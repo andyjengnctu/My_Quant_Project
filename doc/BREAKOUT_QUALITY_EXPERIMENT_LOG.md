@@ -11430,3 +11430,13 @@ Decision：`MR13AV_CLOSED / MR13AW_IMPLEMENTED_RESULT_PENDING / FULL_CONTINUOUS_
 - **Gate**：Seed42 Forward first。Primary看Safety Daily rho、Global rho、Pair是否實質離開AO/AW平台且Breakout同方向；HS-only Conditional-MFE不得崩。P50 qualification/HMHS只作downstream diagnostic。若AX仍無明顯增量，停止high-level split/pooling組合小修，再升級feature-map內部temporal interaction；不做Multi-seed。
 
 Decision：`MR13AW_CLOSED / MR13AX_IMPLEMENTED_RESULT_PENDING / AO_OBJECTIVE_FIXED / TASK_SPECIFIC_SAFETY_ATTENTION_INTERACTION_ONLY / H_AH_AK_AO_AX_CURRENT_LIST / SEED42_FORWARD_NEXT`。
+
+
+## 2026-09-02 — MR-13AX closure + MR-13AY Safety temporal self-attention interaction
+
+- **MR-13AX closure**：補齊AO/AV/AW/AX 2×2 split×pooling最後一格。Forward Safety Daily/Global rho/Pair=`0.3569/0.2891/62.86%` vs AO=`0.3532/0.2929/62.68%`；Breakout=`0.3054/0.3569/63.87%` vs AO=`0.3135/0.3554/63.65%`。Forward只有Daily `+0.0037`、Pair `+0.18pp`，Global反降；Breakout Daily `-0.0081`。Downstream Forward HM/HS/HM/LS=`26.79/29.14%`伴隨High-MFE降至`55.94%`；Breakout contamination=`33.96%`但recall=`56.60%`、HM/HS=`23.55%`。Decision=`SPLIT_ATTENTION_INTERACTION_NO_BREAKTHROUGH / MODEL_GATE_FAIL / NO_ROLLING / NO_MULTI_SEED`。
+- **Research-level transition**：停止shared/task-specific × GAP/scalar-pooling組合小修。使用者明確要求繼續提升DL本身，而不是把研究綁在P50 operating point；下一個mechanism升級到feature-map內部temporal interaction。
+- **MR-13AY identity**：profile=`daily_universal_shared_safety_self_attn_hs_conditional_mfe_full_list_ndcg_pairwise`；architecture=`inception_time_shared_safety_self_attn_mfe_v1`。回到MR-13AO shared InceptionTime strict control；continuous Safety full-list ΔNDCG、true-HS Conditional-MFE、1:1 loss、raw 300×10、Seed42/split/optimizer/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。
+- **唯一scientific change**：Safety path在AO shared feature map加入single-head full-width Q/K/V temporal self-attention，使用PyTorch canonical scaled-dot-product attention（`1/sqrt(C)`、dropout=0、non-causal），context residual加回feature map後仍GAP；MFE path仍原shared feature map→GAP。沒有FFN、positional encoding、attention window、head-count、hidden-width、temperature或額外dropout knob。
+- **Primary Gate**：完整Safety Daily/Global rho與Pair需實質離開AO/AW/AX平台，且Forward/Breakout同方向；Conditional-MFE不可崩。P50 boundary、Pred-HS、HM/HS只作downstream診斷。若AY仍無明顯增量，不再做InceptionTime局部pooling/split/interaction小修，才進真正不同temporal architecture。
+- **Current membership**：explicit references維持`MR-13H / MR-13AH / MR-13AK / MR-13AO`，B325 current-pair merge自動加入`MR-13AY`，因此[3]～[6] list=`H / AH / AK / AO / AY`。

@@ -18,6 +18,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
     use_task_specific_safety_mfe = descriptor.has_capability("task_specific_safety_mfe")
     use_safety_attention_pool = descriptor.has_capability("safety_attention_pool")
+    use_safety_temporal_self_attention = descriptor.has_capability("safety_temporal_self_attention")
+    if use_safety_attention_pool and use_safety_temporal_self_attention:
+        raise ValueError("Safety scalar pooling與temporal self-attention不可同時啟用")
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
     use_nonlinear_hmhs_head = descriptor.has_capability("nonlinear_hmhs_head")
     use_joint_attention_pool = descriptor.has_capability("joint_attention_pool")
@@ -236,6 +239,27 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 if use_safety_attention_pool
                 else None
             )
+            # Safety temporal interaction is deliberately a minimal single-head block:
+            # Q/K/V keep the canonical channel width, scaled-dot-product attention uses
+            # PyTorch's canonical 1/sqrt(C) scale, and the context is added residually
+            # before the unchanged GAP.  No FFN/positional encoding/dropout/window/heads
+            # are introduced.  Parameters are appended after AO-common modules so the
+            # same seed preserves every AO parameter and the complete MFE path exactly.
+            self.safety_temporal_query = (
+                nn.Conv1d(module_output_channels, module_output_channels, kernel_size=1, bias=False)
+                if use_safety_temporal_self_attention
+                else None
+            )
+            self.safety_temporal_key = (
+                nn.Conv1d(module_output_channels, module_output_channels, kernel_size=1, bias=False)
+                if use_safety_temporal_self_attention
+                else None
+            )
+            self.safety_temporal_value = (
+                nn.Conv1d(module_output_channels, module_output_channels, kernel_size=1, bias=False)
+                if use_safety_temporal_self_attention
+                else None
+            )
 
         def _run_residual_stack(self, z, modules, projections):
             residual = z
@@ -287,6 +311,21 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             logits = self.safety_attention_scorer(feature_map).squeeze(1)
             weights = torch.softmax(logits.float(), dim=1).to(feature_map.dtype)
             return torch.sum(feature_map * weights.unsqueeze(1), dim=2)
+
+        def _safety_temporal_interaction(self, feature_map):
+            if (
+                self.safety_temporal_query is None
+                or self.safety_temporal_key is None
+                or self.safety_temporal_value is None
+            ):
+                return feature_map
+            query = self.safety_temporal_query(feature_map).transpose(1, 2).unsqueeze(1)
+            key = self.safety_temporal_key(feature_map).transpose(1, 2).unsqueeze(1)
+            value = self.safety_temporal_value(feature_map).transpose(1, 2).unsqueeze(1)
+            context = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, dropout_p=0.0, is_causal=False
+            )
+            return feature_map + context.squeeze(1).transpose(1, 2).to(feature_map.dtype)
 
         def joint_attention_weights(self, x):
             if self.joint_attention_scorer is None:
@@ -352,19 +391,24 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     raise ValueError("Task-specific architecture沒有Raw MFE head")
                 mfe_logits = self.raw_mfe_classifier(mfe_encoded)
                 return safety_logits, mfe_logits
-            if use_safety_attention_pool:
+            if use_safety_attention_pool or use_safety_temporal_self_attention:
                 feature_map = self.encode_feature_map(x)
                 mfe_pooled = torch.mean(feature_map, dim=2)
-                safety_pooled = self._safety_attention_pool(feature_map)
+                if use_safety_attention_pool:
+                    safety_pooled = self._safety_attention_pool(feature_map)
+                else:
+                    safety_pooled = torch.mean(
+                        self._safety_temporal_interaction(feature_map), dim=2
+                    )
                 # Preserve AO's single dropout RNG draw on the MFE path and reuse the same
-                # mask for Safety.  This keeps the controlled contrast focused on pooling
-                # rather than introducing an additional independent stochastic mask.
+                # mask for Safety.  This keeps the controlled contrast focused on the
+                # Safety representation primitive rather than a second stochastic mask.
                 dropout_mask = self.dropout(torch.ones_like(mfe_pooled))
                 mfe_encoded = mfe_pooled * dropout_mask
                 safety_encoded = safety_pooled * dropout_mask
                 safety_logits = self.raw_safety_classifier(safety_encoded)
                 if self.raw_mfe_classifier is None:
-                    raise ValueError("Safety-attention architecture沒有Raw MFE head")
+                    raise ValueError("Safety-representation architecture沒有Raw MFE head")
                 mfe_logits = self.raw_mfe_classifier(mfe_encoded)
                 return safety_logits, mfe_logits
             _primary_input, shared_encoded = self._encoded_for_heads(x, context)

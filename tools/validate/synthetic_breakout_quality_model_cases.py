@@ -2639,6 +2639,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_RISK_CONTEXT_V1,
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
         INCEPTION_TIME_V1,
@@ -3618,6 +3619,90 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and task_mfe_to_scorer_grad == 0.0
         and task_mfe_to_safety_branch_grad == 0.0
         and task_mfe_branch_grad > 0.0,
+    )
+
+    # Safety temporal self-attention is a distinct interaction primitive, not another
+    # pooling variant.  AO feature extraction/MFE GAP remain exact; only Safety receives
+    # single-head time-to-time Q/K/V interaction followed by the unchanged GAP.
+    self_attn_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1)
+    self_attn_manifest = self_attn_spec.as_manifest_payload()
+    check_true(
+        "safety_temporal_self_attention_keeps_ao_spec_except_interaction_identity",
+        all(
+            ao_manifest[key] == self_attn_manifest[key]
+            for key in ao_manifest
+            if key not in architecture_only_fields
+        )
+        and tuple(self_attn_spec.pooling)
+        == (
+            "safety_single_head_temporal_self_attention_residual",
+            "safety_global_average",
+            "mfe_global_average",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+    )
+    torch.manual_seed(20260902)
+    ao_self_control = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    torch.manual_seed(20260902)
+    self_attn_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1)
+    ao_self_state = ao_self_control.state_dict()
+    self_attn_state = self_attn_model.state_dict()
+    self_attn_shared_keys = sorted(set(ao_self_state).intersection(self_attn_state))
+    self_attn_extra_keys = sorted(set(self_attn_state).difference(ao_self_state))
+    check_true(
+        "safety_temporal_self_attention_same_seed_adds_only_qkv_projections",
+        not (set(ao_self_state) - set(self_attn_state))
+        and self_attn_extra_keys
+        == [
+            "safety_temporal_key.weight",
+            "safety_temporal_query.weight",
+            "safety_temporal_value.weight",
+        ]
+        and all(torch.equal(ao_self_state[key], self_attn_state[key]) for key in self_attn_shared_keys),
+    )
+    q_proj = self_attn_model.safety_temporal_query
+    k_proj = self_attn_model.safety_temporal_key
+    v_proj = self_attn_model.safety_temporal_value
+    expected_channels = int(self_attn_spec.inception_filters) * 4
+    check_true(
+        "safety_temporal_self_attention_is_parameter_minimal_single_head_full_width_qkv",
+        all(
+            isinstance(layer, torch.nn.Conv1d)
+            and int(layer.in_channels) == expected_channels
+            and int(layer.out_channels) == expected_channels
+            and tuple(layer.kernel_size) == (1,)
+            and layer.bias is None
+            for layer in (q_proj, k_proj, v_proj)
+        )
+        and not hasattr(self_attn_model, "safety_temporal_ffn")
+        and not hasattr(self_attn_model, "safety_positional_embedding"),
+    )
+    ao_self_control.eval()
+    self_attn_model.eval()
+    with torch.no_grad():
+        ao_self_safety, ao_self_mfe = ao_self_control.forward_safety_mfe_heads(attention_x, None)
+        self_attn_safety, self_attn_mfe = self_attn_model.forward_safety_mfe_heads(attention_x, None)
+    check_true(
+        "safety_temporal_self_attention_preserves_ao_mfe_path_and_changes_only_safety_readout",
+        torch.equal(ao_self_mfe, self_attn_mfe)
+        and not torch.equal(ao_self_safety, self_attn_safety),
+    )
+    self_attn_model.zero_grad(set_to_none=True)
+    self_attn_safety, _self_attn_mfe = self_attn_model.forward_safety_mfe_heads(attention_x, None)
+    self_attn_safety[:, 1].sum().backward()
+    safety_to_qkv_grad = sum(
+        _gradient_total(layer.parameters()) for layer in (q_proj, k_proj, v_proj)
+    )
+    self_attn_model.zero_grad(set_to_none=True)
+    _self_attn_safety, self_attn_mfe = self_attn_model.forward_safety_mfe_heads(attention_x, None)
+    self_attn_mfe[:, 1].sum().backward()
+    mfe_to_qkv_grad = sum(
+        _gradient_total(layer.parameters()) for layer in (q_proj, k_proj, v_proj)
+    )
+    check_true(
+        "safety_temporal_self_attention_gradient_is_safety_only",
+        safety_to_qkv_grad > 0.0 and mfe_to_qkv_grad == 0.0,
     )
 
     daily_trainer_source = read_source_text(
