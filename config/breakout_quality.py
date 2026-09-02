@@ -211,6 +211,7 @@ from config.breakout_quality_runtime import (
 # - MR-13AQ AP truth + pair-stratified normalization: HS↔LS and HS↔HS Delta-NDCG strata normalized separately then 1:1 mean: "daily_universal_shared_safety_hs_priority_stratified_mfe_full_list_ndcg_pairwise"
 # - MR-13AR direct HS qualification + AO true-HS Conditional-MFE: "daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13AS boundary-focused HS qualification + true-HS Conditional-MFE: "daily_universal_shared_hs_boundary_weighted_qualification_conditional_mfe_full_list_ndcg_pairwise"
+# - MR-13AV AO objective + task-specific final residual Safety/MFE representation: "daily_universal_task_specific_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
@@ -223,8 +224,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13AS",
-    "daily_universal_shared_hs_boundary_weighted_qualification_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13AV",
+    "daily_universal_task_specific_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -483,10 +484,9 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
-    # Current true-HS Conditional-MFE family controls.  The active model is injected
-    # separately below, so the list stays H/AH/AK + completed same-family controls + current.
+    # AO is the simple learnability/reference base for the current representation-level control.
+    # The active model is injected separately below, so the list is H/AH/AK/AO + current.
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    ("MR-13AR", "daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise"),
 )
 
 
@@ -825,6 +825,9 @@ DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_
 )
 DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_hs_boundary_weighted_qualification_conditional_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_task_specific_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
@@ -1729,6 +1732,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_task_specific_safety_mfe_v1",
     ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -2743,6 +2758,36 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13AV",
+        experiment_name="MR-13AV AO-Objective Task-Specific Safety/MFE Representation Ranker",
+        phase="13AV",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "MR-13AO strict representation-level control：AO continuous Safety full-list Delta-NDCG、"
+            "true-HS=P50 Conditional-MFE target/sublist、1:1 head weighting、raw 300x10 input、Seed42/split/optimizer、"
+            "epoch selection與Pred-Safety same-date P50→Conditional-MFE inference全部固定。唯一scientific change是"
+            "architecture切換為task-specific high-level representation：較低層完整InceptionTime residual groups共享，"
+            "最後一個完整residual group由canonical depth-residual_every自動分成Safety與MFE兩支；不新增branch depth/width/lambda。"
+            "Safety head只讀Safety-specific latent，Conditional-MFE head只讀MFE-specific latent且不吃predicted Safety。"
+            "Seed42 Forward Model Gate first；不改Safety supervision、HS threshold、attention/input feature或strategy。"
+        ),
+        metric_scope="task_specific_safety_representation_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_task_specific_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
@@ -4086,6 +4131,7 @@ __all__ = [
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',

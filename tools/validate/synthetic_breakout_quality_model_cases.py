@@ -2637,6 +2637,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         LEGACY_MODEL_ARCHITECTURES,
         SUPPORTED_MODEL_ARCHITECTURES,
         INCEPTION_TIME_RISK_CONTEXT_V1,
+        INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
         INCEPTION_TIME_V1,
         get_model_spec,
         model_spec_from_manifest,
@@ -3415,6 +3416,52 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         "new_same_family_architecture_resolves_from_one_descriptor_registration",
         synthetic_descriptor.architecture_id,
         synthetic_spec.architecture,
+    )
+
+    # The task-specific Safety/MFE topology is a reusable architecture primitive.
+    # Exercise its branch split and gradient ownership here rather than pinning a
+    # particular MR identity to the model factory.
+    task_spec = get_model_spec(INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1)
+    task_model = build_active_model(10, 0, architecture=INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1)
+    check_true(
+        "task_specific_safety_mfe_uses_one_complete_final_residual_group_per_task",
+        int(task_spec.inception_depth) == 2 * int(task_spec.inception_residual_every)
+        and len(task_model.inception_modules)
+        == int(task_spec.inception_depth) - int(task_spec.inception_residual_every)
+        and len(task_model.safety_inception_modules) == int(task_spec.inception_residual_every)
+        and len(task_model.mfe_inception_modules) == int(task_spec.inception_residual_every),
+    )
+    torch.manual_seed(20260902)
+    task_x = torch.randn((2, 64, 10), dtype=torch.float32)
+
+    def _gradient_total(parameters):
+        total = 0.0
+        for parameter in parameters:
+            if parameter.grad is not None:
+                total += float(parameter.grad.detach().abs().sum().item())
+        return total
+
+    task_model.zero_grad(set_to_none=True)
+    safety_logits, _mfe_logits = task_model.forward_safety_mfe_heads(task_x, None)
+    safety_logits[:, 1].sum().backward()
+    safety_shared_grad = _gradient_total(task_model.inception_modules.parameters())
+    safety_branch_grad = _gradient_total(task_model.safety_inception_modules.parameters())
+    safety_to_mfe_grad = _gradient_total(task_model.mfe_inception_modules.parameters())
+
+    task_model.zero_grad(set_to_none=True)
+    _safety_logits, mfe_logits = task_model.forward_safety_mfe_heads(task_x, None)
+    mfe_logits[:, 1].sum().backward()
+    mfe_shared_grad = _gradient_total(task_model.inception_modules.parameters())
+    mfe_branch_grad = _gradient_total(task_model.mfe_inception_modules.parameters())
+    mfe_to_safety_grad = _gradient_total(task_model.safety_inception_modules.parameters())
+    check_true(
+        "task_specific_safety_mfe_gradient_ownership_is_shared_stem_plus_own_final_group",
+        safety_shared_grad > 0.0
+        and safety_branch_grad > 0.0
+        and safety_to_mfe_grad == 0.0
+        and mfe_shared_grad > 0.0
+        and mfe_branch_grad > 0.0
+        and mfe_to_safety_grad == 0.0,
     )
 
     daily_trainer_source = read_source_text(
@@ -7411,7 +7458,6 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
     contract = dict(
         semantics.get("shared_hs_qualification_conditional_mfe_duo_head_contract") or {}
     )
-    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
 
     check_true(
         "hs_qualification_changes_only_ao_primary_head_supervision_semantic",
@@ -7621,7 +7667,6 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
     contract = dict(
         semantics.get("shared_hs_qualification_conditional_mfe_duo_head_contract") or {}
     )
-    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
 
     check_true(
         "hs_boundary_weighted_changes_only_ar_primary_truth_side_pair_weight",
@@ -7651,11 +7696,9 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         and research.model_gate_reference_profile_name == ar_profile.name,
     )
     check_true(
-        "hs_boundary_weighted_current_training_pair_is_structurally_merged_with_reference_controls",
-        (research.model_research_id, profile.name)
-        == tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
-        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
-        in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        "hs_boundary_weighted_historical_identity_does_not_pin_current_membership",
+        research.model_research_id == "MR-13AS"
+        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
         and all(
             pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
             for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
@@ -7664,12 +7707,13 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         == len(BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES) + 1,
     )
     check_true(
-        "hs_boundary_weighted_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        "hs_boundary_weighted_historical_forward_gate_does_not_pin_current_test_membership",
         research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and workflow.rolling_authorized is True
-        and workflow.robustness_authorized is True,
+        and not breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+        and breakout_quality_config.is_breakout_quality_model_test_profile(
+            BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
+        ),
     )
 
     dates = pd.to_datetime(["2021-01-04"] * 4).to_numpy()
@@ -7779,7 +7823,6 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
     model_spec = get_model_spec(str(profile.model_architecture))
     semantics = training_semantics(profile)
     contract = dict(semantics.get("shared_safety_hs_priority_mfe_duo_head_contract") or {})
-    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
 
     check_true(
         "hs_priority_recipe_uses_all_items_without_safety_pair_weight_or_gate",
@@ -7927,7 +7970,6 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
     contract = dict(
         semantics.get("shared_safety_hs_priority_stratified_mfe_duo_head_contract") or {}
     )
-    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
 
     check_true(
         "hs_priority_stratified_recipe_changes_only_secondary_pair_aggregation",
