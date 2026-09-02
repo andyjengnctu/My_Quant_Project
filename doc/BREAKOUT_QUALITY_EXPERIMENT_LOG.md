@@ -11465,3 +11465,16 @@ Decision：`MR13AZ_IMPLEMENTED_RESULT_PENDING / SAFETY_BACKBONE_REPRESENTATION_C
 - **Primary Gate**：完整Safety Daily/Global rho與Pair需實質離開AO平台且Breakout同方向；HS-only Conditional-MFE不得崩。若FAIL，停止「AO有效RF未覆蓋300-bar input」假說，下一輪只測pure capacity scaling，不做dilation/RF sweep。
 
 Decision：`MR13BA_IMPLEMENTED_RESULT_PENDING / FULL_WINDOW_RECEPTIVE_FIELD_CONTROL / SAME_PARAMETER_COUNT_AS_AO / SEED42_FORWARD_NEXT`。
+
+
+## 2026-09-03 — MR-13BA result closure + MR-13BB pure capacity scaling implementation
+
+- **Authoritative baseline**：`test-branch-1_20260903_013343_17acff86.zip`，SHA256=`61283d47fb85541e56f7359cd1b95e570c535a7f4808cd2bca5ffdfe8be2ce7e`；formal Forward comparison結果由使用者貼上之2026-09-03輸出提供。
+- **MR-13BA Forward result**：完整Safety Validation Daily/Global rho/Pair=`0.3414/0.3031/62.29%`；Forward=`0.3529/0.2975/62.67%` vs AO=`0.3532/0.2929/62.68%`；Breakout=`0.3164/0.3572/63.54%` vs AO=`0.3135/0.3554/63.65%`。Forward Pred-HS true-LS=`36.84%`與AO完全相同，True-HS recall=`63.00%`，P45–P55 Pair=`52.39%`。HS-only Conditional-MFE Forward rho/Pair=`0.3875/63.54%`低於AO=`0.3969/63.90%`。Final Forward Daily rho/Pair/Top-Bottom=`0.3974/63.70%/1.7231R`亦低於AO=`0.4042/63.96%/1.8767R`。
+- **MR-13BA Decision**：`FULL_WINDOW_RF_NO_SAFETY_BREAKTHROUGH / RF_INSUFFICIENCY_NOT_SUPPORTED / MODEL_GATE_FAIL / NO_ROLLING / NO_ROBUSTNESS / STOP_DILATION_KERNEL_RF_SWEEP`。RF由229擴到305且trainable params exact不變，Safety ranking與qualification purity未離開AO平台，因此不再把300-bar input未完整覆蓋視為主要瓶頸。
+- **MR-13BB identity**：profile=`daily_universal_shared_safety_hs_conditional_mfe_wide_full_list_ndcg_pairwise`；architecture=`inception_time_shared_safety_mfe_wide_v1`。MR-13AO target/loss/true-HS scope、raw 300×10 input、shared InceptionTime topology、depth=6、kernels=(39,19,9)、module dilations全1、RF=229、GAP/heads、Seed42/split/optimizer/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。
+- **唯一scientific change**：channel/parameter capacity，filters=`32→64`、bottleneck=`32→64`；feature_count=10 trainable params=`473,734→1,885,446`（約`3.98×`）。不改RF、不改input bars、不改backbone family，也不做32/48/64等width sweep。
+- **Primary Gate**：完整Safety Daily/Global rho/Pair需實質離開AO且Breakout同方向，Pred-HS true-LS需明顯下降；HS-only Conditional-MFE不得崩。若FAIL，停止單純InceptionTime parameter-capacity不足假說，下一步才允許backbone-family controlled contrast。
+
+Decision：`MR13BA_CLOSED_MODEL_GATE_FAIL / MR13BB_IMPLEMENTED_RESULT_PENDING / PURE_CAPACITY_CONTROL / 3P98X_PARAMS / SEED42_FORWARD_NEXT`。
+

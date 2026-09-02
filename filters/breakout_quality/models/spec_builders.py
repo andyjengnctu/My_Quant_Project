@@ -349,6 +349,10 @@ def _build_inception_spec(
 ) -> BreakoutQualityModelSpec:
     depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
     descriptor_options = get_architecture_descriptor(architecture).spec_options_dict()
+    filters = int(descriptor_options.get("inception_filters", 32))
+    bottleneck_channels = int(descriptor_options.get("inception_bottleneck_channels", 32))
+    if filters < 1 or bottleneck_channels < 1:
+        raise ValueError("InceptionTime descriptor width必須為正整數")
     kernel_sizes = build_breakout_quality_inception_kernel_sizes()
     declared_module_dilations = tuple(
         int(value)
@@ -360,7 +364,7 @@ def _build_inception_spec(
     return BreakoutQualityModelSpec(
         architecture=architecture,
         family=family,
-        channels=32,
+        channels=filters,
         kernel_size=max(kernel_sizes),
         dilations=(),
         convolutions_per_block=1,
@@ -373,8 +377,8 @@ def _build_inception_spec(
         use_dataset_context=use_dataset_context,
         sequence_input_paths=sequence_input_paths,
         inception_depth=depth,
-        inception_filters=32,
-        inception_bottleneck_channels=32,
+        inception_filters=filters,
+        inception_bottleneck_channels=bottleneck_channels,
         inception_kernel_sizes=kernel_sizes,
         inception_module_dilations=declared_module_dilations,
         inception_residual_every=int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),

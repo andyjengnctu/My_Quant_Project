@@ -2641,6 +2641,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1,
         PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
@@ -3405,6 +3406,30 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and tuple(full_window_spec.pooling) == tuple(ao_shared_spec.pooling)
         and tuple(ao_shared_spec.inception_module_dilations) == ()
         and int(ao_shared_spec.receptive_field_bars) == 229,
+    )
+
+    wide_descriptor = get_architecture_descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
+    wide_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
+    ao_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    wide_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
+    ao_params = sum(int(parameter.numel()) for parameter in ao_model.parameters() if parameter.requires_grad)
+    wide_params = sum(int(parameter.numel()) for parameter in wide_model.parameters() if parameter.requires_grad)
+    check_true(
+        "wide_capacity_capability_scales_channels_without_rf_or_topology_change",
+        wide_descriptor.has_capability("wide_capacity")
+        and int(wide_spec.inception_filters) == 64
+        and int(wide_spec.inception_bottleneck_channels) == 64
+        and int(ao_shared_spec.inception_filters) == 32
+        and int(ao_shared_spec.inception_bottleneck_channels) == 32
+        and int(wide_spec.receptive_field_bars) == int(ao_shared_spec.receptive_field_bars) == 229
+        and tuple(wide_spec.inception_kernel_sizes) == tuple(ao_shared_spec.inception_kernel_sizes) == (39, 19, 9)
+        and tuple(wide_spec.inception_module_dilations) == tuple(ao_shared_spec.inception_module_dilations) == ()
+        and int(wide_spec.inception_depth) == int(ao_shared_spec.inception_depth) == 6
+        and int(wide_spec.inception_residual_every) == int(ao_shared_spec.inception_residual_every) == 3
+        and tuple(wide_spec.pooling) == tuple(ao_shared_spec.pooling)
+        and ao_params == 473734
+        and wide_params == 1885446
+        and wide_params > ao_params,
     )
 
     project_root = Path(__file__).resolve().parents[2]

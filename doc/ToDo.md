@@ -4,6 +4,7 @@
 
 
 - imrove DL module
+    - 從支稱線型分析需要怎麼改DL
     - capital-aware DL with risk%, cap, stop input
     - attention (temperal / cross-secction)
     - self-learned history and L lengths
