@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 
-def _build_patch_token_encoder_base(
+def build_patch_token_encoder_base(
     nn,
     torch,
     *,
@@ -131,7 +131,7 @@ def build_patch_token_ranker(nn, torch, *, feature_count: int, context_count: in
     """Build MR-13AA: MR-13H single-score target on the frozen Patch trunk."""
 
     del context_count
-    encoder_base, embedding_dim, dropout = _build_patch_token_encoder_base(
+    encoder_base, embedding_dim, dropout = build_patch_token_encoder_base(
         nn,
         torch,
         feature_count=int(feature_count),
@@ -162,7 +162,7 @@ def build_patch_token_joint_min(nn, torch, *, feature_count: int, context_count:
     """
 
     del context_count
-    encoder_base, embedding_dim, _dropout = _build_patch_token_encoder_base(
+    encoder_base, embedding_dim, _dropout = build_patch_token_encoder_base(
         nn,
         torch,
         feature_count=int(feature_count),
@@ -251,4 +251,4 @@ def build_patch_token_joint_min(nn, torch, *, feature_count: int, context_count:
     return PatchTokenJointMinClassifier()
 
 
-__all__ = ["build_patch_token_joint_min", "build_patch_token_ranker"]
+__all__ = ["build_patch_token_encoder_base", "build_patch_token_joint_min", "build_patch_token_ranker"]

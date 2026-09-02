@@ -6,6 +6,8 @@ Builders own architecture-specific construction.  The public resolver lives in
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from collections.abc import Callable
 
 from config.breakout_quality import (
@@ -133,6 +135,40 @@ def _build_patch_transformer_spec(architecture: str, *, family: str, pooling: tu
         patch_transformer_positional_encoding="sinusoidal",
     )
 
+
+
+
+def build_hybrid_safety_patch_mfe_inception_spec(architecture: str) -> BreakoutQualityModelSpec:
+    """Safety Patch Transformer + Conditional-MFE InceptionTime dual-encoder spec."""
+
+    options = get_architecture_descriptor(architecture).spec_options_dict()
+    inception = _build_inception_spec(
+        architecture,
+        family=str(options["family"]),
+        pooling=tuple(options["pooling"]),
+        use_dataset_context=bool(options["use_dataset_context"]),
+        sequence_input_paths=tuple(options["sequence_input_paths"]),
+        head_width=options.get("head_width"),
+    )
+    patch = _build_patch_transformer_spec(
+        architecture,
+        family=str(options["family"]),
+        pooling=tuple(options["pooling"]),
+        head_width=options.get("head_width"),
+    )
+    return replace(
+        inception,
+        dropout=patch.dropout,
+        receptive_field_bars=max(int(inception.receptive_field_bars), int(patch.receptive_field_bars)),
+        patch_transformer_patch_size=patch.patch_transformer_patch_size,
+        patch_transformer_patch_stride=patch.patch_transformer_patch_stride,
+        patch_transformer_embedding_dim=patch.patch_transformer_embedding_dim,
+        patch_transformer_depth=patch.patch_transformer_depth,
+        patch_transformer_heads=patch.patch_transformer_heads,
+        patch_transformer_mlp_dim=patch.patch_transformer_mlp_dim,
+        patch_transformer_pooling=patch.patch_transformer_pooling,
+        patch_transformer_positional_encoding=patch.patch_transformer_positional_encoding,
+    )
 
 def build_patch_transformer_spec(architecture: str) -> BreakoutQualityModelSpec:
     return _build_patch_transformer_spec(

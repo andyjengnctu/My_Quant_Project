@@ -42,6 +42,17 @@ def _build_modern_tcn_joint(nn, torch, *, feature_count, context_count, spec, pr
     return build_modern_tcn_joint_min(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec)
 
 
+
+def _build_hybrid_safety_patch_mfe_inception(nn, torch, *, feature_count, context_count, spec, pretrained_encoder_state=None):
+    from filters.breakout_quality.models.hybrid_safety_patch_mfe import build_safety_patch_mfe_inception
+    return build_safety_patch_mfe_inception(
+        nn,
+        torch,
+        feature_count=int(feature_count),
+        context_count=int(context_count),
+        spec=spec,
+    )
+
 def _build_patch_transformer(nn, torch, *, feature_count, context_count, spec, pretrained_encoder_state=None):
     from filters.breakout_quality.models.patch_transformer import build_patch_transformer
     return build_patch_transformer(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec)
@@ -85,6 +96,7 @@ _RUNTIME_BUILDERS_BY_KEY: dict[str, RuntimeBuilder] = {
     "modern_tcn": _build_modern_tcn,
     "modern_tcn_joint": _build_modern_tcn_joint,
     "patch_transformer": _build_patch_transformer,
+    "hybrid_safety_patch_mfe_inception": _build_hybrid_safety_patch_mfe_inception,
     "patch_token_ranker": _build_patch_token_ranker,
     "patch_token_joint": _build_patch_token_joint,
     "residual_tcn": _build_residual_tcn,

@@ -2640,6 +2640,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
+        PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
         INCEPTION_TIME_V1,
@@ -3703,6 +3704,93 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check_true(
         "safety_temporal_self_attention_gradient_is_safety_only",
         safety_to_qkv_grad > 0.0 and mfe_to_qkv_grad == 0.0,
+    )
+
+    # Dual-encoder architecture: Safety gets the frozen historical Patch recipe while
+    # Conditional-MFE keeps the AO-form InceptionTime path.  The two optimizers are still
+    # one model/one loss composition, but gradient ownership is intentionally encoder-local.
+    hybrid_spec = get_model_spec(PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1)
+    hybrid_manifest = hybrid_spec.as_manifest_payload()
+    check_true(
+        "safety_patch_mfe_inception_spec_combines_frozen_patch_recipe_and_ao_inception_recipe",
+        int(hybrid_spec.patch_transformer_patch_size) == 10
+        and int(hybrid_spec.patch_transformer_patch_stride) == 10
+        and int(hybrid_spec.patch_transformer_embedding_dim) == 128
+        and int(hybrid_spec.patch_transformer_depth) == 3
+        and int(hybrid_spec.patch_transformer_heads) == 4
+        and int(hybrid_spec.patch_transformer_mlp_dim) == 256
+        and str(hybrid_spec.patch_transformer_positional_encoding) == "sinusoidal"
+        and abs(float(hybrid_spec.dropout) - 0.10) < 1e-12
+        and int(hybrid_spec.inception_depth) == int(ao_spec.inception_depth)
+        and tuple(hybrid_spec.inception_kernel_sizes) == tuple(ao_spec.inception_kernel_sizes)
+        and tuple(hybrid_spec.pooling) == (
+            "safety_patch_token_global_average",
+            "mfe_inception_global_average",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+    )
+    topology = hybrid_spec.hs_conditional_mfe_topology_contract() or {}
+    check_true(
+        "safety_patch_mfe_inception_topology_declares_independent_encoder_gradient_ownership",
+        topology.get("architecture")
+        == "independent_patch_transformer_safety_encoder_plus_inceptiontime_conditional_mfe_encoder"
+        and topology.get("conditional_mfe_head_inputs")
+        == "inceptiontime_latent_only_no_predicted_safety_context"
+        and topology.get("gradient_ownership")
+        == "safety_loss_updates_patch_encoder_only_conditional_mfe_loss_updates_inceptiontime_encoder_only",
+    )
+    torch.manual_seed(20260904)
+    hybrid_x = torch.randn((3, 300, 10), dtype=torch.float32)
+    torch.manual_seed(20260902)
+    ao_hybrid_control = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    torch.manual_seed(20260902)
+    hybrid_model = build_active_model(10, 0, architecture=PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1)
+    ao_hybrid_state = ao_hybrid_control.state_dict()
+    hybrid_state = hybrid_model.state_dict()
+    check_true(
+        "safety_patch_mfe_inception_same_seed_preserves_complete_ao_mfe_model_initialization",
+        all(
+            "mfe_model." + key in hybrid_state
+            and torch.equal(value, hybrid_state["mfe_model." + key])
+            for key, value in ao_hybrid_state.items()
+        ),
+    )
+    ao_hybrid_control.eval()
+    hybrid_model.eval()
+    with torch.no_grad():
+        _ao_safety, ao_hybrid_mfe = ao_hybrid_control.forward_safety_mfe_heads(hybrid_x, None)
+        hybrid_safety, hybrid_mfe = hybrid_model.forward_safety_mfe_heads(hybrid_x, None)
+        hybrid_both = hybrid_model.forward_output_head(hybrid_x, None, "conditional_both")
+    check_true(
+        "safety_patch_mfe_inception_preserves_ao_mfe_logits_and_exposes_duo_head_output",
+        torch.equal(ao_hybrid_mfe, hybrid_mfe)
+        and tuple(hybrid_safety.shape) == (3, 2)
+        and tuple(hybrid_both.shape) == (3, 4)
+        and bool(torch.isfinite(hybrid_safety).all())
+        and bool(torch.isfinite(hybrid_mfe).all()),
+    )
+    hybrid_model.train()
+    hybrid_model.zero_grad(set_to_none=True)
+    hybrid_safety, _hybrid_mfe = hybrid_model.forward_safety_mfe_heads(hybrid_x, None)
+    hybrid_safety[:, 1].sum().backward()
+    safety_patch_grad = _gradient_total(hybrid_model.safety_encoder.parameters()) + _gradient_total(
+        hybrid_model.raw_safety_classifier.parameters()
+    )
+    safety_to_mfe_encoder_grad = _gradient_total(hybrid_model.mfe_model.parameters())
+    hybrid_model.zero_grad(set_to_none=True)
+    _hybrid_safety, hybrid_mfe = hybrid_model.forward_safety_mfe_heads(hybrid_x, None)
+    hybrid_mfe[:, 1].sum().backward()
+    mfe_to_patch_grad = _gradient_total(hybrid_model.safety_encoder.parameters()) + _gradient_total(
+        hybrid_model.raw_safety_classifier.parameters()
+    )
+    mfe_encoder_grad = _gradient_total(hybrid_model.mfe_model.parameters())
+    check_true(
+        "safety_patch_mfe_inception_gradient_ownership_is_encoder_isolated",
+        safety_patch_grad > 0.0
+        and safety_to_mfe_encoder_grad == 0.0
+        and mfe_to_patch_grad == 0.0
+        and mfe_encoder_grad > 0.0,
     )
 
     daily_trainer_source = read_source_text(

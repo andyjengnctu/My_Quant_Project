@@ -100,6 +100,12 @@ class BreakoutQualityModelSpec:
         """Return canonical final-MFE topology semantics without changing model identity."""
 
         heads = set(self.pooling)
+        if "safety_patch_token_global_average" in heads and "mfe_inception_global_average" in heads:
+            return {
+                "architecture": "independent_patch_transformer_safety_encoder_plus_inceptiontime_conditional_mfe_encoder",
+                "conditional_mfe_head_inputs": "inceptiontime_latent_only_no_predicted_safety_context",
+                "gradient_ownership": "safety_loss_updates_patch_encoder_only_conditional_mfe_loss_updates_inceptiontime_encoder_only",
+            }
         if "task_specific_final_residual_group" in heads and "raw_mfe_head" in heads:
             return {
                 "architecture": "shared_low_level_encoder_task_specific_safety_and_mfe_final_residual_groups",
@@ -121,6 +127,12 @@ class BreakoutQualityModelSpec:
         """Return topology semantics for Safety + true-HS Conditional-MFE objectives."""
 
         heads = set(self.pooling)
+        if "safety_patch_token_global_average" in heads and "mfe_inception_global_average" in heads:
+            return {
+                "architecture": "independent_patch_transformer_safety_encoder_plus_inceptiontime_conditional_mfe_encoder",
+                "conditional_mfe_head_inputs": "inceptiontime_latent_only_no_predicted_safety_context",
+                "gradient_ownership": "safety_loss_updates_patch_encoder_only_conditional_mfe_loss_updates_inceptiontime_encoder_only",
+            }
         if "task_specific_final_residual_group" in heads and "raw_mfe_head" in heads:
             contract = {
                 "architecture": "shared_low_level_encoder_task_specific_safety_and_conditional_mfe_final_residual_groups",

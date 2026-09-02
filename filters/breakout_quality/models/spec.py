@@ -31,6 +31,7 @@ def validate_model_sequence_length(
         "patch_transformer",
         "patch_token_transformer_ranker",
         "patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
+        "patch_transformer_safety_inception_mfe",
     }:
         return
     patch_size = int(model_spec.patch_transformer_patch_size or 0)
@@ -75,6 +76,7 @@ __all__ = [
     "INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1",
     "INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1",
     "INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1",
+    "PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1",
     "INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1",
     "INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1",
     "INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1",

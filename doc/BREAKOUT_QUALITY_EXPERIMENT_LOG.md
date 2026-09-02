@@ -11440,3 +11440,16 @@ Decision：`MR13AW_CLOSED / MR13AX_IMPLEMENTED_RESULT_PENDING / AO_OBJECTIVE_FIX
 - **唯一scientific change**：Safety path在AO shared feature map加入single-head full-width Q/K/V temporal self-attention，使用PyTorch canonical scaled-dot-product attention（`1/sqrt(C)`、dropout=0、non-causal），context residual加回feature map後仍GAP；MFE path仍原shared feature map→GAP。沒有FFN、positional encoding、attention window、head-count、hidden-width、temperature或額外dropout knob。
 - **Primary Gate**：完整Safety Daily/Global rho與Pair需實質離開AO/AW/AX平台，且Forward/Breakout同方向；Conditional-MFE不可崩。P50 boundary、Pred-HS、HM/HS只作downstream診斷。若AY仍無明顯增量，不再做InceptionTime局部pooling/split/interaction小修，才進真正不同temporal architecture。
 - **Current membership**：explicit references維持`MR-13H / MR-13AH / MR-13AK / MR-13AO`，B325 current-pair merge自動加入`MR-13AY`，因此[3]～[6] list=`H / AH / AK / AO / AY`。
+
+
+## 2026-09-02 — MR-13AY result closure + MR-13AZ Safety-Patch / MFE-Inception implementation
+
+- **Authoritative baseline**：`test-branch-1_20260902_220513_2afb359c(1).zip`，SHA256=`9054fae8c3a7d7425c78dce113cd4d6897bba2d4ada343222c4c22b9a1ab8212`；fresh workspace=`/mnt/data/stock_az`。
+- **MR-13AY result**：Forward Safety Daily/Global rho/Pair=`0.3450/0.2917/62.38%` vs AO=`0.3532/0.2929/62.68%`；Breakout=`0.2906/0.3478/63.38%` vs AO=`0.3135/0.3554/63.65%`。HS-only Conditional-MFE Forward/Breakout rho=`0.3848/0.3992` vs AO=`0.3969/0.4116`。Decision=`TEMPORAL_SELF_ATTENTION_DEGRADES_SAFETY_RANKING / CONDITIONAL_MFE_DEGRADES / INCEPTIONTIME_LOCAL_ARCHITECTURE_PATCH_FAMILY_STOP / MODEL_GATE_FAIL / NO_ROLLING / NO_ROBUSTNESS`。
+- **MR-13AZ identity**：profile=`daily_universal_patch_safety_inception_hs_conditional_mfe_full_list_ndcg_pairwise`，architecture=`patch_transformer_safety_inception_mfe_v1`。AO target/loss、true-HS scope、1:1 heads、Seed42、split/optimizer、epoch selection與inference固定。
+- **Safety encoder**：沿用historical 9F/MR-13Z freeze recipe：non-overlap patch=10、embedding=128、3 encoder layers、4 heads、FFN=256、sinusoidal position、dropout=0.10、patch-token mean。無architecture sweep。
+- **Conditional-MFE encoder**：AO-form InceptionTime + GAP；兩encoder完全獨立。Safety loss只更新Patch encoder/head，Conditional-MFE loss只更新InceptionTime encoder/MFE head；此gradient ownership是AZ topology contract的一部分，不誤稱為AO shared-gradient exact control。
+- **Engineering primitive B347**：新增descriptor-driven hybrid builder，並將既有frozen Patch token encoder constructor正式暴露為public reusable primitive供Z/AA/AZ共用；generic trainer/inference仍只消費既有`forward_safety_mfe_heads`／output-head contract，不辨識MR-13AZ identity。same-seed hybrid內完整AO MFE submodel初始化可與AO standalone bit-identical，eval MFE logits exact；Patch/MFE gradients雙向隔離。
+- **Authorization**：Seed42 Forward Model Gate first；Rolling/Robustness/PIT/strategy均不自動授權。current Model Compare/Test List=`MR-13H / MR-13AH / MR-13AK / MR-13AO / MR-13AZ`。
+
+Decision：`MR13AZ_IMPLEMENTED_RESULT_PENDING / SAFETY_BACKBONE_REPRESENTATION_CONTRAST / FROZEN_PATCH_RECIPE / INDEPENDENT_MFE_INCEPTION_ENCODER / SEED42_FORWARD_NEXT`。
