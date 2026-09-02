@@ -34,6 +34,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY,
@@ -192,6 +193,30 @@ SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT = {
     "epoch_selection": "hs_conditional_mfe_mean_daily_spearman_same_as_mr13ao",
     "runtime_score": "conditional_mfe_pass_probability_after_predicted_hs_qualification",
     "runtime_status": "seed42_forward_model_gate_only_no_pit_no_strategy_conversion",
+    "batching": "whole_date_pack_no_date_split",
+}
+
+SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days_full_universe_encoder_exposure",
+    "continuous_safety_target": "same_date_low_adverse_safety_percentile_over_full_universe",
+    "qualification_target": "indicator_of_same_date_low_adverse_safety_percentile_gte_0.50",
+    "safety_head_supervision": "same_logits_dual_supervision_continuous_safety_plus_binary_hs",
+    "safety_branch_loss": "fixed_equal_mean_of_continuous_safety_and_binary_hs_pairwise_losses",
+    "conditional_mfe_target": "same_date_pure_mfe_percentile_within_true_hs_cohort",
+    "true_hs_definition": "same_date_low_adverse_safety_percentile_gte_0.50",
+    "architecture": "same_mr13ar_shared_encoder_independent_safety_and_conditional_mfe_heads",
+    "conditional_mfe_head_inputs": "shared_latent_only_no_predicted_safety_context",
+    "continuous_safety_supervision_scope": "all_rows_same_date_full_list_delta_ndcg",
+    "qualification_supervision_scope": "all_rows_but_only_hs_vs_ls_pairs_have_direction",
+    "conditional_mfe_supervision_scope": "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg",
+    "ls_conditional_mfe_membership": "zero_pairs_zero_rank_position_zero_idcg_zero_delta_ndcg",
+    "conditional_mfe_pair_safety_weight": "none",
+    "shared_encoder_gradient": "dual_supervised_safety_all_rows_plus_conditional_mfe_true_hs_only",
+    "head_weighting": "safety_branch_0.5_conditional_mfe_0.5_with_safety_branch_split_0.5_0.5",
+    "effective_component_weights": "continuous_safety_0.25_binary_hs_0.25_conditional_mfe_0.50_no_sweep",
+    "epoch_selection": "hs_conditional_mfe_mean_daily_spearman_same_as_mr13ar",
+    "runtime_score": "conditional_mfe_pass_probability_after_predicted_hs_qualification_same_safety_head",
+    "runtime_status": "seed42_forward_model_gate_only_no_strategy_conversion",
     "batching": "whole_date_pack_no_date_split",
 }
 
@@ -420,6 +445,10 @@ _PAIRWISE_SPECIALIZED_CONTRACTS = {
         "shared_hs_qualification_conditional_mfe_duo_head_contract",
         SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT,
     ),
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE: (
+        "shared_dual_supervised_hs_conditional_mfe_duo_head_contract",
+        SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT,
+    ),
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_MFE: (
         "shared_safety_hs_priority_mfe_duo_head_contract",
         SHARED_SAFETY_HS_PRIORITY_MFE_DUO_HEAD_TRAINING_CONTRACT,
@@ -581,6 +610,8 @@ __all__ = [
     "SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
+    "SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
+    "SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_HS_PRIORITY_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT",

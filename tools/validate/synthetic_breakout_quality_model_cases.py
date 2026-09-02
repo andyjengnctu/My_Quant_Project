@@ -7365,11 +7365,15 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         and research.model_gate_reference_profile_name == ar_profile.name,
     )
     check_true(
-        "hs_boundary_weighted_current_training_pair_is_structurally_merged_with_reference_controls",
+        "hs_boundary_weighted_completed_model_remains_structural_reference_after_current_advances",
         (research.model_research_id, profile.name)
-        == tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
+        in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
+        and (research.model_research_id, profile.name)
+        in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
         and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
         in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
+        != (research.model_research_id, profile.name)
         and all(
             pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
             for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
@@ -7450,6 +7454,182 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         and gate["hmhs_gap_vs_true_hs_oracle_pp"] == 0.0
         and gate["high_mfe_gap_vs_true_hs_oracle_pp"] == 0.0
         and oracle["selected_hmls_pct"] == 0.0,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
+
+def validate_breakout_quality_dual_supervised_hs_conditional_mfe_contract_case(_base_params):
+    """Protect same-head continuous-Safety + binary-HS supervision with AO-style Conditional-MFE."""
+
+    case_id = "BREAKOUT_QUALITY_DUAL_SUPERVISED_HS_CONDITIONAL_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+        BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
+        BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import (
+        _binary_threshold_pair_target,
+        _dual_supervised_safety_pairwise_loss,
+        _pairwise_logistic_loss,
+        hs_conditional_mfe_metrics,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    as_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    semantics = training_semantics(profile)
+    contract = dict(
+        semantics.get("shared_dual_supervised_hs_conditional_mfe_duo_head_contract") or {}
+    )
+
+    check_true(
+        "dual_supervision_is_current_at_and_reuses_true_hs_conditional_target_geometry",
+        research.model_research_id == "MR-13AT"
+        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) == ("MR-13AT", profile.name)
+        and profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_PAIRWISE_RANKING
+        and recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+        and recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope
+        == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+        and float(recipe.objective_policy.secondary_pair_scope_threshold) == 0.50
+        and recipe.objective_policy.pair_weight_policy == "none",
+    )
+    check_true(
+        "dual_supervision_changes_supervision_only_not_architecture_epoch_or_reference_chain",
+        str(profile.model_architecture) == str(as_profile.model_architecture)
+        == "inception_time_shared_safety_mfe_v1"
+        and profile.epoch_selection_metric == as_profile.epoch_selection_metric
+        == "hs_conditional_mfe_mean_daily_spearman"
+        and research.model_gate_reference_profile_name == as_profile.name,
+    )
+    check_true(
+        "dual_supervision_contract_uses_same_logits_and_fixed_025_025_050_components",
+        contract.get("safety_head_supervision")
+        == "same_logits_dual_supervision_continuous_safety_plus_binary_hs"
+        and contract.get("safety_branch_loss")
+        == "fixed_equal_mean_of_continuous_safety_and_binary_hs_pairwise_losses"
+        and contract.get("effective_component_weights")
+        == "continuous_safety_0.25_binary_hs_0.25_conditional_mfe_0.50_no_sweep"
+        and contract.get("conditional_mfe_supervision_scope")
+        == "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg"
+        and contract.get("conditional_mfe_head_inputs")
+        == "shared_latent_only_no_predicted_safety_context"
+        and contract.get("conditional_mfe_pair_safety_weight") == "none",
+    )
+    check_true(
+        "dual_supervision_compare_membership_keeps_completed_conditional_family_and_removes_af_am",
+        tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        and all(pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)
+        and len(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        == len(BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES) + 1
+        and [model_id for model_id, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
+        == ["MR-13H", "MR-13AH", "MR-13AK", "MR-13AO", "MR-13AR", "MR-13AS", "MR-13AT"],
+    )
+
+    group_table = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2021-01-04"] * 5),
+            "target_favorable_r": [8.0, 6.0, 3.0, 2.0, 1.0],
+            "target_adverse_r": [4.0, 3.0, 2.0, 1.0, 0.0],
+            "label": np.ones(5, dtype=np.int64),
+        }
+    )
+    targets = build_hs_conditional_mfe_targets(
+        group_table, np.ones(5, dtype=bool), true_hs_percentile_cutoff=0.50
+    )
+    continuous_target = torch.tensor(targets.low_adverse_safety_percentile, dtype=torch.float32)
+    binary_target = _binary_threshold_pair_target(torch, continuous_target, 0.50)
+    dates = group_table["date"].to_numpy()
+    margins = torch.tensor([-0.9, -0.5, 0.1, 0.6, 0.9], dtype=torch.float32)
+    continuous_loss, continuous_pairs = _pairwise_logistic_loss(
+        torch, margins, continuous_target, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    binary_loss, binary_pairs = _pairwise_logistic_loss(
+        torch, margins, binary_target, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    combined_loss, combined_pairs, helper_continuous_pairs, helper_binary_pairs = (
+        _dual_supervised_safety_pairwise_loss(
+            torch, margins, continuous_target, binary_target, dates,
+            reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        )
+    )
+    check_true(
+        "dual_supervision_normalizes_continuous_and_binary_losses_independently_then_equal_means",
+        continuous_loss is not None
+        and binary_loss is not None
+        and combined_loss is not None
+        and continuous_pairs == helper_continuous_pairs == 10
+        and binary_pairs == helper_binary_pairs == 6
+        and combined_pairs == 16
+        and torch.allclose(
+            combined_loss.detach(), 0.5 * (continuous_loss.detach() + binary_loss.detach()),
+            atol=1e-8, rtol=0.0,
+        ),
+    )
+    conditional_loss, conditional_pairs = _pairwise_logistic_loss(
+        torch,
+        torch.tensor([100.0, -100.0, 0.9, 0.3, -0.2], dtype=torch.float32),
+        torch.tensor(targets.conditional_mfe_percentile, dtype=torch.float32),
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        item_eligibility=targets.true_hs_mask,
+    )
+    check_true(
+        "dual_supervision_keeps_ao_true_hs_conditional_mfe_zero_ls_membership",
+        conditional_loss is not None
+        and conditional_pairs == 3
+        and np.array_equal(targets.true_hs_mask, [False, False, True, True, True]),
+    )
+
+    metric_scores = {
+        "raw_safety": np.asarray(targets.low_adverse_safety_percentile, dtype=np.float32),
+        "conditional_mfe": np.nan_to_num(
+            np.asarray(targets.conditional_mfe_percentile, dtype=np.float32), nan=-1.0
+        ),
+    }
+    payload = hs_conditional_mfe_metrics(
+        np.arange(5, dtype=np.int64), group_table, targets, metric_scores,
+        include_top_k_quality=False,
+    )
+    check_true(
+        "dual_supervision_uses_existing_conditional_mfe_gate_oracle_diagnostics_without_new_report_semantics",
+        payload["hs_qualification"]["pairwise_concordance"] == 1.0
+        and payload["lexicographic_model_gate"]["predicted_hs_true_ls_pct"] == 0.0
+        and payload["lexicographic_model_gate"]["true_hs_recall_pct"] == 100.0
+        and payload["conditional_mfe_true_hs"]["pairwise_concordance"] == 1.0,
     )
 
     summary["training_performed"] = False

@@ -41,6 +41,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
@@ -1212,6 +1213,43 @@ def _pairwise_logistic_loss(
     return torch.stack(day_losses).mean(), int(ranked_date_count)
 
 
+def _dual_supervised_safety_pairwise_loss(
+    torch,
+    margins,
+    continuous_safety_targets,
+    binary_hs_targets,
+    dates,
+    *,
+    reduction: str,
+) -> tuple[Any | None, int, int, int]:
+    """Combine continuous Safety and binary-HS supervision on the same logits.
+
+    The two supervision sources are normalized independently by the canonical
+    pairwise reduction, then averaged with fixed equal weight.  This is a
+    reusable supervision primitive: no model/profile identity participates.
+    """
+
+    continuous_loss, continuous_pairs = _pairwise_logistic_loss(
+        torch,
+        margins,
+        continuous_safety_targets,
+        dates,
+        reduction=str(reduction),
+        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    )
+    binary_loss, binary_pairs = _pairwise_logistic_loss(
+        torch,
+        margins,
+        binary_hs_targets,
+        dates,
+        reduction=str(reduction),
+        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    )
+    available = [loss for loss in (continuous_loss, binary_loss) if loss is not None]
+    combined = None if not available else sum(available) / float(len(available))
+    return combined, int(continuous_pairs + binary_pairs), int(continuous_pairs), int(binary_pairs)
+
+
 def _binary_partition_stratified_pairwise_loss(
     torch,
     margins,
@@ -1542,6 +1580,7 @@ def _train_epoch(
             elif loss_handler in {
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
             }:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
@@ -1563,31 +1602,54 @@ def _train_epoch(
                 conditional_mfe_margin = conditional_mfe_logits.float()[:, LABEL_PASS] - conditional_mfe_logits.float()[:, LABEL_REJECT]
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
                 primary_pair_target = target[:, 0]
-                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE:
+                binary_hs_pair_target = None
+                if loss_handler in {
+                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+                }:
                     if secondary_pair_scope_threshold is None:
                         raise ValueError("HS-qualification objective缺少true-HS threshold")
-                    primary_pair_target = _binary_threshold_pair_target(
+                    binary_hs_pair_target = _binary_threshold_pair_target(
                         torch, target[:, 0], float(secondary_pair_scope_threshold)
                     )
+                    if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE:
+                        primary_pair_target = binary_hs_pair_target
                 primary_truth_weight_policy = (
                     get_continuous_ranker_primary_pair_weight_policy(training_objective)
                     if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
                     else CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
                 )
-                safety_loss, safety_supervision = _pairwise_logistic_loss(
-                    torch,
-                    safety_margin,
-                    primary_pair_target,
-                    batch_dates,
-                    reduction=str(pairwise_reduction),
-                    pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-                    pair_truth_weight_values=(
-                        target[:, 0]
-                        if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
-                        else None
-                    ),
-                    pair_truth_weight_policy=primary_truth_weight_policy,
-                )
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE:
+                    if binary_hs_pair_target is None:
+                        raise ValueError("dual-supervised HS objective缺少binary HS target")
+                    (
+                        safety_loss,
+                        safety_supervision,
+                        _continuous_safety_supervision,
+                        _binary_hs_supervision,
+                    ) = _dual_supervised_safety_pairwise_loss(
+                        torch,
+                        safety_margin,
+                        target[:, 0],
+                        binary_hs_pair_target,
+                        batch_dates,
+                        reduction=str(pairwise_reduction),
+                    )
+                else:
+                    safety_loss, safety_supervision = _pairwise_logistic_loss(
+                        torch,
+                        safety_margin,
+                        primary_pair_target,
+                        batch_dates,
+                        reduction=str(pairwise_reduction),
+                        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                        pair_truth_weight_values=(
+                            target[:, 0]
+                            if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+                            else None
+                        ),
+                        pair_truth_weight_policy=primary_truth_weight_policy,
+                    )
                 if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE:
                     if secondary_item_eligibility is not None:
                         raise ValueError("stratified secondary objective不得同時使用item-scope mask")
@@ -3723,7 +3785,10 @@ def select_epoch(
                 )
             elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE:
                 gate = dict(validation_hs_conditional_mfe_metrics.get("lexicographic_model_gate") or {})
-                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE:
+                if loss_handler in {
+                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+                }:
                     qualification = dict(validation_hs_conditional_mfe_metrics.get("hs_qualification") or {})
                     qualification_text = (
                         f"Val HS-Qual Pair {float(qualification.get('pairwise_concordance') or 0.0):.4f}"

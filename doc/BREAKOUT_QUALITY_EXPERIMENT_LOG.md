@@ -11362,3 +11362,23 @@ Decision：`MR13AS_IMPLEMENTED_RESULT_PENDING / P50_BOUNDARY_SUPERVISION_FOCUS /
 - **Formal governance closure**：此branch原先已有AP/AQ/AR/AS dedicated validators但未全數進synthetic registry/Checklist；同輪補B334～B337/T454～T457並正式註冊，避免下一次formal coverage因registry drift失敗。
 - **Approved persistent report fingerprint**：`model.standard_comparison=e2273ebf653cc71d`；`model.standard_sop v7`與其fingerprint不變。
 
+
+## 2026-09-02 — MR-13AS Seed42 Forward Model Gate result
+
+- **Conditional-MFE preserved**：Forward HS-only rho/Pair=`0.3877/63.58%`，Breakout=`0.4051/66.87%`；相對AR/AO只小幅變動，true-HS upside branch不是本輪blocker。
+- **Qualification / boundary**：Forward overall HS-Qual Pair=`67.54%`，但P40–P60/P45–P55 Pair僅=`54.27/52.38%`，Pred-HS true-LS=`36.89%`、True-HS recall=`62.97%`；Breakout overall Pair=`69.48%`，P40–P60/P45–P55=`54.33/54.39%`，Pred-HS true-LS=`37.06%`。boundary proximity weighting沒有把P50 gate變純。
+- **Lexicographic outcome**：Forward Pred-HS→Conditional-MFE HM/HS/HM/LS=`24.27/32.54%`；Breakout=`24.19/16.67%`。相對AR沒有Forward/Breakout一致HM/HS增量。
+- **True-HS oracle attribution**：同一Conditional-MFE在true-HS oracle gate下Forward HM/HS=`76.03%`、High-MFE=`76.03%`、Mean MFE=`2.827R`，相對實際Pred-HS差=`-51.76pp / -19.22pp / -1.252R`；Breakout oracle HM/HS=`54.53%`、Mean MFE=`1.803R`，HM/HS gap=`-30.33pp`。這是upper-bound diagnostic，不是可部署績效；它證明主要損失發生在qualification fidelity。
+- **Decision**：`CONDITIONAL_MFE_PRESERVED / OVERALL_HS_QUALIFICATION_LEARNABLE / P45_P55_BOUNDARY_NEAR_RANDOM / P50_PURITY_NOT_MATERIALLY_IMPROVED / TRUE_HS_ORACLE_CONFIRMS_LARGE_CONDITIONAL_MFE_HEADROOM / FORWARD_BREAKOUT_HMHS_INCREMENT_NOT_CONFIRMED / MODEL_GATE_FAIL / STOP / NO_ROLLING / NO_ROBUSTNESS`。不再做boundary exponent/cutoff/focal等同族變形。
+
+## 2026-09-02 — MR-13AT Dual-Supervised HS Representation + True-HS Conditional-MFE implementation
+
+- **Authoritative baseline**：`test-branch-1_20260902_154455_aa54db43.zip`，SHA256=`4d70b53f4ebbf71b75182ccad4b1a2f0530a032b1eda78d51da1e8470861f651`；fresh workspace=`/mnt/data/stock_at`。
+- **Scientific identity**：分配下一個未占用`MR-13AT`，profile=`daily_universal_shared_dual_supervised_hs_conditional_mfe_full_list_ndcg_pairwise`；architecture仍為`ARCH-inception_time_shared_safety_mfe_v1`。AT是最後一個Safety supervision-only cell，不新增第三head。
+- **唯一scientific change**：同一Safety/HS logits同時接受：(1) continuous same-date Low-Adverse Safety percentile full-list ΔNDCG；(2) binary `HS=SafetyPct>=0.50` full-list ΔNDCG。兩個loss各自使用canonical normalization後在Safety branch固定1:1平均；Safety branch再與true-HS-only Conditional-MFE固定1:1，因此等效component weights=`continuous Safety 0.25 / binary HS 0.25 / Conditional-MFE 0.50`。無loss-ratio sweep。
+- **完全固定**：true-HS=P50、AO/AR Conditional-MFE target builder、LS在secondary list rank-position/IDCG/ΔNDCG之前zero membership、shared encoder與兩head topology、Conditional-MFE head只讀shared latent、不吃Safety prediction、Seed/split/optimizer、epoch selection與Pred-HS P50→Conditional-MFE runtime inference全部不變。continuous Safety supervision只作representation shaping，runtime不做fusion/product/weight。
+- **Primary Gate**：Pred-HS true-LS必須實質低於AO/AR/AS約`36.8–37.1%`且recall不崩；P40–P60/P45–P55 Pair需實質高於AS `54.27/52.38%`；HS-only Conditional-MFE需維持約`0.39–0.40`；Forward與Breakout HM/HS需一致提高且HM/LS下降。
+- **Stop rule**：若AT仍約`36–37%` contamination、P45–P55約`52–54%`或HM/HS無一致增量，即停止binary/continuous/boundary/focal/loss-ratio等Safety supervision engineering；下一研究層級轉向DL Safety representation / learning-capacity，而不是再改HS定義。
+- **Targeted validation**：Continuous=`46/46`、Shared-AH=`23/23`、AO=`7/7`、AP=`7/7`、AQ=`7/7`、AR=`8/8`、AS=`6/6`、AT=`7/7`、persistent report=`31/31`、Registry↔Checklist=`1851/1851`；Python compile PASS。Backward identity audit：baseline既有49個Continuous profiles之profile/spec/execution recipe/training semantics=`49/49 exact unchanged`，唯一新增AT。
+
+Decision：`MR13AT_IMPLEMENTED_RESULT_PENDING / SAME_HEAD_DUAL_SAFETY_HS_SUPERVISION / TRUE_HS_CONDITIONAL_MFE_FIXED / LAST_SUPERVISION_ONLY_CELL / SEED42_FORWARD_NEXT`。
