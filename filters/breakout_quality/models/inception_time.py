@@ -274,7 +274,10 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         def safety_attention_weights(self, x):
             if self.safety_attention_scorer is None:
                 raise ValueError("目前architecture沒有Safety temporal attention pooling")
-            feature_map = self.encode_feature_map(x)
+            if use_task_specific_safety_mfe:
+                feature_map, _mfe_map = self.encode_task_specific_feature_maps(x)
+            else:
+                feature_map = self.encode_feature_map(x)
             logits = self.safety_attention_scorer(feature_map).squeeze(1)
             return torch.softmax(logits.float(), dim=1).to(feature_map.dtype)
 
@@ -337,7 +340,12 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 raise ValueError("目前architecture沒有Raw Safety head")
             if use_task_specific_safety_mfe:
                 safety_map, mfe_map = self.encode_task_specific_feature_maps(x)
-                safety_encoded = self.dropout(torch.mean(safety_map, dim=2))
+                safety_pooled = (
+                    self._safety_attention_pool(safety_map)
+                    if use_safety_attention_pool
+                    else torch.mean(safety_map, dim=2)
+                )
+                safety_encoded = self.dropout(safety_pooled)
                 mfe_encoded = self.dropout(torch.mean(mfe_map, dim=2))
                 safety_logits = self.raw_safety_classifier(safety_encoded)
                 if self.raw_mfe_classifier is None:

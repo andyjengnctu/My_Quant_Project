@@ -2639,6 +2639,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_RISK_CONTEXT_V1,
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
         INCEPTION_TIME_V1,
         get_model_spec,
@@ -3541,6 +3542,82 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check_true(
         "safety_attention_pool_gradient_is_safety_only_while_mfe_keeps_shared_gap",
         scorer_from_safety_grad > 0.0 and scorer_from_mfe_grad == 0.0,
+    )
+
+    # Composition cell: task-specific high-level representation + the same scalar
+    # Safety temporal-attention primitive.  Relative to the task-specific GAP model,
+    # only the Safety pooling scorer may be new; MFE branch topology/logits must stay exact.
+    task_attn_spec = get_model_spec(INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1)
+    task_manifest = task_spec.as_manifest_payload()
+    task_attn_manifest = task_attn_spec.as_manifest_payload()
+    check_true(
+        "task_specific_safety_attention_composes_existing_primitives_without_new_hyperparameters",
+        all(
+            task_manifest[key] == task_attn_manifest[key]
+            for key in task_manifest
+            if key not in architecture_only_fields
+        )
+        and tuple(task_attn_spec.pooling)
+        == (
+            "task_specific_final_residual_group",
+            "safety_scalar_attention_pool",
+            "mfe_global_average",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+    )
+    torch.manual_seed(20260902)
+    task_gap_model = build_active_model(10, 0, architecture=INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1)
+    torch.manual_seed(20260902)
+    task_attn_model = build_active_model(10, 0, architecture=INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1)
+    task_gap_state = task_gap_model.state_dict()
+    task_attn_state = task_attn_model.state_dict()
+    task_shared_keys = sorted(set(task_gap_state).intersection(task_attn_state))
+    task_extra_keys = sorted(set(task_attn_state).difference(task_gap_state))
+    check_true(
+        "task_specific_safety_attention_same_seed_adds_only_scalar_scorer",
+        not (set(task_gap_state) - set(task_attn_state))
+        and task_extra_keys
+        == ["safety_attention_scorer.bias", "safety_attention_scorer.weight"]
+        and all(torch.equal(task_gap_state[key], task_attn_state[key]) for key in task_shared_keys),
+    )
+    task_gap_model.eval()
+    task_attn_model.eval()
+    with torch.no_grad():
+        gap_safety_logits, gap_mfe_logits = task_gap_model.forward_safety_mfe_heads(attention_x, None)
+        task_attn_safety_logits, task_attn_mfe_logits = task_attn_model.forward_safety_mfe_heads(attention_x, None)
+        task_safety_weights = task_attn_model.safety_attention_weights(attention_x)
+        safety_map, _mfe_map = task_attn_model.encode_task_specific_feature_maps(attention_x)
+        expected_task_weights = torch.softmax(
+            task_attn_model.safety_attention_scorer(safety_map).squeeze(1).float(), dim=1
+        ).to(safety_map.dtype)
+    check_true(
+        "task_specific_safety_attention_reads_safety_map_and_preserves_mfe_path",
+        torch.equal(gap_mfe_logits, task_attn_mfe_logits)
+        and bool(torch.allclose(task_safety_weights, expected_task_weights, atol=1e-6, rtol=0.0))
+        and bool(torch.allclose(task_safety_weights.sum(dim=1), torch.ones(3), atol=1e-6, rtol=0.0))
+        and not torch.equal(gap_safety_logits, task_attn_safety_logits),
+    )
+    task_attn_model.zero_grad(set_to_none=True)
+    task_attn_safety_logits, _task_attn_mfe_logits = task_attn_model.forward_safety_mfe_heads(attention_x, None)
+    task_attn_safety_logits[:, 1].sum().backward()
+    task_safety_scorer_grad = _gradient_total(task_attn_model.safety_attention_scorer.parameters())
+    task_safety_branch_grad = _gradient_total(task_attn_model.safety_inception_modules.parameters())
+    task_safety_to_mfe_grad = _gradient_total(task_attn_model.mfe_inception_modules.parameters())
+    task_attn_model.zero_grad(set_to_none=True)
+    _task_attn_safety_logits, task_attn_mfe_logits = task_attn_model.forward_safety_mfe_heads(attention_x, None)
+    task_attn_mfe_logits[:, 1].sum().backward()
+    task_mfe_to_scorer_grad = _gradient_total(task_attn_model.safety_attention_scorer.parameters())
+    task_mfe_to_safety_branch_grad = _gradient_total(task_attn_model.safety_inception_modules.parameters())
+    task_mfe_branch_grad = _gradient_total(task_attn_model.mfe_inception_modules.parameters())
+    check_true(
+        "task_specific_safety_attention_gradient_ownership_remains_task_isolated",
+        task_safety_scorer_grad > 0.0
+        and task_safety_branch_grad > 0.0
+        and task_safety_to_mfe_grad == 0.0
+        and task_mfe_to_scorer_grad == 0.0
+        and task_mfe_to_safety_branch_grad == 0.0
+        and task_mfe_branch_grad > 0.0,
     )
 
     daily_trainer_source = read_source_text(

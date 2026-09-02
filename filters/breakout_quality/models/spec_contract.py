@@ -122,11 +122,16 @@ class BreakoutQualityModelSpec:
 
         heads = set(self.pooling)
         if "task_specific_final_residual_group" in heads and "raw_mfe_head" in heads:
-            return {
+            contract = {
                 "architecture": "shared_low_level_encoder_task_specific_safety_and_conditional_mfe_final_residual_groups",
                 "conditional_mfe_head_inputs": "mfe_specific_latent_only_no_predicted_safety_context",
                 "shared_encoder_gradient": "shared_lower_residual_groups_receive_both_heads_task_specific_final_groups_receive_own_head_only",
             }
+            if "safety_scalar_attention_pool" in heads:
+                contract["safety_pooling"] = (
+                    "single_scalar_temporal_attention_over_safety_specific_feature_map"
+                )
+            return contract
         if "raw_mfe_head" in heads:
             return {
                 "architecture": "shared_encoder_independent_raw_safety_and_conditional_mfe_heads",
