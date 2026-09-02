@@ -542,6 +542,16 @@ def training_semantics(profile) -> dict[str, Any]:
             contract["architecture"] = topology_contract["architecture"]
             contract["primary_head_inputs"] = topology_contract["mfe_head_inputs"]
             contract["primary_target_id"] = str(profile.continuous_target_id)
+        elif semantics_key == CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE:
+            from filters.breakout_quality.models.spec import get_model_spec
+
+            model_spec = get_model_spec(str(profile.model_architecture))
+            topology_contract = model_spec.hs_conditional_mfe_topology_contract()
+            if topology_contract is None:
+                raise ValueError(
+                    "Safety + true-HS Conditional-MFE semantics需要canonical topology contract"
+                )
+            contract.update(topology_contract)
         return _extended_semantics(
             batching=contract["batching"],
             pairwise_contract=pairwise_contract,

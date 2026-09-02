@@ -100,6 +100,11 @@ class BreakoutQualityModelSpec:
         """Return canonical final-MFE topology semantics without changing model identity."""
 
         heads = set(self.pooling)
+        if "task_specific_final_residual_group" in heads and "raw_mfe_head" in heads:
+            return {
+                "architecture": "shared_low_level_encoder_task_specific_safety_and_mfe_final_residual_groups",
+                "mfe_head_inputs": "mfe_specific_latent_only_no_safety_prediction_input",
+            }
         if "raw_mfe_head" in heads:
             return {
                 "architecture": "shared_encoder_independent_raw_safety_and_raw_mfe_heads",
@@ -109,6 +114,23 @@ class BreakoutQualityModelSpec:
             return {
                 "architecture": "shared_encoder_raw_safety_head_plus_safety_conditioned_mfe_head",
                 "mfe_head_inputs": "shared_latent_plus_stop_gradient_raw_safety_probability",
+            }
+        return None
+
+    def hs_conditional_mfe_topology_contract(self) -> dict[str, str] | None:
+        """Return topology semantics for Safety + true-HS Conditional-MFE objectives."""
+
+        heads = set(self.pooling)
+        if "task_specific_final_residual_group" in heads and "raw_mfe_head" in heads:
+            return {
+                "architecture": "shared_low_level_encoder_task_specific_safety_and_conditional_mfe_final_residual_groups",
+                "conditional_mfe_head_inputs": "mfe_specific_latent_only_no_predicted_safety_context",
+                "shared_encoder_gradient": "shared_lower_residual_groups_receive_both_heads_task_specific_final_groups_receive_own_head_only",
+            }
+        if "raw_mfe_head" in heads:
+            return {
+                "architecture": "shared_encoder_independent_raw_safety_and_conditional_mfe_heads",
+                "conditional_mfe_head_inputs": "shared_latent_only_no_predicted_safety_context",
             }
         return None
 

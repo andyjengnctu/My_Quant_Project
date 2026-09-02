@@ -7163,12 +7163,9 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
         and contract.get("conditional_mfe_pair_safety_weight") == "none",
     )
     check_true(
-        "hs_qualification_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        "hs_qualification_historical_authorization_fields_remain_frozen",
         research.selection_pit_authorized is False
-        and research.current_time_validation_authorized is False
-        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and workflow.rolling_authorized is True
-        and workflow.robustness_authorized is True,
+        and research.current_time_validation_authorized is False,
     )
 
     group_table = pd.DataFrame(
@@ -7365,29 +7362,15 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         and research.model_gate_reference_profile_name == ar_profile.name,
     )
     check_true(
-        "hs_boundary_weighted_completed_model_remains_structural_reference_after_current_advances",
-        (research.model_research_id, profile.name)
-        in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
-        and (research.model_research_id, profile.name)
-        in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
-        in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
-        != (research.model_research_id, profile.name)
-        and all(
-            pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-            for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
-        )
-        and len(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
-        == len(BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES) + 1,
+        "hs_boundary_weighted_completed_model_remains_resolvable_after_membership_changes",
+        research.model_research_id == "MR-13AS"
+        and profile.name
+        == DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     )
     check_true(
-        "hs_boundary_weighted_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        "hs_boundary_weighted_historical_authorization_fields_remain_frozen",
         research.selection_pit_authorized is False
-        and research.current_time_validation_authorized is False
-        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and workflow.rolling_authorized is True
-        and workflow.robustness_authorized is True,
+        and research.current_time_validation_authorized is False,
     )
 
     dates = pd.to_datetime(["2021-01-04"] * 4).to_numpy()
@@ -7547,11 +7530,10 @@ def validate_breakout_quality_dual_supervised_hs_conditional_mfe_contract_case(_
         and contract.get("conditional_mfe_pair_safety_weight") == "none",
     )
     check_true(
-        "dual_supervision_remains_completed_conditional_family_reference_after_au",
-        ("MR-13AT", profile.name) in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
-        and ("MR-13AT", profile.name) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) != ("MR-13AT", profile.name)
-        and all(model_id not in {"MR-13AF", "MR-13AM"} for model_id, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES),
+        "dual_supervision_completed_identity_remains_resolvable_after_membership_changes",
+        research.model_research_id == "MR-13AT"
+        and profile.name
+        == DAILY_UNIVERSAL_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     )
 
     group_table = pd.DataFrame(
@@ -7990,9 +7972,8 @@ def validate_breakout_quality_top_hs_safety_conditional_mfe_contract_case(_base_
     )
 
     check_true(
-        "top_hs_is_current_au_and_reuses_hs_conditional_target_builder",
+        "top_hs_au_identity_and_hs_conditional_target_builder_remain_frozen",
         research.model_research_id == "MR-13AU"
-        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) == ("MR-13AU", profile.name)
         and profile.training_objective
         == TRAINING_OBJECTIVE_DAILY_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
         and recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
@@ -8020,12 +8001,14 @@ def validate_breakout_quality_top_hs_safety_conditional_mfe_contract_case(_base_
         and contract.get("conditional_mfe_supervision_scope")
         == "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg",
     )
+    expected_membership = tuple(
+        dict.fromkeys(
+            (*BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES, tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE))
+        )
+    )
     check_true(
-        "top_hs_compare_membership_keeps_completed_conditional_family",
-        tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-        and all(pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)
-        and [model_id for model_id, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
-        == ["MR-13H", "MR-13AH", "MR-13AK", "MR-13AO", "MR-13AR", "MR-13AS", "MR-13AT", "MR-13AU"],
+        "model_compare_membership_is_reference_plus_current_without_second_manual_list",
+        tuple(BREAKOUT_QUALITY_MODEL_TEST_PROFILES) == expected_membership,
     )
 
     truth = torch.tensor([0.0, 0.25, 0.50, 0.75, 1.0], dtype=torch.float32)
@@ -8051,5 +8034,157 @@ def validate_breakout_quality_top_hs_safety_conditional_mfe_contract_case(_base_
         and topk_pairs == full_pairs == 9
         and not torch.allclose(topk_loss, full_loss, atol=1e-8, rtol=0.0),
     )
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_task_specific_safety_mfe_contract_case(_base_params):
+    """Protect AO-equivalent supervision with task-specific final residual representations."""
+
+    case_id = "BREAKOUT_QUALITY_TASK_SPECIFIC_SAFETY_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import torch
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+        BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
+        BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    ao_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    ao_recipe = get_continuous_ranker_execution_recipe(ao_profile.name)
+    model_spec = get_model_spec(str(profile.model_architecture))
+    contract = dict(
+        training_semantics(profile).get("shared_safety_hs_conditional_mfe_duo_head_contract") or {}
+    )
+
+    check_true(
+        "task_specific_av_is_current_and_uses_ao_objective_exactly",
+        research.model_research_id == "MR-13AV"
+        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) == ("MR-13AV", profile.name)
+        and profile.training_objective
+        == ao_profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING
+        and profile.continuous_target_id == ao_profile.continuous_target_id
+        and profile.loss_name == ao_profile.loss_name
+        and profile.epoch_selection_metric == ao_profile.epoch_selection_metric
+        and profile.optimizer_name == ao_profile.optimizer_name
+        and profile.training_sampling_mode == ao_profile.training_sampling_mode
+        and profile.training_label_scope == ao_profile.training_label_scope
+        and profile.training_sample_scope == ao_profile.training_sample_scope
+        and recipe.training_policy == ao_recipe.training_policy
+        and recipe.pairwise_reduction
+        == ao_recipe.pairwise_reduction
+        == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+        and recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+        and recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope
+        == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+        and float(recipe.objective_policy.secondary_pair_scope_threshold) == 0.50
+        and research.model_gate_reference_profile_name == ao_profile.name,
+    )
+    check_true(
+        "task_specific_architecture_splits_only_final_complete_residual_group",
+        str(profile.model_architecture) == "inception_time_task_specific_safety_mfe_v1"
+        and model_spec.family == "inception_time_task_specific_safety_mfe"
+        and "task_specific_final_residual_group" in model_spec.pooling
+        and int(model_spec.inception_depth) == 2 * int(model_spec.inception_residual_every),
+    )
+    check_true(
+        "task_specific_artifact_semantics_describe_separate_high_level_latents",
+        contract.get("architecture")
+        == "shared_low_level_encoder_task_specific_safety_and_conditional_mfe_final_residual_groups"
+        and contract.get("conditional_mfe_head_inputs")
+        == "mfe_specific_latent_only_no_predicted_safety_context"
+        and contract.get("shared_encoder_gradient")
+        == "shared_lower_residual_groups_receive_both_heads_task_specific_final_groups_receive_own_head_only"
+        and contract.get("head_weighting") == "fixed_equal_mean_no_lambda_sweep"
+        and contract.get("conditional_mfe_supervision_scope")
+        == "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg",
+    )
+
+    model = build_active_model(
+        10,
+        0,
+        architecture=str(profile.model_architecture),
+        model_spec=model_spec.as_manifest_payload(),
+    )
+    check_true(
+        "task_specific_model_has_shared_group_plus_independent_safety_and_mfe_groups",
+        len(model.inception_modules) == int(model_spec.inception_depth) - int(model_spec.inception_residual_every)
+        and len(model.safety_inception_modules) == int(model_spec.inception_residual_every)
+        and len(model.mfe_inception_modules) == int(model_spec.inception_residual_every),
+    )
+
+    torch.manual_seed(20260902)
+    features = torch.randn(3, 64, 10)
+    safety_logits, mfe_logits = model.forward_safety_mfe_heads(features, None)
+    check_true(
+        "task_specific_model_preserves_two_head_output_api",
+        tuple(safety_logits.shape) == (3, 2) and tuple(mfe_logits.shape) == (3, 2),
+    )
+
+    def grad_total(parameters):
+        return sum(
+            float(parameter.grad.detach().abs().sum().item())
+            for parameter in parameters
+            if parameter.grad is not None
+        )
+
+    model.zero_grad(set_to_none=True)
+    safety_logits, _mfe_logits = model.forward_safety_mfe_heads(features, None)
+    safety_logits[:, 1].sum().backward()
+    check_true(
+        "safety_loss_updates_shared_and_safety_branch_but_not_mfe_branch",
+        grad_total(model.inception_modules.parameters()) > 0.0
+        and grad_total(model.safety_inception_modules.parameters()) > 0.0
+        and grad_total(model.mfe_inception_modules.parameters()) == 0.0,
+    )
+
+    model.zero_grad(set_to_none=True)
+    _safety_logits, mfe_logits = model.forward_safety_mfe_heads(features, None)
+    mfe_logits[:, 1].sum().backward()
+    check_true(
+        "mfe_loss_updates_shared_and_mfe_branch_but_not_safety_branch",
+        grad_total(model.inception_modules.parameters()) > 0.0
+        and grad_total(model.mfe_inception_modules.parameters()) > 0.0
+        and grad_total(model.safety_inception_modules.parameters()) == 0.0,
+    )
+
+    expected_membership = tuple(
+        dict.fromkeys(
+            (*BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES, tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE))
+        )
+    )
+    check_true(
+        "task_specific_compare_membership_is_reference_plus_current",
+        tuple(BREAKOUT_QUALITY_MODEL_TEST_PROFILES) == expected_membership,
+    )
+
     summary["training_performed"] = False
     return results, summary

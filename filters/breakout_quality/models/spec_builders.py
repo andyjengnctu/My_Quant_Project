@@ -356,6 +356,7 @@ _INCEPTION_VARIANTS = {
     INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1: ("inception_time_conditional_mfe_safety", ("global_average", "primary_mfe_head", "conditional_safety_head"), False, ("raw_level",), None),
     INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1: ("inception_time_safety_conditional_mfe", ("global_average", "raw_safety_head", "conditional_mfe_head"), False, ("raw_level",), None),
     INCEPTION_TIME_SHARED_SAFETY_MFE_V1: ("inception_time_shared_safety_mfe", ("global_average", "raw_safety_head", "raw_mfe_head"), False, ("raw_level",), None),
+    INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1: ("inception_time_task_specific_safety_mfe", ("task_specific_final_residual_group", "global_average", "raw_safety_head", "raw_mfe_head"), False, ("raw_level",), None),
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1: ("inception_time_safety_raw_mfe_hmhs", ("global_average", "raw_safety_head", "safety_conditioned_raw_mfe_head", "direct_hmhs_head"), False, ("raw_level",), None),
     INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1: ("inception_time_predicted_upside_context", ("global_average", "predicted_upside_percentile_concat"), True, ("raw_level", "pit_safe_predicted_upside_percentile"), None),
     INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1: ("inception_time_predicted_safety_context", ("global_average", "predicted_safety_percentile_concat"), True, ("raw_level", "pit_safe_predicted_safety_percentile"), None),

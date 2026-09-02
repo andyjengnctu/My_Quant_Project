@@ -23,6 +23,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_shared_safety_mfe = (
         str(spec.architecture) == "inception_time_shared_safety_mfe_v1"
     )
+    use_task_specific_safety_mfe = (
+        str(spec.architecture) == "inception_time_task_specific_safety_mfe_v1"
+    )
     use_safety_raw_mfe_hmhs = str(spec.architecture) in {
         "inception_time_safety_raw_mfe_hmhs_v1",
         "inception_time_safety_raw_mfe_hmhs_mlp_v1",
@@ -127,20 +130,50 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     class InceptionTimeClassifier(nn.Module):
         def __init__(self):
             super().__init__()
+            if depth % residual_every != 0:
+                raise ValueError("InceptionTime depth 必須可被 residual interval 整除")
+            shared_depth = depth
+            if use_task_specific_safety_mfe:
+                shared_depth = depth - residual_every
+                if shared_depth < residual_every or shared_depth % residual_every != 0:
+                    raise ValueError(
+                        "Task-specific InceptionTime 需要至少一個完整shared residual group與一個完整task-specific residual group"
+                    )
+
             modules = []
             shortcuts = []
             in_channels = int(feature_count)
             residual_channels = in_channels
-            for module_index in range(depth):
+            for module_index in range(shared_depth):
                 modules.append(InceptionModule(in_channels))
                 in_channels = module_output_channels
                 if (module_index + 1) % residual_every == 0:
                     shortcuts.append(ResidualProjection(residual_channels))
                     residual_channels = module_output_channels
-            if depth % residual_every != 0:
-                raise ValueError("InceptionTime depth 必須可被 residual interval 整除")
             self.inception_modules = nn.ModuleList(modules)
             self.residual_projections = nn.ModuleList(shortcuts)
+
+            def build_task_specific_group():
+                branch_modules = nn.ModuleList(
+                    [InceptionModule(module_output_channels) for _ in range(residual_every)]
+                )
+                branch_shortcuts = nn.ModuleList([ResidualProjection(module_output_channels)])
+                return branch_modules, branch_shortcuts
+
+            if use_task_specific_safety_mfe:
+                (
+                    self.safety_inception_modules,
+                    self.safety_residual_projections,
+                ) = build_task_specific_group()
+                (
+                    self.mfe_inception_modules,
+                    self.mfe_residual_projections,
+                ) = build_task_specific_group()
+            else:
+                self.safety_inception_modules = nn.ModuleList()
+                self.safety_residual_projections = nn.ModuleList()
+                self.mfe_inception_modules = nn.ModuleList()
+                self.mfe_residual_projections = nn.ModuleList()
             self.residual_activation = nn.ReLU()
             self.dropout = nn.Dropout(float(spec.dropout))
             self.direct_context_concat = bool(use_predicted_scalar_context)
@@ -168,12 +201,17 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             )
             self.raw_safety_classifier = (
                 nn.Linear(module_output_channels, 2)
-                if use_safety_conditional_mfe or use_shared_safety_mfe or use_safety_raw_mfe_hmhs
+                if (
+                    use_safety_conditional_mfe
+                    or use_shared_safety_mfe
+                    or use_task_specific_safety_mfe
+                    or use_safety_raw_mfe_hmhs
+                )
                 else None
             )
             self.raw_mfe_classifier = (
                 nn.Linear(module_output_channels, 2)
-                if use_shared_safety_mfe
+                if use_shared_safety_mfe or use_task_specific_safety_mfe
                 else None
             )
             self.conditional_mfe_classifier = (
@@ -207,19 +245,35 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 else None
             )
 
-        def encode_feature_map(self, x):
-            z = x.transpose(1, 2)
+        def _run_residual_stack(self, z, modules, projections):
             residual = z
             shortcut_index = 0
-            for module_index, module in enumerate(self.inception_modules, start=1):
+            for module_index, module in enumerate(modules, start=1):
                 z = module(z)
                 if module_index % residual_every == 0:
                     z = self.residual_activation(
-                        z + self.residual_projections[shortcut_index](residual)
+                        z + projections[shortcut_index](residual)
                     )
                     residual = z
                     shortcut_index += 1
             return z
+
+        def encode_feature_map(self, x):
+            return self._run_residual_stack(
+                x.transpose(1, 2), self.inception_modules, self.residual_projections
+            )
+
+        def encode_task_specific_feature_maps(self, x):
+            if not use_task_specific_safety_mfe:
+                raise ValueError("目前architecture沒有task-specific Safety/MFE representation")
+            shared = self.encode_feature_map(x)
+            safety = self._run_residual_stack(
+                shared, self.safety_inception_modules, self.safety_residual_projections
+            )
+            mfe = self._run_residual_stack(
+                shared, self.mfe_inception_modules, self.mfe_residual_projections
+            )
+            return safety, mfe
 
         def encode(self, x):
             z = self.encode_feature_map(x)
@@ -275,6 +329,15 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             """
             if self.raw_safety_classifier is None:
                 raise ValueError("目前architecture沒有Raw Safety head")
+            if use_task_specific_safety_mfe:
+                safety_map, mfe_map = self.encode_task_specific_feature_maps(x)
+                safety_encoded = self.dropout(torch.mean(safety_map, dim=2))
+                mfe_encoded = self.dropout(torch.mean(mfe_map, dim=2))
+                safety_logits = self.raw_safety_classifier(safety_encoded)
+                if self.raw_mfe_classifier is None:
+                    raise ValueError("Task-specific architecture沒有Raw MFE head")
+                mfe_logits = self.raw_mfe_classifier(mfe_encoded)
+                return safety_logits, mfe_logits
             _primary_input, shared_encoded = self._encoded_for_heads(x, context)
             safety_logits = self.raw_safety_classifier(shared_encoded)
             if self.raw_mfe_classifier is not None:
