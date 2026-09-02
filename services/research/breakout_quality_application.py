@@ -3938,6 +3938,52 @@ def _clear_continuous_forward_reuse_caches() -> None:
             clear()
 
 
+def _load_canonical_forward_checkpoint_import_source(settings):
+    """Resolve a validated Forward artifact pair eligible for PIT fitting-identity import.
+
+    Forward scores/reports never substitute for Rolling evaluation artifacts.  This helper
+    only exposes the canonical fitted model directory + canonical Forward report so the PIT
+    producer can independently validate each fold's exact fitting identity before reusing the
+    checkpoint.  A non-matching fold simply falls back to the normal cache/resume/train path.
+    """
+
+    contract, reason = _load_reusable_continuous_forward_contract(settings)
+    if contract is None:
+        return None, reason
+    model_paths = resolve_filter_artifact_paths(
+        PROJECT_ROOT,
+        str(settings.filter_id),
+        str(settings.model_architecture),
+        str(settings.experiment_profile),
+    )
+    return (model_paths.model_dir.resolve(), Path(contract.report_path).resolve()), None
+
+
+def _append_pit_forward_checkpoint_import_args(
+    build_args: list[str],
+    source: tuple[Path, Path] | None,
+) -> None:
+    """Append the one canonical Forward→PIT checkpoint bridge argument pair."""
+
+    if source is None:
+        return
+    model_dir, report_path = source
+    build_args.extend([
+        "--checkpoint-import-model-dir", str(Path(model_dir).resolve()),
+        "--checkpoint-import-report-path", str(Path(report_path).resolve()),
+    ])
+
+
+def _rolling_build_reason(reason: str | None, forward_source: tuple[Path, Path] | None) -> str:
+    base = str(reason or "Rolling OOS artifact missing")
+    if forward_source is None:
+        return base
+    return (
+        base
+        + "；Forward model/report READY，PIT producer會逐fold驗證exact fitting identity後REUSE checkpoint"
+    )
+
+
 def _ensure_continuous_forward_model_report(
     program_name: str,
     *,
@@ -4130,6 +4176,7 @@ def _run_continuous_pit_profile(
     model_id: str,
     profile_name: str,
     mode=None,
+    forward_checkpoint_source: tuple[Path, Path] | None = None,
 ) -> int:
     settings = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
     selected_mode = mode or get_breakout_quality_rolling_test_mode("rolling")
@@ -4155,6 +4202,7 @@ def _run_continuous_pit_profile(
         "--seed", str(settings.seed),
         "--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
     ]
+    _append_pit_forward_checkpoint_import_args(build_args, forward_checkpoint_source)
     if selected_mode.fold_anchor_date is not None:
         build_args.extend(["--fold-anchor-date", str(selected_mode.fold_anchor_date)])
     if selected_mode.single_score_block:
@@ -4213,11 +4261,14 @@ def _run_continuous_rolling_mode_direct(
     _print_workflow_status(settings)
     contract, payload, reason = _load_reusable_rolling_standard_report(settings, mode)
     model_id = _model_display_id(settings.experiment_profile)
+    forward_source = None
+    if contract is None or payload is None:
+        forward_source, _forward_reason = _load_canonical_forward_checkpoint_import_source(settings)
     _print_model_action_status(((
         model_id,
         str(settings.experiment_profile),
         "REUSE" if contract is not None and payload is not None else "BUILD/REFRESH",
-        "READY" if contract is not None and payload is not None else str(reason or "Rolling OOS artifact missing"),
+        "READY" if contract is not None and payload is not None else _rolling_build_reason(reason, forward_source),
     ),))
     if contract is not None and payload is not None:
         _emit_standard_model_sop_report(
@@ -4240,6 +4291,7 @@ def _run_continuous_rolling_mode_direct(
         model_id=spec.model_research_id,
         profile_name=settings.experiment_profile,
         mode=mode,
+        forward_checkpoint_source=forward_source,
     )
 
 
@@ -4845,6 +4897,9 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             contract, payload, reason = _load_reusable_rolling_standard_report(settings, rolling_mode)
             ready = contract is not None and payload is not None
             action = "REUSE" if ready else "BUILD/REFRESH"
+            if not ready:
+                forward_source, _forward_reason = _load_canonical_forward_checkpoint_import_source(settings)
+                reason = _rolling_build_reason(reason, forward_source)
         else:
             contract, reason = _load_reusable_continuous_forward_contract(settings)
             payload = None if contract is None else dict(contract.report or {})
@@ -5057,11 +5112,12 @@ def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) ->
         "--point-in-time-dir-override", str(pit_dir),
         "--resume" if settings.point_in_time_resume else "--no-resume",
     ]
-    if forward_payload is not None:
-        build_args.extend([
-            "--checkpoint-import-model-dir", str(forward_model_dir),
-            "--checkpoint-import-report-path", str(forward_report_path),
-        ])
+    _append_pit_forward_checkpoint_import_args(
+        build_args,
+        None
+        if forward_payload is None
+        else (Path(forward_model_dir), Path(forward_report_path)),
+    )
     if mode.fold_anchor_date is not None:
         build_args.extend(["--fold-anchor-date", str(mode.fold_anchor_date)])
     if mode.single_score_block:

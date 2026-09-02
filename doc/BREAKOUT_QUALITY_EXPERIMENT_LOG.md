@@ -11381,3 +11381,10 @@ Decision：`MR13AS_IMPLEMENTED_RESULT_PENDING / P50_BOUNDARY_SUPERVISION_FOCUS /
 
 Decision：`ENGINEERING_SSOT_COMPLETE / SCIENTIFIC_PAYLOAD_BIT_EQUIVALENT / NO_RETRAIN / CURRENT_MR13AS_UNCHANGED`。
 
+
+## 2026-09-02 — Standard Rolling Forward-fitting checkpoint reuse bridge closure
+
+- **Scope**：B342 engineering bug closure；不建立新MR/ARCH identity，不改target、loss、pair geometry、Seed、optimizer、epoch selection、PIT cutoff或Standard SOP scientific/report schema。
+- **Root cause**：PIT producer已具有Forward→shared fitting-cache的exact-identity import能力，Rolling Robustness `[6]`亦正確傳入canonical Forward model/report；但一般Model Rolling `[2]/[4]`未傳入同一candidate，導致即使Forward fitted artifact已存在，第一個完全相同fitting identity的Rolling fold仍直接重新訓練。
+- **Fix**：一般Rolling與Rolling Robustness改共用單一atomic checkpoint-import argument helper；一般Rolling先驗canonical Forward model/manifest/report完整性，再只把model-dir/report交給PIT producer。PIT producer仍逐fold驗model/spec/profile/sample scope、split/cutoff、dataset/target/execution lineage；只有完全相容fit可REUSE checkpoint並重評Rolling score，Forward score/report不會被當成Rolling evidence，後續不同cutoff folds照常resume/cache/train。
+- **User-visible status**：Rolling PIT缺失時若Forward artifact完整，Model status會顯示Forward model/report已READY且將逐fold驗exact fitting identity，不再把「沒有Rolling score」誤表現成「完全沒有已訓練模型」。

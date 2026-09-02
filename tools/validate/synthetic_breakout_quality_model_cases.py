@@ -1292,15 +1292,68 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'print("[PIT data] 建立daily stock-day index／40D target...' not in pit_score_source,
     )
     check_true(
-        "forward_robustness_seed_is_offered_to_rolling_pit_only_through_fitting_identity_cache_bridge",
-        'forward_payload, forward_report_path, _forward_reason = _load_forward_robustness_seed(' in app_source
+        "forward_checkpoint_reuse_is_offered_to_standard_and_robustness_rolling_only_through_fitting_identity_cache_bridge",
+        'def _load_canonical_forward_checkpoint_import_source(settings):' in app_source
+        and app_source.count('_append_pit_forward_checkpoint_import_args(') >= 3
+        and 'forward_payload, forward_report_path, _forward_reason = _load_forward_robustness_seed(' in app_source
         and '"--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT)' in app_source
-        and '"--checkpoint-import-model-dir", str(forward_model_dir)' in app_source
-        and '"--checkpoint-import-report-path", str(forward_report_path)' in app_source
+        and '"--checkpoint-import-model-dir", str(Path(model_dir).resolve())' in app_source
+        and '"--checkpoint-import-report-path", str(Path(report_path).resolve())' in app_source
         and 'def _forward_checkpoint_import_issues(' in pit_score_source
         and 'execution_plan=plan' in pit_score_source
         and 'checkpoint_sample_scope = str(' in pit_score_source
         and 'checkpoint selected_epoch mismatch' not in pit_score_source,
+    )
+
+    rolling_settings = SimpleNamespace(
+        rolling_authorized=True,
+        filter_id="synthetic_quality",
+        model_architecture="synthetic_arch",
+        experiment_profile="synthetic_rolling_profile",
+    )
+    forward_checkpoint_source = (Path("/synthetic/forward/model"), Path("/synthetic/forward/report.json"))
+    with (
+        patch.object(research_app, "_print_workflow_status"),
+        patch.object(
+            research_app, "_load_reusable_rolling_standard_report",
+            return_value=(None, None, "synthetic Rolling PIT missing"),
+        ),
+        patch.object(
+            research_app, "_load_canonical_forward_checkpoint_import_source",
+            return_value=(forward_checkpoint_source, None),
+        ),
+        patch.object(research_app, "_print_model_action_status") as rolling_status,
+        patch.object(research_app, "_collect_continuous_research_input_plan", return_value=ready_plan),
+        patch.object(research_app, "_render_continuous_research_input_plan"),
+        patch.object(
+            research_app, "get_continuous_ranker_research_spec",
+            return_value=SimpleNamespace(model_research_id="SYNTHETIC-ROLLING"),
+        ),
+        patch.object(research_app, "_run_continuous_pit_profile", return_value=0) as pit_profile,
+    ):
+        rolling_rc = research_app._run_continuous_rolling_mode_direct(
+            "apps/research.py model", rolling_settings, prompt_for_build=False
+        )
+    rolling_reason = str(rolling_status.call_args.args[0][0][3])
+    check_true(
+        "standard_rolling_detects_validated_forward_model_report_and_passes_checkpoint_candidate_to_pit_producer",
+        rolling_rc == 0
+        and pit_profile.call_count == 1
+        and pit_profile.call_args.kwargs.get("forward_checkpoint_source") == forward_checkpoint_source
+        and "Forward model/report READY" in rolling_reason
+        and "exact fitting identity" in rolling_reason,
+    )
+
+    synthetic_build_args = ["--filter-id", "synthetic_quality"]
+    research_app._append_pit_forward_checkpoint_import_args(
+        synthetic_build_args, forward_checkpoint_source
+    )
+    check_true(
+        "forward_checkpoint_import_bridge_passes_model_and_report_as_one_atomic_argument_pair",
+        synthetic_build_args[-4:] == [
+            "--checkpoint-import-model-dir", str(forward_checkpoint_source[0].resolve()),
+            "--checkpoint-import-report-path", str(forward_checkpoint_source[1].resolve()),
+        ],
     )
 
     check_true(
@@ -4508,6 +4561,10 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+        get_continuous_ranker_training_policy,
+    )
     from filters.breakout_quality.conditional_mfe_opportunity import (
         HMHS_HIGH_PERCENTILE_CUTOFF,
         build_conditional_mfe_opportunity_targets,
@@ -4519,6 +4576,7 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
     from filters.breakout_quality.inference import strict_parallel_batched_logits
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from services.breakout_quality.ranker_training import safety_raw_mfe_hmhs_metrics
+    from services.breakout_quality.train_continuous_ranker import _combine_training_head_losses
 
     control = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -4743,13 +4801,27 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    trainer_source = (
-        project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
-    ).read_text(encoding="utf-8")
+    training_policy = get_continuous_ranker_training_policy(profile.training_objective)
+    combined_probe_loss = _combine_training_head_losses(
+        [
+            torch.tensor(1.0, dtype=torch.float32),
+            torch.tensor(2.0, dtype=torch.float32),
+            torch.tensor(6.0, dtype=torch.float32),
+        ],
+        combination=training_policy.head_loss_combination,
+        component_count=training_policy.head_loss_component_count,
+    )
     check_true(
         "mr13t_training_uses_fixed_equal_three_head_mean_and_raw_mfe_epoch_selection",
-        "loss = sum(head_losses) / 3.0" in trainer_source
-        and "Val HM/HS Pair" in trainer_source
+        training_policy.head_loss_combination
+        == CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED
+        and int(training_policy.head_loss_component_count) == 3
+        and torch.allclose(
+            combined_probe_loss,
+            torch.tensor(3.0, dtype=torch.float32),
+            rtol=0.0,
+            atol=0.0,
+        )
         and profile.epoch_selection_metric == "raw_mfe_mean_daily_spearman",
     )
     daily_source = (
