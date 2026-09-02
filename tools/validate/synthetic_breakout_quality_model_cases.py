@@ -7512,9 +7512,8 @@ def validate_breakout_quality_dual_supervised_hs_conditional_mfe_contract_case(_
     )
 
     check_true(
-        "dual_supervision_is_current_at_and_reuses_true_hs_conditional_target_geometry",
+        "dual_supervision_at_identity_and_true_hs_conditional_target_geometry_remain_frozen",
         research.model_research_id == "MR-13AT"
-        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) == ("MR-13AT", profile.name)
         and profile.training_objective
         == TRAINING_OBJECTIVE_DAILY_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_PAIRWISE_RANKING
         and recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
@@ -7548,13 +7547,11 @@ def validate_breakout_quality_dual_supervised_hs_conditional_mfe_contract_case(_
         and contract.get("conditional_mfe_pair_safety_weight") == "none",
     )
     check_true(
-        "dual_supervision_compare_membership_keeps_completed_conditional_family_and_removes_af_am",
-        tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-        and all(pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)
-        and len(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
-        == len(BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES) + 1
-        and [model_id for model_id, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
-        == ["MR-13H", "MR-13AH", "MR-13AK", "MR-13AO", "MR-13AR", "MR-13AS", "MR-13AT"],
+        "dual_supervision_remains_completed_conditional_family_reference_after_au",
+        ("MR-13AT", profile.name) in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
+        and ("MR-13AT", profile.name) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) != ("MR-13AT", profile.name)
+        and all(model_id not in {"MR-13AF", "MR-13AM"} for model_id, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES),
     )
 
     group_table = pd.DataFrame(
@@ -7945,3 +7942,114 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
     summary["training_performed"] = False
     return results, summary
 
+
+def validate_breakout_quality_top_hs_safety_conditional_mfe_contract_case(_base_params):
+    """Protect decision-aligned Top-HS NDCG@K Safety supervision with scoped Conditional-MFE."""
+
+    case_id = "BREAKOUT_QUALITY_TOP_HS_SAFETY_CONDITIONAL_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+        BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
+        BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import (
+        _pairwise_logistic_loss,
+        _top_hs_safety_relevance,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    at_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    contract = dict(
+        training_semantics(profile).get("shared_top_hs_safety_conditional_mfe_duo_head_contract") or {}
+    )
+
+    check_true(
+        "top_hs_is_current_au_and_reuses_hs_conditional_target_builder",
+        research.model_research_id == "MR-13AU"
+        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) == ("MR-13AU", profile.name)
+        and profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+        and recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+        and recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope
+        == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+        and float(recipe.objective_policy.secondary_pair_scope_threshold) == 0.50,
+    )
+    check_true(
+        "top_hs_changes_only_safety_supervision_and_uses_at_as_reference",
+        str(profile.model_architecture) == str(at_profile.model_architecture)
+        == "inception_time_shared_safety_mfe_v1"
+        and profile.epoch_selection_metric == at_profile.epoch_selection_metric
+        == "hs_conditional_mfe_mean_daily_spearman"
+        and research.model_gate_reference_profile_name == at_profile.name,
+    )
+    check_true(
+        "top_hs_contract_is_true_hs_count_ndcg_and_keeps_conditional_mfe_scoped",
+        contract.get("safety_top_k") == "per_date_true_hs_item_count_no_k_sweep"
+        and contract.get("safety_ranking_geometry")
+        == "delta_ndcg_at_true_hs_count_predicted_discounts_zero_below_k"
+        and contract.get("safety_within_hs_priority")
+        == "higher_low_adverse_safety_percentile_has_higher_relevance"
+        and contract.get("conditional_mfe_supervision_scope")
+        == "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg",
+    )
+    check_true(
+        "top_hs_compare_membership_keeps_completed_conditional_family",
+        tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        and all(pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)
+        and [model_id for model_id, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
+        == ["MR-13H", "MR-13AH", "MR-13AK", "MR-13AO", "MR-13AR", "MR-13AS", "MR-13AT", "MR-13AU"],
+    )
+
+    truth = torch.tensor([0.0, 0.25, 0.50, 0.75, 1.0], dtype=torch.float32)
+    relevance = _top_hs_safety_relevance(torch, truth, 0.50)
+    check_true(
+        "top_hs_relevance_ties_ls_at_zero_and_preserves_safety_priority_inside_hs",
+        torch.equal(relevance, torch.tensor([0.0, 0.0, 0.50, 0.75, 1.0])),
+    )
+    dates = pd.to_datetime(["2021-01-04"] * 5).to_numpy()
+    margins = torch.tensor([0.4, 0.3, 0.2, 0.1, 0.0], dtype=torch.float32)
+    topk_loss, topk_pairs = _pairwise_logistic_loss(
+        torch, margins, relevance, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        ndcg_top_k_threshold=0.50,
+    )
+    full_loss, full_pairs = _pairwise_logistic_loss(
+        torch, margins, relevance, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    check_true(
+        "top_hs_ndcg_at_k_uses_same_pair_truth_but_different_truncated_rank_geometry",
+        topk_loss is not None and full_loss is not None
+        and topk_pairs == full_pairs == 9
+        and not torch.allclose(topk_loss, full_loss, atol=1e-8, rtol=0.0),
+    )
+    summary["training_performed"] = False
+    return results, summary

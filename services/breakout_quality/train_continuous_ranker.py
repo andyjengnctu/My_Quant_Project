@@ -42,6 +42,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
@@ -866,6 +867,26 @@ def _binary_threshold_pair_target(torch, targets, threshold: float):
     return (values >= cutoff).to(dtype=values.dtype)
 
 
+def _top_hs_safety_relevance(torch, targets, threshold: float):
+    """Keep ordered Safety relevance only inside the true-HS top-half cohort.
+
+    LS rows are tied at zero. HS rows keep their canonical same-date Safety percentile,
+    so every HS strictly outranks every LS while safer HS rows retain higher relevance.
+    """
+
+    values = targets.float()
+    if values.ndim != 1:
+        raise ValueError("Top-HS Safety relevance target必須是一維")
+    cutoff = float(threshold)
+    if not math.isfinite(cutoff) or not 0.0 < cutoff < 1.0:
+        raise ValueError("Top-HS Safety cutoff必須位於(0,1)")
+    if not bool(torch.isfinite(values).all().item()):
+        raise FloatingPointError("Top-HS Safety target必須為有限值")
+    if bool((values < 0.0).any().item()) or bool((values > 1.0).any().item()):
+        raise ValueError("Top-HS Safety target只接受0～1 percentile")
+    return torch.where(values >= cutoff, values, torch.zeros_like(values))
+
+
 def _pairwise_logistic_loss(
     torch,
     margins,
@@ -879,6 +900,7 @@ def _pairwise_logistic_loss(
     pair_partition_relation: str = CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL,
     pair_truth_weight_values=None,
     pair_truth_weight_policy: str = CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
+    ndcg_top_k_threshold: float | None = None,
 ) -> tuple[Any | None, int]:
     """Return the configured RankNet loss over comparable within-day pairs.
 
@@ -926,6 +948,12 @@ def _pairwise_logistic_loss(
         and base_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
     ):
         raise ValueError("truth-side pair weighting目前只支援full-list Delta-NDCG")
+    if ndcg_top_k_threshold is not None:
+        cutoff = float(ndcg_top_k_threshold)
+        if base_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG:
+            raise ValueError("NDCG@K supervision目前只支援full-list Delta-NDCG primitive")
+        if not math.isfinite(cutoff) or not 0.0 < cutoff < 1.0:
+            raise ValueError("NDCG@K target cutoff必須位於(0,1)")
 
     if base_reduction not in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -1126,6 +1154,13 @@ def _pairwise_logistic_loss(
             1, item_count + 1, dtype=detached_margin.dtype, device=detached_margin.device
         )
         rank_discounts = 1.0 / torch.log2(rank_positions + 1.0)
+        if ndcg_top_k_threshold is not None:
+            top_k_count = int((detached_target >= float(ndcg_top_k_threshold)).sum().item())
+            if top_k_count < 1:
+                raise FloatingPointError("NDCG@K supervision每個rankable date至少需要一個top-K item")
+            if top_k_count < item_count:
+                rank_discounts = rank_discounts.clone()
+                rank_discounts[top_k_count:] = 0.0
         predicted_order = torch.argsort(detached_margin, descending=True, stable=True)
         discount_by_item = torch.empty_like(rank_discounts)
         discount_by_item[predicted_order] = rank_discounts
@@ -1581,6 +1616,7 @@ def _train_epoch(
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
             }:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
@@ -1606,6 +1642,7 @@ def _train_epoch(
                 if loss_handler in {
                     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
                     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
                 }:
                     if secondary_pair_scope_threshold is None:
                         raise ValueError("HS-qualification objective缺少true-HS threshold")
@@ -1614,6 +1651,14 @@ def _train_epoch(
                     )
                     if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE:
                         primary_pair_target = binary_hs_pair_target
+                top_hs_ndcg_threshold = None
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE:
+                    if secondary_pair_scope_threshold is None:
+                        raise ValueError("Top-HS Safety objective缺少true-HS threshold")
+                    top_hs_ndcg_threshold = float(secondary_pair_scope_threshold)
+                    primary_pair_target = _top_hs_safety_relevance(
+                        torch, target[:, 0], top_hs_ndcg_threshold
+                    )
                 primary_truth_weight_policy = (
                     get_continuous_ranker_primary_pair_weight_policy(training_objective)
                     if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
@@ -1649,6 +1694,7 @@ def _train_epoch(
                             else None
                         ),
                         pair_truth_weight_policy=primary_truth_weight_policy,
+                        ndcg_top_k_threshold=top_hs_ndcg_threshold,
                     )
                 if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE:
                     if secondary_item_eligibility is not None:

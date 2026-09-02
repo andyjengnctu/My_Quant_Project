@@ -11382,3 +11382,10 @@ Decision：`MR13AS_IMPLEMENTED_RESULT_PENDING / P50_BOUNDARY_SUPERVISION_FOCUS /
 - **Targeted validation**：Continuous=`46/46`、Shared-AH=`23/23`、AO=`7/7`、AP=`7/7`、AQ=`7/7`、AR=`8/8`、AS=`6/6`、AT=`7/7`、persistent report=`31/31`、Registry↔Checklist=`1851/1851`；Python compile PASS。Backward identity audit：baseline既有49個Continuous profiles之profile/spec/execution recipe/training semantics=`49/49 exact unchanged`，唯一新增AT。
 
 Decision：`MR13AT_IMPLEMENTED_RESULT_PENDING / SAME_HEAD_DUAL_SAFETY_HS_SUPERVISION / TRUE_HS_CONDITIONAL_MFE_FIXED / LAST_SUPERVISION_ONLY_CELL / SEED42_FORWARD_NEXT`。
+
+## 2026-09-02 — MR-13AT Dual-Supervision Model Gate / MR-13AU Top-HS follow-up
+
+- MR-13AT Seed42 Forward完成：Forward HS-Qual/P40–P60/P45–P55 Pair=`67.71/54.40/52.46%`、Pred-HS true-LS=`36.84%`、True-HS recall=`63.01%`；Breakout Pred-HS true-LS=`36.85%`、P45–P55=`54.78%`。與AS/AR/AO相比HS fidelity幾乎未動。
+- Conditional-MFE仍保留：Forward HS-only rho/Pair=`0.3947/63.82%`，Breakout=`0.4253/67.17%`；Forward HM/HS=`26.94%`但Breakout僅`24.29%`，不支持把Forward單點增量解讀為qualification breakthrough。Decision=`DUAL_SUPERVISION_NO_HS_FIDELITY_GAIN / MODEL_GATE_FAIL / NO_ROLLING / NO_ROBUSTNESS`。
+- 使用者決定在進representation-level前再做一個不同於continuous/binary/boundary weighting的decision-aligned control：MR-13AU。Safety head truth固定`LS=0`、HS保留same-date Low-Adverse percentile；每日`K=true-HS count`，NDCG discount於K後歸零，使training直接對齊inference的top-half HS membership並保留HS內越安全越優先。Conditional-MFE geometry與AT完全固定；Seed42 Forward only，不做K/cutoff/loss-ratio sweep。
+

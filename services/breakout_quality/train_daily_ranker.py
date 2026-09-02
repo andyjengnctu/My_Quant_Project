@@ -20,6 +20,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
@@ -1005,19 +1006,27 @@ def _render_markdown(payload: dict) -> str:
     if hs_eval:
         primary_semantic = str(hs_eval.get("primary_head_semantic") or "continuous_safety_ranking")
         direct_hs_qualification = primary_semantic == "binary_hs_qualification"
+        top_hs_safety_ranking = primary_semantic == "top_hs_safety_ranking"
+        qualification_style = direct_hs_qualification or top_hs_safety_ranking
         extension_title = (
+            "Top-HS Safety NDCG@K + True-HS Conditional-MFE"
+            if top_hs_safety_ranking
+            else
             "HS-Qualification + True-HS Conditional-MFE"
             if direct_hs_qualification
             else "True-HS Conditional-MFE"
         )
         primary_bullet = (
+            "- Safety head：LS relevance=0、HS保留same-date Safety relevance；每天K=true-HS數，NDCG discount在K之後歸零，直接優化top-half HS membership並讓越安全HS越優先。"
+            if top_hs_safety_ranking
+            else
             "- Qualification head：全daily universe exposure，但truth為Safety percentile≥0.50的binary HS；只有HS↔LS pairs有方向。"
             if direct_hs_qualification
             else "- Safety head：全daily universe supervision；Conditional-MFE head：只有true-HS items形成獨立full-list ΔNDCG sublist。"
         )
         inference_bullet = (
             "- Inference diagnostic固定為Pred-HS同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal qualification percentile，只filter不rerank。"
-            if direct_hs_qualification
+            if qualification_style
             else "- Inference diagnostic固定為Pred-Safety同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal predicted-Safety percentile，只filter不rerank。"
         )
         lines.extend([
@@ -1070,7 +1079,7 @@ def _render_markdown(payload: dict) -> str:
                 f"| {fmt(oracle.get('selected_mean_favorable_r'), 3)} "
                 f"| {fmt(gate.get('mean_favorable_r_gap_vs_true_hs_oracle'), 3)} |"
             )
-        if direct_hs_qualification:
+        if qualification_style:
             lines.extend([
                 "",
                 "| Scope | HS-Qualification Pair | P40–P60 Boundary Pair | P45–P55 Boundary Pair | Pred-HS true-LS | True-HS recall |",
@@ -1296,6 +1305,10 @@ def run(args) -> int:
         hs_conditional_mfe_duo
         and loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
     )
+    top_hs_safety_conditional_mfe_duo = (
+        hs_conditional_mfe_duo
+        and loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+    )
     hs_priority_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE
     safety_raw_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE
     safety_primary_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY
@@ -1417,7 +1430,9 @@ def run(args) -> int:
         else None
     )
     hs_conditional_mfe_evaluation = (
-        {"primary_head_semantic": "binary_hs_qualification"}
+        {"primary_head_semantic": "top_hs_safety_ranking"}
+        if top_hs_safety_conditional_mfe_duo
+        else {"primary_head_semantic": "binary_hs_qualification"}
         if hs_qualification_conditional_mfe_duo
         else {}
     )
