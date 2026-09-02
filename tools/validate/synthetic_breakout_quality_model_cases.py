@@ -2637,6 +2637,8 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         LEGACY_MODEL_ARCHITECTURES,
         SUPPORTED_MODEL_ARCHITECTURES,
         INCEPTION_TIME_RISK_CONTEXT_V1,
+        INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
         INCEPTION_TIME_V1,
         get_model_spec,
@@ -3462,6 +3464,83 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and mfe_shared_grad > 0.0
         and mfe_branch_grad > 0.0
         and mfe_to_safety_grad == 0.0,
+    )
+
+    # Safety-specific temporal attention pooling is another reusable InceptionTime
+    # primitive.  The AO-shared trunk/MFE path must remain exact at initialization;
+    # only the Safety pooling scorer is new, and MFE loss must not update it.
+    ao_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    safety_attn_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1)
+    ao_manifest = ao_spec.as_manifest_payload()
+    attn_manifest = safety_attn_spec.as_manifest_payload()
+    architecture_only_fields = {"architecture", "family", "pooling"}
+    check_true(
+        "safety_attention_pool_keeps_ao_trunk_and_head_spec_except_pooling_identity",
+        all(
+            ao_manifest[key] == attn_manifest[key]
+            for key in ao_manifest
+            if key not in architecture_only_fields
+        )
+        and tuple(safety_attn_spec.pooling)
+        == (
+            "safety_scalar_attention_pool",
+            "mfe_global_average",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+    )
+    torch.manual_seed(20260902)
+    ao_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    torch.manual_seed(20260902)
+    safety_attn_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1)
+    ao_state = ao_model.state_dict()
+    attn_state = safety_attn_model.state_dict()
+    shared_keys = sorted(set(ao_state).intersection(attn_state))
+    extra_keys = sorted(set(attn_state).difference(ao_state))
+    check_true(
+        "safety_attention_pool_same_seed_adds_only_scalar_scorer_parameters",
+        not (set(ao_state) - set(attn_state))
+        and extra_keys
+        == ["safety_attention_scorer.bias", "safety_attention_scorer.weight"]
+        and all(torch.equal(ao_state[key], attn_state[key]) for key in shared_keys),
+    )
+    scorer = safety_attn_model.safety_attention_scorer
+    check_true(
+        "safety_attention_pool_is_single_scalar_1x1_scorer_without_attention_hyperparameters",
+        isinstance(scorer, torch.nn.Conv1d)
+        and int(scorer.in_channels) == int(safety_attn_spec.inception_filters) * 4
+        and int(scorer.out_channels) == 1
+        and tuple(scorer.kernel_size) == (1,)
+        and tuple(scorer.stride) == (1,)
+        and tuple(scorer.padding) == (0,),
+    )
+    torch.manual_seed(20260903)
+    attention_x = torch.randn((3, 64, 10), dtype=torch.float32)
+    ao_model.eval()
+    safety_attn_model.eval()
+    with torch.no_grad():
+        ao_safety_logits, ao_mfe_logits = ao_model.forward_safety_mfe_heads(attention_x, None)
+        attn_safety_logits, attn_mfe_logits = safety_attn_model.forward_safety_mfe_heads(attention_x, None)
+        safety_weights = safety_attn_model.safety_attention_weights(attention_x)
+    check_true(
+        "safety_attention_pool_preserves_ao_mfe_path_and_normalizes_temporal_weights",
+        torch.equal(ao_mfe_logits, attn_mfe_logits)
+        and tuple(safety_weights.shape) == (3, 64)
+        and bool(torch.allclose(safety_weights.sum(dim=1), torch.ones(3), atol=1e-6, rtol=0.0))
+        and bool(torch.isfinite(safety_weights).all())
+        and not torch.equal(ao_safety_logits, attn_safety_logits),
+    )
+    safety_attn_model.zero_grad(set_to_none=True)
+    safety_logits, _mfe_logits = safety_attn_model.forward_safety_mfe_heads(attention_x, None)
+    safety_logits[:, 1].sum().backward()
+    scorer_from_safety_grad = _gradient_total(safety_attn_model.safety_attention_scorer.parameters())
+    safety_attn_model.zero_grad(set_to_none=True)
+    _safety_logits, mfe_logits = safety_attn_model.forward_safety_mfe_heads(attention_x, None)
+    mfe_logits[:, 1].sum().backward()
+    scorer_from_mfe_grad = _gradient_total(safety_attn_model.safety_attention_scorer.parameters())
+    check_true(
+        "safety_attention_pool_gradient_is_safety_only_while_mfe_keeps_shared_gap",
+        scorer_from_safety_grad > 0.0 and scorer_from_mfe_grad == 0.0,
     )
 
     daily_trainer_source = read_source_text(

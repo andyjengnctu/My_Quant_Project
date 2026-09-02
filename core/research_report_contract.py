@@ -180,7 +180,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=9,
+    version=10,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -262,6 +262,9 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
         (
             T("hs_conditional_gate", (
                 C("split", "Split", alignment="left"),
+                C("safety_daily_rho", "Safety Daily rho", 4, preference="higher", format_kind="number"),
+                C("safety_global_rho", "Safety Global rho", 4, preference="higher", format_kind="number"),
+                C("safety_pair", "Safety Pair", 2, "%", "higher", "fraction_pct"),
                 C("hs_only_daily_rho", "HS-only rho", 4, preference="higher", format_kind="number"),
                 C("hs_only_pair", "HS-only Pair", 2, "%", "higher", "fraction_pct"),
                 C("pred_hs_true_ls_pct", "Pred-HS true-LS", 2, "%", "lower", "pct"),
@@ -692,7 +695,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "e2273ebf653cc71d",
+    "model.standard_comparison": "2a47b1928a60f697",
     "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",

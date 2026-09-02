@@ -730,6 +730,7 @@ def _model_sop_view(payload: dict) -> dict:
             scope = dict(hs_conditional_eval.get(scope_key) or {})
             if not scope:
                 continue
+            safety = dict(scope.get("raw_safety") or {})
             learn = dict(scope.get("conditional_mfe_true_hs") or {})
             qualification = dict(scope.get("hs_qualification") or {})
             boundary = dict(scope.get("hs_qualification_boundary") or {})
@@ -739,6 +740,9 @@ def _model_sop_view(payload: dict) -> dict:
             oracle = dict(scope.get("true_hs_oracle_gate") or {})
             gate_rows.append({
                 "split": scope_label,
+                "safety_daily_rho": safety.get("mean_daily_spearman"),
+                "safety_global_rho": safety.get("global_spearman_vs_raw_target"),
+                "safety_pair": safety.get("pairwise_concordance"),
                 "hs_only_daily_rho": learn.get("mean_daily_spearman"),
                 "hs_only_pair": learn.get("pairwise_concordance"),
                 "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),

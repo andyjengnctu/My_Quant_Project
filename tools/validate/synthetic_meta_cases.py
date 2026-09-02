@@ -2883,7 +2883,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop_and_evidence_capabilities",
-        int(MODEL_STANDARD_COMPARISON.version) == 9
+        int(MODEL_STANDARD_COMPARISON.version) == 10
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_extension_ids() == tuple(
@@ -2922,8 +2922,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         == ("Model", "Split", "Head", "Daily rho", "Global rho", "Pair")
         and comparison_extension_contract("truth_prediction_geometry").tables[-1].headers
         == ("Model", "Pred Safety", "N", "Raw-MFE→MFE rho", "High-MFE", "HM/HS")
-        and comparison_extension_contract("hs_conditional_mfe_gate").tables[0].headers[0:3]
-        == ("Model", "Split", "HS-only rho")
+        and comparison_extension_contract("hs_conditional_mfe_gate").tables[0].headers[0:6]
+        == ("Model", "Split", "Safety Daily rho", "Safety Global rho", "Safety Pair", "HS-only rho")
         and comparison_extension_contract("hs_conditional_mfe_gate").tables[-1].headers[0:3]
         == ("Source Model", "Model", "Split"),
     )

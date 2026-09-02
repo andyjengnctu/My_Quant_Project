@@ -17,6 +17,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_safety_conditional_mfe = descriptor.has_capability("safety_conditional_mfe")
     use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
     use_task_specific_safety_mfe = descriptor.has_capability("task_specific_safety_mfe")
+    use_safety_attention_pool = descriptor.has_capability("safety_attention_pool")
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
     use_nonlinear_hmhs_head = descriptor.has_capability("nonlinear_hmhs_head")
     use_joint_attention_pool = descriptor.has_capability("joint_attention_pool")
@@ -226,6 +227,15 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 if use_joint_attention_pool
                 else None
             )
+            # Safety-specific temporal pooling is deliberately a single scalar 1x1 scorer.
+            # It adds no attention-head count, hidden width, temperature or query-count knob.
+            # Keep it after all AO-shared parameters so same-seed AO/AW common parameter
+            # initialization remains identical; only this scorer is newly initialized.
+            self.safety_attention_scorer = (
+                nn.Conv1d(module_output_channels, 1, kernel_size=1, bias=True)
+                if use_safety_attention_pool
+                else None
+            )
 
         def _run_residual_stack(self, z, modules, projections):
             residual = z
@@ -260,6 +270,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         def encode(self, x):
             z = self.encode_feature_map(x)
             return torch.mean(z, dim=2)
+
+        def safety_attention_weights(self, x):
+            if self.safety_attention_scorer is None:
+                raise ValueError("目前architecture沒有Safety temporal attention pooling")
+            feature_map = self.encode_feature_map(x)
+            logits = self.safety_attention_scorer(feature_map).squeeze(1)
+            return torch.softmax(logits.float(), dim=1).to(feature_map.dtype)
+
+        def _safety_attention_pool(self, feature_map):
+            if self.safety_attention_scorer is None:
+                return torch.mean(feature_map, dim=2)
+            logits = self.safety_attention_scorer(feature_map).squeeze(1)
+            weights = torch.softmax(logits.float(), dim=1).to(feature_map.dtype)
+            return torch.sum(feature_map * weights.unsqueeze(1), dim=2)
 
         def joint_attention_weights(self, x):
             if self.joint_attention_scorer is None:
@@ -318,6 +342,21 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 safety_logits = self.raw_safety_classifier(safety_encoded)
                 if self.raw_mfe_classifier is None:
                     raise ValueError("Task-specific architecture沒有Raw MFE head")
+                mfe_logits = self.raw_mfe_classifier(mfe_encoded)
+                return safety_logits, mfe_logits
+            if use_safety_attention_pool:
+                feature_map = self.encode_feature_map(x)
+                mfe_pooled = torch.mean(feature_map, dim=2)
+                safety_pooled = self._safety_attention_pool(feature_map)
+                # Preserve AO's single dropout RNG draw on the MFE path and reuse the same
+                # mask for Safety.  This keeps the controlled contrast focused on pooling
+                # rather than introducing an additional independent stochastic mask.
+                dropout_mask = self.dropout(torch.ones_like(mfe_pooled))
+                mfe_encoded = mfe_pooled * dropout_mask
+                safety_encoded = safety_pooled * dropout_mask
+                safety_logits = self.raw_safety_classifier(safety_encoded)
+                if self.raw_mfe_classifier is None:
+                    raise ValueError("Safety-attention architecture沒有Raw MFE head")
                 mfe_logits = self.raw_mfe_classifier(mfe_encoded)
                 return safety_logits, mfe_logits
             _primary_input, shared_encoded = self._encoded_for_heads(x, context)
