@@ -7299,13 +7299,13 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
     )
     from config.breakout_quality import get_breakout_quality_workflow_settings
     ao_workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+    ao_is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
     check_true(
-        "true_hs_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        "true_hs_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and ao_workflow.rolling_authorized is True
-        and ao_workflow.robustness_authorized is True,
+        and ao_workflow.rolling_authorized is ao_is_current
+        and ao_workflow.robustness_authorized is ao_is_current,
     )
     check_true(
         "true_hs_contract_is_non_compensatory_and_has_no_safety_context_or_pair_weight",
@@ -7494,13 +7494,14 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
         == "shared_latent_only_no_predicted_safety_context"
         and contract.get("conditional_mfe_pair_safety_weight") == "none",
     )
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+    is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
     check_true(
-        "hs_qualification_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        "hs_qualification_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and workflow.rolling_authorized is True
-        and workflow.robustness_authorized is True,
+        and workflow.rolling_authorized is is_current
+        and workflow.robustness_authorized is is_current,
     )
 
     group_table = pd.DataFrame(
@@ -7846,13 +7847,14 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
         and contract.get("priority_pair_safety_weight") == "none"
         and contract.get("runtime_score") == "hs_priority_mfe_pass_probability_direct_all_daily_ranking",
     )
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+    is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
     check_true(
-        "hs_priority_outside_current_membership_remains_unavailable_without_profile_veto",
+        "hs_priority_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and not breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and workflow.rolling_authorized is False
-        and workflow.robustness_authorized is False,
+        and workflow.rolling_authorized is is_current
+        and workflow.robustness_authorized is is_current,
     )
 
     group_table = pd.DataFrame(
@@ -7993,13 +7995,14 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
         == "each_stratum_normalized_by_own_delta_ndcg_weight_sum_then_fixed_equal_mean"
         and contract.get("priority_pair_safety_weight") == "none",
     )
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+    is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
     check_true(
-        "hs_priority_stratified_outside_current_membership_remains_unavailable_without_profile_veto",
+        "hs_priority_stratified_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and not breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and workflow.rolling_authorized is False
-        and workflow.robustness_authorized is False,
+        and workflow.rolling_authorized is is_current
+        and workflow.robustness_authorized is is_current,
     )
 
     group_table = pd.DataFrame(
