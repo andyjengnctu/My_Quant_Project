@@ -153,3 +153,5 @@
 - 2026-09-02：MR-13AX完成2×2最後一格仍未突破：Forward Safety Daily/Global rho/Pair=`0.3569/0.2891/62.86%`，Breakout=`0.3054/0.3569/63.87%`；相對AO只有極小Pair增量且Daily/Global方向不一致。使用者授權下一步不再改P50或pooling/split，改為MR-13AY直接提升feature-map內部temporal interaction。current list=`H / AH / AK / AO / AY`。
 
 - 2026-09-02：MR-13AY Seed42 Forward Model Gate結案。Safety Forward Daily/Global rho/Pair=`0.3450/0.2917/62.38%`與Breakout=`0.2906/0.3478/63.38%`皆未優於AO；HS-only Forward/Breakout rho=`0.3848/0.3992`亦退化。Decision=`TEMPORAL_SELF_ATTENTION_DEGRADES_SAFETY_RANKING / CONDITIONAL_MFE_DEGRADES / INCEPTIONTIME_LOCAL_ARCHITECTURE_PATCH_FAMILY_STOP / MODEL_GATE_FAIL / NO_ROLLING / NO_ROBUSTNESS`。current切到MR-13AZ Safety-only Patch representation contrast；list=`H / AH / AK / AO / AZ`。
+
+- 2026-09-03：B355 Forward→Rolling reuse工程closure依使用者MR-13BF實跑證據重新打開並完成修正：正式Forward `manifest.json`不持有`torch_execution`，該fitting truth只由`fitted_model_manifest.json`／legacy fitting evidence驗證；第一個同fit Rolling fold現在必須REUSE相同checkpoint或fail-fast，不得靜默TRAIN。此修正不改MR-13BF scientific priority／Gate；Queue Priority 1仍為BF Seed42 Forward Model Gate。

@@ -142,10 +142,13 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "experiment_settings": profile_payload,
         "seed": 693545351,
         "training_settings": {
+            "epochs_max": 200,
             "batch_size": 128,
             "learning_rate": 0.0003,
             "weight_decay": 0.0001,
             "gradient_clip_norm": 1.0,
+            "early_stopping_patience": 1,
+            "early_stopping_min_delta": 0.0,
         },
         "planned_periods": {
             "validation_start": "2019-01-01",
@@ -165,7 +168,6 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             )
         },
         "selected_epoch": 2,
-        "torch_execution": execution_payload,
         "source_dataset": {
             "policy": source_contract["dataset_policy"],
             "dataset_storage_schema_version": source_contract["dataset_storage_schema_version"],
@@ -184,10 +186,6 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "training": {
             "seed": fold_contract["seed"],
             "selected_epoch": 2,
-            "batch_size": 128,
-            "learning_rate": 0.0003,
-            "weight_decay": 0.0001,
-            "gradient_clip_norm": 1.0,
         },
         "standard_model_sop": {"evaluation_mode": "forward_oos"},
         "split_report": {
@@ -213,9 +211,26 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         group_context=np.zeros((2, 5), dtype=np.float32),
     )
     execution_plan = SimpleNamespace(as_manifest_payload=lambda: execution_payload)
+    source_fitting_evidence = SimpleNamespace(
+        training_settings={
+            "max_epochs": 200,
+            "batch_size": 128,
+            "learning_rate": 0.0003,
+            "weight_decay": 0.0001,
+            "gradient_clip_norm": 1.0,
+            "use_inner_validation": True,
+            "inner_validation_months": 24,
+            "early_stopping_patience": 1,
+            "early_stopping_min_delta": 0.0,
+        },
+        torch_execution={key: value for key, value in execution_payload.items() if key != "requested_device"},
+        selected_epoch=2,
+        model_record=checkpoint_manifest,
+    )
     import_issues = _forward_checkpoint_import_issues(
         source_manifest=source_manifest,
         source_report=source_report,
+        source_fitting_evidence=source_fitting_evidence,
         checkpoint=checkpoint,
         checkpoint_manifest=checkpoint_manifest,
         fold_contract=fold_contract,
@@ -248,6 +263,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     stale_issues = _forward_checkpoint_import_issues(
         source_manifest=source_manifest,
         source_report=source_report,
+        source_fitting_evidence=source_fitting_evidence,
         checkpoint=checkpoint,
         checkpoint_manifest=checkpoint_manifest,
         fold_contract=stale_fold_contract,

@@ -1093,10 +1093,11 @@ def _forward_checkpoint_import_issues(
     persisted_execution = dict(getattr(source_fitting_evidence, "torch_execution", {}) or {})
     if persisted_execution != expected_execution:
         issues.append("fitted-model torch_execution mismatch")
-    manifest_execution = dict(source_manifest.get("torch_execution") or {})
-    manifest_execution.pop("requested_device", None)
-    if manifest_execution != expected_execution:
-        issues.append("manifest torch_execution mismatch")
+    # ``fitted_model_manifest.json`` is the fitting-execution SSOT.  The final
+    # Forward ``manifest.json`` is an evaluation/publication manifest and the
+    # canonical producer does not persist ``torch_execution`` there.  Requiring
+    # that non-canonical field made every real Forward -> first Rolling import
+    # fail even though the fitted sidecar held the exact resolved execution.
     report_execution = dict(source_report.get("torch_execution") or {})
     report_execution.pop("requested_device", None)
     if report_execution and report_execution != expected_execution:
@@ -1244,6 +1245,17 @@ def _import_forward_checkpoint_to_fitting_cache(
         execution_plan=execution_plan,
     )
     if issues:
+        # For the canonical first Rolling fold, Forward and Rolling share the
+        # same score start and therefore are expected to share the exact fit.
+        # Never silently refit that fold after advertising a validated Forward
+        # checkpoint candidate; surface the violated identity field instead.
+        source_oos_start = str(dict(source_report.get("split_report") or {}).get("oos_start_date") or "")
+        fold_score_start = str(dict(fold_contract.get("planned_periods") or {}).get("score_start") or "")
+        if source_oos_start and source_oos_start == fold_score_start:
+            raise RuntimeError(
+                "Forward OOS checkpoint與第一個Rolling fold應為同一fitting identity但驗證失敗: "
+                + "; ".join(issues[:12])
+            )
         return None
 
     identity = fold_training_identity(fold_contract)

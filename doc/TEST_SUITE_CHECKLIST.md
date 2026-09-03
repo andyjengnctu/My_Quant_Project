@@ -2932,6 +2932,10 @@
 | 2026-09-03 | T474 | 新增patience-change invalidates reuse historical regression | NEW -> DONE | validate_breakout_quality_fitted_model_lifecycle_contract_case |
 | 2026-09-03 | B355 | 修正Forward OOS已fit checkpoint未被同identity Rolling fold重用；橋接改讀fitted-model SSOT並使stale Rolling fit回canonical producer | NEW -> DONE | Forward report只負責evaluation evidence，不再被要求持有optimizer fitting欄位 |
 | 2026-09-03 | T475 | 新增Forward→Rolling實際checkpoint import與stale-fit routing regression | NEW -> DONE | validate_breakout_quality_fitted_model_lifecycle_contract_case |
+| 2026-09-03 | B355 | 使用者MR-13BF實跑證明B355仍未閉環：planner有Forward candidate但第一Rolling fold仍TRAIN；production Forward manifest不含torch_execution而validator仍要求 | DONE -> PARTIAL | `services/breakout_quality/point_in_time_scores.py` production manifest shape mismatch |
+| 2026-09-03 | T475 | 原T475 synthetic錯把torch_execution塞入Forward manifest，未覆蓋正式producer shape，無法抓到真實reuse failure | DONE -> PARTIAL | `validate_breakout_quality_fitted_model_lifecycle_contract_case` fixture fidelity gap |
+| 2026-09-03 | B355 | 修正Forward→Rolling bridge只由fitted-model SSOT驗scientific torch execution；第一同fit Rolling fold identity mismatch改fail-fast，禁止靜默重訓 | PARTIAL -> DONE | `services/breakout_quality/point_in_time_scores.py` |
+| 2026-09-03 | T475 | T475改用production-shaped Forward manifest（無torch_execution）並新增第一fold不得silent TRAIN regression；targeted lifecycle 17/17 PASS | PARTIAL -> DONE | `validate_breakout_quality_fitted_model_lifecycle_contract_case` |
 
 
 

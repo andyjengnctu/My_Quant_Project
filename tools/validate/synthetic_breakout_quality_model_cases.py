@@ -8734,7 +8734,8 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             "model_spec": model_spec,
             "experiment_settings": experiment_settings,
             "selected_epoch": 2,
-            "torch_execution": execution_payload,
+            # Production Forward manifest.json intentionally does not own
+            # torch_execution; fitted_model_manifest.json is the fitting SSOT.
             "model": checkpoint_record,
             "source_dataset": {
                 "policy": source_contract["dataset_policy"],
@@ -8818,11 +8819,40 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             execution_plan=plan,
         )
         check_true(
-            "forward_oos_checkpoint_import_reads_fitted_sidecar_not_report_optimizer_fields",
+            "forward_oos_checkpoint_import_uses_fitted_sidecar_when_production_manifest_omits_torch_execution_and_report_omits_optimizer_fields",
             imported is not None
             and imported.get("reused_existing_cache") is False
             and Path(imported["cache_entry"]).joinpath("model.pt").read_bytes()
             == model_path.read_bytes(),
+        )
+
+        mismatched_manifest = dict(source_manifest)
+        mismatched_manifest["model_spec"] = {"architecture": "wrong_architecture"}
+        (model_dir / "manifest.json").write_text(
+            json.dumps(mismatched_manifest), encoding="utf-8"
+        )
+        first_fold_mismatch_raised = False
+        try:
+            _import_forward_checkpoint_to_fitting_cache(
+                source_model_dir=model_dir,
+                source_report_path=report_path,
+                cache_root=cache_dir,
+                fold_contract=fold_contract,
+                bundle=SimpleNamespace(
+                    feature_bank=np.zeros((1, 300, 10), dtype=np.float32),
+                    group_context=np.zeros((1, 0), dtype=np.float32),
+                ),
+                torch_module=SimpleNamespace(load=lambda *_args, **_kwargs: checkpoint),
+                execution_plan=plan,
+            )
+        except RuntimeError as exc:
+            first_fold_mismatch_raised = (
+                "第一個Rolling fold應為同一fitting identity" in str(exc)
+                and "manifest model_spec mismatch" in str(exc)
+            )
+        check_true(
+            "first_rolling_fold_never_silently_refits_when_forward_candidate_claims_same_score_origin_but_identity_check_fails",
+            first_fold_mismatch_raised,
         )
 
     from services.breakout_quality.fitted_model_artifacts import (

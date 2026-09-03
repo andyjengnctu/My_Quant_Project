@@ -11593,3 +11593,12 @@ Decision：`ENGINEERING_ONLY / FITTING_SETTINGS_READINESS_BEFORE_EVALUATION_REUS
 
 Decision：`ENGINEERING_ONLY / FORWARD_ROLLING_MATCHING_FIT_REUSES_IDENTICAL_CHECKPOINT / FITTED_MODEL_SIDECAR_IS_CROSS_EVALUATION_SSOT / NO_RETRAIN_FOR_MATCHING_FIT`。
 
+## 2026-09-03 — B355 correction: production Forward manifest does not own torch execution
+
+- **User evidence**：MR-13BF Rolling狀態列已顯示「Forward model/report READY，PIT producer會逐fold驗證exact fitting identity後REUSE checkpoint」，但第一個`fold_20210101_20211231`仍直接進入「訓練並評分」。這證明B355的candidate routing已成功，實際import validator仍在拒絕production artifact。
+- **Remaining root cause**：B355 regression為synthetic `source_manifest`人工加入`torch_execution`，但正式`train_daily_ranker.py`產生的Forward `manifest.json`從未持有此欄位；`torch_execution`的fitting truth已由B350 `fitted_model_manifest.json`持有。因此`_forward_checkpoint_import_issues()`仍固定產生`manifest torch_execution mismatch`，造成真實artifact 100%無法import。
+- **Correction**：Forward→Rolling fitting bridge不再要求evaluation/publication `manifest.json`提供`torch_execution`；canonical fitted sidecar仍必須與目前resolved scientific execution一致，Forward report如有execution evidence亦只作一致性驗證。第一個Rolling fold若與Forward `oos_start`相同但任何exact-fitting欄位仍不一致，現在直接fail-fast列出mismatch，禁止再靜默重訓。
+- **Regression correction**：T475 production-shape case現在刻意省略Forward `manifest.json.torch_execution`與Forward report optimizer欄位，仍必須成功匯入相同checkpoint bytes；另驗第一foldidentity mismatch必須拋錯而非fallback TRAIN。targeted lifecycle regression=`17/17 PASS`。
+- **Scientific boundary**：仍為B355 artifact-lifecycle engineering closure；不改MR-13BF target、architecture、loss、seed、split、training settings、OOS/ Rolling evaluation semantics或checkpoint內容。
+
+Decision：`B355_REOPENED_AND_CORRECTED / PRODUCTION_MANIFEST_SHAPE_COVERED / FIRST_MATCHING_ROLLING_FOLD_MUST_REUSE_OR_FAIL_FAST / NO_SCIENTIFIC_CHANGE`。

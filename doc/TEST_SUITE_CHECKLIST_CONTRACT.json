@@ -24097,6 +24097,38 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "validate_breakout_quality_fitted_model_lifecycle_contract_case"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B355",
+      "description": "使用者MR-13BF實跑證明B355仍未閉環：planner有Forward candidate但第一Rolling fold仍TRAIN；production Forward manifest不含torch_execution而validator仍要求",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "`services/breakout_quality/point_in_time_scores.py` production manifest shape mismatch"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T475",
+      "description": "原T475 synthetic錯把torch_execution塞入Forward manifest，未覆蓋正式producer shape，無法抓到真實reuse failure",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` fixture fidelity gap"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B355",
+      "description": "修正Forward→Rolling bridge只由fitted-model SSOT驗scientific torch execution；第一同fit Rolling fold identity mismatch改fail-fast，禁止靜默重訓",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "`services/breakout_quality/point_in_time_scores.py`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T475",
+      "description": "T475改用production-shaped Forward manifest（無torch_execution）並新增第一fold不得silent TRAIN regression；targeted lifecycle 17/17 PASS",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "`validate_breakout_quality_fitted_model_lifecycle_contract_case`"
     }
   ]
 }
