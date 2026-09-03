@@ -348,6 +348,11 @@ def parse_args(argv=None):
     )
     parser.add_argument("--model-output-dir", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--research-output-dir", default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--reuse-fitted-model",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
     if int(args.seed) < 0:
         parser.error("--seed 必須 >= 0")

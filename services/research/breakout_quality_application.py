@@ -3988,6 +3988,23 @@ def _rolling_build_reason(reason: str | None, forward_source: tuple[Path, Path] 
     )
 
 
+def _has_continuous_forward_fitted_candidate(settings) -> bool:
+    """Cheap status-only probe; exact fitting identity is validated by the producer."""
+
+    try:
+        paths = resolve_filter_artifact_paths(
+            PROJECT_ROOT,
+            str(settings.filter_id),
+            str(settings.model_architecture),
+            str(settings.experiment_profile),
+        )
+    except ValueError:
+        # Status-only probe: synthetic/mutation settings may intentionally use an
+        # unregistered architecture. Exact legality is owned by the real producer.
+        return False
+    return paths.model_path.is_file()
+
+
 def _ensure_continuous_forward_model_report(
     program_name: str,
     *,
@@ -4007,7 +4024,7 @@ def _ensure_continuous_forward_model_report(
         print(f"{model_id} 存在不可由canonical producer確定性補建的前置工件；本次不執行。")
         return 1, None, "BLOCKED"
     if prompt_for_build and not _prompt_bool(
-        "目前無可合法REUSE的完整模型報表；確認自動建立缺失工件並訓練", True
+        "完整Forward報表不可REUSE；確認先驗證既有fitted checkpoint，只補缺失evaluation/report（fitting identity不相容才重訓）", True
     ):
         return 0, None, "CANCELLED"
     code = _prepare_continuous_research_inputs(program_name, settings)
@@ -4020,6 +4037,7 @@ def _ensure_continuous_forward_model_report(
             "--model-architecture", str(settings.model_architecture),
             "--experiment-profile", str(settings.experiment_profile),
             "--seed", str(int(settings.seed)),
+            "--reuse-fitted-model",
         ],
         program_name=program_name,
         emit_simple_report=False,
@@ -4032,7 +4050,7 @@ def _ensure_continuous_forward_model_report(
         raise RuntimeError(
             f"{model_id}訓練完成但canonical Forward-OOS contract仍不可REUSE: {reason}"
         )
-    return 0, contract, "BUILD"
+    return 0, contract, "BUILD/REFRESH"
 
 
 def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
@@ -4044,7 +4062,11 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
     _print_model_action_status(((
         str(research_spec.model_research_id),
         str(settings.experiment_profile),
-        "REUSE" if reusable_contract is not None else "BUILD",
+        "REUSE"
+        if reusable_contract is not None
+        else "REFRESH/VERIFY"
+        if _has_continuous_forward_fitted_candidate(settings)
+        else "BUILD",
         "READY" if reusable_contract is not None else str(reuse_reason or "missing"),
     ),))
     code, contract, action = _ensure_continuous_forward_model_report(
@@ -4908,7 +4930,13 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             contract, reason = _load_reusable_continuous_forward_contract(settings)
             payload = None if contract is None else dict(contract.report or {})
             ready = contract is not None
-            action = "REUSE" if ready else "BUILD"
+            action = (
+                "REUSE"
+                if ready
+                else "REFRESH/VERIFY"
+                if _has_continuous_forward_fitted_candidate(settings)
+                else "BUILD"
+            )
         display_rows.append((str(model_id), str(profile_name), action, reason or "READY"))
         planned.append((str(model_id), settings, contract, payload, reason))
 
@@ -5088,6 +5116,7 @@ def _build_forward_robustness_seed(program_name: str, settings, *, seed: int) ->
             "--seed", str(int(seed)),
             "--model-output-dir", str(model_dir),
             "--research-output-dir", str(research_dir),
+            "--reuse-fitted-model",
         ],
         program_name=program_name,
         emit_simple_report=False,

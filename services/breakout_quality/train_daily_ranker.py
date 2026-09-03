@@ -90,6 +90,12 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     predict_score_output_payload,
     resolve_ranker_execution_plan,
 )
+from services.breakout_quality.fitted_model_artifacts import (
+    build_daily_forward_fitting_identity,
+    load_model_from_fitted_checkpoint,
+    load_reusable_fitted_model_contract,
+    write_fitted_model_contract,
+)
 
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
 MR13S_TRUTH_GEOMETRY_JSON_FILENAME = "mr13s_truth_geometry_control.json"
@@ -1349,57 +1355,107 @@ def run(args) -> int:
             f"context={','.join(bundle.summary.get('context_features') or []) or '-'}"
         )
 
-    epoch_selection = ranker_api.select_epoch(
-        torch,
-        bundle.feature_bank,
-        bundle.group_context,
-        bundle.group_table,
-        bundle.raw_target,
-        percentile_target,
-        split.inner_train_ids,
-        split.validation_ids,
-        args=args,
-        plan=plan,
-        evaluate_train_metrics=False,
-    )
-    selected_epoch = int(epoch_selection["best_epoch"])
-    model, final_history = ranker_api.fit_final(
-        torch,
-        bundle.feature_bank,
-        bundle.group_context,
-        bundle.raw_target,
-        percentile_target,
-        bundle.group_table,
-        split.selection_ids,
-        epochs=selected_epoch,
-        args=args,
-        plan=plan,
-        phase_label="Daily Selection完整重訓",
-    )
-
     artifact_paths, output_dir = ranker_api.resolve_training_output_paths(args)
     artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
+    canonical_training_semantics = ranker_api.training_semantics(bundle.profile)
+    expected_fitting_identity = build_daily_forward_fitting_identity(
+        filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile),
+        seed=int(args.seed),
+        bundle=bundle,
+        split_report=split.report,
+        training_semantics=canonical_training_semantics,
+        args=args,
+        plan=plan,
+    )
+    existing_fitted_contract = None
+    fitted_reuse_reason = None
+    if bool(getattr(args, "reuse_fitted_model", False)):
+        existing_fitted_contract, fitted_reuse_reason = load_reusable_fitted_model_contract(
+            model_dir=artifact_paths.model_dir,
+            expected_identity=expected_fitting_identity,
+            final_manifest_path=artifact_paths.manifest_path,
+            report_path=output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME,
+        )
+
+    if existing_fitted_contract is not None:
+        model = load_model_from_fitted_checkpoint(
+            torch, contract=existing_fitted_contract, bundle=bundle, plan=plan
+        )
+        selected_epoch = int(existing_fitted_contract.selected_epoch)
+        epoch_selection = dict(existing_fitted_contract.epoch_selection or {})
+        final_history = list(existing_fitted_contract.final_refit_history or [])
+        fitted_model_action = "REUSE"
+        print(
+            "[REUSE FIT] Continuous fitted checkpoint｜"
+            f"source={existing_fitted_contract.source} | selected_epoch={selected_epoch}"
+        )
+    else:
+        if bool(getattr(args, "reuse_fitted_model", False)) and artifact_paths.model_path.exists():
+            print(f"[FIT REQUIRED] existing checkpoint不可REUSE｜{fitted_reuse_reason or 'fitting identity unavailable'}")
+        epoch_selection = ranker_api.select_epoch(
+            torch,
+            bundle.feature_bank,
+            bundle.group_context,
+            bundle.group_table,
+            bundle.raw_target,
+            percentile_target,
+            split.inner_train_ids,
+            split.validation_ids,
+            args=args,
+            plan=plan,
+            evaluate_train_metrics=False,
+        )
+        selected_epoch = int(epoch_selection["best_epoch"])
+        model, final_history = ranker_api.fit_final(
+            torch,
+            bundle.feature_bank,
+            bundle.group_context,
+            bundle.raw_target,
+            percentile_target,
+            bundle.group_table,
+            split.selection_ids,
+            epochs=selected_epoch,
+            args=args,
+            plan=plan,
+            phase_label="Daily Selection完整重訓",
+        )
+        fitted_model_action = "BUILD"
+        trainable_parameter_count = count_trainable_parameters(model)
+        total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
+        torch.save(
+            {
+                "model_state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
+                "feature_count": int(bundle.feature_bank.shape[2]),
+                "context_count": int(bundle.group_context.shape[1]),
+                "sequence_length": int(bundle.feature_bank.shape[1]),
+                "model_spec": bundle.model_spec.as_manifest_payload(),
+                "experiment_profile": str(args.experiment_profile),
+                "experiment_settings": bundle.profile.as_manifest_payload(),
+                "training_objective": bundle.profile.training_objective,
+                "training_sample_scope": bundle.profile.training_sample_scope,
+                "continuous_target_contract": bundle.target_manifest.get("target_contract"),
+                "selected_epoch": selected_epoch,
+                "torch_execution": plan.as_manifest_payload(),
+                "trainable_parameter_count": int(trainable_parameter_count),
+                "total_parameter_count": int(total_parameter_count),
+            },
+            artifact_paths.model_path,
+        )
+
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
-    torch.save(
-        {
-            "model_state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
-            "feature_count": int(bundle.feature_bank.shape[2]),
-            "context_count": int(bundle.group_context.shape[1]),
-            "sequence_length": int(bundle.feature_bank.shape[1]),
-            "model_spec": bundle.model_spec.as_manifest_payload(),
-            "experiment_profile": str(args.experiment_profile),
-            "experiment_settings": bundle.profile.as_manifest_payload(),
-            "training_objective": bundle.profile.training_objective,
-            "training_sample_scope": bundle.profile.training_sample_scope,
-            "continuous_target_contract": bundle.target_manifest.get("target_contract"),
-            "selected_epoch": selected_epoch,
-            "torch_execution": plan.as_manifest_payload(),
-            "trainable_parameter_count": int(trainable_parameter_count),
-            "total_parameter_count": int(total_parameter_count),
-        },
-        artifact_paths.model_path,
-    )
+    if existing_fitted_contract is None or existing_fitted_contract.source != "fitted_model_manifest":
+        write_fitted_model_contract(
+            model_dir=artifact_paths.model_dir,
+            fitting_identity=expected_fitting_identity,
+            selected_epoch=selected_epoch,
+            epoch_selection=epoch_selection,
+            final_refit_history=final_history,
+            trainable_parameter_count=trainable_parameter_count,
+            total_parameter_count=total_parameter_count,
+        )
 
     # OOS target ranks and inference are intentionally deferred until after checkpoint write.
     oos_mask = np.zeros(bundle.raw_target.shape, dtype=bool)
@@ -2234,7 +2290,6 @@ def run(args) -> int:
         "oos": oos_metrics,
         "breakout_candidate_oos": candidate_metrics,
     }
-    canonical_training_semantics = ranker_api.training_semantics(bundle.profile)
     payload = {
         "schema_version": ranker_api.RANKER_SCHEMA_VERSION + 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),

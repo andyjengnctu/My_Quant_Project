@@ -1192,6 +1192,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 "--model-architecture", "synthetic_arch",
                 "--experiment-profile", "synthetic_model_gate_profile",
                 "--seed", "42",
+                "--reuse-fitted-model",
             ],
             "apps/research.py model",
         )],
@@ -8504,3 +8505,345 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
     summary["training_performed"] = False
     return results, summary
 
+
+
+def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params):
+    """Historical regression: report refresh must never erase a compatible fitted model."""
+
+    case_id = "BREAKOUT_QUALITY_FITTED_MODEL_LIFECYCLE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from services.breakout_quality.fitted_model_artifacts import (
+        FittedModelConflictError,
+        load_reusable_fitted_model_contract,
+        write_fitted_model_contract,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        model_dir = root / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        model_path = model_dir / "model.pt"
+        model_path.write_bytes(b"synthetic-fitted-checkpoint")
+        identity = {
+            "filter_id": "breakout_quality_v1",
+            "model_architecture": "synthetic_architecture",
+            "experiment_profile": "synthetic_profile",
+            "seed": 42,
+            "training_settings": {"learning_rate": 0.0003},
+        }
+        sidecar_path = write_fitted_model_contract(
+            model_dir=model_dir,
+            fitting_identity=identity,
+            selected_epoch=3,
+            epoch_selection={"best_epoch": 3},
+            final_refit_history=[{"epoch": 1}],
+            trainable_parameter_count=10,
+            total_parameter_count=12,
+        )
+        contract, reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir,
+            expected_identity=identity,
+            final_manifest_path=root / "missing_manifest.json",
+            report_path=root / "missing_report.json",
+        )
+        check_true(
+            "fitted_model_sidecar_is_reusable_without_forward_report_or_final_manifest",
+            contract is not None
+            and reason is None
+            and contract.source == "fitted_model_manifest"
+            and contract.selected_epoch == 3
+            and sidecar_path.is_file(),
+        )
+
+        changed_identity = dict(identity)
+        changed_identity["training_settings"] = {"learning_rate": 0.0004}
+        changed_contract, changed_reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir,
+            expected_identity=changed_identity,
+            final_manifest_path=root / "missing_manifest.json",
+            report_path=root / "missing_report.json",
+        )
+        check_true(
+            "fitted_model_reuse_requires_exact_fitting_identity",
+            changed_contract is None and "fitting identity mismatch" in str(changed_reason),
+        )
+
+        model_path.write_bytes(b"synthetic-conflicting-checkpoint")
+        conflict_raised = False
+        try:
+            load_reusable_fitted_model_contract(
+                model_dir=model_dir,
+                expected_identity=identity,
+                final_manifest_path=root / "missing_manifest.json",
+                report_path=root / "missing_report.json",
+            )
+        except FittedModelConflictError:
+            conflict_raised = True
+        check_true(
+            "same_fitting_identity_with_different_checkpoint_bytes_fails_fast",
+            conflict_raised,
+        )
+
+    from services.breakout_quality.fitted_model_artifacts import legacy_default_fitting_settings
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        model_dir = root / "legacy_model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        model_path = model_dir / "model.pt"
+        model_path.write_bytes(b"legacy-daily-checkpoint")
+        expected_identity = {
+            "filter_id": "breakout_quality_v1",
+            "model_architecture": "inception_time_v1",
+            "experiment_profile": "legacy_daily_profile",
+            "experiment_settings": {"name": "legacy_daily_profile"},
+            "model_spec": {"architecture": "inception_time_v1"},
+            "training_objective": "daily_pairwise_ranking",
+            "training_label_scope": "all_labels",
+            "training_sample_scope": "daily_eligible_stock_days",
+            "training_semantics": {"batching": "same_date"},
+            "continuous_target_id": "legacy_target",
+            "seed": 42,
+            "training_settings": legacy_default_fitting_settings(),
+            "torch_execution": {"device": "cuda", "deterministic": True},
+            "split": {
+                "sample_scope": "daily_eligible_stock_days",
+                "selection_start_date": "2011-01-01",
+                "selection_end_date": "2020-12-31",
+                "inner_validation_start_date": "2019-01-01",
+                "oos_start_date": "2021-01-01",
+                "counts": {"inner_train": 100, "validation": 20, "selection": 120},
+                "no_lookahead": True,
+                "selection_label_end_before_oos": True,
+                "inner_train_label_end_before_validation": True,
+                "target_valid_filter_applied": True,
+            },
+            "source": {
+                "dataset_policy": {"dataset": "full"},
+                "training_universe_start_date": "2011-01-01",
+                "target_contract": {"target_id": "legacy_target"},
+            },
+        }
+        legacy_manifest = {
+            key: expected_identity[key]
+            for key in (
+                "filter_id", "model_architecture", "experiment_profile", "experiment_settings",
+                "model_spec", "training_objective", "training_label_scope",
+                "training_sample_scope", "training_semantics", "continuous_target_id",
+            )
+        }
+        legacy_manifest.update({
+            "selected_epoch": 2,
+            "torch_execution": {"requested_device": "cuda", **expected_identity["torch_execution"]},
+            "source_continuous_target": {"target_contract": expected_identity["source"]["target_contract"]},
+            "source_dataset": {
+                "policy": expected_identity["source"]["dataset_policy"],
+                "training_universe_start_date": expected_identity["source"]["training_universe_start_date"],
+            },
+            "model": build_file_manifest(model_path),
+        })
+        legacy_report = {
+            "training": {
+                "seed": 42,
+                "selected_epoch": 2,
+                "epoch_selection": {"best_epoch": 2},
+                "final_refit_history": [{"epoch": 1}],
+            },
+            "torch_execution": {"requested_device": "cuda", **expected_identity["torch_execution"]},
+            "split_report": {
+                **{key: value for key, value in expected_identity["split"].items() if key != "counts"},
+                "counts": {**expected_identity["split"]["counts"], "oos": 30},
+                "oos_end_date": "2026-03-02",
+            },
+            "artifacts": {"model": build_file_manifest(model_path)},
+        }
+        manifest_path = model_dir / "manifest.json"
+        report_path = root / "continuous_ranker_report.json"
+        manifest_path.write_text(json.dumps(legacy_manifest), encoding="utf-8")
+        report_path.write_text(json.dumps(legacy_report), encoding="utf-8")
+        legacy_contract, legacy_reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir,
+            expected_identity=expected_identity,
+            final_manifest_path=manifest_path,
+            report_path=report_path,
+        )
+        check_true(
+            "legacy_daily_forward_artifact_migrates_when_historical_fitting_defaults_match",
+            legacy_contract is not None
+            and legacy_reason is None
+            and legacy_contract.source == "legacy_manifest_report",
+        )
+        changed_identity = dict(expected_identity)
+        changed_settings = dict(expected_identity["training_settings"])
+        changed_settings["learning_rate"] = 0.0004
+        changed_identity["training_settings"] = changed_settings
+        changed_contract, changed_reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir,
+            expected_identity=changed_identity,
+            final_manifest_path=manifest_path,
+            report_path=report_path,
+        )
+        check_true(
+            "legacy_daily_forward_artifact_does_not_mask_changed_fitting_settings",
+            changed_contract is None
+            and "historical defaults" in str(changed_reason),
+        )
+
+    import torch
+    from filters.breakout_quality.models.factory import build_model, count_trainable_parameters
+    from filters.breakout_quality.models.spec_registry import get_model_spec
+    from services.breakout_quality.fitted_model_artifacts import load_model_from_fitted_checkpoint
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        model_dir = Path(temp_dir)
+        spec = get_model_spec("inception_time_v1")
+        feature_count = 10
+        context_count = 0
+        sequence_length = 300
+        source_model = build_model(
+            feature_count,
+            context_count,
+            architecture=spec.architecture,
+            model_spec=spec.as_manifest_payload(),
+        )
+
+        class _SyntheticProfile:
+            name = "synthetic_profile"
+
+            @staticmethod
+            def as_manifest_payload():
+                return {"name": "synthetic_profile"}
+
+        torch.save(
+            {
+                "model_state_dict": {
+                    key: value.detach().cpu() for key, value in source_model.state_dict().items()
+                },
+                "feature_count": feature_count,
+                "context_count": context_count,
+                "sequence_length": sequence_length,
+                "model_spec": spec.as_manifest_payload(),
+                "experiment_profile": _SyntheticProfile.name,
+                "experiment_settings": _SyntheticProfile.as_manifest_payload(),
+                "selected_epoch": 2,
+            },
+            model_dir / "model.pt",
+        )
+        identity = {"synthetic": "zero_context_reload"}
+        write_fitted_model_contract(
+            model_dir=model_dir,
+            fitting_identity=identity,
+            selected_epoch=2,
+            epoch_selection={"best_epoch": 2},
+            final_refit_history=[],
+            trainable_parameter_count=count_trainable_parameters(source_model),
+            total_parameter_count=sum(int(parameter.numel()) for parameter in source_model.parameters()),
+        )
+        fitted_contract, _reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir,
+            expected_identity=identity,
+            final_manifest_path=model_dir / "missing_manifest.json",
+            report_path=model_dir / "missing_report.json",
+        )
+        bundle = SimpleNamespace(
+            feature_bank=np.empty((2, sequence_length, feature_count), dtype=np.float32),
+            group_context=np.empty((2, context_count), dtype=np.float32),
+            model_spec=spec,
+            profile=_SyntheticProfile(),
+        )
+        loaded_model = load_model_from_fitted_checkpoint(
+            torch,
+            contract=fitted_contract,
+            bundle=bundle,
+            plan=SimpleNamespace(device=torch.device("cpu")),
+        )
+        check_true(
+            "zero_context_daily_checkpoint_reloads_exactly_from_fitted_contract",
+            fitted_contract is not None
+            and count_trainable_parameters(loaded_model) == count_trainable_parameters(source_model)
+            and all(
+                torch.equal(source_model.state_dict()[key], loaded_model.state_dict()[key])
+                for key in source_model.state_dict()
+            ),
+        )
+
+    from services.research import breakout_quality_application as research_app
+
+    settings = SimpleNamespace(
+        filter_id="breakout_quality_v1",
+        model_architecture="synthetic_architecture",
+        experiment_profile="synthetic_profile",
+        seed=42,
+    )
+    built_contract = SimpleNamespace(report={"standard_model_sop": {}}, report_path=Path("synthetic_report.json"))
+    command_args = []
+
+    def _capture_command(command, args, **_kwargs):
+        command_args.append((command, tuple(args)))
+        return 0
+
+    with patch.object(
+        research_app,
+        "_load_reusable_continuous_forward_contract",
+        side_effect=[(None, "report refresh required"), (built_contract, None)],
+    ), patch.object(
+        research_app,
+        "_collect_continuous_research_input_plan",
+        return_value=SimpleNamespace(blocked=False),
+    ), patch.object(
+        research_app,
+        "_render_continuous_research_input_plan",
+        return_value=None,
+    ), patch.object(
+        research_app,
+        "_prepare_continuous_research_inputs",
+        return_value=0,
+    ), patch.object(
+        research_app,
+        "_run_command",
+        side_effect=_capture_command,
+    ), patch.object(
+        research_app,
+        "_clear_continuous_forward_reuse_caches",
+        return_value=None,
+    ):
+        code, contract, action = research_app._ensure_continuous_forward_model_report(
+            "synthetic",
+            model_id="MR-SYNTHETIC",
+            settings=settings,
+            prompt_for_build=False,
+        )
+    check_true(
+        "forward_report_refresh_delegates_with_reuse_fitted_model_before_any_refit",
+        code == 0
+        and contract is built_contract
+        and action == "BUILD/REFRESH"
+        and len(command_args) == 1
+        and command_args[0][0] == "train-continuous-ranker"
+        and "--reuse-fitted-model" in command_args[0][1],
+    )
+
+    with patch.object(
+        research_app,
+        "_load_reusable_continuous_forward_contract",
+        return_value=(built_contract, None),
+    ), patch.object(research_app, "_run_command") as run_command:
+        code, contract, action = research_app._ensure_continuous_forward_model_report(
+            "synthetic",
+            model_id="MR-SYNTHETIC",
+            settings=settings,
+            prompt_for_build=False,
+        )
+    check_true(
+        "complete_forward_contract_reuses_without_training_or_report_rebuild",
+        code == 0
+        and contract is built_contract
+        and action == "REUSE"
+        and run_command.call_count == 0,
+    )
+
+    summary["training_performed"] = False
+    return results, summary

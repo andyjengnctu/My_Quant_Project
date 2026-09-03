@@ -118,6 +118,7 @@ from .synthetic_breakout_quality_artifact_cases import (
 from .synthetic_breakout_quality_model_cases import (
     validate_breakout_quality_continuous_target_contract_case,
     validate_breakout_quality_continuous_ranker_contract_case,
+    validate_breakout_quality_fitted_model_lifecycle_contract_case,
     validate_breakout_quality_all_event_no_time_ranker_contract_case,
     validate_breakout_quality_pairwise_ranker_contract_case,
     validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case,
@@ -364,6 +365,7 @@ def get_synthetic_validator_entries():
         _entry(validate_breakout_quality_chronological_embargo_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_continuous_target_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_continuous_ranker_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_breakout_quality_fitted_model_lifecycle_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_all_event_no_time_ranker_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_pairwise_ranker_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case, layer="core_invariant", cost_class="fast"),

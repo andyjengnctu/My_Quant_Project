@@ -3748,6 +3748,17 @@
       "entry": "`tools/local_regression/checklist_contract.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 337
+    },
+    {
+      "id": "B350",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research / Artifact lifecycle",
+      "item": "Continuous Forward FIT / EVALUATE / REPORT artifact lifecycle SSOT",
+      "gap": "Forward fitted checkpoint必須有獨立canonical fitting contract；report/score/schema refresh不得使compatible checkpoint重新fit。完整Forward contract READY時不得再次呼叫trainer；report不完整時只可先驗exact fitting identity並reuse checkpoint補evaluation/report。",
+      "entry": "`services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
+      "initial_status": "NEW",
+      "order": 338
     }
   ],
   "tests": [
@@ -7027,6 +7038,13 @@
       "b_id": "B349",
       "initial_status": "NEW",
       "order": 459
+    },
+    {
+      "id": "T470",
+      "description": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` 驗report/manifest缺失不會抹除獨立fitted-model truth、exact fitting identity reuse、same-identity byte conflict fail-fast、Forward refresh必帶reuse-fitted-model且完整contract 0 producer call",
+      "b_id": "B350",
+      "initial_status": "NEW",
+      "order": 460
     }
   ],
   "transitions": [
@@ -23893,6 +23911,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_checklist_generated_view_ssot_contract_case`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B350",
+      "description": "拆分Continuous Forward FIT / EVALUATE / REPORT artifact lifecycle，checkpoint完成即發布獨立fitting contract，report refresh不得觸發compatible model refit",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T470",
+      "description": "新增fitted-model lifecycle historical regression，鎖住report-independent checkpoint reuse與orchestrator reuse-fitted delegation",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_breakout_quality_fitted_model_lifecycle_contract_case`"
     }
   ]
 }

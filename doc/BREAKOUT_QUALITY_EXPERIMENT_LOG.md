@@ -11491,3 +11491,13 @@ Decision：`MR13BA_CLOSED_MODEL_GATE_FAIL / MR13BB_IMPLEMENTED_RESULT_PENDING / 
 
 Decision：`MR13BB_CLOSED_MODEL_GATE_FAIL / MR13BC_IMPLEMENTED_RESULT_PENDING / 600BAR_LONG_HORIZON_CONTROL / SAME_473734_PARAMS / RF609 / SEED42_FORWARD_NEXT`。
 
+## 2026-09-03 — Engineering closure: Continuous Forward fitted-model lifecycle SSOT
+
+- **Scope**：純engineering artifact-lifecycle refactor；不新增／修改MR scientific identity，不改target、architecture、loss、optimizer、seed、split、epoch-selection metric、PIT/strategy authorization或既有checkpoint fitting semantics。
+- **Root cause**：舊Forward reuse contract把`model.pt` fitting validity與manifest/report/Standard-SOP completeness綁成單一READY。只要report schema／coverage／SOP需要refresh，orchestrator便再次呼叫完整trainer，而Daily trainer沒有reuse-fitted mode，因此已完成checkpoint仍會重跑epoch selection與Selection refit。
+- **B350 contract**：新增獨立`fitted_model_manifest.json`，在checkpoint寫入後、任何OOS inference/report之前立即發布；正式Forward workflow在完整report不可REUSE時傳入`--reuse-fitted-model`，先驗exact fitting identity。相容checkpoint直接載入後只補evaluation/report；不相容才重新fit；完整Forward contract已READY則不呼叫producer。
+- **Legacy compatibility**：既有Daily Universal model/manifest/report可在historical formal fitting settings與current request完全一致時遷移sidecar；current LR/batch/epoch-selection等fitting setting一旦不同即拒絕reuse。sidecar宣告同一deterministic fitting identity但checkpoint bytes不同時fail-fast，不靜默重訓。
+- **Expected operational effect**：Forward model comparison／Forward model gate重跑時，已完整的model+report直接`REUSE`；只有report/evaluation需要refresh時顯示`[REUSE FIT]`並跳過模型訓練，避免因報表治理變動反覆消耗GPU訓練時間。
+
+Decision：`ENGINEERING_ONLY / FIT_EVALUATE_REPORT_SEPARATED / EXISTING_SCIENTIFIC_IDENTITIES_UNCHANGED`。
+
