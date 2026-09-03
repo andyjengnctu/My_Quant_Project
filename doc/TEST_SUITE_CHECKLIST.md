@@ -371,6 +371,7 @@
 | B350 | P1 | Research / Artifact lifecycle | Continuous Forward FIT / EVALUATE / REPORT artifact lifecycle SSOT | DONE | Forward fitted checkpoint必須有獨立canonical fitting contract；report/score/schema refresh不得使compatible checkpoint重新fit。完整Forward contract READY時不得再次呼叫trainer；report不完整時只可先驗exact fitting identity並reuse checkpoint補evaluation/report。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
 | B351 | P1 | Research / Report contract | Continuous DL [3][4][5][6] Comparison Evidence Bundle SSOT | DONE | Forward/Rolling/Forward Robustness/Rolling Robustness必須共用同一Standard SOP + model-extension evidence contract；extension applicability由training composition evidence_family與extension registry派生，Rolling只缺extension時僅refresh audit，不得重建PIT scores；Robustness跨seed aggregation由extension contract宣告，禁止workflow各自截斷或猜測evidence。 | `core/research_report_contract.py`, `config/breakout_quality_runtime.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/point_in_time_audit.py` |
 | B352 | P1 | Research / Artifact lifecycle | Rolling model-extension score capability → audit evidence dependency SSOT | DONE | [4]/[6]遇到comparison extension缺失時必須先由training composition的score_output_policy判斷PIT model-output sidecar是否完整；sidecar缺失只能checkpoint-rescore，sidecar完整且audit stale才audit-only refresh。ranking reader、PIT audit與Robustness不得各自硬編objective-specific score-column matrix。 | `config/breakout_quality_runtime.py`, `filters/breakout_quality/ranking_score_store.py`, `services/breakout_quality/point_in_time_audit.py`, `services/research/breakout_quality_application.py` |
+| B353 | P1 | Research / Artifact lifecycle | PIT row eligibility × score-output capability orthogonal contracts | DONE | Daily PIT row eligibility只回答prediction-time feature history是否足以產生score，future target不得控制score存在；multi-head sidecar completeness只由獨立score-output capability contract判定。正式loader可依序驗兩者，但不得把output columns/head數塞回eligibility contract，避免新增model-output capability改寫無前視score universe。 | `filters/breakout_quality/ranker_sample_contract.py`, `filters/breakout_quality/ranking_score_store.py`, `config/breakout_quality_runtime.py` |
 
 
 
@@ -799,6 +800,7 @@
 | T470 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 驗report/manifest缺失不會抹除獨立fitted-model truth、exact fitting identity reuse、same-identity byte conflict fail-fast、Forward refresh必帶reuse-fitted-model且完整contract 0 producer call | B350 |
 | T471 | `validate_research_report_contract_freeze_case` 覆蓋B351：驗comparison extension evidence-family discovery、v11 persistent contract、row-mean robustness aggregation與single-seed-only geometry contract | B351 |
 | T472 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B352：current score-output policy為唯一column owner，AK-style legacy primary-only PIT在audit前被拒絕並要求checkpoint-rescore | B352 |
+| T473 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B353：eligibility-only manifest必須通過future-independent row contract，同一manifest必須被獨立score-output capability validator拒絕，完整PIT loader再組合兩者 | B353 |
 
 ## G. 逐項收斂紀錄
 
@@ -2920,6 +2922,8 @@
 | 2026-09-03 | T471 | 擴充persistent report capability regression，鎖住evidence-family discovery與robustness aggregation policy | NEW -> DONE | `validate_research_report_contract_freeze_case` |
 | 2026-09-03 | B352 | 收斂Rolling model-extension score capability與audit evidence dependency lifecycle | NEW -> DONE | score-output policy → PIT score → audit → comparison bundle |
 | 2026-09-03 | T472 | 新增PIT stale multi-head score capability regression並鎖住generic score-output owner | NEW -> DONE | validate_breakout_quality_point_in_time_score_builder_contract_case |
+| 2026-09-03 | B353 | 拆分PIT row eligibility與score-output sidecar completeness為正交contract | NEW -> DONE | eligibility → row universe；score-output capability → persisted columns |
+| 2026-09-03 | T473 | 新增PIT eligibility/output capability orthogonality historical regression | NEW -> DONE | validate_breakout_quality_point_in_time_score_builder_contract_case |
 
 
 

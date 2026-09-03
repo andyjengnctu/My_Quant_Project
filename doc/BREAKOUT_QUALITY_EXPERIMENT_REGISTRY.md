@@ -499,3 +499,12 @@ Decision：`ENGINEERING_ONLY / COMPARISON_EVIDENCE_BUNDLE_SSOT / MODEL_IDENTITIE
 - **Fail-fast**：standalone PIT audit 必須驗 manifest `score_columns` 與實際 score columns 都符合 current score-output policy；不符合時拒絕產生新的 incomplete audit。相同規則同時適用 `[4]` 與 `[6]`，避免 single-seed / robustness 再次分叉。
 
 Decision：`ENGINEERING_ONLY / SCORE_THEN_AUDIT_DEPENDENCY_ORDER / NO_RETRAIN_FOR_SCORE_OUTPUT_ONLY_REFRESH`。
+
+## 2026-09-03 — Engineering contract: PIT score eligibility / output capability orthogonality
+
+- **Scope**：B352 後續 engineering correction；不新增／修改 MR scientific identity、target/loss/model fitting、PIT information legality、Strategy semantics 或 `model.standard_comparison` contract。
+- **Row-eligibility owner**：`build_score_eligibility_contract(profile)` 只定義 prediction-time 某 stock-day 是否可依當下 feature history 產生 PIT score；future target maturity 只能控制 training/evaluation target availability，不得控制 score row 是否存在。
+- **Score-output capability owner**：`ContinuousRankerTrainingPolicy.score_output_policy` 只定義已產生 PIT score artifact 必須持久化哪些 primary／sidecar output columns。新增 model head 或 report evidence family 不得回頭改寫 row eligibility universe。
+- **Consumer contract**：正式 PIT ranking loader 依序驗 `score_eligibility_contract` 與 `score_columns`，兩者可同時是 required dependency，但必須由獨立 validator 判定。eligibility-only fixture 可獨立驗 future-independence；完整 loader 仍會對缺 sidecar 的 stale multi-head artifact fail-fast 並要求 checkpoint-rescore。
+
+Decision：`ENGINEERING_ONLY / ROW_ELIGIBILITY_AND_OUTPUT_CAPABILITY_ORTHOGONAL / B197_AND_B352_BOTH_PRESERVED`。

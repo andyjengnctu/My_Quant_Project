@@ -407,16 +407,42 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ),
     )
     from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
-    from filters.breakout_quality.ranking_score_store import _validate_score_eligibility_contract
+    from filters.breakout_quality.ranking_score_store import (
+        _validate_score_eligibility_contract,
+        _validate_score_output_capability_contract,
+    )
 
     a1_manifest_base = {
         "score_eligibility_contract": build_score_eligibility_contract(a1_profile),
     }
     current_a1_manifest = {**a1_manifest_base, "score_columns": expected_raw_duo_columns}
     _validate_score_eligibility_contract(current_a1_manifest, profile=a1_profile)
+    _validate_score_output_capability_contract(current_a1_manifest, profile=a1_profile)
+    eligibility_only_manifest_accepted = True
+    try:
+        _validate_score_eligibility_contract(a1_manifest_base, profile=a1_profile)
+    except ValueError:
+        eligibility_only_manifest_accepted = False
+    output_capability_rejects_eligibility_only_manifest = False
+    try:
+        _validate_score_output_capability_contract(a1_manifest_base, profile=a1_profile)
+    except ValueError as exc:
+        output_capability_rejects_eligibility_only_manifest = (
+            "score-output capability" in str(exc)
+        )
+    check_true(
+        "pit_row_eligibility_and_output_capability_contracts_are_orthogonal",
+        eligibility_only_manifest_accepted
+        and output_capability_rejects_eligibility_only_manifest,
+        note=(
+            "Prediction-time row eligibility must remain future-independent and must not be "
+            "redefined by multi-head sidecar completeness; the full PIT loader validates both "
+            "contracts independently."
+        ),
+    )
     stale_a1_rejected = False
     try:
-        _validate_score_eligibility_contract(
+        _validate_score_output_capability_contract(
             {**a1_manifest_base, "score_columns": {"primary": "breakout_quality_score"}},
             profile=a1_profile,
         )

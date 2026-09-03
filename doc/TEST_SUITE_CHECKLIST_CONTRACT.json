@@ -3781,6 +3781,17 @@
       "entry": "`config/breakout_quality_runtime.py`, `filters/breakout_quality/ranking_score_store.py`, `services/breakout_quality/point_in_time_audit.py`, `services/research/breakout_quality_application.py`",
       "initial_status": "NEW",
       "order": 340
+    },
+    {
+      "id": "B353",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research / Artifact lifecycle",
+      "item": "PIT row eligibility × score-output capability orthogonal contracts",
+      "gap": "Daily PIT row eligibility只回答prediction-time feature history是否足以產生score，future target不得控制score存在；multi-head sidecar completeness只由獨立score-output capability contract判定。正式loader可依序驗兩者，但不得把output columns/head數塞回eligibility contract，避免新增model-output capability改寫無前視score universe。",
+      "entry": "`filters/breakout_quality/ranker_sample_contract.py`, `filters/breakout_quality/ranking_score_store.py`, `config/breakout_quality_runtime.py`",
+      "initial_status": "NEW",
+      "order": 341
     }
   ],
   "tests": [
@@ -7081,6 +7092,13 @@
       "b_id": "B352",
       "initial_status": "NEW",
       "order": 462
+    },
+    {
+      "id": "T473",
+      "description": "`validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B353：eligibility-only manifest必須通過future-independent row contract，同一manifest必須被獨立score-output capability validator拒絕，完整PIT loader再組合兩者",
+      "b_id": "B353",
+      "initial_status": "NEW",
+      "order": 463
     }
   ],
   "transitions": [
@@ -23992,6 +24010,22 @@
       "date": "2026-09-03",
       "id": "T472",
       "description": "新增PIT stale multi-head score capability regression並鎖住generic score-output owner",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "validate_breakout_quality_point_in_time_score_builder_contract_case"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B353",
+      "description": "拆分PIT row eligibility與score-output sidecar completeness為正交contract",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "eligibility → row universe；score-output capability → persisted columns"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T473",
+      "description": "新增PIT eligibility/output capability orthogonality historical regression",
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "validate_breakout_quality_point_in_time_score_builder_contract_case"

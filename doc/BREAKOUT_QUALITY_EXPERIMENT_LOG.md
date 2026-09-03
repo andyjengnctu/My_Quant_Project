@@ -11521,3 +11521,12 @@ Decision：`ENGINEERING_ONLY / FORWARD_ROLLING_ROBUSTNESS_REPORTS_SHARE_ONE_EVID
 - **Regression**：generic PIT capability synthetic直接用 AK-style current score policy驗證 current manifest通過、legacy primary-only manifest在 audit 前被拒絕；consumer source不得再持有 objective-specific score-output matrix。
 
 Decision：`ENGINEERING_ONLY / SCORE_CAPABILITY_AND_AUDIT_LIFECYCLE_SEPARATED / COMPATIBLE_CHECKPOINT_RESCORE_NOT_REFIT`。
+
+## 2026-09-03 — Engineering closure: PIT eligibility / output capability contract separation
+
+- **Observed formal regression**：B352 收斂 Rolling score-output capability 後，`daily_pit_score_presence_depends_only_on_past_feature_history_contract` 與 `strategy_loader_requires_future_independent_daily_pit_score_eligibility_contract` 失敗。實際 scientific/PIT row semantics 未改；失敗由 `_validate_score_eligibility_contract()` 同時要求 `score_columns` 所致。
+- **Root cause**：row eligibility 與 output-column completeness 雖在 dependency 設計上是兩層，實作卻合併成單一 validator。任何新增 multi-head sidecar 都會讓只驗無前視 eligibility 的 artifact/fixture被錯判，形成 capability leakage。
+- **Fix**：`_validate_score_eligibility_contract()` 恢復只驗 future-independent row universe；新增 `_validate_score_output_capability_contract()` 專責 current score-output policy。正式 Selection PIT loader對daily profile依序驗兩者，因此 legacy primary-only multi-head score仍會在策略使用前被拒絕，但 eligibility contract 本身不再依賴 head/column count。
+- **Regression**：B197兩個歷史 future-independence cases恢復 PASS；B352 stale AK-style primary-only sidecar guard仍 PASS；新增 B353/T473 直接驗「同一 eligibility-only manifest 應通過 row contract、但被獨立 output-capability contract拒絕」。
+
+Decision：`ENGINEERING_ONLY / ORTHOGONAL_SCORE_CONTRACTS / NO_SCIENTIFIC_OR_ARTIFACT_IDENTITY_CHANGE`。

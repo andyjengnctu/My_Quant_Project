@@ -217,6 +217,14 @@ def _validate_embedded_target_source_artifact(
 def _validate_score_eligibility_contract(
     manifest: dict[str, Any], *, profile
 ) -> None:
+    """Validate only prediction-time row eligibility.
+
+    Eligibility answers whether a stock-day may receive a PIT score using information
+    available at that decision time.  It is intentionally orthogonal to how many model
+    output columns/heads are persisted.  Keeping these contracts separate prevents a
+    new multi-head output capability from redefining the no-lookahead row universe.
+    """
+
     if (
         str(profile.training_sample_scope)
         != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
@@ -229,11 +237,18 @@ def _validate_score_eligibility_contract(
             "Selection PIT daily score eligibility contract過舊或不一致；"
             "策略使用前請重新建立PIT Scores並重新執行PIT audit"
         )
-    # Score-output capability is declarative and objective-agnostic here.
-    # Historical objective-specific checks caused new multi-head objectives to look
-    # "score READY / audit stale" even when their PIT scores lacked required sidecars.
-    # That made audit-only refresh loop forever because an audit cannot reconstruct
-    # model outputs that were never persisted.
+
+
+def _validate_score_output_capability_contract(
+    manifest: dict[str, Any], *, profile
+) -> None:
+    """Validate persisted model-output columns independently from row eligibility."""
+
+    if (
+        str(profile.training_sample_scope)
+        != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        return
     expected_score_columns = get_continuous_ranker_score_output_columns(
         str(profile.training_objective)
     )
@@ -436,6 +451,7 @@ def load_selection_point_in_time_ranking_contract(
 
     if manifest_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         _validate_score_eligibility_contract(manifest, profile=profile)
+        _validate_score_output_capability_contract(manifest, profile=profile)
         _validate_embedded_target_source_artifact(
             audit_sources.get("continuous_target_manifest"),
             manifest=manifest,
