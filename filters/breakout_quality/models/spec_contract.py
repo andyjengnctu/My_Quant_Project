@@ -60,6 +60,10 @@ class BreakoutQualityModelSpec:
     modern_tcn_channels: int | None = None
     modern_tcn_kernel_size: int | None = None
     modern_tcn_expansion_ratio: int | None = None
+    gru_hidden_size: int | None = None
+    gru_layers: int | None = None
+    gru_bidirectional: bool | None = None
+    gru_pooling: str | None = None
     ts2vec_hidden_dims: int | None = None
     ts2vec_output_dims: int | None = None
     ts2vec_depth: int | None = None
@@ -193,6 +197,10 @@ class BreakoutQualityModelSpec:
             "modern_tcn_channels": self.modern_tcn_channels,
             "modern_tcn_kernel_size": self.modern_tcn_kernel_size,
             "modern_tcn_expansion_ratio": self.modern_tcn_expansion_ratio,
+            "gru_hidden_size": self.gru_hidden_size,
+            "gru_layers": self.gru_layers,
+            "gru_bidirectional": self.gru_bidirectional,
+            "gru_pooling": self.gru_pooling,
             "ts2vec_hidden_dims": self.ts2vec_hidden_dims,
             "ts2vec_output_dims": self.ts2vec_output_dims,
             "ts2vec_depth": self.ts2vec_depth,

@@ -10,6 +10,7 @@ from filters.breakout_quality.models.architectures import (
 from filters.breakout_quality.models.spec_builders import (
     ModelSpecBuilder,
     build_day_token_transformer_shared_safety_mfe_spec,
+    build_gru_shared_safety_mfe_spec,
     build_inception_group_norm_spec,
     build_inception_hmhs_mlp_spec,
     build_inception_joint_spec,
@@ -48,6 +49,7 @@ _SPEC_BUILDERS_BY_KEY: dict[str, ModelSpecBuilder] = {
     "inception_joint": build_inception_joint_spec,
     "inception_group_norm": build_inception_group_norm_spec,
     "day_token_transformer_shared_safety_mfe": build_day_token_transformer_shared_safety_mfe_spec,
+    "gru_shared_safety_mfe": build_gru_shared_safety_mfe_spec,
     "market_set": build_market_set_spec,
     "residual_tcn": build_residual_tcn_spec,
 }

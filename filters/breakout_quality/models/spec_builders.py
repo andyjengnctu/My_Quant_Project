@@ -237,6 +237,36 @@ def build_day_token_transformer_shared_safety_mfe_spec(
         patch_transformer_positional_encoding="sinusoidal",
     )
 
+def build_gru_shared_safety_mfe_spec(architecture: str) -> BreakoutQualityModelSpec:
+    """AO-capacity-matched gated recurrent shared Safety/MFE backbone.
+
+    A 3-layer unidirectional GRU with hidden size 176 plus two 2-class linear
+    heads has 473,796 trainable parameters for feature_count=10, versus AO's
+    473,734 (+0.013%).  The final recurrent state is the shared latent.
+    """
+
+    return BreakoutQualityModelSpec(
+        architecture=architecture,
+        family="gru_shared_safety_mfe",
+        channels=176,
+        kernel_size=1,
+        dilations=(),
+        convolutions_per_block=1,
+        pooling=("final_recurrent_state", "raw_safety_head", "raw_mfe_head"),
+        dropout=0.0,
+        receptive_field_bars=300,
+        input_window_bars=300,
+        normalization=None,
+        head_width=None,
+        use_dataset_context=False,
+        sequence_input_paths=("raw_level_recurrent_sequence",),
+        gru_hidden_size=176,
+        gru_layers=3,
+        gru_bidirectional=False,
+        gru_pooling="final_state",
+    )
+
+
 def build_moment_spec(architecture: str) -> BreakoutQualityModelSpec:
     from filters.breakout_quality.moment_contract import (
         MOMENT_EMBEDDING_DIM,

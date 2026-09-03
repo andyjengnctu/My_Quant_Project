@@ -11621,3 +11621,12 @@ Decision：`B356_DONE / T476_DONE / FORMAL_SYNTHETIC_FIXTURE_FIXED / B355_PRODUC
 - **Scientific boundary**：純console observability；MR-13BF scientific identity、Forward→Rolling checkpoint reuse、PIT score universe、training settings與artifact fingerprints不變，不需重訓任何既有合法checkpoint。
 
 Decision：`B357_DONE / T477_DONE / ROLLING_COMPACT_PROGRESS_PARITY_RESTORED / NO_SCIENTIFIC_CHANGE`。
+
+
+## 2026-09-04 — MR-13BF Day-Token Global Transformer Model Gate FAIL；使用者授權MR-13BG GRU backbone control
+
+- **MR-13BF Forward**：Safety Daily/Global rho/Pair=`0.3432/0.2988/62.22%`，低於或未穩定優於AO=`0.3532/0.2929/62.68%`；Pred-HS true-LS=`37.30%` vs AO `36.84%`，P45–P55 Pair=`52.35%`，未脫離boundary ceiling。HS-only Conditional-MFE rho/Pair=`0.4007/64.10%`，與AO=`0.3969/63.90%`相近，表示global attention可保留upside ranking但未改善Safety qualification。
+- **MR-13BF Rolling**：Safety Daily/Global rho/Pair=`0.3489/0.2055/62.44%` vs AO=`0.3601/0.3141/62.91%`；Pred-HS true-LS=`37.01%` vs `36.67%`，P45–P55=`52.33% vs 52.36%`；HS-only=`0.4112/64.46%` vs AO=`0.4113/64.43%`。Rolling drift仍NO，但沒有Safety增量。
+- **Breakout qualification**：BF Forward true-LS=`33.06%`、Rolling=`33.56%`看似較低，但true-HS recall只有`52.62%/54.57%`，且TopK HM/HS沒有同步突破，因此屬precision/recall trade-off，不視為通用Safety improvement。
+- **Decision**：`RAW_GLOBAL_ATTENTION_DOES_NOT_BREAK_SAFETY_CEILING / CONDITIONAL_MFE_PRESERVED / MODEL_GATE_FAIL / NO_TRANSFORMER_SWEEP / CLOSED / NOT_PROMOTED`。不得再以token size、attention heads、d_model、depth、FFN做迭代OOS sweep。
+- **MR-13BG user-authorized override**：BF事前stop rule原應轉information/target uncertainty；使用者明確要求先試GRU，因此另立`MR-13BG / ARCH-gru_shared_safety_mfe_v1`，不改寫BF結論。BG固定AO raw `300×10`、continuous Safety + true-HS Conditional-MFE、1:1 loss、independent heads、Seed42/split/optimizer/epoch-selection/inference，只換shared backbone為3-layer unidirectional GRU hidden=`176`、dropout=`0`、final-state pooling。feature_count=10 trainable params=`473,796` vs AO=`473,734`（`+0.013%`）。先做Seed42 Forward Model Gate；若FAIL，不做GRU hidden/layer/bidirectional sweep，回information/target uncertainty。
