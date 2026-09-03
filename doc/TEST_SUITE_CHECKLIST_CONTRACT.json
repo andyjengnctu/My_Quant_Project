@@ -3825,6 +3825,17 @@
       "entry": "`tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 344
+    },
+    {
+      "id": "B357",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Model workflow / Console progress",
+      "item": "Rolling OOS compact training heartbeat matches robustness progress visibility",
+      "gap": "Rolling OOS在compact console進入TRAIN fold時，必須持續顯示canonical fold/elapsed/epoch phase進度（select/refit x/y），資訊層級與Robustness trainer heartbeat一致；不得只停在「訓練並評分」，也不得恢復每epoch完整metric洗版。REUSE與完成摘要維持既有顯示。",
+      "entry": "`services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `services/breakout_quality/train_continuous_ranker.py`, `core/training_progress.py`",
+      "initial_status": "NEW",
+      "order": 345
     }
   ],
   "tests": [
@@ -7153,6 +7164,13 @@
       "b_id": "B356",
       "initial_status": "NEW",
       "order": 466
+    },
+    {
+      "id": "T477",
+      "description": "`validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B357：Rolling compact TRAIN fold透過canonical `render_training_unit_progress` 接收trainer select/refit heartbeat；Robustness與Rolling共用相同phase/epoch進度語意，不恢復verbose metric洗版",
+      "b_id": "B357",
+      "initial_status": "NEW",
+      "order": 467
     }
   ],
   "transitions": [
@@ -24163,6 +24181,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_research_report_contract_freeze_case`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B357",
+      "description": "恢復Rolling OOS compact TRAIN fold的fold/elapsed/select-refit epoch單行進度；以optional training callback消費canonical trainer heartbeat並重用Robustness progress renderer，不改訓練或reuse語意",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `services/breakout_quality/train_continuous_ranker.py`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T477",
+      "description": "Continuous-ranker contract regression加入Rolling compact trainer heartbeat wiring檢查；targeted contract 53/53 PASS",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_breakout_quality_continuous_ranker_contract_case`"
     }
   ]
 }

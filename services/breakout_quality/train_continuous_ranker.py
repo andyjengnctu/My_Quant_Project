@@ -3259,6 +3259,7 @@ def select_epoch(
     plan,
     evaluate_train_metrics: bool = True,
     selection_metrics_only: bool = False,
+    progress_callback=None,
 ) -> dict[str, Any]:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -3360,6 +3361,8 @@ def select_epoch(
         print(f"\nEpoch選擇（依{label}）")
     for epoch in range(1, int(args.epochs) + 1):
         _emit_epoch_progress_marker("select", epoch, int(args.epochs))
+        if progress_callback is not None:
+            progress_callback("select", int(epoch), int(args.epochs))
         started = time.perf_counter()
         batch_loss = _train_epoch(
             torch,
@@ -4060,6 +4063,7 @@ def fit_final(
     args,
     plan,
     phase_label: str = "完整Selection重訓",
+    progress_callback=None,
 ):
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -4091,6 +4095,8 @@ def fit_final(
         print(f"\n{str(phase_label)}（{int(epochs)} Epoch）")
     for epoch in range(1, int(epochs) + 1):
         _emit_epoch_progress_marker("refit", epoch, int(epochs))
+        if progress_callback is not None:
+            progress_callback("refit", int(epoch), int(epochs))
         started = time.perf_counter()
         loss = _train_epoch(
             torch,

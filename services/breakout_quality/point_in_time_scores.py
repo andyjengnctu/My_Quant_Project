@@ -19,6 +19,7 @@ import pandas as pd
 from core.display_common import InlineProgress, format_elapsed
 from core.training_progress import (
     clear_trainer_pit_progress_context,
+    render_training_unit_progress,
     set_trainer_pit_progress_context,
 )
 
@@ -1956,7 +1957,16 @@ def _validate_validation_score_frame(frame: pd.DataFrame, *, ids: np.ndarray, fo
 
 
 def _train_fold(
-    args, bundle, fold, ids, fold_contract, contract_fingerprint, *, torch, plan
+    args,
+    bundle,
+    fold,
+    ids,
+    fold_contract,
+    contract_fingerprint,
+    *,
+    torch,
+    plan,
+    progress_callback=None,
 ):
     fold_id = str(fold["fold_id"])
     percentile_target = build_percentile_target(bundle, ids["final_ids"])
@@ -1971,6 +1981,7 @@ def _train_fold(
         selection_metrics_only=bool(
             BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS
         ),
+        progress_callback=progress_callback,
     )
     selected_epoch = int(epoch_selection["best_epoch"])
     model, final_history = fit_final(
@@ -1981,6 +1992,7 @@ def _train_fold(
         epochs=selected_epoch,
         args=args,
         plan=plan,
+        progress_callback=progress_callback,
     )
     scores, score_extras = _predict_primary_score_payload(
         torch, model, bundle, ids["score_ids"], args=args, plan=plan
@@ -2629,6 +2641,17 @@ def _run_point_in_time_scores(
                     + paint("訓練並評分", "yellow", enabled=color_enabled, bold=True)
                     + f" {fold['score_start'].date()} ～ {fold['score_end'].date()}"
                 )
+            def _fold_training_progress(phase: str, epoch: int, total_epochs: int) -> None:
+                if not compact_console:
+                    return
+                fold_progress.update(
+                    render_training_unit_progress(
+                        unit_id=f"PIT fold {fold_index}/{len(folds)} | {fold['fold_id']}",
+                        elapsed_seconds=time.perf_counter() - fold_started,
+                        epoch_progress=(str(phase), int(epoch), int(total_epochs)),
+                    )
+                )
+
             frame, manifest = _train_fold(
                 args,
                 bundle,
@@ -2638,6 +2661,7 @@ def _run_point_in_time_scores(
                 fingerprint,
                 torch=torch,
                 plan=plan,
+                progress_callback=_fold_training_progress if compact_console else None,
             )
             if compact_console:
                 epoch_selection = dict(manifest.get("epoch_selection") or {})

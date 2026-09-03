@@ -520,3 +520,12 @@ Decision：`ENGINEERING_ONLY / ROW_ELIGIBILITY_AND_OUTPUT_CAPABILITY_ORTHOGONAL 
 - **Production boundary**：`_load_reusable_continuous_forward_contract()` 持續先驗 fitted-model settings，再驗 Standard SOP/comparison evidence；測試修正不得使缺 fitted-model evidence 的 production artifact 被誤判 REUSE。
 
 Decision：`ENGINEERING_ONLY / SYNTHETIC_FIXTURE_FIDELITY / PRODUCTION_REUSE_CONTRACT_UNCHANGED`。
+
+## 2026-09-03 — Engineering contract: Rolling PIT compact training heartbeat parity
+
+- **Scope**：B357 engineering-only console observability；不新增／修改任何 MR scientific identity、target/loss/architecture/fitting/PIT legality/checkpoint reuse/strategy semantics。
+- **Progress owner**：Continuous-ranker `select_epoch` / `fit_final` 仍是canonical training heartbeat owner；compact Rolling PIT只透過optional progress callback消費該heartbeat，不重算epoch、patience或fold狀態。
+- **Renderer parity**：Rolling TRAIN fold必須重用 `core/training_progress.py::render_training_unit_progress`，與Robustness使用相同 `select/refit + epoch x/y + elapsed` 語意；畫面固定可辨識 `PIT fold i/N | fold_id | elapsed | epoch select/refit x/y`。
+- **Compact boundary**：維持PROJECT_SETTINGS B17；不恢復每個epoch完整loss/validation metrics洗版。REUSE列與fold完成摘要維持既有canonical輸出。
+
+Decision：`ENGINEERING_ONLY / ROLLING_TRAIN_PROGRESS_RESTORED / ROBUSTNESS_PARITY / NO_SCIENTIFIC_CHANGE`。

@@ -375,6 +375,7 @@
 | B354 | P1 | Research / Artifact lifecycle | Continuous DL fitting-settings readiness precedes Forward/Rolling/Robustness reuse | DONE | 所有[1]～[6]正式入口在宣告REUSE前必須由canonical fitting-settings owner驗證current weight-affecting config與persisted fit相容；完整report/audit不得遮蔽stale fit。Legacy pre-sidecar defaults必須是immutable historical contract，不得隨current config漂移。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/research/breakout_quality_application.py` |
 | B355 | P1 | Research / Artifact lifecycle | Forward OOS → Rolling exact fitting-checkpoint bridge consumes fitted-model SSOT | DONE | Forward與Rolling第一個同fitting identity fold必須共用同一checkpoint bytes；橋接不得從evaluation report重猜optimizer settings，而必須讀canonical fitted_model_manifest／immutable legacy fitting evidence。requested_device等routing metadata不得製造假mismatch；Rolling fit stale時不得誤走audit-only refresh，必須回canonical PIT producer refit/resume。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
 | B356 | P1 | Formal regression / Synthetic coverage | Continuous Forward-report reuse synthetic fixture follows fitted-model readiness contract | DONE | 凡synthetic直接呼叫Forward report reuse loader，fixture必須具備正式contract的report_path，並明確提供fitted-model readiness dependency；不得用不完整SimpleNamespace造成suite-level exception，也不得為遷就mock而放寬production reuse驗證。 | `tools/validate/synthetic_meta_cases.py` |
+| B357 | P1 | Model workflow / Console progress | Rolling OOS compact training heartbeat matches robustness progress visibility | DONE | Rolling OOS在compact console進入TRAIN fold時，必須持續顯示canonical fold/elapsed/epoch phase進度（select/refit x/y），資訊層級與Robustness trainer heartbeat一致；不得只停在「訓練並評分」，也不得恢復每epoch完整metric洗版。REUSE與完成摘要維持既有顯示。 | `services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `services/breakout_quality/train_continuous_ranker.py`, `core/training_progress.py` |
 
 
 
@@ -807,6 +808,7 @@
 | T474 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B354：patience 1→3必須使Forward/Rolling/Forward Robustness/Rolling Robustness reuse全部失效，且legacy historical defaults不得隨current config漂移 | B354 |
 | T475 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：真實Forward report不含optimizer欄位時仍可由fitted_model_manifest匯入同identity checkpoint至Rolling cache；stale Rolling fit回傳不可REUSE而非audit-only refresh | B355 |
 | T476 | `validate_research_report_contract_freeze_case` 覆蓋B356：Forward report reuse fixture包含report_path並實際走過current fitted-model readiness precondition；缺OOS score仍不得單獨迫使重訓 | B356 |
+| T477 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B357：Rolling compact TRAIN fold透過canonical `render_training_unit_progress` 接收trainer select/refit heartbeat；Robustness與Rolling共用相同phase/epoch進度語意，不恢復verbose metric洗版 | B357 |
 
 ## G. 逐項收斂紀錄
 
@@ -2940,6 +2942,8 @@
 | 2026-09-03 | T475 | T475改用production-shaped Forward manifest（無torch_execution）並新增第一fold不得silent TRAIN regression；targeted lifecycle 17/17 PASS | PARTIAL -> DONE | `validate_breakout_quality_fitted_model_lifecycle_contract_case` |
 | 2026-09-03 | B356 | 修正B355後formal synthetic suite因舊Forward contract fixture缺report_path而整套中止；fixture補齊正式shape並明確mock已通過fitting readiness，不放寬production loader | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-09-03 | T476 | report-contract targeted regression新增current fitted-model readiness precondition assertion；34/34 PASS | NEW -> DONE | `validate_research_report_contract_freeze_case` |
+| 2026-09-03 | B357 | 恢復Rolling OOS compact TRAIN fold的fold/elapsed/select-refit epoch單行進度；以optional training callback消費canonical trainer heartbeat並重用Robustness progress renderer，不改訓練或reuse語意 | NEW -> DONE | `services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `services/breakout_quality/train_continuous_ranker.py` |
+| 2026-09-03 | T477 | Continuous-ranker contract regression加入Rolling compact trainer heartbeat wiring檢查；targeted contract 53/53 PASS | NEW -> DONE | `validate_breakout_quality_continuous_ranker_contract_case` |
 
 
 

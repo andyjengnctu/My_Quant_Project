@@ -11611,3 +11611,13 @@ Decision：`B355_REOPENED_AND_CORRECTED / PRODUCTION_MANIFEST_SHAPE_COVERED / FI
 - **Independent checks**：`validate_research_report_contract_freeze_case=34/34 PASS`；`validate_breakout_quality_fitted_model_lifecycle_contract_case=17/17 PASS`；`validate_breakout_quality_continuous_ranker_contract_case=53/53 PASS`；`validate_breakout_quality_point_in_time_score_builder_contract_case=32/32 PASS`。GPT 未執行 `apps/test_suite.py`／`apps/run_bundle.py`；formal double check 仍由使用者本機單一入口確認。
 
 Decision：`B356_DONE / T476_DONE / FORMAL_SYNTHETIC_FIXTURE_FIXED / B355_PRODUCTION_REUSE_LOGIC_UNCHANGED / MR13BF_SCIENTIFIC_PRIORITY_UNCHANGED`。
+
+## 2026-09-03 — B357 Rolling OOS compact trainer heartbeat restoration
+
+- **User evidence**：MR-13BF Rolling成功於2021 fold REUSE Forward OOS checkpoint，但進入2022 TRAIN fold後console只停在`PIT fold 2/6 | ... | 訓練並評分`；使用者指出先前長訓練會持續顯示目前進度，且Robustness仍可見fold/epoch細部位置。
+- **Root cause**：B317後Model workflow啟用compact console時，`train_continuous_ranker.select_epoch()`與`fit_final()`刻意 suppress verbose epoch metrics；Robustness因trainer subprocess另有machine-readable heartbeat reader，仍可用`render_training_unit_progress()`顯示`PIT/active fold/epoch select-refit`，但單次Rolling為in-process producer，沒有把同一heartbeat接到compact `InlineProgress`，因此只有fold起始與完成兩個畫面狀態。
+- **Fix**：canonical trainer `select_epoch`/`fit_final`新增optional progress callback，只傳`phase/epoch/total`，不改optimizer、loss、seed、early stopping或epoch selection。`continuous_ranker_pipeline`只透傳callback；PIT producer在compact TRAIN fold用同一`render_training_unit_progress()`單行刷新`fold + elapsed + epoch select/refit x/y`。verbose mode既有完整epoch metrics不變。
+- **Regression**：`validate_breakout_quality_continuous_ranker_contract_case`加入B357 wiring guard；targeted Continuous Ranker contract=`53/53 PASS`。另要求PIT builder/lifecycle regression維持通過，確保顯示callback不影響reuse/fitting semantics。
+- **Scientific boundary**：純console observability；MR-13BF scientific identity、Forward→Rolling checkpoint reuse、PIT score universe、training settings與artifact fingerprints不變，不需重訓任何既有合法checkpoint。
+
+Decision：`B357_DONE / T477_DONE / ROLLING_COMPACT_PROGRESS_PARITY_RESTORED / NO_SCIENTIFIC_CHANGE`。

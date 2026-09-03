@@ -1290,6 +1290,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'daily_data_progress = InlineProgress()' in pit_score_source
         and 'daily_data_progress.update(' in pit_score_source
         and 'daily_data_progress.finish()' in pit_score_source
+        and 'render_training_unit_progress(' in pit_score_source
+        and 'progress_callback=_fold_training_progress if compact_console else None' in pit_score_source
         and 'print("[PIT data] 建立daily stock-day index／40D target...' not in pit_score_source,
     )
     check_true(

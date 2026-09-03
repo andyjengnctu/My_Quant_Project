@@ -156,3 +156,4 @@
 
 - 2026-09-03：B355 Forward→Rolling reuse工程closure依使用者MR-13BF實跑證據重新打開並完成修正：正式Forward `manifest.json`不持有`torch_execution`，該fitting truth只由`fitted_model_manifest.json`／legacy fitting evidence驗證；第一個同fit Rolling fold現在必須REUSE相同checkpoint或fail-fast，不得靜默TRAIN。此修正不改MR-13BF scientific priority／Gate；Queue Priority 1仍為BF Seed42 Forward Model Gate。
 - 2026-09-03：B356依使用者formal bundle修正B355後的synthetic fixture fidelity：舊Forward fake contract缺`report_path`使coverage suite整體exception，現已補齊正式shape並明確走current fitted-model readiness precondition；production reuse contract未放寬。此為engineering-only closure，不改MR-13BF scientific priority；Priority 1仍為BF Seed42 Forward Model Gate。
+- 2026-09-03：B357依使用者MR-13BF Rolling實跑恢復compact TRAIN fold細部進度：單次Rolling現在與Robustness共用canonical training progress語意，持續顯示fold/elapsed/epoch select-refit x/y，不恢復verbose metric洗版；engineering-only，不改BF Gate、checkpoint reuse或scientific priority。Priority 1仍為MR-13BF Seed42 Forward Model Gate。
