@@ -2660,6 +2660,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1,
         PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
@@ -3479,6 +3480,30 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         == 3
         and tuple(long_horizon_spec.pooling) == tuple(ao_shared_spec.pooling)
         and ao_params == long_horizon_params == 473734,
+    )
+
+    deep_descriptor = get_architecture_descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
+    deep_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
+    deep_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
+    deep_params = sum(
+        int(parameter.numel()) for parameter in deep_model.parameters() if parameter.requires_grad
+    )
+    check_true(
+        "deep_hierarchy_capability_doubles_depth_at_matched_parameter_and_rf_scale",
+        deep_descriptor.has_capability("deep_hierarchy_capacity_matched")
+        and deep_spec.input_window_bars is None
+        and int(deep_spec.inception_depth) == 12
+        and int(deep_spec.inception_filters) == int(ao_shared_spec.inception_filters) == 32
+        and int(deep_spec.inception_bottleneck_channels) == 24
+        and tuple(deep_spec.inception_kernel_sizes) == (21, 11, 5)
+        and tuple(deep_spec.inception_module_dilations) == ()
+        and int(deep_spec.inception_residual_every) == int(ao_shared_spec.inception_residual_every) == 3
+        and int(deep_spec.receptive_field_bars) == 241
+        and tuple(deep_spec.pooling) == tuple(ao_shared_spec.pooling)
+        and ao_params == 473734
+        and deep_params == 475702
+        and abs(deep_params - ao_params) / ao_params < 0.01
+        and abs(int(deep_spec.receptive_field_bars) - int(ao_shared_spec.receptive_field_bars)) / int(ao_shared_spec.receptive_field_bars) < 0.06,
     )
 
     project_root = Path(__file__).resolve().parents[2]

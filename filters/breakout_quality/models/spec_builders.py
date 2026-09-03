@@ -347,8 +347,8 @@ def _build_inception_spec(
     sequence_input_paths: tuple[str, ...] = ("raw_level",),
     head_width: int | None = None,
 ) -> BreakoutQualityModelSpec:
-    depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
     descriptor_options = get_architecture_descriptor(architecture).spec_options_dict()
+    depth = int(descriptor_options.get("inception_depth", BREAKOUT_QUALITY_INCEPTION_DEPTH))
     filters = int(descriptor_options.get("inception_filters", 32))
     bottleneck_channels = int(descriptor_options.get("inception_bottleneck_channels", 32))
     input_window_bars_value = descriptor_options.get("input_window_bars")
@@ -357,7 +357,15 @@ def _build_inception_spec(
         raise ValueError("InceptionTime descriptor width必須為正整數")
     if input_window_bars is not None and input_window_bars < 1:
         raise ValueError("InceptionTime descriptor input_window_bars必須為正整數")
-    kernel_sizes = build_breakout_quality_inception_kernel_sizes()
+    declared_kernel_sizes = tuple(int(value) for value in descriptor_options.get("inception_kernel_sizes", ()))
+    kernel_sizes = declared_kernel_sizes or build_breakout_quality_inception_kernel_sizes()
+    if not kernel_sizes or any(value < 1 or value % 2 == 0 for value in kernel_sizes):
+        raise ValueError("InceptionTime descriptor kernels必須是非空正奇數")
+    residual_every = int(
+        descriptor_options.get("inception_residual_every", BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY)
+    )
+    if depth < 1 or residual_every < 1 or depth % residual_every != 0:
+        raise ValueError("InceptionTime descriptor depth/residual interval必須為可整除的正整數")
     declared_module_dilations = tuple(
         int(value)
         for value in descriptor_options.get("inception_module_dilations", ())
@@ -386,7 +394,7 @@ def _build_inception_spec(
         inception_bottleneck_channels=bottleneck_channels,
         inception_kernel_sizes=kernel_sizes,
         inception_module_dilations=declared_module_dilations,
-        inception_residual_every=int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
+        inception_residual_every=residual_every,
     )
 
 

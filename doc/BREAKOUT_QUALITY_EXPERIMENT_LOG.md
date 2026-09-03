@@ -11530,3 +11530,17 @@ Decision：`ENGINEERING_ONLY / SCORE_CAPABILITY_AND_AUDIT_LIFECYCLE_SEPARATED / 
 - **Regression**：B197兩個歷史 future-independence cases恢復 PASS；B352 stale AK-style primary-only sidecar guard仍 PASS；新增 B353/T473 直接驗「同一 eligibility-only manifest 應通過 row contract、但被獨立 output-capability contract拒絕」。
 
 Decision：`ENGINEERING_ONLY / ORTHOGONAL_SCORE_CONTRACTS / NO_SCIENTIFIC_OR_ARTIFACT_IDENTITY_CHANGE`。
+
+
+## 2026-09-03 — MR-13BC result closure + MR-13BD deep hierarchy matched-control implementation
+
+- **Authoritative baseline**：`test-branch-1_20260903_193917_cd7e7236.zip`，SHA256=`d2dba5af3a7785bd6a304db0541250a21b9952b6636705c7bd0fe26af2370ce6`；Forward與Rolling comparison結果由使用者貼上之2026-09-03輸出提供。
+- **MR-13BC Forward result**：Groups=`585,573`（AO=`608,204`）；Safety Daily/Global rho/Pair=`0.3436/0.2585/62.26%` vs AO=`0.3532/0.2929/62.68%`；Pred-HS true-LS=`37.12%` vs `36.84%`，True-HS recall=`62.73%`，P45–P55 Pair=`52.21%`；HS-only rho/Pair=`0.3490/62.04%` vs AO=`0.3969/63.90%`。Final Daily rho/Pair/Top-Bottom=`0.3639/62.42%/1.4762R` vs AO=`0.4042/63.96%/1.8767R`。
+- **MR-13BC Rolling result**：Safety Daily/Global rho/Pair=`0.3506/0.2648/62.55%` vs AO=`0.3601/0.3141/62.91%`；Pred-HS true-LS=`36.94%` vs `36.67%`；HS-only rho/Pair=`0.3715/62.94%` vs `0.4113/64.43%`。Rolling final Daily rho/Pair/Top-Bottom=`0.3817/63.12%/1.5663R` vs AO=`0.4136/64.33%/1.8203R`；fold drift=`YES`、max adjacent score-mean drift=`1.5439 pooled σ`，AO=`NO / 0.8551σ`。
+- **MR-13BC interpretation boundary**：600-bar eligibility排除約3.7% Forward rows，現有貼上報表未另列AO/BC common-eligible exact contrast，因此不宣稱精確的純horizon effect magnitude；但事前GO要求「明顯Safety突破」，而Forward與Rolling所有Safety/qualification主指標均無此證據，且Conditional-MFE與final ranking一致較弱。故依stop rule不做600/64 interaction。Decision=`LONG_HORIZON_NO_VISIBLE_SAFETY_GAIN / INPUT_HORIZON_INSUFFICIENCY_NOT_SUPPORTED / MODEL_GATE_FAIL / CLOSED / NO_600x64`。
+- **Research transition**：使用者先前提出的物理限制假說包含depth/backbone/parameter/input length。BA/BB/BC已分別回答RF、capacity@300與long-horizon input；current AO objective尚未受控隔離的是depth/hierarchical composition。歷史ModernTCN、Patch與Residual-TCN已有負evidence，因此在backbone-family shopping前先做一個parameter/RF-matched depth control。
+- **MR-13BD identity**：profile=`daily_universal_shared_safety_hs_conditional_mfe_deep_full_list_ndcg_pairwise`；architecture=`inception_time_shared_safety_mfe_deep_v1`。AO target/loss/true-HS scope、raw 300×10、shared InceptionTime family、filters=32、GAP/heads、Seed42/split/optimizer/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。
+- **Scientific treatment**：hierarchical depth=`6→12`。為避免把純參數量/RF再次帶入，descriptor以matching controls固定`bottleneck=24`、kernels=`(21,11,5)`、residual_every=3、all dilation=1；feature_count=10下trainable params=`475,702` vs AO `473,734`（`+0.42%`），RF=`241` vs `229`（`+5.2%`），final latent width仍128 channels。這些matching controls不是待調knobs，不做depth/kernel/bottleneck sweep。
+- **Primary Gate**：完整Safety Daily/Global rho與Pair需實質離開AO、Pred-HS true-LS下降、P45–P55改善且Breakout同方向；HS-only Conditional-MFE不得崩。若FAIL，關閉InceptionTime RF/width/input/depth物理限制族，下一步只能是具有新inductive bias的backbone family，而非再微調InceptionTime。
+
+Decision：`MR13BC_CLOSED_MODEL_GATE_FAIL / MR13BD_IMPLEMENTED_RESULT_PENDING / DEEP_HIERARCHY_MATCHED_CONTROL / PARAMS_PLUS_0P42_PERCENT / RF_PLUS_5P2_PERCENT / SEED42_FORWARD_NEXT`。
