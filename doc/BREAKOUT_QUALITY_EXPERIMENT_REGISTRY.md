@@ -512,3 +512,11 @@ Decision：`ENGINEERING_ONLY / SCORE_THEN_AUDIT_DEPENDENCY_ORDER / NO_RETRAIN_FO
 - **Consumer contract**：正式 PIT ranking loader 依序驗 `score_eligibility_contract` 與 `score_columns`，兩者可同時是 required dependency，但必須由獨立 validator 判定。eligibility-only fixture 可獨立驗 future-independence；完整 loader 仍會對缺 sidecar 的 stale multi-head artifact fail-fast 並要求 checkpoint-rescore。
 
 Decision：`ENGINEERING_ONLY / ROW_ELIGIBILITY_AND_OUTPUT_CAPABILITY_ORTHOGONAL / B197_AND_B352_BOTH_PRESERVED`。
+
+## 2026-09-03 — Engineering contract: Formal synthetic fixture fidelity after fitted-model readiness
+
+- **Scope**：B356 engineering-only formal regression closure；不新增／修改任何 MR scientific identity、target/loss/architecture/fitting/PIT/strategy semantics，也不放寬 production artifact reuse contract。
+- **Fixture rule**：凡 synthetic 直接呼叫 canonical Forward report reuse loader，fixture 必須提供正式 contract 必有的 `report_path`，並明確 mock／建立 fitting-readiness dependency；不得用缺欄位 `SimpleNamespace` 讓 suite-level exception 取代實際 capability assertion。
+- **Production boundary**：`_load_reusable_continuous_forward_contract()` 持續先驗 fitted-model settings，再驗 Standard SOP/comparison evidence；測試修正不得使缺 fitted-model evidence 的 production artifact 被誤判 REUSE。
+
+Decision：`ENGINEERING_ONLY / SYNTHETIC_FIXTURE_FIDELITY / PRODUCTION_REUSE_CONTRACT_UNCHANGED`。

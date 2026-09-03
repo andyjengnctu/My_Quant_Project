@@ -3827,7 +3827,13 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     # [1][1]: validated model/manifest/report plus complete current Standard-SOP
     # evidence is reusable; a missing OOS score CSV alone must not force retraining.
-    reusable_contract = SimpleNamespace(seed=42, report=control_payload)
+    synthetic_report_path = Path("synthetic_report.json")
+    reusable_contract = SimpleNamespace(
+        seed=42,
+        report=control_payload,
+        report_path=synthetic_report_path,
+    )
+    synthetic_model_paths = SimpleNamespace(model_dir=Path("synthetic_model"))
     settings = SimpleNamespace(
         filter_id="breakout_quality_v1",
         model_architecture="inception_time_v1",
@@ -3836,7 +3842,11 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     with patch.object(
         app, "load_continuous_ranker_oos_contract", return_value=reusable_contract
-    ) as report_loader:
+    ) as report_loader, patch.object(
+        app, "resolve_filter_artifact_paths", return_value=synthetic_model_paths
+    ), patch.object(
+        app, "fitted_model_settings_issues", return_value=()
+    ) as fitting_check:
         loaded, reason = app._load_reusable_continuous_forward_contract(settings)
     check_true(
         "report_reuse_validates_model_manifest_report_without_requiring_oos_score_file",
@@ -3844,6 +3854,13 @@ def validate_research_report_contract_freeze_case(_base_params):
         and reason is None
         and report_loader.call_args.kwargs.get("require_scores") is False,
         detail=str(report_loader.call_args),
+    )
+    check_true(
+        "report_reuse_fixture_exercises_current_fitted_model_readiness_contract",
+        fitting_check.call_count == 1
+        and Path(fitting_check.call_args.kwargs.get("model_dir")) == synthetic_model_paths.model_dir
+        and Path(fitting_check.call_args.kwargs.get("report_path")) == synthetic_report_path,
+        detail=str(fitting_check.call_args),
     )
     with patch.object(app, "_load_reusable_continuous_forward_contract", return_value=(reusable_contract, None)), \
          patch.object(app, "_run_command", side_effect=AssertionError("REUSE path must not train")):
@@ -3858,9 +3875,17 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     incomplete_payload = json.loads(json.dumps(control_payload))
     incomplete_payload["standard_model_sop"].pop("upside_downside_alignment_evaluation", None)
-    incomplete_contract = SimpleNamespace(seed=42, report=incomplete_payload)
+    incomplete_contract = SimpleNamespace(
+        seed=42,
+        report=incomplete_payload,
+        report_path=synthetic_report_path,
+    )
     with patch.object(
         app, "load_continuous_ranker_oos_contract", return_value=incomplete_contract
+    ), patch.object(
+        app, "resolve_filter_artifact_paths", return_value=synthetic_model_paths
+    ), patch.object(
+        app, "fitted_model_settings_issues", return_value=()
     ):
         loaded, reason = app._load_reusable_continuous_forward_contract(settings)
     check_true(

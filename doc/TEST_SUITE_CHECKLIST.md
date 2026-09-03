@@ -374,6 +374,7 @@
 | B353 | P1 | Research / Artifact lifecycle | PIT row eligibility × score-output capability orthogonal contracts | DONE | Daily PIT row eligibility只回答prediction-time feature history是否足以產生score，future target不得控制score存在；multi-head sidecar completeness只由獨立score-output capability contract判定。正式loader可依序驗兩者，但不得把output columns/head數塞回eligibility contract，避免新增model-output capability改寫無前視score universe。 | `filters/breakout_quality/ranker_sample_contract.py`, `filters/breakout_quality/ranking_score_store.py`, `config/breakout_quality_runtime.py` |
 | B354 | P1 | Research / Artifact lifecycle | Continuous DL fitting-settings readiness precedes Forward/Rolling/Robustness reuse | DONE | 所有[1]～[6]正式入口在宣告REUSE前必須由canonical fitting-settings owner驗證current weight-affecting config與persisted fit相容；完整report/audit不得遮蔽stale fit。Legacy pre-sidecar defaults必須是immutable historical contract，不得隨current config漂移。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/research/breakout_quality_application.py` |
 | B355 | P1 | Research / Artifact lifecycle | Forward OOS → Rolling exact fitting-checkpoint bridge consumes fitted-model SSOT | DONE | Forward與Rolling第一個同fitting identity fold必須共用同一checkpoint bytes；橋接不得從evaluation report重猜optimizer settings，而必須讀canonical fitted_model_manifest／immutable legacy fitting evidence。requested_device等routing metadata不得製造假mismatch；Rolling fit stale時不得誤走audit-only refresh，必須回canonical PIT producer refit/resume。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
+| B356 | P1 | Formal regression / Synthetic coverage | Continuous Forward-report reuse synthetic fixture follows fitted-model readiness contract | DONE | 凡synthetic直接呼叫Forward report reuse loader，fixture必須具備正式contract的report_path，並明確提供fitted-model readiness dependency；不得用不完整SimpleNamespace造成suite-level exception，也不得為遷就mock而放寬production reuse驗證。 | `tools/validate/synthetic_meta_cases.py` |
 
 
 
@@ -805,6 +806,7 @@
 | T473 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B353：eligibility-only manifest必須通過future-independent row contract，同一manifest必須被獨立score-output capability validator拒絕，完整PIT loader再組合兩者 | B353 |
 | T474 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B354：patience 1→3必須使Forward/Rolling/Forward Robustness/Rolling Robustness reuse全部失效，且legacy historical defaults不得隨current config漂移 | B354 |
 | T475 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：真實Forward report不含optimizer欄位時仍可由fitted_model_manifest匯入同identity checkpoint至Rolling cache；stale Rolling fit回傳不可REUSE而非audit-only refresh | B355 |
+| T476 | `validate_research_report_contract_freeze_case` 覆蓋B356：Forward report reuse fixture包含report_path並實際走過current fitted-model readiness precondition；缺OOS score仍不得單獨迫使重訓 | B356 |
 
 ## G. 逐項收斂紀錄
 
@@ -2936,6 +2938,8 @@
 | 2026-09-03 | T475 | 原T475 synthetic錯把torch_execution塞入Forward manifest，未覆蓋正式producer shape，無法抓到真實reuse failure | DONE -> PARTIAL | `validate_breakout_quality_fitted_model_lifecycle_contract_case` fixture fidelity gap |
 | 2026-09-03 | B355 | 修正Forward→Rolling bridge只由fitted-model SSOT驗scientific torch execution；第一同fit Rolling fold identity mismatch改fail-fast，禁止靜默重訓 | PARTIAL -> DONE | `services/breakout_quality/point_in_time_scores.py` |
 | 2026-09-03 | T475 | T475改用production-shaped Forward manifest（無torch_execution）並新增第一fold不得silent TRAIN regression；targeted lifecycle 17/17 PASS | PARTIAL -> DONE | `validate_breakout_quality_fitted_model_lifecycle_contract_case` |
+| 2026-09-03 | B356 | 修正B355後formal synthetic suite因舊Forward contract fixture缺report_path而整套中止；fixture補齊正式shape並明確mock已通過fitting readiness，不放寬production loader | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-09-03 | T476 | report-contract targeted regression新增current fitted-model readiness precondition assertion；34/34 PASS | NEW -> DONE | `validate_research_report_contract_freeze_case` |
 
 
 

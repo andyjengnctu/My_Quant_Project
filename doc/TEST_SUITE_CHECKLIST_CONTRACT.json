@@ -3814,6 +3814,17 @@
       "entry": "`services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
       "initial_status": "NEW",
       "order": 343
+    },
+    {
+      "id": "B356",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Formal regression / Synthetic coverage",
+      "item": "Continuous Forward-report reuse synthetic fixture follows fitted-model readiness contract",
+      "gap": "凡synthetic直接呼叫Forward report reuse loader，fixture必須具備正式contract的report_path，並明確提供fitted-model readiness dependency；不得用不完整SimpleNamespace造成suite-level exception，也不得為遷就mock而放寬production reuse驗證。",
+      "entry": "`tools/validate/synthetic_meta_cases.py`",
+      "initial_status": "NEW",
+      "order": 344
     }
   ],
   "tests": [
@@ -7135,6 +7146,13 @@
       "b_id": "B355",
       "initial_status": "NEW",
       "order": 465
+    },
+    {
+      "id": "T476",
+      "description": "`validate_research_report_contract_freeze_case` 覆蓋B356：Forward report reuse fixture包含report_path並實際走過current fitted-model readiness precondition；缺OOS score仍不得單獨迫使重訓",
+      "b_id": "B356",
+      "initial_status": "NEW",
+      "order": 466
     }
   ],
   "transitions": [
@@ -24129,6 +24147,22 @@
       "from_status": "PARTIAL",
       "to_status": "DONE",
       "note": "`validate_breakout_quality_fitted_model_lifecycle_contract_case`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B356",
+      "description": "修正B355後formal synthetic suite因舊Forward contract fixture缺report_path而整套中止；fixture補齊正式shape並明確mock已通過fitting readiness，不放寬production loader",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`tools/validate/synthetic_meta_cases.py`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T476",
+      "description": "report-contract targeted regression新增current fitted-model readiness precondition assertion；34/34 PASS",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_research_report_contract_freeze_case`"
     }
   ]
 }

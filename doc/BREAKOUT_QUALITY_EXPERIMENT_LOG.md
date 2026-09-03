@@ -11602,3 +11602,12 @@ Decision：`ENGINEERING_ONLY / FORWARD_ROLLING_MATCHING_FIT_REUSES_IDENTICAL_CHE
 - **Scientific boundary**：仍為B355 artifact-lifecycle engineering closure；不改MR-13BF target、architecture、loss、seed、split、training settings、OOS/ Rolling evaluation semantics或checkpoint內容。
 
 Decision：`B355_REOPENED_AND_CORRECTED / PRODUCTION_MANIFEST_SHAPE_COVERED / FIRST_MATCHING_ROLLING_FOLD_MUST_REUSE_OR_FAIL_FAST / NO_SCIENTIFIC_CHANGE`。
+
+## 2026-09-03 — B356 formal synthetic coverage closure after B355
+
+- **Observed formal evidence**：使用者 `to_chatgpt_bundle_20260903_231344_282ea720.zip` 顯示 quick gate `109/109`、chain/ml smoke PASS，但 consistency 單一 FAIL=`SYNTHETIC_SUITE runtime`，exception 為 `AttributeError: 'types.SimpleNamespace' object has no attribute 'report_path'`；meta-quality 因 `coverage_synthetic_suite_runs_successfully` 同一 upstream failure 而 FAIL，另外 7 個 coverage checks 僅為 blocked。
+- **Root cause**：B354/B355 之後 `_load_reusable_continuous_forward_contract()` 正確地在 report reuse 前讀 `contract.report_path` 並驗 canonical fitted-model readiness；`validate_research_report_contract_freeze_case` 的歷史 fake contract 仍只有 `seed/report`，fixture shape 已落後正式 loader contract。這是 test-fixture fidelity gap，不是 production reuse identity 問題，也不是 coverage threshold 真正下降。
+- **Fix**：synthetic reusable/incomplete Forward contracts 補正式 `report_path`；該 report-contract regression 明確 mock `resolve_filter_artifact_paths` 與已通過的 `fitted_model_settings_issues`，讓此 case 專注驗「缺 OOS score 不得單獨迫使重訓／Standard SOP completeness」；另新增 assertion 證明 current fitted-model readiness precondition 確實被呼叫。Production loader 未修改、未放寬。
+- **Independent checks**：`validate_research_report_contract_freeze_case=34/34 PASS`；`validate_breakout_quality_fitted_model_lifecycle_contract_case=17/17 PASS`；`validate_breakout_quality_continuous_ranker_contract_case=53/53 PASS`；`validate_breakout_quality_point_in_time_score_builder_contract_case=32/32 PASS`。GPT 未執行 `apps/test_suite.py`／`apps/run_bundle.py`；formal double check 仍由使用者本機單一入口確認。
+
+Decision：`B356_DONE / T476_DONE / FORMAL_SYNTHETIC_FIXTURE_FIXED / B355_PRODUCTION_REUSE_LOGIC_UNCHANGED / MR13BF_SCIENTIFIC_PRIORITY_UNCHANGED`。
