@@ -68,6 +68,27 @@ def _build_patch_token_joint(nn, torch, *, feature_count, context_count, spec, p
     return build_patch_token_joint_min(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec)
 
 
+
+def _build_day_token_transformer_shared_safety_mfe(
+    nn,
+    torch,
+    *,
+    feature_count,
+    context_count,
+    spec,
+    pretrained_encoder_state=None,
+):
+    from filters.breakout_quality.models.day_token_transformer import (
+        build_day_token_transformer_shared_safety_mfe,
+    )
+    return build_day_token_transformer_shared_safety_mfe(
+        nn,
+        torch,
+        feature_count=int(feature_count),
+        context_count=int(context_count),
+        spec=spec,
+    )
+
 def _build_residual_tcn(nn, torch, *, feature_count, context_count, spec, pretrained_encoder_state=None):
     from filters.breakout_quality.models.residual_tcn import build_residual_tcn
     return build_residual_tcn(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec)
@@ -99,6 +120,7 @@ _RUNTIME_BUILDERS_BY_KEY: dict[str, RuntimeBuilder] = {
     "hybrid_safety_patch_mfe_inception": _build_hybrid_safety_patch_mfe_inception,
     "patch_token_ranker": _build_patch_token_ranker,
     "patch_token_joint": _build_patch_token_joint,
+    "day_token_transformer_shared_safety_mfe": _build_day_token_transformer_shared_safety_mfe,
     "residual_tcn": _build_residual_tcn,
     "moment": _build_moment,
     "mantis": _build_mantis,

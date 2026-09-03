@@ -11558,3 +11558,16 @@ Decision：`MR13BC_CLOSED_MODEL_GATE_FAIL / MR13BD_IMPLEMENTED_RESULT_PENDING / 
 
 Decision：`MR13BD_CLOSED_MODEL_GATE_FAIL / MR13BE_IMPLEMENTED_RESULT_PENDING / 600BAR_WIDE_CAPACITY_FACTORIAL_INTERACTION / BC_SAME_UNIVERSE_REFERENCE / SEED42_FORWARD_NEXT`。
 
+## 2026-09-03 — MR-13BE result closure + MR-13BF full-resolution day-token Transformer implementation
+
+- **Authoritative baseline**：`test-branch-1_20260903_210132_e05bb4d6.zip`，SHA256=`b5b3a8fda5bb9493e16ae2792863c007e44121b8ae15c9c6d8c59d4a89775c96`；MR-13BE正式Forward結果由使用者2026-09-03貼上輸出提供。
+- **MR-13BE same-universe factorial result**：BE vs BC皆為600-bar eligibility/RF609，僅capacity 64/64 vs 32/32。Forward Safety Daily rho/Pair=`0.3453/62.37%` vs BC=`0.3436/62.26%`，Pred-HS true-LS=`37.10%` vs `37.12%`，P45–P55 Pair=`52.12%` vs `52.21%`，沒有實質qualification提升；Breakout Safety Daily rho=`0.3059`低於BC=`0.3108`。但HS-only Conditional-MFE Forward rho/Pair=`0.3818/63.32%` vs BC=`0.3490/62.04%`，Breakout rho/Pair=`0.4057/66.31%` vs `0.3658/63.25%`，final Forward Daily rho亦`0.3919` vs BC `0.3639`。
+- **Interpretation**：`large capacity × long input` interaction對upside/Conditional-MFE representation確實有正效果，但Safety Daily/Pair/P50 purity幾乎不動。因此BB與BC各自失敗並不是因二者必須一起放大才會改善Safety；InceptionTime的RF、width、input horizon、depth及input×capacity五個physical-scaling假說均未突破Safety ceiling。Decision=`LONG_INPUT_X_CAPACITY_MFE_INTERACTION_PRESENT / SAFETY_CEILING_UNCHANGED / MODEL_GATE_FAIL / CLOSED / NO_ROLLING / NO_ROBUSTNESS`。
+- **MR-13BF identity**：profile=`daily_universal_day_token_transformer_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`；architecture=`day_token_transformer_shared_safety_mfe_v1`。AO target、continuous Safety supervision、true-HS=P50 Conditional-MFE sublist、1:1 dual-head loss、independent linear heads、raw 300×10 input、Seed42/split/optimizer/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。
+- **Only primary treatment**：shared InceptionTime改為full-resolution temporal Transformer；每個交易日直接成為1 token（patch size=stride=1），因此沒有歷史9F/AZ的10-bar patch temporal compression。300 tokens由第一層開始可全域self-attention；sinusoidal positional encoding、mean pool。固定`d_model=96 / depth=6 / heads=4 / FFN=212 / dropout=0`。
+- **Capacity matching**：feature_count=10、雙linear heads下BF trainable params=`473,692`，AO=`473,734`，差`-42 / -0.009%`。FFN=212只作parameter-matching control，不是待調hyperparameter。
+- **Gate / stop**：Seed42 Forward only。Primary要求BF相對AO在Safety Daily/Global rho、Pair、Pred-HS true-LS與P45–P55形成明顯改善，Breakout同方向且HS-only Conditional-MFE不得崩。若FAIL，不做token size/head/d_model/depth/FFN sweep，停止raw global-attention Transformer family；不得以iterative OOS再調Transformer recipe。
+- **Engineering display closure**：使用者BE正式輸出顯示`input_window=300`，但600-bar loader/eligibility與`target_manifest.input_window_bars=600`為真；原因是console/Markdown renderer誤從不持有該欄位的`bundle.summary/source_dataset` fallback至canonical 300。renderer改為讀既有canonical target manifest；不改data membership、window materialization、fitting identity、checkpoint或report schema。
+
+Decision：`MR13BE_CLOSED_MODEL_GATE_FAIL / INCEPTIONTIME_PHYSICAL_SCALING_FAMILY_STOP / MR13BF_IMPLEMENTED_RESULT_PENDING / PARAMETER_MATCHED_DAY_TOKEN_GLOBAL_ATTENTION / SEED42_FORWARD_NEXT`。
+

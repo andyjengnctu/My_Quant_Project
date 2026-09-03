@@ -201,6 +201,42 @@ def build_patch_token_joint_spec(architecture: str) -> BreakoutQualityModelSpec:
     )
 
 
+
+def build_day_token_transformer_shared_safety_mfe_spec(
+    architecture: str,
+) -> BreakoutQualityModelSpec:
+    """AO-capacity-matched full-resolution temporal Transformer.
+
+    Each of the 300 trading days is one token (patch size 1).  The unusual FFN
+    width 212 is a fixed matching control: with feature_count=10 and two linear
+    heads, the runtime has 473,692 trainable parameters versus AO's 473,734.
+    """
+
+    return BreakoutQualityModelSpec(
+        architecture=architecture,
+        family="day_token_transformer_shared_safety_mfe",
+        channels=96,
+        kernel_size=1,
+        dilations=(),
+        convolutions_per_block=1,
+        pooling=("day_token_global_self_attention", "global_average", "raw_safety_head", "raw_mfe_head"),
+        dropout=0.0,
+        receptive_field_bars=300,
+        input_window_bars=300,
+        normalization="layer_norm",
+        head_width=None,
+        use_dataset_context=False,
+        sequence_input_paths=("raw_level_day_tokens",),
+        patch_transformer_patch_size=1,
+        patch_transformer_patch_stride=1,
+        patch_transformer_embedding_dim=96,
+        patch_transformer_depth=6,
+        patch_transformer_heads=4,
+        patch_transformer_mlp_dim=212,
+        patch_transformer_pooling="mean",
+        patch_transformer_positional_encoding="sinusoidal",
+    )
+
 def build_moment_spec(architecture: str) -> BreakoutQualityModelSpec:
     from filters.breakout_quality.moment_contract import (
         MOMENT_EMBEDDING_DIM,
