@@ -2963,8 +2963,10 @@ def validate_research_report_contract_freeze_case(_base_params):
         MODEL_STANDARD_COMPARISON,
         MODEL_STANDARD_SOP,
         MODEL_MODE_EXTENSION_SCHEMAS,
+        aggregate_robustness_row_extension,
         comparison_extension_contract,
         comparison_extension_ids,
+        comparison_extension_ids_for_evidence_families,
         extension_contract,
         mode_extension_contract,
         persistent_report_contract_fingerprints,
@@ -2973,6 +2975,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     from services.research import breakout_quality_application as app
     from config.breakout_quality import (
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
@@ -3008,7 +3011,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop_and_evidence_capabilities",
-        int(MODEL_STANDARD_COMPARISON.version) == 10
+        int(MODEL_STANDARD_COMPARISON.version) == 11
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_extension_ids() == tuple(
@@ -3053,6 +3056,60 @@ def validate_research_report_contract_freeze_case(_base_params):
         == ("Source Model", "Model", "Split"),
     )
 
+    check_true(
+        "comparison_extension_applicability_and_robustness_aggregation_are_owned_by_extension_contract",
+        comparison_extension_ids_for_evidence_families(("safety_raw_mfe",))
+        == ("multi_head_learnability", "truth_prediction_geometry")
+        and comparison_extension_ids_for_evidence_families(("hs_conditional_mfe",))
+        == ("hs_conditional_mfe_gate",)
+        and extension_contract("multi_head_learnability").robustness_aggregation == "row_mean"
+        and extension_contract("hs_conditional_mfe_gate").robustness_aggregation == "row_mean"
+        and extension_contract("truth_prediction_geometry").robustness_aggregation == "single_seed_only",
+    )
+
+    seed_extension_a = {
+        "id": "multi_head_learnability",
+        "rows": [
+            {
+                "split": "Forward OOS", "head": "Raw Safety",
+                "mean_daily_spearman": 0.2,
+                "global_spearman_vs_raw_target": 0.3,
+                "pairwise_concordance": 0.6,
+            }
+        ],
+    }
+    seed_extension_b = {
+        "id": "multi_head_learnability",
+        "rows": [
+            {
+                "split": "Forward OOS", "head": "Raw Safety",
+                "mean_daily_spearman": 0.4,
+                "global_spearman_vs_raw_target": 0.5,
+                "pairwise_concordance": 0.8,
+            }
+        ],
+    }
+    aggregated_extension = aggregate_robustness_row_extension(
+        "multi_head_learnability", (seed_extension_a, seed_extension_b)
+    )
+    aggregated_row = dict((aggregated_extension.get("rows") or [None])[0] or {})
+    truth_geometry_rejected = False
+    try:
+        aggregate_robustness_row_extension(
+            "truth_prediction_geometry", (seed_extension_a, seed_extension_b)
+        )
+    except ValueError:
+        truth_geometry_rejected = True
+    check_true(
+        "robustness_extension_aggregation_means_only_contract_declared_row_metrics",
+        aggregated_row.get("split") == "Forward OOS"
+        and aggregated_row.get("head") == "Raw Safety"
+        and abs(float(aggregated_row.get("mean_daily_spearman")) - 0.3) < 1e-12
+        and abs(float(aggregated_row.get("global_spearman_vs_raw_target")) - 0.4) < 1e-12
+        and abs(float(aggregated_row.get("pairwise_concordance")) - 0.7) < 1e-12
+        and truth_geometry_rejected,
+    )
+
     app_source = Path(app.__file__).read_text(encoding="utf-8")
     report_contract_source = (PROJECT_ROOT / "core" / "research_report_contract.py").read_text(encoding="utf-8")
     check_true(
@@ -3069,6 +3126,9 @@ def validate_research_report_contract_freeze_case(_base_params):
             == "Rolling-specific Extension｜Fold / Year Stability"
         and mode_extension_contract("robustness_stability").title
             == "Robustness-specific Extension｜Across-seed Stability"
+        and len(mode_extension_contract("robustness_stability").tables) == 2
+        and mode_extension_contract("robustness_stability").tables[1].headers
+            == ("Model Extension", "Across-seed aggregation", "Status")
         and "model.rolling_standard_sop" not in current
         and "model.rolling_standard_comparison" not in current,
     )
@@ -3771,7 +3831,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     settings = SimpleNamespace(
         filter_id="breakout_quality_v1",
         model_architecture="inception_time_v1",
-        experiment_profile="synthetic_profile",
+        experiment_profile=DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         seed=42,
     )
     with patch.object(

@@ -11501,3 +11501,13 @@ Decision：`MR13BB_CLOSED_MODEL_GATE_FAIL / MR13BC_IMPLEMENTED_RESULT_PENDING / 
 
 Decision：`ENGINEERING_ONLY / FIT_EVALUATE_REPORT_SEPARATED / EXISTING_SCIENTIFIC_IDENTITIES_UNCHANGED`。
 
+
+## 2026-09-03 — Engineering closure: [3][4][5][6] Comparison Evidence Bundle SSOT
+
+- 使用者指出 `[3] Forward` 與 `[4] Rolling` 的 model-specific extension 不一致，並要求 `[5][6]` 一併架構性確認。根因為四個 workflow 對 comparison payload 的組裝不同源：Forward 消費完整 individual report；Rolling 主要只消費 `standard_model_sop`；Robustness 更在 seed aggregation 前截斷 model-specific evidence。
+- `model.standard_comparison` 升為 v11；Standard SOP 1～6 的表格語意不變。新增 capability metadata：training composition 宣告 `report_evidence_families`，extension registry 宣告 `evidence_family` 與 `robustness_aggregation`，四個 workflow 由同一 contract discovery，不再認 MR ID 或 secondary extension allow-list。
+- Rolling audit 由既有 PIT primary score + raw head sidecar重建 AK-family Multi-head/Truth Geometry 與 AO-family HS-Conditional evidence；若 PIT score core READY 但 audit evidence stale，只做 audit-only refresh，不重訓、不重算 PIT scores。
+- Forward/Rolling Robustness 均保留 per-seed model-specific evidence後再依 extension contract聚合：Multi-head與HS-Conditional row tables採 benchmark-seed arithmetic mean；Truth Geometry明確不跨seed硬平均，報表列為 single-seed-only capability。
+- 本輪不改任何模型 fitting identity、target/loss、split/seed、PIT information legality、strategy conversion 或 research decision。
+
+Decision：`ENGINEERING_ONLY / FORWARD_ROLLING_ROBUSTNESS_REPORTS_SHARE_ONE_EVIDENCE_CONTRACT / NO_RETRAIN_REQUIRED_FOR_REPORT_REFRESH`。

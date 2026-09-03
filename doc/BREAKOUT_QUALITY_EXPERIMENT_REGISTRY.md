@@ -480,3 +480,13 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 4. Reject／Stop／legacy ID 不得刪除或回收。
 5. 程式若因相容性保留舊 alias，文件在可能歧義的情況下仍必須使用 canonical namespace。
 6. Registry 與 Experiment Log 衝突時，先停止新實驗，於同一輪完成 identity／狀態 reconciliation。
+
+## 2026-09-03 — Engineering contract: Continuous DL Comparison Evidence Bundle SSOT
+
+- **Scope**：engineering-only report/evidence lifecycle；不新增或修改任何 MR scientific identity、target/loss/architecture/fitting/PIT/strategy semantics。
+- **Canonical comparison contract**：`model.standard_comparison` v11。`[3] Forward OOS`、`[4] Rolling OOS`、`[5] Forward OOS Robustness`、`[6] Rolling OOS Robustness` 必須共用同一 `Standard SOP + Model-specific Extension` evidence bundle；workflow 只可附加其 mode-specific extension，不得自行維護 model/extension whitelist。
+- **Evidence applicability SSOT**：`ContinuousRankerTrainingPolicy.report_evidence_families` 宣告 training composition 可產生的 report evidence family；`MODEL_EXTENSION_SCHEMAS` 以 `evidence_family` 宣告 extension capability。workflow 只能由兩者交集派生可比較 extension。
+- **Rolling lifecycle**：既有 PIT score/manifest 合法但 audit 缺新 extension 時，僅允許 `audit-point-in-time-scores` refresh；不得重新進入 PIT fitting/scoring。Rolling model-specific evidence由 persisted primary score + capability-owned sidecar heads重建。
+- **Robustness aggregation**：extension contract 自己宣告 across-seed aggregation。row-table evidence使用 benchmark-seed arithmetic mean；Truth / Prediction Geometry 為 distribution geometry，明確 `single_seed_only`，不得逐格硬平均。
+
+Decision：`ENGINEERING_ONLY / COMPARISON_EVIDENCE_BUNDLE_SSOT / MODEL_IDENTITIES_UNCHANGED`。

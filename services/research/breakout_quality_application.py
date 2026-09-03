@@ -50,6 +50,7 @@ from config.breakout_quality import (
     get_breakout_quality_rolling_timing_settings,
     get_breakout_quality_workflow_settings,
 )
+from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.display_common import FixedProgressBlock, render_elapsed
 from core.file_integrity import load_json_object_or_none
 from core.training_progress import (
@@ -60,8 +61,10 @@ from core.training_progress import (
 from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.research_report_contract import (
+    aggregate_robustness_row_extension,
     comparison_extension_contract,
     comparison_extension_ids,
+    comparison_extension_ids_for_evidence_families,
     extension_contract,
     mode_extension_contract,
     format_contract_value,
@@ -98,6 +101,7 @@ from services.research.training_process import (
     terminate_registered_training_processes,
 )
 from config.training_policy import resolve_robustness_benchmark_seeds
+from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.artifact_dependency_registry import (
     collect_model_upstream_preparation_plan,
 )
@@ -134,6 +138,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_report_markdown_path,
     SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_audit_markdown_path,
     resolve_selection_point_in_time_coverage_path,
@@ -891,6 +896,20 @@ def _model_sop_view(payload: dict) -> dict:
     if joint_min_rows:
         extensions.append({"id": "joint_min_retrieval", "rows": joint_min_rows})
 
+    # Robustness aggregation may provide normalized comparison extensions directly.
+    # Merge by extension ID so the same renderer consumes single-seed and multi-seed
+    # evidence without a workflow-specific schema branch.
+    for raw_extension in list(source_payload.get("comparison_extensions") or []):
+        normalized_extension = dict(raw_extension or {})
+        extension_id = str(normalized_extension.get("id") or "").strip()
+        if not extension_id:
+            continue
+        extensions = [
+            extension for extension in extensions
+            if str(dict(extension).get("id") or "") != extension_id
+        ]
+        extensions.append(normalized_extension)
+
     return {
         "split_names": split_names,
         "learnability": learnability_rows,
@@ -905,6 +924,7 @@ def _model_sop_view(payload: dict) -> dict:
         "evaluation_mode": evaluation_mode,
         "rolling_specific": dict((standard.get("mode_extensions") or {}).get("rolling") or {}),
         "robustness_specific": dict((standard.get("mode_extensions") or {}).get("robustness") or {}),
+        "comparison_extension_aggregation": dict(source_payload.get("comparison_extension_aggregation") or {}),
     }
 
 
@@ -1482,6 +1502,29 @@ def _render_model_comparison_contract_table(
     )
 
 
+def _expected_comparison_extension_ids(settings) -> tuple[str, ...]:
+    recipe = get_continuous_ranker_execution_recipe(str(settings.experiment_profile))
+    return comparison_extension_ids_for_evidence_families(
+        recipe.training_policy.report_evidence_families
+    )
+
+
+def _comparison_evidence_issues(payload: dict, settings) -> tuple[str, ...]:
+    expected = _expected_comparison_extension_ids(settings)
+    if not expected:
+        return ()
+    view = _model_sop_view(dict(payload or {}))
+    available = {
+        str(dict(extension).get("id") or "")
+        for extension in list(view.get("extensions") or [])
+    }
+    return tuple(
+        f"model_extension:{extension_id} missing"
+        for extension_id in expected
+        if extension_id not in available
+    )
+
+
 def _standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
     """Return missing common Standard-SOP evidence required by [1][1]/[1][4].
 
@@ -1684,6 +1727,21 @@ def _robustness_specific_comparison_rows(views: list[dict]) -> list[dict]:
     return rows
 
 
+def _robustness_extension_capability_rows() -> list[dict]:
+    rows = []
+    for extension_id in comparison_extension_ids():
+        spec = extension_contract(extension_id)
+        aggregation = str(spec.robustness_aggregation)
+        rows.append({
+            "extension": spec.title,
+            "aggregation": (
+                "Arithmetic row mean" if aggregation == "row_mean" else "Single-seed only"
+            ),
+            "status": "AGGREGATED" if aggregation == "row_mean" else "NOT AGGREGATED",
+        })
+    return rows
+
+
 def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
     """Render the common Standard SOP for multiple models.
 
@@ -1870,10 +1928,16 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
             parts.append(render_section(paint(extension_title, "cyan", enabled=color, bold=True)))
         else:
             parts.append(f"## {markdown_tone(extension_title, 'blue', bold=True)}")
+        robustness_contract = mode_extension_contract("robustness_stability")
         parts.append(_render_model_contract_table(
-            mode_extension_contract("robustness_stability").tables[0],
+            robustness_contract.tables[0],
             robustness_rows, target=target, best_worst_style=True,
         ))
+        capability_rows = _robustness_extension_capability_rows()
+        if capability_rows and len(robustness_contract.tables) > 1:
+            parts.append(_render_model_contract_table(
+                robustness_contract.tables[1], capability_rows, target=target
+            ))
 
     separator = "\n" if target == "console" else "\n\n"
     return separator.join(part for part in parts if part)
@@ -3923,11 +3987,18 @@ def _load_reusable_continuous_forward_contract(settings):
                 str(PROJECT_ROOT), str(settings.filter_id), str(settings.model_architecture),
                 str(settings.experiment_profile), require_scores=False,
             )
-    completeness_issues = _standard_model_sop_completeness_issues(dict(contract.report or {}))
+    report_payload = dict(contract.report or {})
+    completeness_issues = _standard_model_sop_completeness_issues(report_payload)
     if completeness_issues:
         return None, (
             "Standard SOP共通evidence不完整，需由canonical producer補建: "
             + "; ".join(completeness_issues[:8])
+        )
+    extension_issues = _comparison_evidence_issues(report_payload, settings)
+    if extension_issues:
+        return None, (
+            "Comparison model-extension evidence不完整，需由canonical producer補建: "
+            + "; ".join(extension_issues[:8])
         )
     return contract, None
 
@@ -4117,6 +4188,9 @@ def _load_reusable_rolling_standard_report(settings, mode):
     issues = _standard_model_sop_completeness_issues(payload)
     if issues:
         return contract, None, "Standard SOP evidence不完整: " + "; ".join(issues)
+    extension_issues = _comparison_evidence_issues(payload, settings)
+    if extension_issues:
+        return contract, None, "Comparison model-extension evidence不完整: " + "; ".join(extension_issues)
     return contract, payload, None
 
 
@@ -4271,6 +4345,29 @@ def _run_continuous_pit_profile(
     return 0
 
 
+def _refresh_rolling_audit_only(program_name: str, settings, mode) -> tuple[object | None, dict | None, str | None]:
+    """Refresh evaluation/report evidence without re-entering PIT fitting or scoring."""
+
+    pit_dir_override = _rolling_mode_point_in_time_dir(settings, mode)
+    audit_args = [
+        "--filter-id", str(settings.filter_id),
+        "--model-architecture", str(settings.model_architecture),
+        "--experiment-profile", str(settings.experiment_profile),
+    ]
+    if pit_dir_override is not None:
+        audit_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
+    with _compact_console_scope():
+        code = _run_command(
+            "audit-point-in-time-scores",
+            audit_args,
+            program_name=program_name,
+            emit_simple_report=False,
+        )
+    if code != 0:
+        return None, None, f"audit-only refresh failed: returncode={int(code)}"
+    return _load_reusable_rolling_standard_report(settings, mode)
+
+
 def _run_continuous_rolling_mode_direct(
     program_name: str,
     settings,
@@ -4299,6 +4396,27 @@ def _run_continuous_rolling_mode_direct(
     if contract is not None and payload is not None:
         _emit_standard_model_sop_report(
             settings, source_payload=payload, source_path=Path(contract.audit_path), action="REUSE"
+        )
+        return 0
+
+    # PIT scores/folds are already a valid scientific artifact when ``contract`` exists.
+    # A stale/missing comparison extension is evaluation/report staleness only, so refresh
+    # the audit from the persisted score sidecars and never re-enter model fitting/scoring.
+    if contract is not None and payload is None:
+        if prompt_for_build and not _prompt_bool("確認只刷新Rolling audit/evidence（不重訓、不重算PIT scores）", True):
+            return 0
+        refreshed_contract, refreshed_payload, refreshed_reason = _refresh_rolling_audit_only(
+            program_name, settings, mode
+        )
+        if refreshed_contract is None or refreshed_payload is None:
+            raise RuntimeError(
+                f"{model_id} Rolling audit-only refresh後仍不可比較: {refreshed_reason}"
+            )
+        _emit_standard_model_sop_report(
+            settings,
+            source_payload=refreshed_payload,
+            source_path=Path(refreshed_contract.audit_path),
+            action="REFRESH",
         )
         return 0
 
@@ -5043,6 +5161,7 @@ def _validate_robustness_standard_payload(
             f"expected={evaluation_mode!r}"
         )
     issues.extend(_standard_model_sop_completeness_issues(payload))
+    issues.extend(_comparison_evidence_issues(payload, settings))
     return tuple(dict.fromkeys(issues))
 
 
@@ -5123,6 +5242,40 @@ def _build_forward_robustness_seed(program_name: str, settings, *, seed: int) ->
     ))
 
 
+def _rolling_robustness_score_core_ready(settings, *, seed: int) -> tuple[bool, str | None]:
+    pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
+    manifest_path = pit_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+    score_path = pit_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME
+    if not manifest_path.is_file() or not score_path.is_file():
+        return False, "Rolling PIT score/manifest missing"
+    manifest = load_json_object_or_none(manifest_path)
+    if not isinstance(manifest, dict):
+        return False, "Rolling PIT manifest invalid"
+    for key, expected in (
+        ("filter_id", settings.filter_id),
+        ("model_architecture", settings.model_architecture),
+        ("experiment_profile", settings.experiment_profile),
+    ):
+        if str(manifest.get(key) or "") != str(expected):
+            return False, f"Rolling PIT manifest {key} mismatch"
+    if int(manifest.get("seed", -1)) != int(seed):
+        return False, "Rolling PIT seed mismatch"
+    if str(manifest.get("status") or "") != "BUILT":
+        return False, "Rolling PIT manifest not BUILT"
+    recipe = get_continuous_ranker_execution_recipe(str(settings.experiment_profile))
+    score_policy = recipe.training_policy.score_output_policy
+    expected_score_columns = (
+        {"primary": "breakout_quality_score"}
+        if score_policy is None
+        else score_policy.manifest_columns()
+    )
+    if dict(manifest.get("score_columns") or {}) != dict(expected_score_columns):
+        return False, "Rolling PIT score-output capability stale"
+    if build_file_manifest(score_path) != dict((manifest.get("artifacts") or {}).get("scores") or {}):
+        return False, "Rolling PIT score hash mismatch"
+    return True, None
+
+
 def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) -> int:
     mode = get_breakout_quality_rolling_test_mode("rolling")
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
@@ -5165,13 +5318,15 @@ def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) ->
         "--experiment-profile", str(settings.experiment_profile),
         "--point-in-time-dir-override", str(pit_dir),
     ]
+    core_ready, _core_reason = _rolling_robustness_score_core_ready(settings, seed=seed)
     with _compact_console_scope():
-        code = _run_command(
-            "build-point-in-time-scores", build_args, program_name=program_name,
-            emit_simple_report=False,
-        )
-        if code != 0:
-            return int(code)
+        if not core_ready:
+            code = _run_command(
+                "build-point-in-time-scores", build_args, program_name=program_name,
+                emit_simple_report=False,
+            )
+            if code != 0:
+                return int(code)
         return int(_run_command(
             "audit-point-in-time-scores", audit_args, program_name=program_name,
             emit_simple_report=False,
@@ -5221,6 +5376,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             if code != 0:
                 return int(code)
         seed_payloads = []
+        seed_views = []
         source_reports = []
         built = False
         for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):
@@ -5261,14 +5417,39 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                     + f" | {mode_label} Standard SOP READY"
                 )
             seed_payloads.append(dict(payload["standard_model_sop"]))
+            seed_views.append(_model_sop_view(dict(payload)))
             source_reports.append(Path(path))
         aggregated = aggregate_standard_model_sop_robustness(seed_payloads, seeds=seeds)
+        aggregated_extensions = []
+        aggregation_status = {}
+        for extension_id in _expected_comparison_extension_ids(settings):
+            spec = extension_contract(extension_id)
+            per_seed_extensions = []
+            for seed_view in seed_views:
+                extensions_by_id = {
+                    str(dict(ext).get("id") or ""): dict(ext)
+                    for ext in list(seed_view.get("extensions") or [])
+                }
+                if extension_id not in extensions_by_id:
+                    raise RuntimeError(
+                        f"{model_id} robustness缺少{extension_id} seed evidence"
+                    )
+                per_seed_extensions.append(extensions_by_id[extension_id])
+            if spec.robustness_aggregation == "row_mean":
+                aggregated_extensions.append(
+                    aggregate_robustness_row_extension(extension_id, per_seed_extensions)
+                )
+                aggregation_status[extension_id] = "AGGREGATED_ROW_MEAN"
+            else:
+                aggregation_status[extension_id] = "SINGLE_SEED_ONLY_NOT_AGGREGATED"
         completed.append({
             "model_id": str(model_id),
             "settings": settings,
             "payload": {
                 "model_research_id": str(model_id),
                 "standard_model_sop": aggregated,
+                "comparison_extensions": aggregated_extensions,
+                "comparison_extension_aggregation": aggregation_status,
             },
             "artifact_action": "BUILD/REFRESH" if built else "REUSE",
             "benchmark_seeds": seeds,

@@ -528,6 +528,10 @@ class ContinuousRankerTrainingPolicy:
     epoch_loss_aggregation: str = CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED
     uses_pairwise_loss: bool = False
     score_output_policy: ContinuousRankerScoreOutputPolicy | None = None
+    # Comparison/report evidence is a declarative capability of the training
+    # composition, not a workflow/model-ID whitelist.  Consumers discover
+    # applicable Model-specific Extensions through these stable family IDs.
+    report_evidence_families: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.batch_mode not in {
@@ -557,6 +561,9 @@ class ContinuousRankerTrainingPolicy:
             self.score_output_policy, ContinuousRankerScoreOutputPolicy
         ):
             raise TypeError("score_output_policy必須是ContinuousRankerScoreOutputPolicy")
+        evidence_families = tuple(str(value).strip() for value in self.report_evidence_families)
+        if any(not value for value in evidence_families) or len(set(evidence_families)) != len(evidence_families):
+            raise ValueError("report_evidence_families不得包含空值或重複值")
         loss_names = tuple(str(loss_name) for loss_name, _metric in self.profile_loss_metrics)
         if any(not value for value in loss_names) or len(loss_names) != len(set(loss_names)):
             raise ValueError("profile_loss_metrics loss_name不得為空或重複")
@@ -1128,6 +1135,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE,
+            report_evidence_families=("safety_raw_mfe",),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1143,6 +1151,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE,
+            report_evidence_families=("safety_raw_mfe",),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1175,6 +1184,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            report_evidence_families=("hs_conditional_mfe",),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1193,6 +1203,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            report_evidence_families=("hs_conditional_mfe",),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1212,6 +1223,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            report_evidence_families=("hs_conditional_mfe",),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1225,6 +1237,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            report_evidence_families=("hs_conditional_mfe",),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1238,6 +1251,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            report_evidence_families=("hs_conditional_mfe",),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1363,6 +1377,12 @@ def get_continuous_ranker_persisted_score_columns() -> tuple[str, ...]:
                 continue
             columns.append(normalized)
     return tuple(columns)
+
+
+def get_continuous_ranker_report_evidence_families(training_objective: str) -> tuple[str, ...]:
+    """Return comparison/report evidence families from the training-composition owner."""
+
+    return tuple(get_continuous_ranker_training_policy(training_objective).report_evidence_families)
 
 
 def _resolve_continuous_ranker_target_policy(profile: Any) -> ContinuousRankerTargetPolicy:
@@ -1623,5 +1643,6 @@ __all__ = (
     "get_profile_enabled_continuous_ranker_training_objectives",
     "get_continuous_ranker_primary_pair_weight_policy",
     "get_continuous_ranker_persisted_score_columns",
+    "get_continuous_ranker_report_evidence_families",
     "build_continuous_ranker_execution_recipe",
 )

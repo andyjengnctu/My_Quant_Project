@@ -3759,6 +3759,17 @@
       "entry": "`services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
       "initial_status": "NEW",
       "order": 338
+    },
+    {
+      "id": "B351",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research / Report contract",
+      "item": "Continuous DL [3][4][5][6] Comparison Evidence Bundle SSOT",
+      "gap": "Forward/Rolling/Forward Robustness/Rolling Robustness必須共用同一Standard SOP + model-extension evidence contract；extension applicability由training composition evidence_family與extension registry派生，Rolling只缺extension時僅refresh audit，不得重建PIT scores；Robustness跨seed aggregation由extension contract宣告，禁止workflow各自截斷或猜測evidence。",
+      "entry": "`core/research_report_contract.py`, `config/breakout_quality_runtime.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/point_in_time_audit.py`",
+      "initial_status": "NEW",
+      "order": 339
     }
   ],
   "tests": [
@@ -7045,6 +7056,13 @@
       "b_id": "B350",
       "initial_status": "NEW",
       "order": 460
+    },
+    {
+      "id": "T471",
+      "description": "`validate_research_report_contract_freeze_case` 覆蓋B351：驗comparison extension evidence-family discovery、v11 persistent contract、row-mean robustness aggregation與single-seed-only geometry contract",
+      "b_id": "B351",
+      "initial_status": "NEW",
+      "order": 461
     }
   ],
   "transitions": [
@@ -23927,6 +23945,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_breakout_quality_fitted_model_lifecycle_contract_case`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B351",
+      "description": "收斂[3][4][5][6]為單一Comparison Evidence Bundle，Rolling extension stale只做audit refresh，Robustness依extension contract聚合",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`model.standard_comparison` v11"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T471",
+      "description": "擴充persistent report capability regression，鎖住evidence-family discovery與robustness aggregation policy",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_research_report_contract_freeze_case`"
     }
   ]
 }

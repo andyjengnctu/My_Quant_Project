@@ -39,9 +39,15 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config import breakout_quality as workflow_config
-    from config.breakout_quality import get_breakout_quality_workflow_settings
+    from config.breakout_quality import (
+        DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_workflow_settings,
+    )
     from filters.breakout_quality.continuous_ranker_data import _validate_group_consistency
-    from services.breakout_quality.point_in_time_audit import _build_safety_raw_mfe_evaluation
+    from services.breakout_quality.point_in_time_audit import (
+        _build_hs_conditional_mfe_evaluation,
+        _build_safety_raw_mfe_evaluation,
+    )
     from filters.breakout_quality.ranker_sample_contract import (
         resolve_forward_oos_score_group_ids,
         resolve_forward_oos_target_evaluable_group_ids,
@@ -465,6 +471,26 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and int((raw_eval["oos"].get("raw_safety") or {}).get("group_count", 0)) == group_count
         and int((raw_eval["oos"].get("raw_mfe") or {}).get("group_count", 0)) == group_count
         and bool(raw_eval["oos"].get("model_gate")),
+    )
+
+    hs_frame = audit_frame.drop(columns=["raw_mfe_score"]).copy()
+    hs_frame["date"] = dates
+    hs_frame["breakout_quality_score"] = np.linspace(0.05, 0.95, group_count)
+    hs_eval = _build_hs_conditional_mfe_evaluation(
+        audit_bundle,
+        hs_frame,
+        np.arange(0, group_count, 2, dtype=np.int64),
+        experiment_profile=(
+            DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+    )
+    check_true(
+        "rolling_audit_rebuilds_hs_conditional_extension_from_persisted_primary_and_safety_sidecar",
+        set(hs_eval) == {"oos", "breakout_candidate_oos"}
+        and bool((hs_eval["oos"].get("raw_safety") or {}))
+        and bool((hs_eval["oos"].get("hs_qualification") or {}))
+        and bool((hs_eval["oos"].get("conditional_mfe_true_hs") or {}))
+        and bool((hs_eval["oos"].get("lexicographic_model_gate") or {})),
     )
 
     # Reproduce the C71 score-only upgrade failure: legacy code refreshed the

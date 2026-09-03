@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
-from typing import Mapping
+from statistics import fmean
+from typing import Any, Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,13 @@ class ModelExtensionContract:
     # extension-ID whitelist that can drift when a new model/evidence family lands.
     comparison_mode: str | None = None
     comparison_row_keys: tuple[tuple[str, str], ...] = ()
+    # Stable evidence-family handshake with the training-composition owner.
+    # A workflow never names model IDs or extension IDs to decide applicability.
+    evidence_family: str | None = None
+    # Cross-seed aggregation is a scientific property of the extension itself.
+    # ``row_mean`` is valid for contract rows; ``single_seed_only`` explicitly
+    # forbids inventing an across-seed aggregate for distribution geometry.
+    robustness_aggregation: str = "single_seed_only"
 
 
 C = ReportColumnContract
@@ -180,7 +188,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=10,
+    version=11,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -214,7 +222,12 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             C("pair_std", "OOS Pair σ", 2, "%", "lower", "fraction_pct"),
             C("top_bottom_mean", "OOS Top-Bottom mean", 4, preference="higher", format_kind="number"),
             C("top_bottom_std", "OOS Top-Bottom σ", 4, preference="lower", format_kind="number"),
-        )),),
+        )),
+         T("robustness_extension_capabilities", (
+            C("extension", "Model Extension", alignment="left"),
+            C("aggregation", "Across-seed aggregation", alignment="left"),
+            C("status", "Status", alignment="left"),
+        ))),
     ),
 }
 
@@ -231,6 +244,8 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
         )),),
         comparison_mode="row_tables",
         comparison_row_keys=(("multi_head", "rows"),),
+        evidence_family="safety_raw_mfe",
+        robustness_aggregation="row_mean",
     ),
     "truth_prediction_geometry": ModelExtensionContract(
         "truth_prediction_geometry", "Truth / Prediction Geometry",
@@ -255,6 +270,8 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             )),
         ),
         comparison_mode="truth_geometry",
+        evidence_family="safety_raw_mfe",
+        robustness_aggregation="single_seed_only",
     ),
     "hs_conditional_mfe_gate": ModelExtensionContract(
         "hs_conditional_mfe_gate", "HS-Qualification / Conditional-MFE Gate",
@@ -320,6 +337,8 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             ("ls_contamination_tail", "contamination_rows"),
             ("hs_attribution_control", "control_rows"),
         ),
+        evidence_family="hs_conditional_mfe",
+        robustness_aggregation="row_mean",
     ),
     "direct_hmhs_joint_retrieval": ModelExtensionContract(
         "direct_hmhs_joint_retrieval", "Direct HM/HS Joint Retrieval",
@@ -606,6 +625,9 @@ def _truth_geometry_comparison_contract(
             )),
         ),
         comparison_mode=extension.comparison_mode,
+        comparison_row_keys=extension.comparison_row_keys,
+        evidence_family=extension.evidence_family,
+        robustness_aggregation=extension.robustness_aggregation,
     )
 
 
@@ -629,6 +651,79 @@ def comparison_extension_ids() -> tuple[str, ...]:
         for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
         if extension.comparison_mode is not None
     )
+
+
+def comparison_extension_ids_for_evidence_families(
+    evidence_families: Sequence[str],
+) -> tuple[str, ...]:
+    """Resolve cross-model extension IDs from capability families, never model identity."""
+
+    families = {str(value).strip() for value in evidence_families if str(value).strip()}
+    return tuple(
+        extension_id
+        for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
+        if extension.comparison_mode is not None
+        and extension.evidence_family is not None
+        and extension.evidence_family in families
+    )
+
+
+def aggregate_robustness_row_extension(
+    extension_id: str,
+    seed_extensions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate one row-table extension across benchmark seeds by its own contract.
+
+    Identity/text columns must match exactly across seeds. Numeric contract columns
+    use an arithmetic mean, matching Standard-SOP robustness semantics.
+    """
+
+    extension = extension_contract(extension_id)
+    if extension.robustness_aggregation != "row_mean":
+        raise ValueError(
+            f"Model extension不支援row-mean robustness aggregation: {extension_id}="
+            f"{extension.robustness_aggregation}"
+        )
+    if extension.comparison_mode != "row_tables":
+        raise ValueError(f"row-mean robustness只支援row_tables extension: {extension_id}")
+    normalized = [dict(value or {}) for value in seed_extensions]
+    if len(normalized) < 2:
+        raise ValueError("Model extension robustness至少需要兩個seed payload")
+    tables = {table.table_id: table for table in extension.tables}
+    result: dict[str, Any] = {
+        "id": extension_id,
+        "robustness_aggregation": "arithmetic_mean_across_benchmark_seeds",
+    }
+    for table_id, row_key in extension.comparison_row_keys:
+        table = tables[table_id]
+        identity_columns = tuple(
+            column.key for column in table.columns
+            if column.format_kind == "text" or column.digits is None
+        )
+        metric_columns = tuple(column.key for column in table.columns if column.key not in identity_columns)
+        per_seed: list[dict[tuple[Any, ...], dict[str, Any]]] = []
+        for payload in normalized:
+            index: dict[tuple[Any, ...], dict[str, Any]] = {}
+            for raw_row in list(payload.get(row_key) or []):
+                row = dict(raw_row)
+                identity = tuple(row.get(key) for key in identity_columns)
+                if identity in index:
+                    raise ValueError(f"{extension_id}/{table_id} seed row identity重複: {identity}")
+                index[identity] = row
+            per_seed.append(index)
+        identity_sets = [set(index) for index in per_seed]
+        if any(values != identity_sets[0] for values in identity_sets[1:]):
+            raise ValueError(f"{extension_id}/{table_id} row identity跨seed不一致")
+        rows: list[dict[str, Any]] = []
+        for identity in sorted(identity_sets[0], key=lambda value: tuple(str(x) for x in value)):
+            row = {key: value for key, value in zip(identity_columns, identity)}
+            for key in metric_columns:
+                values = [index[identity].get(key) for index in per_seed]
+                finite_values = [float(value) for value in values if value is not None]
+                row[key] = None if not finite_values else float(fmean(finite_values))
+            rows.append(row)
+        result[row_key] = rows
+    return result
 
 
 MODEL_COMPARISON_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
@@ -695,7 +790,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "2a47b1928a60f697",
+    "model.standard_comparison": "7c8b4b930e2e047e",
     "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
@@ -728,7 +823,7 @@ __all__ = [
     "STRATEGY_CONSISTENCY_REPORT", "STRATEGY_STANDARD_SOP",
     "TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R", "TRADE_OUTCOME_PATH_REPORT", "ModelExtensionContract",
     "PersistentReportContract", "ReportColumnContract", "ReportSectionContract",
-    "ReportTableContract", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "extension_contract", "mode_extension_contract", "format_contract_value", "persistent_report_contract_fingerprint",
+    "ReportTableContract", "aggregate_robustness_row_extension", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "comparison_extension_ids_for_evidence_families", "extension_contract", "mode_extension_contract", "format_contract_value", "persistent_report_contract_fingerprint",
     "persistent_report_contract_fingerprints", "report_contract", "section_contract",
     "table_contract", "validate_approved_persistent_report_contracts",
 ]

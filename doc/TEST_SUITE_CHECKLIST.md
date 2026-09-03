@@ -369,6 +369,7 @@
 | B348 | P1 | InceptionTime per-module dilation / full-window receptive-field reusable primitive | InceptionTime architecture descriptor可宣告逐module dilation；未宣告者維持既有全1語意。MR-13BA只在AO shared InceptionTime最後一個residual group使用dilation=2，module dilations固定`(1,1,1,1,2,2)`，使300-bar input的actual receptive field由229擴至305；kernels/depth/filters/bottleneck/residual cadence/pooling/trainable parameter count與AO控制組保持不變。generic model/spec builder必須由descriptor-driven dilation建構，不得硬編MR identity。 | DONE | `validate_breakout_quality_reusable_model_component_contract_case`驗full-window capability、RF=305、module dilations、AO kernels/depth/width/pooling/parameter-count exact control，以及descriptor-driven dilation。 | `filters/breakout_quality/models/architectures.py`, `filters/breakout_quality/models/spec_contract.py`, `filters/breakout_quality/models/spec_builders.py`, `filters/breakout_quality/models/inception_time.py`, `config/breakout_quality.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
 | B349 | P1 | Meta / Test governance | Test Suite Checklist B/T/G generated-view SSOT | DONE | 以 `doc/TEST_SUITE_CHECKLIST_CONTRACT.json` 唯一持有B definitions、T bindings與append-only transitions；B current status與T DONE索引由同一resolver派生，Markdown B/T/G只可由canonical transaction同步render，不得分別手改。Formal須驗generated view逐列等於canonical contract。 | `tools/local_regression/checklist_contract.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B350 | P1 | Research / Artifact lifecycle | Continuous Forward FIT / EVALUATE / REPORT artifact lifecycle SSOT | DONE | Forward fitted checkpoint必須有獨立canonical fitting contract；report/score/schema refresh不得使compatible checkpoint重新fit。完整Forward contract READY時不得再次呼叫trainer；report不完整時只可先驗exact fitting identity並reuse checkpoint補evaluation/report。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
+| B351 | P1 | Research / Report contract | Continuous DL [3][4][5][6] Comparison Evidence Bundle SSOT | DONE | Forward/Rolling/Forward Robustness/Rolling Robustness必須共用同一Standard SOP + model-extension evidence contract；extension applicability由training composition evidence_family與extension registry派生，Rolling只缺extension時僅refresh audit，不得重建PIT scores；Robustness跨seed aggregation由extension contract宣告，禁止workflow各自截斷或猜測evidence。 | `core/research_report_contract.py`, `config/breakout_quality_runtime.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/point_in_time_audit.py` |
 
 
 
@@ -795,6 +796,7 @@
 | T468 | `validate_breakout_quality_reusable_model_component_contract_case` 覆蓋B348：驗InceptionTime per-module dilation、full-window RF=305、AO kernels/depth/width/pooling/parameter-count exact control與descriptor-driven dilation | B348 |
 | T469 | `validate_checklist_generated_view_ssot_contract_case` 驗canonical contract→B/T/G逐列一致、單一transaction自動同步三個view與invalid transition chain fail-fast | B349 |
 | T470 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 驗report/manifest缺失不會抹除獨立fitted-model truth、exact fitting identity reuse、same-identity byte conflict fail-fast、Forward refresh必帶reuse-fitted-model且完整contract 0 producer call | B350 |
+| T471 | `validate_research_report_contract_freeze_case` 覆蓋B351：驗comparison extension evidence-family discovery、v11 persistent contract、row-mean robustness aggregation與single-seed-only geometry contract | B351 |
 
 ## G. 逐項收斂紀錄
 
@@ -2912,6 +2914,8 @@
 | 2026-09-03 | T469 | 新增Checklist generated-view SSOT regression，驗單一transaction同步B/T/G與transition fail-fast | NEW -> DONE | `validate_checklist_generated_view_ssot_contract_case` |
 | 2026-09-03 | B350 | 拆分Continuous Forward FIT / EVALUATE / REPORT artifact lifecycle，checkpoint完成即發布獨立fitting contract，report refresh不得觸發compatible model refit | NEW -> DONE | `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py` |
 | 2026-09-03 | T470 | 新增fitted-model lifecycle historical regression，鎖住report-independent checkpoint reuse與orchestrator reuse-fitted delegation | NEW -> DONE | `validate_breakout_quality_fitted_model_lifecycle_contract_case` |
+| 2026-09-03 | B351 | 收斂[3][4][5][6]為單一Comparison Evidence Bundle，Rolling extension stale只做audit refresh，Robustness依extension contract聚合 | NEW -> DONE | `model.standard_comparison` v11 |
+| 2026-09-03 | T471 | 擴充persistent report capability regression，鎖住evidence-family discovery與robustness aggregation policy | NEW -> DONE | `validate_research_report_contract_freeze_case` |
 
 
 

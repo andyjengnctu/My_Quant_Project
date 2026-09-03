@@ -1428,6 +1428,22 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and '_run_configured_model_robustness(program_name, rolling=False)' in app_source
         and '_run_configured_model_robustness(program_name, rolling=True)' in app_source,
     )
+    check_true(
+        "rolling_report_extension_refresh_reuses_pit_score_core_and_robustness_does_not_reenter_fit_when_only_audit_is_stale",
+        "def _refresh_rolling_audit_only" in app_source
+        and "確認只刷新Rolling audit/evidence（不重訓、不重算PIT scores）" in app_source
+        and "def _rolling_robustness_score_core_ready" in app_source
+        and "Rolling PIT score-output capability stale" in app_source
+        and "score_policy.manifest_columns()" in app_source
+        and "if not core_ready:" in app_source
+        and '"audit-point-in-time-scores"' in app_source
+        and "aggregate_robustness_row_extension" in app_source
+        and "comparison_extension_aggregation" in app_source,
+        note=(
+            "Rolling comparison/robustness must treat model-specific evidence staleness as "
+            "audit/report lifecycle only once canonical PIT score+manifest are valid"
+        ),
+    )
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
     from services.breakout_quality.export_scores import _run_daily_continuous_workflow_export

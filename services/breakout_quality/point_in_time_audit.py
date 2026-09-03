@@ -65,6 +65,7 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     load_continuous_ranker_data,
     primary_audit_metric_scope,
 )
+from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
@@ -474,6 +475,81 @@ def _build_safety_raw_mfe_evaluation(
         return ranker_api.safety_raw_mfe_metrics(
             ids, bundle.group_table, raw_mfe_targets, scores,
             include_top_k_quality=True,
+        )
+
+    valid_target = work[work["target_available"]].copy()
+    evaluation: dict[str, Any] = {}
+    if len(valid_target) >= 2:
+        evaluation["oos"] = evaluate(valid_target)
+    candidate_ids = np.asarray(candidate_ids, dtype=np.int64)
+    if len(candidate_ids) >= 2:
+        breakout = valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
+        if len(breakout) >= 2:
+            evaluation["breakout_candidate_oos"] = evaluate(breakout)
+    return evaluation
+
+
+def _build_hs_conditional_mfe_evaluation(
+    bundle,
+    merged: pd.DataFrame,
+    candidate_ids: np.ndarray,
+    *,
+    experiment_profile: str,
+) -> dict[str, Any]:
+    """Build Rolling HS/Conditional-MFE evidence from persisted score sidecars.
+
+    The Rolling score artifact owns only decision-time model outputs.  This audit
+    reconstructs evaluation-only targets from the same canonical target builder;
+    no checkpoint fitting or score reranking is performed.
+    """
+
+    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
+    if "hs_conditional_mfe" not in set(recipe.training_policy.report_evidence_families):
+        return {}
+    if "raw_safety_score" not in merged.columns:
+        return {}
+    threshold = recipe.objective_policy.secondary_pair_scope_threshold
+    if threshold is None:
+        raise ValueError("HS-Conditional Rolling evidence缺少canonical true-HS threshold")
+
+    work = merged.copy()
+    work["raw_safety_score"] = pd.to_numeric(work["raw_safety_score"], errors="raise").astype(np.float64)
+    work["breakout_quality_score"] = pd.to_numeric(
+        work["breakout_quality_score"], errors="raise"
+    ).astype(np.float64)
+    for column in ("raw_safety_score", "breakout_quality_score"):
+        if not np.isfinite(work[column]).all():
+            raise ValueError(f"Rolling PIT HS-Conditional sidecar含非有限值: {column}")
+        if bool(((work[column] < 0.0) | (work[column] > 1.0)).any()):
+            raise ValueError(f"Rolling PIT HS-Conditional sidecar超出[0,1]: {column}")
+
+    hs_targets = ranker_api.build_hs_conditional_mfe_targets(
+        bundle.group_table,
+        np.isfinite(np.asarray(bundle.raw_target, dtype=np.float32)),
+        true_hs_percentile_cutoff=float(threshold),
+    )
+    safety_pct = ranker_api.build_daily_percentile_targets(
+        work["raw_safety_score"].to_numpy(dtype=np.float32),
+        np.ones(len(work), dtype=bool),
+        work["date"].reset_index(drop=True),
+    )
+    work["__predicted_safety_percentile"] = safety_pct
+
+    def evaluate(frame: pd.DataFrame) -> dict[str, Any]:
+        ids = frame["group_index"].to_numpy(dtype=np.int64)
+        heads = {
+            "raw_safety": frame["raw_safety_score"].to_numpy(dtype=np.float64),
+            "conditional_mfe": frame["breakout_quality_score"].to_numpy(dtype=np.float64),
+        }
+        return ranker_api.hs_conditional_mfe_metrics(
+            ids,
+            bundle.group_table,
+            hs_targets,
+            heads,
+            include_top_k_quality=True,
+            predicted_safety_percentile=frame["__predicted_safety_percentile"].to_numpy(
+                dtype=np.float32
+            ),
         )
 
     valid_target = work[work["target_available"]].copy()
@@ -1447,6 +1523,9 @@ def _run_point_in_time_scores_audit(
     safety_raw_mfe_evaluation = _build_safety_raw_mfe_evaluation(
         bundle, merged, candidate_ids
     )
+    hs_conditional_mfe_evaluation = _build_hs_conditional_mfe_evaluation(
+        bundle, merged, candidate_ids, experiment_profile=str(args.experiment_profile)
+    )
 
     validation_frames: list[pd.DataFrame] = []
     fold_records_by_id = {str(item["fold_id"]): dict(item) for item in manifest.get("folds", [])}
@@ -1609,6 +1688,7 @@ def _run_point_in_time_scores_audit(
         },
         "standard_model_sop": standard_model_sop,
         "safety_raw_mfe_evaluation": safety_raw_mfe_evaluation,
+        "hs_conditional_mfe_evaluation": hs_conditional_mfe_evaluation,
         "metrics": {
             "pass_only_target": pass_metrics,
             "reject_only_target": reject_metrics,
