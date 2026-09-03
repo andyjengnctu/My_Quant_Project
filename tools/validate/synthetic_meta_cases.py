@@ -3827,9 +3827,10 @@ def validate_research_report_contract_freeze_case(_base_params):
         )
     check_true(
         "forward_standard_sop_auto_builds_only_when_complete_contract_is_not_reusable",
-        code == 0 and contract is reusable_contract and action == "BUILD"
+        code == 0 and contract is reusable_contract and action == "BUILD/REFRESH"
         and train_call.call_count == 1
-        and train_call.call_args.args[0] == "train-continuous-ranker",
+        and train_call.call_args.args[0] == "train-continuous-ranker"
+        and "--reuse-fitted-model" in tuple(train_call.call_args.args[1]),
     )
 
     # Current Standard Model comparison membership is config-driven and must reuse the
