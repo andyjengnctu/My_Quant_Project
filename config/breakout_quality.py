@@ -220,6 +220,7 @@ from config.breakout_quality_runtime import (
 # - MR-13BB AO objective + shared InceptionTime pure width/capacity scaling: "daily_universal_shared_safety_hs_conditional_mfe_wide_full_list_ndcg_pairwise"
 # - MR-13BC AO objective + 600-bar long-horizon input control: "daily_universal_shared_safety_hs_conditional_mfe_600bar_full_list_ndcg_pairwise"
 # - MR-13BD AO objective + depth-12 parameter/RF-matched hierarchical control: "daily_universal_shared_safety_hs_conditional_mfe_deep_full_list_ndcg_pairwise"
+# - MR-13BE AO objective + 600-bar × wide-capacity factorial interaction: "daily_universal_shared_safety_hs_conditional_mfe_600bar_wide_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
@@ -232,8 +233,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13BD",
-    "daily_universal_shared_safety_hs_conditional_mfe_deep_full_list_ndcg_pairwise",
+    "MR-13BE",
+    "daily_universal_shared_safety_hs_conditional_mfe_600bar_wide_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -860,6 +861,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_FULL_LIST_NDCG_PAIRWISE_
 )
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_DEEP_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_deep_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_shared_safety_hs_conditional_mfe_600bar_wide_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
@@ -1873,6 +1877,18 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_deep_v1",
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_600bar_wide_v1",
     ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3171,6 +3187,37 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BE",
+        experiment_name="MR-13BE AO-Objective 600-Bar × Wide-Capacity Interaction Control",
+        phase="13BE",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "Factorial interaction control after BB showed 64/64 capacity alone fails at 300 bars and BC showed 600-bar history alone fails at 32/32. "
+            "MR-13AO continuous Safety full-list Delta-NDCG, true-HS=P50 Conditional-MFE, 1:1 loss, shared InceptionTime depth=6, kernels=(39,19,9), "
+            "GAP/heads, Seed42/split/optimizer/epoch selection and Pred-Safety->Conditional-MFE inference remain fixed. This cell intentionally combines the two already-isolated factors: "
+            "raw input_window_bars=600 with parameter-neutral RF coverage via module dilations=(1,1,1,1,6,6), plus filters/bottleneck=64/64. "
+            "Thus BE has the same 600-bar eligibility/RF as BC and the same width/capacity as BB; no new target, head, loss, depth, kernel or backbone-family change is introduced. "
+            "Primary causal contrast is BE vs BC on the identical 600-bar eligible universe, asking whether added capacity becomes useful only when longer history is available. "
+            "BC is therefore the frozen model-gate reference. AO/BB remain completed factorial context, not fitting inputs. If BE does not materially improve full Safety Daily/Global rho, Pair and Pred-HS purity over BC "
+            "with same-direction Breakout and non-collapsing HS-only Conditional-MFE, close the input×capacity interaction and stop InceptionTime physical-limit scaling before moving to a new backbone family."
+        ),
+        metric_scope="long_horizon_600bar_wide_capacity_interaction_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_600bar_wide_capacity_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
@@ -4523,6 +4570,7 @@ __all__ = [
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_DEEP_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',

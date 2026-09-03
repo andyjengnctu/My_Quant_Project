@@ -11544,3 +11544,17 @@ Decision：`ENGINEERING_ONLY / ORTHOGONAL_SCORE_CONTRACTS / NO_SCIENTIFIC_OR_ART
 - **Primary Gate**：完整Safety Daily/Global rho與Pair需實質離開AO、Pred-HS true-LS下降、P45–P55改善且Breakout同方向；HS-only Conditional-MFE不得崩。若FAIL，關閉InceptionTime RF/width/input/depth物理限制族，下一步只能是具有新inductive bias的backbone family，而非再微調InceptionTime。
 
 Decision：`MR13BC_CLOSED_MODEL_GATE_FAIL / MR13BD_IMPLEMENTED_RESULT_PENDING / DEEP_HIERARCHY_MATCHED_CONTROL / PARAMS_PLUS_0P42_PERCENT / RF_PLUS_5P2_PERCENT / SEED42_FORWARD_NEXT`。
+
+## 2026-09-03 — MR-13BD result closure + MR-13BE 600-bar × wide-capacity interaction implementation
+
+- **Authoritative baseline**：`test-branch-1_20260903_200808_dbbcc559.zip`，SHA256=`59fde5175dc0e0983016a31d151b71f20fe5743679f17e5fa06ca84e697bf310`；formal Forward comparison結果由使用者貼上之2026-09-03輸出提供。
+- **MR-13BD Forward result**：Safety Validation Daily/Global rho/Pair=`0.3303/0.2890/61.85%`；Forward=`0.3391/0.2848/62.18%` vs AO=`0.3532/0.2929/62.68%`；Breakout=`0.2784/0.3408/62.99%` vs AO=`0.3135/0.3554/63.65%`。Forward Pred-HS true-LS=`37.19%` vs AO `36.84%`，True-HS recall=`62.65%`，P45–P55 Pair=`52.20%`。HS-only Conditional-MFE Forward rho/Pair=`0.3434/61.83%`低於AO=`0.3969/63.90%`；final Daily rho/Pair=`0.3577/62.19%`亦低於AO=`0.4042/63.96%`。
+- **MR-13BD fit/generalization evidence**：epoch1→2 Train Loss=`0.554436→0.472219`明顯下降，但Val HS-MFE rho=`0.3662→0.2551`、Val Safety rho=`0.3185→0.3102`同步惡化。較深hierarchy具有更強training fit能力但未形成可泛化Safety signal。Decision=`DEEP_HIERARCHY_NO_SAFETY_BREAKTHROUGH / MODEL_GATE_FAIL / CLOSED / NO_ROLLING / NO_ROBUSTNESS`。
+- **Research decision override**：原BC stop rule為600/32無突破則不做600/64；使用者2026-09-03明確指出BB只回答capacity@300、BC只回答long-input@32，兩者都不能排除`long input × large capacity` interaction，並授權補齊factorial最後一格。此人類research decision取代舊`NO_600x64`下一步，不改寫BC原始結果。
+- **MR-13BE identity**：profile=`daily_universal_shared_safety_hs_conditional_mfe_600bar_wide_full_list_ndcg_pairwise`；architecture=`inception_time_shared_safety_mfe_600bar_wide_v1`。AO continuous Safety + true-HS Conditional-MFE objective、1:1 loss、shared InceptionTime depth=6、kernels=(39,19,9)、GAP/heads、Seed42/split/optimizer/epoch selection/inference全部固定。
+- **Factorial cell**：BE合併兩個已完成main-effect treatment且不增加第三變因：BC的`input_window_bars=600`與`module_dilations=(1,1,1,1,6,6)`（RF=609），加BB的`filters/bottleneck=64/64`；trainable params=`1,885,446`。因此BE vs BC在同600-bar eligible universe、同RF下只差capacity；BB vs AO則是既有300-bar capacity main effect。
+- **Fair-comparison contract**：BE `model_gate_reference_profile_name`固定指向MR-13BC，而非AO。既有HS-Qualification Model-specific Extension會直接讀BC frozen Forward score artifact，於完全相同600-bar eligibility下輸出reference control；不修改Standard SOP persistent schema、不把BB/BC硬編成永久comparison list。
+- **Stopping rule**：Seed42 Forward first。只有BE相對BC在Safety Daily/Global rho、Pair、Pred-HS true-LS與boundary上形成明顯且Breakout同方向的提升，且HS-only Conditional-MFE不崩，才支持capacity×long-horizon interaction；否則關閉InceptionTime RF/width/input/depth/interaction physical scaling族，下一步轉真正不同backbone family，不做600-bar width/horizon sweep。
+
+Decision：`MR13BD_CLOSED_MODEL_GATE_FAIL / MR13BE_IMPLEMENTED_RESULT_PENDING / 600BAR_WIDE_CAPACITY_FACTORIAL_INTERACTION / BC_SAME_UNIVERSE_REFERENCE / SEED42_FORWARD_NEXT`。
+
