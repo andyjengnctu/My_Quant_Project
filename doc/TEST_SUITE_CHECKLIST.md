@@ -372,6 +372,8 @@
 | B351 | P1 | Research / Report contract | Continuous DL [3][4][5][6] Comparison Evidence Bundle SSOT | DONE | Forward/Rolling/Forward Robustness/Rolling Robustness必須共用同一Standard SOP + model-extension evidence contract；extension applicability由training composition evidence_family與extension registry派生，Rolling只缺extension時僅refresh audit，不得重建PIT scores；Robustness跨seed aggregation由extension contract宣告，禁止workflow各自截斷或猜測evidence。 | `core/research_report_contract.py`, `config/breakout_quality_runtime.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/point_in_time_audit.py` |
 | B352 | P1 | Research / Artifact lifecycle | Rolling model-extension score capability → audit evidence dependency SSOT | DONE | [4]/[6]遇到comparison extension缺失時必須先由training composition的score_output_policy判斷PIT model-output sidecar是否完整；sidecar缺失只能checkpoint-rescore，sidecar完整且audit stale才audit-only refresh。ranking reader、PIT audit與Robustness不得各自硬編objective-specific score-column matrix。 | `config/breakout_quality_runtime.py`, `filters/breakout_quality/ranking_score_store.py`, `services/breakout_quality/point_in_time_audit.py`, `services/research/breakout_quality_application.py` |
 | B353 | P1 | Research / Artifact lifecycle | PIT row eligibility × score-output capability orthogonal contracts | DONE | Daily PIT row eligibility只回答prediction-time feature history是否足以產生score，future target不得控制score存在；multi-head sidecar completeness只由獨立score-output capability contract判定。正式loader可依序驗兩者，但不得把output columns/head數塞回eligibility contract，避免新增model-output capability改寫無前視score universe。 | `filters/breakout_quality/ranker_sample_contract.py`, `filters/breakout_quality/ranking_score_store.py`, `config/breakout_quality_runtime.py` |
+| B354 | P1 | Research / Artifact lifecycle | Continuous DL fitting-settings readiness precedes Forward/Rolling/Robustness reuse | DONE | 所有[1]～[6]正式入口在宣告REUSE前必須由canonical fitting-settings owner驗證current weight-affecting config與persisted fit相容；完整report/audit不得遮蔽stale fit。Legacy pre-sidecar defaults必須是immutable historical contract，不得隨current config漂移。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/research/breakout_quality_application.py` |
+| B355 | P1 | Research / Artifact lifecycle | Forward OOS → Rolling exact fitting-checkpoint bridge consumes fitted-model SSOT | DONE | Forward與Rolling第一個同fitting identity fold必須共用同一checkpoint bytes；橋接不得從evaluation report重猜optimizer settings，而必須讀canonical fitted_model_manifest／immutable legacy fitting evidence。requested_device等routing metadata不得製造假mismatch；Rolling fit stale時不得誤走audit-only refresh，必須回canonical PIT producer refit/resume。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
 
 
 
@@ -801,6 +803,8 @@
 | T471 | `validate_research_report_contract_freeze_case` 覆蓋B351：驗comparison extension evidence-family discovery、v11 persistent contract、row-mean robustness aggregation與single-seed-only geometry contract | B351 |
 | T472 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B352：current score-output policy為唯一column owner，AK-style legacy primary-only PIT在audit前被拒絕並要求checkpoint-rescore | B352 |
 | T473 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B353：eligibility-only manifest必須通過future-independent row contract，同一manifest必須被獨立score-output capability validator拒絕，完整PIT loader再組合兩者 | B353 |
+| T474 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B354：patience 1→3必須使Forward/Rolling/Forward Robustness/Rolling Robustness reuse全部失效，且legacy historical defaults不得隨current config漂移 | B354 |
+| T475 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：真實Forward report不含optimizer欄位時仍可由fitted_model_manifest匯入同identity checkpoint至Rolling cache；stale Rolling fit回傳不可REUSE而非audit-only refresh | B355 |
 
 ## G. 逐項收斂紀錄
 
@@ -2924,6 +2928,10 @@
 | 2026-09-03 | T472 | 新增PIT stale multi-head score capability regression並鎖住generic score-output owner | NEW -> DONE | validate_breakout_quality_point_in_time_score_builder_contract_case |
 | 2026-09-03 | B353 | 拆分PIT row eligibility與score-output sidecar completeness為正交contract | NEW -> DONE | eligibility → row universe；score-output capability → persisted columns |
 | 2026-09-03 | T473 | 新增PIT eligibility/output capability orthogonality historical regression | NEW -> DONE | validate_breakout_quality_point_in_time_score_builder_contract_case |
+| 2026-09-03 | B354 | 建立Continuous DL fitting-settings readiness SSOT | NEW -> DONE | fit settings → reuse readiness；report/audit不得遮蔽stale fit |
+| 2026-09-03 | T474 | 新增patience-change invalidates reuse historical regression | NEW -> DONE | validate_breakout_quality_fitted_model_lifecycle_contract_case |
+| 2026-09-03 | B355 | 修正Forward OOS已fit checkpoint未被同identity Rolling fold重用；橋接改讀fitted-model SSOT並使stale Rolling fit回canonical producer | NEW -> DONE | Forward report只負責evaluation evidence，不再被要求持有optimizer fitting欄位 |
+| 2026-09-03 | T475 | 新增Forward→Rolling實際checkpoint import與stale-fit routing regression | NEW -> DONE | validate_breakout_quality_fitted_model_lifecycle_contract_case |
 
 
 

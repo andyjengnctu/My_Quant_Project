@@ -80,6 +80,10 @@ from core.console_report import (
     render_section,
     render_table,
 )
+from services.breakout_quality.fitted_model_artifacts import (
+    load_fitted_model_training_evidence,
+    scientific_torch_execution,
+)
 from services.breakout_quality.continuous_ranker_pipeline import (
     build_checkpoint_payload,
     build_percentile_target,
@@ -1013,6 +1017,7 @@ def _forward_checkpoint_import_issues(
     *,
     source_manifest: dict[str, Any],
     source_report: dict[str, Any],
+    source_fitting_evidence,
     checkpoint: dict[str, Any],
     checkpoint_manifest: dict[str, Any],
     fold_contract: dict[str, Any],
@@ -1056,32 +1061,57 @@ def _forward_checkpoint_import_issues(
     training = dict(source_report.get("training") or {})
     if int(training.get("seed", -1)) != int(fold_contract.get("seed", -2)):
         issues.append("report seed mismatch")
+
+    # Weight-affecting optimizer/epoch-selection settings belong to the fitted-model
+    # lifecycle contract, not to the evaluation report schema.  Forward reports may
+    # legitimately omit these fields, so cross-evaluation checkpoint reuse must read
+    # the canonical fitted-model sidecar (or immutable legacy defaults) instead.
     training_settings = dict(fold_contract.get("training_settings") or {})
-    report_training_fields = (
+    persisted_settings = dict(getattr(source_fitting_evidence, "training_settings", {}) or {})
+    fitting_setting_pairs = (
+        ("max_epochs", "epochs_max", int),
         ("batch_size", "batch_size", int),
         ("learning_rate", "learning_rate", float),
         ("weight_decay", "weight_decay", float),
         ("gradient_clip_norm", "gradient_clip_norm", float),
+        ("early_stopping_patience", "early_stopping_patience", int),
+        ("early_stopping_min_delta", "early_stopping_min_delta", float),
     )
-    for report_field, contract_field, caster in report_training_fields:
+    for persisted_field, fold_field, caster in fitting_setting_pairs:
         try:
-            actual = caster(training.get(report_field))
-            expected = caster(training_settings.get(contract_field))
+            actual = caster(persisted_settings.get(persisted_field))
+            expected = caster(training_settings.get(fold_field))
         except (TypeError, ValueError):
-            issues.append(f"report training {report_field} missing")
+            issues.append(f"fitted-model training {persisted_field} missing")
             continue
         if actual != expected:
-            issues.append(f"report training {report_field} mismatch")
+            issues.append(f"fitted-model training {persisted_field} mismatch")
+    if persisted_settings.get("use_inner_validation") is not True:
+        issues.append("fitted-model use_inner_validation mismatch")
 
-    expected_execution = execution_plan.as_manifest_payload()
-    if source_manifest.get("torch_execution") != expected_execution:
+    expected_execution = scientific_torch_execution(execution_plan)
+    persisted_execution = dict(getattr(source_fitting_evidence, "torch_execution", {}) or {})
+    if persisted_execution != expected_execution:
+        issues.append("fitted-model torch_execution mismatch")
+    manifest_execution = dict(source_manifest.get("torch_execution") or {})
+    manifest_execution.pop("requested_device", None)
+    if manifest_execution != expected_execution:
         issues.append("manifest torch_execution mismatch")
-    if source_report.get("torch_execution") != expected_execution:
+    report_execution = dict(source_report.get("torch_execution") or {})
+    report_execution.pop("requested_device", None)
+    if report_execution and report_execution != expected_execution:
         issues.append("report torch_execution mismatch")
-    if int(source_manifest.get("selected_epoch", 0) or 0) < 1:
+
+    manifest_selected_epoch = int(source_manifest.get("selected_epoch", 0) or 0)
+    if manifest_selected_epoch < 1:
         issues.append("manifest selected_epoch missing")
-    if int(training.get("selected_epoch", 0) or 0) != int(source_manifest.get("selected_epoch", 0) or 0):
+    if int(training.get("selected_epoch", 0) or 0) != manifest_selected_epoch:
         issues.append("report/manifest selected_epoch mismatch")
+    if int(getattr(source_fitting_evidence, "selected_epoch", 0) or 0) != manifest_selected_epoch:
+        issues.append("fitted-model/manifest selected_epoch mismatch")
+    persisted_model_record = getattr(source_fitting_evidence, "model_record", None)
+    if persisted_model_record is not None and dict(persisted_model_record) != checkpoint_manifest:
+        issues.append("fitted-model checkpoint hash/size mismatch")
 
     standard = dict(source_report.get("standard_model_sop") or {})
     if str(standard.get("evaluation_mode") or "") != "forward_oos":
@@ -1196,9 +1226,17 @@ def _import_forward_checkpoint_to_fitting_cache(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError, RuntimeError):
         return None
 
+    source_fitting_evidence, _fitting_evidence_reason = load_fitted_model_training_evidence(
+        model_dir=source_model_dir,
+        report_path=source_report_path,
+    )
+    if source_fitting_evidence is None:
+        return None
+
     issues = _forward_checkpoint_import_issues(
         source_manifest=source_manifest,
         source_report=source_report,
+        source_fitting_evidence=source_fitting_evidence,
         checkpoint=checkpoint,
         checkpoint_manifest=checkpoint_manifest,
         fold_contract=fold_contract,

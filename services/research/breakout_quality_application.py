@@ -94,6 +94,11 @@ from services.breakout_quality.standard_model_sop import (
     aggregate_standard_model_sop_robustness,
     migrate_legacy_forward_standard_model_sop,
 )
+from services.breakout_quality.fitted_model_artifacts import (
+    current_default_fitting_settings,
+    fitted_model_settings_issues,
+    pit_fold_fitting_settings_issues,
+)
 from services.research.strategy_compare_training import (
     run_strategy_compare_training_unit,
     validate_strategy_compare_training_artifacts,
@@ -3974,6 +3979,19 @@ def _load_reusable_continuous_forward_contract(settings):
             "training seed不一致: "
             f"artifact={int(contract.seed)}, configured={int(settings.seed)}"
         )
+    model_paths = resolve_filter_artifact_paths(
+        PROJECT_ROOT,
+        str(settings.filter_id),
+        str(settings.model_architecture),
+        str(settings.experiment_profile),
+    )
+    fit_issues = fitted_model_settings_issues(
+        model_dir=model_paths.model_dir,
+        report_path=Path(contract.report_path),
+        expected=current_default_fitting_settings(),
+    )
+    if fit_issues:
+        return None, "Fitted model training settings stale: " + "; ".join(fit_issues[:8])
     report_payload = dict(contract.report or {})
     if not isinstance(report_payload.get("standard_model_sop"), dict):
         migrated = migrate_legacy_forward_standard_model_sop(report_payload)
@@ -4061,7 +4079,7 @@ def _rolling_build_reason(reason: str | None, forward_source: tuple[Path, Path] 
 
 
 def _has_continuous_forward_fitted_candidate(settings) -> bool:
-    """Cheap status-only probe; exact fitting identity is validated by the producer."""
+    """Cheap status probe that never labels a known-stale fit as refresh-only."""
 
     try:
         paths = resolve_filter_artifact_paths(
@@ -4070,11 +4088,27 @@ def _has_continuous_forward_fitted_candidate(settings) -> bool:
             str(settings.model_architecture),
             str(settings.experiment_profile),
         )
+        report_path = (
+            resolve_filter_model_output_dir(
+                PROJECT_ROOT,
+                str(settings.filter_id),
+                str(settings.model_architecture),
+                str(settings.experiment_profile),
+            )
+            / CONTINUOUS_RANKER_REPORT_FILENAME
+        )
     except ValueError:
         # Status-only probe: synthetic/mutation settings may intentionally use an
         # unregistered architecture. Exact legality is owned by the real producer.
         return False
-    return paths.model_path.is_file()
+    return bool(
+        paths.model_path.is_file()
+        and not fitted_model_settings_issues(
+            model_dir=paths.model_dir,
+            report_path=report_path,
+            expected=current_default_fitting_settings(),
+        )
+    )
 
 
 def _ensure_continuous_forward_model_report(
@@ -4179,6 +4213,17 @@ def _load_reusable_rolling_standard_report(settings, mode):
         )
     except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
         return None, None, f"{type(exc).__name__}: {exc}"
+
+    fit_issues = pit_fold_fitting_settings_issues(
+        point_in_time_dir=Path(contract.manifest_path).resolve().parent,
+        manifest=contract.manifest,
+        expected=current_default_fitting_settings(),
+    )
+    if fit_issues:
+        # The PIT score/audit may exist physically, but stale fitting settings make the
+        # scientific model contract non-reusable.  Return no reusable contract so the
+        # canonical PIT producer can refit/resume instead of entering audit-only refresh.
+        return None, None, "Rolling fitted-model training settings stale: " + "; ".join(fit_issues[:8])
 
     payload = dict(contract.audit or {})
     standard = dict(payload.get("standard_model_sop") or {})
@@ -5188,6 +5233,13 @@ def _load_forward_robustness_seed(settings, *, seed: int):
     ):
         if str(manifest.get(key) or "") != str(expected):
             return None, report_path, f"manifest {key} mismatch"
+    fit_issues = fitted_model_settings_issues(
+        model_dir=model_dir,
+        report_path=report_path,
+        expected=current_default_fitting_settings(),
+    )
+    if fit_issues:
+        return None, report_path, "Forward robustness fitted-model training settings stale: " + "; ".join(fit_issues[:8])
     issues = _validate_robustness_standard_payload(
         report, settings=settings, seed=seed, evaluation_mode="forward_oos"
     )
@@ -5215,6 +5267,13 @@ def _load_rolling_robustness_seed(settings, *, seed: int):
             return None, audit_path, f"Rolling manifest {key} mismatch"
     if int(manifest.get("seed", -1)) != int(seed):
         return None, audit_path, f"Rolling seed mismatch: artifact={manifest.get('seed')}, expected={seed}"
+    fit_issues = pit_fold_fitting_settings_issues(
+        point_in_time_dir=pit_dir,
+        manifest=manifest,
+        expected=current_default_fitting_settings(),
+    )
+    if fit_issues:
+        return None, audit_path, "Rolling robustness fitted-model training settings stale: " + "; ".join(fit_issues[:8])
     issues = _validate_robustness_standard_payload(
         audit, settings=settings, seed=seed, evaluation_mode="rolling_oos"
     )

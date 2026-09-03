@@ -11571,3 +11571,25 @@ Decision：`MR13BD_CLOSED_MODEL_GATE_FAIL / MR13BE_IMPLEMENTED_RESULT_PENDING / 
 
 Decision：`MR13BE_CLOSED_MODEL_GATE_FAIL / INCEPTIONTIME_PHYSICAL_SCALING_FAMILY_STOP / MR13BF_IMPLEMENTED_RESULT_PENDING / PARAMETER_MATCHED_DAY_TOKEN_GLOBAL_ATTENTION / SEED42_FORWARD_NEXT`。
 
+
+## 2026-09-03 — Engineering closure: fitting-settings readiness must precede report/audit reuse
+
+- **Observed issue**：使用者修改 `BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE` 後，既有 Continuous DL 仍被正式 workflow 判為 `REUSE`，沒有重新訓練。
+- **Root cause 1**：`fitted_model_manifest.json` 的 exact fitting identity已包含 patience/min-delta，但 `[1]/[3]` 外層 `_load_reusable_continuous_forward_contract()` 只驗 model/report/Standard SOP/comparison evidence；完整 report 直接短路 trainer，因此 exact fitting-identity validator根本沒有執行。
+- **Root cause 2**：pre-sidecar compatibility 的 `legacy_default_fitting_settings()` 名義上表示歷史正式預設，實際卻讀 current config；current patience變更會讓「歷史預設」同步漂移，錯誤放行舊 artifact。
+- **Fix**：B354建立單一 fitting-settings readiness owner。Forward `[1]/[3]`、Forward Robustness `[5]` 先驗 fitted sidecar/legacy settings；Rolling `[2]/[4]`、Rolling Robustness `[6]` 先驗各 fold persisted training settings。任何 current weight-affecting setting mismatch 都先使 FIT stale；trainer/PIT producer再執行完整 fitting identity最終判斷。Legacy Daily Universal defaults改為versioned immutable historical contract，不再引用current config。
+- **Regression**：直接覆蓋 patience `1→3`：完整 Forward report不得遮蔽 stale fit；Rolling fold/audit不得遮蔽 stale fit；Forward/ Rolling robustness seed同樣不得REUSE。既有 exact fitting identity、report-refresh-only、PIT score-output capability與scientific semantics均不變。
+
+Decision：`ENGINEERING_ONLY / FITTING_SETTINGS_READINESS_BEFORE_EVALUATION_REUSE / PATIENCE_CHANGE_FORCES_REFIT / NO_SCIENTIFIC_IDENTITY_CHANGE`。
+
+## 2026-09-03 — Engineering closure: Forward OOS fitted checkpoint must actually REUSE in matching Rolling fold
+
+- **Observed issue**：使用者實際執行Rolling時，已由Forward OOS完成fitting的同一年模型仍重新TRAIN，沒有命中預期的Forward→Rolling checkpoint REUSE。
+- **Root cause**：B342雖已把Forward model/report路徑傳給PIT producer，但`_forward_checkpoint_import_issues()`仍從`continuous_ranker_report.json["training"]`讀`batch_size / learning_rate / weight_decay / gradient_clip_norm`。Forward report的正式責任是evaluation/report evidence，這些weight-affecting settings自B350起已由`fitted_model_manifest.json`持有，因此合法Forward artifact必然因「report training欄位missing」被拒絕import；既有synthetic只驗bridge args有傳遞，未真正建立一份current Forward artifact走過import。
+- **B355 fix**：新增canonical fitted training evidence reader。Forward→Rolling橋接先讀`fitted_model_manifest.json`的training settings、selected epoch、scientific torch execution與checkpoint record；pre-sidecar artifact只可使用immutable historical defaults。`requested_device`只屬routing metadata，跨evaluation fitting reuse只比較resolved scientific torch execution。Forward report仍只驗seed/split/evaluation evidence，不再被要求承擔optimizer SSOT。
+- **Rolling stale-fit routing closure**：B354 loader若發現fold fitting settings stale，現在回傳「不可REUSE」而不是保留contract進audit-only refresh；canonical PIT producer會依resume/identity正常決定refit、checkpoint-rescore或reuse。
+- **Regression**：`validate_breakout_quality_fitted_model_lifecycle_contract_case`新增真實temp Forward model+manifest+report+fitted sidecar，刻意讓report training不含optimizer欄位，仍必須成功匯入shared fitting cache且checkpoint bytes完全相同；同一case同時鎖住stale Rolling fit不再被視為可audit-only refresh。
+- **Scientific boundary**：純artifact lifecycle engineering修正；不改MR identity、target、architecture、loss、seed、split、OOS/Rolling score universe或report schema。
+
+Decision：`ENGINEERING_ONLY / FORWARD_ROLLING_MATCHING_FIT_REUSES_IDENTICAL_CHECKPOINT / FITTED_MODEL_SIDECAR_IS_CROSS_EVALUATION_SSOT / NO_RETRAIN_FOR_MATCHING_FIT`。
+

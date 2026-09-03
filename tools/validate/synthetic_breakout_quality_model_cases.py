@@ -8628,7 +8628,208 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             conflict_raised,
         )
 
-    from services.breakout_quality.fitted_model_artifacts import legacy_default_fitting_settings
+    # Regression for the Forward OOS -> Rolling fitting-identity bridge.  The
+    # canonical Forward report intentionally does not own optimizer settings; those
+    # live in fitted_model_manifest.json.  A valid Forward checkpoint must therefore
+    # import even when report["training"] contains only scientific/result fields.
+    from services.breakout_quality.point_in_time_scores import (
+        _import_forward_checkpoint_to_fitting_cache,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        model_dir = root / "forward_model"
+        report_dir = root / "forward_report"
+        cache_dir = root / "fitting_cache"
+        model_dir.mkdir()
+        report_dir.mkdir()
+        model_path = model_dir / "model.pt"
+        model_path.write_bytes(b"forward-oos-checkpoint")
+        checkpoint_record = build_file_manifest(model_path)
+        model_spec = {"architecture": "synthetic_architecture"}
+        experiment_settings = {
+            "name": "synthetic_profile",
+            "training_sample_scope": "daily_eligible_stock_days",
+        }
+        execution_payload = {
+            "requested_device": "cuda",
+            "device_type": "cuda",
+            "mixed_precision_enabled": True,
+            "autocast_dtype_name": "bfloat16",
+            "deterministic_algorithms": True,
+            "allow_tf32": False,
+        }
+        plan = SimpleNamespace(as_manifest_payload=lambda: dict(execution_payload))
+        source_contract = {
+            "dataset_policy": "synthetic_policy",
+            "dataset_storage_schema_version": 1,
+            "source_data_inventory": {"rows": 1},
+            "dataset_artifacts": {"dataset": {"sha256": "synthetic"}},
+            "target_schema_version": 2,
+            "target_contract": {"target": "synthetic"},
+            "target_artifacts": {"target": {"sha256": "synthetic"}},
+            "training_universe_start_date": "2011-01-01",
+        }
+        fold_contract = {
+            "schema_version": 2,
+            "fold_id": "fold_20210101_20211231",
+            "filter_id": "breakout_quality_v1",
+            "model_architecture": "synthetic_architecture",
+            "experiment_profile": "synthetic_profile",
+            "continuous_target_id": "synthetic_target",
+            "training_label_scope": "all_labels",
+            "training_sample_scope": "daily_eligible_stock_days",
+            "seed": 42,
+            "planned_periods": {
+                "validation_start": "2019-01-01",
+                "validation_end": "2020-12-31",
+                "score_start": "2021-01-01",
+                "score_end": "2021-12-31",
+            },
+            "observed_periods": {
+                "inner_train": {"start": "2011-01-01", "end": "2018-12-31"},
+                "validation": {"start": "2019-01-01", "end": "2020-11-20"},
+                "final_refit": {"start": "2011-01-01", "end": "2020-11-20"},
+                "score": {"start": "2021-01-01", "end": "2021-12-31"},
+            },
+            "model_information_cutoff": "2020-12-31",
+            "group_counts": {
+                "inner_train": 100, "validation": 20, "final_refit": 120, "score": 30
+            },
+            "event_row_counts": {
+                "inner_train": 100, "validation": 20, "final_refit": 120, "score": 30
+            },
+            "model_spec": model_spec,
+            "experiment_settings": experiment_settings,
+            "training_settings": {
+                "epochs_max": 200,
+                "batch_size": 128,
+                "evaluation_batch_size": 4096,
+                "train_prefetch_batches": 8,
+                "train_prefetch_workers": 4,
+                "learning_rate": 0.0003,
+                "weight_decay": 0.0001,
+                "gradient_clip_norm": 1.0,
+                "early_stopping_patience": 1,
+                "early_stopping_min_delta": 0.0,
+                "device": "cuda",
+                "mixed_precision": True,
+                "mixed_precision_dtype": "bfloat16",
+                "deterministic_algorithms": True,
+                "allow_tf32": False,
+            },
+            "source_contract": source_contract,
+            "lookahead_contract": {
+                "training_requires_label_eval_end_before_score_start": True
+            },
+        }
+        source_manifest = {
+            "filter_id": "breakout_quality_v1",
+            "model_architecture": "synthetic_architecture",
+            "experiment_profile": "synthetic_profile",
+            "continuous_target_id": "synthetic_target",
+            "training_label_scope": "all_labels",
+            "training_sample_scope": "daily_eligible_stock_days",
+            "model_information_cutoff": "2020-12-31",
+            "model_spec": model_spec,
+            "experiment_settings": experiment_settings,
+            "selected_epoch": 2,
+            "torch_execution": execution_payload,
+            "model": checkpoint_record,
+            "source_dataset": {
+                "policy": source_contract["dataset_policy"],
+                "dataset_storage_schema_version": source_contract["dataset_storage_schema_version"],
+                "source_data_inventory": source_contract["source_data_inventory"],
+                "dataset_artifacts": source_contract["dataset_artifacts"],
+                "training_universe_start_date": source_contract["training_universe_start_date"],
+            },
+            "source_continuous_target": {
+                "schema_version": source_contract["target_schema_version"],
+                "target_contract": source_contract["target_contract"],
+                "artifacts": source_contract["target_artifacts"],
+            },
+        }
+        (model_dir / "manifest.json").write_text(
+            json.dumps(source_manifest), encoding="utf-8"
+        )
+        report_path = report_dir / "continuous_ranker_report.json"
+        report_path.write_text(
+            json.dumps({
+                "training": {"seed": 42, "selected_epoch": 2},
+                "split_report": {
+                    "selection_start_date": "2011-01-01",
+                    "inner_validation_start_date": "2019-01-01",
+                    "selection_end_date": "2020-12-31",
+                    "oos_start_date": "2021-01-01",
+                    "counts": {"inner_train": 100, "validation": 20, "selection": 120},
+                },
+                "standard_model_sop": {"evaluation_mode": "forward_oos"},
+                "torch_execution": execution_payload,
+                "artifacts": {"model": checkpoint_record},
+            }),
+            encoding="utf-8",
+        )
+        write_fitted_model_contract(
+            model_dir=model_dir,
+            fitting_identity={
+                "training_settings": {
+                    "max_epochs": 200,
+                    "batch_size": 128,
+                    "learning_rate": 0.0003,
+                    "weight_decay": 0.0001,
+                    "gradient_clip_norm": 1.0,
+                    "use_inner_validation": True,
+                    "inner_validation_months": 24,
+                    "early_stopping_patience": 1,
+                    "early_stopping_min_delta": 0.0,
+                },
+                "torch_execution": {
+                    key: value for key, value in execution_payload.items()
+                    if key != "requested_device"
+                },
+            },
+            selected_epoch=2,
+            epoch_selection={"best_epoch": 2},
+            final_refit_history=[],
+            trainable_parameter_count=1,
+            total_parameter_count=1,
+        )
+        checkpoint = {
+            "model_spec": model_spec,
+            "experiment_settings": experiment_settings,
+            "experiment_profile": "synthetic_profile",
+            "training_sample_scope": "daily_eligible_stock_days",
+            "sequence_length": 300,
+            "feature_count": 10,
+            "context_count": 0,
+            "selected_epoch": 2,
+            "model_state_dict": {},
+        }
+        imported = _import_forward_checkpoint_to_fitting_cache(
+            source_model_dir=model_dir,
+            source_report_path=report_path,
+            cache_root=cache_dir,
+            fold_contract=fold_contract,
+            bundle=SimpleNamespace(
+                feature_bank=np.zeros((1, 300, 10), dtype=np.float32),
+                group_context=np.zeros((1, 0), dtype=np.float32),
+            ),
+            torch_module=SimpleNamespace(load=lambda *_args, **_kwargs: checkpoint),
+            execution_plan=plan,
+        )
+        check_true(
+            "forward_oos_checkpoint_import_reads_fitted_sidecar_not_report_optimizer_fields",
+            imported is not None
+            and imported.get("reused_existing_cache") is False
+            and Path(imported["cache_entry"]).joinpath("model.pt").read_bytes()
+            == model_path.read_bytes(),
+        )
+
+    from services.breakout_quality.fitted_model_artifacts import (
+        fitted_model_settings_issues,
+        legacy_default_fitting_settings,
+        pit_fold_fitting_settings_issues,
+    )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -8731,6 +8932,57 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             "legacy_daily_forward_artifact_does_not_mask_changed_fitting_settings",
             changed_contract is None
             and "historical defaults" in str(changed_reason),
+        )
+        changed_patience = dict(expected_identity["training_settings"])
+        changed_patience["early_stopping_patience"] = int(changed_patience["early_stopping_patience"]) + 2
+        patience_issues = fitted_model_settings_issues(
+            model_dir=model_dir,
+            report_path=report_path,
+            expected=changed_patience,
+        )
+        check_true(
+            "legacy_historical_fitting_defaults_do_not_follow_current_patience_change",
+            legacy_default_fitting_settings()["early_stopping_patience"] == 1
+            and patience_issues
+            and "immutable historical defaults" in patience_issues[0],
+        )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        pit_dir = root / "point_in_time"
+        fold_dir = pit_dir / "folds" / "fold_20210101_20211231"
+        fold_dir.mkdir(parents=True, exist_ok=True)
+        fold_manifest = {
+            "training_settings": {
+                "epochs_max": 200,
+                "batch_size": 128,
+                "learning_rate": 0.0003,
+                "weight_decay": 0.0001,
+                "gradient_clip_norm": 1.0,
+                "early_stopping_patience": 1,
+                "early_stopping_min_delta": 0.0,
+            }
+        }
+        (fold_dir / "manifest.json").write_text(json.dumps(fold_manifest), encoding="utf-8")
+        pit_manifest = {
+            "inner_validation_months": 24,
+            "folds": [{"fold_id": "fold_20210101_20211231"}],
+        }
+        expected_settings = legacy_default_fitting_settings()
+        check_true(
+            "rolling_fold_current_fitting_settings_are_reusable_before_change",
+            pit_fold_fitting_settings_issues(
+                point_in_time_dir=pit_dir, manifest=pit_manifest, expected=expected_settings
+            ) == (),
+        )
+        changed_settings = dict(expected_settings)
+        changed_settings["early_stopping_patience"] = 3
+        rolling_issues = pit_fold_fitting_settings_issues(
+            point_in_time_dir=pit_dir, manifest=pit_manifest, expected=changed_settings
+        )
+        check_true(
+            "rolling_fold_patience_change_invalidates_reuse_before_audit_or_comparison",
+            any("early_stopping_patience mismatch" in issue for issue in rolling_issues),
         )
 
     import torch
@@ -8866,6 +9118,122 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         and command_args[0][0] == "train-continuous-ranker"
         and "--reuse-fitted-model" in command_args[0][1],
     )
+
+    stale_contract = SimpleNamespace(
+        seed=42,
+        report={},
+        report_path=Path("synthetic_report.json"),
+    )
+    synthetic_paths = SimpleNamespace(model_dir=Path("synthetic_model"))
+    with patch.object(
+        research_app,
+        "load_continuous_ranker_oos_contract",
+        return_value=stale_contract,
+    ), patch.object(
+        research_app,
+        "resolve_filter_artifact_paths",
+        return_value=synthetic_paths,
+    ), patch.object(
+        research_app,
+        "fitted_model_settings_issues",
+        return_value=("early_stopping_patience mismatch: artifact=1, current=3",),
+    ):
+        stale_loaded, stale_reason = research_app._load_reusable_continuous_forward_contract(settings)
+    check_true(
+        "complete_forward_report_cannot_mask_changed_early_stopping_patience",
+        stale_loaded is None
+        and "Fitted model training settings stale" in str(stale_reason)
+        and "early_stopping_patience mismatch" in str(stale_reason),
+    )
+
+    rolling_contract = SimpleNamespace(
+        manifest_path=Path("synthetic_point_in_time/selection_point_in_time_manifest.json"),
+        manifest={"folds": []},
+        audit={},
+    )
+    with patch.object(
+        research_app,
+        "_rolling_pit_dir_for_loader",
+        return_value=Path("synthetic_point_in_time"),
+    ), patch.object(
+        research_app,
+        "load_selection_point_in_time_ranking_contract",
+        return_value=rolling_contract,
+    ), patch.object(
+        research_app,
+        "pit_fold_fitting_settings_issues",
+        return_value=("fold_20210101_20211231 early_stopping_patience mismatch: artifact=1, current=3",),
+    ):
+        loaded_contract, loaded_payload, rolling_reason = research_app._load_reusable_rolling_standard_report(
+            settings, SimpleNamespace(point_in_time_dirname="point_in_time")
+        )
+    check_true(
+        "complete_rolling_audit_cannot_mask_changed_early_stopping_patience",
+        loaded_contract is None
+        and loaded_payload is None
+        and "Rolling fitted-model training settings stale" in str(rolling_reason),
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        model_dir = root / "forward_seed"
+        research_dir = root / "forward_report"
+        model_dir.mkdir()
+        research_dir.mkdir()
+        model_path = model_dir / "model.pt"
+        manifest_path = model_dir / "manifest.json"
+        report_path = research_dir / "continuous_ranker_report.json"
+        model_path.write_bytes(b"seed-model")
+        manifest_path.write_text(json.dumps({
+            "filter_id": settings.filter_id,
+            "model_architecture": settings.model_architecture,
+            "experiment_profile": settings.experiment_profile,
+        }), encoding="utf-8")
+        report_path.write_text(json.dumps({}), encoding="utf-8")
+        synthetic_artifact_paths = SimpleNamespace(
+            model_path=model_path, manifest_path=manifest_path
+        )
+        with patch.object(
+            research_app, "_model_robustness_dirs", return_value=(model_dir, research_dir)
+        ), patch.object(
+            research_app, "build_filter_artifact_paths_from_dir", return_value=synthetic_artifact_paths
+        ), patch.object(
+            research_app, "fitted_model_settings_issues",
+            return_value=("early_stopping_patience mismatch: artifact=1, current=3",),
+        ):
+            robust_payload, _robust_path, robust_reason = research_app._load_forward_robustness_seed(
+                settings, seed=42
+            )
+        check_true(
+            "forward_robustness_seed_cannot_reuse_changed_early_stopping_patience",
+            robust_payload is None
+            and "Forward robustness fitted-model training settings stale" in str(robust_reason),
+        )
+
+        rolling_dir = root / "rolling_seed"
+        rolling_dir.mkdir()
+        (rolling_dir / "selection_point_in_time_manifest.json").write_text(json.dumps({
+            "filter_id": settings.filter_id,
+            "model_architecture": settings.model_architecture,
+            "experiment_profile": settings.experiment_profile,
+            "seed": 42,
+            "folds": [],
+        }), encoding="utf-8")
+        (rolling_dir / "selection_point_in_time_audit.json").write_text(json.dumps({}), encoding="utf-8")
+        with patch.object(
+            research_app, "_model_robustness_dirs", return_value=(rolling_dir, research_dir)
+        ), patch.object(
+            research_app, "pit_fold_fitting_settings_issues",
+            return_value=("fold_20210101_20211231 early_stopping_patience mismatch: artifact=1, current=3",),
+        ):
+            rolling_robust_payload, _rolling_path, rolling_robust_reason = research_app._load_rolling_robustness_seed(
+                settings, seed=42
+            )
+        check_true(
+            "rolling_robustness_seed_cannot_reuse_changed_early_stopping_patience",
+            rolling_robust_payload is None
+            and "Rolling robustness fitted-model training settings stale" in str(rolling_robust_reason),
+        )
 
     with patch.object(
         research_app,

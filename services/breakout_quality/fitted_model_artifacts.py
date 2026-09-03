@@ -31,6 +31,32 @@ from filters.breakout_quality.models.factory import build_model, count_trainable
 FITTED_MODEL_MANIFEST_FILENAME = "fitted_model_manifest.json"
 FITTED_MODEL_CONTRACT_VERSION = 1
 
+# Immutable compatibility contract for Daily Universal artifacts produced before
+# fitted_model_manifest.json existed.  These values describe historical bytes;
+# they must never follow current config changes.
+LEGACY_DAILY_FORWARD_FITTING_SETTINGS_V1 = {
+    "max_epochs": 200,
+    "batch_size": 128,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "gradient_clip_norm": 1.0,
+    "use_inner_validation": True,
+    "inner_validation_months": 24,
+    "early_stopping_patience": 1,
+    "early_stopping_min_delta": 0.0,
+}
+
+FITTING_SETTING_KEYS = tuple(LEGACY_DAILY_FORWARD_FITTING_SETTINGS_V1)
+PIT_PERSISTED_FITTING_SETTING_KEYS = (
+    "max_epochs",
+    "batch_size",
+    "learning_rate",
+    "weight_decay",
+    "gradient_clip_norm",
+    "early_stopping_patience",
+    "early_stopping_min_delta",
+)
+
 
 class FittedModelConflictError(RuntimeError):
     """Raised when the same declared fitting identity points at incompatible bytes."""
@@ -48,41 +74,271 @@ class FittedModelContract:
     source: str
 
 
+@dataclass(frozen=True)
+class FittedModelTrainingEvidence:
+    """Persisted weight-affecting evidence for cross-evaluation checkpoint reuse."""
+
+    training_settings: dict[str, Any]
+    torch_execution: dict[str, Any]
+    selected_epoch: int
+    model_record: dict[str, Any] | None
+    source: str
+
+
+def _fitting_settings_payload(
+    *,
+    max_epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    weight_decay: float,
+    gradient_clip_norm: float,
+    use_inner_validation: bool,
+    inner_validation_months: int,
+    early_stopping_patience: int,
+    early_stopping_min_delta: float,
+) -> dict[str, Any]:
+    return {
+        "max_epochs": int(max_epochs),
+        "batch_size": int(batch_size),
+        "learning_rate": float(learning_rate),
+        "weight_decay": float(weight_decay),
+        "gradient_clip_norm": float(gradient_clip_norm),
+        "use_inner_validation": bool(use_inner_validation),
+        "inner_validation_months": int(inner_validation_months),
+        "early_stopping_patience": int(early_stopping_patience),
+        "early_stopping_min_delta": float(early_stopping_min_delta),
+    }
+
+
 def canonical_fitting_settings(args) -> dict[str, Any]:
     """Return only settings that can change the fitted weights/epoch selection."""
 
-    return {
-        "max_epochs": int(args.epochs),
-        "batch_size": int(args.batch_size),
-        "learning_rate": float(args.lr),
-        "weight_decay": float(args.weight_decay),
-        "gradient_clip_norm": float(args.gradient_clip_norm),
-        "use_inner_validation": bool(args.use_inner_validation),
-        "inner_validation_months": int(args.inner_validation_months),
-        "early_stopping_patience": int(args.early_stopping_patience),
-        "early_stopping_min_delta": float(args.early_stopping_min_delta),
-    }
+    return _fitting_settings_payload(
+        max_epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.lr,
+        weight_decay=args.weight_decay,
+        gradient_clip_norm=args.gradient_clip_norm,
+        use_inner_validation=args.use_inner_validation,
+        inner_validation_months=args.inner_validation_months,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
+    )
+
+
+def current_default_fitting_settings() -> dict[str, Any]:
+    """Current formal-menu fitting settings from config, through one canonical owner."""
+
+    return _fitting_settings_payload(
+        max_epochs=BREAKOUT_QUALITY_DEFAULT_EPOCHS,
+        batch_size=BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
+        learning_rate=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
+        weight_decay=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
+        gradient_clip_norm=BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
+        use_inner_validation=BREAKOUT_QUALITY_USE_INNER_VALIDATION,
+        inner_validation_months=BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
+        early_stopping_patience=BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
+        early_stopping_min_delta=BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
+    )
 
 
 def legacy_default_fitting_settings() -> dict[str, Any]:
-    """Historical formal-menu fitting settings before an explicit sidecar existed.
+    """Immutable historical settings for pre-sidecar Daily Universal artifacts."""
 
-    Legacy Daily Universal reports did not persist these fields.  Reuse is only
-    permitted when the current request still equals the historical formal-menu
-    defaults; any explicit/current setting change forces a new fit.
+    return dict(LEGACY_DAILY_FORWARD_FITTING_SETTINGS_V1)
+
+
+def _canonicalize_persisted_fitting_settings(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(payload or {})
+    if not raw:
+        return {}
+    normalized = {
+        "max_epochs": raw.get("max_epochs", raw.get("epochs_max")),
+        "batch_size": raw.get("batch_size"),
+        "learning_rate": raw.get("learning_rate", raw.get("lr")),
+        "weight_decay": raw.get("weight_decay"),
+        "gradient_clip_norm": raw.get("gradient_clip_norm"),
+        "use_inner_validation": raw.get("use_inner_validation"),
+        "inner_validation_months": raw.get("inner_validation_months"),
+        "early_stopping_patience": raw.get("early_stopping_patience"),
+        "early_stopping_min_delta": raw.get("early_stopping_min_delta"),
+    }
+    return {key: value for key, value in normalized.items() if value is not None}
+
+
+def fitting_settings_issues(
+    persisted: Mapping[str, Any] | None,
+    *,
+    expected: Mapping[str, Any] | None = None,
+    require_all: bool = True,
+) -> tuple[str, ...]:
+    """Compare persisted fitting knobs to current settings without re-deriving training logic."""
+
+    actual = _canonicalize_persisted_fitting_settings(persisted)
+    target = dict(current_default_fitting_settings() if expected is None else expected)
+    issues: list[str] = []
+    for key in FITTING_SETTING_KEYS:
+        if key not in actual:
+            if require_all:
+                issues.append(f"{key} missing")
+            continue
+        if actual[key] != target.get(key):
+            issues.append(f"{key} mismatch: artifact={actual[key]!r}, current={target.get(key)!r}")
+    return tuple(issues)
+
+
+def load_fitted_model_training_evidence(
+    *,
+    model_dir: Path,
+    report_path: Path | None = None,
+) -> tuple[FittedModelTrainingEvidence | None, str | None]:
+    """Load canonical fitting evidence without requiring evaluation/report completeness.
+
+    New artifacts read the fitted-model sidecar.  Pre-sidecar Daily Universal artifacts
+    may use the immutable historical defaults, but only after the caller independently
+    validates the legacy manifest/report scientific identity.
     """
 
-    return {
-        "max_epochs": int(BREAKOUT_QUALITY_DEFAULT_EPOCHS),
-        "batch_size": int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE),
-        "learning_rate": float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE),
-        "weight_decay": float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY),
-        "gradient_clip_norm": float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM),
-        "use_inner_validation": bool(BREAKOUT_QUALITY_USE_INNER_VALIDATION),
-        "inner_validation_months": int(BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS),
-        "early_stopping_patience": int(BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE),
-        "early_stopping_min_delta": float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA),
-    }
+    model_dir = Path(model_dir).resolve()
+    sidecar_path = model_dir / FITTED_MODEL_MANIFEST_FILENAME
+    sidecar = _read_json(sidecar_path)
+    if sidecar_path.exists():
+        if sidecar is None:
+            return None, "fitted-model sidecar invalid"
+        if int(sidecar.get("contract_version", -1)) != FITTED_MODEL_CONTRACT_VERSION:
+            return None, "fitted-model contract version mismatch"
+        identity = dict(sidecar.get("fitting_identity") or {})
+        settings = _canonicalize_persisted_fitting_settings(identity.get("training_settings"))
+        if not settings:
+            return None, "fitted-model sidecar training_settings missing"
+        result = dict(sidecar.get("fitting_result") or {})
+        selected_epoch = int(result.get("selected_epoch", 0) or 0)
+        if selected_epoch < 1:
+            return None, "fitted-model sidecar selected_epoch missing"
+        execution = dict(identity.get("torch_execution") or {})
+        execution.pop("requested_device", None)
+        return FittedModelTrainingEvidence(
+            training_settings=settings,
+            torch_execution=execution,
+            selected_epoch=selected_epoch,
+            model_record=(
+                dict(sidecar.get("model") or {})
+                if isinstance(sidecar.get("model"), Mapping)
+                else None
+            ),
+            source="fitted_model_manifest",
+        ), None
+
+    report = _read_json(Path(report_path)) if report_path is not None else None
+    if report is None:
+        return None, "legacy forward report missing or invalid"
+    training = dict(report.get("training") or {})
+    persisted = training.get("fitting_settings")
+    settings = (
+        _canonicalize_persisted_fitting_settings(persisted)
+        if persisted is not None
+        else legacy_default_fitting_settings()
+    )
+    selected_epoch = int(training.get("selected_epoch", 0) or 0)
+    if selected_epoch < 1:
+        return None, "legacy forward report selected_epoch missing"
+    execution = dict(report.get("torch_execution") or {})
+    execution.pop("requested_device", None)
+    return FittedModelTrainingEvidence(
+        training_settings=settings,
+        torch_execution=execution,
+        selected_epoch=selected_epoch,
+        model_record=None,
+        source=(
+            "legacy_report_fitting_settings"
+            if persisted is not None
+            else "legacy_daily_forward_defaults"
+        ),
+    ), None
+
+
+def fitted_model_settings_issues(
+    *,
+    model_dir: Path,
+    report_path: Path | None = None,
+    expected: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Cheap FIT-readiness probe used before accepting a complete Forward report.
+
+    Full fitting identity remains owned by load_reusable_fitted_model_contract().
+    This preflight only prevents a complete evaluation/report artifact from hiding
+    a changed weight-affecting setting and bypassing the trainer entirely.
+    """
+
+    model_dir = Path(model_dir).resolve()
+    model_path = model_dir / "model.pt"
+    if not model_path.is_file():
+        return ("model.pt missing",)
+    target = dict(current_default_fitting_settings() if expected is None else expected)
+    sidecar = _read_json(model_dir / FITTED_MODEL_MANIFEST_FILENAME)
+    if sidecar is not None:
+        persisted = dict(sidecar.get("fitting_identity") or {}).get("training_settings")
+        return fitting_settings_issues(persisted, expected=target, require_all=True)
+
+    report = _read_json(Path(report_path)) if report_path is not None else None
+    persisted = dict((report or {}).get("training") or {}).get("fitting_settings")
+    if persisted is not None:
+        return fitting_settings_issues(persisted, expected=target, require_all=True)
+    if target != legacy_default_fitting_settings():
+        return (
+            "legacy artifact lacks fitting settings and current settings differ from immutable historical defaults",
+        )
+    return ()
+
+
+def pit_fold_fitting_settings_issues(
+    *,
+    point_in_time_dir: Path,
+    manifest: Mapping[str, Any],
+    expected: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Validate persisted Rolling fold fitting knobs against current config.
+
+    PIT fold manifests predate the Forward sidecar and use epochs_max.  Their
+    split/time identity is still validated by the PIT producer; this probe exists
+    so [2]/[4]/[6] cannot report REUSE when a weight-affecting config knob changed.
+    """
+
+    target = dict(current_default_fitting_settings() if expected is None else expected)
+    issues: list[str] = []
+    top_level_months = manifest.get("inner_validation_months")
+    if top_level_months is not None and int(top_level_months) != int(target["inner_validation_months"]):
+        issues.append(
+            f"inner_validation_months mismatch: artifact={int(top_level_months)!r}, "
+            f"current={int(target['inner_validation_months'])!r}"
+        )
+    for fold in manifest.get("folds", []):
+        if not isinstance(fold, Mapping):
+            issues.append("fold record invalid")
+            continue
+        fold_id = str(fold.get("fold_id") or "").strip()
+        if not fold_id:
+            issues.append("fold_id missing")
+            continue
+        fold_manifest = _read_json(Path(point_in_time_dir) / "folds" / fold_id / "manifest.json")
+        if fold_manifest is None:
+            issues.append(f"{fold_id} manifest missing or invalid")
+            continue
+        persisted_settings = _canonicalize_persisted_fitting_settings(
+            fold_manifest.get("training_settings")
+        )
+        missing = [
+            key for key in PIT_PERSISTED_FITTING_SETTING_KEYS
+            if key not in persisted_settings
+        ]
+        issues.extend(f"{fold_id} {key} missing" for key in missing)
+        fold_issues = fitting_settings_issues(
+            persisted_settings,
+            expected=target,
+            require_all=False,
+        )
+        issues.extend(f"{fold_id} {issue}" for issue in fold_issues)
+    return tuple(dict.fromkeys(issues))
 
 
 def scientific_torch_execution(plan) -> dict[str, Any]:
@@ -398,10 +654,16 @@ __all__ = [
     "FITTED_MODEL_CONTRACT_VERSION",
     "FITTED_MODEL_MANIFEST_FILENAME",
     "FittedModelConflictError",
+    "FittedModelTrainingEvidence",
     "FittedModelContract",
     "build_daily_forward_fitting_identity",
     "canonical_fitting_settings",
+    "current_default_fitting_settings",
+    "fitted_model_settings_issues",
+    "fitting_settings_issues",
     "legacy_default_fitting_settings",
+    "load_fitted_model_training_evidence",
+    "pit_fold_fitting_settings_issues",
     "load_model_from_fitted_checkpoint",
     "load_reusable_fitted_model_contract",
     "scientific_torch_execution",

@@ -3792,6 +3792,28 @@
       "entry": "`filters/breakout_quality/ranker_sample_contract.py`, `filters/breakout_quality/ranking_score_store.py`, `config/breakout_quality_runtime.py`",
       "initial_status": "NEW",
       "order": 341
+    },
+    {
+      "id": "B354",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research / Artifact lifecycle",
+      "item": "Continuous DL fitting-settings readiness precedes Forward/Rolling/Robustness reuse",
+      "gap": "所有[1]～[6]正式入口在宣告REUSE前必須由canonical fitting-settings owner驗證current weight-affecting config與persisted fit相容；完整report/audit不得遮蔽stale fit。Legacy pre-sidecar defaults必須是immutable historical contract，不得隨current config漂移。",
+      "entry": "`services/breakout_quality/fitted_model_artifacts.py`, `services/research/breakout_quality_application.py`",
+      "initial_status": "NEW",
+      "order": 342
+    },
+    {
+      "id": "B355",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research / Artifact lifecycle",
+      "item": "Forward OOS → Rolling exact fitting-checkpoint bridge consumes fitted-model SSOT",
+      "gap": "Forward與Rolling第一個同fitting identity fold必須共用同一checkpoint bytes；橋接不得從evaluation report重猜optimizer settings，而必須讀canonical fitted_model_manifest／immutable legacy fitting evidence。requested_device等routing metadata不得製造假mismatch；Rolling fit stale時不得誤走audit-only refresh，必須回canonical PIT producer refit/resume。",
+      "entry": "`services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
+      "initial_status": "NEW",
+      "order": 343
     }
   ],
   "tests": [
@@ -7099,6 +7121,20 @@
       "b_id": "B353",
       "initial_status": "NEW",
       "order": 463
+    },
+    {
+      "id": "T474",
+      "description": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B354：patience 1→3必須使Forward/Rolling/Forward Robustness/Rolling Robustness reuse全部失效，且legacy historical defaults不得隨current config漂移",
+      "b_id": "B354",
+      "initial_status": "NEW",
+      "order": 464
+    },
+    {
+      "id": "T475",
+      "description": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：真實Forward report不含optimizer欄位時仍可由fitted_model_manifest匯入同identity checkpoint至Rolling cache；stale Rolling fit回傳不可REUSE而非audit-only refresh",
+      "b_id": "B355",
+      "initial_status": "NEW",
+      "order": 465
     }
   ],
   "transitions": [
@@ -24029,6 +24065,38 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "validate_breakout_quality_point_in_time_score_builder_contract_case"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B354",
+      "description": "建立Continuous DL fitting-settings readiness SSOT",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "fit settings → reuse readiness；report/audit不得遮蔽stale fit"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T474",
+      "description": "新增patience-change invalidates reuse historical regression",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "validate_breakout_quality_fitted_model_lifecycle_contract_case"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B355",
+      "description": "修正Forward OOS已fit checkpoint未被同identity Rolling fold重用；橋接改讀fitted-model SSOT並使stale Rolling fit回canonical producer",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Forward report只負責evaluation evidence，不再被要求持有optimizer fitting欄位"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T475",
+      "description": "新增Forward→Rolling實際checkpoint import與stale-fit routing regression",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "validate_breakout_quality_fitted_model_lifecycle_contract_case"
     }
   ]
 }
