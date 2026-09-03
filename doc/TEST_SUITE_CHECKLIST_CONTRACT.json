@@ -3770,6 +3770,17 @@
       "entry": "`core/research_report_contract.py`, `config/breakout_quality_runtime.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/point_in_time_audit.py`",
       "initial_status": "NEW",
       "order": 339
+    },
+    {
+      "id": "B352",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research / Artifact lifecycle",
+      "item": "Rolling model-extension score capability → audit evidence dependency SSOT",
+      "gap": "[4]/[6]遇到comparison extension缺失時必須先由training composition的score_output_policy判斷PIT model-output sidecar是否完整；sidecar缺失只能checkpoint-rescore，sidecar完整且audit stale才audit-only refresh。ranking reader、PIT audit與Robustness不得各自硬編objective-specific score-column matrix。",
+      "entry": "`config/breakout_quality_runtime.py`, `filters/breakout_quality/ranking_score_store.py`, `services/breakout_quality/point_in_time_audit.py`, `services/research/breakout_quality_application.py`",
+      "initial_status": "NEW",
+      "order": 340
     }
   ],
   "tests": [
@@ -7063,6 +7074,13 @@
       "b_id": "B351",
       "initial_status": "NEW",
       "order": 461
+    },
+    {
+      "id": "T472",
+      "description": "`validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B352：current score-output policy為唯一column owner，AK-style legacy primary-only PIT在audit前被拒絕並要求checkpoint-rescore",
+      "b_id": "B352",
+      "initial_status": "NEW",
+      "order": 462
     }
   ],
   "transitions": [
@@ -23961,6 +23979,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_research_report_contract_freeze_case`"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "B352",
+      "description": "收斂Rolling model-extension score capability與audit evidence dependency lifecycle",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "score-output policy → PIT score → audit → comparison bundle"
+    },
+    {
+      "date": "2026-09-03",
+      "id": "T472",
+      "description": "新增PIT stale multi-head score capability regression並鎖住generic score-output owner",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "validate_breakout_quality_point_in_time_score_builder_contract_case"
     }
   ]
 }

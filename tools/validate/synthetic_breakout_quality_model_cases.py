@@ -1434,7 +1434,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and "確認只刷新Rolling audit/evidence（不重訓、不重算PIT scores）" in app_source
         and "def _rolling_robustness_score_core_ready" in app_source
         and "Rolling PIT score-output capability stale" in app_source
-        and "score_policy.manifest_columns()" in app_source
+        and "get_continuous_ranker_score_output_columns" in app_source
         and "if not core_ready:" in app_source
         and '"audit-point-in-time-scores"' in app_source
         and "aggregate_robustness_row_extension" in app_source

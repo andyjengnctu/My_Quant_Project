@@ -66,6 +66,7 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     primary_audit_metric_scope,
 )
 from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+from config.breakout_quality_runtime import get_continuous_ranker_score_output_columns
 from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
@@ -226,6 +227,24 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
             "model_information_cutoff": "string",
         },
     )
+    profile = get_breakout_quality_workflow_settings(
+        experiment_profile=str(args.experiment_profile)
+    )
+    expected_score_columns = get_continuous_ranker_score_output_columns(
+        str(profile.training_objective)
+    )
+    actual_score_columns = dict(manifest.get("score_columns") or {})
+    if actual_score_columns != expected_score_columns:
+        raise ValueError(
+            "Rolling PIT score-output capability過舊或不一致；"
+            "audit不能替代model-output sidecar，請先以目前PIT producer重建scores"
+        )
+    missing_score_outputs = sorted(set(expected_score_columns.values()) - set(frame.columns))
+    if missing_score_outputs:
+        raise ValueError(
+            "Rolling PIT score缺少current score-output capability欄位: "
+            + ", ".join(missing_score_outputs)
+        )
     required = {
         "ticker",
         "date",

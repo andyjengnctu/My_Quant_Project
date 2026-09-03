@@ -369,6 +369,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     }
     from config.breakout_quality_runtime import (
         get_continuous_ranker_persisted_score_columns,
+        get_continuous_ranker_score_output_columns,
         get_continuous_ranker_training_policy,
     )
     from filters.breakout_quality.ranking_score_store import PIT_OPTIONAL_SCORE_COLUMNS
@@ -387,6 +388,47 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and a1_output_policy.manifest_columns() == expected_raw_duo_columns
         and _score_output_columns(SimpleNamespace(profile=a1_profile)) == expected_raw_duo_columns
         and _score_output_columns(SimpleNamespace(profile=a2_profile)) == expected_raw_duo_columns,
+    )
+    check_true(
+        "pit_score_output_capability_is_single_runtime_owner_for_all_consumers",
+        get_continuous_ranker_score_output_columns(a1_profile.training_objective)
+        == expected_raw_duo_columns
+        and get_continuous_ranker_score_output_columns(a2_profile.training_objective)
+        == expected_raw_duo_columns
+        and "get_continuous_ranker_score_output_columns" in read_source_text(
+            "filters/breakout_quality/ranking_score_store.py"
+        )
+        and "get_continuous_ranker_score_output_columns" in read_source_text(
+            "services/breakout_quality/point_in_time_audit.py"
+        ),
+        note=(
+            "PIT score readiness and audit readiness must consume the same declarative "
+            "score-output capability; no objective-specific sidecar matrix is allowed."
+        ),
+    )
+    from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
+    from filters.breakout_quality.ranking_score_store import _validate_score_eligibility_contract
+
+    a1_manifest_base = {
+        "score_eligibility_contract": build_score_eligibility_contract(a1_profile),
+    }
+    current_a1_manifest = {**a1_manifest_base, "score_columns": expected_raw_duo_columns}
+    _validate_score_eligibility_contract(current_a1_manifest, profile=a1_profile)
+    stale_a1_rejected = False
+    try:
+        _validate_score_eligibility_contract(
+            {**a1_manifest_base, "score_columns": {"primary": "breakout_quality_score"}},
+            profile=a1_profile,
+        )
+    except ValueError as exc:
+        stale_a1_rejected = "score-output capability" in str(exc)
+    check_true(
+        "pit_reader_rejects_stale_multi_head_score_capability_before_audit_refresh",
+        stale_a1_rejected,
+        note=(
+            "A stale AK/AO-family PIT score must enter checkpoint-rescore, not audit-only refresh; "
+            "otherwise missing model-output sidecars can never be reconstructed."
+        ),
     )
     check_true(
         "pit_score_output_consumer_has_no_local_target_builder_capability_registry",

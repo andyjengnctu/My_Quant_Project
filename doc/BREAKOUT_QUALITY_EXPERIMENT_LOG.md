@@ -11511,3 +11511,13 @@ Decision：`ENGINEERING_ONLY / FIT_EVALUATE_REPORT_SEPARATED / EXISTING_SCIENTIF
 - 本輪不改任何模型 fitting identity、target/loss、split/seed、PIT information legality、strategy conversion 或 research decision。
 
 Decision：`ENGINEERING_ONLY / FORWARD_ROLLING_ROBUSTNESS_REPORTS_SHARE_ONE_EVIDENCE_CONTRACT / NO_RETRAIN_REQUIRED_FOR_REPORT_REFRESH`。
+
+## 2026-09-03 — Engineering closure: Rolling comparison extension refresh loop
+
+- **Observed failure**：`[4] Rolling OOS 模型比較` 對 MR-13AK/AO/BC 判定 model-extension evidence missing，進入 audit-only refresh 後仍缺同一 extension。實際上舊 PIT aggregate score artifact 尚未持久化 current multi-head score sidecars，audit-only producer沒有可用 model outputs，因此不可能閉環。
+- **Root cause**：PIT score capability validation不同源。Rolling Robustness已有由 `score_output_policy.manifest_columns()` 派生的 current score-column驗證；一般 `ranking_score_store` 仍只硬編少數歷史 objective，因此 AK/AO/BC 舊 PIT artifact被誤分類成「score READY / audit stale」。
+- **Fix**：新增 runtime-owned `get_continuous_ranker_score_output_columns(training_objective)`；PIT reader、PIT audit與Rolling Robustness全部由同一 owner 驗 score capability。舊 multi-head PIT若缺 sidecar，先進 canonical PIT producer checkpoint-rescore；score-output contract不屬 fitting identity，因此 compatible fold checkpoint不得重訓。只有 sidecar 已完整而 audit extension stale 時才走 audit-only refresh。
+- **Audit fail-fast**：`audit-point-in-time-scores` 現在在產生 evidence 前同時驗 manifest `score_columns` 與實際 score table physical columns；audit不得再寫出「最新時間戳但缺 current model-extension evidence」的假新鮮工件。
+- **Regression**：generic PIT capability synthetic直接用 AK-style current score policy驗證 current manifest通過、legacy primary-only manifest在 audit 前被拒絕；consumer source不得再持有 objective-specific score-output matrix。
+
+Decision：`ENGINEERING_ONLY / SCORE_CAPABILITY_AND_AUDIT_LIFECYCLE_SEPARATED / COMPATIBLE_CHECKPOINT_RESCORE_NOT_REFIT`。

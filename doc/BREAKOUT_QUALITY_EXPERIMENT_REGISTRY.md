@@ -490,3 +490,12 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 - **Robustness aggregation**：extension contract 自己宣告 across-seed aggregation。row-table evidence使用 benchmark-seed arithmetic mean；Truth / Prediction Geometry 為 distribution geometry，明確 `single_seed_only`，不得逐格硬平均。
 
 Decision：`ENGINEERING_ONLY / COMPARISON_EVIDENCE_BUNDLE_SSOT / MODEL_IDENTITIES_UNCHANGED`。
+
+## 2026-09-03 — Engineering contract: Rolling comparison evidence dependency lifecycle
+
+- **Scope**：B351 後續 engineering closure；不改 `model.standard_comparison` v11、MR identity、target/loss/model fitting、PIT legality或Strategy semantics。
+- **Score capability SSOT**：任何 Continuous objective 的 persisted score-column contract 只能由 `ContinuousRankerTrainingPolicy.score_output_policy` 派生。PIT producer、`ranking_score_store`、PIT audit、一般 Rolling comparison 與 Rolling Robustness 不得再維護 objective-specific sidecar 對照表。
+- **Dependency order**：`fitted checkpoint → PIT score-output capability → PIT audit evidence → comparison bundle`。若 current extension 所需 model-output sidecar 尚未持久化，狀態必須是 score capability stale，先以 compatible fold checkpoint rescore；只有 score capability 已完整而 audit evidence stale 時，才允許 audit-only refresh。Audit 不得宣稱可重建未持久化的 model outputs。
+- **Fail-fast**：standalone PIT audit 必須驗 manifest `score_columns` 與實際 score columns 都符合 current score-output policy；不符合時拒絕產生新的 incomplete audit。相同規則同時適用 `[4]` 與 `[6]`，避免 single-seed / robustness 再次分叉。
+
+Decision：`ENGINEERING_ONLY / SCORE_THEN_AUDIT_DEPENDENCY_ORDER / NO_RETRAIN_FOR_SCORE_OUTPUT_ONLY_REFRESH`。

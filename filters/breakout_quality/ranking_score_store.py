@@ -32,7 +32,10 @@ from config.breakout_quality import (
     get_breakout_quality_experiment_profile,
 )
 
-from config.breakout_quality_runtime import get_continuous_ranker_persisted_score_columns
+from config.breakout_quality_runtime import (
+    get_continuous_ranker_persisted_score_columns,
+    get_continuous_ranker_score_output_columns,
+)
 
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
@@ -226,52 +229,20 @@ def _validate_score_eligibility_contract(
             "Selection PIT daily score eligibility contract過舊或不一致；"
             "策略使用前請重新建立PIT Scores並重新執行PIT audit"
         )
-    if (
+    # Score-output capability is declarative and objective-agnostic here.
+    # Historical objective-specific checks caused new multi-head objectives to look
+    # "score READY / audit stale" even when their PIT scores lacked required sidecars.
+    # That made audit-only refresh loop forever because an audit cannot reconstruct
+    # model outputs that were never persisted.
+    expected_score_columns = get_continuous_ranker_score_output_columns(
         str(profile.training_objective)
-        == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
-    ):
-        score_columns = dict(manifest.get("score_columns") or {})
-        expected_columns = {
-            "primary": "breakout_quality_score",
-            "primary_mfe": "primary_mfe_score",
-            "conditional_safety": "conditional_safety_score",
-        }
-        if score_columns != expected_columns:
-            raise ValueError(
-                "Conditional MFE-Safety PIT artifact缺少dual-head score contract；"
-                "請以目前producer重建PIT Scores與audit"
-            )
-    if (
-        str(profile.training_objective)
-        == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    ):
-        score_columns = dict(manifest.get("score_columns") or {})
-        expected_columns = {
-            "primary": "breakout_quality_score",
-            "conditional_mfe": "breakout_quality_score",
-            "raw_safety": "raw_safety_score",
-        }
-        if score_columns != expected_columns:
-            raise ValueError(
-                "Safety→Conditional-MFE PIT artifact缺少Raw Safety score contract；"
-                "請以既有MR-13R fold checkpoint重建PIT scores與audit（不需重訓）"
-            )
-    if (
-        str(profile.training_objective)
-        == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
-    ):
-        score_columns = dict(manifest.get("score_columns") or {})
-        expected_columns = {
-            "primary": "breakout_quality_score",
-            "raw_safety": "raw_safety_score",
-            "raw_mfe": "raw_mfe_score",
-            "joint_min": "joint_min_score",
-        }
-        if score_columns != expected_columns:
-            raise ValueError(
-                "Joint-Min PIT artifact缺少tri-head score contract；"
-                "請以目前producer建立/重建PIT Scores與audit"
-            )
+    )
+    actual_score_columns = dict(manifest.get("score_columns") or {})
+    if actual_score_columns != expected_score_columns:
+        raise ValueError(
+            "Selection PIT score-output capability過舊或不一致；"
+            "請以目前producer從既有compatible fold checkpoint重建PIT scores與audit"
+        )
 
 
 def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[str, Any]:

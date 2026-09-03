@@ -1363,6 +1363,23 @@ def get_profile_enabled_continuous_ranker_training_objectives() -> tuple[str, ..
     )
 
 
+def get_continuous_ranker_score_output_columns(training_objective: str) -> dict[str, str]:
+    """Return the canonical persisted PIT/Forward score-column contract for an objective.
+
+    Score capability is owned by ``ContinuousRankerTrainingPolicy.score_output_policy``.
+    Consumers must not maintain objective-specific column maps: a new multi-head composition
+    becomes reusable/reportable everywhere as soon as its score-output policy is registered.
+    """
+
+    policy = get_continuous_ranker_training_policy(str(training_objective))
+    output_policy = policy.score_output_policy
+    return (
+        {"primary": "breakout_quality_score"}
+        if output_policy is None
+        else dict(output_policy.manifest_columns())
+    )
+
+
 def get_continuous_ranker_persisted_score_columns() -> tuple[str, ...]:
     """Return the runtime-owned union of optional persisted score sidecar columns."""
 
@@ -1642,6 +1659,7 @@ __all__ = (
     "get_continuous_ranker_training_policy",
     "get_profile_enabled_continuous_ranker_training_objectives",
     "get_continuous_ranker_primary_pair_weight_policy",
+    "get_continuous_ranker_score_output_columns",
     "get_continuous_ranker_persisted_score_columns",
     "get_continuous_ranker_report_evidence_families",
     "build_continuous_ranker_execution_recipe",

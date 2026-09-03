@@ -51,6 +51,7 @@ from config.breakout_quality import (
     get_breakout_quality_workflow_settings,
 )
 from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+from config.breakout_quality_runtime import get_continuous_ranker_score_output_columns
 from core.display_common import FixedProgressBlock, render_elapsed
 from core.file_integrity import load_json_object_or_none
 from core.training_progress import (
@@ -5262,12 +5263,8 @@ def _rolling_robustness_score_core_ready(settings, *, seed: int) -> tuple[bool, 
         return False, "Rolling PIT seed mismatch"
     if str(manifest.get("status") or "") != "BUILT":
         return False, "Rolling PIT manifest not BUILT"
-    recipe = get_continuous_ranker_execution_recipe(str(settings.experiment_profile))
-    score_policy = recipe.training_policy.score_output_policy
-    expected_score_columns = (
-        {"primary": "breakout_quality_score"}
-        if score_policy is None
-        else score_policy.manifest_columns()
+    expected_score_columns = get_continuous_ranker_score_output_columns(
+        str(settings.training_objective)
     )
     if dict(manifest.get("score_columns") or {}) != dict(expected_score_columns):
         return False, "Rolling PIT score-output capability stale"
