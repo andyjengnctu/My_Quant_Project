@@ -1920,7 +1920,7 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        model_architecture="gru_shared_safety_mfe_v1",
+        model_architecture="gru_shared_safety_mfe_v2",
     ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3297,8 +3297,8 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         objective_description=(
             "User-authorized recurrent-backbone contrast after MR-13BF full-resolution global attention failed to break the Safety ceiling. "
             "MR-13AO raw 300x10 input, target/loss/true-HS scope, independent linear Safety/MFE heads, Seed42/split/optimizer/epoch selection and Pred-Safety->Conditional-MFE inference remain fixed. "
-            "The only primary treatment is shared temporal backbone: InceptionTime is replaced by a 3-layer unidirectional GRU with hidden_size=176, dropout=0 and final recurrent state pooling. "
-            "Feature_count=10 trainable params are 473,796 versus AO 473,734 (+0.013%), so capacity is effectively matched. "
+            "The only primary treatment is shared temporal backbone: InceptionTime is replaced by a 1-layer unidirectional GRU with hidden_size=391, dropout=0 and final recurrent state pooling. "
+            "This is the execution-feasible pre-result revision of the original 3-layer/176 implementation; feature_count=10 trainable params are 474,287 versus AO 473,734 (+0.117%), so capacity remains effectively matched. "
             "Primary Gate requires material full-Safety Daily/Global rho, Pair and Pred-HS purity improvement over AO, with P45-P55 boundary improvement and non-collapsing true-HS Conditional-MFE. "
             "If FAIL, do not sweep GRU hidden size/layers/bidirectionality on iterative OOS; close recurrent-backbone shopping and return to information/target-uncertainty research."
         ),

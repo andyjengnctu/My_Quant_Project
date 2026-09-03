@@ -11630,3 +11630,23 @@ Decision：`B357_DONE / T477_DONE / ROLLING_COMPACT_PROGRESS_PARITY_RESTORED / N
 - **Breakout qualification**：BF Forward true-LS=`33.06%`、Rolling=`33.56%`看似較低，但true-HS recall只有`52.62%/54.57%`，且TopK HM/HS沒有同步突破，因此屬precision/recall trade-off，不視為通用Safety improvement。
 - **Decision**：`RAW_GLOBAL_ATTENTION_DOES_NOT_BREAK_SAFETY_CEILING / CONDITIONAL_MFE_PRESERVED / MODEL_GATE_FAIL / NO_TRANSFORMER_SWEEP / CLOSED / NOT_PROMOTED`。不得再以token size、attention heads、d_model、depth、FFN做迭代OOS sweep。
 - **MR-13BG user-authorized override**：BF事前stop rule原應轉information/target uncertainty；使用者明確要求先試GRU，因此另立`MR-13BG / ARCH-gru_shared_safety_mfe_v1`，不改寫BF結論。BG固定AO raw `300×10`、continuous Safety + true-HS Conditional-MFE、1:1 loss、independent heads、Seed42/split/optimizer/epoch-selection/inference，只換shared backbone為3-layer unidirectional GRU hidden=`176`、dropout=`0`、final-state pooling。feature_count=10 trainable params=`473,796` vs AO=`473,734`（`+0.013%`）。先做Seed42 Forward Model Gate；若FAIL，不做GRU hidden/layer/bidirectional sweep，回information/target uncertainty。
+
+
+## 2026-09-04 — MR-13BG pre-result execution-feasibility correction：GRU v1 3-layer/176 → v2 1-layer/391
+
+- 使用者正式Forward build進入`Epoch選擇`後長時間無任何epoch完成。程式檢查確認資料／artifact前置已完成，阻塞點位於canonical `_train_epoch()`；date-coherent ranking不得拆同日且不得為效能改optimizer-step semantics，因此3-layer GRU對每個完整交易日做300-step recurrent BPTT的實際執行成本過高。
+- `ARCH-gru_shared_safety_mfe_v1`在**任何epoch metric／checkpoint／scientific result產生前**停止，狀態為`PRE_RESULT_COMPUTE_INFEASIBLE`；identity永久保留，不作MR-13BG evidence。
+- 同一MR-13BG research hypothesis改由`ARCH-gru_shared_safety_mfe_v2`執行：1-layer unidirectional GRU、hidden=`391`、dropout=`0`、final-state pooling；feature_count=10 trainable params=`474,287` vs AO=`473,734`（`+0.117%`）。Target/loss/input/Seed/split/optimizer/batch/date-coherent ranking/determinism/epoch-selection/inference完全不變。此為pre-result execution-feasibility correction，不是OOS-guided architecture tuning。
+- 下一步仍只做MR-13BG Seed42 Forward Model Gate；若FAIL，依既有stop rule停止GRU family tuning。
+
+## 2026-09-04 — MR-13BG v2 Forward refit numerical blocker：GRU recurrent compute固定FP32
+
+- **User evidence**：MR-13BG v2 Seed42 Forward epoch-selection成功完成6 epochs；Validation由epoch1 `HS-MFE rho=0.1516 / Safety rho=0.1796`逐步學起，epoch5達`HS-MFE rho=0.4191 / Safety rho=0.3574`並成為selected epoch，epoch6未再改善。這只證明GRU v2具有可學性，尚不是Forward Model Gate結果。
+- **Failure point**：selected epoch=`5`後重新初始化做`Daily Selection完整重訓（5 Epoch）`；前3 epochs Batch Loss=`0.665070 / 0.553312 / 0.540414`，第4 epoch內`_pairwise_logistic_loss()`的canonical finite guard發現`full-list Delta-NDCG predicted margins`已含NaN/Inf而中止。沒有產生合法final model／OOS report，因此MR-13BG仍為`RESULT_PENDING`，不得以本次partial metrics判定PASS/FAIL。
+- **Diagnosis**：canonical finite guard確認non-finite首先出現在GRU predicted margin上游，而不是Delta-NDCG target／weight計算。project-wide CUDA mixed precision使用BF16 autocast，BF16路徑不使用GradScaler；GRU又是本輪唯一新增的300-step recurrent BPTT primitive。GPT環境無CUDA，無法獨立重現RTX端的確切kernel-level機制，因此不把特定cuDNN/PyTorch kernel當成已證明root cause；修補採最小範圍，將GRU recurrent/head compute隔離為FP32以排除BF16 recurrent numerical instability。
+- **Fix**：`gru_shared_safety_mfe` runtime在外層BF16 autocast內建立局部FP32 island，GRU recurrent state與兩個parameter-matched linear heads皆以FP32計算；trainer、batch/date-coherent membership、sample/order、loss、Adam、LR/weight decay、gradient clip、Seed、optimizer updates、determinism、epoch selection與inference semantics不變。這是numerical execution correction，不占新MR/architecture identity。
+- **Regression**：Reusable Model Components synthetic加入capability-driven recurrent precision guard；在外層CPU BF16 autocast下確認active gated-recurrent model輸出仍為FP32且forward/backward gradients皆finite。另以30-step full-list Delta-NDCG stress驗證outer BF16/autocast + recurrent FP32 island可持續更新且parameters finite。
+- **Next**：重新執行MR-13BG Seed42 Forward；只有完整final model與OOS report產生後才進Model Gate判讀。
+
+Decision：`MR13BG_RESULT_STILL_PENDING / BF16_RECURRENT_NONFINITE_BLOCKER_FIXED / GRU_FP32_EXECUTION_ISLAND / NO_SCIENTIFIC_CHANGE / RERUN_FORWARD_REQUIRED`。
+

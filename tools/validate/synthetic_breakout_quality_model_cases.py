@@ -3408,6 +3408,40 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         == len(ACTIVE_MODEL_ARCHITECTURES),
     )
 
+    recurrent_architectures = [
+        architecture
+        for architecture in ACTIVE_MODEL_ARCHITECTURES
+        if get_architecture_descriptor(architecture).has_capability("gated_recurrent_state")
+    ]
+    check_true(
+        "active_gated_recurrent_backbone_has_single_fp32_stable_runtime_owner",
+        len(recurrent_architectures) == 1,
+    )
+    if recurrent_architectures:
+        recurrent_model = build_active_model(10, 0, architecture=recurrent_architectures[0])
+        recurrent_x = torch.randn((3, 300, 10), dtype=torch.float32)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            recurrent_safety, recurrent_mfe = recurrent_model.forward_safety_mfe_heads(
+                recurrent_x, None
+            )
+            recurrent_loss = recurrent_safety.square().mean() + recurrent_mfe.square().mean()
+        recurrent_model.zero_grad(set_to_none=True)
+        recurrent_loss.backward()
+        recurrent_grads = [
+            parameter.grad
+            for parameter in recurrent_model.parameters()
+            if parameter.requires_grad and parameter.grad is not None
+        ]
+        check_true(
+            "gated_recurrent_backbone_keeps_recurrence_and_heads_fp32_under_outer_bf16_autocast",
+            recurrent_safety.dtype == torch.float32
+            and recurrent_mfe.dtype == torch.float32
+            and bool(torch.isfinite(recurrent_safety).all().item())
+            and bool(torch.isfinite(recurrent_mfe).all().item())
+            and recurrent_grads
+            and all(bool(torch.isfinite(grad).all().item()) for grad in recurrent_grads),
+        )
+
     full_window_descriptor = get_architecture_descriptor(
         INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1
     )

@@ -238,17 +238,17 @@ def build_day_token_transformer_shared_safety_mfe_spec(
     )
 
 def build_gru_shared_safety_mfe_spec(architecture: str) -> BreakoutQualityModelSpec:
-    """AO-capacity-matched gated recurrent shared Safety/MFE backbone.
+    """Descriptor-owned gated recurrent shared Safety/MFE backbone."""
 
-    A 3-layer unidirectional GRU with hidden size 176 plus two 2-class linear
-    heads has 473,796 trainable parameters for feature_count=10, versus AO's
-    473,734 (+0.013%).  The final recurrent state is the shared latent.
-    """
-
+    options = get_architecture_descriptor(architecture).spec_options_dict()
+    hidden_size = int(options.get("gru_hidden_size", 0))
+    num_layers = int(options.get("gru_layers", 0))
+    if hidden_size < 1 or num_layers < 1:
+        raise ValueError("GRU descriptor 必須宣告正的 hidden_size/layers")
     return BreakoutQualityModelSpec(
         architecture=architecture,
         family="gru_shared_safety_mfe",
-        channels=176,
+        channels=hidden_size,
         kernel_size=1,
         dilations=(),
         convolutions_per_block=1,
@@ -260,8 +260,8 @@ def build_gru_shared_safety_mfe_spec(architecture: str) -> BreakoutQualityModelS
         head_width=None,
         use_dataset_context=False,
         sequence_input_paths=("raw_level_recurrent_sequence",),
-        gru_hidden_size=176,
-        gru_layers=3,
+        gru_hidden_size=hidden_size,
+        gru_layers=num_layers,
         gru_bidirectional=False,
         gru_pooling="final_state",
     )
