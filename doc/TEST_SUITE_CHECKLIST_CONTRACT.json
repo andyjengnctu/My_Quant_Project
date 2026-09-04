@@ -3946,6 +3946,17 @@
       "entry": "`services/trading/protection_planning.py`, `core/entry_plans.py`, `core/price_utils.py`, `services/trading/fill_reconciliation.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 355
+    },
+    {
+      "id": "B368",
+      "section": "B2",
+      "priority": "P1",
+      "category": "GUI / Workbench Trading protection broker orders",
+      "item": "Explicit protection SELL submission shares the canonical broker-order SSOT without overselling holdings",
+      "gap": "Trading Stop/TP protection plan仍只屬logical output；只有使用者明確確認券商已實際送出SELL時，才可寫入同一state/trading/orders.json，禁止另建sell_orders第二份truth。單腿Stop或TP送單必須綁定FRESH protection plan、當下strategy_fill實際持股、position-plan fingerprint與來源entry order；非OCO active protection SELL的有效委託曝險不得超過持股。Stop full + TP若合計會超過持股，只能在使用者明確輸入實際券商native OCO/互斥群組ID並確認後，以同一revision建立共享group的兩筆SELL ORDERED；系統不得自行假設OCO支援。Round 11 protection SELL只支援ORDERED/CANCELLED，不得由BUY fill reconciliation處理或從市場資料推定成交。active ENTRY BUY與active protection SELL必須由canonical helper分層；長期protection SELL不得誤阻擋下一交易日新的盤前BUY allocation，但仍屬active broker order並保留account mutation guard。",
+      "entry": "`core/trading_order_state.py`, `services/trading/order_state.py`, `services/trading/protection_order_submission.py`, `services/trading/protection_planning.py`, `services/trading/order_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 356
     }
   ],
   "tests": [
@@ -7351,6 +7362,13 @@
       "description": "`validate_trading_protection_plan_contract_case` 覆蓋confirmed partial/final fill後的canonical Stop/TP levels、full-position Stop qty、half-take-profit qty、STOP_OVER_TP priority、manual-position exclusion、frozen-source freshness、no-market-data/no-discretionary/no-account-mutation/no-broker-submission與Workbench post-fill refresh controls。",
       "initial_status": "NEW",
       "order": 477
+    },
+    {
+      "id": "T488",
+      "description": "`validate_trading_protection_order_submission_contract_case` 覆蓋explicit Stop/TP SELL submission、non-OCO持股上限、explicit broker-native OCO group、account no-mutation、BUY/SELL active-order分層、next-day allocation compatibility、no-BUY-fill/no-market-inference與Workbench確認控制。",
+      "b_id": "B368",
+      "initial_status": "NEW",
+      "order": 478
     }
   ],
   "transitions": [
@@ -24537,6 +24555,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_protection_plan_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B368",
+      "description": "新增Trading protection SELL broker-order state與explicit OCO/持股上限治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/protection_order_submission.py`, `core/trading_order_state.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T488",
+      "description": "新增Trading protection SELL submission direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_protection_order_submission_contract_case`"
     }
   ]
 }

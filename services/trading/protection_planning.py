@@ -432,6 +432,16 @@ def get_trading_protection_plan_read_model(project_root: str | Path) -> dict[str
     }
 
 
+def load_current_trading_protection_plan(project_root: str | Path) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    snapshot = get_trading_protection_plan_read_model(root)
+    if not snapshot.get("exists"):
+        raise FileNotFoundError("Trading protection plan 尚未建立；請先建立／刷新保護單計畫")
+    if not snapshot.get("fresh"):
+        raise RuntimeError("Trading protection plan 已 STALE；請先依最新實際持股／entry order 重新建立")
+    return load_trading_protection_plan(root, required=True)
+
+
 __all__ = [
     "PROTECTION_PLAN_SCHEMA_VERSION",
     "PROTECTION_PLAN_STATUS",
@@ -445,5 +455,6 @@ __all__ = [
     "validate_trading_protection_plan",
     "build_trading_protection_plan",
     "load_trading_protection_plan",
+    "load_current_trading_protection_plan",
     "get_trading_protection_plan_read_model",
 ]

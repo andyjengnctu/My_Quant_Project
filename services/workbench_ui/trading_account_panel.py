@@ -20,6 +20,10 @@ from services.trading.protection_planning import (
     build_trading_protection_plan,
     get_trading_protection_plan_read_model,
 )
+from services.trading.protection_order_submission import (
+    confirm_trading_protection_leg_submission,
+    confirm_trading_protection_oco_submission,
+)
 from services.trading.fill_reconciliation import (
     TradingFillRevisionConflict,
     confirm_trading_buy_order_fill,
@@ -321,16 +325,18 @@ class TradingAccountPanel(ttk.Frame):
         pending_box.columnconfigure(0, weight=1)
         self._order_status_var = tk.StringVar(value="尚無實際送單紀錄。")
         ttk.Label(pending_box, textvariable=self._order_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
-        order_columns = ("ticker", "status", "limit", "qty", "filled", "remaining", "avg_fill", "broker_id", "info_date", "ordered_at", "filled_at", "cancelled_at")
+        order_columns = ("ticker", "side", "purpose", "status", "order_type", "price", "qty", "filled", "remaining", "avg_fill", "broker_id", "info_date", "ordered_at", "filled_at", "cancelled_at")
         self._order_tree = ttk.Treeview(pending_box, columns=order_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
         order_headings = {
-            "ticker": "股票", "status": "狀態", "limit": "限價", "qty": "委託股數", "filled": "已成交",
-            "remaining": "未成交", "avg_fill": "平均成交價", "broker_id": "券商委託號", "info_date": "資訊日",
+            "ticker": "股票", "side": "方向", "purpose": "用途", "status": "狀態", "order_type": "類型",
+            "price": "委託/觸發價", "qty": "委託股數", "filled": "已成交", "remaining": "未成交",
+            "avg_fill": "平均成交價", "broker_id": "券商委託號", "info_date": "資訊日",
             "ordered_at": "送單時間", "filled_at": "完成時間", "cancelled_at": "取消時間",
         }
         order_widths = {
-            "ticker": 80, "status": 90, "limit": 95, "qty": 95, "filled": 90, "remaining": 90, "avg_fill": 105,
-            "broker_id": 130, "info_date": 105, "ordered_at": 160, "filled_at": 160, "cancelled_at": 160,
+            "ticker": 80, "side": 65, "purpose": 125, "status": 90, "order_type": 100, "price": 105,
+            "qty": 95, "filled": 90, "remaining": 90, "avg_fill": 105, "broker_id": 130, "info_date": 105,
+            "ordered_at": 160, "filled_at": 160, "cancelled_at": 160,
         }
         for key in order_columns:
             self._order_tree.heading(key, text=order_headings[key])
@@ -377,7 +383,7 @@ class TradingAccountPanel(ttk.Frame):
             style=WORKBENCH_LABEL_STYLE,
         ).pack(side="left", padx=(12, 0))
 
-        protection_box = ttk.LabelFrame(self, text="成交後 Stop / TP 保護單計畫（尚未送券商）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        protection_box = ttk.LabelFrame(self, text="成交後 Stop / TP 保護單計畫（logical plan；送單狀態見券商掛單表）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         protection_box.grid(row=8, column=0, sticky="nsew", pady=(8, 0))
         protection_box.rowconfigure(1, weight=1)
         protection_box.columnconfigure(0, weight=1)
@@ -394,6 +400,7 @@ class TradingAccountPanel(ttk.Frame):
             columns=protection_columns,
             show="headings",
             style=WORKBENCH_TREE_STYLE,
+            selectmode="browse",
         )
         protection_headings = {
             "ticker": "股票",
@@ -440,6 +447,41 @@ class TradingAccountPanel(ttk.Frame):
             style=WORKBENCH_LABEL_STYLE,
         ).pack(side="left", padx=(12, 0))
 
+        protection_submit = ttk.Frame(protection_box, style=WORKBENCH_FRAME_STYLE)
+        protection_submit.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Label(protection_submit, text="單腿券商委託號", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._protection_broker_id_var = tk.StringVar()
+        ttk.Entry(protection_submit, textvariable=self._protection_broker_id_var, width=16, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        self._confirm_stop_submitted_button = ttk.Button(
+            protection_submit, text="確認 Stop 已送單", command=lambda: self._confirm_protection_leg_submitted("STOP_FULL"), style=WORKBENCH_BUTTON_STYLE
+        )
+        self._confirm_stop_submitted_button.pack(side="left")
+        self._confirm_tp_submitted_button = ttk.Button(
+            protection_submit, text="確認 TP 已送單", command=lambda: self._confirm_protection_leg_submitted("TP_HALF"), style=WORKBENCH_BUTTON_STYLE
+        )
+        self._confirm_tp_submitted_button.pack(side="left", padx=(8, 0))
+
+        protection_oco = ttk.Frame(protection_box, style=WORKBENCH_FRAME_STYLE)
+        protection_oco.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(protection_oco, text="券商 OCO/互斥群組 ID", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._protection_oco_group_var = tk.StringVar()
+        ttk.Entry(protection_oco, textvariable=self._protection_oco_group_var, width=18, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        ttk.Label(protection_oco, text="Stop委託號", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._protection_stop_broker_id_var = tk.StringVar()
+        ttk.Entry(protection_oco, textvariable=self._protection_stop_broker_id_var, width=14, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        ttk.Label(protection_oco, text="TP委託號", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._protection_tp_broker_id_var = tk.StringVar()
+        ttk.Entry(protection_oco, textvariable=self._protection_tp_broker_id_var, width=14, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        self._confirm_oco_submitted_button = ttk.Button(
+            protection_oco, text="確認 Stop+TP 已以券商 OCO 送單", command=self._confirm_protection_oco_submitted, style=WORKBENCH_BUTTON_STYLE
+        )
+        self._confirm_oco_submitted_button.pack(side="left")
+        ttk.Label(
+            protection_box,
+            text="系統不預設券商支援 OCO；只有你明確輸入實際券商 OCO/互斥群組 ID 時才允許 Stop full + TP 同時超額共享同一持股。尚未送券商的 logical plan 仍不是 broker truth。",
+            foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
     def _reload_protection_rows(self, rows):
         for item in self._protection_tree.get_children():
             self._protection_tree.delete(item)
@@ -448,6 +490,7 @@ class TradingAccountPanel(ttk.Frame):
             self._protection_tree.insert(
                 "",
                 "end",
+                iid=str(row.get("ticker") or ""),
                 values=(
                     row.get("ticker") or "-",
                     f"{int(row.get('position_qty') or 0):,}",
@@ -460,6 +503,86 @@ class TradingAccountPanel(ttk.Frame):
                     row.get("same_bar_priority") or "-",
                 ),
             )
+
+    def _selected_protection_row(self):
+        selected = self._protection_tree.selection()
+        if not selected:
+            return None
+        ticker = str(selected[0])
+        for row in self._protection_rows:
+            if str(row.get("ticker") or "") == ticker:
+                return dict(row)
+        return None
+
+    def _confirm_protection_leg_submitted(self, action: str):
+        row = self._selected_protection_row()
+        if not row:
+            messagebox.showerror("Trading 保護 SELL", "請先選取一筆成交後保護單計畫。", parent=self)
+            return
+        ticker = str(row.get("ticker") or "")
+        label = "Stop" if action == "STOP_FULL" else "TP"
+        if not messagebox.askyesno(
+            "確認保護 SELL 已送券商",
+            f"確認已在券商實際送出 {ticker} 的 {label} SELL？\n\n此動作只建立 ORDERED broker truth，不代表成交。若同時存在其他 SELL 委託，系統會依實際持股上限檢查。",
+            parent=self,
+        ):
+            return
+        try:
+            confirm_trading_protection_leg_submission(
+                WORKBENCH_PROJECT_ROOT,
+                ticker=ticker,
+                action=action,
+                expected_order_revision=int(self._current_order_revision()),
+                broker_order_id=self._protection_broker_id_var.get().strip() or None,
+                note="Workbench confirmed protection SELL submission",
+            )
+        except (TradingOrderRevisionConflict, ValueError, RuntimeError, FileNotFoundError) as exc:
+            messagebox.showerror("Trading 保護 SELL 送單失敗", str(exc), parent=self)
+            self.refresh_order_state()
+            self.refresh_protection_plan()
+            return
+        self._protection_broker_id_var.set("")
+        self.refresh_order_state()
+        self.refresh_protection_plan()
+        messagebox.showinfo("Trading 保護 SELL", f"{ticker} {label} 已記錄為 ORDERED；account 未修改。", parent=self)
+
+    def _confirm_protection_oco_submitted(self):
+        row = self._selected_protection_row()
+        if not row:
+            messagebox.showerror("Trading 保護 OCO", "請先選取一筆成交後保護單計畫。", parent=self)
+            return
+        ticker = str(row.get("ticker") or "")
+        group_id = self._protection_oco_group_var.get().strip()
+        if not group_id:
+            messagebox.showerror("Trading 保護 OCO", "必須輸入券商實際 OCO/互斥群組 ID；系統不會自行假設券商支援 OCO。", parent=self)
+            return
+        if not messagebox.askyesno(
+            "確認券商 OCO 送單",
+            f"確認券商已將 {ticker} Stop + TP 以 native OCO/互斥群組送出？\n\n群組 ID：{group_id}\n\n只有實際券商具備互斥/共享持股語意時才可確認。此動作不代表成交。",
+            parent=self,
+        ):
+            return
+        try:
+            confirm_trading_protection_oco_submission(
+                WORKBENCH_PROJECT_ROOT,
+                ticker=ticker,
+                expected_order_revision=int(self._current_order_revision()),
+                broker_oco_group_id=group_id,
+                stop_broker_order_id=self._protection_stop_broker_id_var.get().strip() or None,
+                tp_broker_order_id=self._protection_tp_broker_id_var.get().strip() or None,
+                note="Workbench confirmed broker-native OCO protection submission",
+            )
+        except (TradingOrderRevisionConflict, ValueError, RuntimeError, FileNotFoundError) as exc:
+            messagebox.showerror("Trading 保護 OCO 送單失敗", str(exc), parent=self)
+            self.refresh_order_state()
+            self.refresh_protection_plan()
+            return
+        self._protection_oco_group_var.set("")
+        self._protection_stop_broker_id_var.set("")
+        self._protection_tp_broker_id_var.set("")
+        self.refresh_order_state()
+        self.refresh_protection_plan()
+        messagebox.showinfo("Trading 保護 OCO", f"{ticker} Stop+TP 已依使用者確認記錄為券商 OCO ORDERED；account 未修改。", parent=self)
 
     def refresh_protection_plan(self):
         try:
@@ -659,8 +782,11 @@ class TradingAccountPanel(ttk.Frame):
                 iid=order_id,
                 values=(
                     row.get("ticker") or "-",
+                    row.get("side") or "-",
+                    row.get("purpose") or "-",
                     row.get("status") or "-",
-                    self._format_candidate_number(row.get("limit_price"), digits=2),
+                    row.get("order_type") or "-",
+                    self._format_candidate_number(row.get("trigger_price") if row.get("trigger_price") is not None else row.get("limit_price"), digits=2),
                     f"{int(row.get('qty') or 0):,}",
                     f"{int(row.get('filled_qty') or 0):,}",
                     f"{int(row.get('remaining_qty') or 0):,}",
@@ -676,7 +802,9 @@ class TradingAccountPanel(ttk.Frame):
         revision = snapshot.get("revision")
         state_path = project_relative_display_path(resolve_trading_order_state_path(WORKBENCH_PROJECT_ROOT), project_root=WORKBENCH_PROJECT_ROOT)
         self._order_status_var.set(
-            f"{'ACTIVE' if active else 'CLEAR'} | revision {revision if revision is not None else '-'} | active {active} | 總紀錄 {int(snapshot.get('order_count') or 0)} | {state_path}"
+            f"{'ACTIVE' if active else 'CLEAR'} | revision {revision if revision is not None else '-'} | active {active} "
+            f"(BUY {int(snapshot.get('active_entry_order_count') or 0)} / protection SELL {int(snapshot.get('active_protection_order_count') or 0)}) | "
+            f"總紀錄 {int(snapshot.get('order_count') or 0)} | {state_path}"
         )
         self._apply_order_lock_to_account_controls()
 
@@ -731,6 +859,9 @@ class TradingAccountPanel(ttk.Frame):
             return
         order_id = str(selected[0])
         row = self._order_rows.get(order_id) or {}
+        if str(row.get("side") or "BUY") != "BUY":
+            messagebox.showerror("Trading 成交", "Protection SELL 成交尚未在本輪 reconciliation；不可用 BUY fill 入口處理。", parent=self)
+            return
         if str(row.get("status")) not in {"ORDERED", "PARTIAL"}:
             messagebox.showerror("Trading 成交", "只有 ORDERED / PARTIAL 掛單可確認成交。", parent=self)
             return

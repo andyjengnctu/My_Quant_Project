@@ -1114,6 +1114,181 @@ def validate_trading_protection_plan_contract_case(base_params):
     return results, summary
 
 
+
+def validate_trading_protection_order_submission_contract_case(base_params):
+    case_id = "TRADING_PROTECTION_ORDER_SUBMISSION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.exact_accounting import build_buy_ledger_from_price
+    from core.file_integrity import atomic_write_json, canonical_json_sha256
+    from core.params_io import params_to_json_dict
+    from core.trading_order_state import (
+        TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+        TRADING_ORDER_PURPOSE_PROTECTION_TP,
+        TRADING_ORDER_SIDE_SELL,
+        active_trading_entry_orders,
+        active_trading_protection_orders,
+        append_ordered_trading_proposal,
+        build_empty_trading_order_state,
+        record_trading_buy_order_fill,
+        validate_trading_order_state,
+    )
+    from services.trading.fill_reconciliation import confirm_trading_buy_order_fill
+    from services.trading.order_planning import _assert_order_state_allows_new_allocation
+    from services.trading.order_state import (
+        confirm_trading_order_cancellation,
+        get_trading_order_read_model,
+        load_trading_order_state,
+        resolve_trading_order_state_path,
+    )
+    from services.trading.protection_order_submission import (
+        confirm_trading_protection_leg_submission,
+        confirm_trading_protection_oco_submission,
+    )
+    from services.trading.protection_planning import build_trading_protection_plan, get_trading_protection_plan_read_model
+
+    project_root = Path(__file__).resolve().parents[2]
+    frozen_params = params_to_json_dict(base_params)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        qty = 100
+        reserved = build_buy_ledger_from_price(100.0, qty, base_params)["net_buy_total_milli"]
+        state = build_empty_trading_order_state(timestamp="2026-09-04T09:00:00+08:00", mutation_id="r11-init")
+        plan_seed = {
+            "plan_fingerprint": "r11-entry-plan",
+            "information_date": "2026-09-04",
+            "account_revision": int(account["revision"]),
+            "selected_params_sha256": canonical_json_sha256(frozen_params),
+            "candidate_snapshot_sha256": "r11-candidate",
+            "strategy_id": "full_rule_based_no_dl",
+            "param_selector": "base_finalist_best",
+        }
+        proposal = {
+            "rank": 1, "ticker": "2454", "kind": "buy", "entry_type": "normal", "qty": qty,
+            "limit_price": 100.0, "reserved_cost_milli": int(reserved), "init_sl": 90.0,
+            "init_trail": 90.0, "target_price": 110.0, "entry_atr": 5.0, "security_profile": {},
+        }
+        state = append_ordered_trading_proposal(
+            state, order_id="r11-entry", proposal=proposal, plan=plan_seed,
+            timestamp="2026-09-04T09:01:00+08:00", mutation_id="r11-submit", frozen_params=frozen_params,
+        )
+        atomic_write_json(resolve_trading_order_state_path(root), state)
+        filled = confirm_trading_buy_order_fill(
+            root, order_id="r11-entry", fill_qty=qty, fill_price=99.0, trade_date="2026-09-04",
+            expected_order_revision=int(state["revision"]), expected_account_revision=int(account["revision"]),
+        )
+        account_revision = int(filled["account_revision"])
+        protection = build_trading_protection_plan(root)
+        add_check(results, "trading_protection_orders", case_id, "protection_plan_starts_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
+
+        stop_only = confirm_trading_protection_leg_submission(
+            root, ticker="2454", action="STOP_FULL", expected_order_revision=int(filled["order_revision"]),
+            broker_order_id="R11-STOP-1",
+        )
+        stop_record = next(row for row in stop_only["orders"].values() if row.get("side") == TRADING_ORDER_SIDE_SELL)
+        add_check(results, "trading_protection_orders", case_id, "single_stop_submission_is_sell_ordered", ["SELL", "PROTECTION_STOP", "ORDERED"], [stop_record["side"], stop_record["purpose"], stop_record["status"]])
+        add_check(results, "trading_protection_orders", case_id, "single_stop_uses_canonical_stop_market", "STOP_MARKET", stop_record["order_type"])
+        add_check(results, "trading_protection_orders", case_id, "single_stop_covers_full_held_qty", qty, stop_record["qty"])
+        add_check(results, "trading_protection_orders", case_id, "protection_submission_does_not_mutate_account", account_revision, load_trading_account_state(root)["revision"])
+        add_check(results, "trading_protection_orders", case_id, "broker_order_id_is_preserved_for_protection_sell", "R11-STOP-1", stop_record["broker_order_id"])
+        add_check(results, "trading_protection_orders", case_id, "protection_plan_remains_fresh_after_sell_submission", True, get_trading_protection_plan_read_model(root)["fresh"])
+
+        before_reject_revision = int(stop_only["revision"])
+        try:
+            confirm_trading_protection_leg_submission(
+                root, ticker="2454", action="TP_HALF", expected_order_revision=before_reject_revision,
+                broker_order_id="R11-TP-OVERCOMMIT",
+            )
+        except RuntimeError as exc:
+            tp_overcommit_rejected = "超過實際持股" in str(exc)
+        else:
+            tp_overcommit_rejected = False
+        add_check(results, "trading_protection_orders", case_id, "non_oco_stop_plus_tp_cannot_overcommit_position_qty", True, tp_overcommit_rejected)
+        add_check(results, "trading_protection_orders", case_id, "rejected_overcommit_does_not_advance_order_revision", before_reject_revision, load_trading_order_state(root)["revision"])
+
+        stop_order_id = str(stop_record["order_id"])
+        cancelled = confirm_trading_order_cancellation(root, order_id=stop_order_id, expected_revision=before_reject_revision)
+        try:
+            confirm_trading_protection_oco_submission(
+                root, ticker="2454", expected_order_revision=int(cancelled["revision"]), broker_oco_group_id="",
+            )
+        except ValueError:
+            oco_requires_explicit_group = True
+        else:
+            oco_requires_explicit_group = False
+        add_check(results, "trading_protection_orders", case_id, "oco_is_never_assumed_without_explicit_broker_group", True, oco_requires_explicit_group)
+
+        oco = confirm_trading_protection_oco_submission(
+            root, ticker="2454", expected_order_revision=int(cancelled["revision"]), broker_oco_group_id="R11-OCO-1",
+            stop_broker_order_id="R11-STOP-2", tp_broker_order_id="R11-TP-2",
+        )
+        active_sell = active_trading_protection_orders(oco)
+        purposes = {str(row.get("purpose")) for row in active_sell}
+        add_check(results, "trading_protection_orders", case_id, "explicit_oco_creates_stop_and_tp_sell_orders", {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP}, purposes)
+        add_check(results, "trading_protection_orders", case_id, "oco_group_submission_is_single_revision_mutation", int(cancelled["revision"]) + 1, int(oco["revision"]))
+        add_check(results, "trading_protection_orders", case_id, "all_oco_legs_preserve_user_confirmed_group", {"R11-OCO-1"}, {row.get("broker_oco_group_id") for row in active_sell})
+        add_check(results, "trading_protection_orders", case_id, "all_oco_legs_require_explicit_native_oco_confirmation", {True}, {bool(row.get("broker_native_oco_confirmed")) for row in active_sell})
+        add_check(results, "trading_protection_orders", case_id, "oco_effective_exposure_is_max_leg_not_sum", qty, max(int(row["qty"]) for row in active_sell))
+        add_check(results, "trading_protection_orders", case_id, "protection_sell_does_not_become_entry_buy_pending", 0, len(active_trading_entry_orders(oco)))
+        add_check(results, "trading_protection_orders", case_id, "two_oco_protection_legs_are_active", 2, len(active_sell))
+        add_check(results, "trading_protection_orders", case_id, "oco_submission_still_does_not_mutate_account", account_revision, load_trading_account_state(root)["revision"])
+
+        try:
+            _assert_order_state_allows_new_allocation(root, information_date="2026-09-05")
+        except RuntimeError:
+            next_day_allocation_allowed = False
+        else:
+            next_day_allocation_allowed = True
+        add_check(results, "trading_protection_orders", case_id, "long_lived_protection_sell_does_not_block_next_day_premarket_allocation", True, next_day_allocation_allowed)
+        try:
+            _assert_order_state_allows_new_allocation(root, information_date="2026-09-04")
+        except RuntimeError as exc:
+            same_day_buy_lock_preserved = "同日重新 allocation" in str(exc)
+        else:
+            same_day_buy_lock_preserved = False
+        add_check(results, "trading_protection_orders", case_id, "historical_entry_buy_still_locks_same_information_date_allocation", True, same_day_buy_lock_preserved)
+
+        read_model = get_trading_order_read_model(root)
+        sell_rows = [row for row in read_model["orders"] if row.get("side") == "SELL"]
+        add_check(results, "trading_protection_orders", case_id, "order_read_model_exposes_protection_sell_side_and_purpose", True, all(row.get("purpose") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP} for row in sell_rows))
+        add_check(results, "trading_protection_orders", case_id, "read_model_counts_active_protection_separately", 2, read_model["active_protection_order_count"])
+        add_check(results, "trading_protection_orders", case_id, "read_model_has_no_active_entry_buy_after_entry_filled", 0, read_model["active_entry_order_count"])
+
+        one_sell_id = next(row["order_id"] for row in active_sell)
+        try:
+            record_trading_buy_order_fill(
+                oco, order_id=one_sell_id, fill_id="illegal-sell-as-buy", fill_qty=1, fill_price=90.0,
+                trade_date="2026-09-04", net_buy_total_milli=1, timestamp="2026-09-04T10:00:00+08:00", mutation_id="illegal",
+            )
+        except ValueError:
+            sell_fill_rejected_by_buy_path = True
+        else:
+            sell_fill_rejected_by_buy_path = False
+        add_check(results, "trading_protection_orders", case_id, "protection_sell_cannot_use_buy_fill_reconciliation", True, sell_fill_rejected_by_buy_path)
+
+        tampered = json.loads(json.dumps(oco))
+        tamper_row = next(row for row in tampered["orders"].values() if row.get("side") == "SELL" and row.get("broker_native_oco_confirmed"))
+        tamper_row["broker_oco_group_id"] = None
+        try:
+            validate_trading_order_state(tampered)
+        except ValueError:
+            oco_binding_tamper_rejected = True
+        else:
+            oco_binding_tamper_rejected = False
+        add_check(results, "trading_protection_orders", case_id, "oco_confirmed_group_binding_tamper_is_rejected", True, oco_binding_tamper_rejected)
+
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    service_source = (project_root / "services" / "trading" / "protection_order_submission.py").read_text(encoding="utf-8")
+    add_check(results, "trading_protection_orders", case_id, "workbench_requires_explicit_stop_or_tp_submission_confirmation", True, "確認 Stop 已送單" in panel_source and "確認 TP 已送單" in panel_source)
+    add_check(results, "trading_protection_orders", case_id, "workbench_requires_explicit_broker_oco_group_confirmation", True, "確認 Stop+TP 已以券商 OCO 送單" in panel_source and "券商 OCO/互斥群組 ID" in panel_source)
+    add_check(results, "trading_protection_orders", case_id, "protection_submission_service_does_not_infer_market_fill_or_sell_execution", False, any(token in service_source for token in ("t_high", "t_low", "apply_confirmed_sell_fill", "confirm_trading_sell_fill")))
+
+    summary["checks"] = len(results)
+    return results, summary
+
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
     results = []
@@ -1193,5 +1368,6 @@ __all__ = [
     "validate_trading_pending_order_state_contract_case",
     "validate_trading_confirmed_fill_reconciliation_contract_case",
     "validate_trading_protection_plan_contract_case",
+    "validate_trading_protection_order_submission_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]

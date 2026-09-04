@@ -16,6 +16,7 @@ from core.trading_policy import resolve_trading_selected_strategy_param_path
 from core.trading_order_state import (
     TRADING_ORDER_STATE_FILENAME,
     active_trading_orders,
+    active_trading_entry_orders,
     append_ordered_trading_proposal,
     build_empty_trading_order_state,
     build_trading_order_read_model,
@@ -120,6 +121,31 @@ def _persist_mutation(
     return load_trading_order_state(project_root, required=True)
 
 
+def mutate_trading_order_state(
+    project_root,
+    *,
+    expected_revision: int | None,
+    mutator,
+    pre_persist_guard=None,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    state_path, state, source_sha = _load_or_initialize_for_mutation(
+        root,
+        expected_revision=expected_revision,
+    )
+    original_revision = int(state["revision"])
+    updated = mutator(state, _timestamp(), _mutation_id())
+    if pre_persist_guard is not None:
+        pre_persist_guard()
+    return _persist_mutation(
+        root,
+        state_path,
+        original_sha=source_sha,
+        original_revision=original_revision,
+        updated=updated,
+    )
+
+
 def confirm_trading_order_submission(
     project_root,
     *,
@@ -158,7 +184,7 @@ def confirm_trading_order_submission(
         root,
         expected_revision=expected_revision,
     )
-    active = active_trading_orders(state)
+    active = active_trading_entry_orders(state)
     active_plan_ids = {str(row.get("plan_fingerprint")) for row in active}
     if active_plan_ids and active_plan_ids != {str(plan["plan_fingerprint"])}:
         raise RuntimeError("Trading 尚有其他 plan 的 ORDERED 掛單；禁止混用不同盤前 allocation")
@@ -239,6 +265,7 @@ __all__ = [
     "TradingOrderRevisionConflict",
     "resolve_trading_order_state_path",
     "load_trading_order_state",
+    "mutate_trading_order_state",
     "confirm_trading_order_submission",
     "confirm_trading_order_cancellation",
     "get_trading_order_read_model",

@@ -16,6 +16,16 @@ TRADING_ORDER_STATUS_FILLED = "FILLED"
 TRADING_ORDER_STATUS_CANCELLED = "CANCELLED"
 TRADING_ACTIVE_ORDER_STATUSES = frozenset({TRADING_ORDER_STATUS_ORDERED, TRADING_ORDER_STATUS_PARTIAL})
 TRADING_ORDER_SIDE_BUY = "BUY"
+TRADING_ORDER_SIDE_SELL = "SELL"
+TRADING_ORDER_PURPOSE_ENTRY = "ENTRY_BUY"
+TRADING_ORDER_PURPOSE_PROTECTION_STOP = "PROTECTION_STOP"
+TRADING_ORDER_PURPOSE_PROTECTION_TP = "PROTECTION_TP"
+TRADING_PROTECTION_ORDER_PURPOSES = frozenset({
+    TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+    TRADING_ORDER_PURPOSE_PROTECTION_TP,
+})
+TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
+TRADING_PROTECTION_ORDER_TYPE_LIMIT = "LIMIT"
 
 
 def _event_hash_payload(event: dict[str, Any]) -> dict[str, Any]:
@@ -158,6 +168,7 @@ def append_ordered_trading_proposal(
         "param_selector": str(plan.get("param_selector") or ""),
         "rank": rank,
         "side": TRADING_ORDER_SIDE_BUY,
+        "purpose": TRADING_ORDER_PURPOSE_ENTRY,
         "ticker": ticker,
         "kind": str(proposal.get("kind") or ""),
         "entry_type": str(proposal.get("entry_type") or proposal.get("kind") or "normal"),
@@ -206,6 +217,246 @@ def append_ordered_trading_proposal(
 
 
 
+
+def build_trading_protection_key(
+    *,
+    protection_plan_fingerprint: str,
+    position_plan_fingerprint: str,
+    action: str,
+    ticker: str,
+) -> str:
+    return canonical_json_sha256(
+        {
+            "protection_plan_fingerprint": str(protection_plan_fingerprint),
+            "position_plan_fingerprint": str(position_plan_fingerprint),
+            "action": str(action),
+            "ticker": _normalize_ticker(ticker),
+        }
+    )
+
+
+def _build_ordered_protection_record(
+    *,
+    order_id: str,
+    plan: dict[str, Any],
+    position_plan: dict[str, Any],
+    leg: dict[str, Any],
+    account_revision: int,
+    timestamp: str,
+    broker_order_id: str | None,
+    note: str | None,
+    broker_oco_group_id: str | None,
+    broker_native_oco_confirmed: bool,
+) -> dict[str, Any]:
+    order_id_text = str(order_id or "").strip()
+    if not order_id_text:
+        raise ValueError("Trading protection order_id 不可為空")
+    plan_fingerprint = str(plan.get("plan_fingerprint") or "").strip()
+    position_fp = str(position_plan.get("position_plan_fingerprint") or "").strip()
+    if not plan_fingerprint or not position_fp:
+        raise ValueError("Trading protection plan 缺少 fingerprint")
+    ticker = _normalize_ticker(position_plan.get("ticker"))
+    action = str(leg.get("action") or "").strip()
+    if action == "STOP_FULL":
+        purpose = TRADING_ORDER_PURPOSE_PROTECTION_STOP
+        expected_type = TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET
+    elif action == "TP_HALF":
+        purpose = TRADING_ORDER_PURPOSE_PROTECTION_TP
+        expected_type = TRADING_PROTECTION_ORDER_TYPE_LIMIT
+    else:
+        raise ValueError(f"Trading protection action 不合法: {action}")
+    order_type = str(leg.get("order_type") or "").strip()
+    if order_type != expected_type:
+        raise ValueError(f"Trading protection order_type 與 action 不一致: {action}/{order_type}")
+    qty = int(leg.get("qty") or 0)
+    position_qty = int(position_plan.get("position_qty") or 0)
+    if qty <= 0 or position_qty <= 0 or qty > position_qty:
+        raise ValueError("Trading protection qty 不可超過目前實際持股")
+    trigger_milli = leg.get("trigger_price_milli")
+    limit_milli = leg.get("limit_price_milli")
+    trigger_milli = None if trigger_milli is None else int(trigger_milli)
+    limit_milli = None if limit_milli is None else int(limit_milli)
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
+        if trigger_milli is None or trigger_milli <= 0 or limit_milli is not None:
+            raise ValueError("Trading STOP protection 必須只有有效 trigger price")
+    else:
+        if limit_milli is None or limit_milli <= 0 or trigger_milli is not None:
+            raise ValueError("Trading TP protection 必須只有有效 limit price")
+    oco_group = _normalize_optional_text(broker_oco_group_id)
+    oco_confirmed = bool(broker_native_oco_confirmed)
+    if oco_confirmed and not oco_group:
+        raise ValueError("確認 broker-native OCO 時必須提供券商 OCO/互斥群組識別")
+    if not oco_confirmed and oco_group:
+        raise ValueError("未確認 broker-native OCO 時不得記錄 OCO 群組")
+    protection_identity = build_trading_protection_key(
+        protection_plan_fingerprint=plan_fingerprint,
+        position_plan_fingerprint=position_fp,
+        action=action,
+        ticker=ticker,
+    )
+    proposal_key = canonical_json_sha256({"protection_identity": protection_identity, "order_id": order_id_text})
+    return {
+        "order_id": order_id_text,
+        "proposal_key": proposal_key,
+        "plan_fingerprint": plan_fingerprint,
+        "protection_plan_fingerprint": plan_fingerprint,
+        "position_plan_fingerprint": position_fp,
+        "account_revision": int(account_revision),
+        "side": TRADING_ORDER_SIDE_SELL,
+        "purpose": purpose,
+        "ticker": ticker,
+        "rank": int(leg.get("priority") or 0),
+        "qty": qty,
+        "position_qty_at_submission": position_qty,
+        "entry_order_id": str(position_plan.get("entry_order_id") or ""),
+        "entry_trade_date": str(position_plan.get("entry_trade_date") or ""),
+        "order_type": order_type,
+        "trigger_price_milli": trigger_milli,
+        "limit_price_milli": limit_milli,
+        "reserved_cost_milli": 0,
+        "status": TRADING_ORDER_STATUS_ORDERED,
+        "filled_qty": 0,
+        "remaining_qty": qty,
+        "fills": [],
+        "filled_at": None,
+        "ordered_at": str(timestamp),
+        "broker_order_id": _normalize_optional_text(broker_order_id),
+        "broker_native_oco_confirmed": oco_confirmed,
+        "broker_oco_group_id": oco_group,
+        "cancelled_at": None,
+        "cancel_note": None,
+        "note": _normalize_optional_text(note),
+    }
+
+
+def append_ordered_trading_protection_leg(
+    state: dict[str, Any],
+    *,
+    order_id: str,
+    plan: dict[str, Any],
+    position_plan: dict[str, Any],
+    leg: dict[str, Any],
+    account_revision: int,
+    timestamp: str,
+    mutation_id: str,
+    broker_order_id: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    validate_trading_order_state(state)
+    record = _build_ordered_protection_record(
+        order_id=order_id,
+        plan=plan,
+        position_plan=position_plan,
+        leg=leg,
+        account_revision=account_revision,
+        timestamp=timestamp,
+        broker_order_id=broker_order_id,
+        note=note,
+        broker_oco_group_id=None,
+        broker_native_oco_confirmed=False,
+    )
+    if record["order_id"] in state["orders"]:
+        raise ValueError(f"Trading order_id 已存在: {record['order_id']}")
+    if any(str(row.get("proposal_key")) == record["proposal_key"] for row in state["orders"].values()):
+        raise ValueError(f"同一 Trading protection leg 已記錄過送單狀態: {record['ticker']} {record['purpose']}")
+    updated = deepcopy(state)
+    updated["orders"][record["order_id"]] = record
+    return _append_event(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="confirm_protection_order_submission",
+        timestamp=timestamp,
+        details={
+            "order_id": record["order_id"],
+            "ticker": record["ticker"],
+            "side": record["side"],
+            "purpose": record["purpose"],
+            "qty": record["qty"],
+            "from_status": "PROPOSED_PROTECTION",
+            "to_status": TRADING_ORDER_STATUS_ORDERED,
+            "broker_order_id": record.get("broker_order_id"),
+        },
+    )
+
+
+def append_ordered_trading_protection_oco_group(
+    state: dict[str, Any],
+    *,
+    stop_order_id: str,
+    tp_order_id: str,
+    plan: dict[str, Any],
+    position_plan: dict[str, Any],
+    stop_leg: dict[str, Any],
+    tp_leg: dict[str, Any],
+    account_revision: int,
+    timestamp: str,
+    mutation_id: str,
+    broker_oco_group_id: str,
+    stop_broker_order_id: str | None = None,
+    tp_broker_order_id: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    validate_trading_order_state(state)
+    group = _normalize_optional_text(broker_oco_group_id)
+    if not group:
+        raise ValueError("Stop+TP 同時送單只有在使用者明確確認券商 native OCO/互斥群組時才允許")
+    records = [
+        _build_ordered_protection_record(
+            order_id=stop_order_id,
+            plan=plan,
+            position_plan=position_plan,
+            leg=stop_leg,
+            account_revision=account_revision,
+            timestamp=timestamp,
+            broker_order_id=stop_broker_order_id,
+            note=note,
+            broker_oco_group_id=group,
+            broker_native_oco_confirmed=True,
+        ),
+        _build_ordered_protection_record(
+            order_id=tp_order_id,
+            plan=plan,
+            position_plan=position_plan,
+            leg=tp_leg,
+            account_revision=account_revision,
+            timestamp=timestamp,
+            broker_order_id=tp_broker_order_id,
+            note=note,
+            broker_oco_group_id=group,
+            broker_native_oco_confirmed=True,
+        ),
+    ]
+    if {row["purpose"] for row in records} != {
+        TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+        TRADING_ORDER_PURPOSE_PROTECTION_TP,
+    }:
+        raise ValueError("Trading OCO protection group 必須恰好包含 Stop 與 TP")
+    existing_ids = set(state["orders"])
+    if any(row["order_id"] in existing_ids for row in records):
+        raise ValueError("Trading OCO protection order_id 已存在")
+    existing_keys = {str(row.get("proposal_key")) for row in state["orders"].values()}
+    if any(row["proposal_key"] in existing_keys for row in records):
+        raise ValueError("同一 Trading protection leg 已記錄過送單狀態")
+    updated = deepcopy(state)
+    for row in records:
+        updated["orders"][row["order_id"]] = row
+    return _append_event(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="confirm_protection_oco_submission",
+        timestamp=timestamp,
+        details={
+            "order_ids": [row["order_id"] for row in records],
+            "ticker": records[0]["ticker"],
+            "purposes": [row["purpose"] for row in records],
+            "broker_oco_group_id": group,
+            "from_status": "PROPOSED_PROTECTION",
+            "to_status": TRADING_ORDER_STATUS_ORDERED,
+            "broker_native_oco_confirmed": True,
+        },
+    )
+
+
 def record_trading_buy_order_fill(
     state: dict[str, Any],
     *,
@@ -224,6 +475,8 @@ def record_trading_buy_order_fill(
         raise ValueError(f"Trading order 不存在: {order_id_text}")
     updated = deepcopy(state)
     record = updated["orders"][order_id_text]
+    if str(record.get("side") or "") != TRADING_ORDER_SIDE_BUY:
+        raise ValueError("Trading BUY fill reconciliation 只允許 ENTRY BUY order")
     from_status = str(record.get("status") or "")
     if from_status not in TRADING_ACTIVE_ORDER_STATUSES:
         raise ValueError(
@@ -346,6 +599,22 @@ def has_active_trading_orders(state: dict[str, Any]) -> bool:
     return bool(active_trading_orders(state))
 
 
+def active_trading_entry_orders(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        row for row in active_trading_orders(state)
+        if str(row.get("side") or "") == TRADING_ORDER_SIDE_BUY
+        and str(row.get("purpose") or TRADING_ORDER_PURPOSE_ENTRY) == TRADING_ORDER_PURPOSE_ENTRY
+    ]
+
+
+def active_trading_protection_orders(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        row for row in active_trading_orders(state)
+        if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL
+        and str(row.get("purpose") or "") in TRADING_PROTECTION_ORDER_PURPOSES
+    ]
+
+
 def validate_trading_order_state(state: dict[str, Any]) -> None:
     if not isinstance(state, dict):
         raise TypeError("Trading order state 必須是 dict")
@@ -370,18 +639,14 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
         if not proposal_key or proposal_key in proposal_keys:
             raise ValueError("Trading order proposal_key 必須存在且不可重複")
         proposal_keys.add(proposal_key)
-        if str(record.get("side") or "") != TRADING_ORDER_SIDE_BUY:
-            raise ValueError("Trading broker order side 目前只允許 BUY")
+        side = str(record.get("side") or "")
+        purpose = str(record.get("purpose") or (TRADING_ORDER_PURPOSE_ENTRY if side == TRADING_ORDER_SIDE_BUY else ""))
+        if side not in {TRADING_ORDER_SIDE_BUY, TRADING_ORDER_SIDE_SELL}:
+            raise ValueError(f"Trading broker order side 不合法: {side}")
         _normalize_ticker(record.get("ticker"))
-        if int(record.get("rank") or 0) <= 0 or int(record.get("qty") or 0) <= 0:
-            raise ValueError("Trading order rank/qty 不合法")
-        if int(record.get("limit_price_milli") or 0) <= 0:
-            raise ValueError("Trading order limit_price_milli 不合法")
-        if int(record.get("reserved_cost_milli") or 0) <= 0:
-            raise ValueError("Trading order reserved_cost_milli 不合法")
-        for field in ("init_sl_milli", "init_trail_milli", "target_price_milli"):
-            if int(record.get(field) or 0) <= 0:
-                raise ValueError(f"Trading order {field} 不合法")
+        qty = int(record.get("qty") or 0)
+        if qty <= 0:
+            raise ValueError("Trading order qty 不合法")
         status = str(record.get("status") or "")
         allowed_statuses = {
             TRADING_ORDER_STATUS_ORDERED,
@@ -394,20 +659,12 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
         if not str(record.get("ordered_at") or ""):
             raise ValueError("Trading order record 必須有 ordered_at")
 
-        frozen_params = record.get("frozen_params")
-        frozen_params_sha = record.get("frozen_params_sha256")
-        if frozen_params is not None:
-            if not isinstance(frozen_params, dict):
-                raise ValueError("Trading order frozen_params 必須是 object")
-            if str(frozen_params_sha or "") != canonical_json_sha256(frozen_params):
-                raise ValueError("Trading order frozen_params hash 不一致")
-
         fills = record.get("fills", [])
         if not isinstance(fills, list):
             raise ValueError("Trading order fills 必須是 list")
-        fill_ids = set()
         filled_qty = 0
-        fill_trade_dates = set()
+        fill_ids: set[str] = set()
+        fill_trade_dates: set[str] = set()
         for fill in fills:
             if not isinstance(fill, dict):
                 raise ValueError("Trading order fill record 必須是 object")
@@ -418,46 +675,91 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
             fill_qty = int(fill.get("qty") or 0)
             if fill_qty <= 0 or int(fill.get("fill_price_milli") or 0) <= 0:
                 raise ValueError("Trading order fill qty/price 不合法")
-            if int(fill.get("net_buy_total_milli") or 0) <= 0:
-                raise ValueError("Trading order fill net_buy_total_milli 不合法")
             trade_date = str(fill.get("trade_date") or "")
             if not trade_date or not str(fill.get("confirmed_at") or ""):
                 raise ValueError("Trading order fill 缺少 trade_date/confirmed_at")
             fill_trade_dates.add(trade_date)
             filled_qty += fill_qty
-        if len(fill_trade_dates) > 1:
-            raise ValueError("同一 Trading order 的 partial fills 不得跨交易日")
         declared_filled = int(record.get("filled_qty", 0) or 0)
-        declared_remaining = int(record.get("remaining_qty", int(record["qty"]) - declared_filled) or 0)
-        if declared_filled != filled_qty or declared_remaining != int(record["qty"]) - filled_qty:
+        declared_remaining = int(record.get("remaining_qty", qty - declared_filled) or 0)
+        if declared_filled != filled_qty or declared_remaining != qty - filled_qty:
             raise ValueError("Trading order filled_qty/remaining_qty 與 fills 不一致")
-        if filled_qty < 0 or filled_qty > int(record["qty"]):
+        if filled_qty < 0 or filled_qty > qty:
             raise ValueError("Trading order filled_qty 不合法")
-        if filled_qty > 0 and frozen_params is None:
-            raise ValueError("Trading 已成交 order 必須持有 frozen_params")
+
+        if side == TRADING_ORDER_SIDE_BUY:
+            if purpose != TRADING_ORDER_PURPOSE_ENTRY:
+                raise ValueError("Trading BUY order purpose 必須是 ENTRY_BUY")
+            if int(record.get("rank") or 0) <= 0:
+                raise ValueError("Trading BUY order rank 不合法")
+            if int(record.get("limit_price_milli") or 0) <= 0 or int(record.get("reserved_cost_milli") or 0) <= 0:
+                raise ValueError("Trading BUY order limit/reserved cost 不合法")
+            for field in ("init_sl_milli", "init_trail_milli", "target_price_milli"):
+                if int(record.get(field) or 0) <= 0:
+                    raise ValueError(f"Trading BUY order {field} 不合法")
+            frozen_params = record.get("frozen_params")
+            frozen_params_sha = record.get("frozen_params_sha256")
+            if frozen_params is not None:
+                if not isinstance(frozen_params, dict):
+                    raise ValueError("Trading order frozen_params 必須是 object")
+                if str(frozen_params_sha or "") != canonical_json_sha256(frozen_params):
+                    raise ValueError("Trading order frozen_params hash 不一致")
+            if len(fill_trade_dates) > 1:
+                raise ValueError("同一 Trading order 的 partial fills 不得跨交易日")
+            for fill in fills:
+                if int(fill.get("net_buy_total_milli") or 0) <= 0:
+                    raise ValueError("Trading BUY fill net_buy_total_milli 不合法")
+            if filled_qty > 0 and frozen_params is None:
+                raise ValueError("Trading 已成交 BUY order 必須持有 frozen_params")
+            for field in (
+                "plan_fingerprint", "information_date", "selected_params_sha256",
+                "candidate_snapshot_sha256", "strategy_id", "param_selector",
+            ):
+                if not str(record.get(field) or ""):
+                    raise ValueError(f"Trading BUY order 缺少 immutable binding: {field}")
+        else:
+            if purpose not in TRADING_PROTECTION_ORDER_PURPOSES:
+                raise ValueError("Trading SELL order 本輪只允許 protection purpose")
+            if status not in {TRADING_ORDER_STATUS_ORDERED, TRADING_ORDER_STATUS_CANCELLED}:
+                raise ValueError("Trading protection SELL 本輪尚未支援 PARTIAL/FILLED")
+            if fills or filled_qty != 0 or declared_remaining != qty:
+                raise ValueError("Trading protection SELL 本輪不得含成交紀錄")
+            if int(record.get("reserved_cost_milli") or 0) != 0:
+                raise ValueError("Trading protection SELL 不得保留 BUY reserved cost")
+            position_qty = int(record.get("position_qty_at_submission") or 0)
+            if position_qty <= 0 or qty > position_qty:
+                raise ValueError("Trading protection SELL qty 不得超過送單時實際持股")
+            if not str(record.get("entry_order_id") or ""):
+                raise ValueError("Trading protection SELL 缺少來源 entry_order_id")
+            for field in ("plan_fingerprint", "protection_plan_fingerprint", "position_plan_fingerprint"):
+                if not str(record.get(field) or ""):
+                    raise ValueError(f"Trading protection SELL 缺少 immutable binding: {field}")
+            order_type = str(record.get("order_type") or "")
+            trigger = record.get("trigger_price_milli")
+            limit = record.get("limit_price_milli")
+            if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
+                if order_type != TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET or int(trigger or 0) <= 0 or limit is not None:
+                    raise ValueError("Trading protection STOP order semantics 不合法")
+            else:
+                if order_type != TRADING_PROTECTION_ORDER_TYPE_LIMIT or int(limit or 0) <= 0 or trigger is not None:
+                    raise ValueError("Trading protection TP order semantics 不合法")
+            oco_confirmed = bool(record.get("broker_native_oco_confirmed"))
+            oco_group = _normalize_optional_text(record.get("broker_oco_group_id"))
+            if oco_confirmed != bool(oco_group):
+                raise ValueError("Trading protection OCO confirmed/group binding 不一致")
 
         if status == TRADING_ORDER_STATUS_ORDERED:
             if filled_qty != 0 or record.get("cancelled_at") is not None or record.get("filled_at") is not None:
                 raise ValueError("Trading ORDERED record 的 fill/cancel 狀態不一致")
         elif status == TRADING_ORDER_STATUS_PARTIAL:
-            if not (0 < filled_qty < int(record["qty"])) or record.get("cancelled_at") is not None or record.get("filled_at") is not None:
+            if not (0 < filled_qty < qty) or record.get("cancelled_at") is not None or record.get("filled_at") is not None:
                 raise ValueError("Trading PARTIAL record 狀態不一致")
         elif status == TRADING_ORDER_STATUS_FILLED:
-            if filled_qty != int(record["qty"]) or not str(record.get("filled_at") or "") or record.get("cancelled_at") is not None:
+            if filled_qty != qty or not str(record.get("filled_at") or "") or record.get("cancelled_at") is not None:
                 raise ValueError("Trading FILLED record 狀態不一致")
         elif status == TRADING_ORDER_STATUS_CANCELLED:
-            if filled_qty >= int(record["qty"]) or not str(record.get("cancelled_at") or "") or record.get("filled_at") is not None:
+            if filled_qty >= qty or not str(record.get("cancelled_at") or "") or record.get("filled_at") is not None:
                 raise ValueError("Trading CANCELLED record 狀態不一致")
-        for field in (
-            "plan_fingerprint",
-            "information_date",
-            "selected_params_sha256",
-            "candidate_snapshot_sha256",
-            "strategy_id",
-            "param_selector",
-        ):
-            if not str(record.get(field) or ""):
-                raise ValueError(f"Trading order 缺少 immutable binding: {field}")
 
     events = state.get("events")
     if not isinstance(events, list) or len(events) != revision + 1:
@@ -481,13 +783,19 @@ def build_trading_order_read_model(state: dict[str, Any]) -> dict[str, Any]:
     rows = []
     for record in sorted(
         state["orders"].values(),
-        key=lambda row: (str(row.get("information_date")), str(row.get("ordered_at")), str(row.get("order_id"))),
+        key=lambda row: (str(row.get("information_date") or row.get("entry_trade_date") or ""), str(row.get("ordered_at")), str(row.get("order_id"))),
         reverse=True,
     ):
+        side = str(record.get("side") or "")
+        limit_milli = record.get("limit_price_milli")
+        trigger_milli = record.get("trigger_price_milli")
         rows.append(
             {
                 "order_id": record["order_id"],
                 "ticker": record["ticker"],
+                "side": side,
+                "purpose": record.get("purpose"),
+                "order_type": record.get("order_type"),
                 "status": record["status"],
                 "qty": int(record["qty"]),
                 "filled_qty": int(record.get("filled_qty", 0) or 0),
@@ -500,10 +808,13 @@ def build_trading_order_read_model(state: dict[str, Any]) -> dict[str, Any]:
                         // max(1, sum(int(fill["qty"]) for fill in record["fills"]))
                     )
                 ),
-                "limit_price": milli_to_price(int(record["limit_price_milli"])),
-                "reserved_cost": milli_to_money(int(record["reserved_cost_milli"])),
+                "limit_price": None if limit_milli is None else milli_to_price(int(limit_milli)),
+                "trigger_price": None if trigger_milli is None else milli_to_price(int(trigger_milli)),
+                "reserved_cost": None if side == TRADING_ORDER_SIDE_SELL else milli_to_money(int(record["reserved_cost_milli"])),
                 "broker_order_id": record.get("broker_order_id"),
-                "information_date": record["information_date"],
+                "broker_native_oco_confirmed": bool(record.get("broker_native_oco_confirmed")),
+                "broker_oco_group_id": record.get("broker_oco_group_id"),
+                "information_date": record.get("information_date") or record.get("entry_trade_date"),
                 "ordered_at": record["ordered_at"],
                 "cancelled_at": record.get("cancelled_at"),
                 "filled_at": record.get("filled_at"),
@@ -514,6 +825,8 @@ def build_trading_order_read_model(state: dict[str, Any]) -> dict[str, Any]:
         "schema_version": int(state["schema_version"]),
         "revision": int(state["revision"]),
         "active_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES),
+        "active_entry_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES and row["side"] == TRADING_ORDER_SIDE_BUY),
+        "active_protection_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES and row["side"] == TRADING_ORDER_SIDE_SELL),
         "order_count": len(rows),
         "orders": rows,
         "updated_at": state.get("updated_at"),
@@ -529,13 +842,25 @@ __all__ = [
     "TRADING_ORDER_STATUS_CANCELLED",
     "TRADING_ACTIVE_ORDER_STATUSES",
     "TRADING_ORDER_SIDE_BUY",
+    "TRADING_ORDER_SIDE_SELL",
+    "TRADING_ORDER_PURPOSE_ENTRY",
+    "TRADING_ORDER_PURPOSE_PROTECTION_STOP",
+    "TRADING_ORDER_PURPOSE_PROTECTION_TP",
+    "TRADING_PROTECTION_ORDER_PURPOSES",
+    "TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET",
+    "TRADING_PROTECTION_ORDER_TYPE_LIMIT",
     "build_empty_trading_order_state",
     "build_trading_proposal_key",
+    "build_trading_protection_key",
     "append_ordered_trading_proposal",
+    "append_ordered_trading_protection_leg",
+    "append_ordered_trading_protection_oco_group",
     "record_trading_buy_order_fill",
     "cancel_ordered_trading_order",
     "active_trading_orders",
     "has_active_trading_orders",
+    "active_trading_entry_orders",
+    "active_trading_protection_orders",
     "validate_trading_order_state",
     "build_trading_order_read_model",
 ]

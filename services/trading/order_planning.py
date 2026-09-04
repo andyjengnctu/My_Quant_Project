@@ -37,7 +37,8 @@ from core.runtime_domains import (
 )
 from core.trading_order_state import (
     TRADING_ORDER_STATE_FILENAME,
-    has_active_trading_orders,
+    active_trading_entry_orders,
+    TRADING_ORDER_SIDE_BUY,
     validate_trading_order_state,
 )
 from services.trading.account_state import load_trading_account_state
@@ -76,10 +77,14 @@ def _assert_order_state_allows_new_allocation(project_root: str | Path, *, infor
         return
     state = load_json_strict(order_state_path)
     validate_trading_order_state(state)
-    if has_active_trading_orders(state):
-        raise RuntimeError("Trading 尚有 ORDERED pending orders；完成成交／取消 reconciliation 前禁止建立新的盤前建議掛單")
-    if any(str(row.get("information_date") or "") == str(information_date) for row in state.get("orders", {}).values()):
-        raise RuntimeError("Trading 本資訊日已存在實際送單紀錄；依盤前資金鎖定原則禁止同日重新 allocation")
+    if active_trading_entry_orders(state):
+        raise RuntimeError("Trading 尚有 ORDERED pending orders（ENTRY BUY ORDERED/PARTIAL）；完成成交／取消 reconciliation 前禁止建立新的盤前建議掛單")
+    if any(
+        str(row.get("side") or "") == TRADING_ORDER_SIDE_BUY
+        and str(row.get("information_date") or "") == str(information_date)
+        for row in state.get("orders", {}).values()
+    ):
+        raise RuntimeError("Trading 本資訊日已存在實際 BUY 送單紀錄；依盤前資金鎖定原則禁止同日重新 allocation")
 
 
 def load_current_trading_proposed_order_plan(
