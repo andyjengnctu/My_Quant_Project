@@ -23,7 +23,8 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
+from config.audit import AUDIT_OUTPUT_ROOT
+from core.audit_policy import AuditDefinition
 from core.console_report import render_key_values, render_section, render_table, render_title
 from core.data_utils import discover_unique_csv_map
 from core.dataset_profiles import get_dataset_dir

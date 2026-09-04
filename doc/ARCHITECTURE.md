@@ -16,12 +16,13 @@ project/
 │  ├─ vip_scanner.py                  # 掃描器正式入口（薄入口）
 │  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
-│  ├─ breakout_policy.py              # breakout 策略預設與 optimizer high_len 範圍
+│  ├─ breakout_policy.py              # breakout 策略預設與 optimizer high_len 可調範圍（declarative）
 │  ├─ research.py                     # active model／provider spec／Research orchestration設定（declarative）
 │  ├─ downloader.py                   # downloader篩選、timeout、sleep與verbosity設定（declarative）
 │  ├─ runtime.py                      # Scanner／Optimizer application runtime與console設定（declarative）
-│  ├─ breakout_quality.py             # 模型／Label／training／profiles／PIT／策略workflow設定與scientific declarations
-│  ├─ audit.py                        # active Audit module與各Audit對象／來源／維度／輸出政策
+│  ├─ breakout_quality.py             # BQ 使用者／專案可調設定與current workflow membership（declarative）
+│  ├─ strategy_compare.py             # Strategy Compare執行／diagnostic／promotion設定（declarative）
+│  ├─ audit.py                        # Audit active module與output root（declarative）
 │  ├─ training_policy.py              # Strategy Optimizer 使用者／專案訓練設定（declarative）
 │  ├─ training_performance_policy.py  # optimizer execution/performance knobs（declarative）
 │  ├─ display_policy.py               # console/report 顯示設定值（declarative）
@@ -34,7 +35,14 @@ project/
 │  ├─ training_performance.py         # optimizer performance config resolver／env override／snapshot
 │  ├─ training_policy.py              # Strategy Optimizer training policy validation／derived snapshot／runtime owner
 │  ├─ selection_policy.py             # history-selection 策略參數 schema／default snapshot owner
+│  ├─ breakout_policy.py              # breakout high_len range validation／derived values helper
 │  ├─ strategy_params.py              # breakout + training gate + execution 聚合參數契約
+│  ├─ strategy_compare_registry.py    # Compare Suite／profile／arm／contrast catalog SSOT
+│  ├─ strategy_compare_policy.py      # Strategy Compare resolver／validation／authorization
+│  ├─ audit_registry.py               # formal/reusable Audit definitions／source／dimensions SSOT
+│  ├─ audit_policy.py                 # Audit typed definition／validation／runtime resolver
+│  ├─ breakout_quality_registry.py    # BQ scientific/profile/research-spec registry SSOT
+│  ├─ breakout_quality_policy.py      # BQ derived/current workflow／comparison／Rolling／PIT resolver
 │  ├─ breakout_quality_runtime.py     # Continuous-ranker generic execution capability／composition owner
 │  ├─ breakout_quality_runtime_resolver.py # scientific profile → runtime recipe 單向 resolver gateway
 │  ├─ capital_policy.py               # 單股/投組/scanner 共用資金與 sizing 規則
@@ -136,7 +144,7 @@ project/
 
 ### `apps/research.py`、`services/research/breakout_quality_application.py` 與 Breakout Quality domain
 
-- `apps/research.py`是研究單一正式入口；`[4] Audit／診斷`以穩定方法類型常駐（Pair／Portfolio Attribution、Trade Path／Upside Survival、Selection／Truth Geometry、跨期／跨Seed Stability Attribution），實際啟用的比較profile、arm、target、cohort與threshold由`config/audit.py`持有，不硬編於menu。正式method/catalog／runner位於`services/audit/catalog.py`與`services/audit/runner.py`；`tools/audit/catalog.py`／`tools/audit/runner.py`只保留legacy import compatibility。Formal handler必須`mode=formal`且`read_only=true`，不得重跑策略、建立Label、訓練模型或修改runtime；daily-universal future truth沒有第二份event-style persisted continuous-target bundle時，Audit直接重用canonical profile-aware sample provider，不得以不存在的physical artifact作READY條件。已完成且不再被runtime／active Audit／必要compatibility引用的一次性Audit，不以`enabled=False`或historical CLI永久保留；研究結論留在Experiment Registry／Log，implementation、catalog registration與專屬synthetic/helper一併退役。`core/`與`filters/`不得反向import `tools/audit/`；runtime與Audit若共用計算，純計算真理必須留在正式domain／core。`tools/local_regression/run_meta_quality.py`另執行advisory slimming scan，主動列出disabled formal Audit、無current reachability的Audit／compatibility模組與過大的Audit-specific synthetic tests；只回報`CLEAN／REVIEW`，不單獨造成formal FAIL。
+- `apps/research.py`是研究單一正式入口；`[4] Audit／診斷`以穩定方法類型常駐（Pair／Portfolio Attribution、Trade Path／Upside Survival、Selection／Truth Geometry、跨期／跨Seed Stability Attribution），正式Audit definitions／source／dimensions／outcomes由`core/audit_registry.py`持有，typed validation/resolution由`core/audit_policy.py`負責；`config/audit.py`只保存active module與output root，不硬編於menu。正式method/catalog／runner位於`services/audit/catalog.py`與`services/audit/runner.py`；`tools/audit/catalog.py`／`tools/audit/runner.py`只保留legacy import compatibility。Formal handler必須`mode=formal`且`read_only=true`，不得重跑策略、建立Label、訓練模型或修改runtime；daily-universal future truth沒有第二份event-style persisted continuous-target bundle時，Audit直接重用canonical profile-aware sample provider，不得以不存在的physical artifact作READY條件。已完成且不再被runtime／active Audit／必要compatibility引用的一次性Audit，不以`enabled=False`或historical CLI永久保留；研究結論留在Experiment Registry／Log，implementation、catalog registration與專屬synthetic/helper一併退役。`core/`與`filters/`不得反向import `tools/audit/`；runtime與Audit若共用計算，純計算真理必須留在正式domain／core。`tools/local_regression/run_meta_quality.py`另執行advisory slimming scan，主動列出disabled formal Audit、無current reachability的Audit／compatibility模組與過大的Audit-specific synthetic tests；只回報`CLEAN／REVIEW`，不單獨造成formal FAIL。
 
 - Candidate生命週期採單一責任契約：**Strategy owns validity / DL owns quality / Portfolio selector owns allocation**。只有原策略可決定candidate建立、continuation、Re-entry與失效；DL PASS／REJECT只代表quality，不得刪除仍屬策略VALID的candidate；selector只在既有合法candidate pool中依當下資源配置。Audit可用Future Label／MFE／MAE／Realized R做事後診斷，但不得回流當日runtime或產生第二套candidate-invalid語意。
 - `filters/breakout_quality/trade_path_label.py` 與 `services/breakout_quality/trade_path_label_builder.py` 組成A2 realized trade-path Label鏈；舊`tools/filters/breakout_quality/build_trade_path_labels.py`只保留compatibility wrapper。Label identity與9A MFE／MAE契約隔離；Builder hardlink／copy既有300×10 feature bank，只重建event labels與events metadata。Teacher params由2014～2020 Selection Min ROOS no-DL schedule與2021～2026既有P2 schedule合併，每日只解析當時已生效參數。模擬器直接重用`generate_signals`、normal／extended pre-market entry plan、shadow continuation cleanup、`execute_bar_step`及exact-accounting；初次miss buy只維持pending，同一原始event後續成交只產生一個終局Label，已成交淨Realized R正值為PASS、非正為REJECT；永未成交、shadow終止、新setup覆蓋或資料結尾仍未成交均為EXCLUDED並排除訓練。已成交但資料結尾仍持倉時，直接重用單股正式最後交易日強制結算，形成PASS或REJECT。`train.py`、Binary PIT builder與artifact validator依filter_id解析Label policy，禁止新模型與9A Dataset／manifest混接。
@@ -240,7 +248,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 
 ## 正式入口
 
-- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練、策略參數最佳化、策略組合比較與Audit維持獨立責任；Strategy Compare先經`services/research/strategy_compare_application.py`承接application dispatch，再透過`services/portfolio_replay.py`重用canonical replay，模型／PIT producer由`services/breakout_quality/`承接。Multiple-seed robustness可保存經驗證的compact attribution source供必要的read-only診斷；真正已結案且不再影響current決策的一次性Audit implementation才退役。`AUD-min-roos-planned-risk-40d-alignment`與`AUD-mfe-safety-target-geometry`已依one-shot lifecycle退役；`AUD-selection-k-r0-attribution`雖已有result，但因K/R0機制仍未收斂、依使用者決策保留formal implementation與可重跑入口。`config/audit.py`目前active `AUD-selection-k-r0-attribution`、`AUD-c69-marginal-position-attribution`與`AUD-mr13r-joint-capital-drawdown`；前兩者共用`Selection／Truth Geometry`，新MR-13R Audit使用`策略 Pair／Portfolio Attribution` stable method。K/R0 Audit確認Raw DL Top-K的High-MFE在resource conversion階段大幅流失；C69 marginal Audit已完成，顯示extra positions常為High-MFE/Low-Safety且Realized EV接近零或負值。兩個retained Audit以config明示pre-C70 Strategy Compare fingerprint pin回原completed run，current suite變更不會改寫舊證據。`SR-C67/C68/C69`均轉historical evidence；C70 joint No-K/No-R0已完成且顯示upside上升主要落在Low-Safety。C74 parameter-free joint ranking已完成OOS/ Rolling且未突破C71-C73既有HM/HS/RoMD trade-off，因此不再新增selector arithmetic。current decision work改為`AUD-mr13r-joint-capital-drawdown`：只讀C71-C74 pinned completed sidecars與canonical future truth，拆joint-signal、Safety→capital conversion與portfolio peak→trough drawdown clustering；Audit不得重跑strategy、fit threshold或訓練模型。
+- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練、策略參數最佳化、策略組合比較與Audit維持獨立責任；Strategy Compare先經`services/research/strategy_compare_application.py`承接application dispatch，再透過`services/portfolio_replay.py`重用canonical replay，模型／PIT producer由`services/breakout_quality/`承接。Multiple-seed robustness可保存經驗證的compact attribution source供必要的read-only診斷；真正已結案且不再影響current決策的一次性Audit implementation才退役。`AUD-min-roos-planned-risk-40d-alignment`與`AUD-mfe-safety-target-geometry`已依one-shot lifecycle退役；`AUD-selection-k-r0-attribution`雖已有result，但因K/R0機制仍未收斂、依使用者決策保留formal implementation與可重跑入口。目前啟用的formal Audit與pinned Strategy Compare evidence一律由`core/audit_registry.py`解析，不在Architecture複製current Audit清單；retained historical pair evidence仍以registry明示fingerprint pin回原completed run，current suite變更不得改寫舊證據。`SR-C67/C68/C69`均轉historical evidence；C70 joint No-K/No-R0已完成且顯示upside上升主要落在Low-Safety。C74 parameter-free joint ranking已完成OOS/ Rolling且未突破C71-C73既有HM/HS/RoMD trade-off，因此不再新增selector arithmetic。current decision work改為`AUD-mr13r-joint-capital-drawdown`：只讀C71-C74 pinned completed sidecars與canonical future truth，拆joint-signal、Safety→capital conversion與portfolio peak→trough drawdown clustering；Audit不得重跑strategy、fit threshold或訓練模型。
 - `services/research/breakout_quality_application.py`：Breakout Quality正式model provider，承接model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。舊`tools/filters/breakout_quality/application.py`只作compatibility wrapper。
 - `apps/run_bundle.py`：日常本機 double check 與修改交付的單一使用者入口；固定順序為stage → commit current snapshot → package ZIP → formal test。formal test失敗時保留commit與ZIP，讓該失敗版本可被完整重現與交付。
 - `apps/test_suite.py`：`run_bundle.py`內部formal test runner；不作為一般日常使用者入口。

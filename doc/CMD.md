@@ -61,7 +61,7 @@ python apps/workbench.py
 
 ## 研究資料、訓練與評估
 
-研究工作統一由`apps/research.py`進入；主選單只選工作類型。模型標的由`config/research.py`指定，Audit module由`config/audit.py`指定，策略比較arms／contrasts由`config/strategy_compare.py`指定。`tools/filters/breakout_quality/`的直接CLI只保留開發與歷史研究用途，不保留Audit或strategy-compare legacy相容入口。
+研究工作統一由`apps/research.py`進入；主選單只選工作類型。模型標的由`config/research.py`指定，Audit active module／output policy由`config/audit.py`指定、formal definitions由`core/audit_registry.py`持有，策略比較執行設定由`config/strategy_compare.py`指定。`tools/filters/breakout_quality/`的直接CLI只保留開發與歷史研究用途，不保留Audit或strategy-compare legacy相容入口。
 
 互動式 PowerShell／Terminal 直接執行下列指令會開啟 Research 單一正式入口；主選單只選工作類型。選擇 `[1]  模型訓練  (Enter)` 後，才進入 `config/research.py` 指定 active model 的既有模型選單。Dataset、單獨 train、export及歷史版本化research audit仍可透過 `python apps/research.py model <command>` 執行。目前 Binary 模型研究固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由「策略組合比較」工作類型依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
 
@@ -93,7 +93,7 @@ python apps/research.py compare robustness latest
 
 Robustness與一般OOS／Rolling Strategy Compare的執行計畫共用同一execution-plan renderer與`core/report_style.py`狀態色彩語意；Robustness只追加seed／worker／PIT workload等專屬metadata，不得另維護action配色或手工欄位對齊。共用execution-plan主表採約100欄的人讀短版：artifact identity與producer原因只保留決策必要資訊並設欄寬上限，完整prerequisite／缺件原因仍保留於canonical plan/status與diagnostic，不得為console精簡而改變BUILD／REUSE判斷。Robustness報表前四區與一般OOS／Rolling Strategy Compare共用同一canonical metric registry與renderer；Multi-seed專屬的RoMD分布、same-seed contrasts、seed-by-seed delta與跨seed年度統計保留在後段。`latest`若偵測到舊report schema，會直接以既有`seed_results.csv`、`seed_yearly_returns.csv`與compact attribution source做report-only refresh並覆寫同run的summary/report；此refresh不得呼叫trainer、score builder或strategy replay，因此已完成或正在執行中的scientific run不需為報表格式更新重跑。舊run當時未永久保存的per-seed model prediction／Future Target conversion欄位會顯示`-`；未來新run會在清理暫存model report前保留可直接取用的小型canonical model metrics。
 
-選擇 `[4] Audit／診斷` 會進入固定Audit子選單；Audit module由`config/audit.py`指定，不在選單中選擇：
+選擇 `[4] Audit／診斷` 會進入固定Audit子選單；Audit active module由`config/audit.py`指定、formal definitions由`core/audit_registry.py`解析，不在選單中選擇：
 
 ```text
 === Audit／診斷 ===
@@ -103,7 +103,7 @@ Robustness與一般OOS／Rolling Strategy Compare的執行計畫共用同一exec
 [0]  返回
 ```
 
-全專案Audit inventory與dispatch的正式單一真理位於`services/audit/catalog.py`與`services/audit/runner.py`；`config/audit.py`只保存目前active formal policy，`tools/audit/catalog.py`／`tools/audit/runner.py`只作legacy import compatibility。正式入口為Research主選單的`[4] Audit／診斷`或`python apps/research.py audit`。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。一次性Audit／research diagnostic在決策完成、Registry／Log已留證且current runtime／active Audit／必要compatibility無依賴後即退役，不以`enabled=False`或historical CLI永久累積。`meta quality`會執行advisory slimming scan並在summary列出`CLEAN／REVIEW`與候選數；該訊號不單獨造成formal FAIL。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
+全專案Audit definition registry位於`core/audit_registry.py`、typed policy位於`core/audit_policy.py`；method dispatch仍由`services/audit/catalog.py`與`services/audit/runner.py`負責；`config/audit.py`只保存active module／output policy，`tools/audit/catalog.py`／`tools/audit/runner.py`只作legacy import compatibility。正式入口為Research主選單的`[4] Audit／診斷`或`python apps/research.py audit`。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。一次性Audit／research diagnostic在決策完成、Registry／Log已留證且current runtime／active Audit／必要compatibility無依賴後即退役，不以`enabled=False`或historical CLI永久累積。`meta quality`會執行advisory slimming scan並在summary列出`CLEAN／REVIEW`與候選數；該訊號不單獨造成formal FAIL。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
 
 Audit也可直接由Research CLI子命令執行：
 
@@ -111,7 +111,7 @@ Audit也可直接由Research CLI子命令執行：
 python apps/research.py audit
 ```
 
-目前`config/audit.py`沒有啟用中的formal Audit；Research `[4] Audit／診斷`仍保留泛化入口，當沒有enabled definition時顯示停用狀態。最近一次`AUD-mr13km-frozen-rank-fusion`已於2026-08-18取得`REJECT_EQUAL_RANK_SCORE_FUSION`結果並依一次性研究生命週期退役；其identity與結果只保留於Registry／Experiment Log，不再留formal handler或dedicated synthetic。
+Research `[4] Audit／診斷`保留泛化入口；目前enabled definitions由`core/audit_registry.py`唯一決定，若無enabled definition則顯示停用狀態。已退役Audit的identity與結果只保留於Experiment Registry／Log，不在CMD複製current清單。
 
 模型訓練與策略比較維持不同工作類型與service責任。正式策略組合比較可由主選單 `[3]` 進入，或執行：
 
@@ -162,7 +162,7 @@ Active Research Label：a2_realized_trade_path_v1
 
 `[1]` 固定依序執行：建立／接續A2 realized trade-path Label Dataset、train、research score export、Selection／OOS模型預測報表、forward-OOS runtime score export；到此停止，不執行策略回放。`[2]` 不重新訓練，只更新research scores、重建同一份預測報表並更新forward-OOS runtime scores。`[3]` 顯示PASS／REJECT／EXCLUDED、事件group及初次miss buy／未成交終止契約。新Label使用獨立`filter_id=breakout_quality_a2_trade_path_v1`，不得覆蓋現有9A模型。策略經濟效果由`apps/research.py`的「策略組合比較」依目前啟用arms與contrasts比較；舊`strategy-trade-path-label-gate`只保留歷史研究診斷。
 
-Breakout-quality 的使用者／專案可調設定與current workflow membership只編輯 `config/breakout_quality.py`；scientific/profile declarations集中於`core/breakout_quality_registry.py`，derived/current resolver與workflow／comparison／Rolling／PIT settings集中於`core/breakout_quality_policy.py`，generic continuous-ranker execution capability集中於`core/breakout_quality_runtime.py`。正式Audit對象與診斷設定仍集中於`config/audit.py`。Consumer必須依責任直接import canonical owner，不得把resolver或scientific registry重新塞回config形成第二份truth。
+Breakout-quality 的使用者／專案可調設定與current workflow membership只編輯 `config/breakout_quality.py`；scientific/profile declarations集中於`core/breakout_quality_registry.py`，derived/current resolver與workflow／comparison／Rolling／PIT settings集中於`core/breakout_quality_policy.py`，generic continuous-ranker execution capability集中於`core/breakout_quality_runtime.py`。正式Audit definitions／source／dimensions／outcomes集中於`core/audit_registry.py`，resolver／validation集中於`core/audit_policy.py`；`config/audit.py`只保留active module／output root。Consumer必須依責任直接import canonical owner，不得把resolver或scientific registry重新塞回config形成第二份truth。
 
 模型研究與策略 workflow 使用**分離的config-driven identity**。`BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE`只決定 `apps/research.py → 模型訓練` 的Active Profile；`BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE`則保留目前已驗證的策略／PIT runtime anchor，模型研究往前推進時不得自動改變策略基準。主選單不硬編MR／model名稱，會依模型研究profile的 `training_objective` 與 `training_sample_scope` 自動派送。event-based continuous profile會先依canonical Dataset refresh contract確認Dataset，再由`prepare-continuous-target`建立／驗證event-style Target artifact；daily-universal profile的Target直接由canonical OHLCV按ticker/date建立，feature採lazy materialization，因此**不建立expanded 300×10 daily feature artifact，也不建立event-style Continuous Target artifact**。兩者均可沿用同一Selection PIT builder／audit；PIT split固定要求training label完成日早於validation／score cutoff，score table不得含Future Target。模型流程到模型報表／PIT audit為止，策略經濟比較只由獨立「策略組合比較」入口執行。
 

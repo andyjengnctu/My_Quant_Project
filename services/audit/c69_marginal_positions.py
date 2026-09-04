@@ -22,7 +22,8 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
+from config.audit import AUDIT_OUTPUT_ROOT
+from core.audit_policy import AuditDefinition
 from core.path_utils import project_relative_display_path
 from core.report_metrics import (
     MARGINAL_POSITION_ATTRIBUTION_METRICS,

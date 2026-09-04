@@ -135,7 +135,7 @@ def _analyze_static_python_tree(
     return graph, experiment_branches
 
 def _active_dynamic_audit_modules() -> set[str]:
-    from config.audit import get_audit_module_ids, get_enabled_audit_definitions
+    from core.audit_policy import get_audit_module_ids, get_enabled_audit_definitions
     from tools.audit.catalog import AUDIT_CATALOG, get_audit_entry
 
     # Research-mode catalog commands are dynamically routed by the model application
@@ -495,7 +495,7 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
             }
         )
 
-    from config.audit import AUDIT_MODULES
+    from core.audit_registry import AUDIT_MODULES
 
     disabled_audits: list[dict[str, str]] = []
     for module_id, raw_module in AUDIT_MODULES.items():

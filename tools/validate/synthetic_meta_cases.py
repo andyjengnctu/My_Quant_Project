@@ -2330,6 +2330,29 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "get_strategy_comparison_settings",
             "get_strategy_multi_seed_robustness_settings",
         },
+        "config.audit": {
+            "AUDIT_ACTIVE_MODULE_ID",
+            "AUDIT_OUTPUT_ROOT",
+        },
+        "core.audit_registry": {
+            "AUDIT_MODULES",
+            "AUDIT_REUSABLE_REPORTS",
+            "AUDIT_SCHEMA_VERSION",
+        },
+        "core.audit_policy": {
+            "AuditDefinition",
+            "get_audit_definitions",
+            "get_reusable_audit_definitions",
+        },
+        "config.breakout_policy": {
+            "BREAKOUT_DEFAULT_HIGH_LEN",
+            "BREAKOUT_HIGH_LEN_SEARCH_MIN",
+            "BREAKOUT_HIGH_LEN_SEARCH_MAX",
+            "BREAKOUT_HIGH_LEN_SEARCH_STEP",
+        },
+        "core.breakout_policy": {
+            "build_breakout_optimizer_high_len_values",
+        },
     }
     module_import_failures = []
     module_symbol_failures = []
@@ -2351,14 +2374,10 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
     add_check(results, "meta_coverage", case_id, "policy_contract_modules_importable_for_coverage_probe", [], module_import_failures)
     add_check(results, "meta_coverage", case_id, "policy_contract_modules_expose_expected_symbols", [], module_symbol_failures)
 
-    declarative_config_modules = (
-        "config/execution_policy.py",
-        "config/display_policy.py",
-        "config/research.py",
-        "config/training_performance_policy.py",
-        "config/downloader.py",
-        "config/runtime.py",
-        "config/strategy_compare.py",
+    declarative_config_modules = tuple(
+        str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        for path in sorted((PROJECT_ROOT / "config").glob("*.py"))
+        if path.name != "__init__.py"
     )
     declarative_config_violations = []
     for relative_path in declarative_config_modules:

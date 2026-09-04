@@ -18,7 +18,8 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
+from config.audit import AUDIT_OUTPUT_ROOT
+from core.audit_policy import AuditDefinition
 from core.data_utils import discover_unique_csv_map, sanitize_ohlcv_dataframe
 from core.dataset_profiles import get_dataset_dir
 from core.exact_accounting import (

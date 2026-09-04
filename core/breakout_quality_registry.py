@@ -12,10 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from config.research import RESEARCH_SINGLE_SEED
-from config.breakout_policy import (
-    BREAKOUT_DEFAULT_HIGH_LEN,
-    build_breakout_optimizer_high_len_values,
-)
+from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN
+from core.breakout_policy import build_breakout_optimizer_high_len_values
 from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 from config.execution_policy import (
     DEFAULT_FIXED_RISK,

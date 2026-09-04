@@ -16,8 +16,8 @@ from .synthetic_breakout_quality_support import add_check
 
 
 def validate_breakout_quality_audit_framework_contract_case(_base_params):
-    from config.audit import (
-        AUDIT_OUTPUT_ROOT,
+    from config.audit import AUDIT_OUTPUT_ROOT
+    from core.audit_policy import (
         get_audit_definitions,
         get_audit_module_ids,
         get_enabled_audit_definitions,
@@ -40,13 +40,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     enabled = get_enabled_audit_definitions("breakout_quality")
     validate_audit_catalog(definitions)
 
+    import config.audit as audit_cfg
+    import core.audit_registry as audit_registry
+
     check_true(
-        "formal_audit_config_is_config_driven_and_uses_stable_output_root",
+        "formal_audit_registry_and_user_policy_have_single_owners",
         bool(
-                    get_audit_module_ids()[0] == "breakout_quality"
-                    and len(definitions) >= len(enabled)
-                    and AUDIT_OUTPUT_ROOT == "outputs/audit"
-                ),
+            get_audit_module_ids()[0] == "breakout_quality"
+            and len(definitions) >= len(enabled)
+            and AUDIT_OUTPUT_ROOT == "outputs/audit"
+            and not hasattr(audit_cfg, "AUDIT_MODULES")
+            and hasattr(audit_registry, "AUDIT_MODULES")
+        ),
     )
 
     # Synthetic contract checks must not read the developer's current research artifacts.
@@ -200,7 +205,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     reusable_defs = get_reusable_audit_definitions("breakout_quality")
     check_true(
-        "reusable_audit_reports_are_config_driven_and_not_scientific_aud_ids",
+        "reusable_audit_reports_are_registry_driven_and_not_scientific_aud_ids",
         len(reusable_defs) == 3
         and {item.report_id for item in reusable_defs}
         == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown"}

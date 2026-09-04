@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, Callable
 
-from config.audit import AuditDefinition
+from core.audit_policy import AuditDefinition
 
 StatusHandler = Callable[..., dict[str, Any]]
 RunHandler = Callable[..., dict[str, Any]]

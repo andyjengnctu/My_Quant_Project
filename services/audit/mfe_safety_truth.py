@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from config.audit import AuditDefinition
+from core.audit_policy import AuditDefinition
 from filters.breakout_quality.mfe_safety_geometry import (
     QUADRANT_KEYS,
     attach_quadrants,

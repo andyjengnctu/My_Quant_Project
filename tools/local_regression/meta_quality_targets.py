@@ -72,6 +72,11 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "config/strategy_compare.py",
     "core/strategy_compare_registry.py",
     "core/strategy_compare_policy.py",
+    "config/audit.py",
+    "core/audit_registry.py",
+    "core/audit_policy.py",
+    "config/breakout_policy.py",
+    "core/breakout_policy.py",
 ]
 FORMAL_STEP_ENTRY_COVERAGE_TARGETS = [
     "tools/local_regression/run_quick_gate.py",

@@ -73,8 +73,8 @@ from config.breakout_policy import (
     BREAKOUT_HIGH_LEN_SEARCH_MAX,
     BREAKOUT_HIGH_LEN_SEARCH_MIN,
     BREAKOUT_HIGH_LEN_SEARCH_STEP,
-    build_breakout_optimizer_high_len_values,
 )
+from core.breakout_policy import build_breakout_optimizer_high_len_values
 from core.breakout_quality_registry import (
     ADAMW_ONLY_EXPERIMENT_PROFILE,
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,

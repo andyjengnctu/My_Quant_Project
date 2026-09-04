@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.audit import get_active_audit_module_id, get_audit_definitions
+from core.audit_policy import get_active_audit_module_id, get_audit_definitions
 from core.research_policy import get_active_model_research_provider
 from core.strategy_compare_policy import (
     get_strategy_comparison_menu_profiles,

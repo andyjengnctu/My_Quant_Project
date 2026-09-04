@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from config.breakout_policy import build_breakout_optimizer_high_len_values
+from core.breakout_policy import build_breakout_optimizer_high_len_values
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
 from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 import config.breakout_quality as cfg

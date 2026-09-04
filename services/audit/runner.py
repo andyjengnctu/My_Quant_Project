@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from config.audit import (
-    AUDIT_OUTPUT_ROOT,
+from config.audit import AUDIT_OUTPUT_ROOT
+from core.audit_policy import (
     get_audit_definitions,
     get_audit_module_ids,
     get_reusable_audit_definitions,

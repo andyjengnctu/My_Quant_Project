@@ -25,7 +25,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `DL-*` | 策略 runtime 使用的 DL source identity | `DL-A9`、`DL-TP1` | 綁定具體 model／label／threshold／score source。程式可保留 `A9`、`TP1` alias，相同文件若可能混淆必須使用 canonical prefix。 |
 | `SR-C*` | Strategy runtime／portfolio 使用方式 arm | `SR-C11`、`SR-C12` | 既有 DL 的 refresh timing、gate、ranking、allocation 等使用方式變更全部放這一層。報表可繼續顯示 `C11`、`C12`。 |
 | `PARAM-P*` | 策略參數訓練／工件 stage | `PARAM-P2`、`PARAM-P3` | 代表參數 stage，不是 model experiment，也不是策略 runtime arm。 |
-| `AUD-*` | Read-only Audit／attribution identity | `AUD-a9-pass-quality` | 使用 `config/audit.py` profile slug；Audit 不占用 `MR-*` 或 `SR-C*`。 |
+| `AUD-*` | Read-only Audit／attribution identity | `AUD-a9-pass-quality` | Audit identity由本Registry保留；formal definition slug／source／dimensions由`core/audit_registry.py`持有，`config/audit.py`只保存active module／output policy；Audit不占用`MR-*`或`SR-C*`。 |
 | `DATA-*` | Dataset identity | `DATA-breakout_quality_v1` | row identity、feature-bank dataset semantics 改變時才改版。 |
 | `LABEL-*` | Label／Target identity | `LABEL-a2_realized_trade_path_v1` | Target 語意改變時才改版。 |
 
