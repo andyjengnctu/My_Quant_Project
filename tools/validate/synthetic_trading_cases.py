@@ -955,6 +955,165 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
     summary["checks"] = len(results)
     return results, summary
 
+def validate_trading_protection_plan_contract_case(base_params):
+    case_id = "TRADING_PROTECTION_PLAN"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.file_integrity import atomic_write_json, canonical_json_sha256
+    from core.params_io import params_to_json_dict
+    from core.price_utils import calc_half_take_profit_sell_qty
+    from core.trading_order_state import (
+        append_ordered_trading_proposal,
+        build_empty_trading_order_state,
+    )
+    from services.trading.fill_reconciliation import confirm_trading_buy_order_fill
+    from services.trading.order_state import (
+        load_trading_order_state,
+        resolve_trading_order_state_path,
+    )
+    from services.trading.protection_planning import (
+        PROTECTION_BROKER_STATUS,
+        PROTECTION_PLAN_STATUS,
+        PROTECTION_SAME_BAR_PRIORITY,
+        build_trading_protection_plan,
+        get_trading_protection_plan_read_model,
+        resolve_trading_protection_plan_json_path,
+        resolve_trading_protection_plan_text_path,
+        validate_trading_protection_plan,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    frozen_params = params_to_json_dict(base_params)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        account = adopt_existing_trading_position(
+            root,
+            ticker="2330",
+            qty=100,
+            cost_basis_total=50_000,
+            entry_date="2026-08-01",
+            expected_revision=account["revision"],
+        )
+        account_revision_before_fill = int(account["revision"])
+
+        qty = 100
+        limit_price = 100.0
+        reserved = build_buy_ledger_from_price(limit_price, qty, base_params)["net_buy_total_milli"]
+        order_state = build_empty_trading_order_state(
+            timestamp="2026-09-04T09:00:00+08:00",
+            mutation_id="synthetic-init-order-state",
+        )
+        plan_seed = {
+            "plan_fingerprint": "synthetic-protection-plan",
+            "information_date": "2026-09-04",
+            "account_revision": account_revision_before_fill,
+            "selected_params_sha256": canonical_json_sha256(frozen_params),
+            "candidate_snapshot_sha256": "synthetic-candidate-sha",
+            "strategy_id": "full_rule_based_no_dl",
+            "param_selector": "base_finalist_best",
+        }
+        proposal = {
+            "rank": 1,
+            "ticker": "2454",
+            "kind": "buy",
+            "entry_type": "normal",
+            "qty": qty,
+            "limit_price": limit_price,
+            "reserved_cost_milli": int(reserved),
+            "init_sl": 90.0,
+            "init_trail": 90.0,
+            "target_price": 110.0,
+            "entry_atr": 5.0,
+            "security_profile": {},
+        }
+        order_state = append_ordered_trading_proposal(
+            order_state,
+            order_id="synthetic-entry-order",
+            proposal=proposal,
+            plan=plan_seed,
+            timestamp="2026-09-04T09:01:00+08:00",
+            mutation_id="synthetic-submit-order",
+            frozen_params=frozen_params,
+        )
+        atomic_write_json(resolve_trading_order_state_path(root), order_state)
+
+        first_fill_qty = 40
+        partial = confirm_trading_buy_order_fill(
+            root,
+            order_id="synthetic-entry-order",
+            fill_qty=first_fill_qty,
+            fill_price=99.0,
+            trade_date="2026-09-04",
+            expected_order_revision=int(order_state["revision"]),
+            expected_account_revision=account_revision_before_fill,
+        )
+        account_after_partial = partial["account"]
+        orders_after_partial = partial["orders"]
+        canonical_position = account_after_partial["positions"]["2454"]["strategy_management"]["position_state"]
+        account_revision = int(account_after_partial["revision"])
+        order_revision = int(orders_after_partial["revision"])
+
+        protection = build_trading_protection_plan(root)
+        validate_trading_protection_plan(protection)
+        row = protection["positions"][0]
+        stop_leg = next(leg for leg in row["legs"] if leg["action"] == "STOP_FULL")
+        tp_leg = next(leg for leg in row["legs"] if leg["action"] == "TP_HALF")
+        expected_tp_qty = calc_half_take_profit_sell_qty(first_fill_qty, base_params.tp_percent)
+
+        add_check(results, "trading_protection", case_id, "protection_plan_status_is_proposed_only", PROTECTION_PLAN_STATUS, protection["status"])
+        add_check(results, "trading_protection", case_id, "protection_plan_never_claims_broker_submission", PROTECTION_BROKER_STATUS, protection["broker_status"])
+        add_check(results, "trading_protection", case_id, "protection_plan_does_not_mutate_account_revision", account_revision, load_trading_account_state(root)["revision"])
+        add_check(results, "trading_protection", case_id, "protection_plan_does_not_mutate_order_revision", order_revision, load_trading_order_state(root)["revision"])
+        add_check(results, "trading_protection", case_id, "manual_adopted_position_is_not_auto_managed", ["2330"], protection["manual_positions_skipped"])
+        add_check(results, "trading_protection", case_id, "partial_fill_protects_only_confirmed_held_qty", first_fill_qty, row["position_qty"])
+        add_check(results, "trading_protection", case_id, "stop_leg_covers_full_current_position", first_fill_qty, stop_leg["qty"])
+        add_check(results, "trading_protection", case_id, "stop_leg_uses_canonical_effective_position_stop", int(canonical_position["sl_milli"]), int(stop_leg["trigger_price_milli"]))
+        add_check(results, "trading_protection", case_id, "stop_leg_uses_stop_market_gap_semantics", "STOP_MARKET", stop_leg["order_type"])
+        add_check(results, "trading_protection", case_id, "tp_leg_qty_uses_canonical_half_take_profit_rule", expected_tp_qty, tp_leg["qty"])
+        add_check(results, "trading_protection", case_id, "tp_leg_uses_canonical_position_target", int(canonical_position["tp_half_milli"]), int(tp_leg["limit_price_milli"]))
+        add_check(results, "trading_protection", case_id, "same_bar_stop_has_priority_over_tp", PROTECTION_SAME_BAR_PRIORITY, row["same_bar_priority"])
+        add_check(results, "trading_protection", case_id, "protection_plan_uses_no_post_fill_market_data", False, protection["market_data_used"])
+        add_check(results, "trading_protection", case_id, "protection_plan_uses_no_discretionary_input", False, protection["discretionary_input_used"])
+        add_check(results, "trading_protection", case_id, "protection_json_is_output_not_operational_state", str((root / "outputs" / "trading" / "protection_orders" / "protection_plan.json").resolve()), str(resolve_trading_protection_plan_json_path(root).resolve()))
+        add_check(results, "trading_protection", case_id, "protection_human_summary_is_persisted", True, resolve_trading_protection_plan_text_path(root).is_file())
+        first_read = get_trading_protection_plan_read_model(root)
+        add_check(results, "trading_protection", case_id, "newly_built_protection_plan_is_fresh", True, first_read["fresh"])
+
+        remaining = int(partial["remaining_qty"])
+        final = confirm_trading_buy_order_fill(
+            root,
+            order_id="synthetic-entry-order",
+            fill_qty=remaining,
+            fill_price=98.0,
+            trade_date="2026-09-04",
+            expected_order_revision=int(partial["order_revision"]),
+            expected_account_revision=int(partial["account_revision"]),
+        )
+        stale_read = get_trading_protection_plan_read_model(root)
+        add_check(results, "trading_protection", case_id, "additional_partial_fill_invalidates_old_protection_source_binding", False, stale_read["fresh"])
+        rebuilt = build_trading_protection_plan(root)
+        rebuilt_row = rebuilt["positions"][0]
+        rebuilt_position = final["account"]["positions"]["2454"]["strategy_management"]["position_state"]
+        add_check(results, "trading_protection", case_id, "final_fill_rebuilds_stop_for_full_confirmed_position", qty, rebuilt_row["position_qty"])
+        add_check(results, "trading_protection", case_id, "rebuilt_stop_follows_weighted_average_fill_position_state", int(rebuilt_position["sl_milli"]), int(rebuilt_row["effective_stop_milli"]))
+        add_check(results, "trading_protection", case_id, "rebuilt_target_follows_weighted_average_fill_position_state", int(rebuilt_position["tp_half_milli"]), int(rebuilt_row["target_price_milli"]))
+        add_check(results, "trading_protection", case_id, "source_change_produces_new_protection_fingerprint", True, rebuilt["plan_fingerprint"] != protection["plan_fingerprint"])
+        add_check(results, "trading_protection", case_id, "rebuilt_plan_returns_to_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
+
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    service_source = (project_root / "services" / "trading" / "protection_planning.py").read_text(encoding="utf-8")
+    add_check(results, "trading_protection", case_id, "workbench_exposes_post_fill_protection_plan", True, "成交後 Stop / TP 保護單計畫" in panel_source and "build_trading_protection_plan(" in panel_source)
+    add_check(results, "trading_protection", case_id, "workbench_explicitly_marks_protection_as_not_submitted", True, "尚未送券商" in panel_source)
+    add_check(results, "trading_protection", case_id, "protection_planner_does_not_own_broker_submission", False, "confirm_trading_order_submission(" in service_source or "append_ordered_trading_proposal(" in service_source)
+    add_check(results, "trading_protection", case_id, "protection_planner_does_not_use_market_bar_fill_inference", False, any(token in service_source for token in ("t_high", "t_low", "execute_pre_market_entry_plan")))
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
     results = []
@@ -1033,5 +1192,6 @@ __all__ = [
     "validate_trading_proposed_order_plan_contract_case",
     "validate_trading_pending_order_state_contract_case",
     "validate_trading_confirmed_fill_reconciliation_contract_case",
+    "validate_trading_protection_plan_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]

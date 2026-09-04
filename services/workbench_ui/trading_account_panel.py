@@ -16,6 +16,10 @@ from services.trading.daily_workflow import (
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
 from services.trading.order_planning import build_trading_proposed_order_plan
+from services.trading.protection_planning import (
+    build_trading_protection_plan,
+    get_trading_protection_plan_read_model,
+)
 from services.trading.fill_reconciliation import (
     TradingFillRevisionConflict,
     confirm_trading_buy_order_fill,
@@ -127,12 +131,15 @@ class TradingAccountPanel(ttk.Frame):
         self._proposed_order_rows: list[dict[str, object]] = []
         self._order_snapshot: dict[str, object] = {}
         self._order_rows: dict[str, dict[str, object]] = {}
+        self._protection_snapshot: dict[str, object] = {}
+        self._protection_rows: list[dict[str, object]] = []
         self._workflow_thread = None
         self._workflow_token = 0
         self._workflow_buttons = []
         self._build_ui()
         self.refresh_account()
         self.refresh_order_state()
+        self.refresh_protection_plan()
         self.refresh_daily_workflow()
 
     def _build_ui(self):
@@ -141,6 +148,7 @@ class TradingAccountPanel(ttk.Frame):
         self.rowconfigure(5, weight=1)
         self.rowconfigure(6, weight=1)
         self.rowconfigure(7, weight=1)
+        self.rowconfigure(8, weight=1)
 
         workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -368,6 +376,126 @@ class TradingAccountPanel(ttk.Frame):
             foreground=WORKBENCH_MUTED,
             style=WORKBENCH_LABEL_STYLE,
         ).pack(side="left", padx=(12, 0))
+
+        protection_box = ttk.LabelFrame(self, text="成交後 Stop / TP 保護單計畫（尚未送券商）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        protection_box.grid(row=8, column=0, sticky="nsew", pady=(8, 0))
+        protection_box.rowconfigure(1, weight=1)
+        protection_box.columnconfigure(0, weight=1)
+        self._protection_status_var = tk.StringVar(value="尚未建立成交後保護單計畫。")
+        ttk.Label(
+            protection_box,
+            textvariable=self._protection_status_var,
+            foreground=WORKBENCH_MUTED,
+            style=WORKBENCH_LABEL_STYLE,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        protection_columns = ("ticker", "qty", "entry", "stop_qty", "stop", "tp_qty", "target", "entry_order_status", "priority")
+        self._protection_tree = ttk.Treeview(
+            protection_box,
+            columns=protection_columns,
+            show="headings",
+            style=WORKBENCH_TREE_STYLE,
+        )
+        protection_headings = {
+            "ticker": "股票",
+            "qty": "目前持股",
+            "entry": "實際成交均價",
+            "stop_qty": "Stop股數",
+            "stop": "Stop觸發價",
+            "tp_qty": "TP股數",
+            "target": "TP Limit",
+            "entry_order_status": "買單狀態",
+            "priority": "同bar優先序",
+        }
+        protection_widths = {
+            "ticker": 80, "qty": 95, "entry": 110, "stop_qty": 95, "stop": 105,
+            "tp_qty": 90, "target": 105, "entry_order_status": 95, "priority": 120,
+        }
+        for key in protection_columns:
+            self._protection_tree.heading(key, text=protection_headings[key])
+            self._protection_tree.column(key, width=protection_widths[key], anchor="center")
+        protection_y = ttk.Scrollbar(
+            protection_box, orient="vertical", command=self._protection_tree.yview, style=WORKBENCH_VSCROLL_STYLE
+        )
+        self._protection_tree.configure(yscrollcommand=protection_y.set)
+        self._protection_tree.grid(row=1, column=0, sticky="nsew")
+        protection_y.grid(row=1, column=1, sticky="ns")
+        protection_buttons = ttk.Frame(protection_box, style=WORKBENCH_FRAME_STYLE)
+        protection_buttons.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Button(
+            protection_buttons,
+            text="建立／刷新保護單計畫",
+            command=self._rebuild_protection_plan,
+            style=WORKBENCH_BUTTON_STYLE,
+        ).pack(side="left")
+        ttk.Button(
+            protection_buttons,
+            text="刷新計畫狀態",
+            command=self.refresh_protection_plan,
+            style=WORKBENCH_BUTTON_STYLE,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Label(
+            protection_buttons,
+            text="只由 confirmed strategy fill 的 canonical position state＋ORDERED 時 frozen params 機械派生；不讀成交後行情、不代表券商已掛出 Stop/TP。",
+            foreground=WORKBENCH_MUTED,
+            style=WORKBENCH_LABEL_STYLE,
+        ).pack(side="left", padx=(12, 0))
+
+    def _reload_protection_rows(self, rows):
+        for item in self._protection_tree.get_children():
+            self._protection_tree.delete(item)
+        self._protection_rows = [dict(row) for row in list(rows or [])]
+        for row in self._protection_rows:
+            self._protection_tree.insert(
+                "",
+                "end",
+                values=(
+                    row.get("ticker") or "-",
+                    f"{int(row.get('position_qty') or 0):,}",
+                    self._format_candidate_number(row.get("entry_fill_price"), digits=2),
+                    f"{int(row.get('stop_qty') or 0):,}",
+                    self._format_candidate_number(row.get("stop_price"), digits=2),
+                    f"{int(row.get('tp_qty') or 0):,}",
+                    self._format_candidate_number(row.get("target_price"), digits=2),
+                    row.get("entry_order_status") or "-",
+                    row.get("same_bar_priority") or "-",
+                ),
+            )
+
+    def refresh_protection_plan(self):
+        try:
+            snapshot = get_trading_protection_plan_read_model(WORKBENCH_PROJECT_ROOT)
+        except (ValueError, RuntimeError, OSError) as exc:
+            self._protection_snapshot = {}
+            self._reload_protection_rows([])
+            self._protection_status_var.set(f"保護單計畫讀取失敗：{exc}")
+            return
+        self._protection_snapshot = snapshot
+        self._reload_protection_rows(snapshot.get("positions") or [])
+        if not snapshot.get("exists"):
+            self._protection_status_var.set(
+                f"尚未建立保護單計畫 | {snapshot.get('json_path') or '-'}"
+            )
+            return
+        freshness = "FRESH" if snapshot.get("fresh") else "STALE"
+        skipped = list(snapshot.get("manual_positions_skipped") or [])
+        suffix = f" | manual未接管 {','.join(skipped)}" if skipped else ""
+        self._protection_status_var.set(
+            f"{freshness} | {snapshot.get('status') or '-'} / {snapshot.get('broker_status') or '-'} | "
+            f"positions {int(snapshot.get('position_count') or 0)} | {snapshot.get('text_path') or '-'}{suffix}"
+        )
+
+    def _rebuild_protection_plan(self):
+        try:
+            result = build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
+        except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+            messagebox.showerror("Trading 保護單計畫", str(exc), parent=self)
+            self.refresh_protection_plan()
+            return None
+        self.refresh_protection_plan()
+        self._protection_status_var.set(
+            f"FRESH | {result.get('status')} / {result.get('broker_status')} | positions {len(result.get('positions') or [])} | {result.get('text_path') or '-'}"
+        )
+        return result
 
     def _set_workflow_buttons_state(self, state: str):
         for button in self._workflow_buttons:
@@ -651,11 +779,21 @@ class TradingAccountPanel(ttk.Frame):
         self._fill_date_var.set("")
         self.refresh_account()
         self.refresh_order_state()
-        messagebox.showinfo(
-            "Trading 成交",
-            f"{ticker} 已更新為 {result.get('status')}；累計成交 {int(result.get('filled_qty') or 0):,}，未成交 {int(result.get('remaining_qty') or 0):,}。",
-            parent=self,
+        protection_error = None
+        try:
+            build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
+        except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+            protection_error = str(exc)
+        self.refresh_protection_plan()
+        message = (
+            f"{ticker} 已更新為 {result.get('status')}；累計成交 {int(result.get('filled_qty') or 0):,}，"
+            f"未成交 {int(result.get('remaining_qty') or 0):,}。"
         )
+        if protection_error:
+            message += f"\n\n成交已入帳，但保護單計畫建立失敗：{protection_error}"
+        else:
+            message += "\n\n已依實際成交後 canonical position state 機械刷新 Stop / TP 保護單計畫；尚未送券商。"
+        messagebox.showinfo("Trading 成交", message, parent=self)
 
     def _cancel_selected_order(self):
         selected = self._order_tree.selection()
@@ -691,7 +829,17 @@ class TradingAccountPanel(ttk.Frame):
             return
         self._order_note_var.set("")
         self.refresh_order_state()
-        messagebox.showinfo("Trading 掛單", f"{ticker} 已記錄為 CANCELLED。", parent=self)
+        protection_refresh_error = None
+        if int(row.get("filled_qty") or 0) > 0:
+            try:
+                build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
+            except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+                protection_refresh_error = str(exc)
+        self.refresh_protection_plan()
+        message = f"{ticker} 已記錄為 CANCELLED。"
+        if protection_refresh_error:
+            message += f"\n\n取消已記錄，但保護單計畫刷新失敗：{protection_refresh_error}"
+        messagebox.showinfo("Trading 掛單", message, parent=self)
 
     def _finish_workflow_success(self, action: str, token: int, result):
         if token != self._workflow_token:
@@ -749,6 +897,7 @@ class TradingAccountPanel(ttk.Frame):
             return False
         self.refresh_account()
         self.refresh_order_state()
+        self.refresh_protection_plan()
         self._reload_proposed_order_rows([])
         self._proposed_status_var.set("帳戶已變更；既有建議掛單已失效，請重新執行 4 建議掛單。")
         return True
