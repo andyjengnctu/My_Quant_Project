@@ -30,6 +30,9 @@ INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1 = "inception_time_predicted_safety_co
 INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1 = "inception_time_conditional_mfe_safety_v1"
 INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1 = "inception_time_safety_conditional_mfe_v1"
 INCEPTION_TIME_SHARED_SAFETY_MFE_V1 = "inception_time_shared_safety_mfe_v1"
+INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_STRUCTURE_V1 = (
+    "inception_time_shared_safety_mfe_price_volume_structure_v1"
+)
 INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1 = "inception_time_task_specific_safety_mfe_v1"
 INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1 = "inception_time_shared_safety_attn_mfe_v1"
 INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1 = "inception_time_task_specific_safety_attn_mfe_v1"
@@ -123,6 +126,32 @@ _ARCHITECTURE_DESCRIPTORS = (
     _descriptor(INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1, active=True, active_order=4, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("conditional_mfe_safety",), family="inception_time_conditional_mfe_safety", pooling=("global_average", "primary_mfe_head", "conditional_safety_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
     _descriptor(INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1, active=True, active_order=5, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("safety_conditional_mfe",), family="inception_time_safety_conditional_mfe", pooling=("global_average", "raw_safety_head", "conditional_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
     _descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_V1, active=True, active_order=6, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("shared_safety_mfe",), family="inception_time_shared_safety_mfe", pooling=("global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
+    _descriptor(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_STRUCTURE_V1,
+        active=True,
+        active_order=29,
+        spec_builder="inception_variant",
+        runtime_builder="inception_time",
+        capabilities=("shared_safety_mfe", "price_volume_structure_safety"),
+        family="inception_time_shared_safety_mfe_price_volume_structure",
+        pooling=(
+            "global_average",
+            "safety_price_volume_structure_residual",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+        use_dataset_context=False,
+        sequence_input_paths=("raw_level", "derived_price_volume_structure_from_stock_ohlcv"),
+        head_width=None,
+        input_window_bars=300,
+        price_volume_structure_time_bins=128,
+        price_volume_structure_price_bins=64,
+        price_volume_structure_price_span_atr=16.0,
+        price_volume_structure_atr_bars=14,
+        price_volume_structure_geometry_channels=4,
+        price_volume_structure_geometry_latent_dim=32,
+        price_volume_structure_vap_latent_dim=16,
+    ),
     _descriptor(INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1, active=True, active_order=7, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("task_specific_safety_mfe",), family="inception_time_task_specific_safety_mfe", pooling=("task_specific_final_residual_group", "global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
     _descriptor(INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1, active=True, active_order=15, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("shared_safety_mfe", "safety_attention_pool"), family="inception_time_shared_safety_attn_mfe", pooling=("safety_scalar_attention_pool", "mfe_global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
     _descriptor(INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1, active=True, active_order=16, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("task_specific_safety_mfe", "safety_attention_pool"), family="inception_time_task_specific_safety_attn_mfe", pooling=("task_specific_final_residual_group", "safety_scalar_attention_pool", "mfe_global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),

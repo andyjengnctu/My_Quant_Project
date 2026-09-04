@@ -31,6 +31,13 @@ class BreakoutQualityModelSpec:
     derived_context_lookback_bars: tuple[int, ...] = ()
     derived_context_annualization_bars: int | None = None
     sequence_input_paths: tuple[str, ...] = ()
+    price_volume_structure_time_bins: int | None = None
+    price_volume_structure_price_bins: int | None = None
+    price_volume_structure_price_span_atr: float | None = None
+    price_volume_structure_atr_bars: int | None = None
+    price_volume_structure_geometry_channels: int | None = None
+    price_volume_structure_geometry_latent_dim: int | None = None
+    price_volume_structure_vap_latent_dim: int | None = None
     window_normalization_epsilon: float | None = None
     inception_depth: int | None = None
     inception_filters: int | None = None
@@ -174,6 +181,13 @@ class BreakoutQualityModelSpec:
             "normalization": self.normalization,
             "normalization_groups": self.normalization_groups,
             "head_width": self.head_width,
+            "price_volume_structure_time_bins": self.price_volume_structure_time_bins,
+            "price_volume_structure_price_bins": self.price_volume_structure_price_bins,
+            "price_volume_structure_price_span_atr": self.price_volume_structure_price_span_atr,
+            "price_volume_structure_atr_bars": self.price_volume_structure_atr_bars,
+            "price_volume_structure_geometry_channels": self.price_volume_structure_geometry_channels,
+            "price_volume_structure_geometry_latent_dim": self.price_volume_structure_geometry_latent_dim,
+            "price_volume_structure_vap_latent_dim": self.price_volume_structure_vap_latent_dim,
             "inception_depth": self.inception_depth,
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,

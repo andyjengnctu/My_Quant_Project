@@ -4,10 +4,11 @@
 
 
 - imrove DL learnability
+    - input with 漲/跌家數
+    - input with lowerbound k style
     - more epoch to avoid fast convergence
     - attention (temperal / cross-secction)
     - self-learned history and L lengths
-    - input with lowerbound k style
     - simply label
         - the 40t day's R
         - self learn the label days and input days

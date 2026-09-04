@@ -3986,6 +3986,160 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 total += float(parameter.grad.detach().abs().sum().item())
         return total
 
+    # Price/Volume structural Safety representation is a reusable InceptionTime
+    # primitive.  It must preserve every AO-common parameter and the complete MFE
+    # path at the same seed; only Safety loss may update the new structural branch.
+    structure_architectures = [
+        architecture
+        for architecture in ACTIVE_MODEL_ARCHITECTURES
+        if get_architecture_descriptor(architecture).has_capability(
+            "price_volume_structure_safety"
+        )
+    ]
+    structure_contracts = []
+    for architecture in structure_architectures:
+        structure_spec = get_model_spec(architecture)
+        ao_structure_reference = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+        torch.manual_seed(20260904)
+        ao_structure_model = build_active_model(
+            10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
+        )
+        torch.manual_seed(20260904)
+        structure_model = build_active_model(10, 0, architecture=architecture)
+
+        ao_state = ao_structure_model.state_dict()
+        structure_state = structure_model.state_dict()
+        common_exact = (
+            not (set(ao_state) - set(structure_state))
+            and all(
+                torch.equal(ao_state[key], structure_state[key])
+                for key in ao_state
+            )
+        )
+        extra_keys = sorted(set(structure_state) - set(ao_state))
+
+        # Canonical normalized OHLCV-like synthetic input.  The second row has one
+        # materially higher relative-volume bar but identical price geometry.
+        bars = 300
+        close = torch.linspace(-0.12, 0.0, steps=bars, dtype=torch.float32)
+        open_price = close - 0.002
+        high = torch.maximum(open_price, close) + 0.006
+        low = torch.minimum(open_price, close) - 0.006
+        x0 = torch.zeros((bars, 10), dtype=torch.float32)
+        x0[:, 0] = open_price
+        x0[:, 1] = high
+        x0[:, 2] = low
+        x0[:, 3] = close
+        x0[:, 4] = 0.0
+        x0[:, 5] = open_price
+        x0[:, 6] = high
+        x0[:, 7] = low
+        x0[:, 8] = close
+        x0[:, 9] = 0.0
+        structure_x = torch.stack((x0, x0.clone()), dim=0)
+        high_volume_bar = 150
+        structure_x[1, high_volume_bar, 4] = 4.0
+
+        ao_structure_model.eval()
+        structure_model.eval()
+        with torch.no_grad():
+            ao_safety, ao_mfe = ao_structure_model.forward_safety_mfe_heads(
+                structure_x, None
+            )
+            structure_safety, structure_mfe = structure_model.forward_safety_mfe_heads(
+                structure_x, None
+            )
+            geometry_map, vap = (
+                structure_model.price_volume_structure_encoder.build_structure_inputs(
+                    structure_x
+                )
+            )
+
+        time_bin = min(
+            int(structure_spec.price_volume_structure_time_bins or 0) - 1,
+            int(
+                high_volume_bar
+                * int(structure_spec.price_volume_structure_time_bins or 0)
+                / bars
+            ),
+        )
+        local_volume_mass_base = float(
+            geometry_map[0, 2:, time_bin, :].sum().item()
+        )
+        local_volume_mass_high = float(
+            geometry_map[1, 2:, time_bin, :].sum().item()
+        )
+
+        structure_model.zero_grad(set_to_none=True)
+        _safety_logits, mfe_logits = structure_model.forward_safety_mfe_heads(
+            structure_x, None
+        )
+        mfe_logits[:, 1].sum().backward()
+        structure_from_mfe_grad = _gradient_total(
+            structure_model.price_volume_structure_encoder.parameters()
+        )
+        structure_model.zero_grad(set_to_none=True)
+        safety_logits, _mfe_logits = structure_model.forward_safety_mfe_heads(
+            structure_x, None
+        )
+        safety_logits[:, 1].sum().backward()
+        structure_from_safety_grad = _gradient_total(
+            structure_model.price_volume_structure_encoder.parameters()
+        )
+
+        ao_params = sum(p.numel() for p in ao_structure_model.parameters() if p.requires_grad)
+        structure_params = sum(p.numel() for p in structure_model.parameters() if p.requires_grad)
+        structure_contracts.append(
+            tuple(structure_spec.pooling)
+            == (
+                "global_average",
+                "safety_price_volume_structure_residual",
+                "raw_safety_head",
+                "raw_mfe_head",
+            )
+            and tuple(structure_spec.sequence_input_paths)
+            == (
+                "raw_level",
+                "derived_price_volume_structure_from_stock_ohlcv",
+            )
+            and int(structure_spec.input_window_bars or 0) == 300
+            and int(structure_spec.price_volume_structure_time_bins or 0) == 128
+            and int(structure_spec.price_volume_structure_price_bins or 0) == 64
+            and float(structure_spec.price_volume_structure_price_span_atr or 0.0)
+            == 16.0
+            and int(structure_spec.price_volume_structure_atr_bars or 0) == 14
+            and int(structure_spec.price_volume_structure_geometry_channels or 0) == 4
+            and int(structure_spec.price_volume_structure_geometry_latent_dim or 0) == 32
+            and int(structure_spec.price_volume_structure_vap_latent_dim or 0) == 16
+            and common_exact
+            and bool(extra_keys)
+            and all(key.startswith("price_volume_structure_encoder.") for key in extra_keys)
+            and torch.equal(ao_mfe, structure_mfe)
+            and not torch.equal(ao_safety, structure_safety)
+            and tuple(geometry_map.shape) == (2, 4, 128, 64)
+            and tuple(vap.shape) == (2, 64)
+            and bool(torch.isfinite(geometry_map).all().item())
+            and bool(torch.isfinite(vap).all().item())
+            and bool(
+                torch.allclose(
+                    vap.mean(dim=1),
+                    torch.ones(2, dtype=vap.dtype),
+                    atol=1e-6,
+                    rtol=0.0,
+                )
+            )
+            and local_volume_mass_high > local_volume_mass_base
+            and structure_from_mfe_grad == 0.0
+            and structure_from_safety_grad > 0.0
+            and structure_params > ao_params
+            and (structure_params - ao_params) / ao_params < 0.05
+            and ao_structure_reference.family == "inception_time_shared_safety_mfe"
+        )
+    check_true(
+        "price_volume_structure_is_pit_derived_volume_weighted_safety_only_residual",
+        len(structure_contracts) == 1 and all(structure_contracts),
+    )
+
     task_model.zero_grad(set_to_none=True)
     safety_logits, _mfe_logits = task_model.forward_safety_mfe_heads(task_x, None)
     safety_logits[:, 1].sum().backward()

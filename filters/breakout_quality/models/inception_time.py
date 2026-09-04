@@ -19,6 +19,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_task_specific_safety_mfe = descriptor.has_capability("task_specific_safety_mfe")
     use_safety_attention_pool = descriptor.has_capability("safety_attention_pool")
     use_safety_temporal_self_attention = descriptor.has_capability("safety_temporal_self_attention")
+    use_price_volume_structure_safety = descriptor.has_capability("price_volume_structure_safety")
     if use_safety_attention_pool and use_safety_temporal_self_attention:
         raise ValueError("Safety scalar pooling與temporal self-attention不可同時啟用")
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
@@ -269,6 +270,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 if use_safety_temporal_self_attention
                 else None
             )
+            if use_price_volume_structure_safety:
+                from filters.breakout_quality.models.price_volume_structure import (
+                    build_price_volume_structure_encoder,
+                )
+
+                self.price_volume_structure_encoder = build_price_volume_structure_encoder(
+                    nn,
+                    torch,
+                    feature_count=int(feature_count),
+                    output_width=module_output_channels,
+                    spec=spec,
+                )
+            else:
+                self.price_volume_structure_encoder = None
 
         def _run_residual_stack(self, z, modules, projections):
             residual = z
@@ -421,7 +436,12 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 mfe_logits = self.raw_mfe_classifier(mfe_encoded)
                 return safety_logits, mfe_logits
             _primary_input, shared_encoded = self._encoded_for_heads(x, context)
-            safety_logits = self.raw_safety_classifier(shared_encoded)
+            if self.price_volume_structure_encoder is not None:
+                structure_residual = self.price_volume_structure_encoder(x).to(shared_encoded.dtype)
+                safety_encoded = shared_encoded + structure_residual
+            else:
+                safety_encoded = shared_encoded
+            safety_logits = self.raw_safety_classifier(safety_encoded)
             if self.raw_mfe_classifier is not None:
                 mfe_logits = self.raw_mfe_classifier(shared_encoded)
             elif self.conditional_mfe_classifier is not None:

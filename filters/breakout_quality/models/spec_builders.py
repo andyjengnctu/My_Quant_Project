@@ -433,6 +433,13 @@ def _build_inception_spec(
     bottleneck_channels = int(descriptor_options.get("inception_bottleneck_channels", 32))
     input_window_bars_value = descriptor_options.get("input_window_bars")
     input_window_bars = None if input_window_bars_value is None else int(input_window_bars_value)
+    price_volume_structure_time_bins = descriptor_options.get("price_volume_structure_time_bins")
+    price_volume_structure_price_bins = descriptor_options.get("price_volume_structure_price_bins")
+    price_volume_structure_price_span_atr = descriptor_options.get("price_volume_structure_price_span_atr")
+    price_volume_structure_atr_bars = descriptor_options.get("price_volume_structure_atr_bars")
+    price_volume_structure_geometry_channels = descriptor_options.get("price_volume_structure_geometry_channels")
+    price_volume_structure_geometry_latent_dim = descriptor_options.get("price_volume_structure_geometry_latent_dim")
+    price_volume_structure_vap_latent_dim = descriptor_options.get("price_volume_structure_vap_latent_dim")
     if filters < 1 or bottleneck_channels < 1:
         raise ValueError("InceptionTime descriptor width必須為正整數")
     if input_window_bars is not None and input_window_bars < 1:
@@ -469,6 +476,27 @@ def _build_inception_spec(
         head_width=head_width,
         use_dataset_context=use_dataset_context,
         sequence_input_paths=sequence_input_paths,
+        price_volume_structure_time_bins=(
+            None if price_volume_structure_time_bins is None else int(price_volume_structure_time_bins)
+        ),
+        price_volume_structure_price_bins=(
+            None if price_volume_structure_price_bins is None else int(price_volume_structure_price_bins)
+        ),
+        price_volume_structure_price_span_atr=(
+            None if price_volume_structure_price_span_atr is None else float(price_volume_structure_price_span_atr)
+        ),
+        price_volume_structure_atr_bars=(
+            None if price_volume_structure_atr_bars is None else int(price_volume_structure_atr_bars)
+        ),
+        price_volume_structure_geometry_channels=(
+            None if price_volume_structure_geometry_channels is None else int(price_volume_structure_geometry_channels)
+        ),
+        price_volume_structure_geometry_latent_dim=(
+            None if price_volume_structure_geometry_latent_dim is None else int(price_volume_structure_geometry_latent_dim)
+        ),
+        price_volume_structure_vap_latent_dim=(
+            None if price_volume_structure_vap_latent_dim is None else int(price_volume_structure_vap_latent_dim)
+        ),
         inception_depth=depth,
         inception_filters=filters,
         inception_bottleneck_channels=bottleneck_channels,
