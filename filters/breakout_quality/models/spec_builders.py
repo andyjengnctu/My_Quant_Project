@@ -440,6 +440,9 @@ def _build_inception_spec(
     price_volume_structure_geometry_channels = descriptor_options.get("price_volume_structure_geometry_channels")
     price_volume_structure_geometry_latent_dim = descriptor_options.get("price_volume_structure_geometry_latent_dim")
     price_volume_structure_vap_latent_dim = descriptor_options.get("price_volume_structure_vap_latent_dim")
+    price_volume_local_structure_span_atr = descriptor_options.get("price_volume_local_structure_span_atr")
+    price_volume_local_structure_token_dim = descriptor_options.get("price_volume_local_structure_token_dim")
+    price_volume_local_structure_recent_fraction = descriptor_options.get("price_volume_local_structure_recent_fraction")
     if filters < 1 or bottleneck_channels < 1:
         raise ValueError("InceptionTime descriptor width必須為正整數")
     if input_window_bars is not None and input_window_bars < 1:
@@ -496,6 +499,15 @@ def _build_inception_spec(
         ),
         price_volume_structure_vap_latent_dim=(
             None if price_volume_structure_vap_latent_dim is None else int(price_volume_structure_vap_latent_dim)
+        ),
+        price_volume_local_structure_span_atr=(
+            None if price_volume_local_structure_span_atr is None else float(price_volume_local_structure_span_atr)
+        ),
+        price_volume_local_structure_token_dim=(
+            None if price_volume_local_structure_token_dim is None else int(price_volume_local_structure_token_dim)
+        ),
+        price_volume_local_structure_recent_fraction=(
+            None if price_volume_local_structure_recent_fraction is None else float(price_volume_local_structure_recent_fraction)
         ),
         inception_depth=depth,
         inception_filters=filters,

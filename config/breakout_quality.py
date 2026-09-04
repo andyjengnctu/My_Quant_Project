@@ -39,6 +39,7 @@ from core.breakout_quality_registry import merge_breakout_quality_model_profiles
 # - MR-13M daily-universal full-horizon low-adverse full-list ranker: "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
 # - MR-13BK MR-13M target on BJ BiGRU backbone: "daily_universal_bigru_full_horizon_low_adverse_full_list_ndcg_pairwise"
 # - MR-13BL AO + Price-Volume structural Safety representation: "daily_universal_price_volume_structure_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+# - MR-13BM BL + local Price-Volume zone tokens: "daily_universal_price_volume_structure_local_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13N daily-universal full-horizon equal-rank MFE + low-adverse full-list ranker: "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
 # - MR-13O daily-universal full-horizon Pareto-dominance pairwise ranker: "daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise"
 # - MR-13P single-model conditional MFE–Safety full-list ranker: "daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise"
@@ -95,8 +96,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13BL",
-    "daily_universal_price_volume_structure_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13BM",
+    "daily_universal_price_volume_structure_local_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -356,8 +357,9 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
-    # AO is the exact target/loss/backbone reference for the current Price-Volume treatment.
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    # BL is the exact global-structure parent for the current global+local treatment.
+    ("MR-13BL", "daily_universal_price_volume_structure_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
 )
 
 

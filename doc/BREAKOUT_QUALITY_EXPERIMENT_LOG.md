@@ -11746,3 +11746,21 @@ Decision：`MR13BJ_FORWARD_MIXED_RESULT_AVAILABLE / MR13BK_IMPLEMENTED_RESULT_PE
 - **Predeclared Gate**：Seed42 Forward only first。Primary看Raw Safety而非overall score；要求Safety Daily/Global rho/Pair形成material共同改善、Breakout同方向、Pred-HS true-LS下降或至少不惡化，HS-only Conditional-MFE與Pred-HS top-tail不得明顯受損。若只改善overall或單一slice，不進Rolling。若FAIL，不做time-bin/price-bin/ATR-span/channel-count或CNN width sweep。
 
 Decision：`MR13BK_CLOSED_BACKBONE_FAIL / MR13BL_IMPLEMENTED_RESULT_PENDING / AO_EXACT_TARGET_LOSS_BACKBONE_CONTROL / PRICE_VOLUME_STRUCTURE_SAFETY_ONLY / MFE_PATH_EXACT / LAZY_BATCH_RASTER / FORWARD_GATE_FIRST / NO_GEOMETRY_SWEEP_IF_FAIL`。
+
+## 2026-09-04 — MR-13BL Rolling evidence + MR-13BM global+local Price-Volume structure
+
+- **Authoritative implementation baseline**：`test-branch-1_20260904_231856_bea33788.zip`，SHA256=`b412dba136eb6b01fb54ce78db972ef2a5bd97f4ccd27c7f425c4c90de2c9d31`。
+- **MR-13BL Rolling evidence**：overall Daily/Global/Pair=`0.4167/0.3498/64.46%` vs AO=`0.4136/0.3365/64.33%`；Raw Safety Daily/Global/Pair=`0.3635/0.3259/63.05%` vs AO=`0.3601/0.3141/62.91%`。Breakout overall=`0.3865/0.4316/65.03%`；Breakout Raw Safety=`0.3466/0.3848/64.09%` vs AO=`0.3370/0.3782/64.03%`。P40–P60/P45–P55 Pair=`54.62/52.53%` Rolling，Breakout=`54.69/55.31%`；Breakout Pred-HS true-LS=`34.96%` vs AO `35.96%`。
+- **MR-13BL top-tail trade-off**：Rolling Pred-HS HM/HS/High-MFE/MFE=`26.08%/54.67%/1.398R` vs AO=`27.21%/56.99%/1.468R`；Breakout=`23.46%/37.36%/0.878R` vs AO=`23.61%/38.53%/0.928R`。Rolling drift=`0.9911 pooled σ / NO` vs AO=`0.8551 / NO`。
+- **MR-13BL decision**：global Price×Volume structural representation提供一致但偏小的Safety增量，且Breakout P45–P55與true-LS purity改善較明顯；然而未達原本material Safety gate，Pred-HS MFE/top-tail略退。Decision=`PRICE_VOLUME_GLOBAL_STRUCTURE_SIGNAL_PRESENT / SAFETY_GAIN_MARGINAL / BREAKOUT_BOUNDARY_IMPROVED / MFE_TOPTAIL_TRADEOFF / ORIGINAL_GATE_FAIL / NOT_PROMOTED`。禁止以BL result導向price/time bins、ATR span、geometry channels或CNN width sweep。
+- **User research decision**：使用者明確指出「全圖結構跟微結構應該不是互相取代，而是加乘」，因此下一輪不是用local tokens取代BL，而是保留global field並新增local price-zone evidence。
+- **MR-13BM identity**：profile=`daily_universal_price_volume_structure_local_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`；architecture=`ARCH-inception_time_shared_safety_mfe_price_volume_structure_local_v1`。MR-13BL global `128×64×4` map、64-bin VAP、AO target/universe/300×10/split/Seed42/Adam/clip/date-coherent batch、dual-head 1:1 full-list ΔNDCG與epoch selection全部固定。
+- **Only scientific treatment**：從BL同一PIT raster取得當前價格`±4 ATR`的16個price-zone tokens；每token固定11個parameter-free primitives：signed ATR distance、full-window body/wick/relative-volume-body/relative-volume-wick mass、latest-quarter同四項mass、VAP、volume-structure recency。沒有pivot、support/resistance label、top-K zone挑選、touch-strength人工公式、technical indicator或新資料源。
+- **Global×local interaction**：local branch固定32-d single-head scaled-dot-product attention。Query=`AO shared latent + BL global structure residual`；Keys/Values由zone tokens建立。local context經bias-free projection形成Safety residual，因此global field既直接補Safety，也決定local zone relevance。Raw-MFE仍只讀AO shared latent；local/global structure均不接受MFE loss gradient。
+- **Capacity / storage**：feature_count=10，MR-13BM trainable params=`501,178` vs BL=`490,586`（`+10,592 / +2.16%`），vs AO=`473,734`（`+5.79%`）。Local tokens由既有batch-time raster即時計算，不新增expanded persistent feature artifact。
+- **Pre-result implementation invariants**：same seed下BL所有common state tensors與BM exact identical；MFE logits bitwise exact；16-token attention weights finite且per-sample sum=1；MFE-only loss對local branch gradient=`0`，Safety-only loss對local branch gradient=`>0`。
+- **Workflow membership**：Current Training Model=`MR-13BM`；shared compare/test list=`MR-13H / MR-13AH / MR-13AK / MR-13AO / MR-13BL / MR-13BM`。Primary incremental contrast=BM vs BL；AO仍保留scientific base。
+- **Predeclared Gate**：Seed42 Forward only first。相對BL，Raw Safety Daily/Global/Pair須形成material共同改善；Breakout P45–P55與Pred-HS true-LS至少不得退回AO；HS-only Conditional-MFE及Pred-HS HM/HS/High-MFE/MFE不可再明顯惡化。若只複製BL的小增量或以MFE trade-off換Safety，不進Rolling；不做local span/token dim/recent fraction/attention-head sweep。
+
+Decision：`MR13BL_RESULT_AVAILABLE_NOT_PROMOTED / MR13BM_IMPLEMENTED_RESULT_PENDING / GLOBAL_FIELD_RETAINED / LOCAL_ZONE_TOKEN_INTERACTION_ADDED / SAFETY_ONLY / FORWARD_GATE_FIRST`。
+

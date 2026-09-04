@@ -38,6 +38,9 @@ class BreakoutQualityModelSpec:
     price_volume_structure_geometry_channels: int | None = None
     price_volume_structure_geometry_latent_dim: int | None = None
     price_volume_structure_vap_latent_dim: int | None = None
+    price_volume_local_structure_span_atr: float | None = None
+    price_volume_local_structure_token_dim: int | None = None
+    price_volume_local_structure_recent_fraction: float | None = None
     window_normalization_epsilon: float | None = None
     inception_depth: int | None = None
     inception_filters: int | None = None
@@ -188,6 +191,9 @@ class BreakoutQualityModelSpec:
             "price_volume_structure_geometry_channels": self.price_volume_structure_geometry_channels,
             "price_volume_structure_geometry_latent_dim": self.price_volume_structure_geometry_latent_dim,
             "price_volume_structure_vap_latent_dim": self.price_volume_structure_vap_latent_dim,
+            "price_volume_local_structure_span_atr": self.price_volume_local_structure_span_atr,
+            "price_volume_local_structure_token_dim": self.price_volume_local_structure_token_dim,
+            "price_volume_local_structure_recent_fraction": self.price_volume_local_structure_recent_fraction,
             "inception_depth": self.inception_depth,
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,

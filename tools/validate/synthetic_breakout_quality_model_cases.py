@@ -3995,6 +3995,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         if get_architecture_descriptor(architecture).has_capability(
             "price_volume_structure_safety"
         )
+        and not get_architecture_descriptor(architecture).has_capability(
+            "price_volume_local_structure_safety"
+        )
     ]
     structure_contracts = []
     for architecture in structure_architectures:
@@ -4138,6 +4141,191 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check_true(
         "price_volume_structure_is_pit_derived_volume_weighted_safety_only_residual",
         len(structure_contracts) == 1 and all(structure_contracts),
+    )
+
+    # Global+local Price/Volume composition must extend BL rather than replace it.
+    # The local branch reuses the exact BL raster, sees only +/-4 ATR price-zone
+    # tokens, is conditioned by the globally augmented Safety latent, and remains
+    # completely outside the MFE gradient path.
+    local_structure_architectures = [
+        architecture
+        for architecture in ACTIVE_MODEL_ARCHITECTURES
+        if get_architecture_descriptor(architecture).has_capability(
+            "price_volume_local_structure_safety"
+        )
+    ]
+    local_structure_contracts = []
+    for architecture in local_structure_architectures:
+        local_spec = get_model_spec(architecture)
+        parent_architectures = [
+            candidate
+            for candidate in ACTIVE_MODEL_ARCHITECTURES
+            if get_architecture_descriptor(candidate).has_capability(
+                "price_volume_structure_safety"
+            )
+            and not get_architecture_descriptor(candidate).has_capability(
+                "price_volume_local_structure_safety"
+            )
+        ]
+        if len(parent_architectures) != 1:
+            local_structure_contracts.append(False)
+            continue
+        parent_architecture = parent_architectures[0]
+
+        torch.manual_seed(20260904)
+        parent_model = build_active_model(10, 0, architecture=parent_architecture)
+        torch.manual_seed(20260904)
+        local_model = build_active_model(10, 0, architecture=architecture)
+
+        parent_state = parent_model.state_dict()
+        local_state = local_model.state_dict()
+        common_exact = (
+            not (set(parent_state) - set(local_state))
+            and all(
+                torch.equal(parent_state[key], local_state[key])
+                for key in parent_state
+            )
+        )
+        extra_keys = sorted(set(local_state) - set(parent_state))
+
+        bars = 300
+        close = torch.linspace(-0.18, 0.0, steps=bars, dtype=torch.float32)
+        open_price = close - 0.002
+        high = torch.maximum(open_price, close) + 0.007
+        low = torch.minimum(open_price, close) - 0.007
+        local_x = torch.zeros((2, bars, 10), dtype=torch.float32)
+        for row in range(2):
+            local_x[row, :, 0] = open_price
+            local_x[row, :, 1] = high
+            local_x[row, :, 2] = low
+            local_x[row, :, 3] = close
+            local_x[row, :, 4] = 0.0
+            local_x[row, :, 5] = open_price
+            local_x[row, :, 6] = high
+            local_x[row, :, 7] = low
+            local_x[row, :, 8] = close
+            local_x[row, :, 9] = 0.0
+        local_x[1, -40:, 4] = 3.0
+
+        parent_model.eval()
+        local_model.eval()
+        with torch.no_grad():
+            parent_safety, parent_mfe = parent_model.forward_safety_mfe_heads(
+                local_x, None
+            )
+            local_safety, local_mfe = local_model.forward_safety_mfe_heads(
+                local_x, None
+            )
+            geometry_map, vap = (
+                local_model.price_volume_structure_encoder.build_structure_inputs(
+                    local_x
+                )
+            )
+            shared_encoded = local_model._encoded_for_heads(local_x, None)[1]
+            global_residual = (
+                local_model.price_volume_structure_encoder.encode_structure_inputs(
+                    geometry_map, vap
+                ).to(shared_encoded.dtype)
+            )
+            query_source = shared_encoded + global_residual
+            local_tokens, local_mask = (
+                local_model.price_volume_local_structure_encoder.build_local_tokens(
+                    geometry_map, vap
+                )
+            )
+            local_weights = (
+                local_model.price_volume_local_structure_encoder.attention_weights(
+                    geometry_map, vap, query_source
+                )
+            )
+            zero_local_residual = (
+                local_model.price_volume_local_structure_encoder(
+                    torch.zeros_like(geometry_map),
+                    torch.zeros_like(vap),
+                    query_source,
+                )
+            )
+
+        local_model.zero_grad(set_to_none=True)
+        _safety_logits, mfe_logits = local_model.forward_safety_mfe_heads(
+            local_x, None
+        )
+        mfe_logits[:, 1].sum().backward()
+        local_from_mfe_grad = _gradient_total(
+            local_model.price_volume_local_structure_encoder.parameters()
+        )
+        local_model.zero_grad(set_to_none=True)
+        safety_logits, _mfe_logits = local_model.forward_safety_mfe_heads(
+            local_x, None
+        )
+        safety_logits[:, 1].sum().backward()
+        local_from_safety_grad = _gradient_total(
+            local_model.price_volume_local_structure_encoder.parameters()
+        )
+
+        parent_params = sum(
+            p.numel() for p in parent_model.parameters() if p.requires_grad
+        )
+        local_params = sum(
+            p.numel() for p in local_model.parameters() if p.requires_grad
+        )
+        local_structure_contracts.append(
+            tuple(local_spec.pooling)
+            == (
+                "global_average",
+                "safety_price_volume_structure_residual",
+                "safety_price_volume_local_structure_query_residual",
+                "raw_safety_head",
+                "raw_mfe_head",
+            )
+            and tuple(local_spec.sequence_input_paths)
+            == (
+                "raw_level",
+                "derived_price_volume_structure_from_stock_ohlcv",
+                "derived_local_price_volume_zone_tokens_from_same_raster",
+            )
+            and float(local_spec.price_volume_local_structure_span_atr or 0.0)
+            == 4.0
+            and int(local_spec.price_volume_local_structure_token_dim or 0) == 32
+            and float(
+                local_spec.price_volume_local_structure_recent_fraction or 0.0
+            )
+            == 0.25
+            and common_exact
+            and bool(extra_keys)
+            and all(
+                key.startswith("price_volume_local_structure_encoder.")
+                for key in extra_keys
+            )
+            and torch.equal(parent_mfe, local_mfe)
+            and not torch.equal(parent_safety, local_safety)
+            and tuple(local_tokens.shape) == (2, 16, 11)
+            and tuple(local_mask.shape) == (2, 16)
+            and tuple(local_weights.shape) == (2, 16)
+            and bool(torch.isfinite(local_tokens).all().item())
+            and bool(torch.isfinite(local_weights).all().item())
+            and bool(
+                torch.allclose(
+                    local_weights.float().sum(dim=1),
+                    torch.ones(2, dtype=torch.float32),
+                    atol=1e-6,
+                    rtol=0.0,
+                )
+            )
+            and bool(
+                torch.equal(
+                    zero_local_residual,
+                    torch.zeros_like(zero_local_residual),
+                )
+            )
+            and local_from_mfe_grad == 0.0
+            and local_from_safety_grad > 0.0
+            and local_params > parent_params
+            and (local_params - parent_params) / parent_params < 0.03
+        )
+    check_true(
+        "price_volume_global_and_local_structure_are_additive_safety_only_capabilities",
+        len(local_structure_contracts) == 1 and all(local_structure_contracts),
     )
 
     task_model.zero_grad(set_to_none=True)
