@@ -805,7 +805,7 @@ def load_daily_universal_ranker_data(
         target_policy.materialization_mode
         == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED
     ):
-        from config.strategy_compare import get_strategy_comparison_settings
+        from core.strategy_compare_policy import get_strategy_comparison_settings
 
         risk_param_policy = str(
             get_strategy_comparison_settings("selection_pit").param_policy

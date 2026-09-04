@@ -19,7 +19,7 @@ from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
 )
-from config.strategy_compare import (
+from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
     get_strategy_runtime_integration_settings,

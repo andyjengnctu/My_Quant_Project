@@ -19,7 +19,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     get_breakout_quality_continuous_ranker_comparison_settings,
 )
-from config.strategy_compare import get_strategy_comparison_settings
+from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.console_report import (
     compact_console_enabled,
     print_artifact_paths,

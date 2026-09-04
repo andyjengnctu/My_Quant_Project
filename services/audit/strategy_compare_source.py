@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
-from config.strategy_compare import get_strategy_comparison_settings
+from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.path_utils import project_relative_display_path
 from core.strategy_comparison import strategy_comparison_fingerprint
 from filters.breakout_quality.strategy_compare_contracts import (

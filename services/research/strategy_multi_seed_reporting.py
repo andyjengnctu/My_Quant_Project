@@ -6,7 +6,7 @@ from dataclasses import replace
 import math
 from typing import Any
 
-from config.strategy_compare import get_strategy_comparison_settings
+from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.console_report import render_section, render_table
 from core.report_metrics import (
     ROBUSTNESS_ROMD_DISTRIBUTION_METRICS,

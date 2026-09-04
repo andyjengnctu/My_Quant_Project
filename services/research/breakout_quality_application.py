@@ -4521,7 +4521,7 @@ def _prepare_strategy_compare_model_upstream(
 def _strategy_compare_required_model_sources(profile_ids: tuple[str, ...] | None = None):
     """Resolve model sources required by the selected current Strategy Compare modes."""
 
-    from config.strategy_compare import (
+    from core.strategy_compare_policy import (
         get_strategy_comparison_menu_profiles,
         get_strategy_comparison_settings,
     )
@@ -4728,10 +4728,10 @@ def _prepare_strategy_compare_model_artifacts(
     comparison = comparisons[0]
 
     from config.strategy_compare import (
-        STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
         STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
         STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
     )
+    from core.strategy_compare_registry import STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT
 
     worker_count = validate_strategy_compare_gpu_train_workers(STRATEGY_COMPARE_GPU_TRAIN_WORKERS)
     color_enabled = console_color_enabled()

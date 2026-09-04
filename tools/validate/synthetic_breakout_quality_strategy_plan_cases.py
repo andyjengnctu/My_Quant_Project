@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from config.strategy_compare import get_strategy_comparison_settings
+from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 from services.research import strategy_comparison as strategy_comparison_module
 from filters.breakout_quality.strategy_compare_plan import ResolvedComparisonPlan

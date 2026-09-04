@@ -122,7 +122,7 @@ def load_min_roos_risk_schedule(
     ``atr_times_init`` are extracted; all breakout/exit/portfolio semantics are discarded.
     """
 
-    from config.strategy_compare import get_strategy_comparison_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings
 
     root = Path(project_root)
     settings = get_strategy_comparison_settings("selection_pit")

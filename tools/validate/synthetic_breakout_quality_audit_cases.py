@@ -300,7 +300,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "load_strategy_arm_pipeline_sidecars" not in opportunity_source,
     )
 
-    from config.strategy_compare import get_strategy_comparison_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings
     from filters.breakout_quality.strategy_compare_contracts import (
         COMPARISON_MODE_SCORE_RANKING,
     )

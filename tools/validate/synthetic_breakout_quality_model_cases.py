@@ -91,7 +91,7 @@ def _strategy_c75_uses_experiment_profile(profile_name: str) -> bool:
     the symbol C75 can never exist in the repository.
     """
 
-    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
 
     arm = dict(STRATEGY_COMPARE_ARMS.get("C75") or {})
     source = dict(STRATEGY_DL_SOURCES.get(str(arm.get("dl_id") or "")) or {})
@@ -1651,7 +1651,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from filters.breakout_quality.models.factory import require_torch
-    from config.strategy_compare import get_strategy_comparison_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings
     from tools.filters.breakout_quality.train_continuous_ranker import (
         PAIRWISE_TRAINING_CONTRACT,
         _daily_top_k_metrics,
@@ -2632,7 +2632,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from config.strategy_compare import (
+    from core.strategy_compare_policy import (
         get_strategy_comparison_settings,
         get_strategy_rolling_test_modes,
     )

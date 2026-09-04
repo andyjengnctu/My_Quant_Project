@@ -128,7 +128,7 @@ def append_strategy_compare_preparation_contract_checks(
         and "resolve_research_artifact_action" in research_contract_source,
     )
 
-    from config.strategy_compare import get_strategy_comparison_settings as _get_pit_bundle_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings as _get_pit_bundle_settings
     from filters.breakout_quality.paths import (
         resolve_filter_model_output_dir,
         resolve_selection_point_in_time_audit_json_path,
@@ -406,7 +406,7 @@ def append_strategy_compare_preparation_contract_checks(
     # Regression for the actual cross-producer failure: the rendering snapshot may have
     # comparison_period=None before Dataset/Target preparation.  Parameter execution must
     # consume the freshly re-planned period, never that stale snapshot.
-    from config.strategy_compare import get_strategy_comparison_settings as _get_compare_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings as _get_compare_settings
     fresh_period_settings = _get_compare_settings("extending_window_oos")
     fresh_param_action = StrategyPreparationAction(
         action_id="param:full_oos",
@@ -466,7 +466,7 @@ def append_strategy_compare_preparation_contract_checks(
         and forwarded_ensure.get("comparison_end_date") == "2026-03-02",
     )
 
-    from config.strategy_compare import get_strategy_comparison_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings
     from core.active_param_ensemble import (
         ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
         get_active_param_ensemble_date_range,
@@ -818,7 +818,7 @@ def append_strategy_compare_preparation_contract_checks(
     )
 
 
-    from config.strategy_compare import get_strategy_comparison_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings
     from services.optimizer import strategy_param_training as param_training_module
 
     selection_settings = get_strategy_comparison_settings("selection_pit")

@@ -54,7 +54,7 @@ from config.breakout_quality import (
     get_breakout_quality_workflow_settings,
 )
 from core.training_policy import resolve_robustness_benchmark_seeds
-from config.strategy_compare import (
+from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
 )

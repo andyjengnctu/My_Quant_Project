@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from config.strategy_compare import (
+from core.strategy_compare_policy import (
     get_strategy_comparison_menu_profiles,
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,

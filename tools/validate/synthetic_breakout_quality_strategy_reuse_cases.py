@@ -21,7 +21,7 @@ def append_completed_pair_score_reuse_contract_checks(
 ) -> None:
     """Validate archived frozen-score provenance independently of profile membership."""
 
-    from config import strategy_compare as strategy_config
+    from core import strategy_compare_policy as strategy_config
     from services.research import strategy_comparison as score_reuse_module
 
     reuse_source = (

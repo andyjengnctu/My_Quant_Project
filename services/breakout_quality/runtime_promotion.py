@@ -20,7 +20,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
     get_breakout_quality_workflow_settings,
 )
-from config.strategy_compare import (
+from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_runtime_integration_settings,
 )

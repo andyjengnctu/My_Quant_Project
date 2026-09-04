@@ -2314,6 +2314,22 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "SCANNER_PROGRESS_EVERY",
             "ENABLE_OPTIMIZER_PROFILING",
         },
+        "config.strategy_compare": {
+            "STRATEGY_COMPARE_DEFAULT_PROFILE",
+            "STRATEGY_COMPARE_GPU_TRAIN_WORKERS",
+            "STRATEGY_RUNTIME_INTEGRATION",
+        },
+        "core.strategy_compare_registry": {
+            "STRATEGY_COMPARE_SUITES",
+            "STRATEGY_COMPARE_PROFILES",
+            "STRATEGY_COMPARE_ARMS",
+            "STRATEGY_COMPARE_CONTRASTS",
+        },
+        "core.strategy_compare_policy": {
+            "get_strategy_compare_suite",
+            "get_strategy_comparison_settings",
+            "get_strategy_multi_seed_robustness_settings",
+        },
     }
     module_import_failures = []
     module_symbol_failures = []
@@ -2342,6 +2358,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "config/training_performance_policy.py",
         "config/downloader.py",
         "config/runtime.py",
+        "config/strategy_compare.py",
     )
     declarative_config_violations = []
     for relative_path in declarative_config_modules:

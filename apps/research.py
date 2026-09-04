@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.audit import get_active_audit_module_id, get_audit_definitions
 from core.research_policy import get_active_model_research_provider
-from config.strategy_compare import (
+from core.strategy_compare_policy import (
     get_strategy_comparison_menu_profiles,
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,

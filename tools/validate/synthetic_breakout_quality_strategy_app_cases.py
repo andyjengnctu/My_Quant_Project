@@ -176,7 +176,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     project_root = Path(__file__).resolve().parents[2]
 
-    from config import strategy_compare as strategy_config
+    from core import strategy_compare_policy as strategy_config
     from config.breakout_quality import (
         get_breakout_quality_workflow_settings,
         get_breakout_quality_model_test_settings,
@@ -1293,12 +1293,12 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
         get_breakout_quality_model_test_settings,
         get_continuous_ranker_research_spec,
     )
-    from config.strategy_compare import (
+    from core.strategy_compare_registry import (
         STRATEGY_COMPARE_ARMS,
         STRATEGY_COMPARE_SUITES,
         STRATEGY_DL_SOURCES,
-        get_strategy_compare_suite,
     )
+    from core.strategy_compare_policy import get_strategy_compare_suite
     from config.compatibility.strategy_compare_history import (
         HISTORICAL_STRATEGY_COMPARE_ARMS,
         HISTORICAL_STRATEGY_COMPARE_CONTRASTS,
@@ -1429,7 +1429,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config import strategy_compare as strategy_config
+    from core import strategy_compare_policy as strategy_config
     from core.extended_signals import attach_breakout_quality_rank
     from filters.breakout_quality.ranker_sample_contract import (
         build_score_eligibility_contract,
@@ -1902,7 +1902,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     from config.breakout_quality import (
         get_breakout_quality_workflow_settings,
     )
-    from config.strategy_compare import get_strategy_runtime_integration_settings
+    from core.strategy_compare_policy import get_strategy_runtime_integration_settings
     from services.research.strategy_compare_application import (
         dispatch_runtime_integration_action,
         runtime_integration_execution_enabled,

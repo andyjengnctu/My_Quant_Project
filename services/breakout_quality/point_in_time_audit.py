@@ -1449,7 +1449,7 @@ def _run_point_in_time_scores_audit(
                 f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
             )
     elif mode == "strategy_compare":
-        from config.strategy_compare import (
+        from core.strategy_compare_policy import (
             validate_single_seed_strategy_conversion_authorization,
         )
 

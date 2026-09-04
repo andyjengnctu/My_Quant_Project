@@ -1428,7 +1428,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     point_in_time_source = (
         project_root / "services/breakout_quality/point_in_time_scores.py"
     ).read_text(encoding="utf-8")
-    from config.strategy_compare import get_strategy_multi_seed_robustness_settings
+    from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
     from services.research.strategy_multi_seed_robustness import (
         _benchmark_identity_payload,
         _scientific_benchmark_parameter_identities,
@@ -2663,7 +2663,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     from dataclasses import replace
-    from config.strategy_compare import get_strategy_comparison_settings
+    from core.strategy_compare_policy import get_strategy_comparison_settings
     from services.research.strategy_comparison import render_safety_gate_sensitivity_table
 
     # C71-C73 are historical-only now.  Keep testing the reusable sensitivity renderer
