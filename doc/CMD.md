@@ -44,8 +44,9 @@ python apps/workbench.py
 
 # Workbench
 
-- `apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口。
-- Workbench 上方控制列提供股票代號輸入、常用股票下拉、候選股掃描與歷史績效股掃描。
+- `apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口；同一 Workbench 亦承接實際 Trading 操作。
+- 主頁籤為「單股回測檢視／投組回測檢視／實際交易」；實際交易頁目前可初始化 Trading account、更新現金、登記既有持股，以及修正／移除尚未有賣出歷史且尚未由策略接管的 manual-adopted 持股。所有帳戶變更均由 `services/trading/account_state.py` 寫入 `state/trading/account.json`，不要手動編輯 JSON。
+- 單股 Workbench 上方控制列提供股票代號輸入、常用股票下拉、候選股掃描與歷史績效股掃描。
 - K 線檢視中，交易明細與 Console 為獨立分頁。
 - 日常 GUI 問題先檢查 `services/workbench_ui/single_stock_inspector.py`，再看 `services/workbench_ui/workbench.py`。
 

@@ -239,6 +239,119 @@ def adopt_manual_trading_position(
     )
 
 
+def _has_confirmed_sell_history(state: dict[str, Any], ticker: str) -> bool:
+    ticker_key = _normalize_ticker(ticker)
+    for event in state.get("events", []):
+        if str(event.get("mutation_type") or "") != "confirm_sell_fill":
+            continue
+        details = event.get("details") or {}
+        if _normalize_ticker(details.get("ticker")) == ticker_key:
+            return True
+    return False
+
+
+def correct_manual_trading_position(
+    state: dict[str, Any],
+    *,
+    ticker: object,
+    qty: int,
+    cost_basis_total: object,
+    timestamp: str,
+    mutation_id: str,
+    entry_date: object | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Correct broker truth for an unmanaged manually adopted holding.
+
+    This is a state-reconciliation operation, not a trade.  It never changes
+    cash and is intentionally restricted to holdings with no confirmed sell
+    history so that historical accounting is not rewritten.
+    """
+    validate_trading_account_state(state)
+    ticker_key = _normalize_ticker(ticker)
+    if ticker_key not in state["positions"]:
+        raise ValueError(f"Trading 沒有 open position: {ticker_key}")
+    record = state["positions"][ticker_key]
+    if record.get("source") != POSITION_SOURCE_MANUAL_ADOPTED:
+        raise ValueError(f"只有 manual_adopted position 可直接修正 broker truth: {ticker_key}")
+    management = record.get("strategy_management") or {}
+    if management.get("status") != MANAGEMENT_STATUS_UNMANAGED or management.get("position_state") is not None:
+        raise ValueError(f"已由策略管理的 position 不可用 manual correction 修改: {ticker_key}")
+    if _has_confirmed_sell_history(state, ticker_key):
+        raise ValueError(f"已有 confirmed sell history 的 manual position 不可改寫 broker truth: {ticker_key}")
+
+    qty = int(qty)
+    if qty <= 0:
+        raise ValueError("manual position qty 必須 > 0")
+    cost_basis_milli = int(money_to_milli(cost_basis_total))
+    if cost_basis_milli <= 0:
+        raise ValueError("manual position cost_basis_total 必須 > 0")
+    corrected_entry_date = _normalize_iso_date(entry_date, field_name="entry_date")
+
+    updated = deepcopy(state)
+    updated_record = updated["positions"][ticker_key]
+    previous_broker = deepcopy(updated_record["broker"])
+    updated_record["broker"] = {
+        "qty": qty,
+        "initial_qty": qty,
+        "initial_cost_basis_milli": cost_basis_milli,
+        "remaining_cost_basis_milli": cost_basis_milli,
+        "realized_pnl_milli": 0,
+        "entry_date": corrected_entry_date,
+    }
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="correct_manual_position",
+        timestamp=timestamp,
+        details={
+            "ticker": ticker_key,
+            "previous_broker": previous_broker,
+            "broker": deepcopy(updated_record["broker"]),
+            "note": None if note is None else str(note),
+            "cash_changed": False,
+        },
+    )
+
+
+def remove_manual_trading_position(
+    state: dict[str, Any],
+    *,
+    ticker: object,
+    timestamp: str,
+    mutation_id: str,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Remove an erroneous unmanaged manual holding without creating a trade."""
+    validate_trading_account_state(state)
+    ticker_key = _normalize_ticker(ticker)
+    if ticker_key not in state["positions"]:
+        raise ValueError(f"Trading 沒有 open position: {ticker_key}")
+    record = state["positions"][ticker_key]
+    if record.get("source") != POSITION_SOURCE_MANUAL_ADOPTED:
+        raise ValueError(f"只有 manual_adopted position 可直接移除: {ticker_key}")
+    management = record.get("strategy_management") or {}
+    if management.get("status") != MANAGEMENT_STATUS_UNMANAGED or management.get("position_state") is not None:
+        raise ValueError(f"已由策略管理的 position 不可用 manual remove 移除: {ticker_key}")
+    if _has_confirmed_sell_history(state, ticker_key):
+        raise ValueError(f"已有 confirmed sell history 的 manual position 不可直接移除: {ticker_key}")
+
+    updated = deepcopy(state)
+    removed = deepcopy(updated["positions"].pop(ticker_key))
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="remove_manual_position",
+        timestamp=timestamp,
+        details={
+            "ticker": ticker_key,
+            "removed_position": removed,
+            "note": None if note is None else str(note),
+            "cash_changed": False,
+        },
+    )
+
+
 def apply_confirmed_strategy_buy_fill(
     state: dict[str, Any],
     *,
@@ -510,6 +623,7 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "realized_pnl": milli_to_money(int(broker.get("realized_pnl_milli", 0) or 0)),
                 "entry_date": broker.get("entry_date"),
                 "management_status": record["strategy_management"]["status"],
+                "has_sell_history": _has_confirmed_sell_history(state, ticker),
             }
         )
     return {
@@ -531,6 +645,8 @@ __all__ = [
     "build_empty_trading_account_state",
     "set_trading_account_cash",
     "adopt_manual_trading_position",
+    "correct_manual_trading_position",
+    "remove_manual_trading_position",
     "apply_confirmed_strategy_buy_fill",
     "apply_confirmed_sell_fill",
     "validate_trading_account_state",

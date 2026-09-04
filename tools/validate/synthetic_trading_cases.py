@@ -13,6 +13,8 @@ from core.trading_account_state import validate_trading_account_state
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
+    correct_existing_trading_position,
+    remove_existing_trading_position,
     confirm_trading_sell_fill,
     confirm_trading_strategy_buy_fill,
     get_trading_account_read_model,
@@ -85,6 +87,40 @@ def validate_trading_account_state_contract_case(base_params):
         else:
             duplicate_rejected = False
         add_check(results, "trading_account", case_id, "duplicate_open_ticker_is_rejected", True, duplicate_rejected)
+
+        cash_before_correction = state["cash_milli"]
+        state = correct_existing_trading_position(
+            root,
+            ticker="2330",
+            qty=1200,
+            cost_basis_total=540_000,
+            entry_date="2026-08-02",
+            expected_revision=state["revision"],
+            note="synthetic broker correction",
+        )
+        corrected = state["positions"]["2330"]
+        add_check(results, "trading_account", case_id, "manual_correction_does_not_change_cash", cash_before_correction, state["cash_milli"])
+        add_check(results, "trading_account", case_id, "manual_correction_updates_broker_qty", 1200, corrected["broker"]["qty"])
+        add_check(results, "trading_account", case_id, "manual_correction_updates_broker_cost_basis", money_to_milli(540_000), corrected["broker"]["remaining_cost_basis_milli"])
+        add_check(results, "trading_account", case_id, "manual_correction_does_not_create_strategy_state", None, corrected["strategy_management"]["position_state"])
+
+        state = adopt_existing_trading_position(
+            root,
+            ticker="2454",
+            qty=200,
+            cost_basis_total=200_000,
+            entry_date="2026-08-03",
+            expected_revision=state["revision"],
+        )
+        cash_before_remove = state["cash_milli"]
+        state = remove_existing_trading_position(
+            root,
+            ticker="2454",
+            expected_revision=state["revision"],
+            note="synthetic erroneous manual row",
+        )
+        add_check(results, "trading_account", case_id, "manual_remove_does_not_change_cash", cash_before_remove, state["cash_milli"])
+        add_check(results, "trading_account", case_id, "manual_remove_deletes_only_selected_position", False, "2454" in state["positions"])
 
         cash_before_buy = state["cash_milli"]
         expected_buy = build_buy_ledger_from_price(100, 1000, base_params)
@@ -178,6 +214,21 @@ def validate_trading_account_state_contract_case(base_params):
         add_check(results, "trading_account", case_id, "manual_position_sell_uses_canonical_net_proceeds", cash_before_manual_sell + manual_sell["net_sell_total_milli"], state["cash_milli"])
         add_check(results, "trading_account", case_id, "manual_position_partial_cost_basis_is_allocated_canonically", manual_before["remaining_cost_basis_milli"] - manual_allocated, manual_after["remaining_cost_basis_milli"])
         add_check(results, "trading_account", case_id, "manual_position_remains_unmanaged_after_broker_sell", "unmanaged", state["positions"]["2330"]["strategy_management"]["status"])
+        try:
+            correct_existing_trading_position(
+                root,
+                ticker="2330",
+                qty=800,
+                cost_basis_total=400_000,
+                entry_date="2026-08-02",
+                expected_revision=state["revision"],
+            )
+        except ValueError:
+            sold_manual_correction_rejected = True
+        else:
+            sold_manual_correction_rejected = False
+        add_check(results, "trading_account", case_id, "manual_position_with_sell_history_cannot_be_corrected", True, sold_manual_correction_rejected)
+        add_check(results, "trading_account", case_id, "sold_manual_correction_reject_keeps_revision", state["revision"], load_trading_account_state(root)["revision"])
 
         validate_trading_account_state(state)
         expected_revisions = list(range(state["revision"] + 1))
@@ -204,4 +255,79 @@ def validate_trading_account_state_contract_case(base_params):
     return results, summary
 
 
-__all__ = ["validate_trading_account_state_contract_case"]
+def validate_trading_workbench_account_panel_contract_case(base_params):
+    case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from services.workbench_ui.trading_account_panel import (
+        build_trading_account_panel_snapshot,
+        parse_trading_money_text,
+        parse_trading_qty_text,
+    )
+    from services.workbench_ui.workbench import PANEL_SPECS, build_workbench_spec
+
+    workbench_spec = build_workbench_spec()
+    panel_specs = {row["panel_id"]: row for row in workbench_spec.get("panels", [])}
+    add_check(results, "trading_workbench", case_id, "actual_trading_panel_is_registered", True, "trading_account" in panel_specs)
+    trading_panel = panel_specs.get("trading_account", {})
+    add_check(results, "trading_workbench", case_id, "actual_trading_panel_label", "實際交易", trading_panel.get("tab_label"))
+    add_check(
+        results,
+        "trading_workbench",
+        case_id,
+        "actual_trading_panel_uses_account_state_backend",
+        "services.trading.account_state.get_trading_account_read_model",
+        trading_panel.get("backend_runner"),
+    )
+    add_check(
+        results,
+        "trading_workbench",
+        case_id,
+        "actual_trading_panel_uses_dedicated_factory",
+        "services.workbench_ui.trading_account_panel:TradingAccountPanel",
+        next((row.get("panel_factory_path") for row in PANEL_SPECS if row.get("panel_id") == "trading_account"), None),
+    )
+
+    add_check(results, "trading_workbench", case_id, "money_parser_accepts_grouping_and_decimal", "1234567.89", str(parse_trading_money_text("1,234,567.89", "cash")))
+    add_check(results, "trading_workbench", case_id, "qty_parser_accepts_grouping", 1000, parse_trading_qty_text("1,000"))
+    try:
+        parse_trading_qty_text("1.5")
+    except ValueError:
+        fractional_qty_rejected = True
+    else:
+        fractional_qty_rejected = False
+    add_check(results, "trading_workbench", case_id, "fractional_share_qty_is_rejected", True, fractional_qty_rejected)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        empty_snapshot = build_trading_account_panel_snapshot(root)
+        add_check(results, "trading_workbench", case_id, "workbench_snapshot_handles_uninitialized_account", False, empty_snapshot["initialized"])
+        add_check(results, "trading_workbench", case_id, "workbench_snapshot_uses_project_relative_state_path", "state/trading/account.json", empty_snapshot["state_path"])
+
+        state = initialize_trading_account_state(root, cash=900_000)
+        state = adopt_existing_trading_position(
+            root,
+            ticker="2330",
+            qty=1000,
+            cost_basis_total=500_000,
+            entry_date="2026-08-01",
+            expected_revision=state["revision"],
+        )
+        snapshot = build_trading_account_panel_snapshot(root)
+        add_check(results, "trading_workbench", case_id, "workbench_snapshot_reads_current_revision", state["revision"], snapshot["revision"])
+        add_check(results, "trading_workbench", case_id, "workbench_snapshot_reads_cash", 900_000.0, snapshot["cash"])
+        add_check(results, "trading_workbench", case_id, "workbench_snapshot_reads_manual_position", "2330", snapshot["positions"][0]["ticker"])
+        from core.trading_policy import get_trading_policy_snapshot
+        expected_policy = get_trading_policy_snapshot()
+        add_check(results, "trading_workbench", case_id, "workbench_snapshot_uses_current_trading_strategy_config", expected_policy["strategy_id"], snapshot["policy"]["strategy_id"])
+        add_check(results, "trading_workbench", case_id, "workbench_snapshot_uses_current_param_selector_config", expected_policy["param_selector"], snapshot["policy"]["param_selector"])
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+__all__ = [
+    "validate_trading_account_state_contract_case",
+    "validate_trading_workbench_account_panel_contract_case",
+]

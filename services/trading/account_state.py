@@ -15,6 +15,8 @@ from core.trading_account_state import (
     apply_confirmed_strategy_buy_fill,
     build_empty_trading_account_state,
     build_trading_account_read_model,
+    correct_manual_trading_position,
+    remove_manual_trading_position,
     set_trading_account_cash,
     validate_trading_account_state,
 )
@@ -140,6 +142,52 @@ def adopt_existing_trading_position(
     )
 
 
+def correct_existing_trading_position(
+    project_root,
+    *,
+    ticker,
+    qty: int,
+    cost_basis_total,
+    expected_revision: int,
+    entry_date=None,
+    note: str | None = None,
+):
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        mutator=lambda state, timestamp, mutation_id: correct_manual_trading_position(
+            state,
+            ticker=ticker,
+            qty=qty,
+            cost_basis_total=cost_basis_total,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+            entry_date=entry_date,
+            note=note,
+        ),
+    )
+
+
+def remove_existing_trading_position(
+    project_root,
+    *,
+    ticker,
+    expected_revision: int,
+    note: str | None = None,
+):
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        mutator=lambda state, timestamp, mutation_id: remove_manual_trading_position(
+            state,
+            ticker=ticker,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+            note=note,
+        ),
+    )
+
+
 def confirm_trading_strategy_buy_fill(
     project_root,
     *,
@@ -219,6 +267,8 @@ __all__ = [
     "initialize_trading_account_state",
     "set_trading_cash_balance",
     "adopt_existing_trading_position",
+    "correct_existing_trading_position",
+    "remove_existing_trading_position",
     "confirm_trading_strategy_buy_fill",
     "confirm_trading_sell_fill",
     "get_trading_account_read_model",

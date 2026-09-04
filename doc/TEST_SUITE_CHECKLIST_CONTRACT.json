@@ -3876,10 +3876,21 @@
       "priority": "P1",
       "category": "Runtime domain / Trading account state",
       "item": "Trading account/positions single-state SSOT and confirmed-fill accounting",
-      "gap": "Trading實際帳戶必須以state/trading/account.json作唯一current truth，同一atomic snapshot保存exact-milli cash、open positions與revisioned hash-chain events；不得另建positions.json第二份可變真理。manual adopted既有持股只登記broker qty/cost basis，不改cash、不偽造歷史strategy state；strategy fill必須重用canonical entry position與exact accounting，confirmed sell重用canonical sell/cost-basis/PnL semantics。stale revision、history tamper、同日買賣、超賣必須fail-fast；Trading data與operational state不得進Git/package ZIP。",
+      "gap": "Trading實際帳戶必須以state/trading/account.json作唯一current truth，同一atomic snapshot保存exact-milli cash、open positions與revisioned hash-chain events；不得另建positions.json第二份可變真理。manual adopted既有持股只登記broker qty/cost basis，不改cash、不偽造歷史strategy state；尚未有confirmed sell history且尚未由策略接管的manual holding可用revisioned correction/remove修正broker truth，但不得改cash或偽造成交。strategy fill必須重用canonical entry position與exact accounting，confirmed sell重用canonical sell/cost-basis/PnL semantics。stale revision、history tamper、同日買賣、超賣必須fail-fast；Trading data與operational state不得進Git/package ZIP。",
       "entry": "`core/trading_account_state.py`, `services/trading/account_state.py`, `core/position_step.py`, `.gitignore`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 349
+    },
+    {
+      "id": "B362",
+      "section": "B2",
+      "priority": "P1",
+      "category": "GUI / Workbench Trading account",
+      "item": "Workbench actual-trading account maintenance uses Trading account-state SSOT",
+      "gap": "Workbench必須提供正式「實際交易」頁籤並只透過services/trading/account_state.py操作state/trading/account.json；可初始化帳戶、reconcile cash、登記既有manual-adopted持股，並以revisioned correction/remove event修正尚未有realized sell history且尚未由策略接管的manual broker truth。UI不得直接讀寫JSON、不得用持股修正偽造買賣、不得修改cash或strategy position state；stale revision必須由account service fail-fast並要求重新確認。",
+      "entry": "`services/workbench_ui/workbench.py`, `services/workbench_ui/trading_account_panel.py`, `services/trading/account_state.py`, `core/trading_account_state.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 350
     }
   ],
   "tests": [
@@ -7240,9 +7251,16 @@
     {
       "id": "T481",
       "b_id": "B361",
-      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、gitignore isolation、manual adoption、cash reconciliation、strategy confirmed buy/sell exact accounting、same-day/over-sell/stale-revision guard、broker/strategy parity與event hash-chain tamper detection。",
+      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、gitignore isolation、manual adoption/correction/remove、cash reconciliation、strategy confirmed buy/sell exact accounting、same-day/over-sell/stale-revision guard、broker/strategy parity與event hash-chain tamper detection。",
       "initial_status": "NEW",
       "order": 471
+    },
+    {
+      "id": "T482",
+      "b_id": "B362",
+      "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋第三個實際交易panel registry、account backend/factory、輸入解析、未初始化/已初始化read snapshot、project-relative state path與config-driven Trading policy。",
+      "initial_status": "NEW",
+      "order": 472
     }
   ],
   "transitions": [
@@ -24333,6 +24351,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_account_state_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B362",
+      "description": "新增Workbench實際交易帳戶維護頁，串接single account-state SSOT與manual broker-truth correction/remove mutation。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/workbench_ui/trading_account_panel.py`, `services/trading/account_state.py`, `core/trading_account_state.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T482",
+      "description": "新增Trading Workbench account panel direct synthetic並納入正式synthetic registry。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_workbench_account_panel_contract_case`"
     }
   ]
 }

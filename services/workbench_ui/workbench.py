@@ -96,6 +96,19 @@ PANEL_SPECS = (
         "jump_to_trade_enabled": True,
         "panel_factory_path": "services.workbench_ui.portfolio_backtest_inspector:PortfolioBacktestInspectorPanel",
     },
+    {
+        "panel_id": "trading_account",
+        "tab_label": "實際交易",
+        "backend_runner": "services.trading.account_state.get_trading_account_read_model",
+        "artifact_keys": (),
+        "inline_chart_backend": "",
+        "default_show_volume": False,
+        "scanner_dropdown_enabled": False,
+        "console_tab_enabled": False,
+        "jump_to_latest_enabled": False,
+        "jump_to_trade_enabled": False,
+        "panel_factory_path": "services.workbench_ui.trading_account_panel:TradingAccountPanel",
+    },
 )
 
 
@@ -116,9 +129,9 @@ def build_workbench_spec():
                 "inline_chart_backend": panel["inline_chart_backend"],
                 "default_show_volume": panel["default_show_volume"],
                 "default_dataset": "full",
-                "scanner_dropdown_enabled": True,
-                "console_tab_enabled": True,
-                "jump_to_latest_enabled": True,
+                "scanner_dropdown_enabled": bool(panel.get("scanner_dropdown_enabled", True)),
+                "console_tab_enabled": bool(panel.get("console_tab_enabled", True)),
+                "jump_to_latest_enabled": bool(panel.get("jump_to_latest_enabled", True)),
                 "jump_to_trade_enabled": bool(panel.get("jump_to_trade_enabled", False)),
             }
             for panel in PANEL_SPECS

@@ -54,7 +54,10 @@ from .synthetic_unit_cases import (
     validate_price_utils_unit_case,
     validate_signal_utils_unit_case,
 )
-from .synthetic_trading_cases import validate_trading_account_state_contract_case
+from .synthetic_trading_cases import (
+    validate_trading_account_state_contract_case,
+    validate_trading_workbench_account_panel_contract_case,
+)
 from .synthetic_meta_cases import (
     validate_checklist_generated_view_ssot_contract_case,
     validate_checklist_t_formal_command_single_entry_case,
@@ -364,6 +367,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_single_backtest_uses_compounding_capital_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_account_state_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_workbench_account_panel_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_policy_single_source_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_active_legacy_model_isolation_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_chronological_embargo_case, layer="core_invariant", cost_class="fast"),
