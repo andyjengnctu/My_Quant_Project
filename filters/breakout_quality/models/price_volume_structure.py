@@ -332,7 +332,153 @@ def build_price_volume_local_structure_encoder(
     return PriceVolumeLocalStructureEncoder()
 
 
+def build_price_volume_multiscale_local_encoder(
+    nn,
+    torch,
+    *,
+    feature_count: int,
+    output_width: int,
+    spec,
+):
+    """High-resolution recent Price×Volume geometry with explicit global interaction.
+
+    The BL global field is preserved unchanged.  This branch independently
+    rasterizes only the most recent bars at a tighter ATR span, keeping the
+    time×price geometry that zone-token aggregation discards.  Its residual
+    combines a local 2D latent with an explicit element-wise interaction against
+    the already-computed BL global residual.  It never feeds the MFE head.
+    """
+
+    if int(feature_count) < 5:
+        raise ValueError("Multi-scale local Price-Volume需要stock OHLCV前5個sequence channels")
+    history_bars = int(spec.price_volume_local_map_history_bars or 0)
+    time_bins = int(spec.price_volume_local_map_time_bins or 0)
+    price_bins = int(spec.price_volume_local_map_price_bins or 0)
+    price_span_atr = float(spec.price_volume_local_map_price_span_atr or 0.0)
+    latent_dim = int(spec.price_volume_local_map_geometry_latent_dim or 0)
+    atr_bars = int(spec.price_volume_structure_atr_bars or 0)
+    geometry_channels = int(spec.price_volume_structure_geometry_channels or 0)
+    if history_bars < atr_bars or history_bars < 8:
+        raise ValueError("Multi-scale local Price-Volume history必須涵蓋ATR且>=8 bars")
+    if time_bins < 8 or price_bins < 8 or price_span_atr <= 0.0:
+        raise ValueError("Multi-scale local Price-Volume raster contract不合法")
+    if geometry_channels != 4 or latent_dim < 1 or int(output_width) < 1:
+        raise ValueError("Multi-scale local Price-Volume channels/latent/output contract不合法")
+
+    functional = torch.nn.functional
+
+    class PriceVolumeMultiscaleLocalEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.local_geometry_network = nn.Sequential(
+                nn.Conv2d(geometry_channels, 12, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(12, 24, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(24, latent_dim, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+            )
+            # Explicit cross-scale interaction: local geometry is retained as a
+            # main effect and multiplied by a projected global structural field.
+            self.global_projection = nn.Linear(int(output_width), latent_dim, bias=False)
+            self.fusion_projection = nn.Linear(2 * latent_dim, int(output_width), bias=False)
+
+        @staticmethod
+        def _relative_volume_weight(volume_z):
+            positive = functional.softplus(volume_z.float())
+            mean = positive.mean(dim=1, keepdim=True)
+            eps = torch.finfo(positive.dtype).eps
+            return positive / mean.clamp_min(eps)
+
+        @staticmethod
+        def _current_atr_return(high, low, close):
+            previous_close = torch.cat((close[:, :1], close[:, :-1]), dim=1)
+            true_range = torch.maximum(
+                high - low,
+                torch.maximum(
+                    torch.abs(high - previous_close),
+                    torch.abs(low - previous_close),
+                ),
+            )
+            width = min(int(atr_bars), int(true_range.shape[1]))
+            eps = torch.finfo(true_range.dtype).eps
+            return true_range[:, -width:].mean(dim=1).clamp_min(eps)
+
+        def build_local_geometry_map(self, x):
+            if x.ndim != 3 or int(x.shape[2]) < 5:
+                raise ValueError("Multi-scale local Price-Volume input必須是[B,T,F>=5]")
+            if int(x.shape[1]) < history_bars:
+                raise ValueError("Multi-scale local Price-Volume input history不足")
+            with torch.no_grad():
+                stock = x[:, -history_bars:, :5].float()
+                open_price = stock[:, :, 0]
+                high = stock[:, :, 1]
+                low = stock[:, :, 2]
+                close = stock[:, :, 3]
+                volume_z = stock[:, :, 4]
+                current_atr = self._current_atr_return(high, low, close)
+                atr_axis = torch.linspace(
+                    -price_span_atr,
+                    price_span_atr,
+                    steps=price_bins,
+                    device=x.device,
+                    dtype=torch.float32,
+                )
+                price_centers = current_atr[:, None, None] * atr_axis[None, None, :]
+                half_bin = 0.5 * current_atr[:, None, None] * (
+                    2.0 * price_span_atr / float(price_bins - 1)
+                )
+                body_low = torch.minimum(open_price, close)[:, :, None]
+                body_high = torch.maximum(open_price, close)[:, :, None]
+                candle_low = low[:, :, None]
+                candle_high = high[:, :, None]
+                body = (
+                    (price_centers >= body_low - half_bin)
+                    & (price_centers <= body_high + half_bin)
+                ).float()
+                full_range = (
+                    (price_centers >= candle_low - half_bin)
+                    & (price_centers <= candle_high + half_bin)
+                ).float()
+                wick = torch.clamp(full_range - body, min=0.0, max=1.0)
+                relative_volume = self._relative_volume_weight(volume_z)[:, :, None]
+                full_map = torch.stack(
+                    (body, wick, body * relative_volume, wick * relative_volume),
+                    dim=1,
+                )
+                # 80 observed bars -> 96 deterministic display/conv bins.  Linear
+                # interpolation preserves local diagonal/horizontal geometry without
+                # inventing another market-data source or learnable preprocessing.
+                local_map = functional.interpolate(
+                    full_map,
+                    size=(time_bins, price_bins),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            return local_map
+
+        def encode_local_geometry_map(self, local_map, global_residual):
+            local_latent = self.local_geometry_network(local_map).flatten(1)
+            # No-evidence local windows must not manufacture a learned constant
+            # structure solely from Conv biases.
+            evidence_mask = (
+                local_map.detach().abs().sum(dim=(1, 2, 3), keepdim=False) > 0.0
+            ).to(local_latent.dtype).unsqueeze(1)
+            local_latent = local_latent * evidence_mask
+            global_latent = self.global_projection(global_residual)
+            interaction = local_latent * global_latent
+            return self.fusion_projection(torch.cat((local_latent, interaction), dim=1))
+
+        def forward(self, x, global_residual):
+            local_map = self.build_local_geometry_map(x)
+            return self.encode_local_geometry_map(local_map, global_residual)
+
+    return PriceVolumeMultiscaleLocalEncoder()
+
+
 __all__ = [
     "build_price_volume_structure_encoder",
     "build_price_volume_local_structure_encoder",
+    "build_price_volume_multiscale_local_encoder",
 ]

@@ -11764,3 +11764,14 @@ Decision：`MR13BK_CLOSED_BACKBONE_FAIL / MR13BL_IMPLEMENTED_RESULT_PENDING / AO
 
 Decision：`MR13BL_RESULT_AVAILABLE_NOT_PROMOTED / MR13BM_IMPLEMENTED_RESULT_PENDING / GLOBAL_FIELD_RETAINED / LOCAL_ZONE_TOKEN_INTERACTION_ADDED / SAFETY_ONLY / FORWARD_GATE_FIRST`。
 
+## 2026-09-05 — MR-13BM Forward closure + MR-13BN Multi-scale Price-Volume 2D implementation
+
+- **Baseline**：`test-branch-1_20260905_000945_99a09d64.zip`，SHA256=`4099b2349cae1a2488899575382d5fee8dadf051232f34f3d23d0bf861c399ef`。
+- **MR-13BM Forward result**：Raw Safety Daily/Global/Pair=`0.3586/0.3077/62.87%` vs BL=`0.3568/0.3028/62.81%`；P45–P55=`52.44%` vs `52.39%`。Breakout Raw Safety=`0.3282/0.3696/63.66%` vs BL=`0.3283/0.3708/63.83%`，Breakout P45–P55=`55.21%` vs `54.78%`。Pred-HS HM/HS=`25.00%` vs `25.16%`、High-MFE=`54.21%` vs `55.79%`、MFE=`1.481R` vs `1.459R`。Decision=`LOCAL_ZONE_TOKEN_WEAK_INCREMENT / BREAKOUT_MIXED / MATERIAL_GATE_FAIL / NO_TOKEN_SWEEP / NOT_PROMOTED`。
+- **Interpretation**：BM沒有否定global+local互補；它顯示把local資訊先壓成price-zone statistics只留下很小增量，time×price線型可能是被丟失的資訊。
+- **MR-13BN identity**：profile=`daily_universal_price_volume_multiscale_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`；architecture=`ARCH-inception_time_shared_safety_mfe_price_volume_multiscale_v1`。Primary reference=`MR-13BL`，BM保留local-zone control。
+- **唯一scientific treatment**：BL global `128×64×4 / ±16 ATR / 300 bars`與64-bin VAP完全保留；新增recent80-bar、±4 ATR、`96×64×4` high-resolution local Price-Time-Volume 2D map。Local 2D CNN輸出32D；projected global residual與local latent做element-wise interaction，`[local, local×global]`經bias-free projection形成Safety-only residual。AO target/loss/split/Seed42/Adam/clip/date-coherent batch/epoch-selection及完整MFE path不變。
+- **工程／PIT**：local map只由既有300×10前5個stock OHLCV channels在batch-time deterministic生成；不落盤expanded map，不新增資料源、pivot/support/resistance label或technical indicator。
+- **Same-seed isolation**：BL common state exact、MFE logits bitwise exact；BN params=`512,878` vs BL=`490,586`（`+4.54%`）。
+- **Gate**：Seed42 Forward first；BN需在BL上形成material Raw Safety Daily/Global/Pair共同改善且Breakout boundary不退、MFE top-tail不再惡化。若只有小增量，不做local window/raster/span/CNN/fusion sweep。
+

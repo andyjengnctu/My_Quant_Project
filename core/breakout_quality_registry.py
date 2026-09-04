@@ -421,6 +421,9 @@ DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIS
 DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_LOCAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_price_volume_structure_local_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_PRICE_VOLUME_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_price_volume_multiscale_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_priority_mfe_full_list_ndcg_pairwise"
 )
@@ -1397,6 +1400,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_price_volume_structure_local_v1",
+    ),
+    DAILY_UNIVERSAL_PRICE_VOLUME_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_PRICE_VOLUME_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_price_volume_multiscale_v1",
     ),
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -2621,6 +2636,36 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="bl_global_plus_local_price_volume_structure_safety_control",
         score_semantic_id="daily_true_hs_conditional_mfe_rank_price_volume_global_local_safety",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_PRICE_VOLUME_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_PRICE_VOLUME_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BN",
+        experiment_name="MR-13BN Global + High-Resolution Local Price-Volume 2D",
+        phase="13BN",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "exact_MR13AO_head1_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "exact_MR13AO_head2_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "MR-13BL global 128x64x4 Price-Time-Volume field/VAP、MR-13AO target/universe/300x10 input/split/Seed42/"
+            "Adam/gradient-clip/date-coherent batch/dual-head 1:1 full-list Delta-NDCG objective/epoch-selection全部固定。"
+            "唯一scientific treatment是新增recent 80-bar、+/-4 ATR、96x64x4的high-resolution local Price-Time-Volume 2D map；"
+            "channels仍為body/wick/relative-volume*body/relative-volume*wick。local 2D CNN產生32-d latent，與BL global Safety residual"
+            "投影後做explicit element-wise cross-scale interaction，再以bias-free projection形成Safety-only residual。"
+            "不使用BM price-zone aggregation、pivot/support/resistance label、top-K heuristic或新資料源；Raw-MFE path與BL same-seed exact。"
+            "Primary reference=MR-13BL；MR-13BM保留local-zone historical control；Seed42 Forward only first。"
+        ),
+        metric_scope="bl_global_plus_high_resolution_local_2d_price_volume_safety_control",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank_price_volume_multiscale_safety",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
         secondary_pair_scope_threshold=0.50,

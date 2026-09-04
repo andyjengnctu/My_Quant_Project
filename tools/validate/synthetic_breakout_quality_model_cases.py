@@ -3998,6 +3998,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and not get_architecture_descriptor(architecture).has_capability(
             "price_volume_local_structure_safety"
         )
+        and not get_architecture_descriptor(architecture).has_capability(
+            "price_volume_multiscale_local_safety"
+        )
     ]
     structure_contracts = []
     for architecture in structure_architectures:
@@ -4166,6 +4169,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and not get_architecture_descriptor(candidate).has_capability(
                 "price_volume_local_structure_safety"
             )
+            and not get_architecture_descriptor(candidate).has_capability(
+                "price_volume_multiscale_local_safety"
+            )
         ]
         if len(parent_architectures) != 1:
             local_structure_contracts.append(False)
@@ -4326,6 +4332,162 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check_true(
         "price_volume_global_and_local_structure_are_additive_safety_only_capabilities",
         len(local_structure_contracts) == 1 and all(local_structure_contracts),
+    )
+
+    # BN keeps BL's exact global field and adds a second high-resolution local
+    # 2D field rather than aggregating away time geometry.  The local residual
+    # includes an explicit local×global interaction and remains Safety-only.
+    multiscale_architectures = [
+        architecture
+        for architecture in ACTIVE_MODEL_ARCHITECTURES
+        if get_architecture_descriptor(architecture).has_capability(
+            "price_volume_multiscale_local_safety"
+        )
+    ]
+    multiscale_contracts = []
+    for architecture in multiscale_architectures:
+        multiscale_spec = get_model_spec(architecture)
+        parent_architectures = [
+            candidate
+            for candidate in ACTIVE_MODEL_ARCHITECTURES
+            if get_architecture_descriptor(candidate).has_capability(
+                "price_volume_structure_safety"
+            )
+            and not get_architecture_descriptor(candidate).has_capability(
+                "price_volume_local_structure_safety"
+            )
+            and not get_architecture_descriptor(candidate).has_capability(
+                "price_volume_multiscale_local_safety"
+            )
+        ]
+        if len(parent_architectures) != 1:
+            multiscale_contracts.append(False)
+            continue
+        parent_architecture = parent_architectures[0]
+
+        torch.manual_seed(20260905)
+        parent_model = build_active_model(10, 0, architecture=parent_architecture)
+        torch.manual_seed(20260905)
+        multiscale_model = build_active_model(10, 0, architecture=architecture)
+        parent_state = parent_model.state_dict()
+        multiscale_state = multiscale_model.state_dict()
+        common_exact = (
+            not (set(parent_state) - set(multiscale_state))
+            and all(
+                torch.equal(parent_state[key], multiscale_state[key])
+                for key in parent_state
+            )
+        )
+        extra_keys = sorted(set(multiscale_state) - set(parent_state))
+
+        bars = 300
+        close = torch.linspace(-0.16, 0.0, steps=bars, dtype=torch.float32)
+        open_price = close - 0.002
+        high = torch.maximum(open_price, close) + 0.007
+        low = torch.minimum(open_price, close) - 0.007
+        multiscale_x = torch.zeros((2, bars, 10), dtype=torch.float32)
+        for row in range(2):
+            multiscale_x[row, :, 0] = open_price
+            multiscale_x[row, :, 1] = high
+            multiscale_x[row, :, 2] = low
+            multiscale_x[row, :, 3] = close
+            multiscale_x[row, :, 4] = 0.0
+            multiscale_x[row, :, 5] = open_price
+            multiscale_x[row, :, 6] = high
+            multiscale_x[row, :, 7] = low
+            multiscale_x[row, :, 8] = close
+            multiscale_x[row, :, 9] = 0.0
+        # Same recent price path, different local relative-volume evidence.
+        multiscale_x[1, -20:, 4] = 3.0
+
+        parent_model.eval()
+        multiscale_model.eval()
+        with torch.no_grad():
+            parent_safety, parent_mfe = parent_model.forward_safety_mfe_heads(
+                multiscale_x, None
+            )
+            multiscale_safety, multiscale_mfe = (
+                multiscale_model.forward_safety_mfe_heads(multiscale_x, None)
+            )
+            local_map = (
+                multiscale_model.price_volume_multiscale_local_encoder
+                .build_local_geometry_map(multiscale_x)
+            )
+            zero_local_residual = (
+                multiscale_model.price_volume_multiscale_local_encoder
+                .encode_local_geometry_map(
+                    torch.zeros_like(local_map),
+                    torch.zeros(
+                        (2, int(multiscale_spec.inception_filters or 32) * 4),
+                        dtype=local_map.dtype,
+                    ),
+                )
+            )
+
+        multiscale_model.zero_grad(set_to_none=True)
+        _safety_logits, mfe_logits = multiscale_model.forward_safety_mfe_heads(
+            multiscale_x, None
+        )
+        mfe_logits[:, 1].sum().backward()
+        local_from_mfe_grad = _gradient_total(
+            multiscale_model.price_volume_multiscale_local_encoder.parameters()
+        )
+        multiscale_model.zero_grad(set_to_none=True)
+        safety_logits, _mfe_logits = multiscale_model.forward_safety_mfe_heads(
+            multiscale_x, None
+        )
+        safety_logits[:, 1].sum().backward()
+        local_from_safety_grad = _gradient_total(
+            multiscale_model.price_volume_multiscale_local_encoder.parameters()
+        )
+
+        parent_params = sum(
+            p.numel() for p in parent_model.parameters() if p.requires_grad
+        )
+        multiscale_params = sum(
+            p.numel() for p in multiscale_model.parameters() if p.requires_grad
+        )
+        multiscale_contracts.append(
+            tuple(multiscale_spec.pooling)
+            == (
+                "global_average",
+                "safety_price_volume_structure_residual",
+                "safety_price_volume_local_2d_multiscale_residual",
+                "raw_safety_head",
+                "raw_mfe_head",
+            )
+            and tuple(multiscale_spec.sequence_input_paths)
+            == (
+                "raw_level",
+                "derived_price_volume_structure_from_stock_ohlcv",
+                "derived_high_resolution_local_price_volume_2d_from_recent_stock_ohlcv",
+            )
+            and int(multiscale_spec.price_volume_local_map_history_bars or 0) == 80
+            and int(multiscale_spec.price_volume_local_map_time_bins or 0) == 96
+            and int(multiscale_spec.price_volume_local_map_price_bins or 0) == 64
+            and float(multiscale_spec.price_volume_local_map_price_span_atr or 0.0) == 4.0
+            and int(multiscale_spec.price_volume_local_map_geometry_latent_dim or 0) == 32
+            and common_exact
+            and bool(extra_keys)
+            and all(
+                key.startswith("price_volume_multiscale_local_encoder.")
+                for key in extra_keys
+            )
+            and torch.equal(parent_mfe, multiscale_mfe)
+            and not torch.equal(parent_safety, multiscale_safety)
+            and tuple(local_map.shape) == (2, 4, 96, 64)
+            and bool(torch.isfinite(local_map).all().item())
+            and float(local_map[1, 2:, -24:, :].sum().item())
+            > float(local_map[0, 2:, -24:, :].sum().item())
+            and bool(torch.equal(zero_local_residual, torch.zeros_like(zero_local_residual)))
+            and local_from_mfe_grad == 0.0
+            and local_from_safety_grad > 0.0
+            and multiscale_params > parent_params
+            and (multiscale_params - parent_params) / parent_params < 0.05
+        )
+    check_true(
+        "price_volume_multiscale_global_plus_high_resolution_local_2d_is_safety_only",
+        len(multiscale_contracts) == 1 and all(multiscale_contracts),
     )
 
     task_model.zero_grad(set_to_none=True)
