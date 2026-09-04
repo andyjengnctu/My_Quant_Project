@@ -184,10 +184,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from config.training_policy import (
-        OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
-        ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS,
+    from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+    from core.training_policy import (
         get_robustness_benchmark_policy_snapshot,
+        resolve_robustness_benchmark_seeds,
     )
     from core.strategy_param_artifacts import (
         STRATEGY_PARAM_FAMILIES,
@@ -375,7 +375,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "robustness_benchmark_uses_optimizer_trial_ssot_and_fixed_seed_identity",
         (
             int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
-            tuple(ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS),
+            tuple(resolve_robustness_benchmark_seeds()),
         ),
         (
             int(benchmark["strategy_trials_per_fold"]),

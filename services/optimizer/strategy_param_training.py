@@ -31,6 +31,8 @@ from config.training_policy import (
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     OPTIMIZER_RANDOM_SEED_DEFAULT,
+)
+from core.strategy_params import (
     SELECTION_POLICY_PARAM_SPECS,
 )
 from config.execution_policy import (

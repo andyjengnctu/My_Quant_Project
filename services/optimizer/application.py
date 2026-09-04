@@ -57,14 +57,16 @@ from config.training_policy import (
     TRADE_MODE_RUN_BEST_SELECTOR,
     TRADE_PROMOTE_MIN_SCORE_DELTA,
     OPTIMIZER_PERSIST_STUDY_DB,
-    is_optimizer_local_min_review_enabled,
-    set_optimizer_runtime_model_mode,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
     OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
     OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
+)
+from core.training_policy import (
+    is_optimizer_local_min_review_enabled,
+    set_optimizer_runtime_model_mode,
     resolve_optimizer_base_finalists_agree_min_agree,
     resolve_optimizer_local_finalists_agree_min_agree,
     resolve_optimizer_retention_finalists_agree_min_agree,

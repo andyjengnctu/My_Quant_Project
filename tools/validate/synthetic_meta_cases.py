@@ -2250,6 +2250,10 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "resolve_portfolio_entry_budget",
             "resolve_scanner_live_capital",
         },
+        "core.selection_policy": {
+            "SELECTION_POLICY_PARAM_SPECS",
+            "build_selection_policy_snapshot",
+        },
         "core.strategy_params": {
             "V16StrategyParams",
             "validate_strategy_param_ranges",
@@ -2269,9 +2273,14 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_runtime_param_snapshot",
         },
         "config.training_policy": {
-            "SELECTION_POLICY_PARAM_SPECS",
+            "BUY_SORT_METHOD",
+            "SCORE_CALC_METHOD",
+            "TRAINING_SPLIT_POLICY",
+        },
+        "core.training_policy": {
             "build_training_threshold_snapshot",
             "build_training_score_policy_snapshot",
+            "resolve_robustness_benchmark_seeds",
         },
         "config.training_performance_policy": {
             "OPTIMIZER_ROLLING_FOLD_WORKERS",

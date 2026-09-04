@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config.training_policy import (
+from core.training_policy import (
     get_robustness_benchmark_policy_snapshot,
     get_strategy_parameter_training_policy_snapshot,
 )

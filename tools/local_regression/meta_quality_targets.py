@@ -54,11 +54,13 @@ TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
 ]
 POLICY_CONTRACT_COVERAGE_TARGETS = [
     "core/capital_policy.py",
+    "core/selection_policy.py",
     "core/strategy_params.py",
     "core/params_io.py",
     "config/execution_policy.py",
     "core/execution_policy.py",
     "config/training_policy.py",
+    "core/training_policy.py",
     "config/training_performance_policy.py",
     "core/training_performance.py",
     "config/display_policy.py",

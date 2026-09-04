@@ -4,7 +4,7 @@ from dataclasses import MISSING, dataclass, fields
 from typing import Any
 
 from config.execution_policy import EXECUTION_POLICY_PARAM_SPECS, RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_SPECS
-from config.training_policy import SELECTION_POLICY_PARAM_SPECS
+from core.selection_policy import SELECTION_POLICY_PARAM_SPECS
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS, validate_breakout_param_ranges
 
 

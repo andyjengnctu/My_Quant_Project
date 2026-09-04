@@ -20,6 +20,8 @@ from config.training_policy import (
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
     OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
+)
+from core.training_policy import (
     is_optimizer_local_min_review_enabled,
     resolve_optimizer_local_min_score_finalist_top_k,
 )

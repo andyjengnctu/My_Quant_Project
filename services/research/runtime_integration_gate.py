@@ -507,7 +507,7 @@ def _robustness_checks(
     an unnecessary model retrain merely to recreate a control that already exists.
     """
 
-    from config.training_policy import resolve_robustness_benchmark_seeds
+    from core.training_policy import resolve_robustness_benchmark_seeds
     from services.research.strategy_multi_seed_robustness import SUMMARY_FILENAME
 
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)

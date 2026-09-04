@@ -106,7 +106,7 @@ from services.research.strategy_compare_training import (
 from services.research.training_process import (
     terminate_registered_training_processes,
 )
-from config.training_policy import resolve_robustness_benchmark_seeds
+from core.training_policy import resolve_robustness_benchmark_seeds
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.artifact_dependency_registry import (
     collect_model_upstream_preparation_plan,

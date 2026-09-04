@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import is_dataclass
 from typing import Any
 
-from config.training_policy import SELECTION_POLICY_PARAM_SPECS
+from core.selection_policy import SELECTION_POLICY_PARAM_SPECS
 from core.strategy_params import strategy_params_to_dict
 
 

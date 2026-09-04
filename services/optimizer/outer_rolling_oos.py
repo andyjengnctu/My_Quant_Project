@@ -38,12 +38,14 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
+    OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+)
+from core.training_policy import (
     is_optimizer_local_min_review_enabled,
     resolve_optimizer_base_finalists_agree_min_agree,
     resolve_optimizer_local_finalists_agree_min_agree,
     resolve_optimizer_retention_finalists_agree_min_agree,
     resolve_optimizer_enabled_policy_indicators,
-    OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
 from core.training_performance import (
     is_optimizer_single_fold_tpe_parallel_search_allowed_default,

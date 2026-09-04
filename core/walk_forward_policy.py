@@ -5,7 +5,8 @@ import os
 from typing import Mapping, Optional
 
 from core.display_policy import build_display_policy_snapshot
-from config.training_policy import OUTER_ROLLING_TRAIN_WINDOW_MONTHS, build_training_score_policy_snapshot
+from config.training_policy import OUTER_ROLLING_TRAIN_WINDOW_MONTHS
+from core.training_policy import build_training_score_policy_snapshot
 
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 WALK_FORWARD_SELECTION_START_YEAR_ENV_VAR = "V16_WF_SELECTION_START_YEAR"

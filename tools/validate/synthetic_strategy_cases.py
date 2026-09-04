@@ -1550,18 +1550,19 @@ def validate_optimizer_objective_export_contract_case(_base_params):
 
     robustness = importlib.import_module("tools.optimizer.robustness")
     training_policy = importlib.import_module("config.training_policy")
+    training_policy_runtime = importlib.import_module("core.training_policy")
     no_neighbor_session = SimpleNamespace()
     no_neighbor_trial = SimpleNamespace(number=99, user_attrs={"base_score": 42.0}, value=42.0)
     with patch.object(robustness, "_build_neighbor_candidates", return_value=[]):
         no_neighbor_local_min = robustness.compute_local_min_score(no_neighbor_session, no_neighbor_trial)
-    expected_no_neighbor_local_min = INVALID_TRIAL_VALUE if training_policy.is_optimizer_local_min_review_enabled() else 42.0
+    expected_no_neighbor_local_min = INVALID_TRIAL_VALUE if training_policy_runtime.is_optimizer_local_min_review_enabled() else 42.0
     add_check(results, "strategy_contract", case_id, "local_min_score_no_legal_neighbor_respects_training_policy", expected_no_neighbor_local_min, no_neighbor_local_min)
 
-    previous_runtime_mode = training_policy.resolve_optimizer_runtime_model_mode()
+    previous_runtime_mode = training_policy_runtime.resolve_optimizer_runtime_model_mode()
     try:
-        training_policy.set_optimizer_runtime_model_mode("full")
-        full_mode_local_enabled = training_policy.is_optimizer_local_min_review_enabled()
-        full_mode_local_policy_names = training_policy.resolve_optimizer_enabled_policy_indicators((
+        training_policy_runtime.set_optimizer_runtime_model_mode("full")
+        full_mode_local_enabled = training_policy_runtime.is_optimizer_local_min_review_enabled()
+        full_mode_local_policy_names = training_policy_runtime.resolve_optimizer_enabled_policy_indicators((
             "base_finalist_best",
             "local_finalist_best",
             "retention_finalist_best",
@@ -1572,10 +1573,10 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             "local",
             "retention",
         ))
-        training_policy.set_optimizer_runtime_model_mode("oos")
-        oos_mode_local_enabled = training_policy.is_optimizer_local_min_review_enabled()
+        training_policy_runtime.set_optimizer_runtime_model_mode("oos")
+        oos_mode_local_enabled = training_policy_runtime.is_optimizer_local_min_review_enabled()
     finally:
-        training_policy.set_optimizer_runtime_model_mode(previous_runtime_mode)
+        training_policy_runtime.set_optimizer_runtime_model_mode(previous_runtime_mode)
     add_check(results, "strategy_contract", case_id, "optimizer_full_mode_local_min_review_default_disabled", False, full_mode_local_enabled)
     add_check(results, "strategy_contract", case_id, "optimizer_full_mode_local_retention_policy_indicators_disabled_by_default", ("base_finalist_best", "base_finalists_agree", "base"), full_mode_local_policy_names)
     add_check(results, "strategy_contract", case_id, "optimizer_oos_mode_preserves_global_local_min_review_default", bool(training_policy.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED), oos_mode_local_enabled)
@@ -1610,7 +1611,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         case_id,
         "local_min_score_finalist_top_k_respects_training_policy_rate",
         expected_sample_top_k,
-        training_policy.resolve_optimizer_local_min_score_finalist_top_k(sample_trial_count),
+        training_policy_runtime.resolve_optimizer_local_min_score_finalist_top_k(sample_trial_count),
     )
     add_check(
         results,
@@ -1618,7 +1619,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         case_id,
         "local_min_score_finalist_top_k_respects_training_policy_floor",
         expected_small_top_k,
-        training_policy.resolve_optimizer_local_min_score_finalist_top_k(small_trial_count),
+        training_policy_runtime.resolve_optimizer_local_min_score_finalist_top_k(small_trial_count),
     )
     add_check(
         results,

@@ -1,22 +1,23 @@
 """相容 façade：保留既有匯入路徑，實際 source of truth 已拆分。"""
 
-import config.training_policy as _training_policy
+import config.training_policy as _training_policy_settings
+import core.training_policy as _training_policy
 
 
 def get_buy_sort_method():
-    return _training_policy.BUY_SORT_METHOD
+    return _training_policy_settings.BUY_SORT_METHOD
 
 
 def get_ev_calc_method():
-    return _training_policy.EV_CALC_METHOD
+    return _training_policy_settings.EV_CALC_METHOD
 
 
 def get_score_calc_method():
-    return _training_policy.SCORE_CALC_METHOD
+    return _training_policy_settings.SCORE_CALC_METHOD
 
 
 def get_score_numerator_method():
-    return _training_policy.SCORE_NUMERATOR_METHOD
+    return _training_policy_settings.SCORE_NUMERATOR_METHOD
 
 
 def get_score_mdd_power():
@@ -88,7 +89,7 @@ def get_score_median_r_target():
 
 
 def get_min_full_year_return_pct():
-    return float(_training_policy.MIN_FULL_YEAR_RETURN_PCT)
+    return float(_training_policy_settings.MIN_FULL_YEAR_RETURN_PCT)
 
 
 from config.execution_policy import (  # noqa: F401
@@ -102,7 +103,6 @@ from core.execution_policy import (  # noqa: F401
     build_runtime_param_snapshot,
 )
 from config.training_policy import (  # noqa: F401
-    SELECTION_POLICY_PARAM_SPECS,
     MAX_PORTFOLIO_MDD_PCT,
     MIN_ANNUAL_TRADES,
     MIN_BUY_FILL_RATE,
@@ -130,6 +130,14 @@ from config.training_policy import (  # noqa: F401
     SCORE_MEDIAN_R_FLOOR,
     SCORE_MEDIAN_R_TARGET,
     OPTIMIZER_FIXED_TP_PERCENT,
+    DEFAULT_OPTIMIZER_MODEL_MODE,
+    PREDEPLOY_SELECTION_START_YEAR,
+    FULL_START_YEAR,
+    FULL_END_YEAR,
+    OOS_EVALUATION_START_YEAR,
+    OOS_EVALUATION_END_YEAR,
+)
+from core.training_policy import (  # noqa: F401
     resolve_score_mdd_power,
     resolve_score_mdd_denominator_epsilon,
     resolve_score_win_rate_target,
@@ -141,16 +149,10 @@ from config.training_policy import (  # noqa: F401
     resolve_score_min_quarter_return_target,
     resolve_score_median_r_floor,
     resolve_score_median_r_target,
-    DEFAULT_OPTIMIZER_MODEL_MODE,
-    PREDEPLOY_SELECTION_START_YEAR,
-    FULL_START_YEAR,
-    FULL_END_YEAR,
-    OOS_EVALUATION_START_YEAR,
-    OOS_EVALUATION_END_YEAR,
-    build_selection_policy_snapshot,
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,
 )
+from core.selection_policy import SELECTION_POLICY_PARAM_SPECS, build_selection_policy_snapshot  # noqa: F401
 from config.display_policy import SYSTEM_SCORE_DISPLAY_MULTIPLIER  # noqa: F401
 from core.display_policy import (  # noqa: F401
     build_display_policy_snapshot,

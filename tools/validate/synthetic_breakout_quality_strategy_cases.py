@@ -1447,7 +1447,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _write_seed_results,
         _write_seed_yearly_results,
     )
-    from config.training_policy import (
+    from core.training_policy import (
         get_robustness_benchmark_policy_snapshot,
         get_strategy_parameter_training_policy_snapshot,
     )

@@ -27,9 +27,10 @@ from config.compatibility.strategy_compare_history import (
 )
 from config.training_policy import (
     ROBUSTNESS_BENCHMARK_ID,
-    ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS,
     ROBUSTNESS_BENCHMARK_SEED_COUNT,
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+)
+from core.training_policy import (
     get_strategy_parameter_training_policy_snapshot,
     resolve_robustness_benchmark_seeds,
 )
@@ -1020,7 +1021,7 @@ def get_strategy_multi_seed_robustness_settings(
         resolved_seeds=tuple(
             int(value) for value in tuple(
                 raw.get("resolved_seeds")
-                or (ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS if raw.get("benchmark_id") not in (None, "") else ())
+                or (resolve_robustness_benchmark_seeds() if raw.get("benchmark_id") not in (None, "") else ())
                 or ()
             )
         ),
