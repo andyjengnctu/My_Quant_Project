@@ -240,12 +240,14 @@ def build_day_token_transformer_shared_safety_mfe_spec(
     )
 
 def build_gru_shared_safety_mfe_spec(architecture: str) -> BreakoutQualityModelSpec:
-    """Descriptor-owned gated recurrent shared Safety/MFE backbone."""
+    """Descriptor-owned gated recurrent backbone with declarative head topology."""
 
-    options = get_architecture_descriptor(architecture).spec_options_dict()
+    descriptor = get_architecture_descriptor(architecture)
+    options = descriptor.spec_options_dict()
     hidden_size = int(options.get("gru_hidden_size", 0))
     num_layers = int(options.get("gru_layers", 0))
     bidirectional = bool(options.get("gru_bidirectional", False))
+    single_rank_head = descriptor.has_capability("single_rank_head")
     if hidden_size < 1 or num_layers < 1:
         raise ValueError("GRU descriptor 必須宣告正的 hidden_size/layers")
     pooling_name = (
@@ -255,12 +257,16 @@ def build_gru_shared_safety_mfe_spec(architecture: str) -> BreakoutQualityModelS
     )
     return BreakoutQualityModelSpec(
         architecture=architecture,
-        family="gru_shared_safety_mfe",
+        family=("gru_ranker" if single_rank_head else "gru_shared_safety_mfe"),
         channels=hidden_size * (2 if bidirectional else 1),
         kernel_size=1,
         dilations=(),
         convolutions_per_block=1,
-        pooling=(pooling_name, "raw_safety_head", "raw_mfe_head"),
+        pooling=(
+            (pooling_name, "rank_head")
+            if single_rank_head
+            else (pooling_name, "raw_safety_head", "raw_mfe_head")
+        ),
         dropout=0.0,
         receptive_field_bars=300,
         input_window_bars=300,

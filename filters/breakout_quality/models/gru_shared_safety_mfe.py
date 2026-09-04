@@ -30,6 +30,7 @@ def build_gru_shared_safety_mfe(
     from filters.breakout_quality.models.architectures import get_architecture_descriptor
 
     descriptor = get_architecture_descriptor(str(spec.architecture))
+    single_rank_head = descriptor.has_capability("single_rank_head")
     use_outer_autocast = descriptor.has_capability("recurrent_outer_autocast")
     guarded_retry = descriptor.has_capability("same_batch_fp32_nonfinite_retry")
     if guarded_retry and not use_outer_autocast:
@@ -154,8 +155,15 @@ def build_gru_shared_safety_mfe(
                     bidirectional=False,
                 )
             latent_width = hidden_size * (2 if bidirectional else 1)
-            self.raw_safety_classifier = nn.Linear(latent_width, 2)
-            self.raw_mfe_classifier = nn.Linear(latent_width, 2)
+            if single_rank_head:
+                self.classifier = nn.Linear(latent_width, 2)
+                self.raw_safety_classifier = None
+                self.raw_mfe_classifier = None
+            else:
+                self.classifier = None
+                # Preserve historical construction order exactly for v1-v4 fitted identity.
+                self.raw_safety_classifier = nn.Linear(latent_width, 2)
+                self.raw_mfe_classifier = nn.Linear(latent_width, 2)
             self.same_batch_fp32_nonfinite_retry = bool(guarded_retry)
             self.recurrent_outer_autocast = bool(use_outer_autocast)
 
@@ -194,7 +202,18 @@ def build_gru_shared_safety_mfe(
             with torch.autocast(device_type=x.device.type, enabled=False):
                 return self._encode_fp32(x)
 
+        def _forward_rank_head(self, x, context):
+            del context
+            if self.classifier is None:
+                raise ValueError("目前GRU architecture不是single-rank-head")
+            if self.recurrent_outer_autocast:
+                return self.classifier(self._encode_native(x))
+            with torch.autocast(device_type=x.device.type, enabled=False):
+                return self.classifier(self._encode_fp32(x))
+
         def forward_safety_mfe_heads(self, x, context):
+            if single_rank_head:
+                raise ValueError("single-rank GRU architecture沒有Safety/MFE dual heads")
             del context
             if self.recurrent_outer_autocast:
                 shared_encoded = self._encode_native(x)
@@ -211,6 +230,10 @@ def build_gru_shared_safety_mfe(
 
         def forward_output_head(self, x, context, output_head: str):
             head = str(output_head).strip().lower()
+            if single_rank_head:
+                if head in {"primary", "rank", "final"}:
+                    return self._forward_rank_head(x, context)
+                raise ValueError(f"未知 single-rank GRU output head: {output_head!r}")
             safety_logits, mfe_logits = self.forward_safety_mfe_heads(x, context)
             if head in {"primary", "mfe", "primary_mfe", "conditional_mfe", "raw_mfe", "final"}:
                 return mfe_logits
@@ -221,6 +244,8 @@ def build_gru_shared_safety_mfe(
             raise ValueError(f"未知 GRU output head: {output_head!r}")
 
         def forward(self, x, context):
+            if single_rank_head:
+                return self._forward_rank_head(x, context)
             return self.forward_safety_mfe_heads(x, context)[1]
 
     return GRUSharedSafetyMFE()

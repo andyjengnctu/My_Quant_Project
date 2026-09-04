@@ -11714,3 +11714,20 @@ Decision：`MR13BJ_IMPLEMENTED / USER_AUTHORIZED_SINGLE_BIDIRECTIONAL_OVERRIDE /
 - **Identity rule**：這是pre-result performance execution strategy，依PROJECT_SETTINGS C15不改scientific/artifact identity，不占新MR／architecture，MR-13BJ Gate與stop rule完全不變。GPT環境無RTX 5080/CUDA實機，因此只可驗證parameter/state/model-spec與CPU numerical equivalence；實機wall-time仍需使用者重跑確認。
 
 Decision：`MR13BJ_PRE_RESULT_EXECUTION_CORRECTION / CUDA_DIRECTION_PARALLEL / FINAL_HIDDEN_ONLY_FAST_PATH / SCIENTIFIC_IDENTITY_UNCHANGED / USER_RUNTIME_CONFIRMATION_REQUIRED`。
+
+## 2026-09-04 — MR-13BJ Forward result closure + MR-13BK MR-13M-target BiGRU backbone isolation
+
+- **Authoritative implementation baseline**：`test-branch-1_20260904_193435_243f078c.zip`，SHA256=`1d3527f7d614dee4eb74a88910ad07f9a5e0885c11db9eda6f342e30e8ada649`。
+- **MR-13BJ completed Forward evidence**：selected epoch=`3`；Validation HS-MFE/Safety rho=`0.4312/0.3581`。Forward overall Daily/Global rho/Pair=`0.4189/0.3997/64.51%` vs BG=`0.4124/0.3815/64.25%`，Top-Bottom=`2.2941R vs 2.1017R`。Forward Safety Daily/Global rho/Pair=`0.3697/0.3074/63.33%` vs BG=`0.3683/0.3231/63.26%`；Pred-HS true-LS=`36.14%`、true-HS recall=`63.70%`。HS-only Conditional-MFE rho/Pair=`0.4186/64.71%`、Pred-HS TopK HM/HS=`26.24%`、High-MFE=`55.25%`、mean MFE=`1.376R`，均較BG的`0.4095/64.37%`、`24.43%`、`50.93%`、`1.258R`改善。
+- **MR-13BJ Breakout evidence**：overall Daily/Global/Pair=`0.3916/0.4365/65.17%`；Safety=`0.3458/0.3834/64.47%`。Pred-HS true-LS=`32.63%`明顯低於BG `34.95%`，但true-HS recall同步降至`56.12%`（BG `62.03%`）；HS-only rho=`0.4317`低於BG `0.4491`，Pred-HS HM/HS=`23.31%`亦未改善。
+- **MR-13BJ decision**：bidirectionality確實改善overall ranking、Global representation與Forward MFE/top-tail recovery，但沒有通過事前要求的material joint Safety gate；尤其Safety Global相對BG退化，Breakout purity帶有recall trade-off。Decision=`BIDIRECTIONALITY_IMPROVES_OVERALL_AND_MFE_REPRESENTATION / SAFETY_GLOBAL_NOT_IMPROVED / BREAKOUT_PURITY_RECALL_TRADEOFF / FORWARD_MIXED / ROLLING_DEFERRED / NOT_PROMOTED`。不因overall漂亮而啟動hidden/layer/LR/precision sweep。
+- **User research decision**：使用者明確要求「用這個來跑看看單純的13M」，因此建立新的target-fixed backbone isolation；不是繼續調BJ dual-head objective，也不是改寫MR-13M歷史結果。
+- **MR-13BK identity**：profile=`daily_universal_bigru_full_horizon_low_adverse_full_list_ndcg_pairwise`；architecture=`ARCH-bigru_ranker_v1`。MR-13M `daily_full_horizon_low_adverse_r_v1`、40D full-horizon earliest-max-MFE peak、negative adverse-to-peak R ordering、daily-universal stock-day universe、full-list Delta-NDCG weighted RankNet、single rank head、Seed42、split、Adam、gradient clip、date-coherent batch與mean-Daily-Spearman epoch selection全部固定。
+- **Only scientific treatment**：MR-13M `ARCH-inception_time_v1` global-average representation → MR-13BJ同款1-layer bidirectional GRU hidden=`274`/direction，以forward/backward final recurrent states concat成548-d latent。兩方向只讀同一300個decision-time bars，PIT合法。BK不帶Safety/MFE auxiliary heads或multi-task loss；single rank head直接學Low-Adverse target。
+- **Capacity control**：feature_count=10，MR-13BK trainable params=`471,282` vs MR-13M InceptionTime=`473,218`（`-0.409%`）。不加入projection或unused auxiliary head湊參數。
+- **Architecture ownership**：新增descriptor-driven `ARCH-bigru_ranker_v1`，重用既有generic split-direction CUDA-parallel GRU execution primitive；canonical architecture capability宣告`single_rank_head`，spec/runtime owner依capability建單一rank head。既有GRU v1-v4 construction/state/output semantics不變。
+- **Workflow membership**：Current Training Model切到MR-13BK；shared compare/test list=`MR-13H / MR-13M / MR-13AH / MR-13AK / MR-13AO / MR-13BK`。MR-13M是BK primary target-matched reference；BG/BJ結果保留但不作本輪active comparison必要member，BH/BI仍historical-only。
+- **Predeclared Gate**：Seed42 Forward only first。BK vs M必須在all-stock Daily/Global rho與Pair形成material共同改善，且Breakout同方向；單一Global、Top-Bottom或slice改善不足以進Rolling。若未明顯拉開，不做BK Rolling/robustness，也不做BiGRU hidden/layer/head sweep。
+
+Decision：`MR13BJ_FORWARD_MIXED_RESULT_AVAILABLE / MR13BK_IMPLEMENTED_RESULT_PENDING / EXACT_MR13M_TARGET_LOSS_CONTROL / SINGLE_HEAD_BIGRU / FORWARD_GATE_FIRST / NO_ROLLING_UNLESS_MATERIAL_BACKBONE_GAIN`。
+

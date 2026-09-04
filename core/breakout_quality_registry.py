@@ -379,6 +379,9 @@ DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE = (
 DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_BIGRU_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_bigru_full_horizon_low_adverse_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
 )
@@ -1222,6 +1225,18 @@ _EXPERIMENT_PROFILES = {
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
+    DAILY_UNIVERSAL_BIGRU_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_BIGRU_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_low_adverse_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="bigru_ranker_v1",
     ),
     DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -2258,6 +2273,29 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_full_horizon_low_adverse_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=True,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_BIGRU_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_BIGRU_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BK",
+        experiment_name="MR-13BK MR-13M Low-Adverse Target on BJ BiGRU Backbone",
+        phase="13BK",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_all_stock_order_of_negative_daily_full_horizon_adverse_to_peak_r_v1",
+        objective_description=(
+            "Controlled backbone-isolation experiment after MR-13BJ showed improved overall/MFE ranking but mixed Safety behavior. "
+            "MR-13M target/universe/40D earliest-max-MFE adverse-to-peak definition, full-list Delta-NDCG pairwise loss, "
+            "single rank head, Seed42/split/Adam/gradient clip/date-coherent batch semantics and mean-Daily-Spearman epoch selection remain fixed. "
+            "The only scientific treatment is the temporal backbone/readout: MR-13M InceptionTime GAP is replaced by the MR-13BJ "
+            "1-layer bidirectional GRU with hidden274 per direction, concatenated final forward/backward states and the same FP32 recurrent/head execution strategy. "
+            "Both GRU directions consume only the same 300 decision-time bars, so no post-decision information is introduced. "
+            "Primary contrast is MR-13BK vs MR-13M on the identical Low-Adverse target. Seed42 Forward only first; "
+            "material all-stock Daily/Global rho and Pair improvement with same-direction Breakout evidence is required before any Rolling."
+        ),
+        metric_scope="mr13m_low_adverse_target_bigru_backbone_control",
+        score_semantic_id="daily_bigru_full_horizon_low_adverse_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
     DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(

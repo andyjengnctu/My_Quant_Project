@@ -3439,6 +3439,16 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         for architecture in recurrent_fp32_architectures
         if bool(get_model_spec(architecture).gru_bidirectional)
     ]
+    recurrent_fp32_bidirectional_dual = [
+        architecture
+        for architecture in recurrent_fp32_bidirectional
+        if get_architecture_descriptor(architecture).has_capability("shared_safety_mfe")
+    ]
+    recurrent_fp32_bidirectional_single_rank = [
+        architecture
+        for architecture in recurrent_fp32_bidirectional
+        if get_architecture_descriptor(architecture).has_capability("single_rank_head")
+    ]
     recurrent_guarded_architectures = [
         architecture
         for architecture in recurrent_architectures
@@ -3450,10 +3460,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and bool(recurrent_fp32_bidirectional)
         and len(recurrent_guarded_architectures) == 1,
     )
-    if recurrent_fp32_bidirectional:
+    if recurrent_fp32_bidirectional_dual:
         bidirectional_x = torch.randn((3, 300, 10), dtype=torch.float32)
         bidirectional_contracts = []
-        for architecture in recurrent_fp32_bidirectional:
+        for architecture in recurrent_fp32_bidirectional_dual:
             bidirectional_spec = get_model_spec(architecture)
             bidirectional_model = build_active_model(10, 0, architecture=architecture)
             with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
@@ -3546,6 +3556,92 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         check_true(
             "bidirectional_gru_uses_concat_final_states_with_fp32_recurrent_execution",
             all(bidirectional_contracts),
+        )
+
+    if recurrent_fp32_bidirectional_single_rank:
+        rank_x = torch.randn((3, 300, 10), dtype=torch.float32)
+        rank_contracts = []
+        for architecture in recurrent_fp32_bidirectional_single_rank:
+            rank_spec = get_model_spec(architecture)
+            rank_model = build_active_model(10, 0, architecture=architecture)
+            with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+                rank_logits = rank_model(rank_x, None)
+
+            hidden_size = int(rank_spec.gru_hidden_size or 0)
+            equivalence_x = torch.linspace(
+                -1.0, 1.0, steps=2 * 11 * 10, dtype=torch.float32
+            ).reshape(2, 11, 10)
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(20260904)
+                native_gru = torch.nn.GRU(
+                    input_size=10,
+                    hidden_size=hidden_size,
+                    num_layers=1,
+                    batch_first=True,
+                    dropout=0.0,
+                    bidirectional=True,
+                )
+                native_rank = torch.nn.Linear(2 * hidden_size, 2)
+                torch.manual_seed(20260904)
+                split_model = build_active_model(10, 0, architecture=architecture)
+                _native_output, native_hidden = native_gru(equivalence_x)
+                split_fast_hidden = split_model.gru.final_hidden(equivalence_x)
+                native_latent = torch.cat((native_hidden[-2], native_hidden[-1]), dim=1)
+                split_latent = torch.cat(
+                    (split_fast_hidden[-2], split_fast_hidden[-1]), dim=1
+                )
+                split_forward = split_model.gru.forward_gru
+                split_backward = split_model.gru.backward_gru
+                initialization_equivalent = all(
+                    (
+                        torch.equal(getattr(native_gru, native_name), getattr(split_forward, split_name))
+                        and torch.equal(
+                            getattr(native_gru, native_name + "_reverse"),
+                            getattr(split_backward, split_name),
+                        )
+                    )
+                    for native_name, split_name in (
+                        ("weight_ih_l0", "weight_ih_l0"),
+                        ("weight_hh_l0", "weight_hh_l0"),
+                        ("bias_ih_l0", "bias_ih_l0"),
+                        ("bias_hh_l0", "bias_hh_l0"),
+                    )
+                )
+                rank_head_equivalent = (
+                    split_model.classifier is not None
+                    and torch.equal(native_rank.weight, split_model.classifier.weight)
+                    and torch.equal(native_rank.bias, split_model.classifier.bias)
+                )
+                final_state_equivalent = torch.allclose(
+                    native_latent, split_latent, rtol=1e-6, atol=1e-6
+                )
+
+            rank_contracts.append(
+                bool(rank_spec.gru_bidirectional)
+                and rank_spec.gru_pooling == "final_state_concat"
+                and "bidirectional_final_recurrent_state_concat" in rank_spec.pooling
+                and "rank_head" in rank_spec.pooling
+                and rank_spec.family == "gru_ranker"
+                and int(rank_spec.channels)
+                == 2 * int(rank_spec.gru_hidden_size or 0)
+                and bool(getattr(rank_model.gru, "bidirectional", False))
+                and getattr(rank_model.gru, "execution_strategy", None)
+                == "split_unidirectional_parallel_cuda"
+                and hasattr(rank_model.gru, "final_hidden")
+                and initialization_equivalent
+                and rank_head_equivalent
+                and bool(final_state_equivalent)
+                and rank_model.classifier is not None
+                and rank_model.raw_safety_classifier is None
+                and rank_model.raw_mfe_classifier is None
+                and int(rank_model.classifier.in_features) == int(rank_spec.channels)
+                and rank_logits.shape == (3, 2)
+                and rank_logits.dtype == torch.float32
+                and bool(torch.isfinite(rank_logits).all().item())
+            )
+        check_true(
+            "bidirectional_gru_single_rank_head_reuses_same_recurrent_execution_contract",
+            all(rank_contracts),
         )
 
     if recurrent_fp32_unidirectional and recurrent_guarded_architectures:
