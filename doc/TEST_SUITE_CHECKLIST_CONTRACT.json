@@ -3858,6 +3858,17 @@
       "entry": "`config/research.py`, `config/trading.py`, `core/runtime_domains.py`, `core/trading_policy.py`, `services/downloader/runtime.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 347
+    },
+    {
+      "id": "B360",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Runtime domain / Trading strategy params",
+      "item": "Trading canonical multi-seed strategy-parameter producer and artifact isolation",
+      "gap": "Trading每日strategy parameter training必須委派既有canonical Optimizer producer，使用Trading data/output/models/strategy-params namespace與trade latest-data/fixed-window時間語意；trials/seed count/min-agree/train window/active selector由Trading config驅動。不得讀寫Research candidate/run-best truth、不得自動promotion、不得因舊selected artifact仍存在而把不完整或缺少指定policy的本次訓練誤判READY。成功產物與manifest必須記錄本次Trading training contract，且validator不得把目前selector值硬編成唯一合法答案。",
+      "entry": "`config/trading.py`, `core/trading_policy.py`, `core/strategy_param_artifacts.py`, `services/optimizer/application.py`, `services/optimizer/strategy_param_repository.py`, `services/trading/strategy_param_training.py`, `tools/validate/synthetic_meta_cases.py`",
+      "initial_status": "NEW",
+      "order": 348
     }
   ],
   "tests": [
@@ -7207,6 +7218,13 @@
       "description": "`validate_runtime_domain_isolation_contract_case` 覆蓋Research既有dataset path不搬遷、Trading data/models/outputs/state path隔離、Research downloader write guard、Trading downloader default route、Research cutoff合法性與Trading config-driven selector/no-DL cross-field validation。",
       "initial_status": "NEW",
       "order": 469
+    },
+    {
+      "id": "T480",
+      "b_id": "B360",
+      "description": "`validate_trading_strategy_param_producer_contract_case` 覆蓋Trading training plan、custom strategy-param root、config-driven selector、canonical Optimizer delegation、multi-seed/trials/window injection、candidate/promotion isolation、manifest truth、完整ensemble/指定policy要求與runtime model-mode success/failure restoration。",
+      "initial_status": "NEW",
+      "order": 470
     }
   ],
   "transitions": [
@@ -24265,6 +24283,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_runtime_domain_isolation_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B360",
+      "description": "建立Trading strategy-param training orchestration與canonical Optimizer explicit-root producer seam；Research既有optimizer入口與預設storage語意維持不變。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/strategy_param_training.py`, `services/optimizer/application.py`, `core/strategy_param_artifacts.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T480",
+      "description": "新增Trading strategy-param producer direct synthetic並納入正式registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_strategy_param_producer_contract_case`"
     }
   ]
 }

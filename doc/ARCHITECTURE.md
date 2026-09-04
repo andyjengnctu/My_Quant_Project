@@ -84,6 +84,7 @@ project/
 │  ├─ workbench_ui/                   # GUI application service/UI owner
 │  ├─ trade_analysis/                 # 單股 trade-analysis backend/service owner
 │  ├─ research/                       # Research application boundaries／artifact orchestration／Strategy Compare orchestration
+│  ├─ trading/                        # Trading orchestration；strategy-param training委派canonical Optimizer
 │  └─ optimizer/                      # 正式optimizer primitives；目前含raw cache／trial inputs／walk-forward
 ├─ models/
 │  ├─ filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/
@@ -92,16 +93,18 @@ project/
 │  │  ├─ manifest.json                # model spec/profile/split/score/OOS eligibility 契約
 │  │  ├─ scores.csv                   # architecture/profile-scoped canonical event score table
 │  │  └─ point_in_time/               # Selection rolling/cross-fitted Score與fold工件
-│  └─ strategy_params/                # Optimizer-owned Strategy Parameter SSOT；models root不再放current策略JSON
-│     ├─ canonical/                   # 正常current策略；family/policy以檔名區隔，一檔保存完整跨年schedule
-│     │  ├─ full_base_best.json / full_*_finalists_agree.json / full_ensemble_*.json
-│     │  ├─ min_base_best.json / min_*_finalists_agree.json / min_ensemble_*.json
-│     │  ├─ full_manifest.json / min_manifest.json
-│     │  └─ run_best_params.json / candidate_*_params.json
-│     └─ benchmark/<benchmark_id>/    # 隔離robustness題庫；每個獨立seed以檔名區隔；只放正式truth
-│        ├─ full_base_best_seed_<seed>.json
-│        ├─ min_base_best_seed_<seed>.json
-│        └─ <family>_seed_<seed>_manifest.json
+│  ├─ strategy_params/                # Research Optimizer-owned Strategy Parameter SSOT；models root不再放current策略JSON
+│  │  ├─ canonical/                   # Research current策略；family/policy以檔名區隔，一檔保存完整跨年schedule
+│  │  │  ├─ full_base_best.json / full_*_finalists_agree.json / full_ensemble_*.json
+│  │  │  ├─ min_base_best.json / min_*_finalists_agree.json / min_ensemble_*.json
+│  │  │  ├─ full_manifest.json / min_manifest.json
+│  │  │  └─ run_best_params.json / candidate_*_params.json
+│  │  └─ benchmark/<benchmark_id>/    # 隔離robustness題庫；每個獨立seed以檔名區隔；只放正式truth
+│  │     ├─ full_base_best_seed_<seed>.json
+│  │     ├─ min_base_best_seed_<seed>.json
+│  │     └─ <family>_seed_<seed>_manifest.json
+│  └─ trading/strategy_params/        # Trading Optimizer-owned Strategy Parameter SSOT；與Research physical truth隔離
+│     └─ canonical/                   # trade latest-data/fixed-window multi-seed policy artifacts + manifest
 ├─ outputs/optimizer/strategy_param_schedule/  # Optimizer resume/intermediate workspace；永不作current truth
 │  ├─ canonical/<family>/schedule_2021_forward/
 │  └─ benchmark/<benchmark_id>/seed_<seed>/<family>/schedule_2021_forward/
@@ -247,7 +250,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `tools/`：Audit、CLI／GUI、下載、validate、local regression與legacy import compatibility wrapper；canonical portfolio replay、optimizer library與Breakout Quality training／PIT application service均位於`services/`，正式domain與services不得反向依賴`tools/`。
 - `config/`：只持有使用者／專案可調設定與必要 declarative spec；不得承擔 resolver、formatter、I/O、runtime builder 或 dataclass 行為。Research 與 Trading 可分別持有自己的可調設定，但共享 strategy/execution semantic owner，禁止複製第二套策略計算。設定的型別收斂、environment override、derived value、snapshot 與 runtime resolution 由其 `core/`／domain owner 負責。Scientific/profile declarations 依各 domain Registry／contract 治理，不因 config cleanup 改變 identity。
 - Execution/runtime 預設若是使用者可能調整的資源、diagnostic、timeout／grace 或 benchmark trial knob，應由對應 `config/` owner 持有；service/core 內的固定 schema version、env-var 名稱、sentinel、UI layout、protocol heartbeat 或 generic class fallback 不因「集中設定」而搬入 config。
-- `models/`：模型工件與 Strategy Parameter SSOT 根目錄。所有current策略參數只能位於`models/strategy_params/`；沒有 path override 時，預設run-best參數解析到`models/strategy_params/canonical/run_best_params.json`。`models/*.json` root-level策略檔只屬一次性legacy migration input；migration由`apps/research.py optimizer migrate-strategy-params`明確觸發，cleanup必須通過canonical manifest + SHA／migration-lineage readiness gate。若舊OOS frozen params與canonical schedule initial member不同，explicit migration會先把原檔byte-preserve到`models/research/breakout_quality/strategy_param_legacy_oos/`並記錄source/archive SHA；該archive只供historical evidence，不進current discovery。Round 3後current runtime與`ensure_strategy_parameter_artifact()`均不得掃描、fallback或自動migration root legacy JSON。
+- `models/`：模型工件與 Strategy Parameter truth 根目錄。Research current策略參數位於`models/strategy_params/`；Trading current策略參數位於`models/trading/strategy_params/`，兩個runtime domain物理隔離，但都只能由同一canonical Optimizer producer與同一strategy-parameter artifact schema產生，不得建立第二套search／seed／trial／selector演算法。未指定explicit strategy-param root時，既有Research resolver行為維持`models/strategy_params/`，預設run-best仍解析到`models/strategy_params/canonical/run_best_params.json`。`models/*.json` root-level策略檔只屬一次性legacy migration input；migration由`apps/research.py optimizer migrate-strategy-params`明確觸發，cleanup必須通過canonical manifest + SHA／migration-lineage readiness gate。若舊OOS frozen params與canonical schedule initial member不同，explicit migration會先把原檔byte-preserve到`models/research/breakout_quality/strategy_param_legacy_oos/`並記錄source/archive SHA；該archive只供historical evidence，不進current discovery。Round 3後current runtime與`ensure_strategy_parameter_artifact()`均不得掃描、fallback或自動migration root legacy JSON。
 - `doc/`：架構、常用指令與 formal checklist 文件。
 
 ## 正式入口
@@ -259,6 +262,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `apps/package_zip.py`：打包正式入口；直接呼叫只負責snapshot/package，不取代`run_bundle.py`的整合流程。
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：Trading 市場資料更新正式入口。Research 仍使用既有 `data/tw_stock_data_vip/`，目前 market-data cutoff 由 `config/research.py` 宣告；Trading full dataset 固定寫入 `data/trading/tw_stock_data_vip/`。`core/runtime_domains.py`是 Research/Trading data/models/outputs/state namespace 與 downloader write guard 的 SSOT；正式 downloader 若被重導至 Research dataset 或其子目錄必須 fail-fast。Trading models／strategy params／state 後續只可落入 `models/trading/`、`models/trading/strategy_params/` 與 `state/trading/`，不得覆寫 Research truth。
+- `services/trading/strategy_param_training.py`：Trading strategy-parameter production orchestration。它只建立Trading training plan並將Trading data/output/models/strategy-param roots、trade latest-data/fixed-window時間語意與Trading config中的multi-seed/trials/window/selector注入`services/optimizer/application.py`的canonical non-rolling producer；不得建立第二套Optimizer。Trading不寫Research `candidate_best`／`run_best`、不自動promotion，成功前必須確認本次完整multi-seed與指定policy均已產生，再驗證artifact與manifest的latest-data/trials/seed/window/domain contract。此service目前是後續Workbench實盤流程要呼叫的正式domain service，不新增零散使用者CLI。
 - `apps/vip_scanner.py`：scanner 正式入口。
 - `apps/workbench.py`：GUI / workbench 正式入口；也是單股 trade-analysis 的單一使用者入口；K 線檢視中的交易明細與 Console 改以獨立分頁承接。
 

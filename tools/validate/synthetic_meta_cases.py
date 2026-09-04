@@ -2313,11 +2313,20 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "TRADING_DATASET_PROFILE",
             "TRADING_PARAM_SELECTOR",
             "TRADING_OPTIMIZER_MULTI_SEED_REQUIRED",
+            "TRADING_OPTIMIZER_TRIALS_PER_SEED",
+            "TRADING_OPTIMIZER_SEED_COUNT",
+            "TRADING_OPTIMIZER_SEED_MIN_AGREE",
+            "TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS",
         },
         "core.trading_policy": {
             "TradingStrategyProfile",
             "get_trading_strategy_profile",
             "get_trading_policy_snapshot",
+            "build_trading_strategy_param_training_plan",
+            "resolve_trading_selected_strategy_param_path",
+        },
+        "services.trading.strategy_param_training": {
+            "run_trading_strategy_param_training",
         },
         "core.runtime_domains": {
             "resolve_runtime_domain_paths",
@@ -2508,6 +2517,225 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
     summary["trading_strategy_id"] = profile.strategy_id
     summary["trading_param_selector"] = profile.param_selector
     return results, summary
+
+
+def validate_trading_strategy_param_producer_contract_case(_base_params):
+    case_id = "META_TRADING_STRATEGY_PARAM_PRODUCER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.file_integrity import load_json_strict
+    from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
+    from core.strategy_param_artifacts import (
+        POLICY_FILENAME_BY_NAME,
+        resolve_strategy_param_artifact_path,
+        resolve_strategy_param_manifest_path,
+    )
+    from core.training_policy import (
+        resolve_optimizer_runtime_model_mode,
+        set_optimizer_runtime_model_mode,
+    )
+    import core.trading_policy as trading_policy
+    import services.optimizer.application as optimizer_application
+    from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
+    import services.trading.strategy_param_training as trading_training
+
+    root = PROJECT_ROOT
+    profile = trading_policy.get_trading_strategy_profile()
+    plan = trading_policy.build_trading_strategy_param_training_plan(root)
+    research_selected = resolve_strategy_param_artifact_path(
+        root,
+        family=profile.param_family,
+        evaluation_mode="trade",
+        policy=profile.param_selector,
+    )
+    trading_selected = Path(str(plan["selected_params_path"])).resolve()
+    trading_param_root = Path(str(plan["strategy_params_root"])).resolve()
+
+    add_check(results, "trading_param", case_id, "training_plan_domain_is_trading", "trading", str(plan["runtime_domain"]))
+    add_check(results, "trading_param", case_id, "training_plan_uses_trade_timing_semantics", "trade", str(plan["evaluation_mode"]))
+    add_check(results, "trading_param", case_id, "training_plan_requires_multi_seed", True, bool(plan["optimizer_requires_multi_seed"]))
+    add_check(results, "trading_param", case_id, "training_seed_count_is_valid", True, int(plan["optimizer_seed_count"]) >= 2)
+    add_check(results, "trading_param", case_id, "training_trials_per_seed_is_valid", True, int(plan["optimizer_trials_per_seed"]) >= 1)
+    add_check(results, "trading_param", case_id, "training_window_is_valid", True, int(plan["optimizer_train_window_months"]) >= 1)
+    add_check(results, "trading_param", case_id, "selected_policy_is_registry_driven", True, str(plan["param_selector"]) in POLICY_FILENAME_BY_NAME)
+    add_check(results, "trading_param", case_id, "selected_artifact_is_under_trading_strategy_root", True, trading_selected.is_relative_to(trading_param_root))
+    add_check(results, "trading_param", case_id, "selected_artifact_is_not_research_truth", True, trading_selected != research_selected.resolve())
+    add_check(results, "trading_param", case_id, "optimizer_output_is_under_trading_outputs", True, Path(str(plan["output_dir"])).resolve().is_relative_to((root / "outputs" / "trading").resolve()))
+    add_check(results, "trading_param", case_id, "optimizer_models_is_under_trading_models", True, Path(str(plan["models_root"])).resolve().is_relative_to((root / "models" / "trading").resolve()))
+
+    alternate_policies = [name for name in POLICY_FILENAME_BY_NAME if name != profile.param_selector]
+    alternate_policy = alternate_policies[0] if alternate_policies else profile.param_selector
+    with patch.object(trading_policy, "TRADING_PARAM_SELECTOR", alternate_policy):
+        alternate_path = Path(trading_policy.resolve_trading_selected_strategy_param_path(root)).resolve()
+        alternate_profile = trading_policy.get_trading_strategy_profile()
+    expected_alternate_path = resolve_strategy_param_artifact_path(
+        root,
+        family=alternate_profile.param_family,
+        evaluation_mode="trade",
+        policy=alternate_policy,
+        strategy_params_root=trading_param_root,
+    ).resolve()
+    add_check(results, "trading_param", case_id, "selected_policy_path_follows_config_override", str(expected_alternate_path), str(alternate_path))
+
+    captured_service_kwargs = {}
+    fake_manifest = resolve_strategy_param_manifest_path(
+        root,
+        family=profile.param_family,
+        evaluation_mode="trade",
+        strategy_params_root=trading_param_root,
+    )
+    def _fake_canonical_runner(**kwargs):
+        captured_service_kwargs.update(kwargs)
+        return {
+            "status": "READY",
+            "latest_data_date": "2099-01-01",
+            "param_family": str(kwargs["param_family"]),
+            "selected_policy": str(kwargs["selected_policy"]),
+            "selected_params_path": str(trading_selected),
+            "manifest_path": str(fake_manifest),
+            "trials_per_seed": int(kwargs["trials_per_seed"]),
+            "seed_count": int(kwargs["seed_count"]),
+            "seed_min_agree": kwargs["seed_min_agree"],
+            "trade_train_window_months": int(kwargs["trade_train_window_months"]),
+            "random_seed_ensemble": {},
+        }
+    with patch.object(trading_training, "run_static_strategy_parameter_training", side_effect=_fake_canonical_runner):
+        service_result = trading_training.run_trading_strategy_param_training(project_root=root, environ={})
+    add_check(results, "trading_param", case_id, "trading_service_delegates_to_canonical_optimizer", str(plan["data_dir"]), str(captured_service_kwargs.get("selected_data_dir")))
+    add_check(results, "trading_param", case_id, "trading_service_injects_trading_output_root", str(plan["output_dir"]), str(captured_service_kwargs.get("output_dir")))
+    add_check(results, "trading_param", case_id, "trading_service_injects_trading_models_root", str(plan["models_root"]), str(captured_service_kwargs.get("models_dir")))
+    add_check(results, "trading_param", case_id, "trading_service_injects_trading_strategy_param_root", str(plan["strategy_params_root"]), str(captured_service_kwargs.get("strategy_params_root")))
+    add_check(results, "trading_param", case_id, "trading_service_uses_configured_family", str(plan["param_family"]), str(captured_service_kwargs.get("param_family")))
+    add_check(results, "trading_param", case_id, "trading_service_uses_configured_selector", str(plan["param_selector"]), str(captured_service_kwargs.get("selected_policy")))
+    add_check(results, "trading_param", case_id, "trading_service_uses_configured_seed_count", int(plan["optimizer_seed_count"]), int(captured_service_kwargs.get("seed_count", 0)))
+    add_check(results, "trading_param", case_id, "trading_service_returns_project_relative_paths", False, Path(str(service_result["selected_params_path"])).is_absolute())
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        temp_data = temp_root / "data"
+        temp_output = temp_root / "outputs"
+        temp_models = temp_root / "models"
+        temp_strategy_root = temp_models / "strategy_params"
+        temp_data.mkdir(parents=True)
+        expected_selected = resolve_strategy_param_artifact_path(
+            root,
+            family=profile.param_family,
+            evaluation_mode="trade",
+            policy=profile.param_selector,
+            strategy_params_root=temp_strategy_root,
+        )
+        expected_manifest = resolve_strategy_param_manifest_path(
+            root,
+            family=profile.param_family,
+            evaluation_mode="trade",
+            strategy_params_root=temp_strategy_root,
+        )
+        fake_latest = "2099-01-02"
+        captured_optimizer_kwargs = {}
+
+        def _fake_optimizer_run(**kwargs):
+            captured_optimizer_kwargs.update(kwargs)
+            expected_selected.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "selector": profile.param_selector,
+                "meta": {
+                    "selected_model_mode": "trade",
+                    "trials_per_seed": int(kwargs["requested_trials"]),
+                    "requested_random_seed_ensemble": dict(kwargs["seed_ensemble_policy_override"]),
+                    "walk_forward_policy": dict(kwargs["walk_forward_policy"]),
+                },
+                "params_ensemble": [{"member_index": 1, "seed": 1, "params": {"high_len": 60}}],
+            }
+            expected_selected.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            refresh_strategy_parameter_manifest(
+                root,
+                family=profile.param_family,
+                evaluation_mode="trade",
+                strategy_params_root=temp_strategy_root,
+                training_policy_override=dict(kwargs["manifest_training_policy_override"]),
+            )
+            add_check(results, "trading_param", case_id, "optimizer_runtime_mode_is_trade_inside_run", "trade", resolve_optimizer_runtime_model_mode())
+            return 0
+
+        previous_mode = resolve_optimizer_runtime_model_mode()
+        seed_policy = build_seed_ensemble_policy_snapshot(
+            enabled=True,
+            seed_count=int(plan["optimizer_seed_count"]),
+            min_agree=plan["optimizer_seed_min_agree"],
+        )
+        with patch.object(optimizer_application, "_resolve_latest_dataset_date", return_value=fake_latest), patch.object(
+            optimizer_application,
+            "_run_nonrolling_random_seed_ensemble_training",
+            side_effect=_fake_optimizer_run,
+        ):
+            producer_result = optimizer_application.run_static_strategy_parameter_training(
+                project_root=root,
+                selected_data_dir=temp_data,
+                output_dir=temp_output,
+                models_dir=temp_models,
+                strategy_params_root=temp_strategy_root,
+                dataset_profile_key=str(plan["dataset_profile"]),
+                dataset_label="Synthetic Trading",
+                param_family=str(plan["param_family"]),
+                selected_policy=str(plan["param_selector"]),
+                trials_per_seed=int(plan["optimizer_trials_per_seed"]),
+                seed_count=int(plan["optimizer_seed_count"]),
+                seed_min_agree=plan["optimizer_seed_min_agree"],
+                trade_train_window_months=int(plan["optimizer_train_window_months"]),
+                environ={},
+            )
+        add_check(results, "trading_param", case_id, "optimizer_runtime_mode_restored_after_success", previous_mode, resolve_optimizer_runtime_model_mode())
+        add_check(results, "trading_param", case_id, "canonical_runner_requires_complete_ensemble", True, bool(captured_optimizer_kwargs.get("require_complete_ensemble")))
+        add_check(results, "trading_param", case_id, "canonical_runner_requires_selected_policy_output", str(plan["param_selector"]), str(captured_optimizer_kwargs.get("required_policy_output")))
+        add_check(results, "trading_param", case_id, "canonical_runner_disables_research_candidate_write", False, bool(captured_optimizer_kwargs.get("write_candidate_best")))
+        add_check(results, "trading_param", case_id, "canonical_runner_disables_research_auto_promotion", False, bool(captured_optimizer_kwargs.get("auto_promote_run_best")))
+        add_check(results, "trading_param", case_id, "canonical_runner_uses_requested_seed_policy", seed_policy, dict(captured_optimizer_kwargs.get("seed_ensemble_policy_override") or {}))
+        add_check(results, "trading_param", case_id, "producer_selected_path_is_custom_trading_root", str(expected_selected.resolve()), str(Path(producer_result["selected_params_path"]).resolve()))
+        manifest_payload = load_json_strict(expected_manifest)
+        manifest_training = dict(manifest_payload.get("training_policy") or {})
+        add_check(results, "trading_param", case_id, "trading_manifest_records_runtime_domain", "trading", str(manifest_training.get("runtime_domain")))
+        add_check(results, "trading_param", case_id, "trading_manifest_records_seed_count", int(plan["optimizer_seed_count"]), int(dict(manifest_training.get("random_seed_ensemble") or {}).get("seed_count", 0)))
+        add_check(results, "trading_param", case_id, "trading_manifest_records_trials", int(plan["optimizer_trials_per_seed"]), int(manifest_training.get("trials_per_fold", 0)))
+        add_check(results, "trading_param", case_id, "trading_manifest_records_train_window", int(plan["optimizer_train_window_months"]), int(manifest_training.get("train_window_months", 0)))
+
+        def _raise_optimizer_run(**kwargs):
+            raise RuntimeError("synthetic producer failure")
+        with patch.object(optimizer_application, "_resolve_latest_dataset_date", return_value=fake_latest), patch.object(
+            optimizer_application,
+            "_run_nonrolling_random_seed_ensemble_training",
+            side_effect=_raise_optimizer_run,
+        ):
+            try:
+                optimizer_application.run_static_strategy_parameter_training(
+                    project_root=root,
+                    selected_data_dir=temp_data,
+                    output_dir=temp_output,
+                    models_dir=temp_models,
+                    strategy_params_root=temp_strategy_root,
+                    dataset_profile_key=str(plan["dataset_profile"]),
+                    dataset_label="Synthetic Trading",
+                    param_family=str(plan["param_family"]),
+                    selected_policy=str(plan["param_selector"]),
+                    trials_per_seed=int(plan["optimizer_trials_per_seed"]),
+                    seed_count=int(plan["optimizer_seed_count"]),
+                    seed_min_agree=plan["optimizer_seed_min_agree"],
+                    trade_train_window_months=int(plan["optimizer_train_window_months"]),
+                    environ={},
+                )
+            except RuntimeError as exc:
+                failure_propagated = "synthetic producer failure" in str(exc)
+            else:
+                failure_propagated = False
+        add_check(results, "trading_param", case_id, "producer_failure_is_not_swallowed", True, failure_propagated)
+        add_check(results, "trading_param", case_id, "optimizer_runtime_mode_restored_after_failure", previous_mode, resolve_optimizer_runtime_model_mode())
+        set_optimizer_runtime_model_mode(previous_mode)
+
+    summary["check_scope"] = "trading canonical strategy-parameter producer"
+    summary["selector"] = str(plan["param_selector"])
+    summary["seed_count"] = int(plan["optimizer_seed_count"])
+    return results, summary
+
 
 def validate_peak_process_memory_tracker_context_management_case(_base_params):
     case_id = "META_PEAK_PROCESS_MEMORY_TRACKER_CONTEXT_MANAGEMENT"

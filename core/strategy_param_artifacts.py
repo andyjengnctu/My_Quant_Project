@@ -188,8 +188,15 @@ def normalize_strategy_param_policy(value: str) -> str:
     return policy
 
 
-def _canonical_dir(project_root: str | Path) -> Path:
-    return Path(project_root).resolve() / STRATEGY_PARAM_ROOT_RELATIVE / STRATEGY_PARAM_CANONICAL_DIRNAME
+def _canonical_dir(
+    project_root: str | Path, *, strategy_params_root: str | Path | None = None
+) -> Path:
+    root = (
+        Path(strategy_params_root).resolve()
+        if strategy_params_root is not None
+        else Path(project_root).resolve() / STRATEGY_PARAM_ROOT_RELATIVE
+    )
+    return root / STRATEGY_PARAM_CANONICAL_DIRNAME
 
 
 def _canonical_policy_filename(*, family: str, evaluation_mode: str, policy: str) -> str:
@@ -204,11 +211,11 @@ def _canonical_policy_filename(*, family: str, evaluation_mode: str, policy: str
     return f"{family}_{mode}_{base}"
 
 
-def resolve_strategy_param_dir(project_root: str | Path, *, family: str, evaluation_mode: str) -> Path:
+def resolve_strategy_param_dir(project_root: str | Path, *, family: str, evaluation_mode: str, strategy_params_root: str | Path | None = None) -> Path:
     # Compatibility API: family/mode validation is retained, physical storage is flat.
     normalize_strategy_param_family(family)
     normalize_strategy_param_evaluation_mode(evaluation_mode)
-    return _canonical_dir(project_root)
+    return _canonical_dir(project_root, strategy_params_root=strategy_params_root)
 
 
 def resolve_strategy_param_artifact_path(
@@ -217,8 +224,9 @@ def resolve_strategy_param_artifact_path(
     family: str,
     evaluation_mode: str,
     policy: str,
+    strategy_params_root: str | Path | None = None,
 ) -> Path:
-    return _canonical_dir(project_root) / _canonical_policy_filename(
+    return _canonical_dir(project_root, strategy_params_root=strategy_params_root) / _canonical_policy_filename(
         family=family, evaluation_mode=evaluation_mode, policy=policy
     )
 
@@ -228,10 +236,11 @@ def resolve_strategy_param_state_dir(
     *,
     family: str = "full",
     evaluation_mode: str = "trade",
+    strategy_params_root: str | Path | None = None,
 ) -> Path:
     normalize_strategy_param_family(family)
     normalize_strategy_param_evaluation_mode(evaluation_mode)
-    return _canonical_dir(project_root)
+    return _canonical_dir(project_root, strategy_params_root=strategy_params_root)
 
 
 def resolve_strategy_param_state_path(
@@ -240,23 +249,25 @@ def resolve_strategy_param_state_path(
     artifact: str,
     family: str = "full",
     evaluation_mode: str = "trade",
+    strategy_params_root: str | Path | None = None,
 ) -> Path:
     key = str(artifact or "").strip()
     if key not in STRATEGY_PARAM_STATE_FILENAME_BY_NAME:
         raise ValueError(f"不支援的策略參數state artifact: {artifact!r}")
     return resolve_strategy_param_state_dir(
-        project_root, family=family, evaluation_mode=evaluation_mode
+        project_root, family=family, evaluation_mode=evaluation_mode,
+        strategy_params_root=strategy_params_root,
     ) / STRATEGY_PARAM_STATE_FILENAME_BY_NAME[key]
 
 
-def resolve_strategy_param_manifest_path(project_root: str | Path, *, family: str, evaluation_mode: str) -> Path:
+def resolve_strategy_param_manifest_path(project_root: str | Path, *, family: str, evaluation_mode: str, strategy_params_root: str | Path | None = None) -> Path:
     family = normalize_strategy_param_family(family)
     mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
     if mode in STRATEGY_PARAM_SCHEDULE_MODES:
         filename = f"{family}_manifest.json"
     else:
         filename = f"{family}_{mode}_manifest.json"
-    return _canonical_dir(project_root) / filename
+    return _canonical_dir(project_root, strategy_params_root=strategy_params_root) / filename
 
 
 def normalize_strategy_param_benchmark_id(value: str) -> str:

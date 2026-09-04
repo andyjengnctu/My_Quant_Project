@@ -70,6 +70,7 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "config/trading.py",
     "core/trading_policy.py",
     "core/runtime_domains.py",
+    "services/trading/strategy_param_training.py",
     "config/downloader.py",
     "config/runtime.py",
     "config/strategy_compare.py",

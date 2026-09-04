@@ -59,10 +59,10 @@ def _canonical_json_sha256(payload: Any) -> str:
 
 
 def _existing_source_records(
-    root: Path, *, family: str, evaluation_mode: str
+    root: Path, *, family: str, evaluation_mode: str, strategy_params_root: str | Path | None = None
 ) -> dict[str, dict[str, Any]]:
     manifest_path = resolve_strategy_param_manifest_path(
-        root, family=family, evaluation_mode=evaluation_mode
+        root, family=family, evaluation_mode=evaluation_mode, strategy_params_root=strategy_params_root
     )
     try:
         payload = load_json_strict(manifest_path)
@@ -122,17 +122,19 @@ def build_strategy_parameter_manifest_payload(
     family: str,
     evaluation_mode: str,
     source_records: dict[str, dict[str, Any]] | None = None,
+    strategy_params_root: str | Path | None = None,
+    training_policy_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     family = normalize_strategy_param_family(family)
     mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
     storage_mode = _storage_mode(mode)
-    preserved_sources = _existing_source_records(root, family=family, evaluation_mode=mode)
+    preserved_sources = _existing_source_records(root, family=family, evaluation_mode=mode, strategy_params_root=strategy_params_root)
     preserved_sources.update(dict(source_records or {}))
     artifacts: dict[str, Any] = {}
     for policy in POLICY_FILENAME_BY_NAME:
         path = resolve_strategy_param_artifact_path(
-            root, family=family, evaluation_mode=mode, policy=policy
+            root, family=family, evaluation_mode=mode, policy=policy, strategy_params_root=strategy_params_root
         )
         if not path.is_file():
             continue
@@ -146,7 +148,7 @@ def build_strategy_parameter_manifest_payload(
             artifacts[policy]["source"] = source
     state_artifacts: dict[str, Any] = {}
     if family == "full" and mode == "trade":
-        state_dir = resolve_strategy_param_state_dir(root, family=family, evaluation_mode=mode)
+        state_dir = resolve_strategy_param_state_dir(root, family=family, evaluation_mode=mode, strategy_params_root=strategy_params_root)
         for state_name, filename in STRATEGY_PARAM_STATE_FILENAME_BY_NAME.items():
             state_path = state_dir / filename
             if state_path.is_file():
@@ -154,7 +156,11 @@ def build_strategy_parameter_manifest_payload(
                     "path": _project_relative(root, state_path),
                     "sha256": compute_strategy_param_file_sha256(state_path),
                 }
-    training_policy = _training_policy_for_storage_mode(mode)
+    training_policy = (
+        dict(training_policy_override)
+        if training_policy_override is not None
+        else _training_policy_for_storage_mode(mode)
+    )
     return {
         "schema_type": "canonical_strategy_parameter_artifact_set",
         "schema_version": STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
@@ -306,10 +312,12 @@ def refresh_strategy_parameter_manifest(
     family: str,
     evaluation_mode: str,
     source_records: dict[str, dict[str, Any]] | None = None,
+    strategy_params_root: str | Path | None = None,
+    training_policy_override: dict[str, Any] | None = None,
 ) -> Path:
     root = Path(project_root).resolve()
     manifest_path = resolve_strategy_param_manifest_path(
-        root, family=family, evaluation_mode=evaluation_mode
+        root, family=family, evaluation_mode=evaluation_mode, strategy_params_root=strategy_params_root
     )
     _write_json(
         manifest_path,
@@ -318,6 +326,8 @@ def refresh_strategy_parameter_manifest(
             family=family,
             evaluation_mode=evaluation_mode,
             source_records=source_records,
+            strategy_params_root=strategy_params_root,
+            training_policy_override=training_policy_override,
         ),
     )
     return manifest_path

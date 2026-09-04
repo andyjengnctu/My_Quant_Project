@@ -67,6 +67,7 @@ from config.training_policy import (
 from core.training_policy import (
     is_optimizer_local_min_review_enabled,
     set_optimizer_runtime_model_mode,
+    resolve_optimizer_runtime_model_mode,
     resolve_optimizer_base_finalists_agree_min_agree,
     resolve_optimizer_local_finalists_agree_min_agree,
     resolve_optimizer_retention_finalists_agree_min_agree,
@@ -837,12 +838,17 @@ def _export_selected_candidate_artifacts(
     return True
 
 
-def _resolve_nonrolling_seed_ensemble_policy(*, seed_count: int | None = None):
+def _resolve_nonrolling_seed_ensemble_policy(
+    *,
+    seed_count: int | None = None,
+    enabled: bool | None = None,
+    min_agree=None,
+):
     resolved_seed_count = OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE if seed_count is None else int(seed_count)
     return build_seed_ensemble_policy_snapshot(
-        enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+        enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED if enabled is None else bool(enabled),
         seed_count=resolved_seed_count,
-        min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+        min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE if min_agree is None else min_agree,
     )
 
 
@@ -891,7 +897,13 @@ def _finalists_agree_policy_metadata(policy_name: str) -> dict:
     }
 
 
-def _resolve_nonrolling_policy_seed_ensemble_policy(*, policy_name: str, members: list[dict], seeds: list[int]) -> dict:
+def _resolve_nonrolling_policy_seed_ensemble_policy(
+    *,
+    policy_name: str,
+    members: list[dict],
+    seeds: list[int],
+    requested_seed_policy: dict | None = None,
+) -> dict:
     if _is_finalists_agree_policy_name(policy_name):
         member_count = max(1, len(renumber_seed_ensemble_members(list(members or []))))
         metadata = _finalists_agree_policy_metadata(policy_name)
@@ -904,9 +916,13 @@ def _resolve_nonrolling_policy_seed_ensemble_policy(*, policy_name: str, members
         policy[str(metadata["min_agree_requested_key"])] = metadata["min_agree_requested"]
         policy["member_selection"] = str(metadata["member_selection"])
         policy["intra_seed_agree"] = "selected_seed_finalists"
-        policy["requested_random_seed_ensemble"] = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
+        policy["requested_random_seed_ensemble"] = dict(
+            requested_seed_policy or _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
+        )
         return policy
-    return _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
+    return dict(
+        requested_seed_policy or _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
+    )
 
 
 
@@ -1330,7 +1346,10 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         member_count = int(task["member_count"])
         started_at = time.perf_counter()
         study = None
-        member_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        member_session = build_optimizer_session(
+            walk_forward_policy=walk_forward_policy,
+            output_dir=str(task.get("output_dir") or OUTPUT_DIR),
+        )
         member_session.n_trials = int(requested_trials)
         member_session.run_action = "train"
         member_session.disable_milestone_dashboard = True
@@ -1494,7 +1513,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
 
 
 
-def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_name: str = "") -> dict:
+def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_name: str = "", requested_seed_policy: dict | None = None) -> dict:
     local_scores = [float(item.get("local_min_score", 0.0)) for item in members]
     base_scores = [float(item.get("base_score", 0.0)) for item in members]
     retentions = [float(item.get("retention", 0.0)) for item in members]
@@ -1543,12 +1562,15 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
             }
             for idx, item in enumerate(members)
         ],
-        "random_seed_ensemble": _resolve_nonrolling_policy_seed_ensemble_policy(policy_name=str(policy_name or ""), members=list(members or []), seeds=seeds),
+        "random_seed_ensemble": _resolve_nonrolling_policy_seed_ensemble_policy(
+            policy_name=str(policy_name or ""), members=list(members or []), seeds=seeds,
+            requested_seed_policy=requested_seed_policy,
+        ),
         "created_at": get_taipei_now().isoformat(),
     }
 
 
-def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, source: str, policy_name: str = "") -> dict:
+def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, source: str, policy_name: str = "", requested_seed_policy: dict | None = None) -> dict:
     meta = {
         "source": str(source),
         "dataset_label": str(dataset_label),
@@ -1561,15 +1583,18 @@ def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, w
     }
     if policy_name:
         meta["policy"] = str(policy_name)
+    if requested_seed_policy is not None:
+        meta["requested_random_seed_ensemble"] = dict(requested_seed_policy)
     return meta
 
 
-def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
+def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, requested_seed_policy: dict | None = None) -> dict:
     normalized_members = renumber_seed_ensemble_members(list(members or []))
     requested_policy = _resolve_nonrolling_policy_seed_ensemble_policy(
         policy_name=str(policy_name),
         members=normalized_members,
         seeds=seeds,
+        requested_seed_policy=requested_seed_policy,
     )
     payload = build_static_active_param_ensemble_payload(
         members=normalized_members,
@@ -1585,6 +1610,7 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
             trials_per_seed=trials_per_seed,
             source="nonrolling_random_seed_ensemble_policy_paramset",
             policy_name=str(policy_name),
+            requested_seed_policy=requested_seed_policy,
         ),
         raw_universe_required_min_rows=resolve_raw_universe_required_min_rows(walk_forward_policy),
     )
@@ -1608,7 +1634,14 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
     return payload
 
 
-def _remove_disabled_nonrolling_policy_paramset_files(*, mode: str, active_policy_names: set[str], all_policy_names: tuple[str, ...]) -> None:
+def _remove_disabled_nonrolling_policy_paramset_files(
+    *,
+    mode: str,
+    active_policy_names: set[str],
+    all_policy_names: tuple[str, ...],
+    family: str = "full",
+    strategy_params_root: str | os.PathLike[str] | None = None,
+) -> None:
     from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
 
     normalized_mode = normalize_optimizer_model_mode(mode)
@@ -1617,7 +1650,11 @@ def _remove_disabled_nonrolling_policy_paramset_files(*, mode: str, active_polic
         if policy_name in active:
             continue
         path = str(resolve_strategy_param_artifact_path(
-            PROJECT_ROOT, family="full", evaluation_mode=normalized_mode, policy=policy_name
+            PROJECT_ROOT,
+            family=family,
+            evaluation_mode=normalized_mode,
+            policy=policy_name,
+            strategy_params_root=strategy_params_root,
         ))
         try:
             if os.path.exists(path):
@@ -1626,7 +1663,22 @@ def _remove_disabled_nonrolling_policy_paramset_files(*, mode: str, active_polic
             print(f"{C_YELLOW}⚠️ 無法移除 disabled policy 檔：{_project_relative_path(path)}｜{type(exc).__name__}: {exc}{C_RESET}")
 
 
-def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, write_files: bool = True) -> tuple[dict[str, str], dict[str, dict]]:
+def _write_static_seed_ensemble_policy_paramsets(
+    *,
+    policy_members_by_policy: dict[str, list[dict]],
+    seeds: list[int],
+    objective_mode: str,
+    walk_forward_policy: dict,
+    dataset_label: str,
+    selected_model_mode: str,
+    trials_per_seed: int,
+    write_files: bool = True,
+    family: str = "full",
+    models_dir: str | os.PathLike[str] | None = None,
+    strategy_params_root: str | os.PathLike[str] | None = None,
+    requested_seed_policy: dict | None = None,
+    manifest_training_policy: dict | None = None,
+) -> tuple[dict[str, str], dict[str, dict]]:
     from services.optimizer.outer_rolling_oos import (
         ALL_REPORT_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
@@ -1639,7 +1691,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
     first_class_policy_names = tuple(get_optimizer_paramset_policy_names())
     replay_policy_names = first_class_policy_names
-    _remove_stale_policy_paramset_files(MODELS_DIR)
+    _remove_stale_policy_paramset_files(str(models_dir or MODELS_DIR))
     paths: dict[str, str] = {}
     payloads: dict[str, dict] = {}
     first_class_policy_set = set(first_class_policy_names)
@@ -1648,6 +1700,8 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             mode=selected_model_mode,
             active_policy_names=first_class_policy_set,
             all_policy_names=tuple(ALL_REPORT_POLICY_NAMES),
+            family=family,
+            strategy_params_root=strategy_params_root,
         )
     for policy_name in replay_policy_names:
         members = sorted(
@@ -1669,15 +1723,17 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             dataset_label=dataset_label,
             selected_model_mode=selected_model_mode,
             trials_per_seed=trials_per_seed,
+            requested_seed_policy=requested_seed_policy,
         )
         payloads[str(policy_name)] = payload
         from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
 
         path = str(resolve_strategy_param_artifact_path(
             PROJECT_ROOT,
-            family="full",
+            family=family,
             evaluation_mode=normalize_optimizer_model_mode(selected_model_mode),
             policy=str(policy_name),
+            strategy_params_root=strategy_params_root,
         ))
         if str(policy_name) not in first_class_policy_set:
             try:
@@ -1694,16 +1750,41 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
         refresh_strategy_parameter_manifest(
             PROJECT_ROOT,
-            family="full",
+            family=family,
             evaluation_mode=normalize_optimizer_model_mode(selected_model_mode),
+            strategy_params_root=strategy_params_root,
+            training_policy_override=manifest_training_policy,
         )
     return paths, payloads
 
 
-def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
+def _write_static_seed_ensemble_candidate(
+    *,
+    members: list[dict],
+    seeds: list[int],
+    objective_mode: str,
+    walk_forward_policy: dict,
+    dataset_label: str,
+    selected_model_mode: str,
+    trials_per_seed: int,
+    policy_members_by_policy: dict[str, list[dict]] | None = None,
+    write_candidate_best: bool = True,
+    write_policy_files: bool = True,
+    family: str = "full",
+    candidate_selector_override: str | None = None,
+    run_best_selector_override: str | None = None,
+    models_dir: str | os.PathLike[str] | None = None,
+    strategy_params_root: str | os.PathLike[str] | None = None,
+    requested_seed_policy: dict | None = None,
+    manifest_training_policy: dict | None = None,
+) -> tuple[dict, dict, dict[str, dict]]:
     from services.optimizer.outer_rolling_oos import select_finalist_best_members, select_finalists_agree_members, _is_finalist_best_policy
 
-    candidate_selector = _resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best"
+    candidate_selector = (
+        str(candidate_selector_override)
+        if candidate_selector_override is not None
+        else (_resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best")
+    )
     candidate_members = list(members)
     if candidate_selector != "candidate_best":
         selector_members = list((policy_members_by_policy or {}).get(candidate_selector) or [])
@@ -1718,6 +1799,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         policy_name=str(candidate_selector),
         members=candidate_members,
         seeds=seeds,
+        requested_seed_policy=requested_seed_policy,
     )
     payload = build_static_active_param_ensemble_payload(
         members=candidate_members,
@@ -1733,6 +1815,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
             trials_per_seed=trials_per_seed,
             source="nonrolling_random_seed_ensemble",
             policy_name=str(candidate_selector),
+            requested_seed_policy=requested_seed_policy,
         ),
         raw_universe_required_min_rows=resolve_raw_universe_required_min_rows(walk_forward_policy),
     )
@@ -1745,6 +1828,11 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         selected_model_mode=selected_model_mode,
         trials_per_seed=trials_per_seed,
         write_files=bool(write_policy_files),
+        family=family,
+        models_dir=models_dir,
+        strategy_params_root=strategy_params_root,
+        requested_seed_policy=requested_seed_policy,
+        manifest_training_policy=manifest_training_policy,
     )
     summary = _build_static_seed_ensemble_summary(
         members=candidate_members,
@@ -1755,9 +1843,14 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         selected_model_mode=selected_model_mode,
         trials_per_seed=trials_per_seed,
         policy_name=str(candidate_selector),
+        requested_seed_policy=requested_seed_policy,
     )
     summary["selector"] = str(candidate_selector)
-    summary["run_best_selector"] = _resolve_trade_run_best_selector()
+    summary["run_best_selector"] = (
+        str(run_best_selector_override)
+        if run_best_selector_override is not None
+        else _resolve_trade_run_best_selector()
+    )
     summary["policy_paramsets"] = dict(policy_paramset_paths)
     payload["summary"] = dict(summary)
     if bool(write_candidate_best):
@@ -1988,7 +2081,19 @@ def _run_nonrolling_random_seed_ensemble_training(
     objective_mode: str,
     walk_forward_policy: dict,
     requested_trials: int,
-    build_optimizer_session,
+    family: str = "full",
+    candidate_selector_override: str | None = None,
+    run_best_selector_override: str | None = None,
+    output_dir: str | os.PathLike[str] | None = None,
+    models_dir: str | os.PathLike[str] | None = None,
+    strategy_params_root: str | os.PathLike[str] | None = None,
+    seed_ensemble_policy_override: dict | None = None,
+    write_candidate_best: bool | None = None,
+    auto_promote_run_best: bool | None = None,
+    manifest_training_policy_override: dict | None = None,
+    require_complete_ensemble: bool = False,
+    required_policy_output: str | None = None,
+    build_optimizer_session=None,
     create_optimizer_study,
     ensure_study_effective_policy_compatible,
     configure_optuna_logging,
@@ -2003,7 +2108,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         return None
     if not os.path.isdir(selected_data_dir):
         raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
-    policy = _resolve_nonrolling_seed_ensemble_policy()
+    policy = dict(seed_ensemble_policy_override or _resolve_nonrolling_seed_ensemble_policy())
     if not bool(policy.get("enabled", False)) or int(policy.get("seed_count", 1)) <= 1:
         return None
 
@@ -2020,7 +2125,9 @@ def _run_nonrolling_random_seed_ensemble_training(
     parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))
     parallel_backend = resolve_optimizer_random_seed_ensemble_parallel_backend_default()
     process_parallel_enabled = bool(int(parallel_workers) > 1 and parallel_backend == "process")
-    process_log_dir = os.path.join(OUTPUT_DIR, "seed_ensemble_logs", get_taipei_now().strftime("%Y%m%d_%H%M%S_%f"))
+    runtime_output_dir = str(output_dir or OUTPUT_DIR)
+    runtime_models_dir = str(models_dir or MODELS_DIR)
+    process_log_dir = os.path.join(runtime_output_dir, "seed_ensemble_logs", get_taipei_now().strftime("%Y%m%d_%H%M%S_%f"))
     process_log_paths: dict[int, str] = {}
     progress_lock = threading.Lock()
     progress_board = None
@@ -2092,7 +2199,10 @@ def _run_nonrolling_random_seed_ensemble_training(
         _print_nonrolling_single_fold_progress(walk_forward_policy, **kwargs)
 
     def _run_one_seed_member(member_index: int, seed: int) -> dict | None:
-        member_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        member_session = build_optimizer_session(
+            walk_forward_policy=walk_forward_policy,
+            output_dir=runtime_output_dir,
+        )
         member_session.n_trials = int(requested_trials)
         member_session.run_action = "train"
         member_session.disable_milestone_dashboard = compact_display
@@ -2283,6 +2393,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "optimizer_required_min_rows": int(optimizer_required_min_rows),
                 "objective_mode": str(objective_mode),
                 "requested_trials": int(requested_trials),
+                "output_dir": runtime_output_dir,
                 "db_name": None,
                 "environ": dict(environ or {}),
                 "log_path": log_path,
@@ -2357,8 +2468,13 @@ def _run_nonrolling_random_seed_ensemble_training(
             f"{C_YELLOW}ℹ️ 非 rolling random seed ensemble 未建立 candidate："
             f"可用 members={len(members)}/{len(seeds)}，不輸出不完整 ensemble。{C_RESET}"
         )
-        return 0
+        return 2 if bool(require_complete_ensemble) else 0
 
+    should_write_candidate_best = (
+        normalize_optimizer_model_mode(selected_model_mode) == "trade"
+        if write_candidate_best is None
+        else bool(write_candidate_best)
+    )
     ensemble_payload, _ensemble_summary, _policy_paramset_payloads = _write_static_seed_ensemble_candidate(
         members=members,
         seeds=seeds,
@@ -2368,15 +2484,25 @@ def _run_nonrolling_random_seed_ensemble_training(
         selected_model_mode=selected_model_mode,
         trials_per_seed=int(requested_trials),
         policy_members_by_policy=policy_members_by_policy,
-        write_candidate_best=(normalize_optimizer_model_mode(selected_model_mode) == "trade"),
+        write_candidate_best=should_write_candidate_best,
         # base/base_r/local/retention are selector-study artifacts and must remain
         # available in every non-rolling mode. Only candidate_best/run_best are
         # restricted to Trade mode.
         write_policy_files=True,
+        family=family,
+        candidate_selector_override=candidate_selector_override,
+        run_best_selector_override=run_best_selector_override,
+        models_dir=runtime_models_dir,
+        strategy_params_root=strategy_params_root,
+        requested_seed_policy=policy,
+        manifest_training_policy=manifest_training_policy_override,
     )
     trade_mode = normalize_optimizer_model_mode(selected_model_mode) == "trade"
     if dashboard_session is None:
-        dashboard_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        dashboard_session = build_optimizer_session(
+            walk_forward_policy=walk_forward_policy,
+            output_dir=runtime_output_dir,
+        )
         dashboard_session.load_raw_data(
             selected_data_dir,
             load_all_raw_data=load_all_raw_data,
@@ -2471,8 +2597,20 @@ def _run_nonrolling_random_seed_ensemble_training(
         resource_summary=resource_sampler.summary(),
         color=True,
     ))
-    if normalize_optimizer_model_mode(selected_model_mode) == "trade":
-        if bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST):
+    required_policy = str(required_policy_output or "").strip()
+    if required_policy and required_policy not in dict(_policy_paramset_payloads or {}):
+        print(
+            f"{C_RED}❌ 非 rolling multi-seed 未產生必要 policy：{required_policy}{C_RESET}",
+            file=sys.stderr,
+        )
+        return 3
+    if normalize_optimizer_model_mode(selected_model_mode) == "trade" and should_write_candidate_best:
+        should_auto_promote = (
+            bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST)
+            if auto_promote_run_best is None
+            else bool(auto_promote_run_best)
+        )
+        if should_auto_promote:
             promote_status = _promote_candidate_to_run_best(session=dashboard_session, emit_output=False)
             if promote_status != 0:
                 return int(promote_status)
@@ -2485,6 +2623,219 @@ def _run_nonrolling_random_seed_ensemble_training(
     _print_optimizer_output_files("💾 輸出檔案", list(visible_policy_paths.items()))
     return 0
 
+
+
+def run_static_strategy_parameter_training(
+    *,
+    project_root: str | os.PathLike[str],
+    selected_data_dir: str | os.PathLike[str],
+    output_dir: str | os.PathLike[str],
+    models_dir: str | os.PathLike[str],
+    strategy_params_root: str | os.PathLike[str],
+    dataset_profile_key: str,
+    dataset_label: str,
+    param_family: str,
+    selected_policy: str,
+    trials_per_seed: int,
+    seed_count: int,
+    seed_min_agree,
+    trade_train_window_months: int,
+    environ=None,
+) -> dict:
+    """Run the canonical non-rolling Optimizer against an explicit storage domain.
+
+    This is the reusable producer seam used by Trading.  Research callers keep the
+    existing ``main`` path; Trading injects only data/output/model roots and execution
+    knobs while reusing the same Optimizer/session/search implementation.
+    """
+    from core.file_integrity import load_json_strict
+    from core.strategy_param_artifacts import (
+        normalize_strategy_param_family,
+        normalize_strategy_param_policy,
+        resolve_strategy_param_artifact_path,
+        resolve_strategy_param_manifest_path,
+    )
+    from services.optimizer.prep import load_all_raw_data
+    from services.optimizer.runtime import (
+        create_optimizer_study,
+        resolve_optimizer_single_fold_search_parallel_trials,
+    )
+    from services.optimizer.robustness import (
+        print_local_min_score_finalist_review,
+        print_local_min_score_winner_summary,
+    )
+    from services.optimizer.session import close_study_storage
+    from services.optimizer.study_utils import (
+        build_best_params_payload_from_trial,
+        is_qualified_trial_value,
+    )
+    from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
+
+    root = os.path.abspath(os.fspath(project_root))
+    data_dir = os.path.abspath(os.fspath(selected_data_dir))
+    runtime_output_dir = os.path.abspath(os.fspath(output_dir))
+    runtime_models_dir = os.path.abspath(os.fspath(models_dir))
+    runtime_strategy_params_root = os.path.abspath(os.fspath(strategy_params_root))
+    normalized_dataset = normalize_dataset_profile_key(dataset_profile_key)
+    normalized_family = normalize_strategy_param_family(param_family)
+    normalized_policy = normalize_strategy_param_policy(selected_policy)
+    trials = int(trials_per_seed)
+    seeds = int(seed_count)
+    train_window_months = int(trade_train_window_months)
+    if trials < 1:
+        raise ValueError("strategy parameter training trials_per_seed必須>=1")
+    if seeds < 2:
+        raise ValueError("strategy parameter multi-seed training要求seed_count>=2")
+    if train_window_months < 1:
+        raise ValueError("strategy parameter trade_train_window_months必須>=1")
+    if not os.path.isdir(data_dir):
+        raise FileNotFoundError(build_missing_dataset_dir_message(normalized_dataset, data_dir))
+
+    os.makedirs(runtime_output_dir, exist_ok=True)
+    os.makedirs(runtime_models_dir, exist_ok=True)
+    os.makedirs(runtime_strategy_params_root, exist_ok=True)
+
+    latest_data_date = _resolve_latest_dataset_date(data_dir)
+    loaded_policy = load_walk_forward_policy(root)
+    loaded_policy["trade_train_window_months"] = train_window_months
+    selected_model_mode = "trade"
+    walk_forward_policy = build_optimizer_runtime_policy(
+        loaded_policy,
+        selected_model_mode,
+        latest_data_date=latest_data_date,
+    )
+    optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
+    walk_forward_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
+    objective_mode = str(walk_forward_policy.get("objective_mode", "split_train_romd"))
+    requested_seed_policy = _resolve_nonrolling_seed_ensemble_policy(
+        enabled=True,
+        seed_count=seeds,
+        min_agree=seed_min_agree,
+    )
+    from core.training_policy import get_strategy_parameter_training_policy_snapshot
+    manifest_training_policy = get_strategy_parameter_training_policy_snapshot(
+        evaluation_mode="trade"
+    )
+    manifest_training_policy.update(
+        {
+            "runtime_domain": "trading",
+            "trials_per_fold": trials,
+            "train_window_months": train_window_months,
+            "random_seed_ensemble": dict(requested_seed_policy),
+        }
+    )
+
+    previous_runtime_model_mode = resolve_optimizer_runtime_model_mode()
+    set_optimizer_runtime_model_mode(selected_model_mode)
+    try:
+        status = _run_nonrolling_random_seed_ensemble_training(
+            environ=dict(os.environ if environ is None else environ),
+            selected_data_dir=data_dir,
+            dataset_profile_key=normalized_dataset,
+            dataset_label=str(dataset_label),
+            selected_model_mode=selected_model_mode,
+            load_all_raw_data=load_all_raw_data,
+            optimizer_required_min_rows=int(optimizer_required_min_rows),
+            objective_mode=objective_mode,
+            walk_forward_policy=walk_forward_policy,
+            requested_trials=trials,
+            family=normalized_family,
+            candidate_selector_override=normalized_policy,
+            run_best_selector_override=normalized_policy,
+            output_dir=runtime_output_dir,
+            models_dir=runtime_models_dir,
+            strategy_params_root=runtime_strategy_params_root,
+            seed_ensemble_policy_override=requested_seed_policy,
+            write_candidate_best=False,
+            auto_promote_run_best=False,
+            manifest_training_policy_override=manifest_training_policy,
+            require_complete_ensemble=True,
+            required_policy_output=normalized_policy,
+            build_optimizer_session=build_optimizer_session,
+            create_optimizer_study=create_optimizer_study,
+            ensure_study_effective_policy_compatible=_ensure_study_effective_policy_compatible,
+            configure_optuna_logging=configure_optuna_logging,
+            print_local_min_score_finalist_review=print_local_min_score_finalist_review,
+            print_local_min_score_winner_summary=print_local_min_score_winner_summary,
+            close_study_storage=close_study_storage,
+            is_qualified_trial_value=is_qualified_trial_value,
+            resolve_optimizer_single_fold_search_parallel_trials=resolve_optimizer_single_fold_search_parallel_trials,
+            build_best_params_payload_from_trial=build_best_params_payload_from_trial,
+        )
+    finally:
+        set_optimizer_runtime_model_mode(previous_runtime_model_mode)
+    if status is None:
+        raise RuntimeError("canonical multi-seed Optimizer未執行")
+    if int(status) != 0:
+        raise RuntimeError(f"canonical multi-seed Optimizer失敗: status={status}")
+
+    selected_path = resolve_strategy_param_artifact_path(
+        root,
+        family=normalized_family,
+        evaluation_mode="trade",
+        policy=normalized_policy,
+        strategy_params_root=runtime_strategy_params_root,
+    )
+    if not selected_path.is_file():
+        raise RuntimeError(f"Trading selected strategy params未產生: {selected_path}")
+    payload = load_json_strict(selected_path)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Trading selected strategy params payload不合法")
+    if str(payload.get("selector") or "") != normalized_policy:
+        raise RuntimeError(
+            "Trading selected strategy params selector不一致: "
+            f"expected={normalized_policy}, actual={payload.get('selector')!r}"
+        )
+    meta = dict(payload.get("meta") or {})
+    artifact_policy = dict(meta.get("walk_forward_policy") or {})
+    artifact_seed_policy = dict(meta.get("requested_random_seed_ensemble") or {})
+    if str(meta.get("selected_model_mode") or "") != "trade":
+        raise RuntimeError("Trading strategy params不是trade-mode產物")
+    if int(meta.get("trials_per_seed") or 0) != trials:
+        raise RuntimeError("Trading strategy params trials_per_seed與目前設定不一致")
+    if int(artifact_seed_policy.get("seed_count") or 0) != seeds:
+        raise RuntimeError("Trading strategy params seed_count與目前設定不一致")
+    if int(artifact_seed_policy.get("min_agree") or 0) != int(requested_seed_policy["min_agree"]):
+        raise RuntimeError("Trading strategy params min_agree與目前設定不一致")
+    if int(artifact_policy.get("trade_train_window_months") or artifact_policy.get("train_window_months") or 0) != train_window_months:
+        raise RuntimeError("Trading strategy params train_window_months與目前設定不一致")
+    if str(artifact_policy.get("latest_data_date") or "") != str(latest_data_date):
+        raise RuntimeError(
+            "Trading strategy params不是最新資料訓練產物: "
+            f"expected={latest_data_date}, actual={artifact_policy.get('latest_data_date')!r}"
+        )
+    manifest_path = resolve_strategy_param_manifest_path(
+        root,
+        family=normalized_family,
+        evaluation_mode="trade",
+        strategy_params_root=runtime_strategy_params_root,
+    )
+    manifest = load_json_strict(manifest_path)
+    if not isinstance(manifest, dict):
+        raise RuntimeError("Trading strategy parameter manifest不合法")
+    manifest_training = dict(manifest.get("training_policy") or {})
+    if str(manifest_training.get("runtime_domain") or "") != "trading":
+        raise RuntimeError("Trading strategy parameter manifest缺少trading domain identity")
+    if int(manifest_training.get("trials_per_fold") or 0) != trials:
+        raise RuntimeError("Trading strategy parameter manifest trials與目前設定不一致")
+    if int(manifest_training.get("train_window_months") or 0) != train_window_months:
+        raise RuntimeError("Trading strategy parameter manifest train window與目前設定不一致")
+    manifest_seed_policy = dict(manifest_training.get("random_seed_ensemble") or {})
+    if int(manifest_seed_policy.get("seed_count") or 0) != seeds:
+        raise RuntimeError("Trading strategy parameter manifest seed_count與目前設定不一致")
+    return {
+        "status": "READY",
+        "latest_data_date": str(latest_data_date),
+        "param_family": normalized_family,
+        "selected_policy": normalized_policy,
+        "selected_params_path": str(selected_path),
+        "manifest_path": str(manifest_path),
+        "trials_per_seed": trials,
+        "seed_count": seeds,
+        "seed_min_agree": seed_min_agree,
+        "trade_train_window_months": train_window_months,
+        "random_seed_ensemble": dict(requested_seed_policy),
+    }
 
 def _extract_cli_value(argv, option_name: str):
     args = [] if argv is None else list(argv)
