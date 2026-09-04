@@ -56,6 +56,7 @@ from .synthetic_unit_cases import (
 )
 from .synthetic_trading_cases import (
     validate_trading_account_state_contract_case,
+    validate_trading_daily_workflow_contract_case,
     validate_trading_workbench_account_panel_contract_case,
 )
 from .synthetic_meta_cases import (
@@ -367,6 +368,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_single_backtest_uses_compounding_capital_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_account_state_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_daily_workflow_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_workbench_account_panel_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_policy_single_source_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_active_legacy_model_isolation_contract_case, layer="core_invariant", cost_class="fast"),

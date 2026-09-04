@@ -19,7 +19,7 @@ from .reporting import print_history_qualified_summary, print_scanner_start_bann
 from .runtime_common import ACTIVE_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
 
 
-def _prepare_scan_inputs(data_dir, params):
+def _prepare_scan_inputs(data_dir, params, *, output_dir=None):
     from core.data_utils import discover_unique_csv_inputs
 
     if not os.path.exists(data_dir):
@@ -27,7 +27,7 @@ def _prepare_scan_inputs(data_dir, params):
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
-    ensure_runtime_dirs()
+    ensure_runtime_dirs(output_dir=output_dir)
     print_scanner_start_banner(get_taipei_now().strftime('%Y-%m-%d %H:%M'))
     total_files = len(csv_inputs)
     if total_files == 0:
@@ -99,8 +99,9 @@ def _format_history_progress(count_scanned, total_files, rows):
     )
 
 
-def _run_parallel_scan(data_dir, params, *, process_single_stock_fn, adapt_result_fn, progress_formatter):
-    csv_inputs, duplicate_file_issue_lines, total_files = _prepare_scan_inputs(data_dir, params)
+def _run_parallel_scan(data_dir, params, *, process_single_stock_fn, adapt_result_fn, progress_formatter, output_dir=None):
+    resolved_output_dir = OUTPUT_DIR if output_dir is None else os.fspath(output_dir)
+    csv_inputs, duplicate_file_issue_lines, total_files = _prepare_scan_inputs(data_dir, params, output_dir=resolved_output_dir)
 
     count_scanned = 0
     count_history_qualified = 0
@@ -135,7 +136,7 @@ def _run_parallel_scan(data_dir, params, *, process_single_stock_fn, adapt_resul
             if count_scanned % SCANNER_PROGRESS_EVERY == 0 or count_scanned == total_files:
                 print(progress_formatter(count_scanned, total_files, rows), end="\r", flush=True)
 
-    scanner_issue_log_path = write_issue_log("scanner_issues", scanner_issue_lines, log_dir=OUTPUT_DIR) if scanner_issue_lines else None
+    scanner_issue_log_path = write_issue_log("scanner_issues", scanner_issue_lines, log_dir=resolved_output_dir) if scanner_issue_lines else None
     elapsed_time = time.time() - start_time
     return {
         'count_scanned': count_scanned,
@@ -150,7 +151,7 @@ def _run_parallel_scan(data_dir, params, *, process_single_stock_fn, adapt_resul
     }
 
 
-def run_daily_scanner(data_dir, params):
+def run_daily_scanner(data_dir, params, *, output_dir=None):
     from .stock_processor import process_single_stock
 
     scan_state = _run_parallel_scan(
@@ -159,6 +160,7 @@ def run_daily_scanner(data_dir, params):
         process_single_stock_fn=process_single_stock,
         adapt_result_fn=_adapt_candidate_scan_result,
         progress_formatter=_format_candidate_progress,
+        output_dir=output_dir,
     )
     candidate_rows = list(scan_state['rows'])
     print_scanner_summary(
@@ -185,7 +187,7 @@ def run_daily_scanner(data_dir, params):
     }
 
 
-def run_history_qualified_scanner(data_dir, params):
+def run_history_qualified_scanner(data_dir, params, *, output_dir=None):
     from .stock_processor import process_single_stock_history_qualified
 
     scan_state = _run_parallel_scan(
@@ -194,6 +196,7 @@ def run_history_qualified_scanner(data_dir, params):
         process_single_stock_fn=process_single_stock_history_qualified,
         adapt_result_fn=_adapt_history_scan_result,
         progress_formatter=_format_history_progress,
+        output_dir=output_dir,
     )
     print_history_qualified_summary(
         count_scanned=scan_state['count_scanned'],

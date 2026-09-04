@@ -2,11 +2,19 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.console_report import project_relative_display_path
 from core.trading_policy import get_trading_policy_snapshot
+from services.trading.daily_workflow import (
+    build_trading_daily_workflow_snapshot,
+    run_trading_candidate_scan,
+    run_trading_daily_workflow,
+    run_trading_market_data_update,
+)
+from services.trading.strategy_param_training import run_trading_strategy_param_training
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
@@ -22,6 +30,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_BUTTON_STYLE,
     WORKBENCH_ENTRY_STYLE,
     WORKBENCH_FRAME_STYLE,
+    WORKBENCH_HSCROLL_STYLE,
     WORKBENCH_LABEL_STYLE,
     WORKBENCH_LABELLF_STYLE,
     WORKBENCH_MUTED,
@@ -100,15 +109,52 @@ class TradingAccountPanel(ttk.Frame):
         super().__init__(master, padding=10, style=WORKBENCH_FRAME_STYLE)
         self._snapshot: dict[str, object] = {}
         self._position_rows: dict[str, dict[str, object]] = {}
+        self._candidate_rows: list[dict[str, object]] = []
+        self._workflow_thread = None
+        self._workflow_token = 0
+        self._workflow_buttons = []
         self._build_ui()
         self.refresh_account()
+        self.refresh_daily_workflow()
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(4, weight=1)
+        self.rowconfigure(5, weight=1)
+
+        workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        workflow_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        workflow_box.columnconfigure(0, weight=1)
+        self._workflow_status_var = tk.StringVar(value="讀取 Trading workflow 狀態...")
+        self._workflow_freshness_var = tk.StringVar(value="-")
+        ttk.Label(workflow_box, textvariable=self._workflow_status_var, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
+        ttk.Label(workflow_box, textvariable=self._workflow_freshness_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        workflow_buttons = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
+        workflow_buttons.grid(row=0, column=1, rowspan=2, sticky="e", padx=(12, 0))
+        for text, action in (
+            ("1 更新資料", "data"),
+            ("2 更新 Params", "params"),
+            ("3 Scanner 候選", "scanner"),
+            ("每日流程 1→2→3", "all"),
+        ):
+            button = ttk.Button(
+                workflow_buttons,
+                text=text,
+                command=lambda selected=action: self._start_workflow_action(selected),
+                style=WORKBENCH_BUTTON_STYLE,
+            )
+            button.pack(side="left", padx=(0 if not self._workflow_buttons else 8, 0))
+            self._workflow_buttons.append(button)
+        ttk.Button(workflow_buttons, text="刷新狀態", command=self.refresh_daily_workflow, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
+        ttk.Label(
+            workflow_box,
+            text="Scanner 只在 Trading Params 與目前 Trading data 同一最新交易日，且 selector 解析為單一 member 時執行。",
+            foreground=WORKBENCH_MUTED,
+            style=WORKBENCH_LABEL_STYLE,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         header = ttk.LabelFrame(self, text="Trading 帳戶", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         header.columnconfigure(0, weight=1)
         self._status_var = tk.StringVar(value="讀取中...")
         self._policy_var = tk.StringVar(value="-")
@@ -119,7 +165,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(header, text="重新整理", command=self.refresh_account, style=WORKBENCH_BUTTON_STYLE).grid(row=0, column=1, rowspan=2, padx=(12, 0))
 
         cash_box = ttk.LabelFrame(self, text="現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        cash_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        cash_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         ttk.Label(cash_box, text="帳戶現金", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
         self._cash_var = tk.StringVar()
         self._cash_entry = ttk.Entry(cash_box, textvariable=self._cash_var, width=22, style=WORKBENCH_ENTRY_STYLE)
@@ -131,7 +177,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Label(cash_box, text="初始化可留空；更新現金會留下 revision event，不直接改檔。", foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
         form = ttk.LabelFrame(self, text="既有持股（manual adopted broker truth）", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        form.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        form.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         labels = ("股票代號", "股數", "剩餘成本總額", "買入日 YYYY-MM-DD", "備註")
         for col, label in enumerate(labels):
             ttk.Label(form, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
@@ -163,7 +209,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Label(form, text="修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。", foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=3, column=0, columnspan=5, sticky="w", pady=(8, 0))
 
         table_box = ttk.LabelFrame(self, text="目前持股", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        table_box.grid(row=3, column=0, sticky="nsew")
+        table_box.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
         columns = ("ticker", "source", "qty", "avg_cost", "remaining_cost", "realized_pnl", "entry_date", "management")
@@ -187,6 +233,147 @@ class TradingAccountPanel(ttk.Frame):
         self._tree.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
+
+        candidate_box = ttk.LabelFrame(self, text="今日 Scanner 候選（尚未做帳戶 allocator / 下單）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        candidate_box.grid(row=5, column=0, sticky="nsew")
+        candidate_box.rowconfigure(0, weight=1)
+        candidate_box.columnconfigure(0, weight=1)
+        candidate_columns = ("rank", "ticker", "kind", "sort", "ev", "proj_cost", "detail")
+        self._candidate_tree = ttk.Treeview(candidate_box, columns=candidate_columns, show="headings", style=WORKBENCH_TREE_STYLE)
+        candidate_headings = {"rank": "排名", "ticker": "股票", "kind": "類型", "sort": "排序值", "ev": "EV", "proj_cost": "參考投入", "detail": "Scanner 摘要"}
+        candidate_widths = {"rank": 60, "ticker": 80, "kind": 110, "sort": 100, "ev": 90, "proj_cost": 110, "detail": 700}
+        for key in candidate_columns:
+            self._candidate_tree.heading(key, text=candidate_headings[key])
+            self._candidate_tree.column(key, width=candidate_widths[key], anchor="w" if key == "detail" else "center")
+        candidate_y = ttk.Scrollbar(candidate_box, orient="vertical", command=self._candidate_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
+        candidate_x = ttk.Scrollbar(candidate_box, orient="horizontal", command=self._candidate_tree.xview, style=WORKBENCH_HSCROLL_STYLE)
+        self._candidate_tree.configure(yscrollcommand=candidate_y.set, xscrollcommand=candidate_x.set)
+        self._candidate_tree.grid(row=0, column=0, sticky="nsew")
+        candidate_y.grid(row=0, column=1, sticky="ns")
+        candidate_x.grid(row=1, column=0, sticky="ew")
+
+    def _set_workflow_buttons_state(self, state: str):
+        for button in self._workflow_buttons:
+            button.configure(state=state)
+
+    def refresh_daily_workflow(self):
+        try:
+            snapshot = build_trading_daily_workflow_snapshot(WORKBENCH_PROJECT_ROOT)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._workflow_status_var.set(f"Workflow 狀態讀取失敗：{exc}")
+            self._workflow_freshness_var.set("-")
+            return
+        latest = snapshot.get("latest_data_date") or "尚無資料"
+        param_latest = snapshot.get("param_latest_data_date") or "尚無 Params"
+        ready = bool(snapshot.get("params_ready_for_scan"))
+        self._workflow_status_var.set(
+            f"{'READY' if ready else 'NOT READY'} | Data {latest} | Params {param_latest} | selector {snapshot.get('param_selector') or '-'}"
+        )
+        member_count = int(snapshot.get("param_member_count") or 0)
+        param_error = snapshot.get("param_error")
+        suffix = f" | member {member_count}" if snapshot.get("selected_params_exists") else ""
+        if param_error:
+            suffix += f" | {param_error}"
+        self._workflow_freshness_var.set(
+            f"Data: {snapshot.get('data_dir')} | Params: {snapshot.get('selected_params_path')} | Scanner: {snapshot.get('scanner_output_dir')}{suffix}"
+        )
+
+    def _start_workflow_action(self, action: str):
+        if self._workflow_thread is not None and self._workflow_thread.is_alive():
+            self._workflow_status_var.set("Trading workflow 執行中；請等待目前工作完成。")
+            return
+        labels = {"data": "更新 Trading 資料", "params": "更新 Trading Params", "scanner": "Scanner 候選", "all": "每日流程 1→2→3"}
+        if action not in labels:
+            messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
+            return
+        self._workflow_token += 1
+        token = self._workflow_token
+        self._set_workflow_buttons_state("disabled")
+        self._workflow_status_var.set(f"執行中：{labels[action]}")
+        thread = threading.Thread(
+            target=self._run_workflow_worker,
+            args=(action, token),
+            name=f"workbench-trading-{action}",
+            daemon=True,
+        )
+        self._workflow_thread = thread
+        thread.start()
+
+    def _run_workflow_worker(self, action: str, token: int):
+        try:
+            if action == "data":
+                result = run_trading_market_data_update(project_root=WORKBENCH_PROJECT_ROOT)
+            elif action == "params":
+                result = run_trading_strategy_param_training(project_root=WORKBENCH_PROJECT_ROOT)
+            elif action == "scanner":
+                result = run_trading_candidate_scan(project_root=WORKBENCH_PROJECT_ROOT)
+            else:
+                result = run_trading_daily_workflow(project_root=WORKBENCH_PROJECT_ROOT)
+        except Exception as exc:
+            self.after(0, self._finish_workflow_error, action, token, exc)
+            return
+        self.after(0, self._finish_workflow_success, action, token, result)
+
+    def _finish_workflow_error(self, action: str, token: int, exc: Exception):
+        if token != self._workflow_token:
+            return
+        self._workflow_thread = None
+        self._set_workflow_buttons_state("normal")
+        self.refresh_daily_workflow()
+        self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
+        messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
+
+    @staticmethod
+    def _format_candidate_number(value, *, digits=2):
+        if value is None:
+            return "-"
+        try:
+            return f"{float(value):,.{digits}f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _reload_candidate_rows(self, rows):
+        for item in self._candidate_tree.get_children():
+            self._candidate_tree.delete(item)
+        self._candidate_rows = [dict(row) for row in list(rows or [])]
+        kind_labels = {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)"}
+        for idx, row in enumerate(self._candidate_rows, 1):
+            self._candidate_tree.insert(
+                "",
+                "end",
+                values=(
+                    idx,
+                    row.get("ticker") or "-",
+                    kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
+                    self._format_candidate_number(row.get("sort_value"), digits=4),
+                    self._format_candidate_number(row.get("expected_value", row.get("ev")), digits=3),
+                    self._format_candidate_number(row.get("proj_cost"), digits=0),
+                    row.get("text") or "",
+                ),
+            )
+
+    def _finish_workflow_success(self, action: str, token: int, result):
+        if token != self._workflow_token:
+            return
+        self._workflow_thread = None
+        self._set_workflow_buttons_state("normal")
+        scan_result = dict(result.get("scanner") or {}) if action == "all" else (dict(result) if action == "scanner" else {})
+        if scan_result:
+            self._reload_candidate_rows(scan_result.get("candidate_rows") or [])
+        self.refresh_daily_workflow()
+        if action == "data":
+            self._workflow_status_var.set(
+                f"資料更新完成：market {result.get('market_date') or '-'} | 成功 {result.get('count_success', 0)} | 已最新 {result.get('count_skipped_latest', 0)} | 下載失敗 {result.get('download_error_count', 0)}"
+            )
+        elif action == "params":
+            self._workflow_status_var.set(
+                f"Params 更新完成：through {result.get('latest_data_date') or '-'} | {result.get('selected_policy') or result.get('param_selector') or '-'}"
+            )
+        else:
+            self._workflow_status_var.set(
+                f"每日 Scanner 完成：候選 {len(scan_result.get('candidate_rows') or [])} 檔 | data {scan_result.get('latest_data_date') or '-'}"
+            )
+
 
     def _current_revision(self) -> int:
         revision = self._snapshot.get("revision")

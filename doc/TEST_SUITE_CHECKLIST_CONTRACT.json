@@ -3891,6 +3891,17 @@
       "entry": "`services/workbench_ui/workbench.py`, `services/workbench_ui/trading_account_panel.py`, `services/trading/account_state.py`, `core/trading_account_state.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 350
+    },
+    {
+      "id": "B363",
+      "section": "B2",
+      "priority": "P1",
+      "category": "GUI / Workbench Trading daily workflow",
+      "item": "Workbench daily Trading data → params → scanner workflow uses canonical producers",
+      "gap": "Workbench實際交易頁必須可分步或依序執行Trading data update、Trading strategy-param update與candidate scanner；每一步只能委派既有canonical producer。Scanner必須使用Trading data／selected params／outputs namespace，且selected params latest-data date必須與目前Trading dataset一致；若selector解析成多member而Scanner尚無對應ensemble semantics，必須fail-fast，不得靜默取第一member。長流程不得阻塞Tk主thread；本輪只顯示candidate rows，不得提前形成account allocator、pending order或confirmed fill。",
+      "entry": "`services/downloader/application.py`, `core/dataset_dates.py`, `services/trading/daily_workflow.py`, `services/scanner/scan_runner.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 351
     }
   ],
   "tests": [
@@ -7261,6 +7272,13 @@
       "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋第三個實際交易panel registry、account backend/factory、輸入解析、未初始化/已初始化read snapshot、project-relative state path與config-driven Trading policy。",
       "initial_status": "NEW",
       "order": 472
+    },
+    {
+      "id": "T483",
+      "b_id": "B363",
+      "description": "`validate_trading_daily_workflow_contract_case` 覆蓋reusable downloader application、data/params freshness、single-member scanner guard、Trading scanner output isolation、data→params→scanner順序與Workbench background-thread workflow controls。",
+      "initial_status": "NEW",
+      "order": 473
     }
   ],
   "transitions": [
@@ -24367,6 +24385,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_workbench_account_panel_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B363",
+      "description": "新增Workbench每日Trading data→params→scanner orchestration、freshness guard與Trading-scoped scanner output。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/daily_workflow.py`, `services/downloader/application.py`, `services/workbench_ui/trading_account_panel.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T483",
+      "description": "新增Trading daily workflow direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_daily_workflow_contract_case`"
     }
   ]
 }

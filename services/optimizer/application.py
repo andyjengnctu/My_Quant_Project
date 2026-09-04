@@ -234,35 +234,7 @@ def _policy_fingerprint_from_summary(summary: dict | None) -> str:
     return str(summary.get("policy_fingerprint_sha256") or "").strip()
 
 
-def _resolve_latest_dataset_date(data_dir: str):
-    import pandas as pd
-    from core.data_utils import discover_unique_csv_inputs
-
-    latest = None
-    csv_inputs, _duplicate_issue_lines = discover_unique_csv_inputs(data_dir)
-    for csv_entry in csv_inputs:
-        if isinstance(csv_entry, (tuple, list)) and len(csv_entry) >= 2:
-            _ticker, csv_path = csv_entry[0], csv_entry[1]
-        else:
-            _ticker, csv_path = "", csv_entry
-        try:
-            df = pd.read_csv(csv_path, usecols=lambda col: str(col).strip().lower() in {"date", "time"})
-        except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
-            continue
-        if df.empty:
-            continue
-        columns = list(df.columns)
-        if not columns:
-            continue
-        series = pd.to_datetime(df[columns[0]], errors="coerce").dropna()
-        if series.empty:
-            continue
-        value = series.max().normalize()
-        if latest is None or value > latest:
-            latest = value
-    if latest is None:
-        raise ValueError("Trade mode 無法從資料集 CSV 解析最新交易日，請確認資料包含 Date/Time 欄位。")
-    return latest.strftime("%Y-%m-%d")
+from core.dataset_dates import resolve_latest_dataset_date as _resolve_latest_dataset_date
 
 
 def _embed_summary_in_params_file(params_path: str, summary: dict, *, remove_summary_sidecar: str = "") -> dict:

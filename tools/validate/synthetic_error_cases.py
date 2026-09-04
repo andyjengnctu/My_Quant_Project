@@ -262,20 +262,16 @@ def validate_downloader_main_error_path_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    class _FakeRT:
-        @staticmethod
-        def get_taipei_now():
-            return datetime(2026, 4, 2, 9, 30, 0)
-
+    downloader_application = importlib.import_module("services.downloader.application")
     stderr = io.StringIO()
-    with patch.object(downloader_main, "_get_downloader_modules", return_value=(_FakeRT(), object(), lambda: "2026-04-01", lambda: ["1101"])), \
-         patch.object(downloader_main, "smart_download_vip_data", return_value={
-             "count_success": 0,
-             "count_skipped_latest": 0,
-             "last_date_check_error_count": 1,
-             "download_error_count": 2,
-             "issue_log_path": "outputs/smart_downloader/downloader_issues_20260402.log",
-         }):
+    with patch.object(
+        downloader_application,
+        "run_trading_dataset_update",
+        side_effect=RuntimeError(
+            "VIP 資料庫更新失敗：成功 0 檔、已最新跳過 0 檔、最後日期檢查失敗 1 檔、下載失敗 2 檔；"
+            "詳細請見 outputs/smart_downloader/downloader_issues_20260402.log"
+        ),
+    ):
         with contextlib.redirect_stderr(stderr):
             rc = downloader_main.main(["services/downloader/main.py"])
 

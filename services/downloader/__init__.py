@@ -13,6 +13,12 @@ def smart_download_vip_data(*args, **kwargs):
     return _smart_download_vip_data(*args, **kwargs)
 
 
+
+def run_trading_dataset_update(*args, **kwargs):
+    from .application import run_trading_dataset_update as _run_trading_dataset_update
+
+    return _run_trading_dataset_update(*args, **kwargs)
+
 def __getattr__(name):
     if name in {"SAVE_DIR", "FINMIND_PRICE_DATASET", "dl", "time"}:
         from . import runtime as rt
@@ -29,5 +35,6 @@ __all__ = [
     "dl",
     "time",
     "smart_download_vip_data",
+    "run_trading_dataset_update",
     "main",
 ]

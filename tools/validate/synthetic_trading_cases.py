@@ -1,6 +1,10 @@
 from copy import deepcopy
+import json
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
+
+import pandas as pd
 
 from .checks import add_check
 from core.exact_accounting import (
@@ -255,6 +259,140 @@ def validate_trading_account_state_contract_case(base_params):
     return results, summary
 
 
+
+def validate_trading_daily_workflow_contract_case(base_params):
+    case_id = "TRADING_DAILY_WORKFLOW"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.params_io import params_to_json_dict
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+    import services.downloader.application as downloader_application
+    import services.trading.daily_workflow as daily_workflow
+
+    profile = get_trading_strategy_profile()
+    project_root = Path(__file__).resolve().parents[2]
+
+    with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
+         patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2454"]), \
+         patch.object(downloader_application, "smart_download_vip_data", return_value={
+             "total": 2,
+             "count_success": 1,
+             "count_skipped_latest": 1,
+             "last_date_check_error_count": 0,
+             "download_error_count": 0,
+             "issue_log_path": None,
+         }):
+        downloader_result = downloader_application.run_trading_dataset_update()
+    add_check(results, "trading_daily", case_id, "downloader_application_returns_trading_domain", "trading", downloader_result.get("runtime_domain"))
+    add_check(results, "trading_daily", case_id, "downloader_application_returns_market_date", "2026-09-04", downloader_result.get("market_date"))
+    add_check(results, "trading_daily", case_id, "downloader_application_returns_ticker_count", 2, downloader_result.get("ticker_count"))
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True)
+        pd.DataFrame({
+            "Date": ["2026-09-03", "2026-09-04"],
+            "Open": [100, 101],
+            "High": [102, 103],
+            "Low": [99, 100],
+            "Close": [101, 102],
+            "Volume": [1000, 1100],
+        }).to_csv(data_dir / "2330.csv", index=False)
+
+        selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _write_param_payload(latest_date: str, member_count: int = 1):
+            members = [
+                {"member_index": idx + 1, "seed": idx + 1, "params": params_to_json_dict(base_params)}
+                for idx in range(member_count)
+            ]
+            payload = build_static_active_param_ensemble_payload(
+                members=members,
+                selector=profile.param_selector,
+                meta={
+                    "selected_model_mode": "trade",
+                    "walk_forward_policy": {"latest_data_date": latest_date},
+                },
+            )
+            selected_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        _write_param_payload("2026-09-04", 1)
+        snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
+        add_check(results, "trading_daily", case_id, "workflow_snapshot_reads_latest_trading_data", "2026-09-04", snapshot.get("latest_data_date"))
+        add_check(results, "trading_daily", case_id, "workflow_snapshot_reads_param_latest_date", "2026-09-04", snapshot.get("param_latest_data_date"))
+        add_check(results, "trading_daily", case_id, "workflow_snapshot_requires_single_member", 1, snapshot.get("param_member_count"))
+        add_check(results, "trading_daily", case_id, "workflow_snapshot_ready_when_data_and_params_match", True, snapshot.get("params_ready_for_scan"))
+        add_check(results, "trading_daily", case_id, "workflow_scanner_output_is_trading_scoped", "outputs/trading/scanner", snapshot.get("scanner_output_dir"))
+
+        fake_scan = {
+            "count_scanned": 1,
+            "elapsed_time": 0.01,
+            "count_history_qualified": 1,
+            "count_skipped_insufficient": 0,
+            "count_sanitized_candidates": 0,
+            "max_workers": 1,
+            "pool_start_method": "spawn",
+            "candidate_rows": [{
+                "ticker": "2330",
+                "kind": "buy",
+                "sort_value": 1.5,
+                "expected_value": 0.3,
+                "proj_cost": 100000,
+                "text": "synthetic candidate",
+            }],
+            "scanner_issue_log_path": None,
+        }
+        with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan) as scanner_mock:
+            scan_result = daily_workflow.run_trading_candidate_scan(project_root=root)
+        scanner_args = scanner_mock.call_args
+        add_check(results, "trading_daily", case_id, "trading_scanner_uses_trading_data_dir", str(data_dir), str(scanner_args.args[0]))
+        add_check(results, "trading_daily", case_id, "trading_scanner_injects_trading_output_dir", str((root / "outputs" / "trading" / "scanner").resolve()), str(Path(scanner_args.kwargs["output_dir"]).resolve()))
+        add_check(results, "trading_daily", case_id, "trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
+        add_check(results, "trading_daily", case_id, "trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
+
+        _write_param_payload("2026-09-03", 1)
+        try:
+            daily_workflow.run_trading_candidate_scan(project_root=root)
+        except RuntimeError as exc:
+            stale_rejected = "不是目前最新Trading資料" in str(exc)
+        else:
+            stale_rejected = False
+        add_check(results, "trading_daily", case_id, "stale_trading_params_are_rejected_before_scan", True, stale_rejected)
+
+        _write_param_payload("2026-09-04", 2)
+        try:
+            daily_workflow.run_trading_candidate_scan(project_root=root)
+        except RuntimeError as exc:
+            multi_member_rejected = "禁止靜默只取第一組" in str(exc)
+        else:
+            multi_member_rejected = False
+        add_check(results, "trading_daily", case_id, "multi_member_selector_is_failfast_until_scanner_has_ensemble_semantics", True, multi_member_rejected)
+
+    call_order = []
+    with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: call_order.append("data") or {"status": "READY"}), \
+         patch.object(daily_workflow, "run_trading_strategy_param_training", side_effect=lambda **_kwargs: call_order.append("params") or {"status": "READY"}), \
+         patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
+        workflow_result = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
+    add_check(results, "trading_daily", case_id, "daily_workflow_executes_data_params_scanner_in_order", ["data", "params", "scanner"], call_order)
+    add_check(results, "trading_daily", case_id, "daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
+
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results, "trading_daily", case_id, "workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
+    add_check(results, "trading_daily", case_id, "workbench_exposes_separate_param_button", True, '"2 更新 Params"' in panel_source)
+    add_check(results, "trading_daily", case_id, "workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
+    add_check(results, "trading_daily", case_id, "workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
+    add_check(results, "trading_daily", case_id, "workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
+    add_check(results, "trading_daily", case_id, "workbench_candidate_table_is_not_allocator", True, "尚未做帳戶 allocator / 下單" in panel_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
     results = []
@@ -329,5 +467,6 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
 __all__ = [
     "validate_trading_account_state_contract_case",
+    "validate_trading_daily_workflow_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]

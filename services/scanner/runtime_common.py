@@ -16,8 +16,8 @@ DEFAULT_SCANNER_MAX_WORKERS = min(
 )
 
 
-def ensure_runtime_dirs():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+def ensure_runtime_dirs(*, output_dir=None):
+    os.makedirs(OUTPUT_DIR if output_dir is None else os.fspath(output_dir), exist_ok=True)
     os.makedirs(MODELS_DIR, exist_ok=True)
 
 

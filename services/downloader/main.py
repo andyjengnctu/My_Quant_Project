@@ -55,32 +55,13 @@ def main(argv=None):
     try:
         import pandas as pd
         import requests
-
-        rt, _sync_runtime, get_market_last_date, get_or_update_universe = _get_downloader_modules()
+        from services.downloader.application import run_trading_dataset_update
     except (ImportError, ModuleNotFoundError) as exc:
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
     try:
-        print(f"🤖 Trading 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
-        market_date = get_market_last_date()
-        target_tickers = get_or_update_universe()
-
-        if not target_tickers:
-            raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
-
-        summary = smart_download_vip_data(target_tickers, market_date)
-        if summary["count_success"] == 0 and summary["count_skipped_latest"] == 0:
-            issue_log_path = summary.get("issue_log_path")
-            issue_log_suffix = f"；詳細請見 {issue_log_path}" if issue_log_path else ""
-            raise RuntimeError(
-                "VIP 資料庫更新失敗："
-                f"成功 {summary['count_success']} 檔、"
-                f"已最新跳過 {summary['count_skipped_latest']} 檔、"
-                f"最後日期檢查失敗 {summary['last_date_check_error_count']} 檔、"
-                f"下載失敗 {summary['download_error_count']} 檔"
-                f"{issue_log_suffix}"
-            )
+        run_trading_dataset_update()
         return 0
     except (
         RuntimeError,
