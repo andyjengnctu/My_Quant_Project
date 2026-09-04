@@ -19,6 +19,7 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "services/trading/order_planning.py",
     "services/trading/protection_planning.py",
     "services/trading/protection_order_submission.py",
+    "services/trading/operations_status.py",
     "core/portfolio_entries.py",
     "core/portfolio_entry_plans.py",
     "core/portfolio_entry_selection.py",

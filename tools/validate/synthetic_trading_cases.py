@@ -1406,6 +1406,159 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
     return results, summary
 
 
+def validate_trading_operations_status_contract_case(base_params):
+    case_id = "TRADING_OPERATIONS_STATUS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from services.trading.operations_status import (
+        NEXT_BUILD_PROPOSED,
+        NEXT_DAY_LOCKED,
+        NEXT_INITIALIZE_ACCOUNT,
+        NEXT_NO_ENTRY,
+        NEXT_RECOVER_FILL,
+        NEXT_RECONCILE_ENTRY,
+        NEXT_REFRESH_PROTECTION,
+        NEXT_RUN_SCANNER,
+        NEXT_SET_CASH,
+        NEXT_SUBMIT_PROPOSED,
+        NEXT_SUBMIT_PROTECTION_STOP,
+        NEXT_UPDATE_PARAMS,
+        OPERATIONS_STATUS_BLOCKED,
+        OPERATIONS_STATUS_LOCKED_TODAY,
+        derive_trading_operations_status,
+    )
+
+    workflow = {
+        "latest_data_date": "2026-09-04",
+        "params_ready_for_scan": True,
+        "param_selector": "base_finalist_best",
+    }
+    account = {"initialized": True, "revision": 7, "cash": 500_000.0, "positions": []}
+    orders = {"revision": 4, "orders": []}
+    candidate = {"exists": True, "valid": True, "fresh": True, "candidate_count": 3, "information_date": "2026-09-04"}
+    proposed = {"exists": False, "valid": False, "fresh": False, "order_count": 0}
+    protection = {"exists": False, "fresh": False, "positions": []}
+
+    def derive(**overrides):
+        inputs = {
+            "workflow": deepcopy(workflow),
+            "account": deepcopy(account),
+            "orders": deepcopy(orders),
+            "candidate": deepcopy(candidate),
+            "proposed": deepcopy(proposed),
+            "protection": deepcopy(protection),
+            "fill_transaction_pending": False,
+            "component_errors": {},
+        }
+        inputs.update(overrides)
+        return derive_trading_operations_status(**inputs)
+
+    recovery = derive(fill_transaction_pending=True)
+    add_check(results, "trading_operations", case_id, "pending_fill_transaction_is_top_priority_blocker", NEXT_RECOVER_FILL, recovery["next_action_code"])
+    add_check(results, "trading_operations", case_id, "pending_fill_transaction_status_is_blocked", OPERATIONS_STATUS_BLOCKED, recovery["overall_status"])
+    add_check(results, "trading_operations", case_id, "pending_fill_transaction_disables_all_workflow_actions", {"data": False, "params": False, "scanner": False, "orders": False, "all": False}, recovery["workflow_action_availability"])
+
+    uninitialized = derive(account={"initialized": False, "revision": None, "cash": None, "positions": []})
+    add_check(results, "trading_operations", case_id, "uninitialized_account_next_action", NEXT_INITIALIZE_ACCOUNT, uninitialized["next_action_code"])
+
+    no_cash = derive(account={"initialized": True, "revision": 0, "cash": None, "positions": []})
+    add_check(results, "trading_operations", case_id, "initialized_account_without_cash_next_action", NEXT_SET_CASH, no_cash["next_action_code"])
+    add_check(results, "trading_operations", case_id, "allocation_disabled_without_cash", False, no_cash["workflow_action_availability"]["orders"])
+
+    strategy_account = {
+        "initialized": True,
+        "revision": 8,
+        "cash": 400_000.0,
+        "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "management_status": "active"}],
+    }
+    missing_stop = derive(account=strategy_account)
+    add_check(results, "trading_operations", case_id, "strategy_position_without_stop_is_reported", ["2317"], missing_stop["missing_stop_tickers"])
+    add_check(results, "trading_operations", case_id, "missing_stop_without_fresh_plan_requires_plan_refresh", NEXT_REFRESH_PROTECTION, missing_stop["next_action_code"])
+
+    fresh_protection = {"exists": True, "fresh": True, "positions": [{"ticker": "2317"}]}
+    missing_stop_fresh_plan = derive(account=strategy_account, protection=fresh_protection)
+    add_check(results, "trading_operations", case_id, "fresh_plan_without_active_stop_requires_submission", NEXT_SUBMIT_PROTECTION_STOP, missing_stop_fresh_plan["next_action_code"])
+
+    active_stop_orders = {
+        "revision": 5,
+        "orders": [{
+            "order_id": "stop1", "ticker": "2317", "side": "SELL", "purpose": "PROTECTION_STOP",
+            "status": "ORDERED", "information_date": "2026-09-04",
+        }],
+    }
+    protected = derive(account=strategy_account, orders=active_stop_orders, protection=fresh_protection)
+    add_check(results, "trading_operations", case_id, "active_stop_clears_missing_stop_gap", [], protected["missing_stop_tickers"])
+    add_check(results, "trading_operations", case_id, "long_lived_protection_sell_does_not_block_new_allocation", True, protected["workflow_action_availability"]["orders"])
+
+    active_entry_orders = {
+        "revision": 6,
+        "orders": [{
+            "order_id": "buy1", "ticker": "2330", "side": "BUY", "purpose": "ENTRY_BUY",
+            "status": "PARTIAL", "information_date": "2026-09-04",
+        }],
+    }
+    active_entry = derive(orders=active_entry_orders)
+    add_check(results, "trading_operations", case_id, "active_entry_buy_requires_reconciliation", NEXT_RECONCILE_ENTRY, active_entry["next_action_code"])
+    add_check(results, "trading_operations", case_id, "active_entry_buy_disables_new_allocation", False, active_entry["workflow_action_availability"]["orders"])
+
+    stale_params = derive(workflow={"latest_data_date": "2026-09-04", "params_ready_for_scan": False})
+    add_check(results, "trading_operations", case_id, "stale_params_require_update_params", NEXT_UPDATE_PARAMS, stale_params["next_action_code"])
+    add_check(results, "trading_operations", case_id, "scanner_disabled_until_params_ready", False, stale_params["workflow_action_availability"]["scanner"])
+
+    workflow_error = derive(component_errors={"workflow": "RuntimeError: broken workflow read model"})
+    add_check(results, "trading_operations", case_id, "workflow_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, workflow_error["overall_status"])
+    add_check(results, "trading_operations", case_id, "workflow_read_error_disables_all_workflow_actions", False, any(workflow_error["workflow_action_availability"].values()))
+
+    stale_candidate = derive(candidate={"exists": True, "valid": True, "fresh": False, "candidate_count": 3})
+    add_check(results, "trading_operations", case_id, "stale_candidate_requires_scanner", NEXT_RUN_SCANNER, stale_candidate["next_action_code"])
+
+    same_day_history = {
+        "revision": 7,
+        "orders": [{
+            "order_id": "buydone", "ticker": "2330", "side": "BUY", "purpose": "ENTRY_BUY",
+            "status": "FILLED", "information_date": "2026-09-04",
+        }],
+    }
+    locked = derive(orders=same_day_history)
+    add_check(results, "trading_operations", case_id, "same_information_day_entry_history_locks_reallocation", NEXT_DAY_LOCKED, locked["next_action_code"])
+    add_check(results, "trading_operations", case_id, "same_day_lock_has_explicit_status", OPERATIONS_STATUS_LOCKED_TODAY, locked["overall_status"])
+    add_check(results, "trading_operations", case_id, "same_day_lock_disables_step4_only", False, locked["workflow_action_availability"]["orders"])
+    add_check(results, "trading_operations", case_id, "same_day_lock_keeps_scanner_available", True, locked["workflow_action_availability"]["scanner"])
+
+    build_proposed = derive()
+    add_check(results, "trading_operations", case_id, "fresh_candidate_without_fresh_proposal_requires_step4", NEXT_BUILD_PROPOSED, build_proposed["next_action_code"])
+
+    fresh_proposed = {"exists": True, "valid": True, "fresh": True, "order_count": 2, "information_date": "2026-09-04"}
+    submit = derive(proposed=fresh_proposed)
+    add_check(results, "trading_operations", case_id, "fresh_proposal_with_orders_requires_explicit_submission", NEXT_SUBMIT_PROPOSED, submit["next_action_code"])
+    add_check(results, "trading_operations", case_id, "fresh_proposal_does_not_create_active_broker_order", 0, submit["active_entry_order_count"])
+
+    no_orders = derive(proposed={"exists": True, "valid": True, "fresh": True, "order_count": 0, "information_date": "2026-09-04"})
+    add_check(results, "trading_operations", case_id, "fresh_zero_order_plan_marks_no_entry_today", NEXT_NO_ENTRY, no_orders["next_action_code"])
+
+    manual_account = {
+        "initialized": True,
+        "revision": 9,
+        "cash": 500_000.0,
+        "positions": [{"ticker": "0050", "source": "manual_adopted", "qty": 1000, "management_status": "unmanaged"}],
+    }
+    manual_only = derive(account=manual_account)
+    add_check(results, "trading_operations", case_id, "manual_adopted_is_not_treated_as_strategy_stop_gap", [], manual_only["missing_stop_tickers"])
+    add_check(results, "trading_operations", case_id, "manual_adopted_is_reported_separately", ["0050"], manual_only["manual_tickers"])
+
+    source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "operations_status.py").read_text(encoding="utf-8")
+    panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results, "trading_operations", case_id, "operations_status_is_read_only_composition", False, any(token in source for token in ("atomic_write_json(", "confirm_trading_", "run_trading_market_data_update(")))
+    add_check(results, "trading_operations", case_id, "operations_status_disables_hidden_protection_recovery", True, "get_trading_protection_plan_read_model(root, recover_pending_fill=False)" in source)
+    add_check(results, "trading_operations", case_id, "workbench_has_operations_overview", True, "Trading 操作總覽" in panel_source)
+    add_check(results, "trading_operations", case_id, "workbench_consumes_operations_status_owner", True, "build_trading_operations_status" in panel_source)
+    add_check(results, "trading_operations", case_id, "workbench_exposes_full_state_refresh", True, "全狀態刷新" in panel_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
     results = []
@@ -1487,5 +1640,6 @@ __all__ = [
     "validate_trading_protection_plan_contract_case",
     "validate_trading_protection_order_submission_contract_case",
     "validate_trading_protection_sell_fill_reconciliation_contract_case",
+    "validate_trading_operations_status_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]

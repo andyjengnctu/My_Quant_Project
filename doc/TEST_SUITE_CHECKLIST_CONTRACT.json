@@ -3968,6 +3968,17 @@
       "entry": "`core/trading_order_state.py`, `core/trading_account_state.py`, `core/trading_fill_transaction.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 357
+    },
+    {
+      "id": "B370",
+      "section": "B2",
+      "priority": "P1",
+      "category": "GUI / Workbench Trading operations readiness",
+      "item": "Trading Operations Status composes canonical read models into one next-action and workflow-availability contract",
+      "gap": "實際Trading主生命週期已分散於daily data/params、account、Scanner snapshot、proposed orders、broker BUY/SELL orders、fill transaction與protection plan等canonical owners；Workbench不得自行從多個區塊重猜現在可做什麼。必須由單一read-only operations-status service組合既有read models，派生overall status、下一個合法動作、workflow action availability、D4同資訊日allocation lock、active ENTRY BUY reconciliation、strategy_fill持股缺active Stop與component warnings/blockers。fill transaction recovery仍由既有fill-reconciliation owner明確執行，狀態查詢本身不得隱藏mutation。長期active protection SELL不得誤阻擋下一交易日的新盤前allocation；manual_adopted不得誤列為strategy Stop缺口。Scanner/proposed freshness必須由各自canonical loader驗證，Operations Status與Workbench不得建立第三套SHA/date/revision判斷。",
+      "entry": "`services/trading/operations_status.py`, `services/trading/daily_workflow.py`, `services/trading/order_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 358
     }
   ],
   "tests": [
@@ -7387,6 +7398,13 @@
       "description": "`validate_trading_protection_sell_fill_reconciliation_contract_case` 覆蓋explicit SELL actual-fill、PARTIAL→FILLED、跨日partial、TP limit/Stop gap語意、canonical exact-accounting、TP sold_half完成時點、broker-native OCO peer cancellation、no-market-inference與Workbench side-aware routing。",
       "initial_status": "NEW",
       "order": 479
+    },
+    {
+      "id": "T490",
+      "b_id": "B370",
+      "description": "`validate_trading_operations_status_contract_case` 覆蓋fill-recovery優先序、account/cash setup、active-Stop缺口、ENTRY BUY reconciliation、Data/Params/Scanner/Proposed階段、D4同日lock、long-lived protection SELL不阻擋隔日allocation、manual-adopted隔離、read-only ownership與Workbench總覽/按鈕控制。",
+      "initial_status": "NEW",
+      "order": 480
     }
   ],
   "transitions": [
@@ -24605,6 +24623,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_protection_sell_fill_reconciliation_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B370",
+      "description": "新增Trading operations readiness單一read-model治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/operations_status.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T490",
+      "description": "新增Trading operations-status direct synthetic並納入正式synthetic registry。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_operations_status_contract_case`"
     }
   ]
 }

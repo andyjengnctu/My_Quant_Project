@@ -43,6 +43,7 @@ from core.trading_order_state import (
 )
 from services.trading.account_state import load_trading_account_state
 from services.trading.daily_workflow import (
+    load_trading_candidate_snapshot,
     load_trading_scanner_runtime,
     resolve_trading_candidate_snapshot_path,
 )
@@ -128,6 +129,61 @@ def load_current_trading_proposed_order_plan(
     if int(payload.get("account_revision", -1)) != int(account["revision"]):
         raise RuntimeError("Trading account 已與建議掛單使用的 revision 不一致；請重新產生建議掛單")
     return payload
+
+
+def get_trading_proposed_order_plan_read_model(project_root: str | Path) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    json_path = resolve_trading_proposed_orders_json_path(root)
+    text_path = resolve_trading_proposed_orders_text_path(root)
+    if not json_path.is_file():
+        return {
+            "exists": False,
+            "valid": False,
+            "fresh": False,
+            "status": None,
+            "information_date": None,
+            "order_count": 0,
+            "account_revision": None,
+            "plan_fingerprint": None,
+            "error": None,
+            "json_path": project_relative_display_path(json_path, project_root=root),
+            "text_path": project_relative_display_path(text_path, project_root=root),
+        }
+    try:
+        payload = load_current_trading_proposed_order_plan(root, require_current=False)
+    except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
+        return {
+            "exists": True,
+            "valid": False,
+            "fresh": False,
+            "status": None,
+            "information_date": None,
+            "order_count": 0,
+            "account_revision": None,
+            "plan_fingerprint": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "json_path": project_relative_display_path(json_path, project_root=root),
+            "text_path": project_relative_display_path(text_path, project_root=root),
+        }
+    freshness_error = None
+    try:
+        load_current_trading_proposed_order_plan(root, require_current=True)
+    except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
+        freshness_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "exists": True,
+        "valid": True,
+        "fresh": freshness_error is None,
+        "status": payload.get("status"),
+        "information_date": payload.get("information_date"),
+        "order_count": len(payload.get("orders") or []),
+        "account_revision": payload.get("account_revision"),
+        "plan_fingerprint": payload.get("plan_fingerprint"),
+        "reserved_total": payload.get("reserved_total"),
+        "error": freshness_error,
+        "json_path": project_relative_display_path(json_path, project_root=root),
+        "text_path": project_relative_display_path(text_path, project_root=root),
+    }
 
 
 def _position_security_profile(record: dict[str, Any]):
@@ -268,20 +324,8 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
     runtime = load_trading_scanner_runtime(root)
     _assert_order_state_allows_new_allocation(root, information_date=str(runtime["latest_data_date"]))
     snapshot_path = resolve_trading_candidate_snapshot_path(root)
-    if not snapshot_path.is_file():
-        raise FileNotFoundError("Trading Scanner candidate snapshot 尚未產生；請先執行「3 Scanner 候選」。")
-    snapshot = load_json_strict(snapshot_path)
-    if not isinstance(snapshot, dict):
-        raise RuntimeError("Trading candidate snapshot payload 不合法")
-    if str(snapshot.get("runtime_domain") or "") != RUNTIME_DOMAIN_TRADING:
-        raise RuntimeError("Trading candidate snapshot runtime domain 不合法")
-    if str(snapshot.get("latest_data_date") or "") != str(runtime["latest_data_date"]):
-        raise RuntimeError("Trading candidate snapshot 已過期；請重新執行 Scanner")
-    if str(snapshot.get("param_selector") or "") != str(runtime["profile"].param_selector):
-        raise RuntimeError("Trading candidate snapshot selector 與目前設定不一致")
+    snapshot = load_trading_candidate_snapshot(root, require_current=True)
     current_param_sha = compute_file_sha256(runtime["selected_path"])
-    if str(snapshot.get("selected_params_sha256") or "") != current_param_sha:
-        raise RuntimeError("Trading candidate snapshot 對應的 params 已改變；請重新執行 Scanner")
 
     state = load_trading_account_state(root, required=True)
     if state.get("cash_milli") is None:
@@ -421,5 +465,6 @@ __all__ = [
     "resolve_trading_proposed_orders_json_path",
     "resolve_trading_proposed_orders_text_path",
     "load_current_trading_proposed_order_plan",
+    "get_trading_proposed_order_plan_read_model",
     "build_trading_proposed_order_plan",
 ]

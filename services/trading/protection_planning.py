@@ -367,9 +367,14 @@ def load_trading_protection_plan(project_root: str | Path, *, required: bool = F
     return plan
 
 
-def get_trading_protection_plan_read_model(project_root: str | Path) -> dict[str, Any]:
+def get_trading_protection_plan_read_model(
+    project_root: str | Path,
+    *,
+    recover_pending_fill: bool = True,
+) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    recover_trading_fill_transaction(root)
+    if recover_pending_fill:
+        recover_trading_fill_transaction(root)
     plan = load_trading_protection_plan(root, required=False)
     json_path = resolve_trading_protection_plan_json_path(root)
     text_path = resolve_trading_protection_plan_text_path(root)

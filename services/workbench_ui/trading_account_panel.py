@@ -16,6 +16,7 @@ from services.trading.daily_workflow import (
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
 from services.trading.order_planning import build_trading_proposed_order_plan
+from services.trading.operations_status import build_trading_operations_status
 from services.trading.protection_planning import (
     build_trading_protection_plan,
     get_trading_protection_plan_read_model,
@@ -141,22 +142,36 @@ class TradingAccountPanel(ttk.Frame):
         self._workflow_thread = None
         self._workflow_token = 0
         self._workflow_buttons = []
+        self._workflow_action_buttons: dict[str, object] = {}
+        self._operations_snapshot: dict[str, object] = {}
         self._build_ui()
         self.refresh_account()
         self.refresh_order_state()
         self.refresh_protection_plan()
         self.refresh_daily_workflow()
+        self.refresh_operations_status()
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
         self.rowconfigure(5, weight=1)
         self.rowconfigure(6, weight=1)
         self.rowconfigure(7, weight=1)
         self.rowconfigure(8, weight=1)
+        self.rowconfigure(9, weight=1)
+
+        operations_box = ttk.LabelFrame(self, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        operations_box.columnconfigure(0, weight=1)
+        self._operations_status_var = tk.StringVar(value="讀取 Trading 整體狀態...")
+        self._operations_next_var = tk.StringVar(value="下一步：-")
+        self._operations_detail_var = tk.StringVar(value="-")
+        ttk.Label(operations_box, textvariable=self._operations_status_var, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
+        ttk.Label(operations_box, textvariable=self._operations_next_var, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(operations_box, textvariable=self._operations_detail_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=2, column=0, sticky="w", pady=(4, 0))
+        ttk.Button(operations_box, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).grid(row=0, column=1, rowspan=3, padx=(12, 0))
 
         workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        workflow_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        workflow_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         workflow_box.columnconfigure(0, weight=1)
         self._workflow_status_var = tk.StringVar(value="讀取 Trading workflow 狀態...")
         self._workflow_freshness_var = tk.StringVar(value="-")
@@ -179,6 +194,7 @@ class TradingAccountPanel(ttk.Frame):
             )
             button.pack(side="left", padx=(0 if not self._workflow_buttons else 8, 0))
             self._workflow_buttons.append(button)
+            self._workflow_action_buttons[action] = button
         ttk.Button(workflow_buttons, text="刷新狀態", command=self.refresh_daily_workflow, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
         ttk.Label(
             workflow_box,
@@ -188,7 +204,7 @@ class TradingAccountPanel(ttk.Frame):
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         header = ttk.LabelFrame(self, text="Trading 帳戶", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        header.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        header.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         header.columnconfigure(0, weight=1)
         self._status_var = tk.StringVar(value="讀取中...")
         self._policy_var = tk.StringVar(value="-")
@@ -199,7 +215,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(header, text="重新整理", command=self.refresh_account, style=WORKBENCH_BUTTON_STYLE).grid(row=0, column=1, rowspan=2, padx=(12, 0))
 
         cash_box = ttk.LabelFrame(self, text="現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        cash_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        cash_box.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         ttk.Label(cash_box, text="帳戶現金", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
         self._cash_var = tk.StringVar()
         self._cash_entry = ttk.Entry(cash_box, textvariable=self._cash_var, width=22, style=WORKBENCH_ENTRY_STYLE)
@@ -211,7 +227,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Label(cash_box, text="初始化可留空；更新現金會留下 revision event，不直接改檔。", foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
         form = ttk.LabelFrame(self, text="既有持股（manual adopted broker truth）", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        form.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        form.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         labels = ("股票代號", "股數", "剩餘成本總額", "買入日 YYYY-MM-DD", "備註")
         for col, label in enumerate(labels):
             ttk.Label(form, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
@@ -243,7 +259,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Label(form, text="修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。", foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=3, column=0, columnspan=5, sticky="w", pady=(8, 0))
 
         table_box = ttk.LabelFrame(self, text="目前持股", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        table_box.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
+        table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
         columns = ("ticker", "source", "qty", "avg_cost", "remaining_cost", "realized_pnl", "entry_date", "management")
@@ -269,7 +285,7 @@ class TradingAccountPanel(ttk.Frame):
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
 
         candidate_box = ttk.LabelFrame(self, text="今日 Scanner 候選（原始策略候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        candidate_box.grid(row=5, column=0, sticky="nsew")
+        candidate_box.grid(row=6, column=0, sticky="nsew")
         candidate_box.rowconfigure(0, weight=1)
         candidate_box.columnconfigure(0, weight=1)
         candidate_columns = ("rank", "ticker", "kind", "sort", "ev", "proj_cost", "detail")
@@ -287,7 +303,7 @@ class TradingAccountPanel(ttk.Frame):
         candidate_x.grid(row=1, column=0, sticky="ew")
 
         proposed_box = ttk.LabelFrame(self, text="建議掛單（尚未送單／尚未成交）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        proposed_box.grid(row=6, column=0, sticky="nsew", pady=(8, 0))
+        proposed_box.grid(row=7, column=0, sticky="nsew", pady=(8, 0))
         proposed_box.rowconfigure(1, weight=1)
         proposed_box.columnconfigure(0, weight=1)
         self._proposed_status_var = tk.StringVar(value="尚未產生建議掛單。")
@@ -321,7 +337,7 @@ class TradingAccountPanel(ttk.Frame):
         self._confirm_ordered_button.pack(side="right")
 
         pending_box = ttk.LabelFrame(self, text="券商掛單狀態（ORDERED / PARTIAL / FILLED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        pending_box.grid(row=7, column=0, sticky="nsew", pady=(8, 0))
+        pending_box.grid(row=8, column=0, sticky="nsew", pady=(8, 0))
         pending_box.rowconfigure(1, weight=1)
         pending_box.columnconfigure(0, weight=1)
         self._order_status_var = tk.StringVar(value="尚無實際送單紀錄。")
@@ -385,7 +401,7 @@ class TradingAccountPanel(ttk.Frame):
         ).pack(side="left", padx=(12, 0))
 
         protection_box = ttk.LabelFrame(self, text="成交後 Stop / TP 保護單計畫（logical plan；送單狀態見券商掛單表）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        protection_box.grid(row=8, column=0, sticky="nsew", pady=(8, 0))
+        protection_box.grid(row=9, column=0, sticky="nsew", pady=(8, 0))
         protection_box.rowconfigure(1, weight=1)
         protection_box.columnconfigure(0, weight=1)
         self._protection_status_var = tk.StringVar(value="尚未建立成交後保護單計畫。")
@@ -599,6 +615,7 @@ class TradingAccountPanel(ttk.Frame):
             self._protection_status_var.set(
                 f"尚未建立保護單計畫 | {snapshot.get('json_path') or '-'}"
             )
+            self.refresh_operations_status()
             return
         freshness = "FRESH" if snapshot.get("fresh") else "STALE"
         skipped = list(snapshot.get("manual_positions_skipped") or [])
@@ -607,6 +624,7 @@ class TradingAccountPanel(ttk.Frame):
             f"{freshness} | {snapshot.get('status') or '-'} / {snapshot.get('broker_status') or '-'} | "
             f"positions {int(snapshot.get('position_count') or 0)} | {snapshot.get('text_path') or '-'}{suffix}"
         )
+        self.refresh_operations_status()
 
     def _rebuild_protection_plan(self):
         try:
@@ -620,6 +638,69 @@ class TradingAccountPanel(ttk.Frame):
             f"FRESH | {result.get('status')} / {result.get('broker_status')} | positions {len(result.get('positions') or [])} | {result.get('text_path') or '-'}"
         )
         return result
+
+    def refresh_operations_status(self):
+        try:
+            snapshot = build_trading_operations_status(WORKBENCH_PROJECT_ROOT)
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            self._operations_snapshot = {}
+            self._operations_status_var.set(f"BLOCKED | Trading 整體狀態讀取失敗：{exc}")
+            self._operations_next_var.set("下一步：先修正狀態讀取錯誤")
+            self._operations_detail_var.set("-")
+            self._set_workflow_buttons_state("disabled")
+            return
+        self._operations_snapshot = snapshot
+        self._operations_status_var.set(
+            f"{snapshot.get('overall_status') or '-'} | Data {snapshot.get('latest_data_date') or '-'} | "
+            f"Account rev {snapshot.get('account_revision') if snapshot.get('account_revision') is not None else '-'} | "
+            f"持股 strategy/manual {int(snapshot.get('strategy_position_count') or 0)}/{int(snapshot.get('manual_position_count') or 0)} | "
+            f"Active BUY/SELL {int(snapshot.get('active_entry_order_count') or 0)}/{int(snapshot.get('active_protection_order_count') or 0)}"
+        )
+        self._operations_next_var.set(
+            f"下一步：{snapshot.get('next_action_label') or '-'} | {snapshot.get('next_action_detail') or '-'}"
+        )
+        details = [
+            f"Scanner {'FRESH' if snapshot.get('candidate_snapshot_fresh') else 'STALE/EMPTY'}({int(snapshot.get('candidate_count') or 0)})",
+            f"Proposed {'FRESH' if snapshot.get('proposed_orders_fresh') else 'STALE/EMPTY'}({int(snapshot.get('proposed_order_count') or 0)})",
+            f"Protection {'FRESH' if snapshot.get('protection_plan_fresh') else 'STALE/EMPTY'}",
+        ]
+        missing_stop = list(snapshot.get('missing_stop_tickers') or [])
+        if missing_stop:
+            details.append("缺 active Stop: " + ",".join(missing_stop))
+        warnings = list(snapshot.get('warnings') or [])
+        blockers = list(snapshot.get('blockers') or [])
+        if blockers:
+            details.append("BLOCK: " + "；".join(blockers))
+        elif warnings:
+            details.append("注意: " + "；".join(warnings[:3]))
+        self._operations_detail_var.set(" | ".join(details))
+        self._apply_workflow_action_availability()
+
+    def _refresh_all_trading_state(self):
+        recovery_error = None
+        try:
+            recover_trading_fill_transaction(WORKBENCH_PROJECT_ROOT)
+        except TradingFillRevisionConflict as exc:
+            recovery_error = str(exc)
+        self.refresh_account()
+        self.refresh_order_state()
+        self.refresh_protection_plan()
+        self.refresh_daily_workflow()
+        self.refresh_operations_status()
+        if recovery_error:
+            messagebox.showerror(
+                "Trading fill recovery 失敗",
+                recovery_error,
+                parent=self,
+            )
+
+    def _apply_workflow_action_availability(self):
+        if self._workflow_thread is not None and self._workflow_thread.is_alive():
+            self._set_workflow_buttons_state("disabled")
+            return
+        availability = dict(self._operations_snapshot.get("workflow_action_availability") or {})
+        for action, button in self._workflow_action_buttons.items():
+            button.configure(state="normal" if bool(availability.get(action)) else "disabled")
 
     def _set_workflow_buttons_state(self, state: str):
         for button in self._workflow_buttons:
@@ -646,6 +727,7 @@ class TradingAccountPanel(ttk.Frame):
         self._workflow_freshness_var.set(
             f"Data: {snapshot.get('data_dir')} | Params: {snapshot.get('selected_params_path')} | Scanner: {snapshot.get('scanner_output_dir')}{suffix}"
         )
+        self.refresh_operations_status()
 
     def _start_workflow_action(self, action: str):
         if self._workflow_thread is not None and self._workflow_thread.is_alive():
@@ -654,6 +736,14 @@ class TradingAccountPanel(ttk.Frame):
         labels = {"data": "更新 Trading 資料", "params": "更新 Trading Params", "scanner": "Scanner 候選", "orders": "產生建議掛單", "all": "每日流程 1→2→3"}
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
+            return
+        availability = dict(self._operations_snapshot.get("workflow_action_availability") or {})
+        if availability and not bool(availability.get(action)):
+            messagebox.showerror(
+                "Trading workflow 尚不可執行",
+                f"{labels[action]} 目前被狀態契約阻擋。\n\n下一步：{self._operations_snapshot.get('next_action_label') or '-'}\n{self._operations_snapshot.get('next_action_detail') or ''}",
+                parent=self,
+            )
             return
         self._workflow_token += 1
         token = self._workflow_token
@@ -689,9 +779,9 @@ class TradingAccountPanel(ttk.Frame):
         if token != self._workflow_token:
             return
         self._workflow_thread = None
-        self._set_workflow_buttons_state("normal")
         self.refresh_daily_workflow()
         self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
+        self.refresh_operations_status()
         messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
 
     @staticmethod
@@ -808,6 +898,7 @@ class TradingAccountPanel(ttk.Frame):
             f"總紀錄 {int(snapshot.get('order_count') or 0)} | {state_path}"
         )
         self._apply_order_lock_to_account_controls()
+        self.refresh_operations_status()
 
     def _apply_order_lock_to_account_controls(self):
         active = self._has_active_orders()
@@ -975,7 +1066,6 @@ class TradingAccountPanel(ttk.Frame):
         if token != self._workflow_token:
             return
         self._workflow_thread = None
-        self._set_workflow_buttons_state("normal")
         scan_result = dict(result.get("scanner") or {}) if action == "all" else (dict(result) if action == "scanner" else {})
         if scan_result:
             self._reload_candidate_rows(scan_result.get("candidate_rows") or [])
@@ -1004,6 +1094,7 @@ class TradingAccountPanel(ttk.Frame):
             self._workflow_status_var.set(
                 f"每日 Scanner 完成：候選 {len(scan_result.get('candidate_rows') or [])} 檔 | data {scan_result.get('latest_data_date') or '-'}"
             )
+        self.refresh_operations_status()
 
 
     def _current_revision(self) -> int:
@@ -1030,6 +1121,7 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_protection_plan()
         self._reload_proposed_order_rows([])
         self._proposed_status_var.set("帳戶已變更；既有建議掛單已失效，請重新執行 4 建議掛單。")
+        self.refresh_operations_status()
         return True
 
     def refresh_account(self):
@@ -1062,6 +1154,7 @@ class TradingAccountPanel(ttk.Frame):
             self._cash_var.set("")
         self._reload_positions()
         self._apply_order_lock_to_account_controls()
+        self.refresh_operations_status()
 
     def _reload_positions(self):
         selected = self._selected_ticker()

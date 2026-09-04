@@ -16,6 +16,9 @@ from services.scanner.scan_runner import run_daily_scanner
 from services.trading.strategy_param_training import run_trading_strategy_param_training
 
 
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 1
+
+
 def _selected_payload_latest_data_date(payload: dict[str, Any]) -> str:
     meta = dict(payload.get("meta") or {})
     policy = dict(meta.get("walk_forward_policy") or {})
@@ -153,6 +156,95 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
     }
 
 
+def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise TypeError("Trading candidate snapshot payload 必須是 object")
+    if int(payload.get("schema_version", -1)) != TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION:
+        raise ValueError("Trading candidate snapshot schema_version 不相容；請重新執行 Scanner")
+    if str(payload.get("runtime_domain") or "") != RUNTIME_DOMAIN_TRADING:
+        raise ValueError("Trading candidate snapshot runtime domain 不合法")
+    if not str(payload.get("strategy_id") or "").strip():
+        raise ValueError("Trading candidate snapshot 缺少 strategy_id")
+    if not str(payload.get("param_selector") or "").strip():
+        raise ValueError("Trading candidate snapshot 缺少 param_selector")
+    if not str(payload.get("latest_data_date") or "").strip():
+        raise ValueError("Trading candidate snapshot 缺少 latest_data_date")
+    if not str(payload.get("selected_params_sha256") or "").strip():
+        raise ValueError("Trading candidate snapshot 缺少 selected_params_sha256")
+    if not isinstance(payload.get("candidate_rows"), list):
+        raise ValueError("Trading candidate snapshot candidate_rows 必須是 list")
+
+
+def load_trading_candidate_snapshot(
+    project_root: str | Path,
+    *,
+    require_current: bool = False,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    path = resolve_trading_candidate_snapshot_path(root)
+    if not path.is_file():
+        raise FileNotFoundError("Trading Scanner candidate snapshot 尚未產生；請先執行「3 Scanner 候選」。")
+    payload = load_json_strict(path)
+    _validate_trading_candidate_snapshot_payload(payload)
+    if not require_current:
+        return payload
+
+    runtime = load_trading_scanner_runtime(root)
+    if str(payload.get("strategy_id") or "") != str(runtime["profile"].strategy_id):
+        raise RuntimeError("Trading candidate snapshot strategy 與目前設定不一致；請重新執行 Scanner")
+    if str(payload.get("param_selector") or "") != str(runtime["profile"].param_selector):
+        raise RuntimeError("Trading candidate snapshot selector 與目前設定不一致；請重新執行 Scanner")
+    if str(payload.get("latest_data_date") or "") != str(runtime["latest_data_date"]):
+        raise RuntimeError("Trading candidate snapshot 已過期；請重新執行 Scanner")
+    if str(payload.get("param_latest_data_date") or "") != str(runtime["param_latest_data_date"]):
+        raise RuntimeError("Trading candidate snapshot params date 與目前設定不一致；請重新執行 Scanner")
+    if str(payload.get("selected_params_sha256") or "") != compute_file_sha256(runtime["selected_path"]):
+        raise RuntimeError("Trading candidate snapshot 對應的 params 已改變；請重新執行 Scanner")
+    return payload
+
+
+def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    path = resolve_trading_candidate_snapshot_path(root)
+    if not path.is_file():
+        return {
+            "exists": False,
+            "valid": False,
+            "fresh": False,
+            "candidate_count": 0,
+            "information_date": None,
+            "error": None,
+            "path": project_relative_display_path(path, project_root=root),
+        }
+    try:
+        payload = load_trading_candidate_snapshot(root, require_current=False)
+    except (OSError, TypeError, ValueError, RuntimeError) as exc:
+        return {
+            "exists": True,
+            "valid": False,
+            "fresh": False,
+            "candidate_count": 0,
+            "information_date": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "path": project_relative_display_path(path, project_root=root),
+        }
+    freshness_error = None
+    try:
+        load_trading_candidate_snapshot(root, require_current=True)
+    except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
+        freshness_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "exists": True,
+        "valid": True,
+        "fresh": freshness_error is None,
+        "candidate_count": len(payload.get("candidate_rows") or []),
+        "information_date": payload.get("latest_data_date"),
+        "selected_params_sha256": payload.get("selected_params_sha256"),
+        "error": freshness_error,
+        "path": project_relative_display_path(path, project_root=root),
+    }
+
+
 def run_trading_market_data_update(*, project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
@@ -181,7 +273,7 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     candidate_rows = [_json_safe(dict(row)) for row in list(result.get('candidate_rows') or [])]
     snapshot_path = resolve_trading_candidate_snapshot_path(root)
     snapshot_payload = {
-        'schema_version': 1,
+        'schema_version': TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
         'runtime_domain': RUNTIME_DOMAIN_TRADING,
         'strategy_id': runtime['profile'].strategy_id,
         'param_selector': runtime['profile'].param_selector,
@@ -223,7 +315,10 @@ def run_trading_daily_workflow(*, project_root: str | Path, environ=None) -> dic
 
 
 __all__ = [
+    "TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION",
     "build_trading_daily_workflow_snapshot",
+    "load_trading_candidate_snapshot",
+    "get_trading_candidate_snapshot_read_model",
     "load_trading_scanner_runtime",
     "resolve_trading_candidate_snapshot_path",
     "run_trading_market_data_update",
