@@ -3460,6 +3460,58 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 bi_safety, bi_mfe = bidirectional_model.forward_safety_mfe_heads(
                     bidirectional_x, None
                 )
+            # The split execution path is a performance implementation detail, not
+            # a topology change. Verify that construction preserves native BiGRU
+            # initialization order and that final states remain numerically equivalent.
+            hidden_size = int(bidirectional_spec.gru_hidden_size or 0)
+            equivalence_x = torch.linspace(
+                -1.0, 1.0, steps=2 * 11 * 10, dtype=torch.float32
+            ).reshape(2, 11, 10)
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(20260904)
+                native_gru = torch.nn.GRU(
+                    input_size=10,
+                    hidden_size=hidden_size,
+                    num_layers=1,
+                    batch_first=True,
+                    dropout=0.0,
+                    bidirectional=True,
+                )
+                native_safety = torch.nn.Linear(2 * hidden_size, 2)
+                native_mfe = torch.nn.Linear(2 * hidden_size, 2)
+                torch.manual_seed(20260904)
+                split_model = build_active_model(10, 0, architecture=architecture)
+                _native_output, native_hidden = native_gru(equivalence_x)
+                _split_output, split_hidden = split_model.gru(equivalence_x)
+                native_latent = torch.cat((native_hidden[-2], native_hidden[-1]), dim=1)
+                split_latent = torch.cat((split_hidden[-2], split_hidden[-1]), dim=1)
+                split_forward = split_model.gru.forward_gru
+                split_backward = split_model.gru.backward_gru
+                initialization_equivalent = all(
+                    (
+                        torch.equal(getattr(native_gru, native_name), getattr(split_forward, split_name))
+                        and torch.equal(
+                            getattr(native_gru, native_name + "_reverse"),
+                            getattr(split_backward, split_name),
+                        )
+                    )
+                    for native_name, split_name in (
+                        ("weight_ih_l0", "weight_ih_l0"),
+                        ("weight_hh_l0", "weight_hh_l0"),
+                        ("bias_ih_l0", "bias_ih_l0"),
+                        ("bias_hh_l0", "bias_hh_l0"),
+                    )
+                )
+                heads_equivalent = (
+                    torch.equal(native_safety.weight, split_model.raw_safety_classifier.weight)
+                    and torch.equal(native_safety.bias, split_model.raw_safety_classifier.bias)
+                    and torch.equal(native_mfe.weight, split_model.raw_mfe_classifier.weight)
+                    and torch.equal(native_mfe.bias, split_model.raw_mfe_classifier.bias)
+                )
+                final_state_equivalent = torch.allclose(
+                    native_latent, split_latent, rtol=1e-6, atol=1e-6
+                )
+
             bidirectional_contracts.append(
                 bool(bidirectional_spec.gru_bidirectional)
                 and bidirectional_spec.gru_pooling == "final_state_concat"
@@ -3467,6 +3519,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 and int(bidirectional_spec.channels)
                 == 2 * int(bidirectional_spec.gru_hidden_size or 0)
                 and bool(getattr(bidirectional_model.gru, "bidirectional", False))
+                and getattr(bidirectional_model.gru, "execution_strategy", None)
+                == "split_unidirectional"
+                and initialization_equivalent
+                and heads_equivalent
+                and bool(final_state_equivalent)
                 and int(bidirectional_model.raw_safety_classifier.in_features)
                 == int(bidirectional_spec.channels)
                 and int(bidirectional_model.raw_mfe_classifier.in_features)

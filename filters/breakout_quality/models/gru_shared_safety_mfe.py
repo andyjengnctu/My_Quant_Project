@@ -35,17 +35,66 @@ def build_gru_shared_safety_mfe(
     if guarded_retry and not use_outer_autocast:
         raise ValueError("same-batch FP32 retry 只允許outer-autocast recurrent architecture")
 
+    class _SplitBidirectionalGRU(nn.Module):
+        """Execution-equivalent 1-layer BiGRU using two unidirectional kernels.
+
+        Native bidirectional cuDNN RNN execution can select a materially slower
+        deterministic FP32 path on some CUDA/cuDNN stacks.  Keeping the two
+        directions as independent unidirectional GRUs preserves the BiGRU
+        topology and parameter count while allowing each direction to use the
+        same unidirectional kernel family already exercised by MR-13BG.
+        """
+
+        def __init__(self):
+            super().__init__()
+            if num_layers != 1:
+                raise ValueError("split bidirectional GRU目前只支援1-layer等價執行")
+            self.bidirectional = True
+            self.num_layers = 1
+            self.hidden_size = hidden_size
+            self.execution_strategy = "split_unidirectional"
+            # Construction order intentionally matches nn.GRU(..., bidirectional=True):
+            # forward direction parameters first, then reverse direction parameters.
+            self.forward_gru = nn.GRU(
+                input_size=int(feature_count),
+                hidden_size=hidden_size,
+                num_layers=1,
+                batch_first=True,
+                dropout=0.0,
+                bidirectional=False,
+            )
+            self.backward_gru = nn.GRU(
+                input_size=int(feature_count),
+                hidden_size=hidden_size,
+                num_layers=1,
+                batch_first=True,
+                dropout=0.0,
+                bidirectional=False,
+            )
+
+        def forward(self, x):
+            forward_output, forward_hidden = self.forward_gru(x)
+            reversed_x = torch.flip(x, dims=(1,)).contiguous()
+            reversed_output, backward_hidden = self.backward_gru(reversed_x)
+            backward_output = torch.flip(reversed_output, dims=(1,))
+            output = torch.cat((forward_output, backward_output), dim=2)
+            hidden = torch.cat((forward_hidden, backward_hidden), dim=0)
+            return output, hidden
+
     class GRUSharedSafetyMFE(nn.Module):
         def __init__(self):
             super().__init__()
-            self.gru = nn.GRU(
-                input_size=int(feature_count),
-                hidden_size=hidden_size,
-                num_layers=num_layers,
-                batch_first=True,
-                dropout=0.0,
-                bidirectional=bidirectional,
-            )
+            if bidirectional:
+                self.gru = _SplitBidirectionalGRU()
+            else:
+                self.gru = nn.GRU(
+                    input_size=int(feature_count),
+                    hidden_size=hidden_size,
+                    num_layers=num_layers,
+                    batch_first=True,
+                    dropout=0.0,
+                    bidirectional=False,
+                )
             latent_width = hidden_size * (2 if bidirectional else 1)
             self.raw_safety_classifier = nn.Linear(latent_width, 2)
             self.raw_mfe_classifier = nn.Linear(latent_width, 2)
