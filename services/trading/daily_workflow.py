@@ -302,13 +302,17 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
 
 
 def run_trading_daily_workflow(*, project_root: str | Path, environ=None) -> dict[str, Any]:
+    from services.trading.position_rollforward import run_trading_position_rollforward
+
     data_result = run_trading_market_data_update(project_root=project_root)
+    rollforward_result = run_trading_position_rollforward(project_root=project_root)
     param_result = run_trading_strategy_param_training(project_root=project_root, environ=environ)
     scan_result = run_trading_candidate_scan(project_root=project_root)
     return {
         "status": "READY",
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "data": data_result,
+        "position_rollforward": rollforward_result,
         "params": param_result,
         "scanner": scan_result,
     }

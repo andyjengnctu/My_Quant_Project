@@ -586,6 +586,91 @@ def apply_confirmed_strategy_buy_fill_increment(
     )
 
 
+def apply_trading_strategy_management_rollforward(
+    state: dict[str, Any],
+    *,
+    updates: dict[str, dict[str, Any]],
+    timestamp: str,
+    mutation_id: str,
+) -> dict[str, Any]:
+    """Persist deterministic completed-bar strategy-management advances.
+
+    ``updates`` is keyed by ticker and must contain a canonical ``position_state``
+    plus the last actually processed completed market-data date.  Cash and broker
+    accounting are intentionally immutable in this mutation.
+    """
+    validate_trading_account_state(state)
+    if not isinstance(updates, dict) or not updates:
+        raise ValueError("Trading rollforward updates 不可為空")
+
+    updated = deepcopy(state)
+    details_rows: list[dict[str, Any]] = []
+    for ticker_raw in sorted(updates):
+        ticker = _normalize_ticker(ticker_raw)
+        payload = updates[ticker_raw]
+        if not isinstance(payload, dict):
+            raise ValueError(f"Trading rollforward payload 不合法: {ticker}")
+        processed_bar_count = int(payload.get("processed_bar_count") or 0)
+        if processed_bar_count <= 0:
+            raise ValueError(f"Trading rollforward processed_bar_count 必須 > 0: {ticker}")
+        if ticker not in updated["positions"]:
+            raise ValueError(f"Trading rollforward position 不存在: {ticker}")
+        record = updated["positions"][ticker]
+        if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+            raise ValueError(f"Trading rollforward 只允許 strategy_fill position: {ticker}")
+        management = record.get("strategy_management") or {}
+        if management.get("status") != MANAGEMENT_STATUS_ACTIVE:
+            raise ValueError(f"Trading rollforward position 尚未由策略 active 管理: {ticker}")
+        new_position = deepcopy(payload.get("position_state"))
+        if not isinstance(new_position, dict):
+            raise ValueError(f"Trading rollforward position_state 不合法: {ticker}")
+        broker = record.get("broker") or {}
+        if int(new_position.get("qty", -1)) != int(broker.get("qty", -2)):
+            raise ValueError(f"Trading rollforward 不得改變 broker qty: {ticker}")
+        if int(new_position.get("remaining_cost_basis_milli", -1)) != int(broker.get("remaining_cost_basis_milli", -2)):
+            raise ValueError(f"Trading rollforward 不得改變 broker cost basis: {ticker}")
+
+        processed_through = _normalize_iso_date(
+            payload.get("processed_through_date"), field_name="processed_through_date"
+        )
+        if processed_through is None:
+            raise ValueError(f"Trading rollforward 缺少 processed_through_date: {ticker}")
+        previous_date = _normalize_iso_date(
+            management.get("last_rollforward_date"), field_name="last_rollforward_date"
+        )
+        if previous_date is not None and processed_through <= previous_date:
+            raise ValueError(
+                f"Trading rollforward date 必須前進: {ticker} {previous_date} -> {processed_through}"
+            )
+
+        before_position = management.get("position_state") or {}
+        management["position_state"] = _json_safe(new_position)
+        management["last_rollforward_date"] = processed_through
+        record["strategy_management"] = management
+        details_rows.append(
+            {
+                "ticker": ticker,
+                "previous_rollforward_date": previous_date,
+                "processed_through_date": processed_through,
+                "processed_bar_count": processed_bar_count,
+                "previous_stop_milli": int(before_position.get("sl_milli") or 0),
+                "stop_milli": int(new_position.get("sl_milli") or 0),
+                "previous_highest_high_milli": int(before_position.get("highest_high_since_entry_milli") or 0),
+                "highest_high_since_entry_milli": int(new_position.get("highest_high_since_entry_milli") or 0),
+                "cash_changed": False,
+                "broker_accounting_changed": False,
+            }
+        )
+
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="rollforward_strategy_management",
+        timestamp=timestamp,
+        details={"positions": details_rows},
+    )
+
+
 def apply_confirmed_sell_fill(
     state: dict[str, Any],
     *,
@@ -741,6 +826,18 @@ def validate_trading_account_state(state: dict[str, Any]) -> None:
                 raise ValueError(f"strategy/broker qty 不一致: {ticker}")
             if int(position_state.get("remaining_cost_basis_milli", -1)) != remaining_cost:
                 raise ValueError(f"strategy/broker cost basis 不一致: {ticker}")
+            last_rollforward_date = _normalize_iso_date(
+                management.get("last_rollforward_date"), field_name="last_rollforward_date"
+            )
+            management_start_date = _normalize_iso_date(
+                management.get("management_start_date"), field_name="management_start_date"
+            )
+            if (
+                last_rollforward_date is not None
+                and management_start_date is not None
+                and last_rollforward_date < management_start_date
+            ):
+                raise ValueError(f"Trading last_rollforward_date 不得早於 management_start_date: {ticker}")
 
     events = state.get("events")
     if not isinstance(events, list) or len(events) != revision + 1:
@@ -777,6 +874,12 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "realized_pnl": milli_to_money(int(broker.get("realized_pnl_milli", 0) or 0)),
                 "entry_date": broker.get("entry_date"),
                 "management_status": record["strategy_management"]["status"],
+                "last_rollforward_date": record["strategy_management"].get("last_rollforward_date"),
+                "effective_stop": (
+                    None
+                    if not isinstance(record["strategy_management"].get("position_state"), dict)
+                    else milli_to_price(int(record["strategy_management"]["position_state"].get("sl_milli") or 0))
+                ),
                 "has_sell_history": _has_confirmed_sell_history(state, ticker),
             }
         )
@@ -803,6 +906,7 @@ __all__ = [
     "remove_manual_trading_position",
     "apply_confirmed_strategy_buy_fill",
     "apply_confirmed_strategy_buy_fill_increment",
+    "apply_trading_strategy_management_rollforward",
     "apply_confirmed_sell_fill",
     "validate_trading_account_state",
     "build_trading_account_read_model",

@@ -379,10 +379,11 @@ def validate_trading_daily_workflow_contract_case(base_params):
 
     call_order = []
     with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: call_order.append("data") or {"status": "READY"}), \
+         patch("services.trading.position_rollforward.run_trading_position_rollforward", side_effect=lambda **_kwargs: call_order.append("rollforward") or {"status": "UP_TO_DATE"}), \
          patch.object(daily_workflow, "run_trading_strategy_param_training", side_effect=lambda **_kwargs: call_order.append("params") or {"status": "READY"}), \
          patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
         workflow_result = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
-    add_check(results, "trading_daily", case_id, "daily_workflow_executes_data_params_scanner_in_order", ["data", "params", "scanner"], call_order)
+    add_check(results, "trading_daily", case_id, "daily_workflow_executes_data_rollforward_params_scanner_in_order", ["data", "rollforward", "params", "scanner"], call_order)
     add_check(results, "trading_daily", case_id, "daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
@@ -1406,6 +1407,196 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
     return results, summary
 
 
+
+def validate_trading_position_rollforward_contract_case(base_params):
+    case_id = "TRADING_POSITION_ROLLFORWARD"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+    from core.file_integrity import compute_file_sha256
+    from core.params_io import params_to_json_dict
+    from core.position_step import rollforward_position_management_from_completed_bar
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from core.signal_utils import generate_signals, unpack_precomputed_signals
+    from core.trading_capabilities import build_trading_capability_snapshot
+    from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+    from services.trading.daily_workflow import resolve_trading_candidate_snapshot_path
+    from services.trading.fill_reconciliation import confirm_trading_buy_order_fill
+    from services.trading.order_planning import build_trading_proposed_order_plan
+    from services.trading.order_state import confirm_trading_order_submission, load_trading_order_state
+    from services.trading.position_rollforward import (
+        build_trading_position_rollforward_snapshot,
+        run_trading_position_rollforward,
+    )
+    from services.trading.protection_order_submission import confirm_trading_protection_leg_submission
+    from services.trading.protection_planning import (
+        PROTECTION_STOP_ACTION,
+        build_trading_protection_plan,
+        get_trading_protection_plan_read_model,
+    )
+
+    profile = get_trading_strategy_profile()
+    project_root = Path(__file__).resolve().parents[2]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True)
+
+        needed = max(320, get_required_min_rows(base_params) + 20)
+        dates = pd.bdate_range(end="2026-09-04", periods=needed)
+        close = [200.0 + (idx % 7) * 0.1 for idx in range(needed)]
+        frame = pd.DataFrame({
+            "Date": dates.strftime("%Y-%m-%d"),
+            "Open": close,
+            "High": [value + 2.0 for value in close],
+            "Low": [value - 2.0 for value in close],
+            "Close": close,
+            "Volume": [1_000_000] * needed,
+        })
+        frame.loc[needed - 1, ["Open", "High", "Low", "Close"]] = [199.0, 260.0, 198.0, 250.0]
+        csv_path = data_dir / "2454.csv"
+        frame.to_csv(csv_path, index=False)
+
+        selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        ), ensure_ascii=False), encoding="utf-8")
+
+        account = initialize_trading_account_state(root, cash=800_000)
+        snapshot_path = resolve_trading_candidate_snapshot_path(root)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps({
+            "schema_version": 1,
+            "runtime_domain": "trading",
+            "strategy_id": profile.strategy_id,
+            "param_selector": profile.param_selector,
+            "latest_data_date": "2026-09-04",
+            "param_latest_data_date": "2026-09-04",
+            "selected_params_sha256": compute_file_sha256(selected_path),
+            "candidate_rows": [{
+                "ticker": "2454", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
+                "execution_plan_seed": {
+                    "ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0,
+                    "target_price": 230.0, "entry_atr": 4.0, "trade_date": "2026-09-04",
+                    "security_profile": {"family": "stock"},
+                },
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+
+        plan = build_trading_proposed_order_plan(project_root=root)
+        proposal = plan["orders"][0]
+        ordered = confirm_trading_order_submission(
+            root,
+            rank=int(proposal["rank"]),
+            ticker=proposal["ticker"],
+            expected_revision=None,
+            broker_order_id="ROLL-SYN-BUY",
+        )
+        entry_order_id = next(iter(ordered["orders"]))
+        entry_order = ordered["orders"][entry_order_id]
+        fill_result = confirm_trading_buy_order_fill(
+            root,
+            order_id=entry_order_id,
+            fill_qty=int(entry_order["qty"]),
+            fill_price=199.0,
+            trade_date="2026-09-04",
+            expected_order_revision=int(ordered["revision"]),
+            expected_account_revision=int(account["revision"]),
+        )
+        account_before = load_trading_account_state(root)
+        cash_before = int(account_before["cash_milli"])
+        qty_before = int(account_before["positions"]["2454"]["broker"]["qty"])
+        position_before = deepcopy(account_before["positions"]["2454"]["strategy_management"]["position_state"])
+
+        build_trading_protection_plan(root)
+        order_state = load_trading_order_state(root)
+        order_state = confirm_trading_protection_leg_submission(
+            root,
+            ticker="2454",
+            action=PROTECTION_STOP_ACTION,
+            expected_order_revision=int(order_state["revision"]),
+            broker_order_id="ROLL-SYN-STOP",
+        )
+        protection_before = get_trading_protection_plan_read_model(root)
+        add_check(results, "trading_rollforward", case_id, "pre_rollforward_active_stop_matches_current_position_plan", [], protection_before.get("stale_active_protection_order_ids"))
+
+        changed = deepcopy(base_params)
+        changed.atr_times_trail = float(base_params.atr_times_trail) + 5.0
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        ), ensure_ascii=False), encoding="utf-8")
+
+        clean_df, _stats = sanitize_ohlcv_dataframe(pd.read_csv(csv_path), "2454", min_rows=get_required_min_rows(base_params))
+        atr_values, _buy, _sell, _limits = unpack_precomputed_signals(generate_signals(clean_df, base_params, ticker="2454"))
+        expected_position = deepcopy(position_before)
+        final_idx = len(clean_df) - 1
+        rollforward_position_management_from_completed_bar(
+            expected_position,
+            completed_high=float(clean_df["High"].iloc[final_idx]),
+            completed_atr=float(atr_values[final_idx]),
+            params=base_params,
+        )
+
+        with patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-04"):
+            due = build_trading_position_rollforward_snapshot(root)
+            add_check(results, "trading_rollforward", case_id, "confirmed_position_is_due_through_latest_completed_bar", ["2454"], due["due_tickers"])
+            rolled = run_trading_position_rollforward(root)
+            revision_after_first = int(rolled["account_revision"])
+            second = run_trading_position_rollforward(root)
+
+        account_after = load_trading_account_state(root)
+        management_after = account_after["positions"]["2454"]["strategy_management"]
+        position_after = management_after["position_state"]
+        add_check(results, "trading_rollforward", case_id, "rollforward_uses_source_entry_order_frozen_params_not_current_selected_params", int(expected_position["sl_milli"]), int(position_after["sl_milli"]))
+        add_check(results, "trading_rollforward", case_id, "rollforward_advances_highest_high_from_completed_bar", int(expected_position["highest_high_since_entry_milli"]), int(position_after["highest_high_since_entry_milli"]))
+        add_check(results, "trading_rollforward", case_id, "rollforward_records_processed_completed_date", "2026-09-04", management_after.get("last_rollforward_date"))
+        add_check(results, "trading_rollforward", case_id, "rollforward_does_not_change_broker_qty", qty_before, int(account_after["positions"]["2454"]["broker"]["qty"]))
+        add_check(results, "trading_rollforward", case_id, "rollforward_does_not_change_cash", cash_before, int(account_after["cash_milli"]))
+        add_check(results, "trading_rollforward", case_id, "rollforward_is_idempotent_after_completed_date_consumed", "UP_TO_DATE", second["status"])
+        add_check(results, "trading_rollforward", case_id, "idempotent_second_run_does_not_advance_revision", revision_after_first, int(second["account_revision"]))
+
+        protection_after = get_trading_protection_plan_read_model(root)
+        add_check(results, "trading_rollforward", case_id, "old_active_stop_is_flagged_stale_after_trailing_state_changes", ["2454"], protection_after.get("stale_active_protection_tickers"))
+        add_check(results, "trading_rollforward", case_id, "active_protection_order_is_not_silently_cancelled_or_rewritten", 1, len([row for row in load_trading_order_state(root)["orders"].values() if row.get("status") == "ORDERED" and row.get("side") == "SELL"]))
+
+        future = pd.concat([frame, pd.DataFrame([{
+            "Date": "2026-09-05", "Open": 251.0, "High": 270.0, "Low": 250.0, "Close": 265.0, "Volume": 1_000_000,
+        }])], ignore_index=True)
+        future.to_csv(csv_path, index=False)
+        with patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-04"):
+            try:
+                build_trading_position_rollforward_snapshot(root)
+            except RuntimeError as exc:
+                provisional_rejected = "尚未完成日K" in str(exc)
+            else:
+                provisional_rejected = False
+        add_check(results, "trading_rollforward", case_id, "rollforward_rejects_dataset_containing_uncompleted_future_daily_bar", True, provisional_rejected)
+
+    capability = build_trading_capability_snapshot()
+    add_check(results, "trading_rollforward", case_id, "daily_position_rollforward_capability_is_implemented", True, bool(capability["capabilities"]["daily_position_rollforward"]["implemented"]))
+    add_check(results, "trading_rollforward", case_id, "indicator_sell_execution_remains_separate_live_blocker", True, "indicator_sell_execution" in set(capability.get("live_blocking_capabilities") or []))
+
+    service_source = (project_root / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    daily_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
+    snapshot_body = service_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
+    add_check(results, "trading_rollforward", case_id, "read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
+    add_check(results, "trading_rollforward", case_id, "rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
+    add_check(results, "trading_rollforward", case_id, "workbench_exposes_explicit_position_rollforward_action", True, '"持股日終推進", "rollforward"' in panel_source and 'elif action == "rollforward"' in panel_source)
+    add_check(results, "trading_rollforward", case_id, "daily_workflow_orders_rollforward_after_data_before_param_training", True, daily_source.index("data_result = run_trading_market_data_update") < daily_source.index("rollforward_result = run_trading_position_rollforward") < daily_source.index("param_result = run_trading_strategy_param_training"))
+
+    summary["checks"] = len(results)
+    return results, summary
+
 def validate_trading_operations_status_contract_case(base_params):
     case_id = "TRADING_OPERATIONS_STATUS"
     results = []
@@ -1419,6 +1610,8 @@ def validate_trading_operations_status_contract_case(base_params):
         NEXT_RECOVER_FILL,
         NEXT_RECONCILE_ENTRY,
         NEXT_REFRESH_PROTECTION,
+        NEXT_REPLACE_PROTECTION,
+        NEXT_ROLLFORWARD_POSITIONS,
         NEXT_RUN_SCANNER,
         NEXT_SET_CASH,
         NEXT_SUBMIT_PROPOSED,
@@ -1457,7 +1650,7 @@ def validate_trading_operations_status_contract_case(base_params):
     recovery = derive(fill_transaction_pending=True)
     add_check(results, "trading_operations", case_id, "pending_fill_transaction_is_top_priority_blocker", NEXT_RECOVER_FILL, recovery["next_action_code"])
     add_check(results, "trading_operations", case_id, "pending_fill_transaction_status_is_blocked", OPERATIONS_STATUS_BLOCKED, recovery["overall_status"])
-    add_check(results, "trading_operations", case_id, "pending_fill_transaction_disables_all_workflow_actions", {"data": False, "params": False, "scanner": False, "orders": False, "all": False}, recovery["workflow_action_availability"])
+    add_check(results, "trading_operations", case_id, "pending_fill_transaction_disables_all_workflow_actions", {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}, recovery["workflow_action_availability"])
 
     uninitialized = derive(account={"initialized": False, "revision": None, "cash": None, "positions": []})
     add_check(results, "trading_operations", case_id, "uninitialized_account_next_action", NEXT_INITIALIZE_ACCOUNT, uninitialized["next_action_code"])
@@ -1472,6 +1665,11 @@ def validate_trading_operations_status_contract_case(base_params):
         "cash": 400_000.0,
         "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "management_status": "active"}],
     }
+    rollforward_due = derive(account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
+    add_check(results, "trading_operations", case_id, "due_strategy_position_requires_rollforward_before_protection_or_allocation", NEXT_ROLLFORWARD_POSITIONS, rollforward_due["next_action_code"])
+    add_check(results, "trading_operations", case_id, "due_strategy_position_enables_explicit_rollforward_action", True, rollforward_due["workflow_action_availability"]["rollforward"])
+    add_check(results, "trading_operations", case_id, "due_strategy_position_blocks_new_allocation_until_advanced", False, rollforward_due["workflow_action_availability"]["orders"])
+
     missing_stop = derive(account=strategy_account)
     add_check(results, "trading_operations", case_id, "strategy_position_without_stop_is_reported", ["2317"], missing_stop["missing_stop_tickers"])
     add_check(results, "trading_operations", case_id, "missing_stop_without_fresh_plan_requires_plan_refresh", NEXT_REFRESH_PROTECTION, missing_stop["next_action_code"])
@@ -1491,6 +1689,14 @@ def validate_trading_operations_status_contract_case(base_params):
     add_check(results, "trading_operations", case_id, "active_stop_clears_missing_stop_gap", [], protected["missing_stop_tickers"])
     add_check(results, "trading_operations", case_id, "long_lived_protection_sell_does_not_block_new_allocation", True, protected["workflow_action_availability"]["orders"])
 
+    stale_protection = derive(
+        account=strategy_account,
+        orders=active_stop_orders,
+        protection={**fresh_protection, "stale_active_protection_order_ids": ["stop1"], "stale_active_protection_tickers": ["2317"]},
+    )
+    add_check(results, "trading_operations", case_id, "stale_active_protection_requires_explicit_cancel_resubmit_sequence", NEXT_REPLACE_PROTECTION, stale_protection["next_action_code"])
+    add_check(results, "trading_operations", case_id, "stale_active_protection_blocks_new_allocation", False, stale_protection["workflow_action_availability"]["orders"])
+
     active_entry_orders = {
         "revision": 6,
         "orders": [{
@@ -1501,6 +1707,9 @@ def validate_trading_operations_status_contract_case(base_params):
     active_entry = derive(orders=active_entry_orders)
     add_check(results, "trading_operations", case_id, "active_entry_buy_requires_reconciliation", NEXT_RECONCILE_ENTRY, active_entry["next_action_code"])
     add_check(results, "trading_operations", case_id, "active_entry_buy_disables_new_allocation", False, active_entry["workflow_action_availability"]["orders"])
+    active_entry_with_due = derive(orders=active_entry_orders, account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
+    add_check(results, "trading_operations", case_id, "active_entry_reconciliation_precedes_rollforward_that_cannot_mutate_while_entry_is_active", NEXT_RECONCILE_ENTRY, active_entry_with_due["next_action_code"])
+    add_check(results, "trading_operations", case_id, "active_entry_disables_rollforward_action", False, active_entry_with_due["workflow_action_availability"]["rollforward"])
 
     stale_params = derive(workflow={"latest_data_date": "2026-09-04", "params_ready_for_scan": False})
     add_check(results, "trading_operations", case_id, "stale_params_require_update_params", NEXT_UPDATE_PARAMS, stale_params["next_action_code"])
@@ -1509,6 +1718,9 @@ def validate_trading_operations_status_contract_case(base_params):
     workflow_error = derive(component_errors={"workflow": "RuntimeError: broken workflow read model"})
     add_check(results, "trading_operations", case_id, "workflow_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, workflow_error["overall_status"])
     add_check(results, "trading_operations", case_id, "workflow_read_error_disables_all_workflow_actions", False, any(workflow_error["workflow_action_availability"].values()))
+    rollforward_error = derive(component_errors={"position_rollforward": "RuntimeError: broken rollforward snapshot"})
+    add_check(results, "trading_operations", case_id, "rollforward_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, rollforward_error["overall_status"])
+    add_check(results, "trading_operations", case_id, "rollforward_read_error_blocks_allocation_and_daily_all", [False, False], [rollforward_error["workflow_action_availability"]["orders"], rollforward_error["workflow_action_availability"]["all"]])
 
     stale_candidate = derive(candidate={"exists": True, "valid": True, "fresh": False, "candidate_count": 3})
     add_check(results, "trading_operations", case_id, "stale_candidate_requires_scanner", NEXT_RUN_SCANNER, stale_candidate["next_action_code"])
@@ -1551,6 +1763,9 @@ def validate_trading_operations_status_contract_case(base_params):
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     add_check(results, "trading_operations", case_id, "operations_status_is_read_only_composition", False, any(token in source for token in ("atomic_write_json(", "confirm_trading_", "run_trading_market_data_update(")))
     add_check(results, "trading_operations", case_id, "operations_status_disables_hidden_protection_recovery", True, "get_trading_protection_plan_read_model(root, recover_pending_fill=False)" in source)
+    rollforward_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
+    rollforward_snapshot_body = rollforward_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
+    add_check(results, "trading_operations", case_id, "operations_rollforward_snapshot_has_no_hidden_fill_recovery", False, "recover_trading_fill_transaction(" in rollforward_snapshot_body)
     add_check(results, "trading_operations", case_id, "workbench_has_operations_overview", True, "Trading 操作總覽" in panel_source)
     add_check(results, "trading_operations", case_id, "workbench_consumes_operations_status_owner", True, "build_trading_operations_status" in panel_source)
     add_check(results, "trading_operations", case_id, "workbench_exposes_full_state_refresh", True, "全狀態刷新" in panel_source)
@@ -1640,6 +1855,7 @@ __all__ = [
     "validate_trading_protection_plan_contract_case",
     "validate_trading_protection_order_submission_contract_case",
     "validate_trading_protection_sell_fill_reconciliation_contract_case",
+    "validate_trading_position_rollforward_contract_case",
     "validate_trading_operations_status_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]
@@ -1742,8 +1958,8 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
 
     capability = build_trading_capability_snapshot()
     blockers = set(capability.get("live_blocking_capabilities") or [])
-    add_check(results, "trading_prelive", case_id, "daily_position_rollforward_is_explicit_live_blocker", True, "daily_position_rollforward" in blockers)
-    add_check(results, "trading_prelive", case_id, "indicator_sell_execution_is_explicit_live_blocker", True, "indicator_sell_execution" in blockers)
+    add_check(results, "trading_prelive", case_id, "daily_position_rollforward_is_implemented_and_no_longer_live_blocker", False, "daily_position_rollforward" in blockers)
+    add_check(results, "trading_prelive", case_id, "indicator_sell_execution_remains_explicit_live_blocker", True, "indicator_sell_execution" in blockers)
     add_check(results, "trading_prelive", case_id, "completed_daily_bar_seal_is_implemented", True, bool((capability["capabilities"]["completed_daily_bar_seal"]["implemented"])))
 
     with tempfile.TemporaryDirectory() as temp_dir:

@@ -19,9 +19,9 @@ _TRADING_CAPABILITIES = {
         "description": "BUY/Protection SELL broker fills reconcile through canonical exact accounting.",
     },
     "daily_position_rollforward": {
-        "implemented": False,
+        "implemented": True,
         "required_for_live": True,
-        "description": "Overnight strategy positions are not yet advanced from completed daily bars to the next-session trailing-stop state.",
+        "description": "Confirmed strategy positions advance from completed Trading daily bars using each source entry order's frozen params; broker fills and exits remain explicit separate events.",
     },
     "indicator_sell_execution": {
         "implemented": False,

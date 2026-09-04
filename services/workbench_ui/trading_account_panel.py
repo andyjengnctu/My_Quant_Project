@@ -16,6 +16,7 @@ from services.trading.daily_workflow import (
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
 from services.trading.order_planning import build_trading_proposed_order_plan
+from services.trading.position_rollforward import run_trading_position_rollforward
 from services.trading.operations_status import build_trading_operations_status
 from services.trading.operational_audit import run_trading_operational_audit
 from services.trading.protection_planning import (
@@ -187,6 +188,7 @@ class TradingAccountPanel(ttk.Frame):
         workflow_buttons.grid(row=0, column=1, rowspan=2, sticky="e", padx=(12, 0))
         for text, action in (
             ("1 更新資料", "data"),
+            ("持股日終推進", "rollforward"),
             ("2 更新 Params", "params"),
             ("3 Scanner 候選", "scanner"),
             ("4 建議掛單", "orders"),
@@ -204,7 +206,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(workflow_buttons, text="刷新狀態", command=self.refresh_daily_workflow, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
         ttk.Label(
             workflow_box,
-            text="Scanner 只在 Trading Params 與 Trading data 同一最新交易日執行；建議掛單再套用真實 cash／持股／max positions，且不代表已送單或成交。",
+            text="更新資料後，既有 strategy_fill 持股先用各 entry order frozen params 做日終推進；Scanner 只在 Trading Params 與 Trading data 同一最新交易日執行。",
             foreground=WORKBENCH_MUTED,
             style=WORKBENCH_LABEL_STYLE,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
@@ -670,6 +672,12 @@ class TradingAccountPanel(ttk.Frame):
             f"Proposed {'FRESH' if snapshot.get('proposed_orders_fresh') else 'STALE/EMPTY'}({int(snapshot.get('proposed_order_count') or 0)})",
             f"Protection {'FRESH' if snapshot.get('protection_plan_fresh') else 'STALE/EMPTY'}",
         ]
+        rollforward_due = list(snapshot.get('rollforward_due_tickers') or [])
+        if rollforward_due:
+            details.append("待持股日終推進: " + ",".join(rollforward_due))
+        stale_protection = list(snapshot.get('stale_active_protection_tickers') or [])
+        if stale_protection:
+            details.append("保護單待取消/重送: " + ",".join(stale_protection))
         missing_stop = list(snapshot.get('missing_stop_tickers') or [])
         if missing_stop:
             details.append("缺 active Stop: " + ",".join(missing_stop))
@@ -762,7 +770,7 @@ class TradingAccountPanel(ttk.Frame):
         if self._workflow_thread is not None and self._workflow_thread.is_alive():
             self._workflow_status_var.set("Trading workflow 執行中；請等待目前工作完成。")
             return
-        labels = {"data": "更新 Trading 資料", "params": "更新 Trading Params", "scanner": "Scanner 候選", "orders": "產生建議掛單", "all": "每日流程 1→2→3"}
+        labels = {"data": "更新 Trading 資料", "rollforward": "持股日終推進", "params": "更新 Trading Params", "scanner": "Scanner 候選", "orders": "產生建議掛單", "all": "每日流程 1→2→3"}
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
             return
@@ -791,6 +799,8 @@ class TradingAccountPanel(ttk.Frame):
         try:
             if action == "data":
                 result = run_trading_market_data_update(project_root=WORKBENCH_PROJECT_ROOT)
+            elif action == "rollforward":
+                result = run_trading_position_rollforward(project_root=WORKBENCH_PROJECT_ROOT)
             elif action == "params":
                 result = run_trading_strategy_param_training(project_root=WORKBENCH_PROJECT_ROOT)
             elif action == "scanner":
@@ -1111,6 +1121,12 @@ class TradingAccountPanel(ttk.Frame):
             self._workflow_status_var.set(
                 f"資料更新完成：market {result.get('market_date') or '-'} | 成功 {result.get('count_success', 0)} | 已最新 {result.get('count_skipped_latest', 0)} | 下載失敗 {result.get('download_error_count', 0)}"
             )
+        elif action == "rollforward":
+            self._workflow_status_var.set(
+                f"持股日終推進完成：持股 {result.get('processed_position_count', 0)} 檔 | completed bars {result.get('processed_bar_count', 0)} | account rev {result.get('account_revision', '-')}"
+            )
+            self.refresh_account()
+            self.refresh_protection_plan()
         elif action == "params":
             self._workflow_status_var.set(
                 f"Params 更新完成：through {result.get('latest_data_date') or '-'} | {result.get('selected_policy') or result.get('param_selector') or '-'}"

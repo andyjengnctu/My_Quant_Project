@@ -3990,6 +3990,17 @@
       "entry": "`core/trading_market_clock.py`, `core/trading_capabilities.py`, `services/downloader/universe.py`, `services/downloader/sync.py`, `services/downloader/application.py`, `services/trading/operational_audit.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 359
+    },
+    {
+      "id": "B372",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Trading completed-bar position management",
+      "item": "Confirmed strategy positions roll forward from completed daily bars with frozen entry params before the next session",
+      "gap": "Trading既有strategy_fill持股必須在每日資料更新後、current Trading Params重訓與Scanner之前，以各自source entry order凍結的strategy params消費已完成日K，逐bar重用canonical trailing-stop update，推進highest-high/trailing/effective Stop並記錄last_rollforward_date。此流程不得讀current selected params取代frozen params、不得使用尚未完成的daily row、不得由OHLC推定任何券商SELL fill、不得改cash/qty/cost basis。active ENTRY BUY尚未reconcile時禁止account roll-forward；長期active protection SELL可存在，但若trailing更新使既有broker protection的position-plan fingerprint過期，只能標記stale並要求使用者依實際券商狀態取消／重送，禁止自行假設券商改單。Operations Status與Workbench必須把待roll-forward與stale protection納入next-action/allocation guard。完成本項後daily_position_rollforward capability可由LIVE blocker移除，但Full rule-based ind_sell_signal actual SELL lifecycle仍維持獨立required-live blocker。",
+      "entry": "`core/position_step.py`, `core/trading_account_state.py`, `core/trading_capabilities.py`, `services/trading/account_state.py`, `services/trading/position_rollforward.py`, `services/trading/daily_workflow.py`, `services/trading/protection_planning.py`, `services/trading/operations_status.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 360
     }
   ],
   "tests": [
@@ -7423,6 +7434,13 @@
       "description": "`validate_trading_prelive_operational_audit_contract_case` 覆蓋completed-daily-bar cutoff/physical trim、known download failure blocking、Research physical cutoff、required-live capability blockers、read-only audit artifacts與Workbench實盤就緒入口。",
       "initial_status": "NEW",
       "order": 481
+    },
+    {
+      "id": "T492",
+      "b_id": "B372",
+      "description": "`validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、source entry frozen params、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、active protection共存與stale fingerprint、no-hidden-recovery/no-market-fill、Workbench explicit action與daily data→rollforward→params→scanner順序；既有operations/pre-live regressions同步鎖住next-action與剩餘ind_sell live blocker。",
+      "initial_status": "NEW",
+      "order": 482
     }
   ],
   "transitions": [
@@ -24673,6 +24691,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_prelive_operational_audit_contract_case`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "B372",
+      "description": "新增Trading completed-daily-bar strategy-position roll-forward、frozen-param trailing管理與stale protection replacement gate。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/position_rollforward.py`, `core/position_step.py`, `services/trading/operations_status.py`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "T492",
+      "description": "新增Trading position-rollforward direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_position_rollforward_contract_case`"
     }
   ]
 }

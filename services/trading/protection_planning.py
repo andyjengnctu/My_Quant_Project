@@ -27,7 +27,7 @@ from core.trading_account_state import (
     POSITION_SOURCE_STRATEGY_FILL,
     validate_trading_account_state,
 )
-from core.trading_order_state import validate_trading_order_state
+from core.trading_order_state import active_trading_protection_orders, validate_trading_order_state
 from core.runtime_utils import get_taipei_now
 from services.trading.account_state import resolve_trading_account_state_path
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
@@ -385,6 +385,8 @@ def get_trading_protection_plan_read_model(
             "status": None,
             "positions": [],
             "position_count": 0,
+            "stale_active_protection_order_ids": [],
+            "stale_active_protection_tickers": [],
             "json_path": project_relative_display_path(json_path, project_root=root),
             "text_path": project_relative_display_path(text_path, project_root=root),
         }
@@ -403,6 +405,21 @@ def get_trading_protection_plan_read_model(
             strategy_sha == str(plan.get("strategy_positions_sha256") or "")
             and source_order_sha == str(plan.get("source_orders_sha256") or "")
         )
+
+    stale_active_order_ids: list[str] = []
+    stale_active_tickers: set[str] = set()
+    if fresh and account_path.is_file() and order_path.is_file():
+        current_position_fps = {
+            str(row.get("ticker") or ""): str(row.get("position_plan_fingerprint") or "")
+            for row in plan.get("positions") or []
+        }
+        for order in active_trading_protection_orders(orders):
+            ticker = str(order.get("ticker") or "")
+            current_fp = current_position_fps.get(ticker)
+            if not current_fp or str(order.get("position_plan_fingerprint") or "") != current_fp:
+                stale_active_order_ids.append(str(order.get("order_id") or ""))
+                if ticker:
+                    stale_active_tickers.add(ticker)
 
     rows = []
     for row in plan.get("positions") or []:
@@ -432,6 +449,8 @@ def get_trading_protection_plan_read_model(
         "position_count": len(rows),
         "positions": rows,
         "manual_positions_skipped": list(plan.get("manual_positions_skipped") or []),
+        "stale_active_protection_order_ids": stale_active_order_ids,
+        "stale_active_protection_tickers": sorted(stale_active_tickers),
         "json_path": project_relative_display_path(json_path, project_root=root),
         "text_path": project_relative_display_path(text_path, project_root=root),
     }

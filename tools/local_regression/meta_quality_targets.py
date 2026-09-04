@@ -17,6 +17,7 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "services/trading/fill_reconciliation.py",
     "services/trading/daily_workflow.py",
     "services/trading/order_planning.py",
+    "services/trading/position_rollforward.py",
     "services/trading/protection_planning.py",
     "services/trading/protection_order_submission.py",
     "services/trading/operations_status.py",

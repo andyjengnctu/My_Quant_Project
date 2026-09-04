@@ -12,6 +12,7 @@ from core.runtime_utils import get_taipei_now
 from core.trading_fill_transaction import TRADING_FILL_TRANSACTION_FILENAME
 from core.trading_order_state import (
     TRADING_ORDER_STATE_FILENAME,
+    active_trading_entry_orders,
     has_active_trading_orders,
     validate_trading_order_state,
 )
@@ -19,6 +20,7 @@ from core.trading_account_state import (
     adopt_manual_trading_position,
     apply_confirmed_sell_fill,
     apply_confirmed_strategy_buy_fill,
+    apply_trading_strategy_management_rollforward,
     build_empty_trading_account_state,
     build_trading_account_read_model,
     correct_manual_trading_position,
@@ -57,7 +59,7 @@ def _read_state_with_sha(path: Path) -> tuple[dict[str, Any], str]:
     return state, source_sha
 
 
-def _read_order_guard_sha(project_root) -> str | None:
+def _read_order_guard_sha(project_root, *, allow_active_protection_orders: bool = False) -> str | None:
     paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
     fill_tx_path = Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
     if fill_tx_path.is_file():
@@ -71,7 +73,10 @@ def _read_order_guard_sha(project_root) -> str | None:
     source_sha = hashlib.sha256(raw).hexdigest()
     state = load_json_strict(order_path)
     validate_trading_order_state(state)
-    if has_active_trading_orders(state):
+    if allow_active_protection_orders:
+        if active_trading_entry_orders(state):
+            raise RuntimeError("Trading 尚有 active ENTRY BUY；完成成交／取消 reconciliation 前禁止推進持股管理狀態")
+    elif has_active_trading_orders(state):
         raise RuntimeError("Trading 尚有 ORDERED pending orders；完成成交／取消 reconciliation 前禁止修改 account state")
     return source_sha
 
@@ -123,8 +128,11 @@ def _mutate_account(
     *,
     expected_revision: int,
     mutator: Callable[[dict[str, Any], str, str], dict[str, Any]],
+    allow_active_protection_orders: bool = False,
 ) -> dict[str, Any]:
-    order_guard_sha = _read_order_guard_sha(project_root)
+    order_guard_sha = _read_order_guard_sha(
+        project_root, allow_active_protection_orders=allow_active_protection_orders
+    )
     path = resolve_trading_account_state_path(project_root)
     state, source_sha = _read_state_with_sha(path)
     current_revision = int(state["revision"])
@@ -301,6 +309,26 @@ def confirm_trading_sell_fill(
     )
 
 
+
+
+def rollforward_trading_strategy_management(
+    project_root,
+    *,
+    updates: dict[str, dict[str, Any]],
+    expected_revision: int,
+):
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        allow_active_protection_orders=True,
+        mutator=lambda state, timestamp, mutation_id: apply_trading_strategy_management_rollforward(
+            state,
+            updates=updates,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+        ),
+    )
+
 def get_trading_account_read_model(project_root) -> dict[str, Any]:
     return build_trading_account_read_model(load_trading_account_state(project_root))
 
@@ -316,5 +344,6 @@ __all__ = [
     "remove_existing_trading_position",
     "confirm_trading_strategy_buy_fill",
     "confirm_trading_sell_fill",
+    "rollforward_trading_strategy_management",
     "get_trading_account_read_model",
 ]

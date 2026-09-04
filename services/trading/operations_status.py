@@ -31,6 +31,7 @@ from services.trading.daily_workflow import (
 from services.trading.fill_reconciliation import resolve_trading_fill_transaction_path
 from services.trading.order_planning import get_trading_proposed_order_plan_read_model
 from services.trading.order_state import get_trading_order_read_model
+from services.trading.position_rollforward import build_trading_position_rollforward_snapshot
 from services.trading.protection_planning import get_trading_protection_plan_read_model
 
 TRADING_OPERATIONS_STATUS_SCHEMA_VERSION = 1
@@ -44,6 +45,8 @@ OPERATIONS_STATUS_IDLE = "IDLE"
 NEXT_RECOVER_FILL = "RECOVER_FILL_TRANSACTION"
 NEXT_INITIALIZE_ACCOUNT = "INITIALIZE_ACCOUNT"
 NEXT_SET_CASH = "SET_CASH"
+NEXT_ROLLFORWARD_POSITIONS = "ROLLFORWARD_POSITIONS"
+NEXT_REPLACE_PROTECTION = "REPLACE_STALE_PROTECTION"
 NEXT_REFRESH_PROTECTION = "REFRESH_PROTECTION_PLAN"
 NEXT_SUBMIT_PROTECTION_STOP = "SUBMIT_PROTECTION_STOP"
 NEXT_RECONCILE_ENTRY = "RECONCILE_ENTRY_ORDER"
@@ -119,8 +122,22 @@ def _empty_protection() -> dict[str, Any]:
         "position_count": 0,
         "positions": [],
         "manual_positions_skipped": [],
+        "stale_active_protection_order_ids": [],
+        "stale_active_protection_tickers": [],
         "json_path": None,
         "text_path": None,
+    }
+
+
+def _empty_position_rollforward() -> dict[str, Any]:
+    return {
+        "schema_version": None,
+        "runtime_domain": RUNTIME_DOMAIN_TRADING,
+        "allowed_completed_date": None,
+        "strategy_position_count": 0,
+        "due_count": 0,
+        "due_tickers": [],
+        "positions": [],
     }
 
 
@@ -132,22 +149,27 @@ def _workflow_action_availability(
     candidate: dict[str, Any],
     active_entry_count: int,
     same_day_entry_locked: bool,
+    rollforward_due_count: int,
+    stale_active_protection_count: int,
 ) -> dict[str, bool]:
     if fill_transaction_pending:
-        return {"data": False, "params": False, "scanner": False, "orders": False, "all": False}
+        return {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}
     latest_data_date = workflow.get("latest_data_date")
     account_ready = bool(account.get("initialized")) and account.get("cash") is not None
     return {
         "data": True,
+        "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0 and active_entry_count == 0),
         "params": bool(latest_data_date),
         "scanner": bool(workflow.get("params_ready_for_scan")),
         "orders": bool(
             account_ready
             and candidate.get("fresh")
             and active_entry_count == 0
+            and rollforward_due_count == 0
+            and stale_active_protection_count == 0
             and not same_day_entry_locked
         ),
-        "all": True,
+        "all": bool(active_entry_count == 0),
     }
 
 
@@ -159,12 +181,14 @@ def derive_trading_operations_status(
     candidate: dict[str, Any],
     proposed: dict[str, Any],
     protection: dict[str, Any],
+    position_rollforward: dict[str, Any] | None = None,
     fill_transaction_pending: bool = False,
     component_errors: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Derive the operational stage from canonical read-model snapshots only."""
 
     errors = {str(k): str(v) for k, v in dict(component_errors or {}).items() if str(v).strip()}
+    position_rollforward = dict(position_rollforward or _empty_position_rollforward())
     positions = [dict(row) for row in list(account.get("positions") or [])]
     strategy_tickers = sorted(
         str(row.get("ticker") or "")
@@ -205,6 +229,9 @@ def derive_trading_operations_status(
     active_entry_count = len(active_entry_rows)
     active_protection_count = len(active_protection_rows)
     protection_fresh = bool(protection.get("exists") and protection.get("fresh"))
+    rollforward_due_tickers = sorted(str(x) for x in list(position_rollforward.get("due_tickers") or []))
+    stale_active_protection_order_ids = [str(x) for x in list(protection.get("stale_active_protection_order_ids") or []) if str(x)]
+    stale_active_protection_tickers = sorted(str(x) for x in list(protection.get("stale_active_protection_tickers") or []))
 
     availability = _workflow_action_availability(
         fill_transaction_pending=bool(fill_transaction_pending),
@@ -213,9 +240,15 @@ def derive_trading_operations_status(
         candidate=candidate,
         active_entry_count=active_entry_count,
         same_day_entry_locked=same_day_entry_locked,
+        rollforward_due_count=len(rollforward_due_tickers),
+        stale_active_protection_count=len(stale_active_protection_order_ids),
     )
     if "workflow" in errors:
         availability = {key: False for key in availability}
+    if "position_rollforward" in errors:
+        availability["rollforward"] = False
+        availability["orders"] = False
+        availability["all"] = False
 
     warnings: list[str] = []
     blockers: list[str] = []
@@ -229,6 +262,8 @@ def derive_trading_operations_status(
         warnings.append("既有 Scanner snapshot 已 STALE")
     if strategy_tickers and protection.get("exists") and not protection_fresh:
         warnings.append("既有保護單計畫已 STALE")
+    if stale_active_protection_order_ids:
+        warnings.append("active broker protection 已與目前 position plan 不一致: " + ",".join(stale_active_protection_tickers))
 
     if fill_transaction_pending:
         blockers.append("存在未完成 fill transaction，必須先完成 recovery")
@@ -252,6 +287,26 @@ def derive_trading_operations_status(
         next_code = NEXT_SET_CASH
         next_label = "設定 Trading 現金"
         next_detail = "Account 已建立但 cash 尚未設定，不能建立實際建議掛單。"
+    elif "position_rollforward" in errors:
+        overall = OPERATIONS_STATUS_BLOCKED
+        next_code = NEXT_ROLLFORWARD_POSITIONS
+        next_label = "修正持股日終推進狀態"
+        next_detail = errors["position_rollforward"]
+    elif rollforward_due_tickers and active_entry_count:
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_RECONCILE_ENTRY
+        next_label = "先確認 BUY 掛單成交或取消"
+        next_detail = f"目前有 {active_entry_count} 筆 active ENTRY BUY；完成 reconciliation 後才能安全推進既有持股。"
+    elif rollforward_due_tickers:
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_ROLLFORWARD_POSITIONS
+        next_label = "持股日終推進"
+        next_detail = "用已完成日K與各 entry order frozen params 更新下一交易日 trailing stop: " + ",".join(rollforward_due_tickers)
+    elif stale_active_protection_order_ids:
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_REPLACE_PROTECTION
+        next_label = "取消／重送已過期保護單"
+        next_detail = "目前 active protection 與最新 position plan 不一致: " + ",".join(stale_active_protection_tickers)
     elif missing_stop_tickers:
         overall = OPERATIONS_STATUS_ACTION_REQUIRED
         if protection_fresh:
@@ -338,6 +393,10 @@ def derive_trading_operations_status(
         "active_stop_tickers": active_stop_tickers,
         "active_tp_tickers": active_tp_tickers,
         "missing_stop_tickers": missing_stop_tickers,
+        "rollforward_due_count": len(rollforward_due_tickers),
+        "rollforward_due_tickers": rollforward_due_tickers,
+        "stale_active_protection_order_ids": stale_active_protection_order_ids,
+        "stale_active_protection_tickers": stale_active_protection_tickers,
         "same_day_entry_locked": same_day_entry_locked,
         "candidate_snapshot_fresh": bool(candidate.get("fresh")),
         "candidate_count": int(candidate.get("candidate_count") or 0),
@@ -355,6 +414,7 @@ def derive_trading_operations_status(
             "candidate": candidate,
             "proposed": proposed,
             "protection": protection,
+            "position_rollforward": position_rollforward,
         },
     }
 
@@ -389,6 +449,7 @@ def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
         orders = _empty_orders()
         proposed = _empty_proposed()
         protection = _empty_protection()
+        position_rollforward = _empty_position_rollforward()
     else:
         try:
             state = load_trading_account_state(root, required=False)
@@ -399,6 +460,12 @@ def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
         except (OSError, TypeError, ValueError, RuntimeError) as exc:
             errors["account"] = f"{type(exc).__name__}: {exc}"
             account = _empty_account()
+
+        try:
+            position_rollforward = build_trading_position_rollforward_snapshot(root)
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            errors["position_rollforward"] = f"{type(exc).__name__}: {exc}"
+            position_rollforward = _empty_position_rollforward()
 
         try:
             orders = get_trading_order_read_model(root)
@@ -425,6 +492,7 @@ def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
         candidate=candidate,
         proposed=proposed,
         protection=protection,
+        position_rollforward=position_rollforward,
         fill_transaction_pending=fill_transaction_pending,
         component_errors=errors,
     )
@@ -440,6 +508,8 @@ __all__ = [
     "NEXT_RECOVER_FILL",
     "NEXT_INITIALIZE_ACCOUNT",
     "NEXT_SET_CASH",
+    "NEXT_ROLLFORWARD_POSITIONS",
+    "NEXT_REPLACE_PROTECTION",
     "NEXT_REFRESH_PROTECTION",
     "NEXT_SUBMIT_PROTECTION_STOP",
     "NEXT_RECONCILE_ENTRY",

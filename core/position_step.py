@@ -145,6 +145,32 @@ def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_field
         _sync_trailing_stop_display_fields(position)
 
 
+def rollforward_position_management_from_completed_bar(
+    position,
+    *,
+    completed_high,
+    completed_atr,
+    params,
+    sync_display_fields=True,
+):
+    """Advance only next-session trailing-stop state from one completed bar.
+
+    This is the live Trading counterpart of the y_high/y_atr management update
+    inside ``execute_bar_step``.  It intentionally does not infer any broker
+    fill, execute Stop/TP, or consume next-session OHLC.
+    """
+    if int(position.get('qty', 0) or 0) <= 0:
+        return position
+    _update_trailing_stop(
+        position,
+        y_high=completed_high,
+        y_atr=completed_atr,
+        params=params,
+        sync_display_fields=sync_display_fields,
+    )
+    return position
+
+
 def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True, sync_display_fields=True):
     pending_action = position.get('pending_exit_action')
     if pending_action is None or position.get('qty', 0) <= 0:
