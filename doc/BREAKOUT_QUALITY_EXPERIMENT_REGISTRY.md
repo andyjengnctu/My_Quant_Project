@@ -532,3 +532,11 @@ Decision：`ENGINEERING_ONLY / SYNTHETIC_FIXTURE_FIDELITY / PRODUCTION_REUSE_CON
 - **Compact boundary**：維持PROJECT_SETTINGS B17；不恢復每個epoch完整loss/validation metrics洗版。REUSE列與fold完成摘要維持既有canonical輸出。
 
 Decision：`ENGINEERING_ONLY / ROLLING_TRAIN_PROGRESS_RESTORED / ROBUSTNESS_PARITY / NO_SCIENTIFIC_CHANGE`。
+
+## 2026-09-04 — Engineering contract: Historical synthetic must follow de-duplicating model membership SSOT
+
+- **Scope**：B358 engineering-only formal regression correction；不新增／修改任何 MR scientific identity、current training model、comparison reference membership、authorization、fitting/PIT/strategy semantics。
+- **Membership SSOT**：`BREAKOUT_QUALITY_MODEL_TEST_PROFILES` 仍只由 `BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES` 與 `BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE` 經 ordered exact de-duplicating merge 產生。Current training pair若已合法存在reference controls，正式結果必須去重，不得強制再新增一列。
+- **Historical regression rule**：歷史MR synthetic只能驗其自身scientific freeze與current membership invariants，不得以 `len(reference)+1` 等固定cardinality假設反向綁住未來current/reference組合。
+
+Decision：`ENGINEERING_ONLY / VALIDATOR_CARDINALITY_ASSUMPTION_REMOVED / PRODUCTION_MEMBERSHIP_UNCHANGED`。

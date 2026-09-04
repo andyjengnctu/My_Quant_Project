@@ -3836,6 +3836,17 @@
       "entry": "`services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `services/breakout_quality/train_continuous_ranker.py`, `core/training_progress.py`",
       "initial_status": "NEW",
       "order": 345
+    },
+    {
+      "id": "B358",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Formal regression / Model membership",
+      "item": "Historical model synthetic follows canonical de-duplicating compare/test membership merge",
+      "gap": "Historical MR regression不得假設current training pair必定不在reference controls，亦不得以len(reference)+1硬編current membership。正式[3]～[6]清單由reference controls與[1]/[2] current training pair做ordered exact de-duplicating merge；validator必須驗canonical merge結果、current必要包含與reference保留，而非固定cardinality。",
+      "entry": "`tools/validate/synthetic_breakout_quality_model_cases.py`, `config/breakout_quality.py`",
+      "initial_status": "NEW",
+      "order": 346
     }
   ],
   "tests": [
@@ -7171,6 +7182,13 @@
       "b_id": "B357",
       "initial_status": "NEW",
       "order": 467
+    },
+    {
+      "id": "T478",
+      "b_id": "B358",
+      "description": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case` 覆蓋B358：historical MR-13AS regression以ordered de-duplicating reference∪current結果驗[3]～[6] membership，不再要求current必使list長度固定+1",
+      "initial_status": "NEW",
+      "order": 468
     }
   ],
   "transitions": [
@@ -24197,6 +24215,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_breakout_quality_continuous_ranker_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B358",
+      "description": "修正MR-13AS歷史synthetic以len(reference)+1硬編current不在reference的舊假設；改驗canonical ordered de-duplicating merge，不改production membership",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`tools/validate/synthetic_breakout_quality_model_cases.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T478",
+      "description": "targeted historical-membership case 6/6 PASS，並將252個synthetic validators分四段全掃為0 FAIL / 0 exception",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`"
     }
   ]
 }

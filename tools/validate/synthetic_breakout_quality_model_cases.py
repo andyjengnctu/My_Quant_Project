@@ -8263,6 +8263,11 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         == "truth_side_supervision_only_no_model_input_no_direction_change"
         and research.model_gate_reference_profile_name == ar_profile.name,
     )
+    expected_current_test_profiles = tuple(
+        dict.fromkeys(
+            (*BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES, BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
+        )
+    )
     check_true(
         "hs_boundary_weighted_historical_identity_does_not_pin_current_membership",
         research.model_research_id == "MR-13AS"
@@ -8271,8 +8276,7 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
             pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
             for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
         )
-        and len(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
-        == len(BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES) + 1,
+        and tuple(BREAKOUT_QUALITY_MODEL_TEST_PROFILES) == expected_current_test_profiles,
     )
     check_true(
         "hs_boundary_weighted_historical_forward_gate_does_not_pin_current_test_membership",

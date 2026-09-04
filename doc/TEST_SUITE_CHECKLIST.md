@@ -376,6 +376,7 @@
 | B355 | P1 | Research / Artifact lifecycle | Forward OOS → Rolling exact fitting-checkpoint bridge consumes fitted-model SSOT | DONE | Forward與Rolling第一個同fitting identity fold必須共用同一checkpoint bytes；橋接不得從evaluation report重猜optimizer settings，而必須讀canonical fitted_model_manifest／immutable legacy fitting evidence。requested_device等routing metadata不得製造假mismatch；Rolling fit stale時不得誤走audit-only refresh，必須回canonical PIT producer refit/resume。 | `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
 | B356 | P1 | Formal regression / Synthetic coverage | Continuous Forward-report reuse synthetic fixture follows fitted-model readiness contract | DONE | 凡synthetic直接呼叫Forward report reuse loader，fixture必須具備正式contract的report_path，並明確提供fitted-model readiness dependency；不得用不完整SimpleNamespace造成suite-level exception，也不得為遷就mock而放寬production reuse驗證。 | `tools/validate/synthetic_meta_cases.py` |
 | B357 | P1 | Model workflow / Console progress | Rolling OOS compact training heartbeat matches robustness progress visibility | DONE | Rolling OOS在compact console進入TRAIN fold時，必須持續顯示canonical fold/elapsed/epoch phase進度（select/refit x/y），資訊層級與Robustness trainer heartbeat一致；不得只停在「訓練並評分」，也不得恢復每epoch完整metric洗版。REUSE與完成摘要維持既有顯示。 | `services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `services/breakout_quality/train_continuous_ranker.py`, `core/training_progress.py` |
+| B358 | P1 | Formal regression / Model membership | Historical model synthetic follows canonical de-duplicating compare/test membership merge | DONE | Historical MR regression不得假設current training pair必定不在reference controls，亦不得以len(reference)+1硬編current membership。正式[3]～[6]清單由reference controls與[1]/[2] current training pair做ordered exact de-duplicating merge；validator必須驗canonical merge結果、current必要包含與reference保留，而非固定cardinality。 | `tools/validate/synthetic_breakout_quality_model_cases.py`, `config/breakout_quality.py` |
 
 
 
@@ -809,6 +810,7 @@
 | T475 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：真實Forward report不含optimizer欄位時仍可由fitted_model_manifest匯入同identity checkpoint至Rolling cache；stale Rolling fit回傳不可REUSE而非audit-only refresh | B355 |
 | T476 | `validate_research_report_contract_freeze_case` 覆蓋B356：Forward report reuse fixture包含report_path並實際走過current fitted-model readiness precondition；缺OOS score仍不得單獨迫使重訓 | B356 |
 | T477 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B357：Rolling compact TRAIN fold透過canonical `render_training_unit_progress` 接收trainer select/refit heartbeat；Robustness與Rolling共用相同phase/epoch進度語意，不恢復verbose metric洗版 | B357 |
+| T478 | `validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case` 覆蓋B358：historical MR-13AS regression以ordered de-duplicating reference∪current結果驗[3]～[6] membership，不再要求current必使list長度固定+1 | B358 |
 
 ## G. 逐項收斂紀錄
 
@@ -2944,6 +2946,8 @@
 | 2026-09-03 | T476 | report-contract targeted regression新增current fitted-model readiness precondition assertion；34/34 PASS | NEW -> DONE | `validate_research_report_contract_freeze_case` |
 | 2026-09-03 | B357 | 恢復Rolling OOS compact TRAIN fold的fold/elapsed/select-refit epoch單行進度；以optional training callback消費canonical trainer heartbeat並重用Robustness progress renderer，不改訓練或reuse語意 | NEW -> DONE | `services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `services/breakout_quality/train_continuous_ranker.py` |
 | 2026-09-03 | T477 | Continuous-ranker contract regression加入Rolling compact trainer heartbeat wiring檢查；targeted contract 53/53 PASS | NEW -> DONE | `validate_breakout_quality_continuous_ranker_contract_case` |
+| 2026-09-04 | B358 | 修正MR-13AS歷史synthetic以len(reference)+1硬編current不在reference的舊假設；改驗canonical ordered de-duplicating merge，不改production membership | NEW -> DONE | `tools/validate/synthetic_breakout_quality_model_cases.py` |
+| 2026-09-04 | T478 | targeted historical-membership case 6/6 PASS，並將252個synthetic validators分四段全掃為0 FAIL / 0 exception | NEW -> DONE | `validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case` |
 
 
 

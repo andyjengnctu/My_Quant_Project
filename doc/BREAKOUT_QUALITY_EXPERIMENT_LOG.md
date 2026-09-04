@@ -11623,6 +11623,16 @@ Decision：`B356_DONE / T476_DONE / FORMAL_SYNTHETIC_FIXTURE_FIXED / B355_PRODUC
 Decision：`B357_DONE / T477_DONE / ROLLING_COMPACT_PROGRESS_PARITY_RESTORED / NO_SCIENTIFIC_CHANGE`。
 
 
+## 2026-09-04 — B358 formal model-membership synthetic cardinality closure
+
+- **User formal evidence**：quick gate / chain / ml smoke PASS；consistency 單一 FAIL，meta-quality 單一 FAIL=`coverage_synthetic_suite_runs_successfully`。
+- **Root cause**：`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case` 的歷史MR-13AS guard要求 `len(BREAKOUT_QUALITY_MODEL_TEST_PROFILES) == len(BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)+1`。目前current training pair=`MR-13BG`已合法存在reference controls，production `_merge_breakout_quality_model_profiles()`正確exact de-duplicate，因此test/reference皆為6列；舊validator把合法去重誤判FAIL。
+- **Fix**：移除固定`+1` cardinality，改以 `reference controls + current training pair` 的ordered exact de-duplicating expected tuple驗證；仍明確要求current pair存在、全部reference保留。Production config與membership list未修改。
+- **Independent checks**：targeted MR-13AS case=`6/6 PASS`；252個synthetic validators分四段獨立執行後合計=`0 FAIL / 0 exception`。GPT未執行`apps/test_suite.py`／`apps/run_bundle.py`。
+
+Decision：`B358_DONE / T478_DONE / HISTORICAL_VALIDATOR_FOLLOWS_MEMBERSHIP_SSOT / NO_PRODUCTION_OR_SCIENTIFIC_CHANGE`。
+
+
 ## 2026-09-04 — MR-13BF Day-Token Global Transformer Model Gate FAIL；使用者授權MR-13BG GRU backbone control
 
 - **MR-13BF Forward**：Safety Daily/Global rho/Pair=`0.3432/0.2988/62.22%`，低於或未穩定優於AO=`0.3532/0.2929/62.68%`；Pred-HS true-LS=`37.30%` vs AO `36.84%`，P45–P55 Pair=`52.35%`，未脫離boundary ceiling。HS-only Conditional-MFE rho/Pair=`0.4007/64.10%`，與AO=`0.3969/63.90%`相近，表示global attention可保留upside ranking但未改善Safety qualification。
