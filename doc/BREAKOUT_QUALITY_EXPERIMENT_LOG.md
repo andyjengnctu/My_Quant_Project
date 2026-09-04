@@ -11694,3 +11694,14 @@ Decision：`MR13BH_CONTROL_FAIL / SAME_BATCH_FP32_RETRY_TRAJECTORY_DISTORTION_CO
 - **BG decision against predeclared gate**：事前要求Rolling同時確認Safety Daily/Global rho/Pair與true-LS優勢、HS-only MFE不崩、drift不惡化。BG在HS-only與Daily/Pair/purity上沒有崩，但**Safety Global與drift兩項明確不通過**，且Pred-HS top-tail economic quality較AO弱。因此Decision=`FORWARD_SIGNAL_NOT_ROLLING_CONFIRMED / ROLLING_MIXED / TUNING_CLOSED / NO_ROBUSTNESS / NO_GRU_SWEEP / NO_STRATEGY / NOT_PROMOTED`。不以single-seed小幅overall gain啟動robustness。
 - **Current workflow boundary**：使用者先前明確要求Training Model維持`MR-13BG`並從compare list移除BH/BI；故current pair仍是BG，scientific reference base仍AO。這只是current workflow holder，不代表BG promotion。下一個模型研究回到BF前已延後的`information content / target uncertainty`問題；具體單一treatment尚未授權，不預占新MR identity。
 
+
+
+## 2026-09-04 — MR-13BJ Parameter-Matched Bidirectional GRU controlled extension
+
+- **Authorization / prior stop rule**：MR-13BG Rolling已依事前Gate判定`ROLLING_MIXED / TUNING_CLOSED / NOT_PROMOTED`，原本不再做GRU topology sweep；使用者其後明確詢問GRU可改善方向並對「parameter-matched Bidirectional GRU」回覆「進行」，因此只覆寫一次bidirectionality hypothesis，不重開一般GRU tuning。
+- **Controlled treatment**：MR-13BG的raw `300×10`、1 recurrent layer、FP32 recurrent＋heads numerical execution、Safety full-universe head、true-HS P50 Conditional-MFE head、1:1 dual-head pairwise loss、Seed42、split、Adam、gradient clip、date-coherent batch membership/order、epoch-selection與inference全部固定。唯一改變為`1-layer hidden391 unidirectional final state`→`1-layer BiGRU hidden274 per direction + final forward/backward states concat`。
+- **Capacity / PIT legality**：feature_count=10 trainable params=`472,380`，AO=`473,734`（`-0.286%`）、BG=`474,287`（`-0.402%`）；不加projection layer以免混入第二treatment。Backward direction只反向閱讀同一個decision-time前已知300-bar window，沒有任何post-decision observation，因此PIT合法。
+- **Identity / workflow**：新identity=`MR-13BJ / ARCH-gru_shared_safety_mfe_v4 / daily_universal_bigru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`。Current Training Model切到BJ；shared compare/test list由explicit H/AH/AK/AO/BG references + current injection自動成為`H / AH / AK / AO / BG / BJ`，BH/BI仍historical-only且不回到active membership。Primary Model Gate reference=BG。
+- **Predeclared Gate**：先只跑Seed42 Forward。必須看到Safety Daily/Global rho、Pair與Pred-HS purity的material joint improvement，且HS-only Conditional-MFE與Pred-HS top-tail HM/HS/MFE不退化；overall rho或單一slice小幅領先不足以進Rolling。若FAIL，不再做BiGRU hidden、layers、directionality、precision、LR或long-window sweep，回information content / target uncertainty。
+
+Decision：`MR13BJ_IMPLEMENTED / USER_AUTHORIZED_SINGLE_BIDIRECTIONAL_OVERRIDE / PARAMETER_MATCHED / PIT_LEGAL / FORWARD_GATE_FIRST / NO_GRU_SWEEP_IF_FAIL`。

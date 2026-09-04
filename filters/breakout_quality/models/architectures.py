@@ -43,6 +43,7 @@ DAY_TOKEN_TRANSFORMER_SHARED_SAFETY_MFE_V1 = "day_token_transformer_shared_safet
 GRU_SHARED_SAFETY_MFE_V1 = "gru_shared_safety_mfe_v1"
 GRU_SHARED_SAFETY_MFE_V2 = "gru_shared_safety_mfe_v2"
 GRU_SHARED_SAFETY_MFE_V3 = "gru_shared_safety_mfe_v3"
+GRU_SHARED_SAFETY_MFE_V4 = "gru_shared_safety_mfe_v4"
 PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1 = "patch_transformer_safety_inception_mfe_v1"
 INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1 = "inception_time_safety_raw_mfe_hmhs_v1"
 INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1 = "inception_time_safety_raw_mfe_hmhs_mlp_v1"
@@ -134,6 +135,7 @@ _ARCHITECTURE_DESCRIPTORS = (
     _descriptor(GRU_SHARED_SAFETY_MFE_V1, active=False, spec_builder="gru_shared_safety_mfe", runtime_builder="gru_shared_safety_mfe", capabilities=("shared_safety_mfe", "gated_recurrent_state", "compute_infeasible_pre_result"), gru_hidden_size=176, gru_layers=3),
     _descriptor(GRU_SHARED_SAFETY_MFE_V2, active=True, active_order=25, spec_builder="gru_shared_safety_mfe", runtime_builder="gru_shared_safety_mfe", capabilities=("shared_safety_mfe", "gated_recurrent_state"), gru_hidden_size=391, gru_layers=1),
     _descriptor(GRU_SHARED_SAFETY_MFE_V3, active=True, active_order=26, spec_builder="gru_shared_safety_mfe", runtime_builder="gru_shared_safety_mfe", capabilities=("shared_safety_mfe", "gated_recurrent_state", "recurrent_outer_autocast", "same_batch_fp32_nonfinite_retry"), gru_hidden_size=391, gru_layers=1),
+    _descriptor(GRU_SHARED_SAFETY_MFE_V4, active=True, active_order=27, spec_builder="gru_shared_safety_mfe", runtime_builder="gru_shared_safety_mfe", capabilities=("shared_safety_mfe", "gated_recurrent_state", "bidirectional_recurrent_state"), gru_hidden_size=274, gru_layers=1, gru_bidirectional=True),
     _descriptor(PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1, active=True, active_order=19, spec_builder="hybrid_safety_patch_mfe_inception", runtime_builder="hybrid_safety_patch_mfe_inception", capabilities=("independent_safety_patch_mfe_inception",), family="patch_transformer_safety_inception_mfe", pooling=("safety_patch_token_global_average", "mfe_inception_global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level", "raw_level_temporal_nonoverlap_patches"), head_width=None),
     _descriptor(INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1, active=True, active_order=8, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("safety_raw_mfe_hmhs",), family="inception_time_safety_raw_mfe_hmhs", pooling=("global_average", "raw_safety_head", "safety_conditioned_raw_mfe_head", "direct_hmhs_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
     _descriptor(INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1, active=True, active_order=9, spec_builder="inception_hmhs_mlp", runtime_builder="inception_time", capabilities=("safety_raw_mfe_hmhs", "nonlinear_hmhs_head")),

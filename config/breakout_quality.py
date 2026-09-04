@@ -223,6 +223,7 @@ from config.breakout_quality_runtime import (
 # - MR-13BE AO objective + 600-bar × wide-capacity factorial interaction: "daily_universal_shared_safety_hs_conditional_mfe_600bar_wide_full_list_ndcg_pairwise"
 # - MR-13BF AO objective + parameter-matched full-resolution day-token Transformer: "daily_universal_day_token_transformer_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13BG AO objective + parameter-matched gated recurrent GRU backbone: "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+# - MR-13BJ BG controlled extension + parameter-matched bidirectional GRU: "daily_universal_bigru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
@@ -235,8 +236,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13BG",
-    "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13BJ",
+    "daily_universal_bigru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -498,6 +499,8 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     # AO is the stable scientific reference; the active Training Model is injected separately.
     # Therefore current [3]~[6] membership is H/AH/AK/AO + current without a second manual list.
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    # BG remains the direct recurrent reference while BJ is the current BiGRU treatment.
+    ("MR-13BG", "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
 )
 
 
@@ -872,6 +875,9 @@ DAILY_UNIVERSAL_DAY_TOKEN_TRANSFORMER_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST
 )
 DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_BIGRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_bigru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_gru_bf16_guarded_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
@@ -1955,6 +1961,18 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="gru_shared_safety_mfe_v2",
+    ),
+    DAILY_UNIVERSAL_BIGRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_BIGRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="gru_shared_safety_mfe_v4",
     ),
     DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3375,6 +3393,36 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
+    DAILY_UNIVERSAL_BIGRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_BIGRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BJ",
+        experiment_name="MR-13BJ Parameter-Matched Bidirectional GRU Recurrent-State Control",
+        phase="13BJ",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "User-authorized controlled GRU-family extension after MR-13BG Rolling remained mixed. "
+            "This explicitly overrides the prior BG tuning-closed stop rule for one bidirectionality test only. "
+            "MR-13BG raw 300x10 input, 1-layer recurrent depth, FP32 recurrent/head numerical policy, target/loss/true-HS scope, independent linear Safety/MFE heads, Seed42/split/Adam/gradient clip/date-coherent batch semantics/epoch selection/inference remain fixed. "
+            "The only primary treatment is recurrent directionality/readout: unidirectional hidden391 final state is replaced by a 1-layer bidirectional GRU with hidden274 per direction and concatenated final forward/backward states. "
+            "Feature_count=10 trainable params are 472,380 versus AO 473,734 (-0.286%) and BG 474,287 (-0.402%), preserving matched capacity without adding a projection layer. "
+            "Because both directions consume only the same 300 decision-time bars, no post-decision data or look-ahead is introduced. "
+            "Primary Forward gate requires material Safety Daily/Global rho, Pair and Pred-HS purity improvement over BG/AO while preserving or improving HS-only Conditional-MFE and top-tail HM/HS/MFE; otherwise close pure GRU topology extensions without hidden/layer/bidirectional sweep."
+        ),
+        metric_scope="parameter_matched_bidirectional_gated_recurrent_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_bigru_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
     DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         model_research_id="MR-13BH",
@@ -4780,6 +4828,7 @@ __all__ = [
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_DAY_TOKEN_TRANSFORMER_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_BIGRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT',

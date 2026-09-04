@@ -20,10 +20,12 @@ def build_gru_shared_safety_mfe(
     pooling = str(spec.gru_pooling or "").strip().lower()
     if hidden_size < 1 or num_layers < 1:
         raise ValueError("GRU hidden size/layers 必須 >= 1")
-    if bidirectional:
-        raise ValueError("MR-13BG GRU control 固定為單向 recurrent state")
-    if pooling != "final_state":
-        raise ValueError(f"不支援的 GRU pooling: {pooling!r}")
+    expected_pooling = "final_state_concat" if bidirectional else "final_state"
+    if pooling != expected_pooling:
+        raise ValueError(
+            f"GRU pooling 與方向性不一致: bidirectional={bidirectional}, "
+            f"pooling={pooling!r}, expected={expected_pooling!r}"
+        )
 
     from filters.breakout_quality.models.architectures import get_architecture_descriptor
 
@@ -42,24 +44,32 @@ def build_gru_shared_safety_mfe(
                 num_layers=num_layers,
                 batch_first=True,
                 dropout=0.0,
-                bidirectional=False,
+                bidirectional=bidirectional,
             )
-            self.raw_safety_classifier = nn.Linear(hidden_size, 2)
-            self.raw_mfe_classifier = nn.Linear(hidden_size, 2)
+            latent_width = hidden_size * (2 if bidirectional else 1)
+            self.raw_safety_classifier = nn.Linear(latent_width, 2)
+            self.raw_mfe_classifier = nn.Linear(latent_width, 2)
             self.same_batch_fp32_nonfinite_retry = bool(guarded_retry)
             self.recurrent_outer_autocast = bool(use_outer_autocast)
+
+        def _final_latent(self, hidden):
+            if not bidirectional:
+                return hidden[-1]
+            # PyTorch orders hidden as [layer0-forward, layer0-backward, ...].
+            # The last layer therefore occupies the final two rows.
+            return torch.cat((hidden[-2], hidden[-1]), dim=1)
 
         def _encode_native(self, x):
             if x.ndim != 3:
                 raise ValueError(f"GRU input 必須是 [batch,time,feature]，收到 shape={tuple(x.shape)}")
             _outputs, hidden = self.gru(x)
-            return hidden[-1]
+            return self._final_latent(hidden)
 
         def _encode_fp32(self, x):
             if x.ndim != 3:
                 raise ValueError(f"GRU input 必須是 [batch,time,feature]，收到 shape={tuple(x.shape)}")
             _outputs, hidden = self.gru(x.float())
-            return hidden[-1]
+            return self._final_latent(hidden)
 
         def encode(self, x):
             if self.recurrent_outer_autocast:

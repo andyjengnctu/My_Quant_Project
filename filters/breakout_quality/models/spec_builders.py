@@ -243,16 +243,22 @@ def build_gru_shared_safety_mfe_spec(architecture: str) -> BreakoutQualityModelS
     options = get_architecture_descriptor(architecture).spec_options_dict()
     hidden_size = int(options.get("gru_hidden_size", 0))
     num_layers = int(options.get("gru_layers", 0))
+    bidirectional = bool(options.get("gru_bidirectional", False))
     if hidden_size < 1 or num_layers < 1:
         raise ValueError("GRU descriptor 必須宣告正的 hidden_size/layers")
+    pooling_name = (
+        "bidirectional_final_recurrent_state_concat"
+        if bidirectional
+        else "final_recurrent_state"
+    )
     return BreakoutQualityModelSpec(
         architecture=architecture,
         family="gru_shared_safety_mfe",
-        channels=hidden_size,
+        channels=hidden_size * (2 if bidirectional else 1),
         kernel_size=1,
         dilations=(),
         convolutions_per_block=1,
-        pooling=("final_recurrent_state", "raw_safety_head", "raw_mfe_head"),
+        pooling=(pooling_name, "raw_safety_head", "raw_mfe_head"),
         dropout=0.0,
         receptive_field_bars=300,
         input_window_bars=300,
@@ -262,8 +268,8 @@ def build_gru_shared_safety_mfe_spec(architecture: str) -> BreakoutQualityModelS
         sequence_input_paths=("raw_level_recurrent_sequence",),
         gru_hidden_size=hidden_size,
         gru_layers=num_layers,
-        gru_bidirectional=False,
-        gru_pooling="final_state",
+        gru_bidirectional=bidirectional,
+        gru_pooling=("final_state_concat" if bidirectional else "final_state"),
     )
 
 

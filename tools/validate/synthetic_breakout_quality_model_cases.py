@@ -3418,18 +3418,63 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         for architecture in recurrent_architectures
         if not get_architecture_descriptor(architecture).has_capability("recurrent_outer_autocast")
     ]
+    recurrent_fp32_unidirectional = [
+        architecture
+        for architecture in recurrent_fp32_architectures
+        if not bool(get_model_spec(architecture).gru_bidirectional)
+    ]
+    recurrent_fp32_bidirectional = [
+        architecture
+        for architecture in recurrent_fp32_architectures
+        if bool(get_model_spec(architecture).gru_bidirectional)
+    ]
     recurrent_guarded_architectures = [
         architecture
         for architecture in recurrent_architectures
         if get_architecture_descriptor(architecture).has_capability("same_batch_fp32_nonfinite_retry")
     ]
     check_true(
-        "active_gated_recurrent_backbones_have_one_fp32_reference_and_one_guarded_bf16_control",
-        len(recurrent_fp32_architectures) == 1 and len(recurrent_guarded_architectures) == 1,
+        "active_gated_recurrent_backbones_expose_fp32_directionality_controls_and_guarded_bf16_control",
+        bool(recurrent_fp32_unidirectional)
+        and bool(recurrent_fp32_bidirectional)
+        and len(recurrent_guarded_architectures) == 1,
     )
-    if recurrent_fp32_architectures and recurrent_guarded_architectures:
+    if recurrent_fp32_bidirectional:
+        bidirectional_x = torch.randn((3, 300, 10), dtype=torch.float32)
+        bidirectional_contracts = []
+        for architecture in recurrent_fp32_bidirectional:
+            bidirectional_spec = get_model_spec(architecture)
+            bidirectional_model = build_active_model(10, 0, architecture=architecture)
+            with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+                bi_safety, bi_mfe = bidirectional_model.forward_safety_mfe_heads(
+                    bidirectional_x, None
+                )
+            bidirectional_contracts.append(
+                bool(bidirectional_spec.gru_bidirectional)
+                and bidirectional_spec.gru_pooling == "final_state_concat"
+                and "bidirectional_final_recurrent_state_concat" in bidirectional_spec.pooling
+                and int(bidirectional_spec.channels)
+                == 2 * int(bidirectional_spec.gru_hidden_size or 0)
+                and bool(getattr(bidirectional_model.gru, "bidirectional", False))
+                and int(bidirectional_model.raw_safety_classifier.in_features)
+                == int(bidirectional_spec.channels)
+                and int(bidirectional_model.raw_mfe_classifier.in_features)
+                == int(bidirectional_spec.channels)
+                and bi_safety.shape == (3, 2)
+                and bi_mfe.shape == (3, 2)
+                and bi_safety.dtype == torch.float32
+                and bi_mfe.dtype == torch.float32
+                and bool(torch.isfinite(bi_safety).all().item())
+                and bool(torch.isfinite(bi_mfe).all().item())
+            )
+        check_true(
+            "bidirectional_gru_uses_concat_final_states_with_fp32_recurrent_execution",
+            all(bidirectional_contracts),
+        )
+
+    if recurrent_fp32_unidirectional and recurrent_guarded_architectures:
         recurrent_x = torch.randn((3, 300, 10), dtype=torch.float32)
-        fp32_model = build_active_model(10, 0, architecture=recurrent_fp32_architectures[0])
+        fp32_model = build_active_model(10, 0, architecture=recurrent_fp32_unidirectional[0])
         guarded_model = build_active_model(10, 0, architecture=recurrent_guarded_architectures[0])
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
             fp32_safety, fp32_mfe = fp32_model.forward_safety_mfe_heads(recurrent_x, None)
