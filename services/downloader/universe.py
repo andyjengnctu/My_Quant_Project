@@ -4,6 +4,10 @@ from datetime import timedelta
 from io import StringIO
 
 from core.console_report import project_relative_display_path
+from core.trading_market_clock import (
+    latest_allowed_completed_daily_date,
+    select_latest_completed_daily_date,
+)
 from services.downloader import runtime as rt
 
 
@@ -15,9 +19,10 @@ def get_market_last_date():
         df = loader.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start)
         if df is not None and not df.empty:
             df.columns = [c.lower() for c in df.columns]
-            actual_date = str(df['date'].max()).split(' ')[0]
-            print(f"📅 台股最新交易日 (FinMind) 為: {actual_date}")
-            return actual_date
+            actual_date = select_latest_completed_daily_date(df['date'].tolist(), now=rt.get_taipei_now())
+            if actual_date:
+                print(f"📅 台股最新完整交易日 (FinMind) 為: {actual_date}")
+                return actual_date
     except rt.EXPECTED_MARKET_DATE_EXCEPTIONS as e:
         rt.append_downloader_issues("最新交易日(FinMind)失敗", [f"{type(e).__name__}: {e}"])
         print(f"注意：FinMind 日期獲取異常: {type(e).__name__}: {e}")
@@ -28,17 +33,15 @@ def get_market_last_date():
         ticker = yf.Ticker("0050.TW")
         hist = ticker.history(period="5d")
         if not hist.empty:
-            actual_date = hist.index[-1].strftime("%Y-%m-%d")
-            print(f"📅 台股最新交易日 (YF備援) 為: {actual_date}")
-            return actual_date
+            actual_date = select_latest_completed_daily_date(hist.index.tolist(), now=rt.get_taipei_now())
+            if actual_date:
+                print(f"📅 台股最新完整交易日 (YF備援) 為: {actual_date}")
+                return actual_date
     except rt.EXPECTED_MARKET_DATE_EXCEPTIONS as e:
         rt.append_downloader_issues("最新交易日(YF備援)失敗", [f"{type(e).__name__}: {e}"])
         print(f"注意：YFinance 備援失敗: {type(e).__name__}: {e}")
 
-    fallback_date = rt.get_taipei_now()
-    if fallback_date.hour < 14:
-        fallback_date -= timedelta(days=1)
-
+    fallback_date = pd.Timestamp(latest_allowed_completed_daily_date(now=rt.get_taipei_now())).to_pydatetime()
     while fallback_date.weekday() >= 5:
         fallback_date -= timedelta(days=1)
 

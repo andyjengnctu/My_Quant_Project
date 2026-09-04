@@ -17,6 +17,7 @@ from services.trading.daily_workflow import (
 from services.trading.strategy_param_training import run_trading_strategy_param_training
 from services.trading.order_planning import build_trading_proposed_order_plan
 from services.trading.operations_status import build_trading_operations_status
+from services.trading.operational_audit import run_trading_operational_audit
 from services.trading.protection_planning import (
     build_trading_protection_plan,
     get_trading_protection_plan_read_model,
@@ -165,10 +166,15 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_status_var = tk.StringVar(value="讀取 Trading 整體狀態...")
         self._operations_next_var = tk.StringVar(value="下一步：-")
         self._operations_detail_var = tk.StringVar(value="-")
+        self._live_audit_var = tk.StringVar(value="實盤就緒：LIVE_BLOCKED｜尚未執行實盤就緒檢查")
         ttk.Label(operations_box, textvariable=self._operations_status_var, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
         ttk.Label(operations_box, textvariable=self._operations_next_var, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=0, sticky="w", pady=(4, 0))
         ttk.Label(operations_box, textvariable=self._operations_detail_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=2, column=0, sticky="w", pady=(4, 0))
-        ttk.Button(operations_box, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).grid(row=0, column=1, rowspan=3, padx=(12, 0))
+        ttk.Label(operations_box, textvariable=self._live_audit_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=3, column=0, sticky="w", pady=(4, 0))
+        operations_buttons = ttk.Frame(operations_box, style=WORKBENCH_FRAME_STYLE)
+        operations_buttons.grid(row=0, column=1, rowspan=4, padx=(12, 0), sticky="n")
+        ttk.Button(operations_buttons, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).pack(fill="x")
+        ttk.Button(operations_buttons, text="實盤就緒檢查", command=self._run_operational_audit, style=WORKBENCH_BUTTON_STYLE).pack(fill="x", pady=(6, 0))
 
         workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -675,6 +681,29 @@ class TradingAccountPanel(ttk.Frame):
             details.append("注意: " + "；".join(warnings[:3]))
         self._operations_detail_var.set(" | ".join(details))
         self._apply_workflow_action_availability()
+
+    def _run_operational_audit(self):
+        try:
+            audit = run_trading_operational_audit(WORKBENCH_PROJECT_ROOT)
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            self._live_audit_var.set(f"實盤就緒：LIVE_BLOCKED｜Audit 失敗：{exc}")
+            messagebox.showerror("Trading 實盤就緒檢查失敗", str(exc), parent=self)
+            return
+        blockers = list(audit.get("blockers") or [])
+        warnings = list(audit.get("warnings") or [])
+        report_path = audit.get("markdown_path") or "-"
+        if blockers:
+            summary = "；".join(blockers[:2])
+            self._live_audit_var.set(f"實盤就緒：{audit.get('status')}｜{summary}")
+            messagebox.showwarning(
+                "Trading 尚不可實盤",
+                f"{summary}\n\n完整報告：{report_path}",
+                parent=self,
+            )
+        else:
+            suffix = f"｜警告 {len(warnings)} 項" if warnings else ""
+            self._live_audit_var.set(f"實盤就緒：{audit.get('status')}{suffix}｜{report_path}")
+            messagebox.showinfo("Trading 實盤就緒檢查", f"{audit.get('status')}\n\n報告：{report_path}", parent=self)
 
     def _refresh_all_trading_state(self):
         recovery_error = None

@@ -1643,3 +1643,131 @@ __all__ = [
     "validate_trading_operations_status_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]
+
+
+def validate_trading_prelive_operational_audit_contract_case(_base_params):
+    case_id = "TRADING_PRELIVE_OPERATIONAL_AUDIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from core.trading_capabilities import build_trading_capability_snapshot
+    from core.trading_market_clock import (
+        assert_completed_daily_information_date,
+        latest_allowed_completed_daily_date,
+        select_latest_completed_daily_date,
+    )
+    from services.downloader import application as downloader_application
+    from services.downloader import runtime as downloader_runtime
+    from services.downloader import sync as downloader_sync
+    from services.downloader import universe as downloader_universe
+    from services.trading.operational_audit import (
+        TRADING_OPERATIONAL_AUDIT_STATUS_LIVE_BLOCKED,
+        build_trading_operational_audit,
+        run_trading_operational_audit,
+    )
+
+    tz = ZoneInfo("Asia/Taipei")
+    morning = datetime(2026, 9, 5, 10, 0, tzinfo=tz)
+    after_close = datetime(2026, 9, 5, 14, 30, tzinfo=tz)
+    add_check(results, "trading_prelive", case_id, "morning_completed_daily_cutoff_excludes_today", "2026-09-04", latest_allowed_completed_daily_date(now=morning))
+    add_check(results, "trading_prelive", case_id, "after_close_completed_daily_cutoff_allows_today", "2026-09-05", latest_allowed_completed_daily_date(now=after_close))
+    add_check(results, "trading_prelive", case_id, "provider_provisional_today_row_is_ignored_before_cutoff", "2026-09-04", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=morning))
+    add_check(results, "trading_prelive", case_id, "provider_today_row_is_eligible_after_cutoff", "2026-09-05", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=after_close))
+    try:
+        assert_completed_daily_information_date("2026-09-05", now=morning)
+    except RuntimeError:
+        provisional_rejected = True
+    else:
+        provisional_rejected = False
+    add_check(results, "trading_prelive", case_id, "intraday_today_information_date_is_rejected", True, provisional_rejected)
+
+    class _FakeLoader:
+        def get_data(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "date": ["2026-09-04", "2026-09-05"],
+                    "open": [100.0, 101.0],
+                    "max": [102.0, 103.0],
+                    "min": [99.0, 100.0],
+                    "close": [101.0, 102.0],
+                    "Trading_volume": [1000, 2000],
+                }
+            )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        data_dir = temp_root / "data" / "trading" / "tw_stock_data_vip"
+        output_dir = temp_root / "outputs" / "trading" / "smart_downloader"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with (
+            patch.object(downloader_runtime, "SAVE_DIR", str(data_dir)),
+            patch.object(downloader_runtime, "OUTPUT_DIR", str(output_dir)),
+            patch.object(downloader_runtime, "get_finmind_loader", return_value=_FakeLoader()),
+            patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0),
+        ):
+            sync_summary = downloader_sync.smart_download_vip_data(["2330"], "2026-09-04", verbose=False)
+        saved = pd.read_csv(data_dir / "2330.csv")
+        saved_dates = pd.to_datetime(saved["Date"]).dt.strftime("%Y-%m-%d").tolist()
+        add_check(results, "trading_prelive", case_id, "downloader_physically_seals_rows_to_confirmed_market_date", ["2026-09-04"], saved_dates)
+        add_check(results, "trading_prelive", case_id, "downloader_reports_trimmed_future_rows", 1, int(sync_summary.get("trimmed_future_row_count") or 0))
+
+    with (
+        patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"),
+        patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2317"]),
+        patch.object(downloader_application, "smart_download_vip_data", return_value={
+            "count_success": 1,
+            "count_skipped_latest": 0,
+            "last_date_check_error_count": 0,
+            "download_error_count": 1,
+            "trimmed_future_row_count": 0,
+            "issue_log_path": None,
+        }),
+        patch.object(downloader_runtime, "get_taipei_now", return_value=after_close),
+    ):
+        try:
+            downloader_application.run_trading_dataset_update()
+        except RuntimeError:
+            incomplete_download_rejected = True
+        else:
+            incomplete_download_rejected = False
+    add_check(results, "trading_prelive", case_id, "trading_update_rejects_known_ticker_download_failure", True, incomplete_download_rejected)
+
+    with patch.object(downloader_runtime, "get_taipei_now", return_value=morning), patch.object(downloader_runtime, "get_finmind_loader", return_value=_FakeLoader()):
+        safe_market_date = downloader_universe.get_market_last_date()
+    add_check(results, "trading_prelive", case_id, "market_date_resolver_ignores_provisional_today_row", "2026-09-04", safe_market_date)
+
+    capability = build_trading_capability_snapshot()
+    blockers = set(capability.get("live_blocking_capabilities") or [])
+    add_check(results, "trading_prelive", case_id, "daily_position_rollforward_is_explicit_live_blocker", True, "daily_position_rollforward" in blockers)
+    add_check(results, "trading_prelive", case_id, "indicator_sell_execution_is_explicit_live_blocker", True, "indicator_sell_execution" in blockers)
+    add_check(results, "trading_prelive", case_id, "completed_daily_bar_seal_is_implemented", True, bool((capability["capabilities"]["completed_daily_bar_seal"]["implemented"])))
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        reduced = root / "data" / "tw_stock_data_vip_reduced"
+        reduced.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "Date": ["2026-03-02", "2026-03-03"],
+                "Open": [1, 1], "High": [1, 1], "Low": [1, 1], "Close": [1, 1], "Volume": [1, 1],
+            }
+        ).to_csv(reduced / "2330.csv", index=False)
+        audit = build_trading_operational_audit(root)
+        add_check(results, "trading_prelive", case_id, "research_cutoff_breach_blocks_live_readiness", TRADING_OPERATIONAL_AUDIT_STATUS_LIVE_BLOCKED, audit["status"])
+        add_check(results, "trading_prelive", case_id, "research_cutoff_breach_is_reported", True, any("Research reduced dataset 超過 cutoff" in item for item in audit["blockers"]))
+        report = run_trading_operational_audit(root)
+        add_check(results, "trading_prelive", case_id, "operational_audit_writes_human_readable_report", True, (root / report["markdown_path"]).is_file())
+        add_check(results, "trading_prelive", case_id, "operational_audit_writes_machine_readable_report", True, (root / report["json_path"]).is_file())
+
+    project_root = Path(__file__).resolve().parents[2]
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
+    add_check(results, "trading_prelive", case_id, "workbench_exposes_explicit_prelive_audit_action", True, "實盤就緒檢查" in panel_source)
+    add_check(results, "trading_prelive", case_id, "operational_audit_does_not_mutate_trading_state", False, any(token in audit_source for token in ("confirm_trading_", "mutate_trading_", "set_trading_cash_balance(")))
+
+    summary["checks"] = len(results)
+    return results, summary

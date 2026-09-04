@@ -3979,6 +3979,17 @@
       "entry": "`services/trading/operations_status.py`, `services/trading/daily_workflow.py`, `services/trading/order_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 358
+    },
+    {
+      "id": "B371",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Trading pre-live operational safety",
+      "item": "Pre-live audit seals completed daily bars and blocks live readiness when required position-management capabilities are missing",
+      "gap": "Trading downloader不得把資料來源尚未完成的當日日K寫入daily dataset：Asia/Taipei 14:00前今天一律視為provisional，provider回傳晚於latest allowed completed information date的rows必須在落盤前物理裁除；任何已知ticker download failure都不得回報Trading update READY。實盤前read-only operational audit必須驗證Research full/reduced實體資料未超過2026-03-02 cutoff、Trading latest date不超過completed-bar seal、既有Operations Status與required-live implementation capabilities，並輸出machine/human reports；audit本身不得修改account/order/fill state。只要daily strategy-position roll-forward/trailing-stop或Full rule-based ind_sell_signal actual SELL lifecycle尚未實作，系統與Workbench就必須明確維持LIVE_BLOCKED，不得因Data→Params→Scanner→Order/Fill生命週期其餘部分已存在而宣稱live-ready。",
+      "entry": "`core/trading_market_clock.py`, `core/trading_capabilities.py`, `services/downloader/universe.py`, `services/downloader/sync.py`, `services/downloader/application.py`, `services/trading/operational_audit.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 359
     }
   ],
   "tests": [
@@ -7405,6 +7416,13 @@
       "description": "`validate_trading_operations_status_contract_case` 覆蓋fill-recovery優先序、account/cash setup、active-Stop缺口、ENTRY BUY reconciliation、Data/Params/Scanner/Proposed階段、D4同日lock、long-lived protection SELL不阻擋隔日allocation、manual-adopted隔離、read-only ownership與Workbench總覽/按鈕控制。",
       "initial_status": "NEW",
       "order": 480
+    },
+    {
+      "id": "T491",
+      "b_id": "B371",
+      "description": "`validate_trading_prelive_operational_audit_contract_case` 覆蓋completed-daily-bar cutoff/physical trim、known download failure blocking、Research physical cutoff、required-live capability blockers、read-only audit artifacts與Workbench實盤就緒入口。",
+      "initial_status": "NEW",
+      "order": 481
     }
   ],
   "transitions": [
@@ -24639,6 +24657,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_operations_status_contract_case`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "B371",
+      "description": "新增Trading completed-daily-bar seal與pre-live operational audit gate，明確暴露尚未實作的live capabilities。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/trading_market_clock.py`, `core/trading_capabilities.py`, `services/trading/operational_audit.py`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "T491",
+      "description": "新增pre-live operational safety direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_prelive_operational_audit_contract_case`"
     }
   ]
 }

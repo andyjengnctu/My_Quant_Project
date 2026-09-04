@@ -19,6 +19,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
     last_date_check_errors = []
     count_success = 0
     count_skipped_latest = 0
+    trimmed_future_row_count = 0
 
     for i, sid in enumerate(tickers, 1):
         file_path = rt.os.path.join(rt.SAVE_DIR, f"{sid}.csv")
@@ -63,6 +64,14 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
             df.set_index('Date', inplace=True)
             df = df.sort_index()
 
+            target_date = pd.Timestamp(market_last_date).normalize()
+            future_mask = df.index.normalize() > target_date
+            trimmed_future_row_count += int(future_mask.sum())
+            if bool(future_mask.any()):
+                df = df.loc[~future_mask].copy()
+            if df.empty:
+                raise ValueError(f"FinMind 在完整交易日 {market_last_date} 以前沒有可用資料")
+
             required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
             missing_cols = [c for c in required_cols if c not in df.columns]
             if missing_cols:
@@ -103,5 +112,6 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
         "count_skipped_latest": count_skipped_latest,
         "last_date_check_error_count": len(last_date_check_errors),
         "download_error_count": len(download_errors),
+        "trimmed_future_row_count": int(trimmed_future_row_count),
         "issue_log_path": issue_log_path,
     }
