@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
 )
 from config.breakout_quality import PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID

@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 
 # Stable execution-capability identities live with the runtime policies that consume them.
-# ``config.breakout_quality`` re-exports these names for backward compatibility and uses
+# ``config.breakout_quality`` imports these names when declaring scientific profiles and uses
 # them when declaring scientific profiles; there must not be a reverse runtime->config edge.
 PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
     "daily_predicted_upside_conditional_low_adverse_v1"

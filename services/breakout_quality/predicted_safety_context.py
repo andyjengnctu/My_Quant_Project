@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
 )
 from filters.breakout_quality.predicted_context_artifact import (

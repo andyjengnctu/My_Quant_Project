@@ -50,8 +50,8 @@ from config.breakout_quality import (
     get_breakout_quality_rolling_timing_settings,
     get_breakout_quality_workflow_settings,
 )
-from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-from config.breakout_quality_runtime import get_continuous_ranker_score_output_columns
+from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
 from core.display_common import FixedProgressBlock, render_elapsed
 from core.file_integrity import load_json_object_or_none
 from core.training_progress import (

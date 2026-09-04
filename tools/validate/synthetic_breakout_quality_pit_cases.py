@@ -383,7 +383,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "raw_safety": "raw_safety_score",
         "raw_mfe": "raw_mfe_score",
     }
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         get_continuous_ranker_persisted_score_columns,
         get_continuous_ranker_score_output_columns,
         get_continuous_ranker_training_policy,

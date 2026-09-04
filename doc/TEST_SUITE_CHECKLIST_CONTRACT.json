@@ -3192,7 +3192,7 @@
       "category": "MR-13AG PIT-safe MFE-Winner-Safety-Weighted Pure-MFE directional anti-shortcut contract",
       "item": "MR-13AG必須重用MR-13M/Seed42 canonical predicted-Safety PIT context，但Safety不得作network input；Stage-2固定MR-13K `inception_time_v1`與`daily_full_horizon_pure_mfe_r_v1` target/order，base pair relevance維持full-list ΔNDCG。唯一scientific change為generic `pair_weight_policy=mfe_winner_predicted_safety`：每個同日non-tied MFE pair乘較高Pure-MFE item的Safety percentile `S_winner`，safe winner > unsafe loser不得因loser低Safety被共同降權，unsafe winner > safe loser仍須低權重；pair truth永不反轉。最後用weight sum做normalized weighted mean；禁止額外mean normalization、bucket/cutoff/lambda/temperature/joint head/residual/product。Safety全1時loss須精確退化MR-13K；AF legacy min-Safety identity/contract不得漂移。Pair-weight必須為first-class runtime plugin：generic trainer、data/training contract、renderer與synthetic registry不得辨認特定pair-weight identity；新增第三種policy只需registry/primitive＋declarative spec＋generic primitive test。結果前不得PIT/Strategy/robustness/fixed。",
       "gap": "`validate_breakout_quality_continuous_ranker_contract_case`逐profile驗AG ExecutionRecipe/context/dependency/training semantics，並以pair-weight registry驗min/winner primitive、Safety=1精確退化base、動態注入synthetic第三種policy可直接通過generic loss/scientific-contract/report metadata；另掃generic trainer/renderer不得含特定pair-weight ID。`validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case`保留AF frozen legacy regression。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
     },
     {
       "id": "B303",
@@ -3203,7 +3203,7 @@
       "category": "MR-13AH PIT-safe Safety-Product-Weighted Pure-MFE symmetric high-Safety concentration contract",
       "item": "MR-13AH必須重用MR-13M/Seed42 canonical predicted-Safety PIT context，但Safety不得作network input；Stage-2固定MR-13K `inception_time_v1`與`daily_full_horizon_pure_mfe_r_v1` target/order，base pair relevance維持full-list ΔNDCG。唯一scientific change為generic `pair_weight_policy=product_predicted_safety`：每個同日non-tied MFE pair乘兩端Safety percentile乘積`S_i×S_j`，weight必須對pair方向完全對稱，不得依MFE winner改變；相較AF `min(S_i,S_j)`只允許更集中high-Safety manifold與更強壓低low/low pairs，不得引入bucket/cutoff/lambda/exponent/temperature/joint head/residual/product score。最後用weight sum做normalized weighted mean；Safety全1時loss須精確退化MR-13K。MR-13AG directional winner policy與MR-13AF legacy min policy contract不得漂移。Round 7 pair-weight plugin modification-radius必須維持：generic trainer/data/report不得新增MR-13AH identity branch；新增此primitive只需runtime registry＋declarative profile/spec＋generic primitive test。結果前不得PIT/Strategy/robustness/fixed。",
       "gap": "`validate_breakout_quality_continuous_ranker_contract_case`逐profile自動驗AH ExecutionRecipe/context/dependency/training semantics，並驗product policy數值為`S_i×S_j`、對target_diff正負完全對稱、low/low比AF min更低、Safety=1精確退化base；同時回歸min/winner policies與synthetic injected policy，確保generic trainer/data/report不辨認AH identity。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
     },
     {
       "id": "B304",
@@ -3225,7 +3225,7 @@
       "category": "MR-13AJ PIT-safe conflict-only unsafe-winner discount Pure-MFE contract",
       "item": "MR-13AJ必須重用MR-13M/Seed42 canonical predicted-Safety PIT context，Safety不得作network input；Stage-2固定MR-13K `inception_time_v1`、`daily_full_horizon_pure_mfe_r_v1` target/order與full-list ΔNDCG。唯一scientific change為generic `pair_weight_policy=conflict_unsafe_winner_predicted_safety`：MFE與Safety ordering一致或Safety tie時multiplier必須精確為1，只有MFE winner較不安全的conflict pair才乘該winner的Safety percentile；pair truth永不反轉。Safety全1時loss須精確退化MR-13K；AF min、AG winner、AH product contracts不得漂移。Round 7 modification-radius持續成立：新增此primitive只需runtime registry＋declarative profile/spec＋generic primitive invariant test，generic trainer/data/report不得新增MR-13AJ identity branch。結果前不得PIT/Strategy/robustness/fixed。",
       "gap": "`validate_breakout_quality_continuous_ranker_contract_case`自動覆蓋AJ ExecutionRecipe/context/dependency/training semantics，並驗conflict-only policy：aligned pair=`1`、unsafe-winner conflict=`S_winner`、反向pair對稱語意正確、Safety=1退化base；同時回歸AF/AG/AH既有primitive與identity leakage guard。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
     },
     {
       "id": "B306",
@@ -3390,7 +3390,7 @@
       "category": "MR-13AK A1 Shared-AH architecture/loss contract",
       "item": "A1必須重用MR-13S shared encoder／dual-head capability但不得沿用其Safety-conditioned MFE head：`inception_time_shared_safety_mfe_v1`的MFE head只讀shared latent；Safety普通full-list ΔNDCG；MFE用Pure-MFE full-list ΔNDCG乘shared Safety probability的same-date average-rank percentile `detach(S_i)×detach(S_j)`；MFE direction不得被Safety改寫；MFE loss不得更新Safety classifier但可更新shared encoder；profile不得宣告external MR-13M context/PIT dependency；final score只取MFE head，A1只做Model Gate。",
       "gap": "`validate_breakout_quality_shared_ah_contract_case`以模型forward、Safety classifier權重擾動、MFE-only backward、實際A1 `_train_epoch`與pair-weight/percentile arithmetic直接驗證，不只檢查config字串；既有`safety_raw_mfe_evaluation` capability負責multi-head report輸出。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `filters/breakout_quality/models/`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/models/`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
     },
     {
       "id": "B325",
@@ -3456,7 +3456,7 @@
       "category": "MR-13AL A2 negative-control closure + MR-13AM A3 AK→economic-target one-control-point / current membership rollover",
       "item": "A2結果不得因MFE小幅提升誤判成功：AL explicit Safety context若未改善predicted Safety/MFE geometry即保留historical identity但退出current [3]～[6] membership。A3必直接重用AK topology/loss/Safety-product contract，只允許primary target Pure-MFE→`daily_full_horizon_opportunity_r_v1`；不得帶AL Safety-context input。B325 current-training-pair merge必自動形成H/AF/AH/AK/AM且無第二份AL exclusion list。Economic-target second head必由generic capability標示，不得錯套Raw-MFE-specific geometry extension。",
       "gap": "`validate_breakout_quality_shared_ah_contract_case`驗A1/A2/A3 composition、AM=AK topology/loss但target不同、AM不使用Safety context、AL歷史profile仍可解析但current membership自動排除；`validate_breakout_quality_continuous_ranker_contract_case`驗current pair→shared test list containment仍成立。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `filters/breakout_quality/safety_primary_target.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/safety_primary_target.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
     },
     {
       "id": "B331",
@@ -3489,7 +3489,7 @@
       "category": "MR-13AO True-HS Conditional-MFE membership-scoped supervision contract",
       "item": "MR-13AO只改MFE supervision membership：Safety truth仍在完整target-valid daily universe學習，`true HS = same-date Low-Adverse Safety percentile >= 0.50`；Conditional-MFE truth只在true-HS cohort內做same-date MFE percentile，且LS rows必須在rank positions／IDCG／full-list ΔNDCG pair geometry建立前退出MFE sublist。重用MR-13AK shared-Safety/MFE topology，MFE head只讀shared latent、不吃predicted Safety context、不使用Safety pair weighting；Model Gate固定Pred-Safety P50 qualification後再依Conditional-MFE排序，AK frozen score只作同gate attribution reference。AO只授權Seed42 Forward Model Gate，不得自動開Rolling／Robustness／PIT／strategy conversion。",
       "gap": "`validate_breakout_quality_true_hs_scoped_pair_membership_contract_case`直接驗declarative recipe、AK topology重用、true-HS target geometry、LS margin不影響HS-sublist ΔNDCG、current authorization fail-closed及AK同gate reference不在Breakout subset重算Safety percentile。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`"
     },
     {
       "id": "B334",
@@ -3500,7 +3500,7 @@
       "category": "MR-13AP HS-Priority MFE non-compensatory truth contract",
       "item": "MR-13AP固定LS relevance=0、true-HS依同日HS cohort MFE percentile映射至[0.5,1.0]，任一HS truth嚴格高於任一LS；shared Safety auxiliary/encoder與full-list ΔNDCG保留，final ranking direct all-daily，不使用Pred-Safety gate或Safety pair weighting。歷史Seed42 Forward Gate結果不改寫；current workflow availability只依shared membership判定。",
       "gap": "`validate_breakout_quality_hs_priority_mfe_contract_case`驗AP target、architecture、runtime score、HS/LS ordering與current membership外fail-closed。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
     },
     {
       "id": "B335",
@@ -3511,7 +3511,7 @@
       "category": "MR-13AQ HS-Priority pair-stratified normalization contract",
       "item": "MR-13AQ完全重用AP truth與architecture，只把HS↔LS、HS↔HS comparable pairs在相同full-list rank/IDCG/ΔNDCG geometry下各自依自身weight sum normalize再固定1:1平均；不得改pair direction、target、inference或加入Safety weighting。",
       "gap": "`validate_breakout_quality_hs_priority_stratified_mfe_contract_case`驗AQ只改pair aggregation、AP truth完全重用、兩strata normalization與current membership外fail-closed。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
     },
     {
       "id": "B336",
@@ -3522,7 +3522,7 @@
       "category": "MR-13AR Direct HS-Qualification + Conditional-MFE contract",
       "item": "MR-13AR固定P50 true-HS定義與AO Conditional-MFE sublist，只把primary head改成binary HS↔LS qualification；同cohort pair tie，Conditional-MFE只在true-HS sublist產生gradient，Pred-HS P50→Conditional-MFE inference與AO same-gate attribution固定。歷史Forward Gate結果保留，但AR若位於current shared Model Compare/Test membership，不得被歷史Forward-only flag二次阻擋。",
       "gap": "`validate_breakout_quality_hs_qualification_conditional_mfe_contract_case`驗binary qualification、true-HS conditional upside、same-gate reference與current shared-membership authorization。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
     },
     {
       "id": "B337",
@@ -3533,7 +3533,7 @@
       "category": "MR-13AS P50-boundary-weighted HS qualification contract",
       "item": "MR-13AS重用AR完整two-head contract，唯一scientific change為qualification HS↔LS pair在canonical full-list ΔNDCG上再乘`1 - abs(SafetyPct_i - SafetyPct_j)` truth-side proximity weight；不改pair direction、input、HS threshold、Conditional-MFE或inference。歷史AS identity不得反向綁死current model membership；B325只泛化保證「目前current training pair」自動注入shared Model Compare/Test list。",
       "gap": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`驗boundary weight formula/ordering、AR one-control-point、AS歷史identity可解析且不pin current membership；current training-pair containment由generic Continuous-DL contract驗證。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`"
     },
     {
       "id": "B338",
@@ -3577,7 +3577,7 @@
       "category": "Continuous-ranker training composition SSOT",
       "item": "Continuous objective之profile loss/epoch metric、pairwise kind、context pair-weight legality、secondary pair scope、primary/secondary supervision mode、truth-side primary pair weighting、head-loss combination/component count與persisted head-weighting semantics必須由單一`ContinuousRankerTrainingPolicy` composition owner派生。Profile/ResearchSpec不得維護objective-name capability matrix；正式profile-enabled objective membership不得另維護手寫tuple；generic trainer可保留primitive loss handlers但不得由objective/handler名稱重猜scientific supervision composition。",
       "gap": "`validate_breakout_quality_continuous_ranker_contract_case`驗20個profile-enabled objective由composition registry派生、全部registered profiles的loss/metric/spec/pairwise/scope capability一致、trainer consumes supervision/head-combination policy、artifact head weighting由composition owner派生，並禁止舊objective capability matrices回流。",
-      "entry": "`config/breakout_quality.py`, `config/breakout_quality_runtime.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`"
+      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`"
     },
     {
       "id": "B342",
@@ -3767,7 +3767,7 @@
       "category": "Research / Report contract",
       "item": "Continuous DL [3][4][5][6] Comparison Evidence Bundle SSOT",
       "gap": "Forward/Rolling/Forward Robustness/Rolling Robustness必須共用同一Standard SOP + model-extension evidence contract；extension applicability由training composition evidence_family與extension registry派生，Rolling只缺extension時僅refresh audit，不得重建PIT scores；Robustness跨seed aggregation由extension contract宣告，禁止workflow各自截斷或猜測evidence。",
-      "entry": "`core/research_report_contract.py`, `config/breakout_quality_runtime.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/point_in_time_audit.py`",
+      "entry": "`core/research_report_contract.py`, `core/breakout_quality_runtime.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/point_in_time_audit.py`",
       "initial_status": "NEW",
       "order": 339
     },
@@ -3778,7 +3778,7 @@
       "category": "Research / Artifact lifecycle",
       "item": "Rolling model-extension score capability → audit evidence dependency SSOT",
       "gap": "[4]/[6]遇到comparison extension缺失時必須先由training composition的score_output_policy判斷PIT model-output sidecar是否完整；sidecar缺失只能checkpoint-rescore，sidecar完整且audit stale才audit-only refresh。ranking reader、PIT audit與Robustness不得各自硬編objective-specific score-column matrix。",
-      "entry": "`config/breakout_quality_runtime.py`, `filters/breakout_quality/ranking_score_store.py`, `services/breakout_quality/point_in_time_audit.py`, `services/research/breakout_quality_application.py`",
+      "entry": "`core/breakout_quality_runtime.py`, `filters/breakout_quality/ranking_score_store.py`, `services/breakout_quality/point_in_time_audit.py`, `services/research/breakout_quality_application.py`",
       "initial_status": "NEW",
       "order": 340
     },
@@ -3789,7 +3789,7 @@
       "category": "Research / Artifact lifecycle",
       "item": "PIT row eligibility × score-output capability orthogonal contracts",
       "gap": "Daily PIT row eligibility只回答prediction-time feature history是否足以產生score，future target不得控制score存在；multi-head sidecar completeness只由獨立score-output capability contract判定。正式loader可依序驗兩者，但不得把output columns/head數塞回eligibility contract，避免新增model-output capability改寫無前視score universe。",
-      "entry": "`filters/breakout_quality/ranker_sample_contract.py`, `filters/breakout_quality/ranking_score_store.py`, `config/breakout_quality_runtime.py`",
+      "entry": "`filters/breakout_quality/ranker_sample_contract.py`, `filters/breakout_quality/ranking_score_store.py`, `core/breakout_quality_runtime.py`",
       "initial_status": "NEW",
       "order": 341
     },

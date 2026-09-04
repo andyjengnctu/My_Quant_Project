@@ -32,7 +32,7 @@ from config.breakout_quality import (
     get_breakout_quality_experiment_profile,
 )
 
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     get_continuous_ranker_persisted_score_columns,
     get_continuous_ranker_score_output_columns,
 )

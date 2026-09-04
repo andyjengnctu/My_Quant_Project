@@ -35,6 +35,8 @@ project/
 │  ├─ training_policy.py              # Strategy Optimizer training policy validation／derived snapshot／runtime owner
 │  ├─ selection_policy.py             # history-selection 策略參數 schema／default snapshot owner
 │  ├─ strategy_params.py              # breakout + training gate + execution 聚合參數契約
+│  ├─ breakout_quality_runtime.py     # Continuous-ranker generic execution capability／composition owner
+│  ├─ breakout_quality_runtime_resolver.py # scientific profile → runtime recipe 單向 resolver gateway
 │  ├─ capital_policy.py               # 單股/投組/scanner 共用資金與 sizing 規則
 │  ├─ exact_accounting.py             # 正式整數 ledger / cost-basis allocation / tick 正規化單一真理來源
 │  ├─ backtest_core.py                # 單股回測總控 façade
@@ -331,7 +333,7 @@ P3不得使用final 9A score回灌歷史optimizer。`tools/filters/breakout_qual
 
 Breakout Quality 的研究身份與可執行語意必須分層，避免每個新 MR 把 experiment identity 永久寫進 trainer／runtime。
 
-- **Current execution**：`config/breakout_quality.py`只持有使用者設定與 scientific/profile declarations；generic execution capability 的唯一 owner 是`config/breakout_quality_runtime.py`。`ContinuousRankerExecutionRecipe`只由既有`BreakoutQualityExperimentProfile`與`ContinuousRankerResearchSpec`衍生 trainer／target／loss／architecture／pairwise／score semantic；`config/breakout_quality.py`僅保留相容 re-export。Generic data/training/dependency/inference consumer直接依賴runtime owner並只讀recipe，不以MR ID判斷行為。`current_time_validation_authorized`預設fail-closed，且只授權目前Strategy Compare OOS／Rolling真正需要的continuous model dependencies。
+- **Current execution**：`config/breakout_quality.py`只持有使用者設定與 scientific/profile declarations；generic execution capability 的唯一 owner 是`core/breakout_quality_runtime.py`。`ContinuousRankerExecutionRecipe`只由既有`BreakoutQualityExperimentProfile`與`ContinuousRankerResearchSpec`衍生 trainer／target／loss／architecture／pairwise／score semantic；`config/breakout_quality.py`只在 scientific/profile declaration 需要時匯入 capability identity；generic consumer 不再透過 config runtime façade。Generic data/training/dependency/inference consumer直接依賴runtime owner並只讀recipe，不以MR ID判斷行為。`current_time_validation_authorized`預設fail-closed，且只授權目前Strategy Compare OOS／Rolling真正需要的continuous model dependencies。
 - **Reusable components**：target transform、pairwise reduction、risk context、attention／encoder block等可重組數學留在其canonical domain implementation；REJECT的是特定experiment recipe，不代表component本身被刪除或永久禁用。Reusable component不另建第二份MR registry。
 - **Legacy compatibility**：`filters/breakout_quality/models/legacy_compatibility.py`只負責舊checkpoint／manifest reconstruction；新訓練只可走`filters/breakout_quality/models/active.py`。`ACTIVE_MODEL_ARCHITECTURES`與`LEGACY_MODEL_ARCHITECTURES`必須互斥且完整覆蓋supported architecture。
 - **History**：MR/SR identity、phase、比較reference、已執行證據與GO/REJECT理由只由`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`／`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`保存；不得要求production service依歷史文件或舊approval report才能執行。

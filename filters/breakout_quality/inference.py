@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from config.breakout_quality_runtime import BREAKOUT_QUALITY_OUTPUT_SCHEMA
+from core.breakout_quality_runtime import BREAKOUT_QUALITY_OUTPUT_SCHEMA
 
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
 from filters.breakout_quality.market_set import IndexedMarketSetBank, MarketSetBatch

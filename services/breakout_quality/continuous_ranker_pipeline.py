@@ -18,7 +18,7 @@ from config.breakout_quality import (
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
 )
-from config.breakout_quality_runtime import get_continuous_ranker_training_policy
+from core.breakout_quality_runtime import get_continuous_ranker_training_policy
 from filters.breakout_quality.inference import strict_parallel_batched_logits
 from filters.breakout_quality.models.factory import (
     count_trainable_parameters,

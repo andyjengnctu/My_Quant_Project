@@ -65,8 +65,8 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     load_continuous_ranker_data,
     primary_audit_metric_scope,
 )
-from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-from config.breakout_quality_runtime import get_continuous_ranker_score_output_columns
+from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
 from core.console_report import (
     compact_console_enabled,
     console_color_enabled,

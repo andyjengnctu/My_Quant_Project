@@ -15,7 +15,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
@@ -37,7 +37,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
     normalize_continuous_ranker_pair_weight_configuration,
 )
-from config.breakout_quality_runtime_resolver import (
+from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (

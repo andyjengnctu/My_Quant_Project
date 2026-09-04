@@ -18,7 +18,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
 )

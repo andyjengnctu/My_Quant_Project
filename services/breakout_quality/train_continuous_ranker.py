@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
@@ -78,7 +78,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TRAINER_EVENT,
     get_continuous_ranker_training_policy,
 )
-from config.breakout_quality_runtime_resolver import (
+from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (

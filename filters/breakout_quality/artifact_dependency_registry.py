@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from core.research_policy import get_research_artifact_preparation_policy
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
 )
-from config.breakout_quality_runtime_resolver import (
+from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (

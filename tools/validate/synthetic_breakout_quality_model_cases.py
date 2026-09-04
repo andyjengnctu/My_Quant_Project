@@ -378,9 +378,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # automatically checked here.  A new experiment that only recombines existing
     # target/context/objective capabilities must not require a new synthetic case.
     import config.breakout_quality as breakout_quality_config
-    import config.breakout_quality_runtime as continuous_ranker_runtime
-    import config.breakout_quality_runtime_resolver as continuous_ranker_runtime_resolver
-    from config.breakout_quality_runtime import (
+    import core.breakout_quality_runtime as continuous_ranker_runtime
+    import core.breakout_quality_runtime_resolver as continuous_ranker_runtime_resolver
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
         CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
         CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
@@ -401,7 +401,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         get_profile_enabled_continuous_ranker_training_objectives,
         normalize_continuous_ranker_pair_weight_configuration,
     )
-    from config.breakout_quality_runtime_resolver import (
+    from core.breakout_quality_runtime_resolver import (
         get_continuous_ranker_execution_recipe,
     )
     from filters.breakout_quality.artifact_dependency_registry import (
@@ -416,7 +416,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     check(
         "continuous_ranker_runtime_contract_has_dedicated_owner",
-        "config.breakout_quality_runtime",
+        "core.breakout_quality_runtime",
         continuous_ranker_runtime.ContinuousRankerExecutionRecipe.__module__,
     )
     check(
@@ -465,8 +465,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         runtime_facade_bypass_imports,
         note=(
             "filters/services generic consumers must import capability names from "
-            "config.breakout_quality_runtime and the profile resolver from "
-            "config.breakout_quality_runtime_resolver; config.breakout_quality is not a "
+            "core.breakout_quality_runtime and the profile resolver from "
+            "core.breakout_quality_runtime_resolver; config.breakout_quality is not a "
             "generic-consumer runtime import surface"
         ),
     )
@@ -675,7 +675,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         pair_weight_identity_leaks,
         note=(
             "all registered pair-weight identities, including future policies, must remain "
-            "owned by config.breakout_quality_runtime; filters/services consume resolved "
+            "owned by core.breakout_quality_runtime; filters/services consume resolved "
             "policy contracts and must not branch on policy IDs"
         ),
     )
@@ -3491,7 +3491,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and getattr(guarded_model, "same_batch_fp32_nonfinite_retry", None) is True,
         )
 
-        from config.breakout_quality_runtime import (
+        from core.breakout_quality_runtime import (
             CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
             CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
             TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -4763,7 +4763,7 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_research_spec,
     )
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
@@ -4771,7 +4771,7 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
         get_continuous_ranker_pair_weight_policy,
     )
-    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.spec import get_model_spec
     from filters.breakout_quality.ranker_training_contract import training_semantics
@@ -5305,7 +5305,7 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
         get_continuous_ranker_training_policy,
     )
@@ -7953,12 +7953,12 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_research_spec,
     )
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
         CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
         CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
     )
-    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
     from filters.breakout_quality.models.spec import get_model_spec
     from filters.breakout_quality.ranker_training_contract import training_semantics
@@ -8128,12 +8128,12 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
         get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
     )
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
         CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
         CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
     )
-    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from services.breakout_quality.train_continuous_ranker import (
@@ -8336,14 +8336,14 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
     )
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
         CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
         CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
         get_continuous_ranker_primary_pair_weight_policy,
         CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
     )
-    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from services.breakout_quality.train_continuous_ranker import (
@@ -8506,12 +8506,12 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
         get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
     )
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
         CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
         CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
     )
-    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from filters.breakout_quality.hs_conditional_mfe import build_hs_priority_mfe_targets
     from filters.breakout_quality.models.spec import get_model_spec
     from filters.breakout_quality.ranker_training_contract import training_semantics
@@ -8649,14 +8649,14 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
         get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
     )
-    from config.breakout_quality_runtime import (
+    from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
         CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS,
         CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE,
         CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
         CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
     )
-    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from filters.breakout_quality.hs_conditional_mfe import build_hs_priority_mfe_targets
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from services.breakout_quality.train_continuous_ranker import (

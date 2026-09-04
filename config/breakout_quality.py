@@ -3,7 +3,7 @@
 Edit only the user-settings section at the top of this file. Named scientific/profile
 declarations, validation, derived values, and helper functions remain centralized here.
 Generic continuous-ranker execution capability contracts live in
-``config.breakout_quality_runtime`` and are re-exported below for compatibility; that module
+``core.breakout_quality_runtime`` and are re-exported below for compatibility; that module
 is not user-adjustable configuration.
 """
 
@@ -27,7 +27,7 @@ from config.execution_policy import (
     DEFAULT_PORTFOLIO_MAX_POSITIONS,
     DEFAULT_PORTFOLIO_ROTATION,
 )
-from config.breakout_quality_runtime import (
+from core.breakout_quality_runtime import (
     PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
     PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
