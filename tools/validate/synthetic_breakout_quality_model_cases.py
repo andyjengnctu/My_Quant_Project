@@ -3460,6 +3460,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 self.mfe = torch.nn.Linear(8, 2)
                 self.failure_mode = failure_mode
                 self.same_batch_fp32_nonfinite_retry = True
+                self.recurrent_outer_autocast = True
 
             def forward_safety_mfe_heads(self, x, context):
                 del context
@@ -3521,6 +3522,90 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         check_true(
             "guarded_bf16_retries_same_batch_once_for_forward_or_gradient_nonfinite_without_extra_step",
             all(retry_results),
+        )
+
+        bi_profile_name = (
+            breakout_quality_config.
+            DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        )
+        bi_profile = breakout_quality_config.get_breakout_quality_experiment_profile(bi_profile_name)
+        check_true(
+            "pure_bf16_backward_scaling_control_is_profile_owned_not_new_topology",
+            bi_profile.model_architecture == recurrent_guarded_architectures[0]
+            and bi_profile.numerical_execution_policy
+            == breakout_quality_config.NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING
+            and tuple(bi_profile.bf16_backward_retry_scales)
+            == (0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625),
+        )
+
+        reference_model = _RetryProbe(None)
+        scaled_model = _RetryProbe(None)
+        scaled_model.load_state_dict(reference_model.state_dict())
+        reference_optimizer = _CountingAdam(reference_model.parameters(), lr=1e-3)
+        scaled_optimizer = _CountingAdam(scaled_model.parameters(), lr=1e-3)
+        reference_loss = training_module._train_epoch(
+            torch, reference_model, reference_optimizer, retry_features, retry_context,
+            np.arange(8, dtype=np.int64), retry_target, retry_dates,
+            training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+            batch_size=128, seed=42, gradient_clip_norm=1.0, plan=retry_plan,
+            grad_scaler=None,
+            pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+            secondary_pair_scope_threshold=0.50,
+        )
+
+        original_gradient_finite = training_module._model_gradients_are_finite
+        original_fp32_retry = training_module._fp32_retry_shared_safety_loss
+        finite_probe_calls = {"count": 0}
+
+        def _staged_gradient_finite(torch_arg, model_arg):
+            finite_probe_calls["count"] += 1
+            # Force the canonical pass and the first 1/2 retry to be rejected;
+            # 1/4 then succeeds. This exercises schedule progression without
+            # inserting any FP32 forward/backward path.
+            if finite_probe_calls["count"] <= 2:
+                return False
+            return original_gradient_finite(torch_arg, model_arg)
+
+        def _forbid_fp32_retry(*_args, **_kwargs):
+            raise AssertionError("pure-BF16 backward scaling不得呼叫FP32 retry")
+
+        training_module._model_gradients_are_finite = _staged_gradient_finite
+        training_module._fp32_retry_shared_safety_loss = _forbid_fp32_retry
+        try:
+            scaled_loss = training_module._train_epoch(
+                torch, scaled_model, scaled_optimizer, retry_features, retry_context,
+                np.arange(8, dtype=np.int64), retry_target, retry_dates,
+                training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+                batch_size=128, seed=42, gradient_clip_norm=1.0, plan=retry_plan,
+                grad_scaler=None,
+                pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+                secondary_pair_scope_threshold=0.50,
+                numerical_execution_policy=(
+                    breakout_quality_config.NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING
+                ),
+                bf16_backward_retry_scales=(0.5, 0.25, 0.125),
+            )
+        finally:
+            training_module._model_gradients_are_finite = original_gradient_finite
+            training_module._fp32_retry_shared_safety_loss = original_fp32_retry
+
+        max_parameter_delta = max(
+            float((left.detach() - right.detach()).abs().max().item())
+            for left, right in zip(reference_model.parameters(), scaled_model.parameters())
+        )
+        check_true(
+            "pure_bf16_dynamic_backward_scaling_retries_without_fp32_or_extra_optimizer_step",
+            math.isfinite(float(reference_loss))
+            and math.isfinite(float(scaled_loss))
+            and reference_optimizer.step_count == 1
+            and scaled_optimizer.step_count == 1
+            and int(getattr(scaled_model, "_bf16_backward_scaling_rescue_count", 0)) == 1
+            and int(getattr(scaled_model, "_bf16_backward_scaling_last_attempts", 0)) == 2
+            and float(getattr(scaled_model, "_bf16_backward_scaling_last_scale", 0.0)) == 0.25
+            and max_parameter_delta <= 5e-5
+            and all(bool(torch.isfinite(p).all().item()) for p in scaled_model.parameters()),
         )
 
     full_window_descriptor = get_architecture_descriptor(

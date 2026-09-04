@@ -11671,3 +11671,16 @@ Decision：`MR13BG_RESULT_STILL_PENDING / BF16_RECURRENT_NONFINITE_BLOCKER_FIXED
 - **Independent checks**：v2在修改前後同seed synthetic one-epoch loss=`0.69070923328399658`且state hash=`e75b7ffe145883129e3a644efc881788331230674ede06fcd8819bce84a07a79` exact equal；原47個architecture manifests零漂移，只新增v3。Synthetic分別注入BF16 non-finite forward與non-finite gradient，兩路皆觀察到exactly one same-batch FP32 retry、exactly one optimizer step且parameters finite。
 
 Decision：`MR13BG_FORWARD_SIGNAL_GO / BG_ROLLING_REQUIRED / MR13BH_BF16_GUARDED_NUMERICAL_CONTROL_IMPLEMENTED / SAME_BATCH_FP32_RETRY_ONLY_ON_NONFINITE / NO_BATCH_SKIP / NO_EXTRA_OPTIMIZER_STEP / NO_GRU_TOPOLOGY_TUNING`。
+
+
+## 2026-09-04 — MR-13BH result closure + MR-13BI pure-BF16 dynamic backward-scaling control
+
+- **BH completed Forward evidence**：MR-13BH epoch-selection完全重現先前BF16 trajectory，best epoch5 Validation HS-MFE/Safety/Pred-HS TopK HM/HS=`0.4191/0.3574/26.40%`。Selection完整重訓前3 epoch Batch Loss=`0.665070→0.553312→0.540414`；第4 epoch首次偵測`non-finite BF16 gradient`並依BH contract做same-batch FP32 recompute。該retry後epoch4/5 Loss反而升至`0.579697/0.615215`，顯示rescue step沒有維持原BF16 optimizer trajectory。
+- **BH final result**：Forward overall Daily/Global/Pair=`0.3873/0.3786/63.42%`；Safety Daily/Global/Pair=`0.3272/0.2867/61.58%`，Pred-HS true-LS=`38.04%`，HS-only rho/Pair=`0.3937/63.79%`。Breakout Safety=`0.3298/0.3738/63.48%`，purity改善伴隨true-HS recall僅`38.21%`。相對BG Safety=`0.3683/0.3231/63.26%`與true-LS=`36.30%`明顯退化，因此BH不能promotion。
+- **Interpretation**：BH證明「阻止non-finite optimizer step」本身不足；在BF16 trajectory中插入完整FP32 forward/backward gradient會改變gradient direction與Adam moments，雖然optimizer update count仍為1，scientific optimization path仍受到material disturbance。Decision=`SAME_BATCH_FP32_RETRY_DISTORTS_REFIT_TRAJECTORY / MODEL_CONTROL_FAIL / CLOSED / NO_ROLLING`。
+- **MR-13BI design**：使用者授權下一個numerical control，不新增GRU topology。BI直接重用`ARCH-gru_shared_safety_mfe_v3`（1-layer/hidden391、474,287 params、outer BF16）與BH全部scientific contract；新增profile-owned `numerical_execution_policy=bf16_dynamic_backward_scaling`，retry scales固定`(1/2,1/4,1/8,1/16,1/32,1/64,1/128,1/256)`。正常batch完全不變；只有原始backward gradient non-finite時才清grad、同batch同BF16 autocast重算loss並逐級縮放backward。一旦scaled gradient finite，在FP32 parameter-gradient buffer除回scale，重新確認finite、套原`clip_norm`，再執行唯一一次Adam step。
+- **Fail-fast boundary**：若BF16 forward或canonical loss本身non-finite，BI不切FP32而直接失敗；若全部8個backward scales耗盡仍non-finite亦fail-fast。禁止skip batch、降低LR、改clip、固定epoch5、改hidden/layer/bidirectional或任何OOS-guided tuning。
+- **Identity/ownership**：numerical execution policy由Experiment Profile持有並進`experiment_settings` fitted identity；BI與BH可共用同一architecture descriptor，避免再把training recipe誤建成architecture identity。既有68個profile manifest payload與48個architecture manifests保持不變；只新增BI profile，無新architecture。Current Training Model仍BG；BI加入shared `[3]～[6]` comparison membership作Forward-only numerical control。
+- **Independent checks**：synthetic強制原始gradient與`1/2` retry皆判non-finite、`1/4`才成功；確認未呼叫FP32 retry、exactly one optimizer step、rescue scale=`0.25`、parameters finite，且scaled/unscaled更新與正常BF16 reference保持在`5e-5` max-parameter tolerance內。
+
+Decision：`MR13BH_CONTROL_FAIL / SAME_BATCH_FP32_RETRY_TRAJECTORY_DISTORTION_CONFIRMED / MR13BI_PURE_BF16_DYNAMIC_BACKWARD_SCALING_IMPLEMENTED / NO_FP32_FALLBACK / ONE_BATCH_ONE_OPTIMIZER_STEP / BG_ROLLING_PRIORITY_UNCHANGED`。

@@ -502,6 +502,7 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     # BH is a Forward-only numerical control and can be built by [3] without changing [1]/[2].
     ("MR-13BG", "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
     ("MR-13BH", "daily_universal_gru_bf16_guarded_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    ("MR-13BI", "daily_universal_gru_bf16_backward_scaled_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
 )
 
 
@@ -880,6 +881,9 @@ DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PRO
 DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_gru_bf16_guarded_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_gru_bf16_backward_scaled_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
 )
@@ -970,6 +974,13 @@ SUPPORTED_BREAKOUT_QUALITY_AUGMENTATIONS = (
     AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK,
 )
 
+NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT = "architecture_default"
+NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING = "bf16_dynamic_backward_scaling"
+SUPPORTED_BREAKOUT_QUALITY_NUMERICAL_EXECUTION_POLICIES = (
+    NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
+    NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING,
+)
+
 
 @dataclass(frozen=True)
 class BreakoutQualityExperimentProfile:
@@ -994,6 +1005,8 @@ class BreakoutQualityExperimentProfile:
     training_sample_scope: str = TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
     raw_r_huber_delta_r: float | None = None
     model_architecture: str | None = None
+    numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT
+    bf16_backward_retry_scales: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -1026,6 +1039,20 @@ class BreakoutQualityExperimentProfile:
             raise ValueError(f"不支援的 training label scope: {self.training_label_scope!r}")
         if self.training_sample_scope not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES:
             raise ValueError(f"不支援的 training sample scope: {self.training_sample_scope!r}")
+        numerical_policy = str(self.numerical_execution_policy).strip().lower()
+        if numerical_policy not in SUPPORTED_BREAKOUT_QUALITY_NUMERICAL_EXECUTION_POLICIES:
+            raise ValueError(f"不支援的 numerical execution policy: {self.numerical_execution_policy!r}")
+        retry_scales = tuple(float(value) for value in self.bf16_backward_retry_scales)
+        if numerical_policy == NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT:
+            if retry_scales:
+                raise ValueError("architecture-default numerical policy 不得指定 BF16 backward retry scales")
+        elif numerical_policy == NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING:
+            if not retry_scales:
+                raise ValueError("BF16 dynamic backward scaling 必須指定至少一個 retry scale")
+            if any(not math.isfinite(value) or not 0.0 < value < 1.0 for value in retry_scales):
+                raise ValueError("BF16 backward retry scale 必須是介於0與1之間的有限值")
+            if any(right >= left for left, right in zip(retry_scales, retry_scales[1:])):
+                raise ValueError("BF16 backward retry scales 必須嚴格遞減")
         if self.model_architecture is not None:
             architecture = str(self.model_architecture).strip().lower()
             if not architecture or architecture != self.model_architecture:
@@ -1161,6 +1188,11 @@ class BreakoutQualityExperimentProfile:
                 payload["training_label_scope"] = self.training_label_scope
         if self.model_architecture is not None:
             payload["model_architecture"] = str(self.model_architecture)
+        if self.numerical_execution_policy != NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT:
+            payload["numerical_execution_policy"] = str(self.numerical_execution_policy)
+            payload["bf16_backward_retry_scales"] = [
+                float(value) for value in self.bf16_backward_retry_scales
+            ]
         return payload
 
 
@@ -1940,6 +1972,22 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="gru_shared_safety_mfe_v3",
+    ),
+    DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="gru_shared_safety_mfe_v3",
+        numerical_execution_policy=NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING,
+        bf16_backward_retry_scales=(
+            0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625,
+        ),
     ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3359,6 +3407,33 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
+    DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BI",
+        experiment_name="MR-13BI GRU Pure-BF16 Dynamic Backward-Scaling Numerical Control",
+        phase="13BI",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "Numerical-control follow-up after MR-13BH showed that inserting a full-FP32 same-batch recompute at the first non-finite BF16 gradient materially changed the final-refit trajectory. "
+            "MR-13BI reuses the exact MR-13BH 1-layer/hidden391 outer-BF16 GRU topology, 474,287 params, raw 300x10 input, target/loss/true-HS scope, Seed42, split, Adam, date-coherent batch membership/order, gradient clip, epoch selection and inference. "
+            "Normal batches remain pure BF16. If and only if backward produces a non-finite gradient, the failed gradients are discarded and the exact same batch is recomputed under the same BF16 autocast with progressively smaller loss scales 1/2 through 1/256. Once finite, FP32 parameter-gradient buffers are unscaled back to the canonical gradient magnitude, canonical clip_norm is applied, and exactly one optimizer step is taken. "
+            "No FP32 forward/backward fallback is permitted; non-finite forward/loss fails fast. Primary contrast is BI vs BH for numerical rescue behavior, with BG retained as the complete FP32-island scientific reference. No LR/epoch/hidden/layer/bidirectional tuning is authorized."
+        ),
+        metric_scope="gru_pure_bf16_dynamic_backward_scaling_numerical_control",
+        score_semantic_id="daily_gru_pure_bf16_scaled_backward_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         model_research_id="MR-13T",
@@ -4711,6 +4786,9 @@ __all__ = [
     'DAILY_UNIVERSAL_DAY_TOKEN_TRANSFORMER_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT',
+    'NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING',
     'DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',

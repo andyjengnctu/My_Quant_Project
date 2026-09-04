@@ -104,6 +104,8 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
+    NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
     resolve_breakout_quality_random_seed,
@@ -1770,6 +1772,137 @@ def _fp32_retry_shared_safety_loss(
         )
 
 
+def _model_gradients_are_finite(torch, model) -> bool:
+    flags = [
+        torch.isfinite(parameter.grad).all()
+        for parameter in model.parameters()
+        if parameter.grad is not None
+    ]
+    if not flags:
+        return False
+    return bool(torch.stack(flags).all().item())
+
+
+def _unscale_model_gradients_(model, scale: float) -> None:
+    inverse = 1.0 / float(scale)
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            parameter.grad.mul_(inverse)
+
+
+def _bf16_dynamic_backward_scaling_enabled(
+    model,
+    plan,
+    grad_scaler,
+    loss_handler: str,
+    numerical_execution_policy: str,
+) -> bool:
+    if str(numerical_execution_policy) != NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING:
+        return False
+    if str(loss_handler) not in _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS:
+        raise ValueError(
+            "BF16 dynamic backward scaling目前只支援shared Safety scoped Conditional-MFE loss capability"
+        )
+    if not bool(getattr(model, "recurrent_outer_autocast", False)):
+        raise ValueError("BF16 dynamic backward scaling只允許outer-autocast recurrent model")
+    if not (
+        plan.mixed_precision_enabled
+        and plan.autocast_dtype_name == "bfloat16"
+        and grad_scaler is None
+    ):
+        raise ValueError("BF16 dynamic backward scaling需要BF16 autocast且不得使用GradScaler")
+    return True
+
+
+def _record_bf16_backward_scaling_rescue(
+    model,
+    *,
+    scale: float,
+    attempts: int,
+) -> None:
+    count = int(getattr(model, "_bf16_backward_scaling_rescue_count", 0)) + 1
+    setattr(model, "_bf16_backward_scaling_rescue_count", count)
+    setattr(model, "_bf16_backward_scaling_last_scale", float(scale))
+    setattr(model, "_bf16_backward_scaling_last_attempts", int(attempts))
+    print(
+        f"  BF16 Backward Scaling Rescue #{count} | non-finite BF16 gradient "
+        f"-> same batch BF16 scale={float(scale):.8g} attempts={int(attempts)}"
+    )
+
+
+def _retry_same_batch_bf16_backward_with_scaling(
+    torch,
+    model,
+    optimizer,
+    xb,
+    cb,
+    target,
+    batch_dates,
+    *,
+    plan,
+    training_policy,
+    secondary_pair_scope: str,
+    secondary_pair_scope_threshold: float | None,
+    pairwise_reduction: str,
+    gradient_clip_norm: float,
+    retry_scales: tuple[float, ...],
+):
+    if not retry_scales:
+        raise ValueError("BF16 dynamic backward scaling缺少retry scales")
+    attempted: list[float] = []
+    for attempt_index, raw_scale in enumerate(retry_scales, start=1):
+        scale = float(raw_scale)
+        attempted.append(scale)
+        optimizer.zero_grad(set_to_none=True)
+        with autocast_context(torch, plan):
+            retry_loss, retry_loss_weight = _compute_shared_safety_scoped_mfe_duo_loss(
+                torch,
+                model,
+                xb,
+                cb,
+                target,
+                batch_dates,
+                training_policy=training_policy,
+                secondary_pair_scope=secondary_pair_scope,
+                secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+                pairwise_reduction=pairwise_reduction,
+            )
+        if retry_loss is None:
+            raise FloatingPointError("same-batch BF16 backward scaling缺少有效ranking supervision")
+        retry_scalar = float(retry_loss.detach().cpu().item())
+        if not math.isfinite(retry_scalar):
+            raise FloatingPointError(
+                "same-batch BF16 backward scaling的forward/loss已非有限值；不得切換FP32"
+            )
+        (retry_loss * scale).backward()
+        if not _model_gradients_are_finite(torch, model):
+            continue
+
+        # Parameter gradients are FP32 buffers even though recurrent math ran under
+        # BF16 autocast. Undo only the loss scale there, then apply the unchanged
+        # canonical clip norm. This preserves one batch -> one optimizer update.
+        _unscale_model_gradients_(model, scale)
+        if not _model_gradients_are_finite(torch, model):
+            continue
+        if float(gradient_clip_norm) > 0.0:
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                float(gradient_clip_norm),
+                error_if_nonfinite=True,
+            )
+        optimizer.step()
+        _record_bf16_backward_scaling_rescue(
+            model, scale=scale, attempts=attempt_index
+        )
+        return retry_loss, int(retry_loss_weight), retry_scalar
+
+    optimizer.zero_grad(set_to_none=True)
+    raise FloatingPointError(
+        "BF16 dynamic backward scaling耗盡retry scales仍無有限gradient；"
+        f"attempted={attempted}"
+    )
+
+
 def _train_epoch(
     torch,
     model,
@@ -1794,10 +1927,20 @@ def _train_epoch(
     secondary_pair_scope_threshold: float | None = None,
     raw_r_loss_name: str | None = None,
     raw_r_huber_delta_r: float | None = None,
+    numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
+    bf16_backward_retry_scales: tuple[float, ...] = (),
 ) -> float:
     model.train()
     training_policy = get_continuous_ranker_training_policy(training_objective)
     loss_handler = str(training_policy.loss_handler)
+    numerical_policy = str(numerical_execution_policy).strip().lower()
+    dynamic_bf16_backward_scaling = _bf16_dynamic_backward_scaling_enabled(
+        model, plan, grad_scaler, loss_handler, numerical_policy
+    )
+    architecture_guarded_retry = bool(
+        numerical_policy == NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT
+        and _guarded_retry_enabled(model, plan, grad_scaler, loss_handler)
+    )
     ids_all = np.asarray(group_ids, dtype=np.int64)
     rng = np.random.default_rng(int(seed))
     if training_policy.batch_mode == CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED:
@@ -1834,7 +1977,7 @@ def _train_epoch(
         if len(ids) == 0:
             continue
         optimizer.zero_grad(set_to_none=True)
-        guarded_retry = False
+        guarded_retry = bool(architecture_guarded_retry)
         guarded_batch_dates = None
         with autocast_context(torch, plan):
             if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE:
@@ -1872,7 +2015,6 @@ def _train_epoch(
             elif loss_handler in _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS:
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
                 guarded_batch_dates = batch_dates
-                guarded_retry = _guarded_retry_enabled(model, plan, grad_scaler, loss_handler)
                 try:
                     loss, loss_weight = _compute_shared_safety_scoped_mfe_duo_loss(
                         torch,
@@ -2098,7 +2240,15 @@ def _train_epoch(
         if grad_scaler is None:
             loss.backward()
             nonfinite_gradient = False
-            if float(gradient_clip_norm) > 0.0:
+            if dynamic_bf16_backward_scaling:
+                nonfinite_gradient = not _model_gradients_are_finite(torch, model)
+                if not nonfinite_gradient and float(gradient_clip_norm) > 0.0:
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        float(gradient_clip_norm),
+                        error_if_nonfinite=True,
+                    )
+            elif float(gradient_clip_norm) > 0.0:
                 if guarded_retry:
                     try:
                         torch.nn.utils.clip_grad_norm_(
@@ -2119,7 +2269,31 @@ def _train_epoch(
                     if parameter.grad is not None
                 )
 
-            if guarded_retry and nonfinite_gradient:
+            if dynamic_bf16_backward_scaling and nonfinite_gradient:
+                if guarded_batch_dates is None:
+                    raise RuntimeError("BF16 backward scaling缺少canonical batch dates")
+                retry_loss, retry_loss_weight, retry_scalar = (
+                    _retry_same_batch_bf16_backward_with_scaling(
+                        torch,
+                        model,
+                        optimizer,
+                        xb,
+                        cb,
+                        target,
+                        guarded_batch_dates,
+                        plan=plan,
+                        training_policy=training_policy,
+                        secondary_pair_scope=secondary_pair_scope,
+                        secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+                        pairwise_reduction=pairwise_reduction,
+                        gradient_clip_norm=float(gradient_clip_norm),
+                        retry_scales=tuple(float(value) for value in bf16_backward_retry_scales),
+                    )
+                )
+                loss = retry_loss
+                loss_weight = int(retry_loss_weight)
+                loss_scalar_value = retry_scalar if reuse_loss_scalar else None
+            elif guarded_retry and nonfinite_gradient:
                 if guarded_batch_dates is None:
                     raise RuntimeError("guarded BF16 retry缺少canonical batch dates")
                 optimizer.zero_grad(set_to_none=True)
@@ -3586,6 +3760,8 @@ def select_epoch(
             secondary_pair_scope_threshold=execution_recipe.objective_policy.secondary_pair_scope_threshold,
             raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
+            numerical_execution_policy=profile.numerical_execution_policy,
+            bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
         )
         validation_conditional_metrics = None
         validation_reverse_conditional_metrics = None
@@ -4320,6 +4496,8 @@ def fit_final(
             secondary_pair_scope_threshold=execution_recipe.objective_policy.secondary_pair_scope_threshold,
             raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
+            numerical_execution_policy=profile.numerical_execution_policy,
+            bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})
