@@ -40,6 +40,7 @@ python apps/workbench.py
 ```
 
 - `apps/` 只作正式入口；模組責任與依賴方向以 `doc/ARCHITECTURE.md` 為準。
+- `apps/smart_downloader.py` 現為 **Trading data** 正式更新入口；寫入 `data/trading/tw_stock_data_vip/`，不得修改 Research 的 `data/tw_stock_data_vip/`。Research market-data snapshot 目前固定截至 `config/research.py` 所宣告的 cutoff。
 
 # Workbench
 
@@ -366,7 +367,7 @@ outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_
 
 - `outputs/portfolio_sim/`：投組報表與載入摘要。
 - `outputs/vip_scanner/`：scanner issue log。
-- `outputs/smart_downloader/`：下載器 issue log。
+- `outputs/trading/smart_downloader/`：Trading downloader issue log；不由 Research/local-regression retention 清理。
 - `outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界。
 - `outputs/workbench_ui/`：Workbench GUI runtime 快取；目前用於常用股票中文名稱快取；若 reduced 代碼組變動或缺名，Workbench 會優先查官方 CSV / ISIN 名錄並於必要時做 SSL 容錯與 HTTP fallback。

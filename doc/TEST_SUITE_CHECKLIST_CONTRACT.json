@@ -3847,6 +3847,17 @@
       "entry": "`tools/validate/synthetic_breakout_quality_model_cases.py`, `config/breakout_quality.py`",
       "initial_status": "NEW",
       "order": 346
+    },
+    {
+      "id": "B359",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Runtime domain / Data isolation",
+      "item": "Research/Trading physical namespace isolation and downloader write guard",
+      "gap": "Research必須保留既有data/models/outputs scientific truth並由declarative cutoff固定目前market-data snapshot；Trading使用獨立data/models/outputs/state namespace。正式smart_downloader只能寫Trading dataset與Trading downloader output；即使runtime SAVE_DIR被誤設到Research dataset或其子目錄也必須fail-fast。Trading strategy config必須與Research設定分離，但只保存strategy identity／parameter selector／DL usage等declarative policy，strategy/execution計算仍重用canonical SSOT。",
+      "entry": "`config/research.py`, `config/trading.py`, `core/runtime_domains.py`, `core/trading_policy.py`, `services/downloader/runtime.py`, `tools/validate/synthetic_meta_cases.py`",
+      "initial_status": "NEW",
+      "order": 347
     }
   ],
   "tests": [
@@ -7189,6 +7200,13 @@
       "description": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case` 覆蓋B358：historical MR-13AS regression以ordered de-duplicating reference∪current結果驗[3]～[6] membership，不再要求current必使list長度固定+1",
       "initial_status": "NEW",
       "order": 468
+    },
+    {
+      "id": "T479",
+      "b_id": "B359",
+      "description": "`validate_runtime_domain_isolation_contract_case` 覆蓋Research既有dataset path不搬遷、Trading data/models/outputs/state path隔離、Research downloader write guard、Trading downloader default route、Research cutoff合法性與Trading config-driven selector/no-DL cross-field validation。",
+      "initial_status": "NEW",
+      "order": 469
     }
   ],
   "transitions": [
@@ -24231,6 +24249,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B359",
+      "description": "建立Research/Trading runtime-domain path SSOT、Trading declarative strategy policy與Trading-only downloader write guard；Research既有scientific paths不搬遷。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/runtime_domains.py`, `core/trading_policy.py`, `services/downloader/runtime.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T479",
+      "description": "新增runtime-domain isolation direct synthetic並納入正式registry／coverage contract；targeted contract 20 checks 0 fail。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_runtime_domain_isolation_contract_case`"
     }
   ]
 }

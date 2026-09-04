@@ -20,14 +20,20 @@ from config.downloader import (
     DOWNLOADER_VERBOSE_UNIVERSE_FETCH_ERRORS as VERBOSE_UNIVERSE_FETCH_ERRORS,
     DOWNLOADER_YF_SCREEN_SLEEP_SEC as YF_SCREEN_SLEEP_SEC,
 )
-from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir
 from core.log_utils import append_issue_log, build_timestamped_log_path
 from core.runtime_utils import get_taipei_now, get_taipei_file_mtime
-from core.output_paths import build_output_dir
+from core.runtime_domains import (
+    RUNTIME_DOMAIN_TRADING,
+    assert_runtime_write_path_is_not_research_dataset,
+    resolve_runtime_domain_paths,
+    resolve_runtime_output_dir,
+)
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = PROJECT_ROOT
-SAVE_DIR = get_dataset_dir(BASE_DIR, DATASET_PROFILE_FULL)
+RUNTIME_DOMAIN = RUNTIME_DOMAIN_TRADING
+_DOMAIN_PATHS = resolve_runtime_domain_paths(BASE_DIR, domain=RUNTIME_DOMAIN)
+SAVE_DIR = _DOMAIN_PATHS.data_dir
 
 
 # # (AI註: 單一真理來源 - universe 名單路徑必須即時依 SAVE_DIR 推導，避免目錄重導後仍寫回舊路徑)
@@ -36,7 +42,7 @@ def get_universe_list_file_path():
 
 
 FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
-OUTPUT_DIR = build_output_dir(BASE_DIR, 'smart_downloader')
+OUTPUT_DIR = resolve_runtime_output_dir(BASE_DIR, domain=RUNTIME_DOMAIN, category='smart_downloader')
 
 # # (AI註: 大量批次時避免逐筆錯誤洗板；詳細清單仍保留在摘要與 log)
 def _get_optional_curl_request_exceptions():
@@ -126,6 +132,7 @@ def get_finmind_loader():
 
 # # (AI註: 將執行期目錄建立延後到實際執行，避免被 import 時產生副作用)
 def ensure_runtime_dirs():
+    assert_runtime_write_path_is_not_research_dataset(PROJECT_ROOT, SAVE_DIR)
     os.makedirs(SAVE_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 

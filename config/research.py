@@ -10,6 +10,9 @@ ACTIVE_MODEL_ID = "breakout_quality"
 # Canonical single-seed identity for ordinary Research workflows.
 RESEARCH_SINGLE_SEED = 42
 
+# Research market-data snapshot is frozen at this information cutoff.
+RESEARCH_MARKET_DATA_CUTOFF = "2026-03-02"
+
 # Model-specific application providers. Add future models here without adding a
 # new executable under apps/.
 MODEL_RESEARCH_PROVIDERS: dict[str, dict[str, str]] = {
@@ -36,6 +39,7 @@ RESEARCH_ARTIFACT_PREPARATION = {
 __all__ = [
     "ACTIVE_MODEL_ID",
     "RESEARCH_SINGLE_SEED",
+    "RESEARCH_MARKET_DATA_CUTOFF",
     "MODEL_RESEARCH_PROVIDERS",
     "RESEARCH_ARTIFACT_PREPARATION",
 ]

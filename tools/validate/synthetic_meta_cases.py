@@ -2302,10 +2302,27 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "ACTIVE_MODEL_ID",
             "MODEL_RESEARCH_PROVIDERS",
             "RESEARCH_ARTIFACT_PREPARATION",
+            "RESEARCH_MARKET_DATA_CUTOFF",
         },
         "core.research_policy": {
             "get_active_model_research_provider",
             "get_research_artifact_preparation_policy",
+        },
+        "config.trading": {
+            "TRADING_ACTIVE_STRATEGY_ID",
+            "TRADING_DATASET_PROFILE",
+            "TRADING_PARAM_SELECTOR",
+            "TRADING_OPTIMIZER_MULTI_SEED_REQUIRED",
+        },
+        "core.trading_policy": {
+            "TradingStrategyProfile",
+            "get_trading_strategy_profile",
+            "get_trading_policy_snapshot",
+        },
+        "core.runtime_domains": {
+            "resolve_runtime_domain_paths",
+            "resolve_runtime_output_dir",
+            "assert_runtime_write_path_is_not_research_dataset",
         },
         "config.downloader": {
             "DOWNLOADER_MIN_VOLUME",
@@ -2408,6 +2425,89 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
     summary["reloaded_modules"] = reloaded_modules
     return results, summary
 
+
+
+def validate_runtime_domain_isolation_contract_case(_base_params):
+    case_id = "META_RUNTIME_DOMAIN_ISOLATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.research import RESEARCH_MARKET_DATA_CUTOFF
+    from core.dataset_profiles import DATASET_PROFILE_FULL, DATASET_PROFILE_REDUCED, get_dataset_dir
+    from core.runtime_domains import (
+        RUNTIME_DOMAIN_RESEARCH,
+        RUNTIME_DOMAIN_TRADING,
+        assert_runtime_write_path_is_not_research_dataset,
+        build_runtime_domain_contract_snapshot,
+        resolve_runtime_domain_paths,
+        resolve_runtime_output_dir,
+    )
+    import core.trading_policy as trading_policy
+
+    root = PROJECT_ROOT
+    research = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_RESEARCH, dataset_profile=DATASET_PROFILE_FULL)
+    trading = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=DATASET_PROFILE_FULL)
+
+    add_check(results, "runtime_domain", case_id, "research_full_path_preserves_existing_dataset_ssot", str(Path(get_dataset_dir(root, DATASET_PROFILE_FULL)).resolve()), str(Path(research.data_dir).resolve()))
+    add_check(results, "runtime_domain", case_id, "trading_full_path_is_isolated", str((root / "data" / "trading" / "tw_stock_data_vip").resolve()), str(Path(trading.data_dir).resolve()))
+    add_check(results, "runtime_domain", case_id, "research_and_trading_data_dirs_differ", True, str(Path(research.data_dir).resolve()) != str(Path(trading.data_dir).resolve()))
+    add_check(results, "runtime_domain", case_id, "trading_models_root_is_isolated", str((root / "models" / "trading").resolve()), str(Path(trading.models_root).resolve()))
+    add_check(results, "runtime_domain", case_id, "trading_strategy_params_root_is_isolated", str((root / "models" / "trading" / "strategy_params").resolve()), str(Path(trading.strategy_params_root).resolve()))
+    add_check(results, "runtime_domain", case_id, "trading_outputs_root_is_isolated", str((root / "outputs" / "trading").resolve()), str(Path(trading.outputs_root).resolve()))
+    add_check(results, "runtime_domain", case_id, "trading_state_root_is_isolated", str((root / "state" / "trading").resolve()), str(Path(trading.state_root).resolve()))
+    add_check(results, "runtime_domain", case_id, "trading_downloader_output_dir_is_nested_under_trading", str((root / "outputs" / "trading" / "smart_downloader").resolve()), str(Path(resolve_runtime_output_dir(root, domain=RUNTIME_DOMAIN_TRADING, category="smart_downloader")).resolve()))
+
+    downloader_runtime = importlib.import_module("services.downloader.runtime")
+    add_check(results, "runtime_domain", case_id, "downloader_default_save_dir_uses_trading_domain", str(Path(trading.data_dir).resolve()), str(Path(downloader_runtime.SAVE_DIR).resolve()))
+    add_check(results, "runtime_domain", case_id, "downloader_issue_logs_use_trading_domain", str((root / "outputs" / "trading" / "smart_downloader").resolve()), str(Path(downloader_runtime.OUTPUT_DIR).resolve()))
+
+    cutoff = str(RESEARCH_MARKET_DATA_CUTOFF)
+    try:
+        parsed_cutoff = str(__import__("pandas").Timestamp(cutoff).date())
+    except (TypeError, ValueError):
+        parsed_cutoff = ""
+    add_check(results, "runtime_domain", case_id, "research_market_data_cutoff_is_valid_date", cutoff, parsed_cutoff)
+
+    for profile in (DATASET_PROFILE_FULL, DATASET_PROFILE_REDUCED):
+        protected = get_dataset_dir(root, profile)
+        try:
+            assert_runtime_write_path_is_not_research_dataset(root, protected)
+        except RuntimeError:
+            rejected = True
+        else:
+            rejected = False
+        add_check(results, "runtime_domain", case_id, f"downloader_rejects_research_{profile}_root", True, rejected)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        assert_runtime_write_path_is_not_research_dataset(root, temp_dir)
+        add_check(results, "runtime_domain", case_id, "downloader_allows_nonresearch_write_target", True, True)
+
+    profile = trading_policy.get_trading_strategy_profile()
+    add_check(results, "runtime_domain", case_id, "trading_strategy_id_supported", True, profile.strategy_id in trading_policy.SUPPORTED_TRADING_STRATEGY_IDS)
+    add_check(results, "runtime_domain", case_id, "trading_param_selector_supported", True, profile.param_selector in __import__("core.strategy_param_artifacts", fromlist=["POLICY_FILENAME_BY_NAME"]).POLICY_FILENAME_BY_NAME)
+    add_check(results, "runtime_domain", case_id, "no_dl_strategy_disables_filter", False, profile.dl_filter_enabled)
+    add_check(results, "runtime_domain", case_id, "no_dl_strategy_disables_ranking", False, profile.dl_ranking_enabled)
+
+    with patch.object(trading_policy, "TRADING_PARAM_SELECTOR", "base_finalists_agree"):
+        patched_profile = trading_policy.get_trading_strategy_profile()
+    add_check(results, "runtime_domain", case_id, "trading_selector_runtime_follows_config_override", "base_finalists_agree", patched_profile.param_selector)
+
+    with patch.object(trading_policy, "TRADING_DL_FILTER_ENABLED", True):
+        try:
+            trading_policy.get_trading_strategy_profile()
+        except ValueError:
+            invalid_dl_rejected = True
+        else:
+            invalid_dl_rejected = False
+    add_check(results, "runtime_domain", case_id, "no_dl_strategy_rejects_dl_filter_override", True, invalid_dl_rejected)
+
+    snapshot = build_runtime_domain_contract_snapshot(root)
+    add_check(results, "runtime_domain", case_id, "runtime_domain_snapshot_carries_research_cutoff", cutoff, str(snapshot["research"]["market_data_cutoff"]))
+    summary["research_data_dir"] = str(Path(research.data_dir).resolve())
+    summary["trading_data_dir"] = str(Path(trading.data_dir).resolve())
+    summary["trading_strategy_id"] = profile.strategy_id
+    summary["trading_param_selector"] = profile.param_selector
+    return results, summary
 
 def validate_peak_process_memory_tracker_context_management_case(_base_params):
     case_id = "META_PEAK_PROCESS_MEMORY_TRACKER_CONTEXT_MANAGEMENT"

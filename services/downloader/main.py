@@ -49,7 +49,7 @@ def main(argv=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "services/downloader/main.py")
         print(f"用法: python {program_name}")
-        print("說明: 下載或更新完整資料集到預設 full dataset 路徑。")
+        print("說明: 下載或更新 Trading 完整資料集；Research 資料不會被修改。")
         return 0
 
     try:
@@ -62,7 +62,7 @@ def main(argv=None):
         return 1
 
     try:
-        print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
+        print(f"🤖 Trading 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
         market_date = get_market_last_date()
         target_tickers = get_or_update_universe()
 

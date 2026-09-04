@@ -9,7 +9,7 @@ project/
 ├─ apps/
 │  ├─ research.py                     # 研究單一正式入口：模型訓練／策略參數最佳化／策略組合比較／Audit
 │  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
-│  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
+│  ├─ smart_downloader.py             # Trading 市場資料更新正式入口（薄入口）
 │  ├─ run_bundle.py                   # 本機 double check／commit／package／formal test 單一使用者入口
 │  ├─ package_zip.py                  # run_bundle 使用的專案打包 helper；亦保留直接 snapshot 用途
 │  ├─ test_suite.py                   # run_bundle 內部 formal test runner
@@ -17,7 +17,8 @@ project/
 │  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
 │  ├─ breakout_policy.py              # breakout 策略預設與 optimizer high_len 可調範圍（declarative）
-│  ├─ research.py                     # active model／provider spec／Research orchestration設定（declarative）
+│  ├─ research.py                     # active model／provider spec／Research orchestration／market-data cutoff（declarative）
+│  ├─ trading.py                      # Trading active strategy／param selector／DL policy（declarative）
 │  ├─ downloader.py                   # downloader篩選、timeout、sleep與verbosity設定（declarative）
 │  ├─ runtime.py                      # Scanner／Portfolio／Optimizer／Research process runtime與console設定（declarative）
 │  ├─ breakout_quality.py             # BQ 使用者／專案可調設定與current workflow membership（declarative）
@@ -32,6 +33,8 @@ project/
 │  ├─ execution_policy.py             # execution config snapshot runtime helper
 │  ├─ display_policy.py               # display coercion／formatter／snapshot runtime helper
 │  ├─ research_policy.py              # Research provider／artifact policy typed resolver
+│  ├─ trading_policy.py               # Trading strategy config validation／resolved snapshot
+│  ├─ runtime_domains.py              # Research/Trading data/models/outputs/state path SSOT與write guard
 │  ├─ training_performance.py         # optimizer performance config resolver／env override／snapshot
 │  ├─ training_policy.py              # Strategy Optimizer training policy validation／derived snapshot／runtime owner
 │  ├─ selection_policy.py             # history-selection 策略參數 schema／default snapshot owner
@@ -242,7 +245,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `services/`：正式 application/service orchestration；可組合`core/`、`filters/`與其他正式service，不得反向依賴`tools/`。
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
 - `tools/`：Audit、CLI／GUI、下載、validate、local regression與legacy import compatibility wrapper；canonical portfolio replay、optimizer library與Breakout Quality training／PIT application service均位於`services/`，正式domain與services不得反向依賴`tools/`。
-- `config/`：只持有使用者／專案可調設定與必要 declarative spec；不得承擔 resolver、formatter、I/O、runtime builder 或 dataclass 行為。設定的型別收斂、environment override、derived value、snapshot 與 runtime resolution 由其 `core/`／domain owner 負責。Scientific/profile declarations 依各 domain Registry／contract 治理，不因 config cleanup 改變 identity。
+- `config/`：只持有使用者／專案可調設定與必要 declarative spec；不得承擔 resolver、formatter、I/O、runtime builder 或 dataclass 行為。Research 與 Trading 可分別持有自己的可調設定，但共享 strategy/execution semantic owner，禁止複製第二套策略計算。設定的型別收斂、environment override、derived value、snapshot 與 runtime resolution 由其 `core/`／domain owner 負責。Scientific/profile declarations 依各 domain Registry／contract 治理，不因 config cleanup 改變 identity。
 - Execution/runtime 預設若是使用者可能調整的資源、diagnostic、timeout／grace 或 benchmark trial knob，應由對應 `config/` owner 持有；service/core 內的固定 schema version、env-var 名稱、sentinel、UI layout、protocol heartbeat 或 generic class fallback 不因「集中設定」而搬入 config。
 - `models/`：模型工件與 Strategy Parameter SSOT 根目錄。所有current策略參數只能位於`models/strategy_params/`；沒有 path override 時，預設run-best參數解析到`models/strategy_params/canonical/run_best_params.json`。`models/*.json` root-level策略檔只屬一次性legacy migration input；migration由`apps/research.py optimizer migrate-strategy-params`明確觸發，cleanup必須通過canonical manifest + SHA／migration-lineage readiness gate。若舊OOS frozen params與canonical schedule initial member不同，explicit migration會先把原檔byte-preserve到`models/research/breakout_quality/strategy_param_legacy_oos/`並記錄source/archive SHA；該archive只供historical evidence，不進current discovery。Round 3後current runtime與`ensure_strategy_parameter_artifact()`均不得掃描、fallback或自動migration root legacy JSON。
 - `doc/`：架構、常用指令與 formal checklist 文件。
@@ -255,7 +258,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `apps/test_suite.py`：`run_bundle.py`內部formal test runner；不作為一般日常使用者入口。
 - `apps/package_zip.py`：打包正式入口；直接呼叫只負責snapshot/package，不取代`run_bundle.py`的整合流程。
 - `apps/portfolio_sim.py`：投組模擬正式入口。
-- `apps/smart_downloader.py`：下載器正式入口。
+- `apps/smart_downloader.py`：Trading 市場資料更新正式入口。Research 仍使用既有 `data/tw_stock_data_vip/`，目前 market-data cutoff 由 `config/research.py` 宣告；Trading full dataset 固定寫入 `data/trading/tw_stock_data_vip/`。`core/runtime_domains.py`是 Research/Trading data/models/outputs/state namespace 與 downloader write guard 的 SSOT；正式 downloader 若被重導至 Research dataset 或其子目錄必須 fail-fast。Trading models／strategy params／state 後續只可落入 `models/trading/`、`models/trading/strategy_params/` 與 `state/trading/`，不得覆寫 Research truth。
 - `apps/vip_scanner.py`：scanner 正式入口。
 - `apps/workbench.py`：GUI / workbench 正式入口；也是單股 trade-analysis 的單一使用者入口；K 線檢視中的交易明細與 Console 改以獨立分頁承接。
 
