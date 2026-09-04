@@ -3413,33 +3413,114 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         for architecture in ACTIVE_MODEL_ARCHITECTURES
         if get_architecture_descriptor(architecture).has_capability("gated_recurrent_state")
     ]
+    recurrent_fp32_architectures = [
+        architecture
+        for architecture in recurrent_architectures
+        if not get_architecture_descriptor(architecture).has_capability("recurrent_outer_autocast")
+    ]
+    recurrent_guarded_architectures = [
+        architecture
+        for architecture in recurrent_architectures
+        if get_architecture_descriptor(architecture).has_capability("same_batch_fp32_nonfinite_retry")
+    ]
     check_true(
-        "active_gated_recurrent_backbone_has_single_fp32_stable_runtime_owner",
-        len(recurrent_architectures) == 1,
+        "active_gated_recurrent_backbones_have_one_fp32_reference_and_one_guarded_bf16_control",
+        len(recurrent_fp32_architectures) == 1 and len(recurrent_guarded_architectures) == 1,
     )
-    if recurrent_architectures:
-        recurrent_model = build_active_model(10, 0, architecture=recurrent_architectures[0])
+    if recurrent_fp32_architectures and recurrent_guarded_architectures:
         recurrent_x = torch.randn((3, 300, 10), dtype=torch.float32)
+        fp32_model = build_active_model(10, 0, architecture=recurrent_fp32_architectures[0])
+        guarded_model = build_active_model(10, 0, architecture=recurrent_guarded_architectures[0])
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-            recurrent_safety, recurrent_mfe = recurrent_model.forward_safety_mfe_heads(
-                recurrent_x, None
-            )
-            recurrent_loss = recurrent_safety.square().mean() + recurrent_mfe.square().mean()
-        recurrent_model.zero_grad(set_to_none=True)
-        recurrent_loss.backward()
-        recurrent_grads = [
-            parameter.grad
-            for parameter in recurrent_model.parameters()
-            if parameter.requires_grad and parameter.grad is not None
-        ]
+            fp32_safety, fp32_mfe = fp32_model.forward_safety_mfe_heads(recurrent_x, None)
+            guarded_safety, guarded_mfe = guarded_model.forward_safety_mfe_heads(recurrent_x, None)
         check_true(
-            "gated_recurrent_backbone_keeps_recurrence_and_heads_fp32_under_outer_bf16_autocast",
-            recurrent_safety.dtype == torch.float32
-            and recurrent_mfe.dtype == torch.float32
-            and bool(torch.isfinite(recurrent_safety).all().item())
-            and bool(torch.isfinite(recurrent_mfe).all().item())
-            and recurrent_grads
-            and all(bool(torch.isfinite(grad).all().item()) for grad in recurrent_grads),
+            "gated_recurrent_precision_controls_keep_topology_matched_but_execution_distinct",
+            sum(p.numel() for p in fp32_model.parameters() if p.requires_grad) == 474287
+            and sum(p.numel() for p in guarded_model.parameters() if p.requires_grad) == 474287
+            and fp32_safety.dtype == torch.float32
+            and fp32_mfe.dtype == torch.float32
+            and guarded_safety.dtype == torch.bfloat16
+            and guarded_mfe.dtype == torch.bfloat16
+            and getattr(fp32_model, "same_batch_fp32_nonfinite_retry", None) is False
+            and getattr(guarded_model, "same_batch_fp32_nonfinite_retry", None) is True,
+        )
+
+        from config.breakout_quality_runtime import (
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+            TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        )
+
+        class _RetryProbe(torch.nn.Module):
+            def __init__(self, failure_mode):
+                super().__init__()
+                self.encoder = torch.nn.Linear(10, 8)
+                self.safety = torch.nn.Linear(8, 2)
+                self.mfe = torch.nn.Linear(8, 2)
+                self.failure_mode = failure_mode
+                self.same_batch_fp32_nonfinite_retry = True
+
+            def forward_safety_mfe_heads(self, x, context):
+                del context
+                encoded = torch.tanh(self.encoder(x[:, -1, :]))
+                safety = self.safety(encoded)
+                mfe = self.mfe(encoded)
+                if torch.is_autocast_enabled("cpu"):
+                    if self.failure_mode == "forward":
+                        safety = safety * torch.tensor(float("inf"), device=safety.device)
+                        mfe = mfe * torch.tensor(float("inf"), device=mfe.device)
+                    elif self.failure_mode == "gradient":
+                        safety.register_hook(
+                            lambda grad: grad * torch.tensor(float("inf"), device=grad.device)
+                        )
+                return safety, mfe
+
+        class _CountingAdam(torch.optim.Adam):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.step_count = 0
+
+            def step(self, *args, **kwargs):
+                self.step_count += 1
+                return super().step(*args, **kwargs)
+
+        retry_features = np.random.default_rng(11).normal(size=(8, 300, 10)).astype(np.float32)
+        retry_context = np.zeros((8, 0), dtype=np.float32)
+        retry_target = np.asarray([
+            [0.10, 0.20], [0.40, 0.40], [0.70, 0.60], [0.90, 0.90],
+            [0.20, 0.10], [0.45, 0.30], [0.65, 0.70], [0.95, 0.95],
+        ], dtype=np.float32)
+        retry_dates = pd.Series(pd.to_datetime(["2020-01-01"] * 4 + ["2020-01-02"] * 4))
+        retry_plan = SimpleNamespace(
+            device_type="cpu",
+            device=torch.device("cpu"),
+            mixed_precision_enabled=True,
+            autocast_dtype_name="bfloat16",
+        )
+        retry_results = []
+        for failure_mode in ("forward", "gradient"):
+            retry_model = _RetryProbe(failure_mode)
+            retry_optimizer = _CountingAdam(retry_model.parameters(), lr=1e-3)
+            retry_loss = training_module._train_epoch(
+                torch, retry_model, retry_optimizer, retry_features, retry_context,
+                np.arange(8, dtype=np.int64), retry_target, retry_dates,
+                training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+                batch_size=128, seed=42, gradient_clip_norm=1.0, plan=retry_plan,
+                grad_scaler=None,
+                pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+                secondary_pair_scope_threshold=0.50,
+            )
+            retry_results.append(
+                math.isfinite(float(retry_loss))
+                and retry_optimizer.step_count == 1
+                and int(getattr(retry_model, "_same_batch_fp32_retry_count", 0)) == 1
+                and all(bool(torch.isfinite(p).all().item()) for p in retry_model.parameters())
+            )
+        check_true(
+            "guarded_bf16_retries_same_batch_once_for_forward_or_gradient_nonfinite_without_extra_step",
+            all(retry_results),
         )
 
     full_window_descriptor = get_architecture_descriptor(

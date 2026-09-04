@@ -1570,6 +1570,206 @@ def _combine_training_head_losses(
     return sum(available) / float(len(available))
 
 
+
+_SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS = frozenset({
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
+})
+
+
+def _compute_shared_safety_scoped_mfe_duo_loss(
+    torch,
+    model,
+    xb,
+    cb,
+    target,
+    batch_dates,
+    *,
+    training_policy,
+    secondary_pair_scope: str,
+    secondary_pair_scope_threshold: float | None,
+    pairwise_reduction: str,
+):
+    """Canonical shared Safety + scoped Conditional-MFE batch loss.
+
+    This is used by the normal mixed-precision path and by the guarded same-batch
+    FP32 retry path.  Keeping one loss owner prevents the numerical fallback from
+    silently changing target/scope/weighting semantics.
+    """
+
+    if target.ndim != 2 or int(target.shape[1]) != 2:
+        raise ValueError("Shared Safety independent-secondary duo-head target必須為[N,2]")
+    if not hasattr(model, "forward_safety_mfe_heads"):
+        raise ValueError("Shared Safety independent-secondary objective需要independent duo-head model architecture")
+
+    secondary_item_eligibility = None
+    if str(secondary_pair_scope) == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN:
+        if secondary_pair_scope_threshold is None:
+            raise ValueError("scoped secondary objective缺少secondary pair scope threshold")
+        threshold = float(secondary_pair_scope_threshold)
+        if not math.isfinite(threshold) or not 0.0 < threshold < 1.0:
+            raise ValueError("secondary pair scope threshold必須在(0,1)")
+        secondary_item_eligibility = target[:, 0] >= threshold
+    elif str(secondary_pair_scope) != CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
+        raise ValueError(f"unsupported secondary pair scope: {secondary_pair_scope!r}")
+
+    safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
+    safety_margin = safety_logits.float()[:, LABEL_PASS] - safety_logits.float()[:, LABEL_REJECT]
+    conditional_mfe_margin = (
+        conditional_mfe_logits.float()[:, LABEL_PASS]
+        - conditional_mfe_logits.float()[:, LABEL_REJECT]
+    )
+    primary_pair_target = target[:, 0]
+    primary_mode = str(training_policy.primary_supervision_mode)
+    binary_hs_pair_target = None
+    if primary_mode in {
+        CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
+        CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS,
+        CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS,
+    }:
+        if secondary_pair_scope_threshold is None:
+            raise ValueError("HS supervision composition缺少true-HS threshold")
+        binary_hs_pair_target = _binary_threshold_pair_target(
+            torch, target[:, 0], float(secondary_pair_scope_threshold)
+        )
+        if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS:
+            primary_pair_target = binary_hs_pair_target
+
+    top_hs_ndcg_threshold = None
+    if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS:
+        if secondary_pair_scope_threshold is None:
+            raise ValueError("Top-HS Safety composition缺少true-HS threshold")
+        top_hs_ndcg_threshold = float(secondary_pair_scope_threshold)
+        primary_pair_target = _top_hs_safety_relevance(
+            torch, target[:, 0], top_hs_ndcg_threshold
+        )
+
+    primary_truth_weight_policy = str(training_policy.primary_pair_weight_policy)
+    if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS:
+        if binary_hs_pair_target is None:
+            raise ValueError("dual-supervised HS composition缺少binary HS target")
+        (
+            safety_loss,
+            safety_supervision,
+            _continuous_safety_supervision,
+            _binary_hs_supervision,
+        ) = _dual_supervised_safety_pairwise_loss(
+            torch,
+            safety_margin,
+            target[:, 0],
+            binary_hs_pair_target,
+            batch_dates,
+            reduction=str(pairwise_reduction),
+        )
+    else:
+        safety_loss, safety_supervision = _pairwise_logistic_loss(
+            torch,
+            safety_margin,
+            primary_pair_target,
+            batch_dates,
+            reduction=str(pairwise_reduction),
+            pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            pair_truth_weight_values=(
+                target[:, 0]
+                if primary_truth_weight_policy
+                != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+                else None
+            ),
+            pair_truth_weight_policy=primary_truth_weight_policy,
+            ndcg_top_k_threshold=top_hs_ndcg_threshold,
+        )
+
+    if (
+        training_policy.secondary_supervision_mode
+        == CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED
+    ):
+        if secondary_item_eligibility is not None:
+            raise ValueError("stratified secondary composition不得同時使用item-scope mask")
+        partition_membership = target[:, 1] > 0.0
+        (
+            conditional_mfe_loss,
+            boundary_supervision,
+            within_hs_supervision,
+        ) = _binary_partition_stratified_pairwise_loss(
+            torch,
+            conditional_mfe_margin,
+            target[:, 1],
+            batch_dates,
+            partition_membership,
+            reduction=str(pairwise_reduction),
+        )
+        conditional_mfe_supervision = int(boundary_supervision + within_hs_supervision)
+    else:
+        conditional_mfe_loss, conditional_mfe_supervision = _pairwise_logistic_loss(
+            torch,
+            conditional_mfe_margin,
+            target[:, 1],
+            batch_dates,
+            reduction=str(pairwise_reduction),
+            pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            item_eligibility=secondary_item_eligibility,
+        )
+
+    loss = _combine_training_head_losses(
+        (safety_loss, conditional_mfe_loss),
+        combination=training_policy.head_loss_combination,
+        component_count=training_policy.head_loss_component_count,
+    )
+    if loss is None:
+        return None, 0
+    return loss, int(max(1, safety_supervision + conditional_mfe_supervision))
+
+
+def _record_same_batch_fp32_retry(model, *, reason: str) -> None:
+    count = int(getattr(model, "_same_batch_fp32_retry_count", 0)) + 1
+    setattr(model, "_same_batch_fp32_retry_count", count)
+    print(f"  BF16 Guarded Retry #{count} | {reason} -> same batch FP32 recompute")
+
+
+def _guarded_retry_enabled(model, plan, grad_scaler, loss_handler: str) -> bool:
+    enabled = bool(getattr(model, "same_batch_fp32_nonfinite_retry", False))
+    if not enabled:
+        return False
+    if str(loss_handler) not in _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS:
+        raise ValueError("same-batch FP32 retry目前只支援shared Safety scoped Conditional-MFE loss capability")
+    return bool(
+        plan.mixed_precision_enabled
+        and plan.autocast_dtype_name == "bfloat16"
+        and grad_scaler is None
+    )
+
+
+def _fp32_retry_shared_safety_loss(
+    torch,
+    model,
+    xb,
+    cb,
+    target,
+    batch_dates,
+    *,
+    training_policy,
+    secondary_pair_scope: str,
+    secondary_pair_scope_threshold: float | None,
+    pairwise_reduction: str,
+):
+    with torch.autocast(device_type=xb.device.type, enabled=False):
+        return _compute_shared_safety_scoped_mfe_duo_loss(
+            torch,
+            model,
+            xb.float(),
+            cb.float(),
+            target.float(),
+            batch_dates,
+            training_policy=training_policy,
+            secondary_pair_scope=secondary_pair_scope,
+            secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+            pairwise_reduction=pairwise_reduction,
+        )
+
+
 def _train_epoch(
     torch,
     model,
@@ -1634,6 +1834,8 @@ def _train_epoch(
         if len(ids) == 0:
             continue
         optimizer.zero_grad(set_to_none=True)
+        guarded_retry = False
+        guarded_batch_dates = None
         with autocast_context(torch, plan):
             if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 3:
@@ -1667,134 +1869,44 @@ def _train_epoch(
                 if loss is None:
                     continue
                 loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
-            elif loss_handler in {
-                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
-                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
-                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
-                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
-                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
-            }:
-                if target.ndim != 2 or int(target.shape[1]) != 2:
-                    raise ValueError("Shared Safety independent-secondary duo-head target必須為[N,2]")
-                if not hasattr(model, "forward_safety_mfe_heads"):
-                    raise ValueError("Shared Safety independent-secondary objective需要independent duo-head model architecture")
-                secondary_item_eligibility = None
-                if str(secondary_pair_scope) == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN:
-                    if secondary_pair_scope_threshold is None:
-                        raise ValueError("scoped secondary objective缺少secondary pair scope threshold")
-                    threshold = float(secondary_pair_scope_threshold)
-                    if not math.isfinite(threshold) or not 0.0 < threshold < 1.0:
-                        raise ValueError("secondary pair scope threshold必須在(0,1)")
-                    secondary_item_eligibility = target[:, 0] >= threshold
-                elif str(secondary_pair_scope) != CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
-                    raise ValueError(f"unsupported secondary pair scope: {secondary_pair_scope!r}")
-                safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
-                safety_margin = safety_logits.float()[:, LABEL_PASS] - safety_logits.float()[:, LABEL_REJECT]
-                conditional_mfe_margin = conditional_mfe_logits.float()[:, LABEL_PASS] - conditional_mfe_logits.float()[:, LABEL_REJECT]
+            elif loss_handler in _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS:
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
-                primary_pair_target = target[:, 0]
-                primary_mode = str(training_policy.primary_supervision_mode)
-                binary_hs_pair_target = None
-                if primary_mode in {
-                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
-                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS,
-                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS,
-                }:
-                    if secondary_pair_scope_threshold is None:
-                        raise ValueError("HS supervision composition缺少true-HS threshold")
-                    binary_hs_pair_target = _binary_threshold_pair_target(
-                        torch, target[:, 0], float(secondary_pair_scope_threshold)
-                    )
-                    if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS:
-                        primary_pair_target = binary_hs_pair_target
-
-                top_hs_ndcg_threshold = None
-                if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS:
-                    if secondary_pair_scope_threshold is None:
-                        raise ValueError("Top-HS Safety composition缺少true-HS threshold")
-                    top_hs_ndcg_threshold = float(secondary_pair_scope_threshold)
-                    primary_pair_target = _top_hs_safety_relevance(
-                        torch, target[:, 0], top_hs_ndcg_threshold
-                    )
-
-                primary_truth_weight_policy = str(
-                    training_policy.primary_pair_weight_policy
-                )
-                if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS:
-                    if binary_hs_pair_target is None:
-                        raise ValueError("dual-supervised HS composition缺少binary HS target")
-                    (
-                        safety_loss,
-                        safety_supervision,
-                        _continuous_safety_supervision,
-                        _binary_hs_supervision,
-                    ) = _dual_supervised_safety_pairwise_loss(
+                guarded_batch_dates = batch_dates
+                guarded_retry = _guarded_retry_enabled(model, plan, grad_scaler, loss_handler)
+                try:
+                    loss, loss_weight = _compute_shared_safety_scoped_mfe_duo_loss(
                         torch,
-                        safety_margin,
-                        target[:, 0],
-                        binary_hs_pair_target,
+                        model,
+                        xb,
+                        cb,
+                        target,
                         batch_dates,
-                        reduction=str(pairwise_reduction),
+                        training_policy=training_policy,
+                        secondary_pair_scope=secondary_pair_scope,
+                        secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+                        pairwise_reduction=pairwise_reduction,
                     )
-                else:
-                    safety_loss, safety_supervision = _pairwise_logistic_loss(
+                except FloatingPointError as exc:
+                    if not guarded_retry:
+                        raise
+                    optimizer.zero_grad(set_to_none=True)
+                    _record_same_batch_fp32_retry(model, reason="non-finite BF16 forward/loss")
+                    loss, loss_weight = _fp32_retry_shared_safety_loss(
                         torch,
-                        safety_margin,
-                        primary_pair_target,
+                        model,
+                        xb,
+                        cb,
+                        target,
                         batch_dates,
-                        reduction=str(pairwise_reduction),
-                        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-                        pair_truth_weight_values=(
-                            target[:, 0]
-                            if primary_truth_weight_policy
-                            != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
-                            else None
-                        ),
-                        pair_truth_weight_policy=primary_truth_weight_policy,
-                        ndcg_top_k_threshold=top_hs_ndcg_threshold,
+                        training_policy=training_policy,
+                        secondary_pair_scope=secondary_pair_scope,
+                        secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+                        pairwise_reduction=pairwise_reduction,
                     )
-
-                if (
-                    training_policy.secondary_supervision_mode
-                    == CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED
-                ):
-                    if secondary_item_eligibility is not None:
-                        raise ValueError("stratified secondary composition不得同時使用item-scope mask")
-                    partition_membership = target[:, 1] > 0.0
-                    (
-                        conditional_mfe_loss,
-                        boundary_supervision,
-                        within_hs_supervision,
-                    ) = _binary_partition_stratified_pairwise_loss(
-                        torch,
-                        conditional_mfe_margin,
-                        target[:, 1],
-                        batch_dates,
-                        partition_membership,
-                        reduction=str(pairwise_reduction),
-                    )
-                    conditional_mfe_supervision = int(
-                        boundary_supervision + within_hs_supervision
-                    )
-                else:
-                    conditional_mfe_loss, conditional_mfe_supervision = _pairwise_logistic_loss(
-                        torch,
-                        conditional_mfe_margin,
-                        target[:, 1],
-                        batch_dates,
-                        reduction=str(pairwise_reduction),
-                        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-                        item_eligibility=secondary_item_eligibility,
-                    )
-
-                loss = _combine_training_head_losses(
-                    (safety_loss, conditional_mfe_loss),
-                    combination=training_policy.head_loss_combination,
-                    component_count=training_policy.head_loss_component_count,
-                )
+                    if loss is None:
+                        continue
                 if loss is None:
                     continue
-                loss_weight = int(max(1, safety_supervision + conditional_mfe_supervision))
             elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
                     raise ValueError("Shared Safety-weighted duo-head target必須為[N,2]")
@@ -1955,15 +2067,99 @@ def _train_epoch(
             # canonical finite-loss guard. Reuse the same scalar for reporting
             # after optimizer.step instead of synchronizing a second time.
             loss_scalar_value = float(loss.detach().cpu().item())
-            if not math.isfinite(loss_scalar_value):
+            loss_is_finite = math.isfinite(loss_scalar_value)
+        else:
+            loss_is_finite = bool(torch.isfinite(loss).item())
+        if not loss_is_finite:
+            if not guarded_retry or guarded_batch_dates is None:
                 raise FloatingPointError("continuous ranker training loss非有限值")
-        elif not bool(torch.isfinite(loss).item()):
-            raise FloatingPointError("continuous ranker training loss非有限值")
+            optimizer.zero_grad(set_to_none=True)
+            _record_same_batch_fp32_retry(model, reason="non-finite BF16 training loss")
+            retry_loss, retry_loss_weight = _fp32_retry_shared_safety_loss(
+                torch,
+                model,
+                xb,
+                cb,
+                target,
+                guarded_batch_dates,
+                training_policy=training_policy,
+                secondary_pair_scope=secondary_pair_scope,
+                secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+                pairwise_reduction=pairwise_reduction,
+            )
+            if retry_loss is None:
+                raise FloatingPointError("same-batch FP32 retry缺少有效ranking supervision")
+            retry_scalar = float(retry_loss.detach().cpu().item())
+            if not math.isfinite(retry_scalar):
+                raise FloatingPointError("same-batch FP32 retry training loss非有限值")
+            loss = retry_loss
+            loss_weight = int(retry_loss_weight)
+            loss_scalar_value = retry_scalar if reuse_loss_scalar else None
         if grad_scaler is None:
             loss.backward()
+            nonfinite_gradient = False
             if float(gradient_clip_norm) > 0.0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(gradient_clip_norm))
-            optimizer.step()
+                if guarded_retry:
+                    try:
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(),
+                            float(gradient_clip_norm),
+                            error_if_nonfinite=True,
+                        )
+                    except RuntimeError as exc:
+                        if "non-finite" not in str(exc).lower():
+                            raise
+                        nonfinite_gradient = True
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(gradient_clip_norm))
+            elif guarded_retry:
+                nonfinite_gradient = any(
+                    not bool(torch.isfinite(parameter.grad).all().item())
+                    for parameter in model.parameters()
+                    if parameter.grad is not None
+                )
+
+            if guarded_retry and nonfinite_gradient:
+                if guarded_batch_dates is None:
+                    raise RuntimeError("guarded BF16 retry缺少canonical batch dates")
+                optimizer.zero_grad(set_to_none=True)
+                _record_same_batch_fp32_retry(model, reason="non-finite BF16 gradient")
+                retry_loss, retry_loss_weight = _fp32_retry_shared_safety_loss(
+                    torch,
+                    model,
+                    xb,
+                    cb,
+                    target,
+                    guarded_batch_dates,
+                    training_policy=training_policy,
+                    secondary_pair_scope=secondary_pair_scope,
+                    secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+                    pairwise_reduction=pairwise_reduction,
+                )
+                if retry_loss is None:
+                    raise FloatingPointError("same-batch FP32 retry缺少有效ranking supervision")
+                retry_scalar = float(retry_loss.detach().cpu().item())
+                if not math.isfinite(retry_scalar):
+                    raise FloatingPointError("same-batch FP32 retry training loss非有限值")
+                retry_loss.backward()
+                if float(gradient_clip_norm) > 0.0:
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        float(gradient_clip_norm),
+                        error_if_nonfinite=True,
+                    )
+                elif any(
+                    not bool(torch.isfinite(parameter.grad).all().item())
+                    for parameter in model.parameters()
+                    if parameter.grad is not None
+                ):
+                    raise FloatingPointError("same-batch FP32 retry gradient仍為非有限值")
+                optimizer.step()
+                loss = retry_loss
+                loss_weight = int(retry_loss_weight)
+                loss_scalar_value = retry_scalar if reuse_loss_scalar else None
+            else:
+                optimizer.step()
         else:
             grad_scaler.scale(loss).backward()
             if float(gradient_clip_norm) > 0.0:

@@ -498,6 +498,10 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     # AO is the simple learnability/reference base for the current representation-level control.
     # The active model is injected separately below, so the list is H/AH/AK/AO + current.
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    # BG remains the current Training Model while its Rolling confirmation is pending.
+    # BH is a Forward-only numerical control and can be built by [3] without changing [1]/[2].
+    ("MR-13BG", "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    ("MR-13BH", "daily_universal_gru_bf16_guarded_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
 )
 
 
@@ -872,6 +876,9 @@ DAILY_UNIVERSAL_DAY_TOKEN_TRANSFORMER_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST
 )
 DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_gru_bf16_guarded_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
@@ -1921,6 +1928,18 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="gru_shared_safety_mfe_v2",
+    ),
+    DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="gru_shared_safety_mfe_v3",
     ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3313,6 +3332,33 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
+    DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BH",
+        experiment_name="MR-13BH GRU v2 BF16 Guarded-Retry Numerical Control",
+        phase="13BH",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "Numerical-control follow-up to MR-13BG after the same 1-layer/hidden391 GRU topology showed a distinct BF16 convergence trajectory but the BF16 final refit became non-finite. "
+            "MR-13BG FP32-island artifact remains unchanged and is the frozen primary reference. MR-13BH keeps the same raw 300x10 input, GRU topology/parameter count, target/loss/true-HS scope, Seed42, split, optimizer, gradient clip, date-coherent batch membership/order, epoch selection and inference. "
+            "The only treatment is recurrent numerical execution: normal forward/backward stays in canonical CUDA BF16 outer autocast. If the canonical finite-margin/loss guard or pre-step gradient finite guard detects a non-finite batch, no optimizer step is taken; the exact same batch is recomputed once with autocast disabled (FP32), then the single canonical optimizer step is applied. "
+            "No batch is skipped, no extra optimizer update is added, and no LR/epoch/hidden/layer tuning is authorized. Primary contrast is BH BF16-guarded vs BG FP32-island. This control asks whether the earlier BF16 late-epoch validation regime can produce a legal final OOS model when only the numerical blow-up step is rescued."
+        ),
+        metric_scope="gru_bf16_guarded_retry_numerical_control",
+        score_semantic_id="daily_gru_bf16_guarded_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         model_research_id="MR-13T",
@@ -4664,6 +4710,7 @@ __all__ = [
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_600BAR_WIDE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_DAY_TOKEN_TRANSFORMER_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_GRU_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_GRU_BF16_GUARDED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',

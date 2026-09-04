@@ -11650,3 +11650,14 @@ Decision：`B357_DONE / T477_DONE / ROLLING_COMPACT_PROGRESS_PARITY_RESTORED / N
 
 Decision：`MR13BG_RESULT_STILL_PENDING / BF16_RECURRENT_NONFINITE_BLOCKER_FIXED / GRU_FP32_EXECUTION_ISLAND / NO_SCIENTIFIC_CHANGE / RERUN_FORWARD_REQUIRED`。
 
+
+## 2026-09-04 — MR-13BG Forward Signal GO + MR-13BH BF16 guarded-retry numerical control
+
+- **BG completed Forward evidence**：MR-13BG v2 FP32-island合法完成Seed42 Forward。Overall Daily/Global rho/Pair=`0.4124/0.3815/64.25%` vs AO=`0.4042/0.3368/63.96%`，Top-Bottom=`2.1017R vs 1.8767R`。Safety Daily/Global rho/Pair=`0.3683/0.3231/63.26%` vs AO=`0.3532/0.2929/62.68%`，Pred-HS true-LS=`36.30% vs 36.84%`；HS-only rho/Pair=`0.4095/64.37%` vs `0.3969/63.90%`。Breakout Safety=`0.3511/0.4020/64.47%`、true-LS=`34.95%`、HS-only rho=`0.4491`，亦較AO同向。
+- **BG decision**：這是BA～BF後第一個Validation/Forward/Breakout Safety皆一致改善的backbone，故Decision=`FORWARD_SIGNAL_GO / ROLLING_CONFIRMATION_REQUIRED`。但P45–P55=`52.42%`與TopK HM/HS=`24.43%`尚未突破，故不進robustness/strategy、不做GRU hidden/layer/bidirectional sweep；先跑同一BG Rolling。
+- **Why BH exists**：同一v2 topology較早的BF16 run曾走到epoch5 Validation `HS-MFE rho=0.4191 / Safety rho=0.3574 / Pred-HS TopK HM/HS=26.40%`，但Selection refit第4 epoch前後weights被non-finite step污染而在下一batch margin finite guard中止。後續FP32-island成功落地BG，但明顯改變optimization trajectory（selected epoch 1）。使用者要求保留並修復原BF16 trajectory。
+- **MR-13BH numerical control**：新增`ARCH-gru_shared_safety_mfe_v3`，topology/params完全同BG v2 (`1-layer/391`, `474,287`)；正常recurrent/head forward/backward遵循外層CUDA BF16 autocast。Trainer新增capability-driven finite-step guard：若BF16 forward/loss先出現non-finite，或`clip_grad_norm_(..., error_if_nonfinite=True)`在optimizer.step前發現non-finite gradient，則**不執行該BF16 step**、清除該batch gradients、以同一batch關閉autocast重算FP32 loss/backward，確認finite後執行唯一一次canonical optimizer step。不得skip batch、不得增加optimizer update、不得改LR/epoch/hidden/layer/Seed/order。
+- **Isolation**：BG v2 FP32-island architecture/artifact不覆寫；BH用新MR/profile/architecture identity，Primary comparison=`BH vs BG`。Current Training Model仍BG，讓使用者先完成BG Rolling；BH加入shared `[3]～[6]` compare list作數值control。BG Rolling完成後，以`[3] Forward OOS 模型比較`自動BUILD BH Forward；暫不跑BH Rolling/robustness。
+- **Independent checks**：v2在修改前後同seed synthetic one-epoch loss=`0.69070923328399658`且state hash=`e75b7ffe145883129e3a644efc881788331230674ede06fcd8819bce84a07a79` exact equal；原47個architecture manifests零漂移，只新增v3。Synthetic分別注入BF16 non-finite forward與non-finite gradient，兩路皆觀察到exactly one same-batch FP32 retry、exactly one optimizer step且parameters finite。
+
+Decision：`MR13BG_FORWARD_SIGNAL_GO / BG_ROLLING_REQUIRED / MR13BH_BF16_GUARDED_NUMERICAL_CONTROL_IMPLEMENTED / SAME_BATCH_FP32_RETRY_ONLY_ON_NONFINITE / NO_BATCH_SKIP / NO_EXTRA_OPTIMIZER_STEP / NO_GRU_TOPOLOGY_TUNING`。
