@@ -14,7 +14,9 @@ from typing import Any, Mapping
 import pandas as pd
 
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from core.breakout_quality_policy import (
+    get_breakout_quality_workflow_settings,
+)
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,

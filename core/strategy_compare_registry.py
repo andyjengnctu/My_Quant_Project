@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from config.breakout_quality import (
     BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_rolling_test_mode,
 )
 from config.strategy_compare import (

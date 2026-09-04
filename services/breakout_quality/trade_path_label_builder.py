@@ -15,7 +15,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from core.breakout_quality_policy import (
+    get_breakout_quality_workflow_settings,
+)
 from core.file_integrity import canonical_json_sha256 as _canonical_hash
 from core.dataset_profiles import get_dataset_dir
 from core.runtime_utils import get_taipei_now

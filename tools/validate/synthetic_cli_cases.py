@@ -15,8 +15,10 @@ from unittest.mock import patch
 import zipfile
 
 from config.breakout_quality import (
-    ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+)
+from core.breakout_quality_registry import (
+    ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
@@ -129,16 +131,17 @@ def validate_dataset_cli_contract_case(_base_params):
             and str(root) not in report_stdout,
         )
 
-    from config import breakout_quality as cfg
+    from core import breakout_quality_registry as bq_registry
+    from core import breakout_quality_policy as bq_policy
     current_profiles = [
         profile
-        for profile in cfg.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-        if cfg.get_continuous_ranker_execution_recipe(profile).current_time_validation_authorized
+        for profile in bq_registry.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if bq_policy.get_continuous_ranker_execution_recipe(profile).current_time_validation_authorized
     ]
     check_true(
         "breakout_quality_cli_current_time_authorization_is_config_driven",
         all(
-            profile in cfg.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+            profile in bq_registry.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
             for profile in current_profiles
         ),
     )
@@ -867,11 +870,13 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
     # output-contract test must use an isolated authorized timing profile instead of
     # mutating or implicitly broadening the current research authorization.
     from config import breakout_quality as breakout_quality_config
+    from core import breakout_quality_registry as breakout_quality_registry
+    from core import breakout_quality_policy as breakout_quality_policy
 
     timing_profile = next(
-        iter(breakout_quality_config.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
+        iter(breakout_quality_registry.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
     )
-    base_timing_recipe = breakout_quality_config.get_continuous_ranker_execution_recipe(
+    base_timing_recipe = breakout_quality_policy.get_continuous_ranker_execution_recipe(
         timing_profile
     )
     isolated_authorized_recipe = replace(
@@ -879,7 +884,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         historical_pit_authorized=True,
         current_time_validation_authorized=True,
     )
-    original_recipe_resolver = breakout_quality_config.get_continuous_ranker_execution_recipe
+    original_recipe_resolver = breakout_quality_policy.get_continuous_ranker_execution_recipe
 
     def isolated_recipe_resolver(profile_name):
         if str(profile_name) == str(timing_profile):
@@ -891,7 +896,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         "BREAKOUT_QUALITY_ROLLING_TIMING_EXPERIMENT_PROFILE",
         timing_profile,
     ), patch.object(
-        breakout_quality_config,
+        breakout_quality_policy,
         "get_continuous_ranker_execution_recipe",
         side_effect=isolated_recipe_resolver,
     ):

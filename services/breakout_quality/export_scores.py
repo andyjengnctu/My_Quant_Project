@@ -16,10 +16,6 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality import (
-    CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
-    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
-    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-    get_breakout_quality_experiment_profile,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
@@ -30,6 +26,12 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
     BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
     BREAKOUT_QUALITY_ALLOW_TF32,
+)
+from core.breakout_quality_registry import (
+    CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
 )
 
 from filters.breakout_quality.artifacts import (

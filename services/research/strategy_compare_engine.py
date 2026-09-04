@@ -98,6 +98,8 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from core.active_param_ensemble import get_active_param_ensemble_date_range

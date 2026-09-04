@@ -66,10 +66,11 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     )
 
     from config import breakout_quality as breakout_quality_config
+    from core import breakout_quality_policy as breakout_quality_policy
     from config import research as research_config
     from config import training_policy as training_policy_config
 
-    configured_seed = breakout_quality_config.resolve_breakout_quality_random_seed()
+    configured_seed = breakout_quality_policy.resolve_breakout_quality_random_seed()
     check_true(
         "single_seed_contract_resolves_nonnegative_integer",
         isinstance(configured_seed, int) and configured_seed >= 0,
@@ -83,19 +84,19 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     )
 
     with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", 7):
-        overridden_seed = breakout_quality_config.resolve_breakout_quality_random_seed()
+        overridden_seed = breakout_quality_policy.resolve_breakout_quality_random_seed()
         with patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
         ):
-            binary_seed = breakout_quality_config.get_breakout_quality_workflow_settings().seed
+            binary_seed = breakout_quality_policy.get_breakout_quality_workflow_settings().seed
         with patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
         ):
-            continuous_seed = breakout_quality_config.get_breakout_quality_workflow_settings().seed
+            continuous_seed = breakout_quality_policy.get_breakout_quality_workflow_settings().seed
     check(
         "single_seed_contract_applies_override_to_all_profiles",
         (7, 7, 7),
@@ -104,7 +105,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
 
     with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", -1):
         try:
-            breakout_quality_config.resolve_breakout_quality_random_seed()
+            breakout_quality_policy.resolve_breakout_quality_random_seed()
         except ValueError:
             negative_seed_rejected = True
         else:
@@ -177,12 +178,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     project_root = Path(__file__).resolve().parents[2]
 
     from core import strategy_compare_policy as strategy_config
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
+        get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
         get_breakout_quality_workflow_settings,
         get_breakout_quality_model_test_settings,
         is_breakout_quality_model_test_profile,
         get_continuous_ranker_execution_recipe,
-        get_continuous_ranker_research_spec,
     )
     from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
     from core.training_policy import (
@@ -1288,10 +1291,12 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        get_breakout_quality_model_test_settings,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_breakout_quality_model_test_settings,
     )
     from core.strategy_compare_registry import (
         STRATEGY_COMPARE_ARMS,
@@ -1899,7 +1904,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
+    from core.breakout_quality_policy import (
         get_breakout_quality_workflow_settings,
     )
     from core.strategy_compare_policy import get_strategy_runtime_integration_settings

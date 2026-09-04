@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from config.breakout_quality import (
+from core.breakout_quality_policy import (
     get_breakout_quality_model_test_settings,
     is_breakout_quality_model_test_profile,
     get_breakout_quality_workflow_settings,

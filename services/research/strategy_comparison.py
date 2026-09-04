@@ -13,7 +13,9 @@ from typing import Any
 
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from core.breakout_quality_policy import (
+    get_breakout_quality_workflow_settings,
+)
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_runtime_integration_settings,

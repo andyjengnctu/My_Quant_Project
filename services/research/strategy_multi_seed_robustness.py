@@ -50,7 +50,11 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+)
+from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from core.training_policy import resolve_robustness_benchmark_seeds

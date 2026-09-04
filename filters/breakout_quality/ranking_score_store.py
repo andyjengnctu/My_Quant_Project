@@ -17,8 +17,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
+)
+from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -27,9 +32,6 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-    get_breakout_quality_experiment_profile,
 )
 
 from core.breakout_quality_runtime import (

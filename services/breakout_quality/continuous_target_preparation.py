@@ -6,7 +6,9 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from core.breakout_quality_policy import (
+    get_breakout_quality_workflow_settings,
+)
 from filters.breakout_quality.continuous_target import (
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,

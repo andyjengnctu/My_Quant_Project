@@ -43,7 +43,7 @@ from core.breakout_quality_runtime import (
 from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     get_predicted_safety_pair_weight_contract,
     get_predicted_safety_context_contract,
     get_predicted_safety_pure_mfe_contract,

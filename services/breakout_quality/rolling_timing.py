@@ -22,6 +22,8 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS,
     BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_rolling_timing_settings,
 )
 from core.console_report import (

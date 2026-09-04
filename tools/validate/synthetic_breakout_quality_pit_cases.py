@@ -38,9 +38,14 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config import breakout_quality as workflow_config
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
+        CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
         DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_experiment_profile,
+    )
+    from core.breakout_quality_policy import (
         get_breakout_quality_workflow_settings,
     )
     from filters.breakout_quality.continuous_ranker_data import _validate_group_consistency
@@ -299,13 +304,13 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     )
 
     settings = get_breakout_quality_workflow_settings()
-    binary = workflow_config.get_breakout_quality_workflow_settings(
+    binary = get_breakout_quality_workflow_settings(
         experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
     )
-    continuous = workflow_config.get_breakout_quality_workflow_settings(
+    continuous = get_breakout_quality_workflow_settings(
         experiment_profile=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
     )
-    daily = workflow_config.get_breakout_quality_workflow_settings(
+    daily = get_breakout_quality_workflow_settings(
         experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
     )
     check_true(
@@ -372,11 +377,11 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and not _fold_training_contract_is_compatible(changed_contract, expected_contract=expected_contract),
     )
 
-    a1_profile = workflow_config.get_breakout_quality_experiment_profile(
-        workflow_config.DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    a1_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
-    a2_profile = workflow_config.get_breakout_quality_experiment_profile(
-        workflow_config.DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    a2_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     expected_raw_duo_columns = {
         "primary": "breakout_quality_score",
@@ -479,7 +484,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     )
     registered_optional_score_columns = {
         str(column)
-        for training_objective in workflow_config.CONTINUOUS_RANKER_TRAINING_OBJECTIVES
+        for training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
         for training_policy in (
             get_continuous_ranker_training_policy(training_objective),
         )
@@ -1340,8 +1345,12 @@ def validate_breakout_quality_pit_training_performance_semantics_case(_base_para
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
+    )
+    from core.breakout_quality_policy import (
         get_breakout_quality_workflow_settings,
     )
     from filters.breakout_quality.features import (

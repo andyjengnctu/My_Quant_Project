@@ -174,7 +174,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config import breakout_quality as cfg
-    from config.breakout_quality import (
+    from core import breakout_quality_policy as policy
+    from core import breakout_quality_registry as registry
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
         TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     )
@@ -184,17 +186,55 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         resolve_legacy_model_spec,
     )
 
-    configured_seed = cfg.resolve_breakout_quality_random_seed()
+    config_tree = read_source_ast("config/breakout_quality.py")
+    registry_tree = read_source_ast("core/breakout_quality_registry.py")
+    policy_tree = read_source_ast("core/breakout_quality_policy.py")
+    runtime_tree = read_source_ast("core/breakout_quality_runtime.py")
+
+    def imported_modules(tree):
+        modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules.update(str(alias.name) for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                modules.add(str(node.module))
+        return modules
+
+    check_true(
+        "breakout_quality_config_is_declarative_without_runtime_helpers_or_classes",
+        not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for node in config_tree.body
+        ),
+    )
+    check_true(
+        "breakout_quality_registry_does_not_reverse_depend_on_user_breakout_config_or_policy",
+        "config.breakout_quality" not in imported_modules(registry_tree)
+        and "core.breakout_quality_policy" not in imported_modules(registry_tree),
+    )
+    check_true(
+        "breakout_quality_policy_is_the_only_config_to_registry_runtime_resolution_layer",
+        {
+            "config.breakout_quality",
+            "core.breakout_quality_registry",
+            "core.breakout_quality_runtime",
+        }.issubset(imported_modules(policy_tree))
+        and "core.breakout_quality_policy" not in imported_modules(runtime_tree)
+        and "config.breakout_quality" not in imported_modules(runtime_tree)
+        and "core.breakout_quality_registry" not in imported_modules(runtime_tree),
+    )
+
+    configured_seed = policy.resolve_breakout_quality_random_seed()
     check_true(
         "workflow_random_seed_is_one_nonnegative_config_value",
         isinstance(configured_seed, int) and configured_seed >= 0,
     )
     with patch.object(cfg, "BREAKOUT_QUALITY_RANDOM_SEED", 17):
-        overridden_seed = cfg.resolve_breakout_quality_random_seed()
-        binary_settings = cfg.get_breakout_quality_workflow_settings(
+        overridden_seed = policy.resolve_breakout_quality_random_seed()
+        binary_settings = policy.get_breakout_quality_workflow_settings(
             experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
         )
-        continuous_settings = cfg.get_breakout_quality_workflow_settings(
+        continuous_settings = policy.get_breakout_quality_workflow_settings(
             experiment_profile=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
         )
     check(
@@ -204,7 +244,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
     with patch.object(cfg, "BREAKOUT_QUALITY_RANDOM_SEED", -1):
         try:
-            cfg.resolve_breakout_quality_random_seed()
+            policy.resolve_breakout_quality_random_seed()
         except ValueError:
             invalid_seed_rejected = True
         else:
@@ -230,8 +270,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         all(resolve_legacy_model_spec(architecture=name).architecture == name for name in legacy),
     )
 
-    profiles = tuple(cfg.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
-    recipes = [cfg.get_continuous_ranker_execution_recipe(profile) for profile in profiles]
+    profiles = tuple(registry.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
+    recipes = [policy.get_continuous_ranker_execution_recipe(profile) for profile in profiles]
     check_true(
         "continuous_ranker_profiles_resolve_execution_recipes",
         bool(profiles)
@@ -253,7 +293,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         ),
     )
 
-    daily_settings = cfg.get_breakout_quality_workflow_settings(
+    daily_settings = policy.get_breakout_quality_workflow_settings(
         experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
     )
     check_true(

@@ -16,9 +16,13 @@ from core.breakout_quality_runtime_resolver import (
 from config.breakout_quality import (
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
     BREAKOUT_QUALITY_TARGET_COMPARISON_BARRIER_BAND_RETURN,
+)
+from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
-    get_breakout_quality_model_research_settings,
     get_continuous_ranker_research_spec,
+)
+from core.breakout_quality_policy import (
+    get_breakout_quality_model_research_settings,
 )
 from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
 from filters.breakout_quality.continuous_target import (

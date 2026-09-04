@@ -12,7 +12,7 @@ import pandas as pd
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
 )
-from config.breakout_quality import (
+from core.breakout_quality_runtime import (
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
     PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
 )

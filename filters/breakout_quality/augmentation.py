@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     AUGMENTATION_NONE,
     AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK,
     SUPPORTED_BREAKOUT_QUALITY_AUGMENTATIONS,

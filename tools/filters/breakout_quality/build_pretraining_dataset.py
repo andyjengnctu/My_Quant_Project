@@ -15,8 +15,10 @@ import pandas as pd
 from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
-    BREAKOUT_QUALITY_PRETRAINING_FAMILY,
     BREAKOUT_QUALITY_PRETRAINING_STRIDE,
+)
+from core.breakout_quality_policy import (
+    BREAKOUT_QUALITY_PRETRAINING_FAMILY,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
 from filters.breakout_quality.features import build_breakout_quality_sequence_feature

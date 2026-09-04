@@ -40,7 +40,11 @@ from core.breakout_quality_runtime import (
 from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
+    get_breakout_quality_experiment_profile,
+    get_continuous_ranker_research_spec,
+)
+from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
@@ -52,8 +56,6 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-    get_breakout_quality_experiment_profile,
-    get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (

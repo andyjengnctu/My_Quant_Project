@@ -21,7 +21,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     LR_SCHEDULE_NONE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
@@ -38,6 +38,8 @@ from config.breakout_quality import (
     TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
     get_breakout_quality_experiment_profile,
+)
+from core.breakout_quality_policy import (
     resolve_breakout_quality_random_seed,
 )
 

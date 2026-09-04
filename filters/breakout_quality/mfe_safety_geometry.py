@@ -13,7 +13,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_experiment_profile
+from core.breakout_quality_registry import (
+    get_breakout_quality_experiment_profile,
+)
 from core.path_utils import project_relative_display_path
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,

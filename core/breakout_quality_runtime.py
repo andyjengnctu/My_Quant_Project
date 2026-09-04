@@ -1,9 +1,10 @@
 """Generic continuous-ranker runtime capability contracts.
 
 This module owns execution-only primitives used by breakout-quality consumers.
-Scientific/profile declarations and user-adjustable settings remain in
-``config.breakout_quality``.  This module is deliberately dependency-free from that
-scientific configuration owner; profile resolution is composed outside this module.
+Scientific/profile declarations live in ``core.breakout_quality_registry`` while
+user-adjustable selections remain in ``config.breakout_quality``.  This module is
+deliberately dependency-free from both; profile resolution is composed by
+``core.breakout_quality_policy`` outside this module.
 
 Do not add MR/profile-specific branches here.  New behavior belongs in reusable
 target/training/context/objective capabilities and is selected declaratively.
@@ -17,8 +18,8 @@ from typing import Any, Callable
 
 
 # Stable execution-capability identities live with the runtime policies that consume them.
-# ``config.breakout_quality`` imports these names when declaring scientific profiles and uses
-# them when declaring scientific profiles; there must not be a reverse runtime->config edge.
+# ``core.breakout_quality_registry`` imports these names when declaring scientific profiles;
+# there must not be a reverse runtime->registry/config edge.
 PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
     "daily_predicted_upside_conditional_low_adverse_v1"
 )
@@ -1490,8 +1491,8 @@ def build_continuous_ranker_execution_recipe(
 ) -> ContinuousRankerExecutionRecipe:
     """Build executable semantics from already-resolved declarative inputs.
 
-    This module deliberately does not import the scientific/profile configuration owner.
-    Resolution of profile identity belongs to ``config.breakout_quality``; the runtime
+    This module deliberately does not import the scientific/profile registry or user config.
+    Resolution of profile identity belongs to ``core.breakout_quality_policy``; the runtime
     owner only turns resolved declarations into reusable execution capabilities.
     """
 

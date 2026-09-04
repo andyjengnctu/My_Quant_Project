@@ -382,7 +382,9 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
 
     import services.optimizer.strategy_param_training as compatibility_training
     import services.optimizer.strategy_param_training as canonical_training
-    from config.breakout_quality import get_breakout_quality_workflow_settings
+    from core.breakout_quality_policy import (
+        get_breakout_quality_workflow_settings,
+    )
     from filters.breakout_quality.binary_pit_score_store import (
         BINARY_PIT_SCORE_SOURCE,
         build_pass_condition_from_binary_point_in_time_scores,
@@ -2301,7 +2303,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _pure_mfe_diagnostic_profile,
         paired_trade_r_conversion_diagnostic,
     )
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
     )

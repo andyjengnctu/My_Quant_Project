@@ -81,12 +81,22 @@ from core.breakout_quality_runtime import (
 from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
+    NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING,
+    get_breakout_quality_experiment_profile,
+    get_continuous_ranker_research_spec,
+)
+from core.breakout_quality_policy import (
+    resolve_breakout_quality_random_seed,
+)
+from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
@@ -103,12 +113,6 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-    NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
-    NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING,
-    get_breakout_quality_experiment_profile,
-    get_continuous_ranker_research_spec,
-    resolve_breakout_quality_random_seed,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,

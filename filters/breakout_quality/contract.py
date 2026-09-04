@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Mapping
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
     normalize_breakout_quality_experiment_profile,
 )
@@ -22,6 +22,8 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
+)
+from core.breakout_quality_policy import (
     build_breakout_quality_default_high_len_values,
 )
 

@@ -16,8 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
-from config.breakout_quality import BREAKOUT_QUALITY_EXPERIMENT_PROFILE
+from core.breakout_quality_registry import (
+    SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+)
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+)
 from filters.breakout_quality.contract import (
     DEFAULT_FILTER_ID,
     FEATURE_COLUMNS,

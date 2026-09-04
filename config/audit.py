@@ -10,11 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from config.breakout_quality import (
-    BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
-    BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+)
+from core.breakout_quality_policy import (
+    BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+    BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
 )
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,

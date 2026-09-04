@@ -10,7 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from core.breakout_quality_policy import (
+    get_breakout_quality_workflow_settings,
+)
 from core.console_report import project_relative_display_path
 from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_comparison import (

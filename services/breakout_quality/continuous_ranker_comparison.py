@@ -17,6 +17,8 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_continuous_ranker_comparison_settings,
 )
 from core.strategy_compare_policy import get_strategy_comparison_settings

@@ -12,7 +12,9 @@ import pandas as pd
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
 )
-from config.breakout_quality import PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID
+from core.breakout_quality_runtime import (
+    PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+)
 from filters.breakout_quality.conditional_mfe_safety import (
     build_same_date_residual_percentile,
 )

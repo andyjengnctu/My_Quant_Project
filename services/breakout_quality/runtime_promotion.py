@@ -18,6 +18,8 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from core.strategy_compare_policy import (

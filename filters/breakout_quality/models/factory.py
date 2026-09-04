@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from config.breakout_quality import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+)
 from filters.breakout_quality.models.active import build_active_model
 from filters.breakout_quality.models.runtime import (
     count_trainable_parameters,

@@ -15,6 +15,8 @@ import pandas as pd
 from config.breakout_quality import (
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -54,7 +56,7 @@ from services.breakout_quality.point_in_time_scores import (
     FOLD_VALIDATION_SCORE_FILENAME,
     POINT_IN_TIME_SCHEMA_VERSION,
 )
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
 )

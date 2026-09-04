@@ -16,6 +16,8 @@ from typing import Any
 
 from config.breakout_quality import (
     BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+)
+from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
 )

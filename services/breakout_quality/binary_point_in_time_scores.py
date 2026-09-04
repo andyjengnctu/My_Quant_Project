@@ -37,9 +37,13 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+)
+from core.breakout_quality_registry import (
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     get_breakout_quality_experiment_profile,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from core.runtime_utils import get_taipei_now

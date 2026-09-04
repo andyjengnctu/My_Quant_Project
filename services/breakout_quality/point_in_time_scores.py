@@ -42,10 +42,12 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-    get_breakout_quality_workflow_settings,
     get_continuous_ranker_research_spec,
+)
+from core.breakout_quality_policy import (
+    get_breakout_quality_workflow_settings,
 )
 from core.breakout_quality_runtime import (
     get_continuous_ranker_persisted_score_columns,

@@ -29,7 +29,7 @@ from core.breakout_quality_runtime import (
 from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
     get_predicted_safety_pair_weight_contract,
 )
@@ -68,7 +68,9 @@ from filters.breakout_quality.predicted_safety_context import (
     PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     build_predicted_safety_conditional_mfe_targets,
 )
-from config.breakout_quality import get_predicted_safety_pure_mfe_contract
+from core.breakout_quality_registry import (
+    get_predicted_safety_pure_mfe_contract,
+)
 from filters.breakout_quality.risk_normalized_target import (
     DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     RISK_GEOMETRY_CONTEXT_FEATURES,

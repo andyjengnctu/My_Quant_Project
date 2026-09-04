@@ -14,7 +14,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+from core.breakout_quality_registry import (
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+)
 from core.console_report import project_relative_display_path
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.csv_io import read_breakout_quality_csv

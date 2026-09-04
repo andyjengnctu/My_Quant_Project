@@ -3042,6 +3042,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     from types import SimpleNamespace
 
     import config.breakout_quality as bq
+    import core.breakout_quality_registry as bq_registry
+    import core.breakout_quality_policy as bq_policy
     from core.research_report_contract import (
         APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
         MODEL_COMPARISON_EXTENSION_SCHEMAS,
@@ -3060,8 +3062,10 @@ def validate_research_report_contract_freeze_case(_base_params):
         validate_approved_persistent_report_contracts,
     )
     from services.research import breakout_quality_application as app
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    )
+    from core.breakout_quality_runtime import (
         TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
@@ -4006,9 +4010,9 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     # Current Standard Model comparison membership is config-driven and must reuse the
     # single Model Compare/Test SSOT instead of freezing a particular MR list here.
-    current_pairs = tuple(bq.get_breakout_quality_model_test_settings().model_profiles)
+    current_pairs = tuple(bq_policy.get_breakout_quality_model_test_settings().model_profiles)
     current_standard_pairs = tuple(
-        bq.get_breakout_quality_standard_model_comparison_settings().model_profiles
+        bq_policy.get_breakout_quality_standard_model_comparison_settings().model_profiles
     )
     check_true(
         "current_standard_model_comparison_matches_model_test_ssot",
@@ -4018,12 +4022,12 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     # Comparison config must accept one additional arbitrary valid model/profile pair
     # without any fixed assumption about how many models are currently configured.
-    extra_profile = bq.DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    extra_id = str(bq.get_continuous_ranker_research_spec(extra_profile).model_research_id)
+    extra_profile = bq_registry.DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    extra_id = str(bq_registry.get_continuous_ranker_research_spec(extra_profile).model_research_id)
     synthetic_pairs = (*current_pairs, (extra_id, extra_profile))
     with patch.object(bq, "BREAKOUT_QUALITY_MODEL_TEST_PROFILES", synthetic_pairs):
-        resolved_shared = bq.get_breakout_quality_model_test_settings()
-        resolved = bq.get_breakout_quality_standard_model_comparison_settings()
+        resolved_shared = bq_policy.get_breakout_quality_model_test_settings()
+        resolved = bq_policy.get_breakout_quality_standard_model_comparison_settings()
     check_true(
         "standard_model_comparison_config_supports_additional_models",
         len(resolved.model_profiles) == len(synthetic_pairs) == len(current_pairs) + 1

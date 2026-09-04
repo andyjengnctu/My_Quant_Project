@@ -11,7 +11,7 @@ from pathlib import Path
 from core.file_integrity import compute_file_sha256
 from typing import Any
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     BASELINE_EXPERIMENT_PROFILE,
     TIME_WEIGHT_MODE_DATE_BALANCED,
     TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,

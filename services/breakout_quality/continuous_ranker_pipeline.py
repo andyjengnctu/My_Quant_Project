@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,

@@ -20,7 +20,7 @@ from core.breakout_quality_runtime import (
 from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
 from core.console_report import project_relative_display_path

@@ -8,7 +8,7 @@ Scientific Compare Suite／arm／contrast／artifact-source catalog 由
 
 from __future__ import annotations
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
 )
 

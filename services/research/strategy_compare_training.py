@@ -14,8 +14,10 @@ import sys
 import time
 from typing import Any, Mapping
 
-from config.breakout_quality import (
+from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
+)
+from core.breakout_quality_policy import (
     is_breakout_quality_model_test_profile,
 )
 from core.console_report import COMPACT_CONSOLE_ENV

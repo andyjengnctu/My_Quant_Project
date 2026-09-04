@@ -14,8 +14,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.breakout_quality import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
-from config.breakout_quality import BREAKOUT_QUALITY_EXPERIMENT_PROFILE
+from core.breakout_quality_registry import (
+    SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+)
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+)
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID
 from filters.breakout_quality.paths import (
     ensure_filter_report_dir,

@@ -9,7 +9,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_experiment_profile
+from core.breakout_quality_registry import (
+    get_breakout_quality_experiment_profile,
+)
 from filters.breakout_quality.continuous_target import load_validated_continuous_target_arrays
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length

@@ -23,17 +23,23 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.breakout_quality import (
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
+)
+from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
+    get_breakout_quality_experiment_profile,
+    get_continuous_ranker_research_spec,
+)
+from core.breakout_quality_policy import (
     get_breakout_quality_continuous_ranker_comparison_settings,
     get_breakout_quality_standard_model_comparison_settings,
     get_breakout_quality_model_test_settings,
-    get_breakout_quality_experiment_profile,
-    get_continuous_ranker_research_spec,
-    BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
+)
+from core.breakout_quality_runtime import (
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
@@ -42,7 +48,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
     BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT,
 )
-from config.breakout_quality import (
+from core.breakout_quality_policy import (
     get_breakout_quality_continuous_ranker_pit_gate_settings,
     get_breakout_quality_model_research_settings,
     get_breakout_quality_rolling_test_mode,

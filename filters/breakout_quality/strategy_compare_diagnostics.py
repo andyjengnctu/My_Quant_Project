@@ -15,9 +15,13 @@ import pandas as pd
 
 from config.breakout_quality import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+)
+from core.breakout_quality_registry import (
+    get_breakout_quality_experiment_profile,
+)
+from core.breakout_quality_policy import (
     BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
     BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
-    get_breakout_quality_experiment_profile,
 )
 from config.strategy_compare import (
     STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_ENABLED,

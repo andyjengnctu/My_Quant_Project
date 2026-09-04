@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import core.breakout_quality_registry as breakout_quality_registry
+import core.breakout_quality_policy as breakout_quality_policy
 from .checks import bind_checks
 
 from config import breakout_quality as breakout_quality_config
@@ -378,6 +380,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # automatically checked here.  A new experiment that only recombines existing
     # target/context/objective capabilities must not require a new synthetic case.
     import config.breakout_quality as breakout_quality_config
+    import core.breakout_quality_registry as breakout_quality_registry
+    import core.breakout_quality_policy as breakout_quality_policy
     import core.breakout_quality_runtime as continuous_ranker_runtime
     import core.breakout_quality_runtime_resolver as continuous_ranker_runtime_resolver
     from core.breakout_quality_runtime import (
@@ -421,7 +425,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
     check(
         "continuous_ranker_profile_enabled_objective_membership_derives_from_composition_registry",
-        tuple(breakout_quality_config.CONTINUOUS_RANKER_TRAINING_OBJECTIVES),
+        tuple(breakout_quality_registry.CONTINUOUS_RANKER_TRAINING_OBJECTIVES),
         tuple(get_profile_enabled_continuous_ranker_training_objectives()),
         note=(
             "config must not maintain a second hand-written objective membership list; "
@@ -430,11 +434,11 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
     check_true(
         "continuous_ranker_recipe_resolver_reexports_canonical_config_resolver",
-        breakout_quality_config.get_continuous_ranker_execution_recipe
+        breakout_quality_policy.get_continuous_ranker_execution_recipe
         is continuous_ranker_runtime_resolver.get_continuous_ranker_execution_recipe,
         note=(
             "the acyclic runtime resolver gateway must forward the single canonical "
-            "profile-to-recipe resolver owned by config.breakout_quality"
+            "profile-to-recipe resolver owned by core.breakout_quality_policy"
         ),
     )
     runtime_public_names = set(continuous_ranker_runtime.__all__)
@@ -613,7 +617,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             pair_weight_policy=synthetic_policy_id,
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
         )
-        synthetic_contract = breakout_quality_config.get_predicted_safety_pair_weight_contract(
+        synthetic_contract = breakout_quality_registry.get_predicted_safety_pair_weight_contract(
             synthetic_policy_id
         )
         synthetic_loss, synthetic_count = _pairwise_logistic_loss(
@@ -824,7 +828,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
             if weighted_pairwise:
                 expected_pair_weight_contract = (
-                    breakout_quality_config.get_predicted_safety_pair_weight_contract(
+                    breakout_quality_registry.get_predicted_safety_pair_weight_contract(
                         recipe.objective_policy.pair_weight_policy
                     )
                 )
@@ -857,7 +861,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES) - len(registered_runtime_failures),
     )
 
-    config_source = read_source_text("config/breakout_quality.py")
+    registry_source = read_source_text("core/breakout_quality_registry.py")
     trainer_source = read_source_text(
         "services/breakout_quality/train_continuous_ranker.py"
     )
@@ -866,11 +870,11 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
     check_true(
         "continuous_ranker_profile_and_research_spec_delegate_objective_legality_to_composition_owner",
-        "expected_loss = {" not in config_source
+        "expected_loss = {" not in registry_source
         and "scoped secondary pair supervision只允許支援該capability的training objective"
-        not in config_source
-        and ".validate_profile_loss_metric(" in config_source
-        and ".validate_research_spec(" in config_source,
+        not in registry_source
+        and ".validate_profile_loss_metric(" in registry_source
+        and ".validate_research_spec(" in registry_source,
         note=(
             "profile/research declarations must consume the runtime composition registry "
             "instead of maintaining objective-name capability matrices"
@@ -1368,8 +1372,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
 
 
-    shared_training = breakout_quality_config.get_breakout_quality_model_research_settings()
-    shared_test = breakout_quality_config.get_breakout_quality_model_test_settings().model_profiles
+    shared_training = breakout_quality_policy.get_breakout_quality_model_research_settings()
+    shared_test = breakout_quality_policy.get_breakout_quality_model_test_settings().model_profiles
     canonical_training_pair = tuple(
         str(value).strip()
         for value in breakout_quality_config.BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
@@ -1386,11 +1390,12 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and canonical_training_pair[1] == str(shared_training.experiment_profile)
         and canonical_training_pair in shared_test
         and all(item in shared_test for item in reference_test_profiles)
-        and "BREAKOUT_QUALITY_MODEL_TEST_PROFILES = _merge_breakout_quality_model_profiles(" in config_source
+        and "BREAKOUT_QUALITY_MODEL_TEST_PROFILES = merge_breakout_quality_model_profiles(" in config_source
+        and "def merge_breakout_quality_model_profiles(" in read_source_text("core/breakout_quality_registry.py")
         and "(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,)" in config_source,
     )
     synthetic_new_training_pair = ("MR-SYNTHETIC-NEW", "synthetic_new_training_profile")
-    synthetic_merged = breakout_quality_config._merge_breakout_quality_model_profiles(
+    synthetic_merged = breakout_quality_registry.merge_breakout_quality_model_profiles(
         reference_test_profiles,
         (synthetic_new_training_pair,),
     )
@@ -1399,7 +1404,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         synthetic_new_training_pair in synthetic_merged
         and all(item in synthetic_merged for item in reference_test_profiles),
     )
-    configured_workflow_profiles = breakout_quality_config.get_breakout_quality_model_workflow_profile_names()
+    configured_workflow_profiles = breakout_quality_policy.get_breakout_quality_model_workflow_profile_names()
     expected_workflow_profiles = tuple(dict.fromkeys(
         [str(shared_training.experiment_profile)]
         + [str(profile_name) for _model_id, profile_name in shared_test]
@@ -1410,10 +1415,10 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and shared_training.rolling_authorized
         and shared_training.robustness_authorized
         and all(
-            breakout_quality_config.get_breakout_quality_workflow_settings(
+            breakout_quality_policy.get_breakout_quality_workflow_settings(
                 experiment_profile=str(profile_name)
             ).rolling_authorized
-            and breakout_quality_config.get_breakout_quality_workflow_settings(
+            and breakout_quality_policy.get_breakout_quality_workflow_settings(
                 experiment_profile=str(profile_name)
             ).robustness_authorized
             for _model_id, profile_name in shared_test
@@ -1663,7 +1668,9 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         parse_args as parse_continuous_ranker_args,
     )
     import config.breakout_quality as breakout_quality_config
-    from config.breakout_quality import (
+    import core.breakout_quality_registry as breakout_quality_registry
+    import core.breakout_quality_policy as breakout_quality_policy
+    from core.breakout_quality_policy import (
         get_breakout_quality_continuous_ranker_comparison_settings,
     )
     from filters.breakout_quality.continuous_ranker_quality import (
@@ -2624,13 +2631,17 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
-        CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
+    from core.breakout_quality_registry import (
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+        CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
     )
     from core.strategy_compare_policy import (
         get_strategy_comparison_settings,
@@ -3280,7 +3291,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         "current_compare_dependencies_use_shared_model_workflow_authorization",
         bool(current_dependency_profiles)
         and all(
-            breakout_quality_config.get_breakout_quality_workflow_settings(
+            breakout_quality_policy.get_breakout_quality_workflow_settings(
                 experiment_profile=profile_name
             ).rolling_authorized
             for profile_name in current_dependency_profiles
@@ -3570,15 +3581,15 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         )
 
         bi_profile_name = (
-            breakout_quality_config.
+            breakout_quality_registry.
             DAILY_UNIVERSAL_GRU_BF16_BACKWARD_SCALED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         )
-        bi_profile = breakout_quality_config.get_breakout_quality_experiment_profile(bi_profile_name)
+        bi_profile = breakout_quality_registry.get_breakout_quality_experiment_profile(bi_profile_name)
         check_true(
             "pure_bf16_backward_scaling_control_is_profile_owned_not_new_topology",
             bi_profile.model_architecture == recurrent_guarded_architectures[0]
             and bi_profile.numerical_execution_policy
-            == breakout_quality_config.NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING
+            == breakout_quality_registry.NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING
             and tuple(bi_profile.bf16_backward_retry_scales)
             == (0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625),
         )
@@ -3628,7 +3639,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
                 secondary_pair_scope_threshold=0.50,
                 numerical_execution_policy=(
-                    breakout_quality_config.NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING
+                    breakout_quality_registry.NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING
                 ),
                 bf16_backward_retry_scales=(0.5, 0.25, 0.125),
             )
@@ -4252,13 +4263,17 @@ def validate_breakout_quality_conditional_mfe_safety_single_model_contract_case(
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.conditional_mfe_safety import (
         build_conditional_mfe_safety_targets,
@@ -4371,14 +4386,18 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
         TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-        get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
-        get_continuous_ranker_research_spec,
     )
     from filters.breakout_quality.conditional_mfe_opportunity import (
         build_conditional_mfe_opportunity_targets,
@@ -4530,13 +4549,17 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.conditional_mfe_opportunity import (
         build_conditional_mfe_opportunity_targets,
@@ -4753,15 +4776,19 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
     import torch
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
     )
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
@@ -5298,12 +5325,18 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     )
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
@@ -5602,12 +5635,18 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.conditional_mfe_opportunity import (
         HMHS_HIGH_PERCENTILE_CUTOFF,
@@ -5792,12 +5831,18 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
     from config.breakout_quality import (
         BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
@@ -5958,13 +6003,19 @@ def validate_breakout_quality_joint_min_target_contract_case(_base_params):
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-        get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
-        get_continuous_ranker_research_spec,
     )
     from filters.breakout_quality.conditional_mfe_opportunity import (
         build_conditional_mfe_opportunity_targets,
@@ -6120,13 +6171,17 @@ def validate_breakout_quality_joint_attention_pool_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
@@ -6293,12 +6348,18 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MODERN_TCN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
@@ -6480,12 +6541,18 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
@@ -6693,14 +6760,18 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_PATCH_TRANSFORMER_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
@@ -6907,12 +6978,18 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     )
     from filters.breakout_quality.continuous_target import (
         DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
@@ -7139,12 +7216,14 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     import numpy as np
     import pandas as pd
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
     )
     from filters.breakout_quality.conditional_mfe_safety import (
         build_conditional_mfe_safety_targets,
@@ -7351,13 +7430,15 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
     import numpy as np
     import pandas as pd
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
     )
     from filters.breakout_quality.continuous_ranker_data import (
         build_same_date_percentile_targets,
@@ -7564,10 +7645,7 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
-        CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+    from core.breakout_quality_registry import (
         CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
         DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
@@ -7576,8 +7654,15 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+        CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     )
 
     continuous_profiles = tuple(
@@ -7630,7 +7715,7 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
             hasattr(daily_recipe, "phase"),
         ),
     )
-    from config.breakout_quality import (
+    from core.breakout_quality_runtime import (
         TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     )
@@ -7668,16 +7753,20 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
         PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
         get_predicted_safety_pure_mfe_contract,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     )
     from filters.breakout_quality.models.spec import get_model_spec
     from filters.breakout_quality.ranker_training_contract import training_semantics
@@ -7800,16 +7889,20 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
     import numpy as np
     import pandas as pd
     import torch
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
-        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
         get_high_safety_weighted_pure_mfe_contract,
+    )
+    from core.breakout_quality_policy import (
+        get_continuous_ranker_execution_recipe,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
     )
     from filters.breakout_quality.models.spec import get_model_spec
     from services.breakout_quality.train_continuous_ranker import (
@@ -7945,13 +8038,15 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
     import numpy as np
     import pandas as pd
     import torch
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     )
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
@@ -7994,9 +8089,11 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
         and research.reference_profile_name is None
         and research.evaluation_reference_profile_name is None,
     )
-    from config.breakout_quality import get_breakout_quality_workflow_settings
+    from core.breakout_quality_policy import (
+        get_breakout_quality_workflow_settings,
+    )
     ao_workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
-    ao_is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+    ao_is_current = breakout_quality_policy.is_breakout_quality_model_test_profile(profile.name)
     check_true(
         "true_hs_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
@@ -8119,14 +8216,18 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
     import numpy as np
     import pandas as pd
     import torch
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_breakout_quality_workflow_settings,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
     )
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
@@ -8192,7 +8293,7 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
         and contract.get("conditional_mfe_pair_safety_weight") == "none",
     )
     workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
-    is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+    is_current = breakout_quality_policy.is_breakout_quality_model_test_profile(profile.name)
     check_true(
         "hs_qualification_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
@@ -8328,13 +8429,19 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
         BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
         BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_breakout_quality_workflow_settings,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
     )
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
@@ -8412,8 +8519,8 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         "hs_boundary_weighted_historical_forward_gate_does_not_pin_current_test_membership",
         research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and not breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
-        and breakout_quality_config.is_breakout_quality_model_test_profile(
+        and not breakout_quality_policy.is_breakout_quality_model_test_profile(profile.name)
+        and breakout_quality_policy.is_breakout_quality_model_test_profile(
             BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
         ),
     )
@@ -8498,13 +8605,17 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
     import numpy as np
     import pandas as pd
     import torch
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_breakout_quality_workflow_settings,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
     )
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
@@ -8549,7 +8660,7 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
         and contract.get("runtime_score") == "hs_priority_mfe_pass_probability_direct_all_daily_ranking",
     )
     workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
-    is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+    is_current = breakout_quality_policy.is_breakout_quality_model_test_profile(profile.name)
     check_true(
         "hs_priority_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
@@ -8640,14 +8751,18 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
     import numpy as np
     import pandas as pd
     import torch
-    from config.breakout_quality import (
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
-        get_breakout_quality_workflow_settings,
         get_continuous_ranker_research_spec,
+    )
+    from core.breakout_quality_policy import (
+        get_breakout_quality_workflow_settings,
+    )
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
     )
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
@@ -8697,7 +8812,7 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
         and contract.get("priority_pair_safety_weight") == "none",
     )
     workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
-    is_current = breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+    is_current = breakout_quality_policy.is_breakout_quality_model_test_profile(profile.name)
     check_true(
         "hs_priority_stratified_historical_forward_gate_follows_current_membership_ssot",
         research.selection_pit_authorized is False
