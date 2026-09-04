@@ -477,8 +477,253 @@ def build_price_volume_multiscale_local_encoder(
     return PriceVolumeMultiscaleLocalEncoder()
 
 
+def build_price_volume_position_aware_multiscale_encoder(
+    nn,
+    torch,
+    *,
+    feature_count: int,
+    output_width: int,
+    spec,
+):
+    """Position-aware global/local Price×Volume geometry for Safety-only fusion.
+
+    MR-13BO keeps the BN raster spans/resolutions and AO dual-head scientific
+    contract, but explicitly exposes absolute geometry coordinates to the CNNs.
+    Evidence channels remain body/wick/relative-volume×body/relative-volume×wick.
+    Two deterministic CoordConv-style channels are appended: signed price
+    position relative to the decision-day close (normalized by each branch ATR
+    span) and time age from oldest=-1 to newest=+1.  VAP similarly receives the
+    signed price coordinate as a second channel.  No coordinate reaches MFE.
+    """
+
+    if int(feature_count) < 5:
+        raise ValueError("Position-aware Price-Volume需要stock OHLCV前5個sequence channels")
+    global_time_bins = int(spec.price_volume_structure_time_bins or 0)
+    global_price_bins = int(spec.price_volume_structure_price_bins or 0)
+    global_span_atr = float(spec.price_volume_structure_price_span_atr or 0.0)
+    atr_bars = int(spec.price_volume_structure_atr_bars or 0)
+    geometry_channels = int(spec.price_volume_structure_geometry_channels or 0)
+    geometry_latent_dim = int(spec.price_volume_structure_geometry_latent_dim or 0)
+    vap_channels = int(spec.price_volume_structure_vap_channels or 0)
+    vap_latent_dim = int(spec.price_volume_structure_vap_latent_dim or 0)
+    coordinate_mode = str(spec.price_volume_structure_coordinate_mode or "")
+    local_history_bars = int(spec.price_volume_local_map_history_bars or 0)
+    local_time_bins = int(spec.price_volume_local_map_time_bins or 0)
+    local_price_bins = int(spec.price_volume_local_map_price_bins or 0)
+    local_span_atr = float(spec.price_volume_local_map_price_span_atr or 0.0)
+    local_latent_dim = int(spec.price_volume_local_map_geometry_latent_dim or 0)
+
+    if global_time_bins < 8 or global_price_bins < 8 or global_span_atr <= 0.0:
+        raise ValueError("Position-aware global Price-Volume raster contract不合法")
+    if local_history_bars < atr_bars or local_history_bars < 8:
+        raise ValueError("Position-aware local Price-Volume history必須涵蓋ATR且>=8 bars")
+    if local_time_bins < 8 or local_price_bins < 8 or local_span_atr <= 0.0:
+        raise ValueError("Position-aware local Price-Volume raster contract不合法")
+    if geometry_channels != 6:
+        raise ValueError("Position-aware Price-Volume固定6 channels: 4 evidence + signed-price + time-age")
+    if vap_channels != 2:
+        raise ValueError("Position-aware VAP固定2 channels: mass + signed-price")
+    if coordinate_mode != "signed_atr_price_plus_time_age":
+        raise ValueError("Position-aware Price-Volume coordinate mode不一致")
+    if geometry_latent_dim < 1 or vap_latent_dim < 1 or local_latent_dim < 1 or int(output_width) < 1:
+        raise ValueError("Position-aware Price-Volume latent/output width必須為正")
+
+    functional = torch.nn.functional
+
+    class PriceVolumePositionAwareMultiscaleEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.global_geometry_network = nn.Sequential(
+                nn.Conv2d(geometry_channels, 12, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(12, 24, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(24, geometry_latent_dim, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+            )
+            self.vap_network = nn.Sequential(
+                nn.Conv1d(vap_channels, 8, kernel_size=5, stride=2, padding=2),
+                nn.ReLU(),
+                nn.Conv1d(8, vap_latent_dim, kernel_size=5, stride=2, padding=2),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool1d(1),
+            )
+            self.global_fusion_projection = nn.Linear(
+                geometry_latent_dim + vap_latent_dim,
+                int(output_width),
+                bias=False,
+            )
+            self.local_geometry_network = nn.Sequential(
+                nn.Conv2d(geometry_channels, 12, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(12, 24, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(24, local_latent_dim, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+            )
+            self.global_projection = nn.Linear(int(output_width), local_latent_dim, bias=False)
+            self.local_fusion_projection = nn.Linear(
+                2 * local_latent_dim,
+                int(output_width),
+                bias=False,
+            )
+
+        @staticmethod
+        def _relative_volume_weight(volume_z):
+            positive = functional.softplus(volume_z.float())
+            mean = positive.mean(dim=1, keepdim=True)
+            eps = torch.finfo(positive.dtype).eps
+            return positive / mean.clamp_min(eps)
+
+        @staticmethod
+        def _current_atr_return(high, low, close):
+            previous_close = torch.cat((close[:, :1], close[:, :-1]), dim=1)
+            true_range = torch.maximum(
+                high - low,
+                torch.maximum(
+                    torch.abs(high - previous_close),
+                    torch.abs(low - previous_close),
+                ),
+            )
+            width = min(int(atr_bars), int(true_range.shape[1]))
+            eps = torch.finfo(true_range.dtype).eps
+            return true_range[:, -width:].mean(dim=1).clamp_min(eps)
+
+        @staticmethod
+        def _append_coordinates(evidence_map):
+            batch, _channels, time_count, price_count = evidence_map.shape
+            price_coordinate = torch.linspace(
+                -1.0, 1.0, steps=int(price_count), device=evidence_map.device, dtype=torch.float32
+            ).view(1, 1, 1, int(price_count)).expand(int(batch), 1, int(time_count), int(price_count))
+            time_coordinate = torch.linspace(
+                -1.0, 1.0, steps=int(time_count), device=evidence_map.device, dtype=torch.float32
+            ).view(1, 1, int(time_count), 1).expand(int(batch), 1, int(time_count), int(price_count))
+            return torch.cat((evidence_map, price_coordinate, time_coordinate), dim=1)
+
+        @staticmethod
+        def _position_aware_vap(vap):
+            batch, price_count = vap.shape
+            price_coordinate = torch.linspace(
+                -1.0, 1.0, steps=int(price_count), device=vap.device, dtype=torch.float32
+            ).view(1, 1, int(price_count)).expand(int(batch), 1, int(price_count))
+            return torch.cat((vap.unsqueeze(1), price_coordinate), dim=1)
+
+        def _raster_evidence(self, stock, *, price_bins, price_span_atr):
+            open_price = stock[:, :, 0]
+            high = stock[:, :, 1]
+            low = stock[:, :, 2]
+            close = stock[:, :, 3]
+            volume_z = stock[:, :, 4]
+            current_atr = self._current_atr_return(high, low, close)
+            atr_axis = torch.linspace(
+                -float(price_span_atr),
+                float(price_span_atr),
+                steps=int(price_bins),
+                device=stock.device,
+                dtype=torch.float32,
+            )
+            # Canonical stock price channels are already normalized to the
+            # decision-day close, so zero is the current-price anchor.
+            price_centers = current_atr[:, None, None] * atr_axis[None, None, :]
+            half_bin = 0.5 * current_atr[:, None, None] * (
+                2.0 * float(price_span_atr) / float(int(price_bins) - 1)
+            )
+            body_low = torch.minimum(open_price, close)[:, :, None]
+            body_high = torch.maximum(open_price, close)[:, :, None]
+            candle_low = low[:, :, None]
+            candle_high = high[:, :, None]
+            body = (
+                (price_centers >= body_low - half_bin)
+                & (price_centers <= body_high + half_bin)
+            ).float()
+            full_range = (
+                (price_centers >= candle_low - half_bin)
+                & (price_centers <= candle_high + half_bin)
+            ).float()
+            wick = torch.clamp(full_range - body, min=0.0, max=1.0)
+            relative_volume = self._relative_volume_weight(volume_z)[:, :, None]
+            return torch.stack(
+                (body, wick, body * relative_volume, wick * relative_volume),
+                dim=1,
+            )
+
+        def build_global_position_aware_inputs(self, x):
+            if x.ndim != 3 or int(x.shape[2]) < 5:
+                raise ValueError("Position-aware global Price-Volume input必須是[B,T,F>=5]")
+            if int(x.shape[1]) != int(spec.input_window_bars or x.shape[1]):
+                raise ValueError("Position-aware global Price-Volume sequence length與model spec不一致")
+            with torch.no_grad():
+                stock = x[:, :, :5].float()
+                full_evidence = self._raster_evidence(
+                    stock,
+                    price_bins=global_price_bins,
+                    price_span_atr=global_span_atr,
+                )
+                evidence_map = functional.adaptive_avg_pool2d(
+                    full_evidence,
+                    output_size=(global_time_bins, global_price_bins),
+                )
+                position_aware_map = self._append_coordinates(evidence_map)
+                vap = (full_evidence[:, 2] + full_evidence[:, 3]).sum(dim=1)
+                vap_mean = vap.mean(dim=1, keepdim=True)
+                eps = torch.finfo(vap.dtype).eps
+                vap = vap / vap_mean.clamp_min(eps)
+                position_aware_vap = self._position_aware_vap(vap)
+            return position_aware_map, position_aware_vap
+
+        def build_local_position_aware_map(self, x):
+            if x.ndim != 3 or int(x.shape[2]) < 5:
+                raise ValueError("Position-aware local Price-Volume input必須是[B,T,F>=5]")
+            if int(x.shape[1]) < local_history_bars:
+                raise ValueError("Position-aware local Price-Volume input history不足")
+            with torch.no_grad():
+                stock = x[:, -local_history_bars:, :5].float()
+                full_evidence = self._raster_evidence(
+                    stock,
+                    price_bins=local_price_bins,
+                    price_span_atr=local_span_atr,
+                )
+                evidence_map = functional.interpolate(
+                    full_evidence,
+                    size=(local_time_bins, local_price_bins),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                position_aware_map = self._append_coordinates(evidence_map)
+            return position_aware_map
+
+        def encode_global(self, global_map, position_aware_vap):
+            global_latent = self.global_geometry_network(global_map).flatten(1)
+            vap_latent = self.vap_network(position_aware_vap).flatten(1)
+            return self.global_fusion_projection(torch.cat((global_latent, vap_latent), dim=1))
+
+        def encode_local(self, local_map, global_residual):
+            local_latent = self.local_geometry_network(local_map).flatten(1)
+            # Coordinate channels are non-zero by construction. Evidence gating
+            # must therefore inspect only the four market-evidence channels.
+            evidence_mask = (
+                local_map[:, :4].detach().abs().sum(dim=(1, 2, 3), keepdim=False) > 0.0
+            ).to(local_latent.dtype).unsqueeze(1)
+            local_latent = local_latent * evidence_mask
+            global_latent = self.global_projection(global_residual)
+            interaction = local_latent * global_latent
+            return self.local_fusion_projection(torch.cat((local_latent, interaction), dim=1))
+
+        def forward(self, x):
+            global_map, position_aware_vap = self.build_global_position_aware_inputs(x)
+            global_residual = self.encode_global(global_map, position_aware_vap)
+            local_map = self.build_local_position_aware_map(x)
+            local_residual = self.encode_local(local_map, global_residual)
+            return global_residual + local_residual
+
+    return PriceVolumePositionAwareMultiscaleEncoder()
+
+
 __all__ = [
     "build_price_volume_structure_encoder",
     "build_price_volume_local_structure_encoder",
     "build_price_volume_multiscale_local_encoder",
+    "build_price_volume_position_aware_multiscale_encoder",
 ]

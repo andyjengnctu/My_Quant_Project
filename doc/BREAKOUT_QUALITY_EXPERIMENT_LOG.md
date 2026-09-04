@@ -11774,4 +11774,16 @@ Decision：`MR13BL_RESULT_AVAILABLE_NOT_PROMOTED / MR13BM_IMPLEMENTED_RESULT_PEN
 - **工程／PIT**：local map只由既有300×10前5個stock OHLCV channels在batch-time deterministic生成；不落盤expanded map，不新增資料源、pivot/support/resistance label或technical indicator。
 - **Same-seed isolation**：BL common state exact、MFE logits bitwise exact；BN params=`512,878` vs BL=`490,586`（`+4.54%`）。
 - **Gate**：Seed42 Forward first；BN需在BL上形成material Raw Safety Daily/Global/Pair共同改善且Breakout boundary不退、MFE top-tail不再惡化。若只有小增量，不做local window/raster/span/CNN/fusion sweep。
+## 2026-09-05 — MR-13BN Forward closure + MR-13BO Position-Aware Multi-scale Price-Volume implementation
+
+- **Authoritative implementation baseline**：`test-branch-1_20260905_002703_04fb31a8.zip`，SHA256=`a3ce82b4d43637052104757522dafba85fbf8602e22b9c795fa113d45f7de315`。
+- **MR-13BN Forward result**：Raw Safety Daily/Global/Pair=`0.3538/0.3030/62.67%` vs BL=`0.3568/0.3028/62.81%`；Breakout Raw Safety=`0.3208/0.3725/63.74%` vs BL=`0.3283/0.3708/63.83%`。P45–P55=`52.32%` vs BL `52.39%`；Breakout P45–P55=`55.21%` vs BL `54.78%`。Pred-HS true-LS=`36.85%`，Breakout=`33.92%`；Forward Pred-HS MFE=`1.624R` vs BL `1.459R`，但Breakout MFE=`0.868R` vs BL `0.883R`。Decision=`MULTISCALE_GEOMETRY_FORWARD_GATE_FAIL / NO_ROLLING / NO_RESOLUTION_SPAN_CNN_SWEEP / NOT_PROMOTED`。
+- **Representation diagnosis**：canonical OHLC price channels已以decision-day close正規化，因此current price anchor本身存在；問題在Global/Local Conv2d與VAP Conv1d最後皆以adaptive global average pooling壓縮，且原4-channel map沒有顯式signed price/time coordinate。相同局部形狀位於current price上方/下方或recent/old區域時，network需靠boundary effects間接推回位置，與支撐/壓力Safety語意不匹配。
+- **MR-13BO identity**：profile=`daily_universal_price_volume_position_aware_multiscale_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`；architecture=`ARCH-inception_time_shared_safety_mfe_price_volume_position_aware_multiscale_v1`。Primary reference=`MR-13BN`，BL保留global-only reference，AO保留scientific base。
+- **Only scientific treatment**：BN Global/Local spans/resolutions及cross-scale fusion全部固定。Global/Local原4 evidence channels=`body / wick / relative-volume×body / relative-volume×wick`各追加2個deterministic CoordConv channels：signed price coordinate由branch最低價位`-1`到最高`+1`、current-price附近為0；time-age由oldest=`-1`到newest=`+1`。Global shape=`6×128×64`；Local=`6×96×64`。VAP由`1×64 mass`改為`2×64 [mass,signed-price]`。沒有pivot/support/resistance label、technical indicator、新資料源或target/loss改動。
+- **Isolation / capacity**：同seed下BN與BO所有非Price-Volume common state tensors exact；MFE logits bitwise exact；MFE-only loss對position-aware encoder gradient=`0`、Safety-only loss=`>0`。BO params=`513,350` vs BN=`512,878`，只增加`472 / +0.09%`，因此不是capacity scaling。
+- **Workflow membership**：Current Training Model=`MR-13BO`；shared compare/test list=`MR-13H / MR-13AH / MR-13AK / MR-13AO / MR-13BL / MR-13BM / MR-13BN / MR-13BO`，確保BO primary reference BN可在[3]～[6]直接比較。
+- **Gate**：Seed42 Forward first。BO需相對BN讓Raw Safety Daily/Global/Pair形成material共同改善，Breakout Safety/boundary與Pred-HS true-LS不得退，且HS-only Conditional-MFE/top-tail不得以明顯trade-off換取。若仍只是小幅變動，不做coordinate scaling、map resolution/span、CNN width或fusion sweep，整條position-aware Price×Volume第一版結案。
+
+Decision：`MR13BN_FORWARD_GATE_FAIL / MR13BO_IMPLEMENTED_RESULT_PENDING / EXPLICIT_PRICE_TIME_COORDINATES / POSITION_AWARE_VAP / MFE_PATH_EXACT / CAPACITY_NEUTRAL / FORWARD_GATE_FIRST`。
 

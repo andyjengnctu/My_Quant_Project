@@ -439,7 +439,9 @@ def _build_inception_spec(
     price_volume_structure_atr_bars = descriptor_options.get("price_volume_structure_atr_bars")
     price_volume_structure_geometry_channels = descriptor_options.get("price_volume_structure_geometry_channels")
     price_volume_structure_geometry_latent_dim = descriptor_options.get("price_volume_structure_geometry_latent_dim")
+    price_volume_structure_vap_channels = descriptor_options.get("price_volume_structure_vap_channels")
     price_volume_structure_vap_latent_dim = descriptor_options.get("price_volume_structure_vap_latent_dim")
+    price_volume_structure_coordinate_mode = descriptor_options.get("price_volume_structure_coordinate_mode")
     price_volume_local_structure_span_atr = descriptor_options.get("price_volume_local_structure_span_atr")
     price_volume_local_structure_token_dim = descriptor_options.get("price_volume_local_structure_token_dim")
     price_volume_local_structure_recent_fraction = descriptor_options.get("price_volume_local_structure_recent_fraction")
@@ -502,8 +504,14 @@ def _build_inception_spec(
         price_volume_structure_geometry_latent_dim=(
             None if price_volume_structure_geometry_latent_dim is None else int(price_volume_structure_geometry_latent_dim)
         ),
+        price_volume_structure_vap_channels=(
+            None if price_volume_structure_vap_channels is None else int(price_volume_structure_vap_channels)
+        ),
         price_volume_structure_vap_latent_dim=(
             None if price_volume_structure_vap_latent_dim is None else int(price_volume_structure_vap_latent_dim)
+        ),
+        price_volume_structure_coordinate_mode=(
+            None if price_volume_structure_coordinate_mode is None else str(price_volume_structure_coordinate_mode)
         ),
         price_volume_local_structure_span_atr=(
             None if price_volume_local_structure_span_atr is None else float(price_volume_local_structure_span_atr)

@@ -424,6 +424,9 @@ DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_LOCAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FU
 DAILY_UNIVERSAL_PRICE_VOLUME_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_price_volume_multiscale_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_PRICE_VOLUME_POSITION_AWARE_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_price_volume_position_aware_multiscale_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_priority_mfe_full_list_ndcg_pairwise"
 )
@@ -1412,6 +1415,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_price_volume_multiscale_v1",
+    ),
+    DAILY_UNIVERSAL_PRICE_VOLUME_POSITION_AWARE_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_PRICE_VOLUME_POSITION_AWARE_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_price_volume_position_aware_multiscale_v1",
     ),
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -2671,6 +2686,38 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_PRICE_VOLUME_POSITION_AWARE_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_PRICE_VOLUME_POSITION_AWARE_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BO",
+        experiment_name="MR-13BO Position-Aware Multi-scale Price-Volume Geometry",
+        phase="13BO",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "exact_MR13AO_head1_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "exact_MR13AO_head2_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "MR-13BN global/local Price-Time-Volume spans/resolutions、MR-13AO target/universe/300x10 input/split/Seed42/"
+            "Adam/gradient-clip/date-coherent batch/dual-head 1:1 full-list Delta-NDCG objective/epoch-selection全部固定。"
+            "唯一scientific treatment是讓global/local raster encoder顯式position-aware：原body/wick/relative-volume*body/"
+            "relative-volume*wick 4個evidence channels各追加signed-price coordinate與time-age coordinate，形成6-channel map；"
+            "64-bin VAP由mass-only改為[mass,signed-price-coordinate] 2 channels。signed price以decision-day close為0並以各branch ATR span"
+            "正規化到[-1,+1]；time-age由oldest=-1到newest=+1。Global=300 bars,+/-16 ATR,128x64；local=recent80 bars,"
+            "+/-4 ATR,96x64；local main effect與local*global interaction沿用BN topology。沒有pivot/support label、technical indicator、"
+            "新資料源或target/loss變更；position-aware residual只補Raw Safety，Raw-MFE path與AO/BN same-seed common path exact。"
+            "Primary reference=MR-13BN，MR-13BL保留global-field reference；Seed42 Forward only first。"
+        ),
+        metric_scope="position_aware_multiscale_price_volume_safety_control",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank_price_volume_position_aware_multiscale_safety",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_PRICE_VOLUME_MULTISCALE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,

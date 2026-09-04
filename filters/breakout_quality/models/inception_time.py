@@ -26,10 +26,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_price_volume_multiscale_local_safety = descriptor.has_capability(
         "price_volume_multiscale_local_safety"
     )
+    use_price_volume_position_aware_multiscale_safety = descriptor.has_capability(
+        "price_volume_position_aware_multiscale_safety"
+    )
     if (use_price_volume_local_structure_safety or use_price_volume_multiscale_local_safety) and not use_price_volume_structure_safety:
         raise ValueError("Local Price-Volume structure必須建立在global Price-Volume structure上")
-    if use_price_volume_local_structure_safety and use_price_volume_multiscale_local_safety:
-        raise ValueError("Local zone-token與high-resolution local 2D treatment不可同時啟用")
+    if sum(
+        int(flag)
+        for flag in (
+            use_price_volume_local_structure_safety,
+            use_price_volume_multiscale_local_safety,
+            use_price_volume_position_aware_multiscale_safety,
+        )
+    ) > 1:
+        raise ValueError("Price-Volume local/position-aware treatment不可同時啟用")
     if use_safety_attention_pool and use_safety_temporal_self_attention:
         raise ValueError("Safety scalar pooling與temporal self-attention不可同時啟用")
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
@@ -319,6 +329,22 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 self.price_volume_structure_encoder = None
                 self.price_volume_local_structure_encoder = None
                 self.price_volume_multiscale_local_encoder = None
+            if use_price_volume_position_aware_multiscale_safety:
+                from filters.breakout_quality.models.price_volume_structure import (
+                    build_price_volume_position_aware_multiscale_encoder,
+                )
+
+                self.price_volume_position_aware_multiscale_encoder = (
+                    build_price_volume_position_aware_multiscale_encoder(
+                        nn,
+                        torch,
+                        feature_count=int(feature_count),
+                        output_width=module_output_channels,
+                        spec=spec,
+                    )
+                )
+            else:
+                self.price_volume_position_aware_multiscale_encoder = None
 
         def _run_residual_stack(self, z, modules, projections):
             residual = z
@@ -471,7 +497,14 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 mfe_logits = self.raw_mfe_classifier(mfe_encoded)
                 return safety_logits, mfe_logits
             _primary_input, shared_encoded = self._encoded_for_heads(x, context)
-            if self.price_volume_structure_encoder is not None:
+            if self.price_volume_position_aware_multiscale_encoder is not None:
+                position_aware_residual = (
+                    self.price_volume_position_aware_multiscale_encoder(x).to(
+                        shared_encoded.dtype
+                    )
+                )
+                safety_encoded = shared_encoded + position_aware_residual
+            elif self.price_volume_structure_encoder is not None:
                 if self.price_volume_local_structure_encoder is not None:
                     geometry_map, vap = (
                         self.price_volume_structure_encoder.build_structure_inputs(x)

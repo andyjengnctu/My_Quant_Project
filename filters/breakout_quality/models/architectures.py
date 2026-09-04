@@ -39,6 +39,9 @@ INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_STRUCTURE_LOCAL_V1 = (
 INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_MULTISCALE_V1 = (
     "inception_time_shared_safety_mfe_price_volume_multiscale_v1"
 )
+INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_POSITION_AWARE_MULTISCALE_V1 = (
+    "inception_time_shared_safety_mfe_price_volume_position_aware_multiscale_v1"
+)
 INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1 = "inception_time_task_specific_safety_mfe_v1"
 INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1 = "inception_time_shared_safety_attn_mfe_v1"
 INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1 = "inception_time_task_specific_safety_attn_mfe_v1"
@@ -230,6 +233,48 @@ _ARCHITECTURE_DESCRIPTORS = (
         price_volume_structure_geometry_channels=4,
         price_volume_structure_geometry_latent_dim=32,
         price_volume_structure_vap_latent_dim=16,
+        price_volume_local_map_history_bars=80,
+        price_volume_local_map_time_bins=96,
+        price_volume_local_map_price_bins=64,
+        price_volume_local_map_price_span_atr=4.0,
+        price_volume_local_map_geometry_latent_dim=32,
+    ),
+    _descriptor(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_POSITION_AWARE_MULTISCALE_V1,
+        active=True,
+        active_order=32,
+        spec_builder="inception_variant",
+        runtime_builder="inception_time",
+        capabilities=(
+            "shared_safety_mfe",
+            "price_volume_position_aware_multiscale_safety",
+        ),
+        family="inception_time_shared_safety_mfe_price_volume_position_aware_multiscale",
+        pooling=(
+            "global_average",
+            "safety_price_volume_position_aware_global_residual",
+            "safety_price_volume_position_aware_local_2d_multiscale_residual",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+        use_dataset_context=False,
+        sequence_input_paths=(
+            "raw_level",
+            "derived_position_aware_global_price_volume_2d_from_stock_ohlcv",
+            "derived_position_aware_high_resolution_local_price_volume_2d_from_recent_stock_ohlcv",
+            "derived_position_aware_volume_at_price_from_stock_ohlcv",
+        ),
+        head_width=None,
+        input_window_bars=300,
+        price_volume_structure_time_bins=128,
+        price_volume_structure_price_bins=64,
+        price_volume_structure_price_span_atr=16.0,
+        price_volume_structure_atr_bars=14,
+        price_volume_structure_geometry_channels=6,
+        price_volume_structure_geometry_latent_dim=32,
+        price_volume_structure_vap_channels=2,
+        price_volume_structure_vap_latent_dim=16,
+        price_volume_structure_coordinate_mode="signed_atr_price_plus_time_age",
         price_volume_local_map_history_bars=80,
         price_volume_local_map_time_bins=96,
         price_volume_local_map_price_bins=64,

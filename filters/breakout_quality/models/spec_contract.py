@@ -37,7 +37,9 @@ class BreakoutQualityModelSpec:
     price_volume_structure_atr_bars: int | None = None
     price_volume_structure_geometry_channels: int | None = None
     price_volume_structure_geometry_latent_dim: int | None = None
+    price_volume_structure_vap_channels: int | None = None
     price_volume_structure_vap_latent_dim: int | None = None
+    price_volume_structure_coordinate_mode: str | None = None
     price_volume_local_structure_span_atr: float | None = None
     price_volume_local_structure_token_dim: int | None = None
     price_volume_local_structure_recent_fraction: float | None = None
@@ -195,7 +197,9 @@ class BreakoutQualityModelSpec:
             "price_volume_structure_atr_bars": self.price_volume_structure_atr_bars,
             "price_volume_structure_geometry_channels": self.price_volume_structure_geometry_channels,
             "price_volume_structure_geometry_latent_dim": self.price_volume_structure_geometry_latent_dim,
+            "price_volume_structure_vap_channels": self.price_volume_structure_vap_channels,
             "price_volume_structure_vap_latent_dim": self.price_volume_structure_vap_latent_dim,
+            "price_volume_structure_coordinate_mode": self.price_volume_structure_coordinate_mode,
             "price_volume_local_structure_span_atr": self.price_volume_local_structure_span_atr,
             "price_volume_local_structure_token_dim": self.price_volume_local_structure_token_dim,
             "price_volume_local_structure_recent_fraction": self.price_volume_local_structure_recent_fraction,

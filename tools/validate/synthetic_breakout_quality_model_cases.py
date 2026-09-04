@@ -4490,6 +4490,157 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         len(multiscale_contracts) == 1 and all(multiscale_contracts),
     )
 
+    # BO keeps BN's global/local spans and full time×price geometry, but makes
+    # absolute position explicit before GAP.  Coord channels are deterministic:
+    # signed price runs -1..+1 across price bins, time age runs -1..+1 oldest
+    # to newest, and VAP receives the same signed-price coordinate.  MFE remains
+    # the exact shared AO/BN path and must not update the position-aware branch.
+    position_aware_architectures = [
+        architecture
+        for architecture in ACTIVE_MODEL_ARCHITECTURES
+        if get_architecture_descriptor(architecture).has_capability(
+            "price_volume_position_aware_multiscale_safety"
+        )
+    ]
+    position_aware_contracts = []
+    for architecture in position_aware_architectures:
+        position_spec = get_model_spec(architecture)
+        parent_architectures = [
+            candidate
+            for candidate in ACTIVE_MODEL_ARCHITECTURES
+            if get_architecture_descriptor(candidate).has_capability(
+                "price_volume_multiscale_local_safety"
+            )
+        ]
+        if len(parent_architectures) != 1:
+            position_aware_contracts.append(False)
+            continue
+        parent_architecture = parent_architectures[0]
+
+        torch.manual_seed(20260905)
+        parent_model = build_active_model(10, 0, architecture=parent_architecture)
+        torch.manual_seed(20260905)
+        position_model = build_active_model(10, 0, architecture=architecture)
+        parent_state = parent_model.state_dict()
+        position_state = position_model.state_dict()
+        shared_non_structure_keys = sorted(
+            key
+            for key in parent_state
+            if key in position_state and not key.startswith("price_volume_")
+        )
+        common_exact = bool(shared_non_structure_keys) and all(
+            torch.equal(parent_state[key], position_state[key])
+            for key in shared_non_structure_keys
+        )
+
+        bars = 300
+        close = torch.linspace(-0.16, 0.0, steps=bars, dtype=torch.float32)
+        open_price = close - 0.002
+        high = torch.maximum(open_price, close) + 0.007
+        low = torch.minimum(open_price, close) - 0.007
+        position_x = torch.zeros((2, bars, 10), dtype=torch.float32)
+        for row in range(2):
+            position_x[row, :, 0] = open_price
+            position_x[row, :, 1] = high
+            position_x[row, :, 2] = low
+            position_x[row, :, 3] = close
+            position_x[row, :, 4] = 0.0
+            position_x[row, :, 5] = open_price
+            position_x[row, :, 6] = high
+            position_x[row, :, 7] = low
+            position_x[row, :, 8] = close
+            position_x[row, :, 9] = 0.0
+        position_x[1, -20:, 4] = 3.0
+
+        parent_model.eval()
+        position_model.eval()
+        encoder = position_model.price_volume_position_aware_multiscale_encoder
+        with torch.no_grad():
+            parent_safety, parent_mfe = parent_model.forward_safety_mfe_heads(
+                position_x, None
+            )
+            position_safety, position_mfe = position_model.forward_safety_mfe_heads(
+                position_x, None
+            )
+            global_map, position_vap = encoder.build_global_position_aware_inputs(
+                position_x
+            )
+            local_map = encoder.build_local_position_aware_map(position_x)
+
+        expected_global_price = torch.linspace(-1.0, 1.0, steps=64)
+        expected_global_time = torch.linspace(-1.0, 1.0, steps=128)
+        expected_local_time = torch.linspace(-1.0, 1.0, steps=96)
+        coordinates_exact = (
+            torch.equal(global_map[0, 4, 0, :].cpu(), expected_global_price)
+            and torch.equal(global_map[0, 4, -1, :].cpu(), expected_global_price)
+            and torch.equal(global_map[0, 5, :, 0].cpu(), expected_global_time)
+            and torch.equal(global_map[0, 5, :, -1].cpu(), expected_global_time)
+            and torch.equal(position_vap[0, 1, :].cpu(), expected_global_price)
+            and torch.equal(local_map[0, 4, 0, :].cpu(), expected_global_price)
+            and torch.equal(local_map[0, 5, :, 0].cpu(), expected_local_time)
+        )
+
+        position_model.zero_grad(set_to_none=True)
+        _safety_logits, mfe_logits = position_model.forward_safety_mfe_heads(
+            position_x, None
+        )
+        mfe_logits[:, 1].sum().backward()
+        position_from_mfe_grad = _gradient_total(encoder.parameters())
+        position_model.zero_grad(set_to_none=True)
+        safety_logits, _mfe_logits = position_model.forward_safety_mfe_heads(
+            position_x, None
+        )
+        safety_logits[:, 1].sum().backward()
+        position_from_safety_grad = _gradient_total(encoder.parameters())
+
+        parent_params = sum(
+            parameter.numel()
+            for parameter in parent_model.parameters()
+            if parameter.requires_grad
+        )
+        position_params = sum(
+            parameter.numel()
+            for parameter in position_model.parameters()
+            if parameter.requires_grad
+        )
+        position_aware_contracts.append(
+            tuple(position_spec.pooling)
+            == (
+                "global_average",
+                "safety_price_volume_position_aware_global_residual",
+                "safety_price_volume_position_aware_local_2d_multiscale_residual",
+                "raw_safety_head",
+                "raw_mfe_head",
+            )
+            and int(position_spec.price_volume_structure_geometry_channels or 0) == 6
+            and int(position_spec.price_volume_structure_vap_channels or 0) == 2
+            and str(position_spec.price_volume_structure_coordinate_mode or "")
+            == "signed_atr_price_plus_time_age"
+            and int(position_spec.price_volume_structure_time_bins or 0) == 128
+            and int(position_spec.price_volume_structure_price_bins or 0) == 64
+            and int(position_spec.price_volume_local_map_history_bars or 0) == 80
+            and int(position_spec.price_volume_local_map_time_bins or 0) == 96
+            and int(position_spec.price_volume_local_map_price_bins or 0) == 64
+            and common_exact
+            and torch.equal(parent_mfe, position_mfe)
+            and not torch.equal(parent_safety, position_safety)
+            and tuple(global_map.shape) == (2, 6, 128, 64)
+            and tuple(position_vap.shape) == (2, 2, 64)
+            and tuple(local_map.shape) == (2, 6, 96, 64)
+            and bool(torch.isfinite(global_map).all().item())
+            and bool(torch.isfinite(position_vap).all().item())
+            and bool(torch.isfinite(local_map).all().item())
+            and coordinates_exact
+            and position_from_mfe_grad == 0.0
+            and position_from_safety_grad > 0.0
+            and position_params > parent_params
+            and (position_params - parent_params) / parent_params < 0.01
+        )
+    check_true(
+        "price_volume_position_aware_multiscale_preserves_coordinates_and_mfe_path",
+        len(position_aware_contracts) == 1 and all(position_aware_contracts),
+    )
+
     task_model.zero_grad(set_to_none=True)
     safety_logits, _mfe_logits = task_model.forward_safety_mfe_heads(task_x, None)
     safety_logits[:, 1].sum().backward()
