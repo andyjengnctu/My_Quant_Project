@@ -2285,6 +2285,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "config.training_performance_policy": {
             "OPTIMIZER_ROLLING_FOLD_WORKERS",
             "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
+            "OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS",
         },
         "core.training_performance": {
             "build_training_performance_policy_snapshot",
@@ -2313,6 +2314,8 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "config.runtime": {
             "SCANNER_PROGRESS_EVERY",
             "ENABLE_OPTIMIZER_PROFILING",
+            "RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS",
+            "PORTFOLIO_LOAD_PROGRESS_EVERY",
         },
         "config.strategy_compare": {
             "STRATEGY_COMPARE_DEFAULT_PROFILE",

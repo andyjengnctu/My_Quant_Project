@@ -9,13 +9,13 @@ import time
 from threading import Lock
 from typing import Mapping, MutableMapping, Sequence
 
-DEFAULT_TRAINER_TERMINATION_GRACE_SECONDS = 5.0
+from config.runtime import RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS
 
 
 def terminate_training_process(
     proc: subprocess.Popen,
     *,
-    grace_seconds: float = DEFAULT_TRAINER_TERMINATION_GRACE_SECONDS,
+    grace_seconds: float = RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS,
 ) -> None:
     if proc.poll() is not None:
         return
@@ -31,7 +31,7 @@ def terminate_registered_training_processes(
     registry: Mapping[str, subprocess.Popen],
     registry_lock: Lock,
     *,
-    grace_seconds: float = DEFAULT_TRAINER_TERMINATION_GRACE_SECONDS,
+    grace_seconds: float = RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS,
 ) -> None:
     with registry_lock:
         processes = list(registry.values())
@@ -50,7 +50,7 @@ def run_logged_training_process(
     env_overrides: Mapping[str, str] | None = None,
     failure_prefix: str,
     log_tail_chars: int = 5000,
-    grace_seconds: float = DEFAULT_TRAINER_TERMINATION_GRACE_SECONDS,
+    grace_seconds: float = RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS,
 ) -> dict[str, object]:
     """Run one trainer with shared logging, cancellation and failure-tail semantics."""
 
@@ -90,7 +90,6 @@ def run_logged_training_process(
 
 
 __all__ = [
-    "DEFAULT_TRAINER_TERMINATION_GRACE_SECONDS",
     "run_logged_training_process",
     "terminate_registered_training_processes",
     "terminate_training_process",

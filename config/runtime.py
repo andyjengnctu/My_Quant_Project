@@ -7,6 +7,7 @@ to the consuming runtime module rather than config.
 
 # Scanner runtime / progress display.
 SCANNER_PROGRESS_EVERY = 25
+PORTFOLIO_LOAD_PROGRESS_EVERY = 50
 SCANNER_AUTO_MAX_WORKERS_CAP = 8
 
 # Optimizer session runtime / diagnostics.
@@ -15,3 +16,6 @@ OPTIMIZER_OTHER_AUTO_MAX_WORKERS_CAP = 6
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_OPTIMIZER_PROFILE_CONSOLE_PRINT = False
 OPTIMIZER_PROFILE_PRINT_EVERY_N_TRIALS = 1
+
+# Research subprocess lifecycle.
+RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS = 5.0

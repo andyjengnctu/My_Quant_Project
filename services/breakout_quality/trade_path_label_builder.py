@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality import BREAKOUT_QUALITY_TRADE_PATH_LABEL_WORKERS
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
@@ -79,7 +80,6 @@ from services.optimizer.strategy_param_training import (
 )
 
 SCHEMA_VERSION = 2
-DEFAULT_WORKERS = 4
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -106,7 +106,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         type=float,
         default=float(settings.strategy_max_position_cap_pct),
     )
-    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
+    parser.add_argument("--workers", type=int, default=BREAKOUT_QUALITY_TRADE_PATH_LABEL_WORKERS)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--force-rebuild", action="store_true")
     parser.add_argument("--plan-only", action="store_true")

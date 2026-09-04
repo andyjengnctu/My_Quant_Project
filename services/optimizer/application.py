@@ -2600,8 +2600,8 @@ def _apply_interactive_study_db_policy(*, selected_model_mode: str, db_file: str
 
 
 def _resolve_cli_run_request(argv):
+    from config.training_performance_policy import OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS
     from core.runtime_utils import parse_int_strict
-    from services.optimizer.benchmark import OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS
 
     timing_mode = _has_cli_flag(argv, '--timing')
     outer_oos_mode = _has_cli_flag(argv, '--outer-oos')
@@ -2626,7 +2626,7 @@ def _resolve_cli_run_request(argv):
     if timing_mode:
         return {
             'timing_mode': True,
-            'n_trials': 3,
+            'n_trials': int(OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS),
             'action': 'train',
             'source': 'CLI:--timing',
         }

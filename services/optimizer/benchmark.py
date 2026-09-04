@@ -4,8 +4,6 @@ from typing import Any
 
 from core.display_common import C_CYAN, C_RESET
 
-OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS = 3
-
 
 def build_timing_db_file_path(*, output_dir: str, dataset_profile_key: str, session_ts: str) -> str:
     safe_dataset = str(dataset_profile_key or "full").strip().lower() or "full"

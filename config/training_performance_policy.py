@@ -9,6 +9,7 @@ scientific semantics. Runtime resolution belongs to ``core.training_performance`
 OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"  # "fold_count" / "auto" or a positive integer
 OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0
 OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024
+OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS = 3
 
 # Random-seed ensemble parallelism.
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = "auto"
