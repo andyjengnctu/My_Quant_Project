@@ -1425,6 +1425,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     strategy_compare_config_source = (project_root / "config/strategy_compare.py").read_text(encoding="utf-8")
+    strategy_compare_registry_source = (
+        project_root / "core/strategy_compare_registry.py"
+    ).read_text(encoding="utf-8")
     point_in_time_source = (
         project_root / "services/breakout_quality/point_in_time_scores.py"
     ).read_text(encoding="utf-8")
@@ -2206,7 +2209,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and oos_cache_root == rolling_cache_root
                 and not Path(oos_cache_root).is_absolute()
                 and "multi_seed_robustness" not in oos_cache_root
-                and "STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT" in strategy_compare_config_source
+                and "STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT" in strategy_compare_registry_source
                 and "--checkpoint-cache-root" in strategy_training_source
                 and "fitting_identity_checkpoint_reuse" in point_in_time_source
                 and "source_score_reused" in point_in_time_source
