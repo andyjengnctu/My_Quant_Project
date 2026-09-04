@@ -597,6 +597,7 @@ def apply_confirmed_sell_fill(
     mutation_id: str,
     trade_date: object,
     event: str = "MANUAL_CONFIRMED_SELL",
+    mark_tp_half_complete: bool = False,
 ) -> dict[str, Any]:
     validate_trading_account_state(state)
     ticker_key = _normalize_ticker(ticker)
@@ -659,6 +660,8 @@ def apply_confirmed_sell_fill(
         )
         if int(freed_cash_milli) != net_sell_total_milli or int(strategy_pnl_milli) != pnl_milli:
             raise RuntimeError("Trading broker/strategy sell accounting diverged from canonical position accounting")
+        if mark_tp_half_complete and int(strategy_position.get("qty", 0) or 0) > 0:
+            strategy_position["sold_half"] = True
         strategy_management["position_state"] = _json_safe(strategy_position)
 
     remaining_qty = int(broker["qty"])

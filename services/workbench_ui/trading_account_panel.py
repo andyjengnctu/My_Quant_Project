@@ -27,6 +27,7 @@ from services.trading.protection_order_submission import (
 from services.trading.fill_reconciliation import (
     TradingFillRevisionConflict,
     confirm_trading_buy_order_fill,
+    confirm_trading_protection_sell_order_fill,
     recover_trading_fill_transaction,
 )
 from services.trading.order_state import (
@@ -859,9 +860,6 @@ class TradingAccountPanel(ttk.Frame):
             return
         order_id = str(selected[0])
         row = self._order_rows.get(order_id) or {}
-        if str(row.get("side") or "BUY") != "BUY":
-            messagebox.showerror("Trading 成交", "Protection SELL 成交尚未在本輪 reconciliation；不可用 BUY fill 入口處理。", parent=self)
-            return
         if str(row.get("status")) not in {"ORDERED", "PARTIAL"}:
             messagebox.showerror("Trading 成交", "只有 ORDERED / PARTIAL 掛單可確認成交。", parent=self)
             return
@@ -881,12 +879,13 @@ class TradingAccountPanel(ttk.Frame):
         ticker = str(row.get("ticker") or "")
         if not messagebox.askyesno(
             "確認券商成交",
-            f"確認券商實際成交 {ticker}？\n\n本次成交：{fill_qty:,} 股 @ {fill_price}\n成交日：{trade_date}\n\n只有實際券商成交才可確認；此動作會以 canonical exact accounting 更新 cash／持股。",
+            f"確認券商實際成交 {ticker} {row.get('side') or 'BUY'}？\n\n本次成交：{fill_qty:,} 股 @ {fill_price}\n成交日：{trade_date}\n\n只有實際券商成交才可確認；此動作會以 canonical exact accounting 更新 cash／持股。",
             parent=self,
         ):
             return
         try:
-            result = confirm_trading_buy_order_fill(
+            fill_fn = confirm_trading_buy_order_fill if str(row.get("side") or "BUY") == "BUY" else confirm_trading_protection_sell_order_fill
+            result = fill_fn(
                 WORKBENCH_PROJECT_ROOT,
                 order_id=order_id,
                 fill_qty=fill_qty,

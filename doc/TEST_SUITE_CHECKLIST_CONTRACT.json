@@ -3953,10 +3953,21 @@
       "priority": "P1",
       "category": "GUI / Workbench Trading protection broker orders",
       "item": "Explicit protection SELL submission shares the canonical broker-order SSOT without overselling holdings",
-      "gap": "Trading Stop/TP protection plan仍只屬logical output；只有使用者明確確認券商已實際送出SELL時，才可寫入同一state/trading/orders.json，禁止另建sell_orders第二份truth。單腿Stop或TP送單必須綁定FRESH protection plan、當下strategy_fill實際持股、position-plan fingerprint與來源entry order；非OCO active protection SELL的有效委託曝險不得超過持股。Stop full + TP若合計會超過持股，只能在使用者明確輸入實際券商native OCO/互斥群組ID並確認後，以同一revision建立共享group的兩筆SELL ORDERED；系統不得自行假設OCO支援。Round 11 protection SELL只支援ORDERED/CANCELLED，不得由BUY fill reconciliation處理或從市場資料推定成交。active ENTRY BUY與active protection SELL必須由canonical helper分層；長期protection SELL不得誤阻擋下一交易日新的盤前BUY allocation，但仍屬active broker order並保留account mutation guard。",
+      "gap": "Trading Stop/TP protection plan仍只屬logical output；只有使用者明確確認券商已實際送出SELL時，才可寫入同一state/trading/orders.json，禁止另建sell_orders第二份truth。單腿Stop或TP送單必須綁定FRESH protection plan、當下strategy_fill實際持股、position-plan fingerprint與來源entry order；非OCO active protection SELL的有效委託曝險不得超過持股。Stop full + TP若合計會超過持股，只能在使用者明確輸入實際券商native OCO/互斥群組ID並確認後，以同一revision建立共享group的兩筆SELL ORDERED；系統不得自行假設OCO支援。Protection SELL不得由BUY fill reconciliation處理或從市場資料推定成交；後續實際SELL fill由獨立confirmed-fill contract治理。active ENTRY BUY與active protection SELL必須由canonical helper分層；長期protection SELL不得誤阻擋下一交易日新的盤前BUY allocation，但仍屬active broker order並保留account mutation guard。",
       "entry": "`core/trading_order_state.py`, `services/trading/order_state.py`, `services/trading/protection_order_submission.py`, `services/trading/protection_planning.py`, `services/trading/order_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 356
+    },
+    {
+      "id": "B369",
+      "section": "B2",
+      "priority": "P1",
+      "category": "GUI / Workbench Trading protection SELL fills",
+      "item": "Explicit protection SELL fills reconcile broker order state and account exact accounting without market inference",
+      "gap": "Protection SELL實際成交只能由使用者輸入券商真正的成交股數、成交價與成交日觸發，不得由market high/low、trigger touch或shadow fill自動推定。只有ORDERED/PARTIAL protection SELL可成交，每次fill qty必須大於0且不超過remaining qty；TP LIMIT實際成交價不得低於原limit，STOP_MARKET允許gap成交。每次SELL fill必須重用來源entry order frozen params與canonical exact sell accounting／position sell seam，同步更新cash、cost basis、realized PnL與strategy position；TP只有該TP order全數成交後才可把canonical sold_half標記完成。Protection partial fills可跨交易日；未全數成交維持PARTIAL，全數成交轉FILLED。若該腿屬使用者先前明確確認的broker-native OCO，任何實際fill發生後，同一OCO group的其他active protection leg必須在同一order revision轉CANCELLED，避免剩餘SELL exposure超過實際持股。account.json與orders.json仍必須透過state/trading/fill_transaction.json可恢復transaction原子收斂；Workbench只做explicit actual-fill input與service委派，成交後機械刷新logical protection plan，不得自行重算帳務或推定券商成交。",
+      "entry": "`core/trading_order_state.py`, `core/trading_account_state.py`, `core/trading_fill_transaction.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 357
     }
   ],
   "tests": [
@@ -7369,6 +7380,13 @@
       "b_id": "B368",
       "initial_status": "NEW",
       "order": 478
+    },
+    {
+      "id": "T489",
+      "b_id": "B369",
+      "description": "`validate_trading_protection_sell_fill_reconciliation_contract_case` 覆蓋explicit SELL actual-fill、PARTIAL→FILLED、跨日partial、TP limit/Stop gap語意、canonical exact-accounting、TP sold_half完成時點、broker-native OCO peer cancellation、no-market-inference與Workbench side-aware routing。",
+      "initial_status": "NEW",
+      "order": 479
     }
   ],
   "transitions": [
@@ -24571,6 +24589,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_protection_order_submission_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B369",
+      "description": "新增Trading protection SELL confirmed-fill reconciliation與OCO peer cancellation治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/fill_reconciliation.py`, `core/trading_order_state.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T489",
+      "description": "新增Trading protection SELL fill direct synthetic並納入正式synthetic registry。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_protection_sell_fill_reconciliation_contract_case`"
     }
   ]
 }

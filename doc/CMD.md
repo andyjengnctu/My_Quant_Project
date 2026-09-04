@@ -423,3 +423,8 @@ python apps/research.py optimizer migrate-strategy-params
 此入口只呼叫Optimizer-owned migration service並做cleanup readiness驗證，不刪檔。Cleanup gate只有在canonical target存在、Optimizer manifest identity正確、target SHA由manifest pin住，且legacy source可由內容SHA或migration lineage證明已保存時才會回報`READY_FOR_CLEANUP`。完成後才可依回報的`removable`清單執行`Remove-Item`。
 
 Round 3完成後，current `ensure_strategy_parameter_artifact()`不再掃描、fallback或自動migration `models/*.json` root；current Strategy Compare只接受flat canonical schedule truth與Optimizer current build／rebuild／resume；OOS freeze只發生在consumer讀取時，不再產生Optimizer-owned第二份OOS parameter artifact。若canonical工件缺失，必須先由Optimizer正式流程建立或執行上述一次性migration，不得讓Research在current執行途中偷偷讀legacy root。
+
+
+### Protection SELL 實際成交
+
+Workbench「實際交易」頁對 `ORDERED/PARTIAL` Stop/TP SELL 只接受使用者輸入的券商實際成交股數、成交價與成交日；不得由行情觸發自動推定。成交會透過 canonical exact accounting 同步 account/order state；native OCO 任一腿實際成交後，另一 active 腿同步記錄為券商互斥取消。

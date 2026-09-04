@@ -548,6 +548,76 @@ def record_trading_buy_order_fill(
         },
     )
 
+
+def record_trading_protection_sell_order_fill(
+    state: dict[str, Any],
+    *,
+    order_id: str,
+    fill_id: str,
+    fill_qty: int,
+    fill_price,
+    trade_date: str,
+    net_sell_total_milli: int,
+    allocated_cost_milli: int,
+    realized_pnl_milli: int,
+    timestamp: str,
+    mutation_id: str,
+) -> dict[str, Any]:
+    validate_trading_order_state(state)
+    oid = str(order_id or "").strip()
+    if oid not in state["orders"]:
+        raise ValueError(f"Trading order 不存在: {oid}")
+    updated = deepcopy(state)
+    record = updated["orders"][oid]
+    if str(record.get("side") or "") != TRADING_ORDER_SIDE_SELL or str(record.get("purpose") or "") not in TRADING_PROTECTION_ORDER_PURPOSES:
+        raise ValueError("Trading SELL fill reconciliation 只允許 protection SELL order")
+    from_status = str(record.get("status") or "")
+    if from_status not in TRADING_ACTIVE_ORDER_STATUSES:
+        raise ValueError(f"Trading protection SELL 只有 ORDERED/PARTIAL 可確認成交: {oid} status={from_status}")
+    qty = int(fill_qty)
+    remaining_before = int(record.get("remaining_qty") or 0)
+    if qty <= 0 or qty > remaining_before:
+        raise ValueError(f"Trading SELL fill_qty 必須介於 1..{remaining_before}")
+    fill_price_milli = price_to_milli(fill_price)
+    if fill_price_milli <= 0:
+        raise ValueError("Trading SELL fill_price 必須 > 0")
+    if str(record.get("purpose")) == TRADING_ORDER_PURPOSE_PROTECTION_TP and fill_price_milli < int(record.get("limit_price_milli") or 0):
+        raise ValueError("Trading TP 實際成交價不可低於原始賣出限價")
+    trade_date_text = str(trade_date or "").strip()
+    if not trade_date_text:
+        raise ValueError("Trading SELL fill trade_date 必填")
+    fill_id_text = str(fill_id or "").strip()
+    fills = list(record.get("fills") or [])
+    if not fill_id_text or any(str(x.get("fill_id") or "") == fill_id_text for x in fills):
+        raise ValueError("Trading SELL fill_id 不可為空或重複")
+    net_sell = int(net_sell_total_milli); allocated = int(allocated_cost_milli); pnl = int(realized_pnl_milli)
+    if net_sell <= 0 or allocated < 0 or pnl != net_sell - allocated:
+        raise ValueError("Trading SELL fill exact-accounting payload 不合法")
+    fills.append({"fill_id": fill_id_text, "qty": qty, "fill_price_milli": fill_price_milli, "trade_date": trade_date_text,
+                  "net_sell_total_milli": net_sell, "allocated_cost_milli": allocated, "realized_pnl_milli": pnl, "confirmed_at": str(timestamp)})
+    filled_qty = sum(int(x["qty"]) for x in fills)
+    remaining_qty = int(record["qty"]) - filled_qty
+    to_status = TRADING_ORDER_STATUS_FILLED if remaining_qty == 0 else TRADING_ORDER_STATUS_PARTIAL
+    record.update({"fills": fills, "filled_qty": filled_qty, "remaining_qty": remaining_qty, "status": to_status,
+                   "filled_at": str(timestamp) if to_status == TRADING_ORDER_STATUS_FILLED else None})
+    oco_cancelled=[]
+    if bool(record.get("broker_native_oco_confirmed")):
+        group=str(record.get("broker_oco_group_id") or "")
+        for peer_id, peer in updated["orders"].items():
+            if peer_id == oid: continue
+            if str(peer.get("side") or "") != TRADING_ORDER_SIDE_SELL: continue
+            if str(peer.get("broker_oco_group_id") or "") != group: continue
+            if str(peer.get("status") or "") in TRADING_ACTIVE_ORDER_STATUSES:
+                peer["status"] = TRADING_ORDER_STATUS_CANCELLED
+                peer["cancelled_at"] = str(timestamp)
+                peer["cancel_note"] = f"broker-native OCO peer fill: {oid}"
+                oco_cancelled.append(peer_id)
+    return _append_event(updated, mutation_id=mutation_id, mutation_type="confirm_protection_sell_fill", timestamp=timestamp, details={
+        "order_id": oid, "ticker": record["ticker"], "purpose": record["purpose"], "fill_id": fill_id_text, "fill_qty": qty,
+        "fill_price_milli": fill_price_milli, "trade_date": trade_date_text, "net_sell_total_milli": net_sell,
+        "allocated_cost_milli": allocated, "realized_pnl_milli": pnl, "filled_qty": filled_qty, "remaining_qty": remaining_qty,
+        "from_status": from_status, "to_status": to_status, "oco_cancelled_order_ids": oco_cancelled})
+
 def cancel_ordered_trading_order(
     state: dict[str, Any],
     *,
@@ -720,10 +790,11 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
         else:
             if purpose not in TRADING_PROTECTION_ORDER_PURPOSES:
                 raise ValueError("Trading SELL order 本輪只允許 protection purpose")
-            if status not in {TRADING_ORDER_STATUS_ORDERED, TRADING_ORDER_STATUS_CANCELLED}:
-                raise ValueError("Trading protection SELL 本輪尚未支援 PARTIAL/FILLED")
-            if fills or filled_qty != 0 or declared_remaining != qty:
-                raise ValueError("Trading protection SELL 本輪不得含成交紀錄")
+            for fill in fills:
+                if int(fill.get("net_sell_total_milli") or 0) <= 0 or int(fill.get("allocated_cost_milli") or 0) < 0:
+                    raise ValueError("Trading protection SELL fill exact-accounting payload 不合法")
+                if int(fill.get("realized_pnl_milli") or 0) != int(fill.get("net_sell_total_milli") or 0) - int(fill.get("allocated_cost_milli") or 0):
+                    raise ValueError("Trading protection SELL fill PnL reconciliation 不一致")
             if int(record.get("reserved_cost_milli") or 0) != 0:
                 raise ValueError("Trading protection SELL 不得保留 BUY reserved cost")
             position_qty = int(record.get("position_qty_at_submission") or 0)
@@ -856,6 +927,7 @@ __all__ = [
     "append_ordered_trading_protection_leg",
     "append_ordered_trading_protection_oco_group",
     "record_trading_buy_order_fill",
+    "record_trading_protection_sell_order_fill",
     "cancel_ordered_trading_order",
     "active_trading_orders",
     "has_active_trading_orders",

@@ -948,7 +948,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
         add_check(results, "trading_fill", case_id, "partial_cancel_preserves_position_and_cash", [first_qty, partial_cash], [load_trading_account_state(root)["positions"]["2454"]["broker"]["qty"], load_trading_account_state(root)["cash_milli"]])
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results, "trading_fill", case_id, "workbench_requires_explicit_broker_fill_confirmation", True, 'text="確認選取成交"' in panel_source and "confirm_trading_buy_order_fill(" in panel_source)
+    add_check(results, "trading_fill", case_id, "workbench_requires_explicit_broker_fill_confirmation", True, 'text="確認選取成交"' in panel_source and "confirm_trading_buy_order_fill" in panel_source and "confirm_trading_protection_sell_order_fill" in panel_source)
     add_check(results, "trading_fill", case_id, "workbench_fill_inputs_are_actual_qty_price_and_date", True, all(token in panel_source for token in ("本次成交股數", "本次成交價", "成交日 YYYY-MM-DD")))
     add_check(results, "trading_fill", case_id, "workbench_does_not_auto_infer_fill_from_market_bar", False, "t_low" in panel_source or "t_high" in panel_source or "execute_pre_market_entry_plan" in panel_source)
 
@@ -1289,6 +1289,123 @@ def validate_trading_protection_order_submission_contract_case(base_params):
     summary["checks"] = len(results)
     return results, summary
 
+
+def validate_trading_protection_sell_fill_reconciliation_contract_case(base_params):
+    case_id = "TRADING_PROTECTION_SELL_FILL"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.file_integrity import atomic_write_json, canonical_json_sha256
+    from core.params_io import params_to_json_dict
+    from core.trading_order_state import (
+        TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+        TRADING_ORDER_PURPOSE_PROTECTION_TP,
+        build_empty_trading_order_state,
+        append_ordered_trading_proposal,
+        validate_trading_order_state,
+    )
+    from services.trading.fill_reconciliation import (
+        confirm_trading_buy_order_fill,
+        confirm_trading_protection_sell_order_fill,
+    )
+    from services.trading.order_state import load_trading_order_state, resolve_trading_order_state_path
+    from services.trading.protection_planning import build_trading_protection_plan
+    from services.trading.protection_order_submission import (
+        confirm_trading_protection_leg_submission,
+        confirm_trading_protection_oco_submission,
+    )
+
+    frozen_params = params_to_json_dict(base_params)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        qty = 100
+        reserved = build_buy_ledger_from_price(100.0, qty, base_params)["net_buy_total_milli"]
+        state = build_empty_trading_order_state(timestamp="2026-09-04T09:00:00+08:00", mutation_id="r12-init")
+        plan = {
+            "plan_fingerprint": "r12-entry-plan", "information_date": "2026-09-04",
+            "account_revision": int(account["revision"]), "selected_params_sha256": canonical_json_sha256(frozen_params),
+            "candidate_snapshot_sha256": "r12-candidate", "strategy_id": "full_rule_based_no_dl", "param_selector": "base_finalist_best",
+        }
+        proposal = {
+            "rank": 1, "ticker": "2454", "kind": "buy", "entry_type": "normal", "qty": qty,
+            "limit_price": 100.0, "reserved_cost_milli": int(reserved), "init_sl": 90.0, "init_trail": 90.0,
+            "target_price": 110.0, "entry_atr": 5.0, "security_profile": {},
+        }
+        state = append_ordered_trading_proposal(
+            state, order_id="r12-entry", proposal=proposal, plan=plan,
+            timestamp="2026-09-04T09:01:00+08:00", mutation_id="r12-submit", frozen_params=frozen_params,
+        )
+        atomic_write_json(resolve_trading_order_state_path(root), state)
+        bought = confirm_trading_buy_order_fill(
+            root, order_id="r12-entry", fill_qty=qty, fill_price=99.0, trade_date="2026-09-04",
+            expected_order_revision=int(state["revision"]), expected_account_revision=int(account["revision"]),
+        )
+        build_trading_protection_plan(root)
+        oco = confirm_trading_protection_oco_submission(
+            root, ticker="2454", expected_order_revision=int(bought["order_revision"]), broker_oco_group_id="R12-OCO",
+            stop_broker_order_id="R12-STOP", tp_broker_order_id="R12-TP",
+        )
+        tp = next(row for row in oco["orders"].values() if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_TP)
+        stop = next(row for row in oco["orders"].values() if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP)
+        cash_before = int(load_trading_account_state(root)["cash_milli"])
+        first_qty = 20
+        first = confirm_trading_protection_sell_order_fill(
+            root, order_id=tp["order_id"], fill_qty=first_qty, fill_price=111.0, trade_date="2026-09-05",
+            expected_order_revision=int(oco["revision"]), expected_account_revision=int(bought["account_revision"]),
+        )
+        first_record = first["orders"]["orders"][tp["order_id"]]
+        peer = first["orders"]["orders"][stop["order_id"]]
+        expected_first_ledger = build_sell_ledger_from_price(111.0, first_qty, base_params, ticker="2454", security_profile={}, trade_date="2026-09-05")
+        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_fill_sets_partial", "PARTIAL", first_record["status"])
+        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_fill_reduces_remaining_qty", int(tp["qty"]) - first_qty, first_record["remaining_qty"])
+        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_fill_reduces_real_held_qty", qty - first_qty, first["account"]["positions"]["2454"]["broker"]["qty"])
+        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_does_not_mark_sold_half_complete", False, first["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
+        add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_cash_credit_uses_canonical_exact_ledger", cash_before + int(expected_first_ledger["net_sell_total_milli"]), first["account"]["cash_milli"])
+        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_peer_is_cancelled_on_first_actual_fill", "CANCELLED", peer["status"])
+        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_cancel_is_same_order_revision_mutation", [stop["order_id"]], first["oco_cancelled_order_ids"])
+        add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_advances_account_once", int(bought["account_revision"]) + 1, first["account_revision"])
+        add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_advances_orders_once", int(oco["revision"]) + 1, first["order_revision"])
+
+        final_qty = int(first_record["remaining_qty"])
+        second = confirm_trading_protection_sell_order_fill(
+            root, order_id=tp["order_id"], fill_qty=final_qty, fill_price=112.0, trade_date="2026-09-06",
+            expected_order_revision=int(first["order_revision"]), expected_account_revision=int(first["account_revision"]),
+        )
+        final_record = second["orders"]["orders"][tp["order_id"]]
+        add_check(results, "trading_protection_sell_fill", case_id, "protection_sell_partial_fills_may_span_days", {"2026-09-05", "2026-09-06"}, {row["trade_date"] for row in final_record["fills"]})
+        add_check(results, "trading_protection_sell_fill", case_id, "final_tp_fill_sets_filled", "FILLED", final_record["status"])
+        add_check(results, "trading_protection_sell_fill", case_id, "final_tp_fill_zero_remaining", 0, final_record["remaining_qty"])
+        add_check(results, "trading_protection_sell_fill", case_id, "completed_tp_marks_canonical_sold_half", True, second["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
+        add_check(results, "trading_protection_sell_fill", case_id, "completed_tp_leaves_half_position", qty - int(tp["qty"]), second["account"]["positions"]["2454"]["broker"]["qty"])
+        validate_trading_order_state(second["orders"])
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        qty = 100
+        reserved = build_buy_ledger_from_price(100.0, qty, base_params)["net_buy_total_milli"]
+        state = build_empty_trading_order_state(timestamp="2026-09-04T09:00:00+08:00", mutation_id="r12s-init")
+        plan = {"plan_fingerprint":"r12s-plan","information_date":"2026-09-04","account_revision":0,"selected_params_sha256":canonical_json_sha256(frozen_params),"candidate_snapshot_sha256":"c","strategy_id":"s","param_selector":"p"}
+        proposal = {"rank":1,"ticker":"2330","kind":"buy","entry_type":"normal","qty":qty,"limit_price":100.0,"reserved_cost_milli":int(reserved),"init_sl":90.0,"init_trail":90.0,"target_price":110.0,"entry_atr":5.0,"security_profile":{}}
+        state = append_ordered_trading_proposal(state,order_id="r12s-entry",proposal=proposal,plan=plan,timestamp="2026-09-04T09:01:00+08:00",mutation_id="s",frozen_params=frozen_params)
+        atomic_write_json(resolve_trading_order_state_path(root),state)
+        bought = confirm_trading_buy_order_fill(root,order_id="r12s-entry",fill_qty=qty,fill_price=99.0,trade_date="2026-09-04",expected_order_revision=state["revision"],expected_account_revision=account["revision"])
+        build_trading_protection_plan(root)
+        stop_state = confirm_trading_protection_leg_submission(root,ticker="2330",action="STOP_FULL",expected_order_revision=bought["order_revision"],broker_order_id="R12S-STOP")
+        stop = next(row for row in stop_state["orders"].values() if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP)
+        stopped = confirm_trading_protection_sell_order_fill(root,order_id=stop["order_id"],fill_qty=qty,fill_price=85.0,trade_date="2026-09-05",expected_order_revision=stop_state["revision"],expected_account_revision=bought["account_revision"])
+        add_check(results, "trading_protection_sell_fill", case_id, "stop_market_actual_fill_may_gap_below_trigger", "FILLED", stopped["status"])
+        add_check(results, "trading_protection_sell_fill", case_id, "full_stop_fill_closes_position", False, "2330" in stopped["account"]["positions"])
+
+    service_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "fill_reconciliation.py").read_text(encoding="utf-8")
+    panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_service_does_not_infer_market_high_low", False, any(token in service_source for token in ("t_high", "t_low", "shadow_fill")))
+    add_check(results, "trading_protection_sell_fill", case_id, "workbench_routes_sell_fill_to_sell_reconciliation", True, "confirm_trading_protection_sell_order_fill" in panel_source)
+    summary["checks"] = len(results)
+    return results, summary
+
+
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
     results = []
@@ -1369,5 +1486,6 @@ __all__ = [
     "validate_trading_confirmed_fill_reconciliation_contract_case",
     "validate_trading_protection_plan_contract_case",
     "validate_trading_protection_order_submission_contract_case",
+    "validate_trading_protection_sell_fill_reconciliation_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]
