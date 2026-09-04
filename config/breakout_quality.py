@@ -495,14 +495,9 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
-    # AO is the simple learnability/reference base for the current representation-level control.
-    # The active model is injected separately below, so the list is H/AH/AK/AO + current.
+    # AO is the stable scientific reference; the active Training Model is injected separately.
+    # Therefore current [3]~[6] membership is H/AH/AK/AO + current without a second manual list.
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    # BG remains the current Training Model while its Rolling confirmation is pending.
-    # BH is a Forward-only numerical control and can be built by [3] without changing [1]/[2].
-    ("MR-13BG", "daily_universal_gru_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    ("MR-13BH", "daily_universal_gru_bf16_guarded_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    ("MR-13BI", "daily_universal_gru_bf16_backward_scaled_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
 )
 
 

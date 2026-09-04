@@ -3,16 +3,18 @@
     - 刪除不再需要的相容層的code，精簡程式也避免之後誤接
 
 
-- imrove DL module
-    - 從支稱線型分析需要怎麼改DL
-    - capital-aware DL with risk%, cap, stop input
+- imrove DL learnability
+    - more epoch to avoid fast convergence
     - attention (temperal / cross-secction)
     - self-learned history and L lengths
-    - hihger weight for high mfe or high safety   
-    - retrain min parameters
+    - input with lowerbound k style
     - simply label
         - the 40t day's R
         - self learn the label days and input days
+
+- improve DL Transferability
+    - capital-aware DL with risk%, cap, stop input
+    - retrain min parameters
     - sell using score    
     - non breakout strategy
     - 三大法人籌碼資訊/ EPS財報/ 基本面 
