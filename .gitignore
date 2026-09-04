@@ -23,3 +23,7 @@ __pycache__/
 /models/champion_archive/
 /models/filters/
 /models/
+
+# 忽略本機 Trading 每日資料與實際帳戶狀態；不可進 Git/package ZIP
+/data/trading/
+/state/trading/

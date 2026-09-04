@@ -305,3 +305,32 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             events.extend(['MISSED_SELL', sell_block_reason])
 
     return _finish()
+
+
+def execute_confirmed_position_sell_fill(
+    position,
+    *,
+    exec_price,
+    sell_qty,
+    params,
+    trade_date=None,
+    event="MANUAL_CONFIRMED_SELL",
+):
+    """Apply one externally confirmed sell fill through canonical exact accounting."""
+    qty = int(position.get("qty", 0) or 0)
+    sell_qty = int(sell_qty)
+    if qty <= 0:
+        raise ValueError("position 沒有可賣持股")
+    if sell_qty <= 0 or sell_qty > qty:
+        raise ValueError(f"sell_qty 必須介於 1..{qty}，收到 {sell_qty}")
+    return _execute_sell_leg(
+        position,
+        event=str(event),
+        exec_price=exec_price,
+        sell_qty=sell_qty,
+        params=params,
+        deferred=False,
+        trade_date=trade_date,
+        record_exec_contexts=True,
+        sync_display_fields=True,
+    )

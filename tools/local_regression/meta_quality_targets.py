@@ -9,6 +9,8 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/portfolio_levels.py",
     "core/portfolio_ensemble.py",
     "core/position_step.py",
+    "core/trading_account_state.py",
+    "services/trading/account_state.py",
     "core/portfolio_entries.py",
     "core/portfolio_entry_plans.py",
     "core/portfolio_entry_selection.py",

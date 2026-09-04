@@ -3869,6 +3869,17 @@
       "entry": "`config/trading.py`, `core/trading_policy.py`, `core/strategy_param_artifacts.py`, `services/optimizer/application.py`, `services/optimizer/strategy_param_repository.py`, `services/trading/strategy_param_training.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 348
+    },
+    {
+      "id": "B361",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Runtime domain / Trading account state",
+      "item": "Trading account/positions single-state SSOT and confirmed-fill accounting",
+      "gap": "Trading實際帳戶必須以state/trading/account.json作唯一current truth，同一atomic snapshot保存exact-milli cash、open positions與revisioned hash-chain events；不得另建positions.json第二份可變真理。manual adopted既有持股只登記broker qty/cost basis，不改cash、不偽造歷史strategy state；strategy fill必須重用canonical entry position與exact accounting，confirmed sell重用canonical sell/cost-basis/PnL semantics。stale revision、history tamper、同日買賣、超賣必須fail-fast；Trading data與operational state不得進Git/package ZIP。",
+      "entry": "`core/trading_account_state.py`, `services/trading/account_state.py`, `core/position_step.py`, `.gitignore`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 349
     }
   ],
   "tests": [
@@ -7225,6 +7236,13 @@
       "description": "`validate_trading_strategy_param_producer_contract_case` 覆蓋Trading training plan、custom strategy-param root、config-driven selector、canonical Optimizer delegation、multi-seed/trials/window injection、candidate/promotion isolation、manifest truth、完整ensemble/指定policy要求與runtime model-mode success/failure restoration。",
       "initial_status": "NEW",
       "order": 470
+    },
+    {
+      "id": "T481",
+      "b_id": "B361",
+      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、gitignore isolation、manual adoption、cash reconciliation、strategy confirmed buy/sell exact accounting、same-day/over-sell/stale-revision guard、broker/strategy parity與event hash-chain tamper detection。",
+      "initial_status": "NEW",
+      "order": 471
     }
   ],
   "transitions": [
@@ -24299,6 +24317,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_strategy_param_producer_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B361",
+      "description": "建立Trading account single-state SSOT、manual-adopted與strategy-fill分層、canonical confirmed-fill accounting及revision/hash-chain mutation contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/trading_account_state.py`, `services/trading/account_state.py`, `core/position_step.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T481",
+      "description": "新增Trading account-state direct synthetic並納入正式registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_account_state_contract_case`"
     }
   ]
 }
