@@ -521,6 +521,214 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
     return results, summary
 
 
+
+def validate_trading_pending_order_state_contract_case(base_params):
+    case_id = "TRADING_PENDING_ORDERS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.file_integrity import compute_file_sha256
+    from core.params_io import params_to_json_dict
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from core.trading_order_state import validate_trading_order_state
+    from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+    from services.trading.daily_workflow import resolve_trading_candidate_snapshot_path
+    from services.trading.order_planning import build_trading_proposed_order_plan
+    from services.trading.order_state import (
+        TradingOrderRevisionConflict,
+        confirm_trading_order_cancellation,
+        confirm_trading_order_submission,
+        get_trading_order_read_model,
+        load_trading_order_state,
+        resolve_trading_order_state_path,
+    )
+
+    profile = get_trading_strategy_profile()
+    project_root = Path(__file__).resolve().parents[2]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True)
+        for ticker, close in (("2454", 200.0), ("2603", 50.0)):
+            pd.DataFrame({
+                "Date": ["2026-09-03", "2026-09-04"],
+                "Open": [close, close],
+                "High": [close + 1, close + 1],
+                "Low": [close - 1, close - 1],
+                "Close": [close, close],
+                "Volume": [1000, 1000],
+            }).to_csv(data_dir / f"{ticker}.csv", index=False)
+
+        selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        ), ensure_ascii=False), encoding="utf-8")
+
+        account = initialize_trading_account_state(root, cash=800_000)
+        account_revision = int(account["revision"])
+        account_cash_milli = int(account["cash_milli"])
+
+        snapshot_path = resolve_trading_candidate_snapshot_path(root)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate_rows = [
+            {
+                "ticker": "2454",
+                "kind": "buy",
+                "sort_value": 2.0,
+                "expected_value": 0.4,
+                "execution_plan_seed": {
+                    "ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0,
+                    "target_price": 210.0, "entry_atr": 4.0, "trade_date": "2026-09-04",
+                    "security_profile": {"family": "stock"},
+                },
+            },
+            {
+                "ticker": "2603",
+                "kind": "buy",
+                "sort_value": 1.0,
+                "expected_value": 0.3,
+                "execution_plan_seed": {
+                    "ticker": "2603", "limit_price": 50.0, "init_sl": 47.0, "init_trail": 48.0,
+                    "target_price": 53.0, "entry_atr": 1.0, "trade_date": "2026-09-04",
+                    "security_profile": {"family": "stock"},
+                },
+            },
+        ]
+        snapshot_path.write_text(json.dumps({
+            "schema_version": 1,
+            "runtime_domain": "trading",
+            "strategy_id": profile.strategy_id,
+            "param_selector": profile.param_selector,
+            "latest_data_date": "2026-09-04",
+            "param_latest_data_date": "2026-09-04",
+            "selected_params_sha256": compute_file_sha256(selected_path),
+            "candidate_rows": candidate_rows,
+        }, ensure_ascii=False), encoding="utf-8")
+
+        plan = build_trading_proposed_order_plan(project_root=root)
+        order_path = resolve_trading_order_state_path(root)
+        add_check(results, "trading_pending", case_id, "proposal_only_does_not_create_order_state", False, order_path.exists())
+        add_check(results, "trading_pending", case_id, "order_state_path_is_operational_trading_state", str((root / "state" / "trading" / "orders.json").resolve()), str(order_path.resolve()))
+        add_check(results, "trading_pending", case_id, "proposed_schema_preserves_entry_type_for_future_fill", True, all(bool(row.get("entry_type")) for row in plan["orders"]))
+        add_check(results, "trading_pending", case_id, "proposed_schema_preserves_security_profile_for_future_fill", True, all(isinstance(row.get("security_profile"), dict) for row in plan["orders"]))
+
+        first = plan["orders"][0]
+        ordered = confirm_trading_order_submission(
+            root,
+            rank=int(first["rank"]),
+            ticker=first["ticker"],
+            expected_revision=None,
+            broker_order_id="SYN-001",
+            note="synthetic broker submission",
+        )
+        validate_trading_order_state(ordered)
+        ordered_record = next(iter(ordered["orders"].values()))
+        add_check(results, "trading_pending", case_id, "first_confirmed_submission_creates_revision_one", 1, ordered["revision"])
+        add_check(results, "trading_pending", case_id, "confirmed_submission_status_is_ordered", "ORDERED", ordered_record["status"])
+        add_check(results, "trading_pending", case_id, "confirmed_submission_records_proposed_to_ordered_transition", ["PROPOSED", "ORDERED"], [ordered["events"][-1]["details"]["from_status"], ordered["events"][-1]["details"]["to_status"]])
+        add_check(results, "trading_pending", case_id, "broker_order_id_is_preserved", "SYN-001", ordered_record["broker_order_id"])
+        add_check(results, "trading_pending", case_id, "order_freezes_plan_fingerprint", plan["plan_fingerprint"], ordered_record["plan_fingerprint"])
+        add_check(results, "trading_pending", case_id, "order_freezes_account_revision", account_revision, ordered_record["account_revision"])
+        add_check(results, "trading_pending", case_id, "order_freezes_param_sha", plan["selected_params_sha256"], ordered_record["selected_params_sha256"])
+        add_check(results, "trading_pending", case_id, "order_freezes_candidate_sha", plan["candidate_snapshot_sha256"], ordered_record["candidate_snapshot_sha256"])
+        add_check(results, "trading_pending", case_id, "order_submission_does_not_mutate_account_revision", account_revision, load_trading_account_state(root)["revision"])
+        add_check(results, "trading_pending", case_id, "order_submission_does_not_mutate_account_cash", account_cash_milli, load_trading_account_state(root)["cash_milli"])
+
+        try:
+            confirm_trading_order_submission(
+                root,
+                rank=int(first["rank"]),
+                ticker=first["ticker"],
+                expected_revision=ordered["revision"],
+            )
+        except ValueError:
+            duplicate_rejected = True
+        else:
+            duplicate_rejected = False
+        add_check(results, "trading_pending", case_id, "same_proposal_cannot_be_marked_ordered_twice", True, duplicate_rejected)
+        add_check(results, "trading_pending", case_id, "duplicate_rejection_does_not_advance_order_revision", ordered["revision"], load_trading_order_state(root)["revision"])
+
+        try:
+            set_trading_cash_balance(root, cash=700_000, expected_revision=account_revision)
+        except RuntimeError as exc:
+            account_locked = "ORDERED pending orders" in str(exc)
+        else:
+            account_locked = False
+        add_check(results, "trading_pending", case_id, "active_order_blocks_account_reconciliation", True, account_locked)
+
+        try:
+            build_trading_proposed_order_plan(project_root=root)
+        except RuntimeError as exc:
+            replanning_blocked = "ORDERED pending orders" in str(exc)
+        else:
+            replanning_blocked = False
+        add_check(results, "trading_pending", case_id, "active_order_blocks_new_premarket_allocation", True, replanning_blocked)
+
+        order_id = ordered_record["order_id"]
+        try:
+            confirm_trading_order_cancellation(root, order_id=order_id, expected_revision=0)
+        except TradingOrderRevisionConflict:
+            stale_order_revision_rejected = True
+        else:
+            stale_order_revision_rejected = False
+        add_check(results, "trading_pending", case_id, "stale_order_revision_is_rejected", True, stale_order_revision_rejected)
+
+        cancelled = confirm_trading_order_cancellation(
+            root,
+            order_id=order_id,
+            expected_revision=ordered["revision"],
+            note="synthetic broker cancelled",
+        )
+        cancelled_record = cancelled["orders"][order_id]
+        add_check(results, "trading_pending", case_id, "cancel_transition_advances_one_revision", ordered["revision"] + 1, cancelled["revision"])
+        add_check(results, "trading_pending", case_id, "cancelled_order_status", "CANCELLED", cancelled_record["status"])
+        add_check(results, "trading_pending", case_id, "cancelled_order_has_timestamp", True, bool(cancelled_record["cancelled_at"]))
+        add_check(results, "trading_pending", case_id, "cancellation_does_not_mutate_account", [account_revision, account_cash_milli], [load_trading_account_state(root)["revision"], load_trading_account_state(root)["cash_milli"]])
+
+        try:
+            build_trading_proposed_order_plan(project_root=root)
+        except RuntimeError as exc:
+            same_day_reallocation_blocked = "同日重新 allocation" in str(exc)
+        else:
+            same_day_reallocation_blocked = False
+        add_check(results, "trading_pending", case_id, "cancelled_order_still_locks_same_information_date_allocation", True, same_day_reallocation_blocked)
+
+        reconciled = set_trading_cash_balance(root, cash=700_000, expected_revision=account_revision)
+        add_check(results, "trading_pending", case_id, "account_mutation_is_reenabled_after_all_orders_cancelled", account_revision + 1, reconciled["revision"])
+
+        try:
+            confirm_trading_order_cancellation(root, order_id=order_id, expected_revision=cancelled["revision"])
+        except ValueError:
+            double_cancel_rejected = True
+        else:
+            double_cancel_rejected = False
+        add_check(results, "trading_pending", case_id, "cancelled_order_cannot_be_cancelled_twice", True, double_cancel_rejected)
+
+        tampered = load_trading_order_state(root)
+        tampered["events"][-1]["details"]["ticker"] = "TAMPER"
+        order_path.write_text(json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
+        try:
+            load_trading_order_state(root)
+        except ValueError:
+            tamper_rejected = True
+        else:
+            tamper_rejected = False
+        add_check(results, "trading_pending", case_id, "order_event_hash_tamper_is_rejected", True, tamper_rejected)
+
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results, "trading_pending", case_id, "workbench_requires_explicit_order_submission_confirmation", True, 'text="確認選取已送單"' in panel_source and "confirm_trading_order_submission(" in panel_source)
+    add_check(results, "trading_pending", case_id, "workbench_exposes_explicit_broker_cancellation_confirmation", True, 'text="確認選取已取消"' in panel_source and "confirm_trading_order_cancellation(" in panel_source)
+    add_check(results, "trading_pending", case_id, "round8_workbench_does_not_confirm_fill", False, "confirm_trading_strategy_buy_fill" in panel_source or "confirm_trading_sell_fill" in panel_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
     results = []
@@ -597,5 +805,6 @@ __all__ = [
     "validate_trading_account_state_contract_case",
     "validate_trading_daily_workflow_contract_case",
     "validate_trading_proposed_order_plan_contract_case",
+    "validate_trading_pending_order_state_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]

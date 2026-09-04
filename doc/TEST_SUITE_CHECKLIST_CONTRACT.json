@@ -3913,6 +3913,17 @@
       "entry": "`services/trading/order_planning.py`, `services/trading/daily_workflow.py`, `core/portfolio_entry_selection.py`, `services/scanner/stock_processor.py`, `services/scanner/scan_runner.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 352
+    },
+    {
+      "id": "B365",
+      "section": "B2",
+      "priority": "P1",
+      "category": "GUI / Workbench Trading broker orders",
+      "item": "Explicit broker-order confirmation persists ORDERED/CANCELLED state without mutating account",
+      "gap": "Trading proposed-order artifact只屬盤前建議；只有使用者明確確認實際券商送單，才可將單筆proposal以PROPOSED→ORDERED寫入state/trading/orders.json。ORDERED record必須凍結plan fingerprint、information date、account revision、selected-param/candidate SHA與後續fill所需的limit/qty/reserved/stop/trail/target/ATR/security-profile semantics，並以revisioned hash-chain與optimistic revision防止stale/tamper。送單與取消都不得修改account cash/positions；同一proposal不得重複送單。只要仍有ORDERED，account mutation與新的盤前allocation必須fail-fast；即使同日ORDERED已全部CANCELLED，只要該information date曾有實際送單紀錄，仍不得重新allocation。本輪只允許ORDERED→CANCELLED，不得建立FILLED/PARTIAL或自動推定成交。",
+      "entry": "`core/trading_order_state.py`, `services/trading/order_state.py`, `services/trading/order_planning.py`, `services/trading/account_state.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 353
     }
   ],
   "tests": [
@@ -7297,6 +7308,13 @@
       "description": "`validate_trading_proposed_order_plan_contract_case` 覆蓋fresh candidate/param binding、account revision、canonical mark-to-market sizing、max-position/cash reservation、held-ticker/extended-TBD排除、proposal artifact與no-account-mutation/no-confirmed-fill guard。",
       "initial_status": "NEW",
       "order": 474
+    },
+    {
+      "id": "T485",
+      "b_id": "B365",
+      "description": "`validate_trading_pending_order_state_contract_case` 覆蓋proposal-only/no-state、explicit PROPOSED→ORDERED、immutable plan/account/param/candidate binding、broker-order ID、no-account-mutation、duplicate/stale/tamper guards、active-order account/replan lock、cancelled same-day reallocation lock、ORDERED→CANCELLED與Workbench explicit confirmation controls。",
+      "initial_status": "NEW",
+      "order": 475
     }
   ],
   "transitions": [
@@ -24435,6 +24453,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_proposed_order_plan_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B365",
+      "description": "新增Trading broker-order state SSOT與Workbench明確送單／取消確認，維持proposal/order/account分層。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/trading_order_state.py`, `services/trading/order_state.py`, `services/workbench_ui/trading_account_panel.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T485",
+      "description": "新增Trading pending-order direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_pending_order_state_contract_case`"
     }
   ]
 }

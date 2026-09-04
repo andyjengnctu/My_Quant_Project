@@ -16,6 +16,13 @@ from services.trading.daily_workflow import (
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
 from services.trading.order_planning import build_trading_proposed_order_plan
+from services.trading.order_state import (
+    TradingOrderRevisionConflict,
+    confirm_trading_order_cancellation,
+    confirm_trading_order_submission,
+    get_trading_order_read_model,
+    resolve_trading_order_state_path,
+)
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
@@ -112,11 +119,14 @@ class TradingAccountPanel(ttk.Frame):
         self._position_rows: dict[str, dict[str, object]] = {}
         self._candidate_rows: list[dict[str, object]] = []
         self._proposed_order_rows: list[dict[str, object]] = []
+        self._order_snapshot: dict[str, object] = {}
+        self._order_rows: dict[str, dict[str, object]] = {}
         self._workflow_thread = None
         self._workflow_token = 0
         self._workflow_buttons = []
         self._build_ui()
         self.refresh_account()
+        self.refresh_order_state()
         self.refresh_daily_workflow()
 
     def _build_ui(self):
@@ -124,6 +134,7 @@ class TradingAccountPanel(ttk.Frame):
         self.rowconfigure(4, weight=1)
         self.rowconfigure(5, weight=1)
         self.rowconfigure(6, weight=1)
+        self.rowconfigure(7, weight=1)
 
         workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -274,6 +285,64 @@ class TradingAccountPanel(ttk.Frame):
         self._proposed_tree.grid(row=1, column=0, sticky="nsew")
         proposed_y.grid(row=1, column=1, sticky="ns")
 
+        submit_row = ttk.Frame(proposed_box, style=WORKBENCH_FRAME_STYLE)
+        submit_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Label(submit_row, text="券商委託號（可留空）", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._broker_order_id_var = tk.StringVar()
+        ttk.Entry(submit_row, textvariable=self._broker_order_id_var, width=18, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        ttk.Label(submit_row, text="備註", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._order_note_var = tk.StringVar()
+        ttk.Entry(submit_row, textvariable=self._order_note_var, width=28, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10), fill="x", expand=True)
+        self._confirm_ordered_button = ttk.Button(
+            submit_row,
+            text="確認選取已送單",
+            command=self._confirm_selected_ordered,
+            style=WORKBENCH_BUTTON_STYLE,
+        )
+        self._confirm_ordered_button.pack(side="right")
+
+        pending_box = ttk.LabelFrame(self, text="券商掛單狀態（ORDERED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        pending_box.grid(row=7, column=0, sticky="nsew", pady=(8, 0))
+        pending_box.rowconfigure(1, weight=1)
+        pending_box.columnconfigure(0, weight=1)
+        self._order_status_var = tk.StringVar(value="尚無實際送單紀錄。")
+        ttk.Label(pending_box, textvariable=self._order_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        order_columns = ("ticker", "status", "limit", "qty", "reserved", "broker_id", "info_date", "ordered_at", "cancelled_at")
+        self._order_tree = ttk.Treeview(pending_box, columns=order_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
+        order_headings = {
+            "ticker": "股票", "status": "狀態", "limit": "限價", "qty": "股數", "reserved": "預留資金",
+            "broker_id": "券商委託號", "info_date": "資訊日", "ordered_at": "送單時間", "cancelled_at": "取消時間",
+        }
+        order_widths = {
+            "ticker": 80, "status": 90, "limit": 95, "qty": 85, "reserved": 115, "broker_id": 130,
+            "info_date": 105, "ordered_at": 160, "cancelled_at": 160,
+        }
+        for key in order_columns:
+            self._order_tree.heading(key, text=order_headings[key])
+            self._order_tree.column(key, width=order_widths[key], anchor="center")
+        order_y = ttk.Scrollbar(pending_box, orient="vertical", command=self._order_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
+        order_x = ttk.Scrollbar(pending_box, orient="horizontal", command=self._order_tree.xview, style=WORKBENCH_HSCROLL_STYLE)
+        self._order_tree.configure(yscrollcommand=order_y.set, xscrollcommand=order_x.set)
+        self._order_tree.grid(row=1, column=0, sticky="nsew")
+        order_y.grid(row=1, column=1, sticky="ns")
+        order_x.grid(row=2, column=0, sticky="ew")
+        pending_buttons = ttk.Frame(pending_box, style=WORKBENCH_FRAME_STYLE)
+        pending_buttons.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self._cancel_order_button = ttk.Button(
+            pending_buttons,
+            text="確認選取已取消",
+            command=self._cancel_selected_order,
+            style=WORKBENCH_BUTTON_STYLE,
+        )
+        self._cancel_order_button.pack(side="left")
+        ttk.Button(pending_buttons, text="刷新掛單狀態", command=self.refresh_order_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
+        ttk.Label(
+            pending_buttons,
+            text="只有使用者確認實際送單才建立 ORDERED；取消只改 order state，不改 cash／持股。",
+            foreground=WORKBENCH_MUTED,
+            style=WORKBENCH_LABEL_STYLE,
+        ).pack(side="left", padx=(12, 0))
+
     def _set_workflow_buttons_state(self, state: str):
         for button in self._workflow_buttons:
             button.configure(state=state)
@@ -381,9 +450,11 @@ class TradingAccountPanel(ttk.Frame):
             self._proposed_tree.delete(item)
         self._proposed_order_rows = [dict(row) for row in list(rows or [])]
         for row in self._proposed_order_rows:
+            iid = f"{int(row.get('rank') or 0)}:{str(row.get('ticker') or '')}"
             self._proposed_tree.insert(
                 "",
                 "end",
+                iid=iid,
                 values=(
                     int(row.get("rank") or 0),
                     row.get("ticker") or "-",
@@ -395,6 +466,142 @@ class TradingAccountPanel(ttk.Frame):
                     self._format_candidate_number(row.get("target_price"), digits=2),
                 ),
             )
+
+    def _selected_proposed_order(self):
+        selected = self._proposed_tree.selection()
+        if not selected:
+            return None
+        iid = str(selected[0])
+        for row in self._proposed_order_rows:
+            if f"{int(row.get('rank') or 0)}:{str(row.get('ticker') or '')}" == iid:
+                return dict(row)
+        return None
+
+    def _current_order_revision(self):
+        revision = self._order_snapshot.get("revision")
+        return None if revision is None else int(revision)
+
+    def _has_active_orders(self) -> bool:
+        return int(self._order_snapshot.get("active_order_count") or 0) > 0
+
+    def refresh_order_state(self):
+        try:
+            snapshot = get_trading_order_read_model(WORKBENCH_PROJECT_ROOT)
+        except (ValueError, RuntimeError, OSError) as exc:
+            self._order_snapshot = {}
+            self._order_rows = {}
+            self._order_status_var.set(f"掛單狀態讀取失敗：{exc}")
+            return
+        self._order_snapshot = snapshot
+        self._order_rows = {}
+        for item in self._order_tree.get_children():
+            self._order_tree.delete(item)
+        for row in list(snapshot.get("orders") or []):
+            order_id = str(row.get("order_id") or "")
+            self._order_rows[order_id] = dict(row)
+            self._order_tree.insert(
+                "",
+                "end",
+                iid=order_id,
+                values=(
+                    row.get("ticker") or "-",
+                    row.get("status") or "-",
+                    self._format_candidate_number(row.get("limit_price"), digits=2),
+                    f"{int(row.get('qty') or 0):,}",
+                    self._format_candidate_number(row.get("reserved_cost"), digits=0),
+                    row.get("broker_order_id") or "-",
+                    row.get("information_date") or "-",
+                    row.get("ordered_at") or "-",
+                    row.get("cancelled_at") or "-",
+                ),
+            )
+        active = int(snapshot.get("active_order_count") or 0)
+        revision = snapshot.get("revision")
+        state_path = project_relative_display_path(resolve_trading_order_state_path(WORKBENCH_PROJECT_ROOT), project_root=WORKBENCH_PROJECT_ROOT)
+        self._order_status_var.set(
+            f"{'ACTIVE' if active else 'CLEAR'} | revision {revision if revision is not None else '-'} | ORDERED {active} | 總紀錄 {int(snapshot.get('order_count') or 0)} | {state_path}"
+        )
+        self._apply_order_lock_to_account_controls()
+
+    def _apply_order_lock_to_account_controls(self):
+        active = self._has_active_orders()
+        initialized = bool(self._snapshot.get("initialized"))
+        self._set_cash_button.configure(state="disabled" if active or not initialized else "normal")
+        self._add_button.configure(state="disabled" if active or not initialized else "normal")
+        selected = self._selected_ticker()
+        self._set_position_action_state(self._position_rows.get(selected or ""))
+
+    def _confirm_selected_ordered(self):
+        row = self._selected_proposed_order()
+        if not row:
+            messagebox.showerror("Trading 掛單", "請先選取一筆建議掛單。", parent=self)
+            return
+        ticker = str(row.get("ticker") or "")
+        qty = int(row.get("qty") or 0)
+        limit_price = self._format_candidate_number(row.get("limit_price"), digits=2)
+        if not messagebox.askyesno(
+            "確認實際送單",
+            f"確認已在券商送出 {ticker} 買單？\n\n股數：{qty:,}\n限價：{limit_price}\n\n此動作只建立 ORDERED broker truth，不會扣 cash、也不會建立持股。",
+            parent=self,
+        ):
+            return
+        try:
+            confirm_trading_order_submission(
+                WORKBENCH_PROJECT_ROOT,
+                rank=int(row.get("rank") or 0),
+                ticker=ticker,
+                expected_revision=self._current_order_revision(),
+                broker_order_id=self._broker_order_id_var.get().strip() or None,
+                note=self._order_note_var.get().strip() or None,
+            )
+        except TradingOrderRevisionConflict as exc:
+            messagebox.showerror("Trading 掛單已更新", f"{exc}\n\n已重新讀取最新掛單狀態。", parent=self)
+            self.refresh_order_state()
+            return
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            messagebox.showerror("Trading 掛單失敗", str(exc), parent=self)
+            self.refresh_order_state()
+            return
+        self._broker_order_id_var.set("")
+        self._order_note_var.set("")
+        self.refresh_order_state()
+        messagebox.showinfo("Trading 掛單", f"{ticker} 已記錄為 ORDERED；account cash／positions 未變更。", parent=self)
+
+    def _cancel_selected_order(self):
+        selected = self._order_tree.selection()
+        if not selected:
+            messagebox.showerror("Trading 掛單", "請先選取一筆 ORDERED 掛單。", parent=self)
+            return
+        order_id = str(selected[0])
+        row = self._order_rows.get(order_id) or {}
+        if str(row.get("status")) != "ORDERED":
+            messagebox.showerror("Trading 掛單", "只有 ORDERED 掛單可確認取消。", parent=self)
+            return
+        ticker = str(row.get("ticker") or "")
+        if not messagebox.askyesno(
+            "確認券商取消",
+            f"確認券商端 {ticker} 掛單已取消？\n\n此動作不會修改 cash／持股。",
+            parent=self,
+        ):
+            return
+        try:
+            confirm_trading_order_cancellation(
+                WORKBENCH_PROJECT_ROOT,
+                order_id=order_id,
+                expected_revision=int(self._current_order_revision()),
+                note=self._order_note_var.get().strip() or "Workbench confirmed broker cancellation",
+            )
+        except TradingOrderRevisionConflict as exc:
+            messagebox.showerror("Trading 掛單已更新", f"{exc}\n\n已重新讀取最新掛單狀態。", parent=self)
+            self.refresh_order_state()
+            return
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            messagebox.showerror("Trading 掛單失敗", str(exc), parent=self)
+            self.refresh_order_state()
+            return
+        self._order_note_var.set("")
+        self.refresh_order_state()
+        messagebox.showinfo("Trading 掛單", f"{ticker} 已記錄為 CANCELLED。", parent=self)
 
     def _finish_workflow_success(self, action: str, token: int, result):
         if token != self._workflow_token:
@@ -412,6 +619,7 @@ class TradingAccountPanel(ttk.Frame):
                 f"預留 {format_trading_money(order_result.get('reserved_total'))} | 餘額 {format_trading_money(order_result.get('cash_after_reservation'))} | {order_result.get('text_path') or '-'}"
             )
         self.refresh_daily_workflow()
+        self.refresh_order_state()
         if action == "data":
             self._workflow_status_var.set(
                 f"資料更新完成：market {result.get('market_date') or '-'} | 成功 {result.get('count_success', 0)} | 已最新 {result.get('count_skipped_latest', 0)} | 下載失敗 {result.get('download_error_count', 0)}"
@@ -442,12 +650,15 @@ class TradingAccountPanel(ttk.Frame):
         except TradingAccountRevisionConflict as exc:
             messagebox.showerror("Trading 帳戶已更新", f"{exc}\n\n已重新讀取最新狀態，請確認後再操作。", parent=self)
             self.refresh_account()
+            self.refresh_order_state()
             return False
         except (ValueError, RuntimeError, FileNotFoundError, FileExistsError) as exc:
             messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
             self.refresh_account()
+            self.refresh_order_state()
             return False
         self.refresh_account()
+        self.refresh_order_state()
         self._reload_proposed_order_rows([])
         self._proposed_status_var.set("帳戶已變更；既有建議掛單已失效，請重新執行 4 建議掛單。")
         return True
@@ -481,6 +692,7 @@ class TradingAccountPanel(ttk.Frame):
         elif not initialized:
             self._cash_var.set("")
         self._reload_positions()
+        self._apply_order_lock_to_account_controls()
 
     def _reload_positions(self):
         selected = self._selected_ticker()
@@ -523,6 +735,7 @@ class TradingAccountPanel(ttk.Frame):
             and row.get("source") == MANUAL_SOURCE
             and row.get("management_status") == UNMANAGED_STATUS
             and not bool(row.get("has_sell_history"))
+            and not self._has_active_orders()
         )
         state = "normal" if editable else "disabled"
         self._correct_button.configure(state=state)

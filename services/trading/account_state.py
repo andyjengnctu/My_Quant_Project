@@ -9,6 +9,11 @@ from uuid import uuid4
 from core.file_integrity import atomic_write_json, load_json_strict
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.runtime_utils import get_taipei_now
+from core.trading_order_state import (
+    TRADING_ORDER_STATE_FILENAME,
+    has_active_trading_orders,
+    validate_trading_order_state,
+)
 from core.trading_account_state import (
     adopt_manual_trading_position,
     apply_confirmed_sell_fill,
@@ -51,6 +56,36 @@ def _read_state_with_sha(path: Path) -> tuple[dict[str, Any], str]:
     return state, source_sha
 
 
+def _read_order_guard_sha(project_root) -> str | None:
+    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
+    if paths.state_root is None:
+        raise RuntimeError("Trading runtime domain 缺少 state_root")
+    order_path = Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
+    if not order_path.is_file():
+        return None
+    raw = order_path.read_bytes()
+    source_sha = hashlib.sha256(raw).hexdigest()
+    state = load_json_strict(order_path)
+    validate_trading_order_state(state)
+    if has_active_trading_orders(state):
+        raise RuntimeError("Trading 尚有 ORDERED pending orders；完成成交／取消 reconciliation 前禁止修改 account state")
+    return source_sha
+
+
+def _assert_order_guard_unchanged(project_root, expected_sha: str | None) -> None:
+    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
+    order_path = Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
+    if expected_sha is None:
+        if order_path.exists():
+            raise TradingAccountRevisionConflict("Trading order state 在 account mutation 期間已建立")
+        return
+    if not order_path.is_file():
+        raise TradingAccountRevisionConflict("Trading order state 在 account mutation 期間被移除")
+    current_sha = hashlib.sha256(order_path.read_bytes()).hexdigest()
+    if current_sha != expected_sha:
+        raise TradingAccountRevisionConflict("Trading order state 在 account mutation 期間已變更")
+
+
 def load_trading_account_state(project_root, *, required: bool = True) -> dict[str, Any] | None:
     path = resolve_trading_account_state_path(project_root)
     if not path.is_file():
@@ -81,6 +116,7 @@ def _mutate_account(
     expected_revision: int,
     mutator: Callable[[dict[str, Any], str, str], dict[str, Any]],
 ) -> dict[str, Any]:
+    order_guard_sha = _read_order_guard_sha(project_root)
     path = resolve_trading_account_state_path(project_root)
     state, source_sha = _read_state_with_sha(path)
     current_revision = int(state["revision"])
@@ -98,6 +134,7 @@ def _mutate_account(
     latest_sha = hashlib.sha256(latest_raw).hexdigest()
     if latest_sha != source_sha:
         raise TradingAccountRevisionConflict("Trading account state 在寫入前已被其他流程修改")
+    _assert_order_guard_unchanged(project_root, order_guard_sha)
     atomic_write_json(path, updated)
     return load_trading_account_state(project_root)
 

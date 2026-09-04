@@ -30,14 +30,23 @@ from core.portfolio_entry_selection import (
     select_resource_aware_action_candidates,
 )
 from core.portfolio_fast_data import calc_mark_to_market_equity, pack_static_market_data
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
+from core.runtime_domains import (
+    RUNTIME_DOMAIN_TRADING,
+    resolve_runtime_domain_paths,
+    resolve_runtime_output_dir,
+)
+from core.trading_order_state import (
+    TRADING_ORDER_STATE_FILENAME,
+    has_active_trading_orders,
+    validate_trading_order_state,
+)
 from services.trading.account_state import load_trading_account_state
 from services.trading.daily_workflow import (
     load_trading_scanner_runtime,
     resolve_trading_candidate_snapshot_path,
 )
 
-PROPOSED_ORDER_SCHEMA_VERSION = 1
+PROPOSED_ORDER_SCHEMA_VERSION = 2
 PROPOSED_ORDER_STATUS = "PROPOSED"
 
 
@@ -52,6 +61,68 @@ def resolve_trading_proposed_orders_json_path(project_root: str | Path) -> Path:
 
 def resolve_trading_proposed_orders_text_path(project_root: str | Path) -> Path:
     return resolve_trading_proposed_orders_dir(project_root) / "proposed_orders.txt"
+
+
+def _resolve_trading_order_state_path(project_root: str | Path) -> Path:
+    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
+    if paths.state_root is None:
+        raise RuntimeError("Trading runtime domain 缺少 state_root")
+    return Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
+
+
+def _assert_order_state_allows_new_allocation(project_root: str | Path, *, information_date: str) -> None:
+    order_state_path = _resolve_trading_order_state_path(project_root)
+    if not order_state_path.is_file():
+        return
+    state = load_json_strict(order_state_path)
+    validate_trading_order_state(state)
+    if has_active_trading_orders(state):
+        raise RuntimeError("Trading 尚有 ORDERED pending orders；完成成交／取消 reconciliation 前禁止建立新的盤前建議掛單")
+    if any(str(row.get("information_date") or "") == str(information_date) for row in state.get("orders", {}).values()):
+        raise RuntimeError("Trading 本資訊日已存在實際送單紀錄；依盤前資金鎖定原則禁止同日重新 allocation")
+
+
+def load_current_trading_proposed_order_plan(
+    project_root: str | Path,
+    *,
+    require_current: bool = True,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    path = resolve_trading_proposed_orders_json_path(root)
+    if not path.is_file():
+        raise FileNotFoundError("Trading 建議掛單尚未產生；請先執行「4 建議掛單」。")
+    payload = load_json_strict(path)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Trading proposed-order payload 不合法")
+    if int(payload.get("schema_version", -1)) != PROPOSED_ORDER_SCHEMA_VERSION:
+        raise RuntimeError("Trading proposed-order schema_version 不相容，請重新產生建議掛單")
+    if str(payload.get("status") or "") != PROPOSED_ORDER_STATUS:
+        raise RuntimeError("Trading proposed-order status 不合法")
+    if str(payload.get("runtime_domain") or "") != RUNTIME_DOMAIN_TRADING:
+        raise RuntimeError("Trading proposed-order runtime domain 不合法")
+    payload_core = {key: value for key, value in payload.items() if key != "plan_fingerprint"}
+    expected_fingerprint = canonical_json_sha256(payload_core)
+    if str(payload.get("plan_fingerprint") or "") != expected_fingerprint:
+        raise RuntimeError("Trading proposed-order plan fingerprint 不一致")
+    if not require_current:
+        return payload
+
+    runtime = load_trading_scanner_runtime(root)
+    if str(payload.get("information_date") or "") != str(runtime["latest_data_date"]):
+        raise RuntimeError("Trading 建議掛單資料日期已過期；請重新執行 3 Scanner 與 4 建議掛單")
+    if str(payload.get("strategy_id") or "") != str(runtime["profile"].strategy_id):
+        raise RuntimeError("Trading 建議掛單策略與目前設定不一致")
+    if str(payload.get("param_selector") or "") != str(runtime["profile"].param_selector):
+        raise RuntimeError("Trading 建議掛單 selector 與目前設定不一致")
+    if str(payload.get("selected_params_sha256") or "") != compute_file_sha256(runtime["selected_path"]):
+        raise RuntimeError("Trading 建議掛單對應的 params 已改變；請重新執行 Scanner／建議掛單")
+    snapshot_path = resolve_trading_candidate_snapshot_path(root)
+    if not snapshot_path.is_file() or str(payload.get("candidate_snapshot_sha256") or "") != compute_file_sha256(snapshot_path):
+        raise RuntimeError("Trading 建議掛單對應的 Scanner snapshot 已改變；請重新執行建議掛單")
+    account = load_trading_account_state(root, required=True)
+    if int(payload.get("account_revision", -1)) != int(account["revision"]):
+        raise RuntimeError("Trading account 已與建議掛單使用的 revision 不一致；請重新產生建議掛單")
+    return payload
 
 
 def _position_security_profile(record: dict[str, Any]):
@@ -190,6 +261,7 @@ def _render_proposed_orders_text(payload: dict[str, Any]) -> str:
 def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     runtime = load_trading_scanner_runtime(root)
+    _assert_order_state_allows_new_allocation(root, information_date=str(runtime["latest_data_date"]))
     snapshot_path = resolve_trading_candidate_snapshot_path(root)
     if not snapshot_path.is_file():
         raise FileNotFoundError("Trading Scanner candidate snapshot 尚未產生；請先執行「3 Scanner 候選」。")
@@ -286,6 +358,8 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
             "init_trail": float(plan["init_trail"]),
             "target_price": float(plan["target_price"]),
             "entry_atr": None if plan.get("entry_atr") is None else float(plan["entry_atr"]),
+            "entry_type": str(row.get("type") or row.get("kind") or "normal"),
+            "security_profile": deepcopy(plan.get("security_profile")),
             "sort_value": row.get("sort_value"),
             "expected_value": row.get("expected_value", row.get("ev")),
         })
@@ -341,5 +415,6 @@ __all__ = [
     "resolve_trading_proposed_orders_dir",
     "resolve_trading_proposed_orders_json_path",
     "resolve_trading_proposed_orders_text_path",
+    "load_current_trading_proposed_order_plan",
     "build_trading_proposed_order_plan",
 ]
