@@ -38,11 +38,11 @@ def build_gru_shared_safety_mfe(
     class _SplitBidirectionalGRU(nn.Module):
         """Execution-equivalent 1-layer BiGRU using two unidirectional kernels.
 
-        Native bidirectional cuDNN RNN execution can select a materially slower
-        deterministic FP32 path on some CUDA/cuDNN stacks.  Keeping the two
-        directions as independent unidirectional GRUs preserves the BiGRU
-        topology and parameter count while allowing each direction to use the
-        same unidirectional kernel family already exercised by MR-13BG.
+        The scientific topology is unchanged from a native 1-layer BiGRU.  The
+        production encoder only needs the two final recurrent states, so its CUDA
+        path runs the independent directions on separate streams and does not
+        materialize/flip/concatenate the unused full-sequence outputs.  ``forward``
+        retains the complete native-like output contract for diagnostics/tests.
         """
 
         def __init__(self):
@@ -52,7 +52,10 @@ def build_gru_shared_safety_mfe(
             self.bidirectional = True
             self.num_layers = 1
             self.hidden_size = hidden_size
-            self.execution_strategy = "split_unidirectional"
+            self.execution_strategy = "split_unidirectional_parallel_cuda"
+            # CUDA streams are execution-only state and therefore intentionally
+            # absent from state_dict / fitted-model identity.
+            self._cuda_stream_pairs = {}
             # Construction order intentionally matches nn.GRU(..., bidirectional=True):
             # forward direction parameters first, then reverse direction parameters.
             self.forward_gru = nn.GRU(
@@ -72,7 +75,62 @@ def build_gru_shared_safety_mfe(
                 bidirectional=False,
             )
 
+        def _sequential_final_hidden(self, x):
+            _forward_output, forward_hidden = self.forward_gru(x)
+            reversed_x = torch.flip(x, dims=(1,)).contiguous()
+            _reversed_output, backward_hidden = self.backward_gru(reversed_x)
+            return torch.cat((forward_hidden, backward_hidden), dim=0)
+
+        def _cuda_stream_pair(self, x):
+            device_index = int(
+                x.device.index
+                if x.device.index is not None
+                else torch.cuda.current_device()
+            )
+            pair = self._cuda_stream_pairs.get(device_index)
+            if pair is None:
+                pair = (
+                    torch.cuda.Stream(device=x.device),
+                    torch.cuda.Stream(device=x.device),
+                )
+                self._cuda_stream_pairs[device_index] = pair
+            return pair
+
+        def final_hidden(self, x):
+            """Return native-order [forward, backward] final states only.
+
+            Directions are independent by construction.  On CUDA, branch from the
+            caller stream after all prior writes (including optimizer.step), execute
+            both unidirectional GRUs concurrently, then rejoin before concatenation.
+            PyTorch autograd preserves the same branch streams for backward ops.
+            """
+
+            if not bool(getattr(x, "is_cuda", False)):
+                return self._sequential_final_hidden(x)
+            # Avoid introducing custom stream edges inside a CUDA graph capture.
+            if bool(torch.cuda.is_current_stream_capturing()):
+                return self._sequential_final_hidden(x)
+
+            current_stream = torch.cuda.current_stream(device=x.device)
+            forward_stream, backward_stream = self._cuda_stream_pair(x)
+            forward_stream.wait_stream(current_stream)
+            backward_stream.wait_stream(current_stream)
+
+            with torch.cuda.stream(forward_stream):
+                _forward_output, forward_hidden = self.forward_gru(x)
+            with torch.cuda.stream(backward_stream):
+                reversed_x = torch.flip(x, dims=(1,)).contiguous()
+                _reversed_output, backward_hidden = self.backward_gru(reversed_x)
+
+            current_stream.wait_stream(forward_stream)
+            current_stream.wait_stream(backward_stream)
+            forward_hidden.record_stream(current_stream)
+            backward_hidden.record_stream(current_stream)
+            return torch.cat((forward_hidden, backward_hidden), dim=0)
+
         def forward(self, x):
+            # Preserve a native-like full-output contract for diagnostics.  The
+            # production encoder uses final_hidden() and skips these unused tensors.
             forward_output, forward_hidden = self.forward_gru(x)
             reversed_x = torch.flip(x, dims=(1,)).contiguous()
             reversed_output, backward_hidden = self.backward_gru(reversed_x)
@@ -111,13 +169,20 @@ def build_gru_shared_safety_mfe(
         def _encode_native(self, x):
             if x.ndim != 3:
                 raise ValueError(f"GRU input 必須是 [batch,time,feature]，收到 shape={tuple(x.shape)}")
-            _outputs, hidden = self.gru(x)
+            if bidirectional and hasattr(self.gru, "final_hidden"):
+                hidden = self.gru.final_hidden(x)
+            else:
+                _outputs, hidden = self.gru(x)
             return self._final_latent(hidden)
 
         def _encode_fp32(self, x):
             if x.ndim != 3:
                 raise ValueError(f"GRU input 必須是 [batch,time,feature]，收到 shape={tuple(x.shape)}")
-            _outputs, hidden = self.gru(x.float())
+            fp32_x = x.float()
+            if bidirectional and hasattr(self.gru, "final_hidden"):
+                hidden = self.gru.final_hidden(fp32_x)
+            else:
+                _outputs, hidden = self.gru(fp32_x)
             return self._final_latent(hidden)
 
         def encode(self, x):

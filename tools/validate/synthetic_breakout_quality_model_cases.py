@@ -3483,8 +3483,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 split_model = build_active_model(10, 0, architecture=architecture)
                 _native_output, native_hidden = native_gru(equivalence_x)
                 _split_output, split_hidden = split_model.gru(equivalence_x)
+                split_fast_hidden = split_model.gru.final_hidden(equivalence_x)
                 native_latent = torch.cat((native_hidden[-2], native_hidden[-1]), dim=1)
                 split_latent = torch.cat((split_hidden[-2], split_hidden[-1]), dim=1)
+                split_fast_latent = torch.cat(
+                    (split_fast_hidden[-2], split_fast_hidden[-1]), dim=1
+                )
                 split_forward = split_model.gru.forward_gru
                 split_backward = split_model.gru.backward_gru
                 initialization_equivalent = all(
@@ -3508,8 +3512,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                     and torch.equal(native_mfe.weight, split_model.raw_mfe_classifier.weight)
                     and torch.equal(native_mfe.bias, split_model.raw_mfe_classifier.bias)
                 )
-                final_state_equivalent = torch.allclose(
-                    native_latent, split_latent, rtol=1e-6, atol=1e-6
+                final_state_equivalent = (
+                    torch.allclose(native_latent, split_latent, rtol=1e-6, atol=1e-6)
+                    and torch.allclose(
+                        native_latent, split_fast_latent, rtol=1e-6, atol=1e-6
+                    )
                 )
 
             bidirectional_contracts.append(
@@ -3520,7 +3527,8 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 == 2 * int(bidirectional_spec.gru_hidden_size or 0)
                 and bool(getattr(bidirectional_model.gru, "bidirectional", False))
                 and getattr(bidirectional_model.gru, "execution_strategy", None)
-                == "split_unidirectional"
+                == "split_unidirectional_parallel_cuda"
+                and hasattr(bidirectional_model.gru, "final_hidden")
                 and initialization_equivalent
                 and heads_equivalent
                 and bool(final_state_equivalent)

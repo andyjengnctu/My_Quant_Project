@@ -11705,3 +11705,12 @@ Decision：`MR13BH_CONTROL_FAIL / SAME_BATCH_FP32_RETRY_TRAJECTORY_DISTORTION_CO
 - **Predeclared Gate**：先只跑Seed42 Forward。必須看到Safety Daily/Global rho、Pair與Pred-HS purity的material joint improvement，且HS-only Conditional-MFE與Pred-HS top-tail HM/HS/MFE不退化；overall rho或單一slice小幅領先不足以進Rolling。若FAIL，不再做BiGRU hidden、layers、directionality、precision、LR或long-window sweep，回information content / target uncertainty。
 
 Decision：`MR13BJ_IMPLEMENTED / USER_AUTHORIZED_SINGLE_BIDIRECTIONAL_OVERRIDE / PARAMETER_MATCHED / PIT_LEGAL / FORWARD_GATE_FIRST / NO_GRU_SWEEP_IF_FAIL`。
+
+## 2026-09-04 — MR-13BJ pre-result CUDA direction-parallel execution correction
+
+- **Observed runtime evidence**：使用者在native BiGRU與先前split-unidirectional版上皆觀察到`Epoch選擇`後超過15分鐘仍未完成第一個epoch；兩次都發生在任何BJ epoch metric／checkpoint／Forward scientific result之前，因此不構成result-guided model tuning。
+- **Root cause narrowing**：split版已排除`nn.GRU(..., bidirectional=True)`本身是唯一瓶頸；但兩個hidden274單向GRU仍在同一CUDA stream串行執行，且production encoder雖只消費final hidden，runtime仍額外materialize／flip／concat完整`[B,300,548]` sequence output。Parameter-matched FLOPs不等於wall-time：兩個較小recurrent kernels會重複支付sequence/kernel overhead，且串行不能利用方向間天然獨立性。
+- **Execution-only correction**：BJ scientific topology／params／input／FP32 recurrent+heads／Seed／batch order／loss／optimizer／update count全部不變。CUDA production encoder改為兩個獨立unidirectional GRU分別在兩條side streams執行，caller stream先branch、兩方向完成後rejoin，再concat native-order final states；CPU與CUDA graph capture保留sequential fallback。正式encoder只取final hidden，不再建立未使用的full-sequence reverse/output concat；module `forward()`仍保留native-like full-output contract供診斷。
+- **Identity rule**：這是pre-result performance execution strategy，依PROJECT_SETTINGS C15不改scientific/artifact identity，不占新MR／architecture，MR-13BJ Gate與stop rule完全不變。GPT環境無RTX 5080/CUDA實機，因此只可驗證parameter/state/model-spec與CPU numerical equivalence；實機wall-time仍需使用者重跑確認。
+
+Decision：`MR13BJ_PRE_RESULT_EXECUTION_CORRECTION / CUDA_DIRECTION_PARALLEL / FINAL_HIDDEN_ONLY_FAST_PATH / SCIENTIFIC_IDENTITY_UNCHANGED / USER_RUNTIME_CONFIRMATION_REQUIRED`。
