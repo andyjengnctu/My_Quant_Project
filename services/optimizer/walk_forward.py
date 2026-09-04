@@ -10,7 +10,7 @@ import pandas as pd
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 from core.runtime_utils import get_taipei_now
-from config.display_policy import format_system_score_for_display
+from core.display_policy import format_system_score_for_display
 
 WF_MIN_TRAIN_YEARS = 8
 

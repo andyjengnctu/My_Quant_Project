@@ -1,6 +1,7 @@
 from core.runtime_utils import is_insufficient_data_error
 import os
 
+from config.runtime import SCANNER_AUTO_MAX_WORKERS_CAP, SCANNER_PROGRESS_EVERY
 from core.model_paths import resolve_active_params_path, resolve_models_dir
 from core.params_io import load_params_from_json as load_strict_params
 from core.output_paths import build_output_dir
@@ -9,8 +10,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "vip_scanner")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
 ACTIVE_PARAMS_PATH = resolve_active_params_path(PROJECT_ROOT)
-SCANNER_PROGRESS_EVERY = 25
-DEFAULT_SCANNER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1) // 2))
+DEFAULT_SCANNER_MAX_WORKERS = min(
+    int(SCANNER_AUTO_MAX_WORKERS_CAP),
+    max(1, (os.cpu_count() or 1) // 2),
+)
 
 
 def ensure_runtime_dirs():

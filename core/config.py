@@ -96,6 +96,8 @@ from config.execution_policy import (  # noqa: F401
     RUNTIME_PARAM_DEFAULTS,
     RUNTIME_PARAM_SPECS,
     RUNTIME_PARAM_TYPES,
+)
+from core.execution_policy import (  # noqa: F401
     build_execution_policy_snapshot,
     build_runtime_param_snapshot,
 )
@@ -149,8 +151,8 @@ from config.training_policy import (  # noqa: F401
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,
 )
-from config.display_policy import (  # noqa: F401
-    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+from config.display_policy import SYSTEM_SCORE_DISPLAY_MULTIPLIER  # noqa: F401
+from core.display_policy import (  # noqa: F401
     build_display_policy_snapshot,
     format_system_score_for_display,
     scale_system_score_for_display,
@@ -159,6 +161,8 @@ from config.training_performance_policy import (  # noqa: F401
     OPTIMIZER_FEATURE_BANK_MAX_ITEMS,
     OPTIMIZER_ROLLING_FOLD_WORKERS,
     OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS,
+)
+from core.training_performance import (  # noqa: F401
     build_training_performance_policy_snapshot,
     resolve_optimizer_feature_bank_max_items_default,
     resolve_optimizer_rolling_fold_workers_default,

@@ -1,0 +1,75 @@
+"""Typed runtime resolution for declarative Research configuration."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Mapping
+
+from config.research import (
+    ACTIVE_MODEL_ID,
+    MODEL_RESEARCH_PROVIDERS,
+    RESEARCH_ARTIFACT_PREPARATION,
+)
+
+
+@dataclass(frozen=True)
+class ResearchArtifactPreparationPolicy:
+    auto_prepare: bool
+    reuse_ready_artifacts: bool
+    rebuild_stale_artifacts: bool
+    resume_partial_artifacts: bool
+    require_single_confirmation: bool
+
+
+def get_research_artifact_preparation_policy() -> ResearchArtifactPreparationPolicy:
+    raw = dict(RESEARCH_ARTIFACT_PREPARATION)
+    return ResearchArtifactPreparationPolicy(
+        auto_prepare=bool(raw.get("auto_prepare", True)),
+        reuse_ready_artifacts=bool(raw.get("reuse_ready_artifacts", True)),
+        rebuild_stale_artifacts=bool(raw.get("rebuild_stale_artifacts", True)),
+        resume_partial_artifacts=bool(raw.get("resume_partial_artifacts", True)),
+        require_single_confirmation=bool(raw.get("require_single_confirmation", True)),
+    )
+
+
+@dataclass(frozen=True)
+class ModelResearchProvider:
+    model_id: str
+    module: str
+    menu_handler: str
+    status_handler: str
+    cli_handler: str
+    strategy_artifact_handler: str
+
+
+def get_active_model_research_provider() -> ModelResearchProvider:
+    model_id = str(ACTIVE_MODEL_ID).strip()
+    if not model_id:
+        raise ValueError("ACTIVE_MODEL_ID不可空白")
+    raw = MODEL_RESEARCH_PROVIDERS.get(model_id)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"ACTIVE_MODEL_ID尚未登記research provider: {model_id}")
+    values = {
+        key: str(raw.get(key) or "").strip()
+        for key in (
+            "module",
+            "menu_handler",
+            "status_handler",
+            "cli_handler",
+            "strategy_artifact_handler",
+        )
+    }
+    missing = [key for key, value in values.items() if not value]
+    if missing:
+        raise ValueError(
+            f"MODEL_RESEARCH_PROVIDERS[{model_id!r}]缺少欄位: {', '.join(missing)}"
+        )
+    return ModelResearchProvider(model_id=model_id, **values)
+
+
+__all__ = [
+    "ModelResearchProvider",
+    "ResearchArtifactPreparationPolicy",
+    "get_active_model_research_provider",
+    "get_research_artifact_preparation_policy",
+]

@@ -9,7 +9,7 @@ from multiprocessing import get_context
 import pandas as pd
 
 from core.data_utils import get_required_min_rows
-from config.training_performance_policy import resolve_optimizer_feature_bank_max_items_default
+from core.training_performance import resolve_optimizer_feature_bank_max_items_default
 from core.feature_bank import FeatureBank
 from core.log_utils import format_exception_summary
 from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data

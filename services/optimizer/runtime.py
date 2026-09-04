@@ -6,7 +6,7 @@ import sys
 from core.console_report import render_menu_item
 from core.log_utils import format_exception_summary
 
-from config.training_performance_policy import (
+from core.training_performance import (
     is_optimizer_single_fold_tpe_parallel_search_allowed_default,
     resolve_optimizer_single_fold_search_parallel_trials_default,
 )

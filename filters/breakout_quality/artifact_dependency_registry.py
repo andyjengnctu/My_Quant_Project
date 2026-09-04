@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from config.research import get_research_artifact_preparation_policy
+from core.research_policy import get_research_artifact_preparation_policy
 from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,

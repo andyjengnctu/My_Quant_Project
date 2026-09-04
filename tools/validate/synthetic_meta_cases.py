@@ -2263,16 +2263,47 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "config.execution_policy": {
             "EXECUTION_POLICY_PARAM_SPECS",
             "RUNTIME_PARAM_SPECS",
+        },
+        "core.execution_policy": {
             "build_execution_policy_snapshot",
+            "build_runtime_param_snapshot",
         },
         "config.training_policy": {
             "SELECTION_POLICY_PARAM_SPECS",
             "build_training_threshold_snapshot",
             "build_training_score_policy_snapshot",
         },
+        "config.training_performance_policy": {
+            "OPTIMIZER_ROLLING_FOLD_WORKERS",
+            "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
+        },
+        "core.training_performance": {
+            "build_training_performance_policy_snapshot",
+            "resolve_optimizer_rolling_fold_workers_default",
+        },
         "config.display_policy": {
             "SYSTEM_SCORE_DISPLAY_MULTIPLIER",
+        },
+        "core.display_policy": {
             "build_display_policy_snapshot",
+            "format_system_score_for_display",
+        },
+        "config.research": {
+            "ACTIVE_MODEL_ID",
+            "MODEL_RESEARCH_PROVIDERS",
+            "RESEARCH_ARTIFACT_PREPARATION",
+        },
+        "core.research_policy": {
+            "get_active_model_research_provider",
+            "get_research_artifact_preparation_policy",
+        },
+        "config.downloader": {
+            "DOWNLOADER_MIN_VOLUME",
+            "DOWNLOADER_REQUEST_TIMEOUT_SEC",
+        },
+        "config.runtime": {
+            "SCANNER_PROGRESS_EVERY",
+            "ENABLE_OPTIMIZER_PROFILING",
         },
     }
     module_import_failures = []
@@ -2294,6 +2325,35 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
     add_check(results, "meta_coverage", case_id, "policy_contract_coverage_targets_declared", [], missing_targets)
     add_check(results, "meta_coverage", case_id, "policy_contract_modules_importable_for_coverage_probe", [], module_import_failures)
     add_check(results, "meta_coverage", case_id, "policy_contract_modules_expose_expected_symbols", [], module_symbol_failures)
+
+    declarative_config_modules = (
+        "config/execution_policy.py",
+        "config/display_policy.py",
+        "config/research.py",
+        "config/training_performance_policy.py",
+        "config/downloader.py",
+        "config/runtime.py",
+    )
+    declarative_config_violations = []
+    for relative_path in declarative_config_modules:
+        tree = ast.parse((PROJECT_ROOT / relative_path).read_text(encoding="utf-8"))
+        runtime_defs = [
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        ]
+        if runtime_defs:
+            declarative_config_violations.append(
+                f"{relative_path}: {runtime_defs}"
+            )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "refactored_config_modules_are_declarative",
+        [],
+        declarative_config_violations,
+    )
 
     summary["expected_target_count"] = len(expected_targets)
     summary["missing_targets"] = missing_targets

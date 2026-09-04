@@ -17,14 +17,21 @@ project/
 │  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
 │  ├─ breakout_policy.py              # breakout 策略預設與 optimizer high_len 範圍
-│  ├─ research.py                     # active model與model provider設定
-│  ├─ breakout_quality.py             # 唯一可編輯設定：模型／Label／training／profiles／PIT／策略workflow
+│  ├─ research.py                     # active model／provider spec／Research orchestration設定（declarative）
+│  ├─ downloader.py                   # downloader篩選、timeout、sleep與verbosity設定（declarative）
+│  ├─ runtime.py                      # Scanner／Optimizer application runtime與console設定（declarative）
+│  ├─ breakout_quality.py             # 模型／Label／training／profiles／PIT／策略workflow設定與scientific declarations
 │  ├─ audit.py                        # active Audit module與各Audit對象／來源／維度／輸出政策
 │  ├─ training_policy.py              # 訓練政策與 selection gate
-│  ├─ display_policy.py               # console/report 顯示政策
-│  └─ execution_policy.py             # 資金、費用與 runtime 執行預設
+│  ├─ training_performance_policy.py  # optimizer execution/performance knobs（declarative）
+│  ├─ display_policy.py               # console/report 顯示設定值（declarative）
+│  └─ execution_policy.py             # 資金、費用與 runtime parameter schema（declarative）
 ├─ core/
 │  ├─ config.py                       # 相容 façade；穩定匯出設定常數與參數契約
+│  ├─ execution_policy.py             # execution config snapshot runtime helper
+│  ├─ display_policy.py               # display coercion／formatter／snapshot runtime helper
+│  ├─ research_policy.py              # Research provider／artifact policy typed resolver
+│  ├─ training_performance.py         # optimizer performance config resolver／env override／snapshot
 │  ├─ strategy_params.py              # breakout + training gate + execution 聚合參數契約
 │  ├─ capital_policy.py               # 單股/投組/scanner 共用資金與 sizing 規則
 │  ├─ exact_accounting.py             # 正式整數 ledger / cost-basis allocation / tick 正規化單一真理來源
@@ -223,7 +230,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `services/`：正式 application/service orchestration；可組合`core/`、`filters/`與其他正式service，不得反向依賴`tools/`。
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
 - `tools/`：Audit、CLI／GUI、下載、validate、local regression與legacy import compatibility wrapper；canonical portfolio replay、optimizer library與Breakout Quality training／PIT application service均位於`services/`，正式domain與services不得反向依賴`tools/`。
-- `config/`：共用政策與執行預設。
+- `config/`：只持有使用者／專案可調設定與必要 declarative spec；不得承擔 resolver、formatter、I/O、runtime builder 或 dataclass 行為。設定的型別收斂、environment override、derived value、snapshot 與 runtime resolution 由其 `core/`／domain owner 負責。Scientific/profile declarations 依各 domain Registry／contract 治理，不因 config cleanup 改變 identity。
 - `models/`：模型工件與 Strategy Parameter SSOT 根目錄。所有current策略參數只能位於`models/strategy_params/`；沒有 path override 時，預設run-best參數解析到`models/strategy_params/canonical/run_best_params.json`。`models/*.json` root-level策略檔只屬一次性legacy migration input；migration由`apps/research.py optimizer migrate-strategy-params`明確觸發，cleanup必須通過canonical manifest + SHA／migration-lineage readiness gate。若舊OOS frozen params與canonical schedule initial member不同，explicit migration會先把原檔byte-preserve到`models/research/breakout_quality/strategy_param_legacy_oos/`並記錄source/archive SHA；該archive只供historical evidence，不進current discovery。Round 3後current runtime與`ensure_strategy_parameter_artifact()`均不得掃描、fallback或自動migration root legacy JSON。
 - `doc/`：架構、常用指令與 formal checklist 文件。
 

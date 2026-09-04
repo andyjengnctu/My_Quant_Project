@@ -130,7 +130,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         project_root
         / "services" / "research" / "strategy_compare_runtime_contract.py"
     ).read_text(encoding="utf-8")
-    from config.research import get_active_model_research_provider
+    from core.research_policy import get_active_model_research_provider
 
     provider = get_active_model_research_provider()
     research_shell_source = strategy_app_path.read_text(encoding="utf-8")
@@ -686,7 +686,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from services.research import breakout_quality_application as model_application
     from services.research import strategy_compare_training as training_runtime
     from services.research import strategy_multi_seed_robustness as robustness_runtime
-    from config.research import get_active_model_research_provider
+    from core.research_policy import get_active_model_research_provider
 
     resume_fixture_arm = settings.enabled_arms[0]
     resume_fixture_contract = {

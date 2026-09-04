@@ -73,7 +73,7 @@ from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_POR
 from config.training_policy import OPTIMIZER_RANDOM_SEED_DEFAULT
 
 
-from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
+from core.training_performance import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
 
 from services.optimizer.study_utils import INVALID_TRIAL_VALUE
 from services.optimizer.score_display import format_optimizer_score_for_display
@@ -122,10 +122,6 @@ RUN_BEST_SUMMARY_PATH = str(resolve_strategy_param_state_path(PROJECT_ROOT, arti
 DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = DEFAULT_PORTFOLIO_MAX_POSITIONS
 TRAIN_ENABLE_ROTATION = DEFAULT_PORTFOLIO_ROTATION == "on"
-DEFAULT_OPTIMIZER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1))) if os.name == "nt" else min(6, max(1, (os.cpu_count() or 1) // 2))
-ENABLE_OPTIMIZER_PROFILING = True
-ENABLE_PROFILE_CONSOLE_PRINT = False
-PROFILE_PRINT_EVERY_N_TRIALS = 1
 START_BANNER_POLICY_LABEL = "Train/Test policy:"
 
 COLORS = {

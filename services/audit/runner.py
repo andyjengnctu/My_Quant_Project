@@ -11,7 +11,7 @@ from config.audit import (
     get_audit_module_ids,
     get_reusable_audit_definitions,
 )
-from config.research import get_research_artifact_preparation_policy
+from core.research_policy import get_research_artifact_preparation_policy
 from core.research_orchestration import (
     ResearchArtifactAction,
     ResearchArtifactPlan,

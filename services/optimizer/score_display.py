@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from config.display_policy import format_system_score_for_display, scale_system_score_for_display
+from core.display_policy import format_system_score_for_display, scale_system_score_for_display
 from services.optimizer.study_utils import INVALID_TRIAL_VALUE
 
 

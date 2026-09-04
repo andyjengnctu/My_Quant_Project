@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 
-from config.training_performance_policy import (
+from core.training_performance import (
     is_optimizer_local_min_dependency_stats_enabled,
     resolve_optimizer_local_min_portfolio_dependency_order,
     resolve_optimizer_local_min_signal_dependency_field_order,

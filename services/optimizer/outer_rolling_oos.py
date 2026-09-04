@@ -45,7 +45,7 @@ from config.training_policy import (
     resolve_optimizer_enabled_policy_indicators,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
-from config.training_performance_policy import (
+from core.training_performance import (
     is_optimizer_single_fold_tpe_parallel_search_allowed_default,
     resolve_optimizer_random_seed_ensemble_parallel_backend_default,
     resolve_optimizer_random_seed_ensemble_parallel_workers_default,

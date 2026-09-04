@@ -9,6 +9,17 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from config.downloader import (
+    DOWNLOADER_FINMIND_DOWNLOAD_SLEEP_SEC as FINMIND_DOWNLOAD_SLEEP_SEC,
+    DOWNLOADER_MIN_MARKET_CAP as MIN_MARKET_CAP,
+    DOWNLOADER_MIN_VOLUME as MIN_VOLUME,
+    DOWNLOADER_REQUEST_TIMEOUT_SEC as REQUEST_TIMEOUT_SEC,
+    DOWNLOADER_RESCAN_DAYS as RESCAN_DAYS,
+    DOWNLOADER_VERBOSE_DOWNLOAD_ERRORS as VERBOSE_DOWNLOAD_ERRORS,
+    DOWNLOADER_VERBOSE_LAST_DATE_CHECK_ERRORS as VERBOSE_LAST_DATE_CHECK_ERRORS,
+    DOWNLOADER_VERBOSE_UNIVERSE_FETCH_ERRORS as VERBOSE_UNIVERSE_FETCH_ERRORS,
+    DOWNLOADER_YF_SCREEN_SLEEP_SEC as YF_SCREEN_SLEEP_SEC,
+)
 from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir
 from core.log_utils import append_issue_log, build_timestamped_log_path
 from core.runtime_utils import get_taipei_now, get_taipei_file_mtime
@@ -24,12 +35,6 @@ def get_universe_list_file_path():
     return os.path.join(SAVE_DIR, "universe_list.txt")
 
 
-MIN_VOLUME = 1_000_000
-MIN_MARKET_CAP = 10_000_000_000
-RESCAN_DAYS = 7
-REQUEST_TIMEOUT_SEC = 10
-YF_SCREEN_SLEEP_SEC = 0.01
-FINMIND_DOWNLOAD_SLEEP_SEC = 0.5
 FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
 OUTPUT_DIR = build_output_dir(BASE_DIR, 'smart_downloader')
 
@@ -95,9 +100,6 @@ EXPECTED_DOWNLOAD_EXCEPTIONS = (
 ) + OPTIONAL_CURL_REQUEST_EXCEPTIONS
 
 # # (AI註: 大量批次時預設不逐筆洗板；需要時再手動切成 True)
-VERBOSE_UNIVERSE_FETCH_ERRORS = False
-VERBOSE_LAST_DATE_CHECK_ERRORS = False
-VERBOSE_DOWNLOAD_ERRORS = False
 
 dl = None
 

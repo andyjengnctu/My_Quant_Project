@@ -18,7 +18,7 @@ from config.breakout_quality import (
     get_breakout_quality_rolling_test_mode,
     get_breakout_quality_workflow_settings,
 )
-from config.research import get_research_artifact_preparation_policy
+from core.research_policy import get_research_artifact_preparation_policy
 from config.compatibility.strategy_compare_history import (
     HISTORICAL_STRATEGY_COMPARE_ARMS,
     HISTORICAL_STRATEGY_COMPARE_CONTRASTS,
