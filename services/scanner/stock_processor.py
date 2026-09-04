@@ -5,7 +5,9 @@ from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
 from core.data_utils import get_required_min_rows, resolve_latest_trade_date_from_frame, sanitize_ohlcv_dataframe
 from core.exact_accounting import calc_entry_total_cost
+from core.capital_policy import resolve_scanner_live_capital
 from core.price_utils import calc_reference_candidate_qty, can_execute_half_take_profit
+from core.trade_plans import build_normal_candidate_plan
 from core.signal_utils import extract_precomputed_signals as _build_precomputed_signals
 from core.scanner_display import build_scanner_sort_probe_text
 from .runtime_common import is_insufficient_data_error
@@ -47,7 +49,20 @@ def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, as
     )
 
 
-def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, prev_close=None, limit_price=None):
+def _normalize_execution_plan_seed(candidate_plan, *, ticker, trade_date):
+    if not isinstance(candidate_plan, dict):
+        return None
+    keys = (
+        'limit_price', 'init_sl', 'init_trail', 'target_price', 'entry_atr',
+        'security_profile', 'max_qty', 'orig_limit', 'orig_atr', 'entry_source',
+    )
+    seed = {key: candidate_plan.get(key) for key in keys if candidate_plan.get(key) is not None}
+    seed['ticker'] = str(ticker)
+    seed['trade_date'] = trade_date
+    return seed
+
+
+def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, prev_close=None, limit_price=None, execution_plan_seed=None, trade_date=None):
     sort_value = _calc_sort_value(
         expected_value=expected_value,
         proj_cost=proj_cost,
@@ -78,6 +93,8 @@ def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_coun
         'win_rate': win_rate_pct,
         'trade_count': trade_count,
         'asset_growth': asset_growth_pct,
+        'trade_date': None if trade_date is None else str(trade_date),
+        'execution_plan_seed': execution_plan_seed,
     }
 
 
@@ -138,6 +155,8 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
         sanitize_issue=sanitize_issue,
         prev_close=prev_close,
         limit_price=limit_price,
+        execution_plan_seed=_normalize_execution_plan_seed(candidate_plan, ticker=ticker, trade_date=trade_date),
+        trade_date=trade_date,
     )
 
 
@@ -180,6 +199,14 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
         )
 
     if stats['is_setup_today']:
+        normal_candidate_plan = build_normal_candidate_plan(
+            stats['buy_limit'],
+            stats.get('entry_atr'),
+            resolve_scanner_live_capital(params),
+            params,
+            ticker=ticker,
+            trade_date=trade_date,
+        )
         proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)
         if proj_qty > 0:
             proj_cost = calc_entry_total_cost(stats['buy_limit'], proj_qty, params)
@@ -202,6 +229,8 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             sanitize_issue=sanitize_issue,
             prev_close=prev_close,
             limit_price=stats['buy_limit'],
+            execution_plan_seed=_normalize_execution_plan_seed(normal_candidate_plan, ticker=ticker, trade_date=trade_date),
+            trade_date=trade_date,
         )
 
     if extended_candidate is not None:
@@ -249,6 +278,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
         proj_cost=None,
         detail='僅歷績符合：今日無新訊號 / 延續掛單',
         sanitize_issue=sanitize_issue,
+        trade_date=trade_date,
     )
 
 
@@ -276,6 +306,25 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, 
         history_row['sanitize_issue'],
     )
 
+
+
+def process_prepared_stock_actionable_detail(df, ticker, params, sanitize_stats=None):
+    sanitize_stats = sanitize_stats or {}
+    precomputed_signals = _build_precomputed_signals(df)
+    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
+    trade_date = resolve_latest_trade_date_from_frame(df)
+    row = build_history_qualified_row_from_stats(
+        ticker=ticker,
+        stats=stats,
+        params=params,
+        sanitize_stats=sanitize_stats,
+        trade_date=trade_date,
+    )
+    if row is None:
+        return None
+    detailed = dict(row)
+    detailed['status'] = detailed['kind']
+    return detailed
 
 
 def process_prepared_stock(df, ticker, params, sanitize_stats=None):
@@ -314,6 +363,18 @@ def process_single_stock(file_path, ticker, params):
     except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             return ('skip_insufficient', None, None, None, None, ticker, None)
+        raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
+
+
+def process_single_stock_actionable_detail(file_path, ticker, params):
+    try:
+        raw_df = pd.read_csv(file_path)
+        min_rows_needed = get_required_min_rows(params)
+        df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+        return process_prepared_stock_actionable_detail(df, ticker, params, sanitize_stats=sanitize_stats)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
+        if is_insufficient_data_error(e):
+            return {'status': 'skip_insufficient', 'ticker': ticker, 'sanitize_issue': None}
         raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
 
 

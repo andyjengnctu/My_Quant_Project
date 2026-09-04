@@ -345,6 +345,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
                 "expected_value": 0.3,
                 "proj_cost": 100000,
                 "text": "synthetic candidate",
+                "execution_plan_seed": {"ticker": "2330", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0, "target_price": 106.0, "entry_atr": 2.0, "trade_date": "2026-09-04"},
             }],
             "scanner_issue_log_path": None,
         }
@@ -353,7 +354,9 @@ def validate_trading_daily_workflow_contract_case(base_params):
         scanner_args = scanner_mock.call_args
         add_check(results, "trading_daily", case_id, "trading_scanner_uses_trading_data_dir", str(data_dir), str(scanner_args.args[0]))
         add_check(results, "trading_daily", case_id, "trading_scanner_injects_trading_output_dir", str((root / "outputs" / "trading" / "scanner").resolve()), str(Path(scanner_args.kwargs["output_dir"]).resolve()))
+        add_check(results, "trading_daily", case_id, "trading_scanner_requests_execution_context_for_allocator", True, scanner_args.kwargs.get("include_execution_context"))
         add_check(results, "trading_daily", case_id, "trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
+        add_check(results, "trading_daily", case_id, "trading_scanner_persists_candidate_snapshot", True, (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").is_file())
         add_check(results, "trading_daily", case_id, "trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
 
         _write_param_payload("2026-09-03", 1)
@@ -388,10 +391,135 @@ def validate_trading_daily_workflow_contract_case(base_params):
     add_check(results, "trading_daily", case_id, "workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
     add_check(results, "trading_daily", case_id, "workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     add_check(results, "trading_daily", case_id, "workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
-    add_check(results, "trading_daily", case_id, "workbench_candidate_table_is_not_allocator", True, "尚未做帳戶 allocator / 下單" in panel_source)
+    add_check(results, "trading_daily", case_id, "workbench_keeps_scanner_candidates_separate_from_proposed_orders", True, "今日 Scanner 候選" in panel_source and "建議掛單（尚未送單／尚未成交）" in panel_source)
 
     summary["checks"] = len(results)
     return results, summary
+
+def validate_trading_proposed_order_plan_contract_case(base_params):
+    case_id = "TRADING_PROPOSED_ORDERS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.exact_accounting import build_sell_ledger_from_price
+    from core.file_integrity import compute_file_sha256
+    from core.params_io import params_to_json_dict
+    from core.price_utils import adjust_long_sell_fill_price
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+    from services.trading.daily_workflow import resolve_trading_candidate_snapshot_path
+    from services.trading.order_planning import build_trading_proposed_order_plan
+
+    profile = get_trading_strategy_profile()
+    project_root = Path(__file__).resolve().parents[2]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True)
+        for ticker, close in (("2330", 100.0), ("2454", 200.0), ("2603", 50.0)):
+            pd.DataFrame({
+                "Date": ["2026-09-03", "2026-09-04"],
+                "Open": [close, close],
+                "High": [close + 1, close + 1],
+                "Low": [close - 1, close - 1],
+                "Close": [close, close],
+                "Volume": [1000, 1000],
+            }).to_csv(data_dir / f"{ticker}.csv", index=False)
+
+        selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+        selected_payload = build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        )
+        selected_path.write_text(json.dumps(selected_payload, ensure_ascii=False), encoding="utf-8")
+
+        state = initialize_trading_account_state(root, cash=800_000)
+        state = adopt_existing_trading_position(
+            root,
+            ticker="2330",
+            qty=1000,
+            cost_basis_total=100_000,
+            entry_date="2026-01-01",
+            expected_revision=state["revision"],
+        )
+        starting_revision = int(state["revision"])
+        starting_cash_milli = int(state["cash_milli"])
+
+        candidate_snapshot_path = resolve_trading_candidate_snapshot_path(root)
+        candidate_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate_rows = [
+            {
+                "ticker": "2330",
+                "kind": "extended_tbd",
+                "sort_value": 3.0,
+                "expected_value": 0.5,
+                "execution_plan_seed": {"ticker": "2330", "limit_price": 101.0, "init_sl": 95.0, "init_trail": 96.0, "target_price": 107.0, "entry_atr": 2.0, "trade_date": "2026-09-04"},
+            },
+            {
+                "ticker": "2454",
+                "kind": "buy",
+                "sort_value": 2.0,
+                "expected_value": 0.4,
+                "execution_plan_seed": {"ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0, "target_price": 210.0, "entry_atr": 4.0, "trade_date": "2026-09-04"},
+            },
+            {
+                "ticker": "2603",
+                "kind": "buy",
+                "sort_value": 1.0,
+                "expected_value": 0.3,
+                "execution_plan_seed": {"ticker": "2603", "limit_price": 50.0, "init_sl": 47.0, "init_trail": 48.0, "target_price": 53.0, "entry_atr": 1.0, "trade_date": "2026-09-04"},
+            },
+        ]
+        candidate_snapshot_path.write_text(json.dumps({
+            "schema_version": 1,
+            "runtime_domain": "trading",
+            "strategy_id": profile.strategy_id,
+            "param_selector": profile.param_selector,
+            "latest_data_date": "2026-09-04",
+            "param_latest_data_date": "2026-09-04",
+            "selected_params_sha256": compute_file_sha256(selected_path),
+            "candidate_rows": candidate_rows,
+        }, ensure_ascii=False), encoding="utf-8")
+
+        plan = build_trading_proposed_order_plan(project_root=root)
+        add_check(results, "trading_orders", case_id, "proposed_plan_does_not_mutate_account_revision", starting_revision, load_trading_account_state(root)["revision"])
+        add_check(results, "trading_orders", case_id, "proposed_plan_does_not_mutate_account_cash", starting_cash_milli, load_trading_account_state(root)["cash_milli"])
+        add_check(results, "trading_orders", case_id, "held_ticker_is_not_proposed_again", ["2330"], plan.get("held_tickers_skipped"))
+        add_check(results, "trading_orders", case_id, "extended_tbd_is_resolved_against_actual_holdings", False, any(row.get("ticker") == "2330" for row in plan.get("orders") or []))
+        add_check(results, "trading_orders", case_id, "proposed_orders_are_not_confirmed", False, plan.get("confirmed"))
+        add_check(results, "trading_orders", case_id, "proposed_orders_do_not_claim_account_mutation", False, plan.get("account_mutated"))
+        add_check(results, "trading_orders", case_id, "reserved_total_equals_order_sum", int(plan["reserved_total_milli"]), sum(int(row["reserved_cost_milli"]) for row in plan["orders"]))
+        add_check(results, "trading_orders", case_id, "reservation_never_exceeds_cash", True, int(plan["reserved_total_milli"]) <= starting_cash_milli)
+        add_check(results, "trading_orders", case_id, "reserved_cash_is_locked_across_proposed_orders", starting_cash_milli - int(plan["reserved_total_milli"]), int(plan["cash_after_reservation_milli"]))
+        expected_liquidation = build_sell_ledger_from_price(adjust_long_sell_fill_price(100.0, ticker="2330"), 1000, base_params, ticker="2330", trade_date="2026-09-04")["net_sell_total_milli"]
+        add_check(results, "trading_orders", case_id, "sizing_equity_uses_mark_to_market_net_liquidation", starting_cash_milli + expected_liquidation, int(round(float(plan["sizing_equity"]) * 1000)))
+        add_check(results, "trading_orders", case_id, "proposed_plan_writes_machine_readable_output", True, (root / "outputs" / "trading" / "proposed_orders" / "proposed_orders.json").is_file())
+        add_check(results, "trading_orders", case_id, "proposed_plan_writes_human_readable_output", True, (root / "outputs" / "trading" / "proposed_orders" / "proposed_orders.txt").is_file())
+        add_check(results, "trading_orders", case_id, "proposed_plan_carries_account_revision", starting_revision, plan.get("account_revision"))
+        add_check(results, "trading_orders", case_id, "proposed_plan_carries_candidate_snapshot_identity", compute_file_sha256(candidate_snapshot_path), plan.get("candidate_snapshot_sha256"))
+
+        selected_path.write_text(selected_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        try:
+            build_trading_proposed_order_plan(project_root=root)
+        except RuntimeError as exc:
+            stale_snapshot_rejected = "params 已改變" in str(exc)
+        else:
+            stale_snapshot_rejected = False
+        add_check(results, "trading_orders", case_id, "candidate_snapshot_is_rejected_after_param_artifact_changes", True, stale_snapshot_rejected)
+
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results, "trading_orders", case_id, "workbench_exposes_proposed_order_button", True, '"4 建議掛單"' in panel_source)
+    add_check(results, "trading_orders", case_id, "workbench_proposed_orders_use_background_thread", True, 'elif action == "orders"' in panel_source and "threading.Thread(" in panel_source)
+    add_check(results, "trading_orders", case_id, "workbench_does_not_confirm_fill_from_proposal_action", False, "confirm_trading_strategy_buy_fill" in panel_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
 
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
@@ -468,5 +596,6 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 __all__ = [
     "validate_trading_account_state_contract_case",
     "validate_trading_daily_workflow_contract_case",
+    "validate_trading_proposed_order_plan_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]

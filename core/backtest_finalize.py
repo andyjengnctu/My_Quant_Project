@@ -314,6 +314,7 @@ def build_backtest_stats(
         'close_last': close_last,
         'stop_loss': stop_loss,
         'tp_price': tp_price,
+        'entry_atr': atr_last if buy_next_day else None,
         'extended_candidate_today': extended_candidate_today,
         'extended_orderable_today': extended_orderable_today,
         'extended_candidate_tbd_today': extended_candidate_tbd_today,

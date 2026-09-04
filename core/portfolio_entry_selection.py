@@ -82,6 +82,24 @@ def select_resource_aware_action_candidates(orderable_candidates_today, resource
     return rows[:limit]
 
 
+
+def build_reserved_candidate_order_plan(
+    orderable_candidates_today,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+):
+    """Pure pre-market reservation plan using the canonical portfolio allocator semantics."""
+    return _simulate_reserved_candidate_order(
+        list(orderable_candidates_today or []),
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=int(free_slots),
+        params=params,
+    )
+
 def reorder_candidates_for_resource_aware_quality(
     orderable_candidates_today,
     *,

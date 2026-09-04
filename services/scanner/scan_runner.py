@@ -45,6 +45,20 @@ def _adapt_candidate_scan_result(result):
     if result is None:
         return {"history_qualified": False, "skip_insufficient": False, "row": None, "sanitize_issue": None}
 
+    if isinstance(result, dict):
+        status = str(result.get('status') or result.get('kind') or '')
+        sanitize_issue = result.get('sanitize_issue')
+        row = None
+        if status in ['buy', 'extended', 'extended_tbd']:
+            row = dict(result)
+            row.pop('status', None)
+        return {
+            "history_qualified": status in ['buy', 'extended', 'extended_tbd', 'candidate'],
+            "skip_insufficient": status == 'skip_insufficient',
+            "row": row,
+            "sanitize_issue": sanitize_issue,
+        }
+
     status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = result
     history_qualified = status in ['buy', 'extended', 'extended_tbd', 'candidate']
     row = None
@@ -151,13 +165,14 @@ def _run_parallel_scan(data_dir, params, *, process_single_stock_fn, adapt_resul
     }
 
 
-def run_daily_scanner(data_dir, params, *, output_dir=None):
-    from .stock_processor import process_single_stock
+def run_daily_scanner(data_dir, params, *, output_dir=None, include_execution_context=False):
+    from .stock_processor import process_single_stock, process_single_stock_actionable_detail
 
+    process_fn = process_single_stock_actionable_detail if bool(include_execution_context) else process_single_stock
     scan_state = _run_parallel_scan(
         data_dir,
         params,
-        process_single_stock_fn=process_single_stock,
+        process_single_stock_fn=process_fn,
         adapt_result_fn=_adapt_candidate_scan_result,
         progress_formatter=_format_candidate_progress,
         output_dir=output_dir,

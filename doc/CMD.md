@@ -45,7 +45,7 @@ python apps/workbench.py
 # Workbench
 
 - `apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口；同一 Workbench 亦承接實際 Trading 操作。
-- 主頁籤為「單股回測檢視／投組回測檢視／實際交易」；實際交易頁可分步執行「1 更新資料／2 更新 Params／3 Scanner 候選」，也可用「每日流程 1→2→3」依序完成盤前流程。Scanner只在Trading params與目前Trading data同一最新交易日且selector解析為單一runtime member時執行；候選表目前尚未套用帳戶allocator或形成下單。頁面同時可初始化 Trading account、更新現金、登記既有持股，以及修正／移除尚未有賣出歷史且尚未由策略接管的 manual-adopted 持股。所有帳戶變更均由 `services/trading/account_state.py` 寫入 `state/trading/account.json`，不要手動編輯 JSON。
+- 主頁籤為「單股回測檢視／投組回測檢視／實際交易」；實際交易頁可分步執行「1 更新資料／2 更新 Params／3 Scanner 候選」，也可用「每日流程 1→2→3」依序完成資料、參數與候選更新。Scanner只在Trading params與目前Trading data同一最新交易日且selector解析為單一runtime member時執行。完成Scanner後可按「4 建議掛單」：系統會以目前`state/trading/account.json`的真實cash／持股、最新Trading收盤價、canonical max positions／position sizing／reserved-capital語意產生account-aware proposed orders，輸出至`outputs/trading/proposed_orders/`；此結果只是建議掛單，不代表已送單、pending order或成交。頁面同時可初始化 Trading account、更新現金、登記既有持股，以及修正／移除尚未有賣出歷史且尚未由策略接管的 manual-adopted 持股。所有帳戶變更均由 `services/trading/account_state.py` 寫入 `state/trading/account.json`，不要手動編輯 JSON。
 - 單股 Workbench 上方控制列提供股票代號輸入、常用股票下拉、候選股掃描與歷史績效股掃描。
 - K 線檢視中，交易明細與 Console 為獨立分頁。
 - 日常 GUI 問題先檢查 `services/workbench_ui/single_stock_inspector.py`，再看 `services/workbench_ui/workbench.py`。
@@ -369,6 +369,8 @@ outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_
 - `outputs/portfolio_sim/`：投組報表與載入摘要。
 - `outputs/vip_scanner/`：scanner issue log。
 - `outputs/trading/smart_downloader/`：Trading downloader issue log；不由 Research/local-regression retention 清理。
+- `outputs/trading/scanner/`：Trading Scanner issue log與`candidate_snapshot.json`；snapshot綁定同次Trading data date與selected-param SHA，只供account allocator消費，不是持股／pending-order truth。
+- `outputs/trading/proposed_orders/`：account-aware建議掛單JSON與人讀摘要；只屬盤前proposal output，不改`state/trading/account.json`，亦不代表已送單或成交。
 - `outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界。
 - `outputs/workbench_ui/`：Workbench GUI runtime 快取；目前用於常用股票中文名稱快取；若 reduced 代碼組變動或缺名，Workbench 會優先查官方 CSV / ISIN 名錄並於必要時做 SSL 容錯與 HTTP fallback。

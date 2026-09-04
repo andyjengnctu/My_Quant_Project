@@ -15,6 +15,7 @@ from services.trading.daily_workflow import (
     run_trading_market_data_update,
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
+from services.trading.order_planning import build_trading_proposed_order_plan
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
@@ -110,6 +111,7 @@ class TradingAccountPanel(ttk.Frame):
         self._snapshot: dict[str, object] = {}
         self._position_rows: dict[str, dict[str, object]] = {}
         self._candidate_rows: list[dict[str, object]] = []
+        self._proposed_order_rows: list[dict[str, object]] = []
         self._workflow_thread = None
         self._workflow_token = 0
         self._workflow_buttons = []
@@ -121,6 +123,7 @@ class TradingAccountPanel(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(4, weight=1)
         self.rowconfigure(5, weight=1)
+        self.rowconfigure(6, weight=1)
 
         workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -135,6 +138,7 @@ class TradingAccountPanel(ttk.Frame):
             ("1 更新資料", "data"),
             ("2 更新 Params", "params"),
             ("3 Scanner 候選", "scanner"),
+            ("4 建議掛單", "orders"),
             ("每日流程 1→2→3", "all"),
         ):
             button = ttk.Button(
@@ -148,7 +152,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(workflow_buttons, text="刷新狀態", command=self.refresh_daily_workflow, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
         ttk.Label(
             workflow_box,
-            text="Scanner 只在 Trading Params 與目前 Trading data 同一最新交易日，且 selector 解析為單一 member 時執行。",
+            text="Scanner 只在 Trading Params 與 Trading data 同一最新交易日執行；建議掛單再套用真實 cash／持股／max positions，且不代表已送單或成交。",
             foreground=WORKBENCH_MUTED,
             style=WORKBENCH_LABEL_STYLE,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
@@ -234,7 +238,7 @@ class TradingAccountPanel(ttk.Frame):
         scroll.grid(row=0, column=1, sticky="ns")
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
 
-        candidate_box = ttk.LabelFrame(self, text="今日 Scanner 候選（尚未做帳戶 allocator / 下單）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        candidate_box = ttk.LabelFrame(self, text="今日 Scanner 候選（原始策略候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         candidate_box.grid(row=5, column=0, sticky="nsew")
         candidate_box.rowconfigure(0, weight=1)
         candidate_box.columnconfigure(0, weight=1)
@@ -251,6 +255,24 @@ class TradingAccountPanel(ttk.Frame):
         self._candidate_tree.grid(row=0, column=0, sticky="nsew")
         candidate_y.grid(row=0, column=1, sticky="ns")
         candidate_x.grid(row=1, column=0, sticky="ew")
+
+        proposed_box = ttk.LabelFrame(self, text="建議掛單（尚未送單／尚未成交）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        proposed_box.grid(row=6, column=0, sticky="nsew", pady=(8, 0))
+        proposed_box.rowconfigure(1, weight=1)
+        proposed_box.columnconfigure(0, weight=1)
+        self._proposed_status_var = tk.StringVar(value="尚未產生建議掛單。")
+        ttk.Label(proposed_box, textvariable=self._proposed_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        proposed_columns = ("rank", "ticker", "kind", "limit", "qty", "reserved", "stop", "target")
+        self._proposed_tree = ttk.Treeview(proposed_box, columns=proposed_columns, show="headings", style=WORKBENCH_TREE_STYLE)
+        proposed_headings = {"rank": "順位", "ticker": "股票", "kind": "類型", "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "Target"}
+        proposed_widths = {"rank": 60, "ticker": 80, "kind": 110, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 100}
+        for key in proposed_columns:
+            self._proposed_tree.heading(key, text=proposed_headings[key])
+            self._proposed_tree.column(key, width=proposed_widths[key], anchor="center")
+        proposed_y = ttk.Scrollbar(proposed_box, orient="vertical", command=self._proposed_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
+        self._proposed_tree.configure(yscrollcommand=proposed_y.set)
+        self._proposed_tree.grid(row=1, column=0, sticky="nsew")
+        proposed_y.grid(row=1, column=1, sticky="ns")
 
     def _set_workflow_buttons_state(self, state: str):
         for button in self._workflow_buttons:
@@ -282,7 +304,7 @@ class TradingAccountPanel(ttk.Frame):
         if self._workflow_thread is not None and self._workflow_thread.is_alive():
             self._workflow_status_var.set("Trading workflow 執行中；請等待目前工作完成。")
             return
-        labels = {"data": "更新 Trading 資料", "params": "更新 Trading Params", "scanner": "Scanner 候選", "all": "每日流程 1→2→3"}
+        labels = {"data": "更新 Trading 資料", "params": "更新 Trading Params", "scanner": "Scanner 候選", "orders": "產生建議掛單", "all": "每日流程 1→2→3"}
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
             return
@@ -307,6 +329,8 @@ class TradingAccountPanel(ttk.Frame):
                 result = run_trading_strategy_param_training(project_root=WORKBENCH_PROJECT_ROOT)
             elif action == "scanner":
                 result = run_trading_candidate_scan(project_root=WORKBENCH_PROJECT_ROOT)
+            elif action == "orders":
+                result = build_trading_proposed_order_plan(project_root=WORKBENCH_PROJECT_ROOT)
             else:
                 result = run_trading_daily_workflow(project_root=WORKBENCH_PROJECT_ROOT)
         except Exception as exc:
@@ -352,6 +376,26 @@ class TradingAccountPanel(ttk.Frame):
                 ),
             )
 
+    def _reload_proposed_order_rows(self, rows):
+        for item in self._proposed_tree.get_children():
+            self._proposed_tree.delete(item)
+        self._proposed_order_rows = [dict(row) for row in list(rows or [])]
+        for row in self._proposed_order_rows:
+            self._proposed_tree.insert(
+                "",
+                "end",
+                values=(
+                    int(row.get("rank") or 0),
+                    row.get("ticker") or "-",
+                    row.get("kind") or "-",
+                    self._format_candidate_number(row.get("limit_price"), digits=2),
+                    f"{int(row.get('qty') or 0):,}",
+                    self._format_candidate_number(row.get("reserved_cost"), digits=0),
+                    self._format_candidate_number(row.get("init_sl"), digits=2),
+                    self._format_candidate_number(row.get("target_price"), digits=2),
+                ),
+            )
+
     def _finish_workflow_success(self, action: str, token: int, result):
         if token != self._workflow_token:
             return
@@ -360,6 +404,13 @@ class TradingAccountPanel(ttk.Frame):
         scan_result = dict(result.get("scanner") or {}) if action == "all" else (dict(result) if action == "scanner" else {})
         if scan_result:
             self._reload_candidate_rows(scan_result.get("candidate_rows") or [])
+        if action == "orders":
+            order_result = dict(result)
+            self._reload_proposed_order_rows(order_result.get("orders") or [])
+            self._proposed_status_var.set(
+                f"PROPOSED | account rev {order_result.get('account_revision')} | equity {format_trading_money(order_result.get('sizing_equity'))} | "
+                f"預留 {format_trading_money(order_result.get('reserved_total'))} | 餘額 {format_trading_money(order_result.get('cash_after_reservation'))} | {order_result.get('text_path') or '-'}"
+            )
         self.refresh_daily_workflow()
         if action == "data":
             self._workflow_status_var.set(
@@ -368,6 +419,10 @@ class TradingAccountPanel(ttk.Frame):
         elif action == "params":
             self._workflow_status_var.set(
                 f"Params 更新完成：through {result.get('latest_data_date') or '-'} | {result.get('selected_policy') or result.get('param_selector') or '-'}"
+            )
+        elif action == "orders":
+            self._workflow_status_var.set(
+                f"建議掛單完成：{len(result.get('orders') or [])} 筆 | 預留 {format_trading_money(result.get('reserved_total'))} | account rev {result.get('account_revision')}"
             )
         else:
             self._workflow_status_var.set(
@@ -393,6 +448,8 @@ class TradingAccountPanel(ttk.Frame):
             self.refresh_account()
             return False
         self.refresh_account()
+        self._reload_proposed_order_rows([])
+        self._proposed_status_var.set("帳戶已變更；既有建議掛單已失效，請重新執行 4 建議掛單。")
         return True
 
     def refresh_account(self):

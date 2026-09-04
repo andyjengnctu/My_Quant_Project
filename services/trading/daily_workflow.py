@@ -6,7 +6,7 @@ from typing import Any
 
 from core.console_report import project_relative_display_path
 from core.dataset_dates import resolve_latest_dataset_date
-from core.file_integrity import load_json_strict
+from core.file_integrity import atomic_write_json, compute_file_sha256, load_json_strict
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths, resolve_runtime_output_dir
 from core.strategy_param_artifacts import resolve_strategy_param_manifest_path
@@ -31,7 +31,28 @@ def _safe_latest_dataset_date(data_dir: Path) -> str | None:
         return None
 
 
-def _load_trading_scanner_runtime(project_root: str | Path) -> dict[str, Any]:
+def _json_safe(value):
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    item = getattr(value, 'item', None)
+    if callable(item):
+        return _json_safe(item())
+    isoformat = getattr(value, 'isoformat', None)
+    if callable(isoformat):
+        return isoformat()
+    return str(value)
+
+
+def resolve_trading_candidate_snapshot_path(project_root: str | Path) -> Path:
+    root = Path(project_root).resolve()
+    return Path(resolve_runtime_output_dir(root, domain=RUNTIME_DOMAIN_TRADING, category='scanner')) / 'candidate_snapshot.json'
+
+
+def load_trading_scanner_runtime(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     profile = get_trading_strategy_profile()
     paths = resolve_runtime_domain_paths(
@@ -146,7 +167,7 @@ def run_trading_market_data_update(*, project_root: str | Path) -> dict[str, Any
 
 
 def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
-    runtime = _load_trading_scanner_runtime(project_root)
+    runtime = load_trading_scanner_runtime(project_root)
     root = runtime["root"]
     output_dir = resolve_runtime_output_dir(
         root, domain=RUNTIME_DOMAIN_TRADING, category="scanner"
@@ -155,9 +176,25 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         str(runtime["data_dir"]),
         runtime["params"],
         output_dir=output_dir,
+        include_execution_context=True,
     )
+    candidate_rows = [_json_safe(dict(row)) for row in list(result.get('candidate_rows') or [])]
+    snapshot_path = resolve_trading_candidate_snapshot_path(root)
+    snapshot_payload = {
+        'schema_version': 1,
+        'runtime_domain': RUNTIME_DOMAIN_TRADING,
+        'strategy_id': runtime['profile'].strategy_id,
+        'param_selector': runtime['profile'].param_selector,
+        'latest_data_date': runtime['latest_data_date'],
+        'param_latest_data_date': runtime['param_latest_data_date'],
+        'selected_params_path': project_relative_display_path(runtime['selected_path'], project_root=root),
+        'selected_params_sha256': compute_file_sha256(runtime['selected_path']),
+        'candidate_rows': candidate_rows,
+    }
+    atomic_write_json(snapshot_path, snapshot_payload)
     return {
         **dict(result),
+        'candidate_rows': candidate_rows,
         "status": "READY",
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "strategy_id": runtime["profile"].strategy_id,
@@ -167,6 +204,8 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         "param_member_count": runtime["member_count"],
         "selected_params_path": project_relative_display_path(runtime["selected_path"], project_root=root),
         "scanner_output_dir": project_relative_display_path(output_dir, project_root=root),
+        "candidate_snapshot_path": project_relative_display_path(snapshot_path, project_root=root),
+        "candidate_snapshot_sha256": compute_file_sha256(snapshot_path),
     }
 
 
@@ -185,6 +224,8 @@ def run_trading_daily_workflow(*, project_root: str | Path, environ=None) -> dic
 
 __all__ = [
     "build_trading_daily_workflow_snapshot",
+    "load_trading_scanner_runtime",
+    "resolve_trading_candidate_snapshot_path",
     "run_trading_market_data_update",
     "run_trading_candidate_scan",
     "run_trading_daily_workflow",
