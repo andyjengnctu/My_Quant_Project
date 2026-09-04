@@ -722,9 +722,235 @@ def validate_trading_pending_order_state_contract_case(base_params):
         add_check(results, "trading_pending", case_id, "order_event_hash_tamper_is_rejected", True, tamper_rejected)
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    order_service_source = (project_root / "services" / "trading" / "order_state.py").read_text(encoding="utf-8")
     add_check(results, "trading_pending", case_id, "workbench_requires_explicit_order_submission_confirmation", True, 'text="確認選取已送單"' in panel_source and "confirm_trading_order_submission(" in panel_source)
-    add_check(results, "trading_pending", case_id, "workbench_exposes_explicit_broker_cancellation_confirmation", True, 'text="確認選取已取消"' in panel_source and "confirm_trading_order_cancellation(" in panel_source)
-    add_check(results, "trading_pending", case_id, "round8_workbench_does_not_confirm_fill", False, "confirm_trading_strategy_buy_fill" in panel_source or "confirm_trading_sell_fill" in panel_source)
+    add_check(results, "trading_pending", case_id, "workbench_exposes_explicit_broker_cancellation_confirmation", True, 'text="確認選取剩餘委託已取消"' in panel_source and "confirm_trading_order_cancellation(" in panel_source)
+    add_check(results, "trading_pending", case_id, "submission_cancel_service_does_not_own_fill_reconciliation", False, "confirm_trading_buy_order_fill(" in order_service_source or "apply_confirmed_strategy_buy_fill(" in order_service_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
+    case_id = "TRADING_CONFIRMED_FILLS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256
+    from core.params_io import params_to_json_dict
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from core.trading_order_state import TRADING_ACTIVE_ORDER_STATUSES
+    from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+    from services.trading.daily_workflow import resolve_trading_candidate_snapshot_path
+    from services.trading.fill_reconciliation import (
+        TradingFillRevisionConflict,
+        confirm_trading_buy_order_fill,
+        recover_trading_fill_transaction,
+        resolve_trading_fill_transaction_path,
+    )
+    from services.trading.order_planning import build_trading_proposed_order_plan
+    from services.trading.order_state import (
+        confirm_trading_order_cancellation,
+        confirm_trading_order_submission,
+        load_trading_order_state,
+    )
+
+    profile = get_trading_strategy_profile()
+    project_root = Path(__file__).resolve().parents[2]
+
+    def prepare(root: Path):
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True)
+        pd.DataFrame({
+            "Date": ["2026-09-03", "2026-09-04"],
+            "Open": [200.0, 200.0], "High": [201.0, 201.0], "Low": [199.0, 199.0],
+            "Close": [200.0, 200.0], "Volume": [1000, 1000],
+        }).to_csv(data_dir / "2454.csv", index=False)
+        selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        ), ensure_ascii=False), encoding="utf-8")
+        account = initialize_trading_account_state(root, cash=800_000)
+        snapshot_path = resolve_trading_candidate_snapshot_path(root)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps({
+            "schema_version": 1,
+            "runtime_domain": "trading",
+            "strategy_id": profile.strategy_id,
+            "param_selector": profile.param_selector,
+            "latest_data_date": "2026-09-04",
+            "param_latest_data_date": "2026-09-04",
+            "selected_params_sha256": compute_file_sha256(selected_path),
+            "candidate_rows": [{
+                "ticker": "2454", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
+                "execution_plan_seed": {
+                    "ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0,
+                    "target_price": 210.0, "entry_atr": 4.0, "trade_date": "2026-09-04",
+                    "security_profile": {"family": "stock"},
+                },
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+        plan = build_trading_proposed_order_plan(project_root=root)
+        proposal = plan["orders"][0]
+        ordered = confirm_trading_order_submission(
+            root,
+            rank=int(proposal["rank"]),
+            ticker=proposal["ticker"],
+            expected_revision=None,
+            broker_order_id="FILL-SYN-001",
+        )
+        order_id = next(iter(ordered["orders"]))
+        return selected_path, account, plan, proposal, ordered, order_id
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        selected_path, account, plan, proposal, ordered, order_id = prepare(root)
+        ordered_record = ordered["orders"][order_id]
+        add_check(results, "trading_fill", case_id, "ordered_freezes_param_payload", params_to_json_dict(base_params), ordered_record.get("frozen_params"))
+        add_check(results, "trading_fill", case_id, "ordered_freezes_param_payload_hash", canonical_json_sha256(params_to_json_dict(base_params)), ordered_record.get("frozen_params_sha256"))
+
+        changed = deepcopy(base_params)
+        changed.high_len = int(getattr(changed, "high_len")) + 5
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        ), ensure_ascii=False), encoding="utf-8")
+
+        order_qty = int(ordered_record["qty"])
+        first_qty = max(1, order_qty // 2)
+        initial_cash = int(account["cash_milli"])
+        first_ledger = build_buy_ledger_from_price(199.0, first_qty, base_params)
+        tx_path = resolve_trading_fill_transaction_path(root)
+        from core.file_integrity import atomic_write_json as real_atomic_write_json
+        write_counter = {"count": 0}
+
+        def crash_after_account_write(path, payload):
+            write_counter["count"] += 1
+            if write_counter["count"] == 3:
+                raise RuntimeError("synthetic crash between account/order commit")
+            return real_atomic_write_json(path, payload)
+
+        with patch("services.trading.fill_reconciliation.atomic_write_json", side_effect=crash_after_account_write):
+            try:
+                confirm_trading_buy_order_fill(
+                    root,
+                    order_id=order_id,
+                    fill_qty=first_qty,
+                    fill_price=199.0,
+                    trade_date="2026-09-05",
+                    expected_order_revision=int(ordered["revision"]),
+                    expected_account_revision=int(account["revision"]),
+                )
+            except RuntimeError as exc:
+                interrupted = "synthetic crash" in str(exc)
+            else:
+                interrupted = False
+        add_check(results, "trading_fill", case_id, "two_state_fill_commit_interruption_is_observable", True, interrupted)
+        add_check(results, "trading_fill", case_id, "fill_transaction_journal_persists_after_interruption", True, tx_path.is_file())
+        add_check(results, "trading_fill", case_id, "fill_transaction_recovery_completes_prepared_targets", True, recover_trading_fill_transaction(root))
+        add_check(results, "trading_fill", case_id, "fill_transaction_journal_removed_after_recovery", False, tx_path.exists())
+
+        partial_account = load_trading_account_state(root)
+        partial_orders = load_trading_order_state(root)
+        partial_record = partial_orders["orders"][order_id]
+        add_check(results, "trading_fill", case_id, "first_fill_transitions_to_partial", "PARTIAL", partial_record["status"])
+        add_check(results, "trading_fill", case_id, "partial_fill_updates_filled_qty", first_qty, partial_record["filled_qty"])
+        add_check(results, "trading_fill", case_id, "partial_fill_keeps_remaining_qty_active", order_qty - first_qty, partial_record["remaining_qty"])
+        add_check(results, "trading_fill", case_id, "partial_status_remains_active_order", True, partial_record["status"] in TRADING_ACTIVE_ORDER_STATUSES)
+        add_check(results, "trading_fill", case_id, "partial_fill_debits_exact_cash", initial_cash - int(first_ledger["net_buy_total_milli"]), partial_account["cash_milli"])
+        add_check(results, "trading_fill", case_id, "partial_fill_creates_actual_position", first_qty, partial_account["positions"]["2454"]["broker"]["qty"])
+        add_check(results, "trading_fill", case_id, "partial_fill_binds_position_to_order", order_id, partial_account["positions"]["2454"]["broker"].get("entry_order_id"))
+        add_check(results, "trading_fill", case_id, "fill_uses_frozen_params_after_current_artifact_changes", int(getattr(base_params, "high_len")), int(partial_record["frozen_params"]["high_len"]))
+
+        before_order_rev = int(partial_orders["revision"])
+        before_account_rev = int(partial_account["revision"])
+        try:
+            confirm_trading_buy_order_fill(
+                root,
+                order_id=order_id,
+                fill_qty=1,
+                fill_price=201.0,
+                trade_date="2026-09-05",
+                expected_order_revision=before_order_rev,
+                expected_account_revision=before_account_rev,
+            )
+        except ValueError:
+            above_limit_rejected = True
+        else:
+            above_limit_rejected = False
+        add_check(results, "trading_fill", case_id, "broker_fill_above_buy_limit_is_rejected", True, above_limit_rejected)
+        add_check(results, "trading_fill", case_id, "rejected_fill_does_not_advance_revisions", [before_account_rev, before_order_rev], [load_trading_account_state(root)["revision"], load_trading_order_state(root)["revision"]])
+
+        try:
+            confirm_trading_buy_order_fill(
+                root,
+                order_id=order_id,
+                fill_qty=1,
+                fill_price=198.5,
+                trade_date="2026-09-06",
+                expected_order_revision=before_order_rev,
+                expected_account_revision=before_account_rev,
+            )
+        except ValueError:
+            cross_day_partial_rejected = True
+        else:
+            cross_day_partial_rejected = False
+        add_check(results, "trading_fill", case_id, "partial_fills_for_one_order_cannot_cross_trade_dates", True, cross_day_partial_rejected)
+
+        remaining = int(partial_record["remaining_qty"])
+        second_ledger = build_buy_ledger_from_price(198.0, remaining, base_params)
+        final = confirm_trading_buy_order_fill(
+            root,
+            order_id=order_id,
+            fill_qty=remaining,
+            fill_price=198.0,
+            trade_date="2026-09-05",
+            expected_order_revision=before_order_rev,
+            expected_account_revision=before_account_rev,
+        )
+        add_check(results, "trading_fill", case_id, "final_fill_transitions_to_filled", "FILLED", final["status"])
+        add_check(results, "trading_fill", case_id, "filled_order_has_zero_remaining_qty", 0, final["remaining_qty"])
+        add_check(results, "trading_fill", case_id, "all_partial_fills_accumulate_position_qty", order_qty, final["account"]["positions"]["2454"]["broker"]["qty"])
+        add_check(results, "trading_fill", case_id, "all_partial_fills_debit_sum_of_exact_ledgers", initial_cash - int(first_ledger["net_buy_total_milli"]) - int(second_ledger["net_buy_total_milli"]), final["account"]["cash_milli"])
+        add_check(results, "trading_fill", case_id, "filled_order_is_no_longer_active", False, final["orders"]["orders"][order_id]["status"] in TRADING_ACTIVE_ORDER_STATUSES)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _selected_path, account, _plan, _proposal, ordered, order_id = prepare(root)
+        record = ordered["orders"][order_id]
+        order_qty = int(record["qty"])
+        first_qty = max(1, order_qty // 3)
+        partial = confirm_trading_buy_order_fill(
+            root,
+            order_id=order_id,
+            fill_qty=first_qty,
+            fill_price=199.0,
+            trade_date="2026-09-05",
+            expected_order_revision=int(ordered["revision"]),
+            expected_account_revision=int(account["revision"]),
+        )
+        partial_cash = int(partial["account"]["cash_milli"])
+        cancelled = confirm_trading_order_cancellation(
+            root,
+            order_id=order_id,
+            expected_revision=int(partial["order_revision"]),
+            note="cancel remaining synthetic qty",
+        )
+        cancelled_record = cancelled["orders"][order_id]
+        add_check(results, "trading_fill", case_id, "partial_order_can_cancel_unfilled_remainder", "CANCELLED", cancelled_record["status"])
+        add_check(results, "trading_fill", case_id, "partial_cancel_preserves_filled_qty", first_qty, cancelled_record["filled_qty"])
+        add_check(results, "trading_fill", case_id, "partial_cancel_preserves_position_and_cash", [first_qty, partial_cash], [load_trading_account_state(root)["positions"]["2454"]["broker"]["qty"], load_trading_account_state(root)["cash_milli"]])
+
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results, "trading_fill", case_id, "workbench_requires_explicit_broker_fill_confirmation", True, 'text="確認選取成交"' in panel_source and "confirm_trading_buy_order_fill(" in panel_source)
+    add_check(results, "trading_fill", case_id, "workbench_fill_inputs_are_actual_qty_price_and_date", True, all(token in panel_source for token in ("本次成交股數", "本次成交價", "成交日 YYYY-MM-DD")))
+    add_check(results, "trading_fill", case_id, "workbench_does_not_auto_infer_fill_from_market_bar", False, "t_low" in panel_source or "t_high" in panel_source or "execute_pre_market_entry_plan" in panel_source)
 
     summary["checks"] = len(results)
     return results, summary
@@ -806,5 +1032,6 @@ __all__ = [
     "validate_trading_daily_workflow_contract_case",
     "validate_trading_proposed_order_plan_contract_case",
     "validate_trading_pending_order_state_contract_case",
+    "validate_trading_confirmed_fill_reconciliation_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]

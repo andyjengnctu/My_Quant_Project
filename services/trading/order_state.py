@@ -7,8 +7,12 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, compute_file_sha256, load_json_strict
+from core.params_io import params_to_json_dict
+from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.runtime_utils import get_taipei_now
+from core.trading_fill_transaction import TRADING_FILL_TRANSACTION_FILENAME
+from core.trading_policy import resolve_trading_selected_strategy_param_path
 from core.trading_order_state import (
     TRADING_ORDER_STATE_FILENAME,
     active_trading_orders,
@@ -36,6 +40,15 @@ def resolve_trading_order_state_path(project_root) -> Path:
     return Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
 
 
+def _assert_no_fill_transaction(project_root) -> None:
+    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
+    if paths.state_root is None:
+        raise RuntimeError("Trading runtime domain 缺少 state_root")
+    tx_path = Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
+    if tx_path.is_file():
+        raise RuntimeError("Trading 尚有未完成 fill transaction；請先由 Workbench 重新整理以完成 recovery")
+
+
 def _timestamp() -> str:
     return get_taipei_now().isoformat(timespec="seconds")
 
@@ -53,6 +66,7 @@ def _read_state_with_sha(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def load_trading_order_state(project_root, *, required: bool = False) -> dict[str, Any] | None:
+    _assert_no_fill_transaction(project_root)
     path = resolve_trading_order_state_path(project_root)
     if not path.is_file():
         if required:
@@ -64,6 +78,7 @@ def load_trading_order_state(project_root, *, required: bool = False) -> dict[st
 
 
 def _load_or_initialize_for_mutation(project_root, *, expected_revision: int | None):
+    _assert_no_fill_transaction(project_root)
     path = resolve_trading_order_state_path(project_root)
     if path.is_file():
         state, source_sha = _read_state_with_sha(path)
@@ -129,6 +144,16 @@ def confirm_trading_order_submission(
         raise ValueError(f"無法唯一定位 Trading proposed order: rank={rank}, ticker={ticker}")
     proposal = dict(matches[0])
 
+    selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+    if not selected_path.is_file():
+        raise FileNotFoundError("Trading selected strategy params 已不存在；禁止建立無法重現的 ORDERED")
+    if compute_file_sha256(selected_path) != str(plan.get("selected_params_sha256") or ""):
+        raise RuntimeError("Trading selected strategy params 已與 proposed plan 不一致；請重新建立建議掛單")
+    param_source = load_portfolio_param_source_from_json(selected_path)
+    if int(param_source.get("member_count") or 0) != 1:
+        raise RuntimeError("Trading ORDERED 只能凍結單一參數 member")
+    frozen_params = params_to_json_dict(param_source["primary_params"])
+
     state_path, state, source_sha = _load_or_initialize_for_mutation(
         root,
         expected_revision=expected_revision,
@@ -152,6 +177,7 @@ def confirm_trading_order_submission(
         mutation_id=_mutation_id(),
         broker_order_id=broker_order_id,
         note=note,
+        frozen_params=frozen_params,
     )
     if compute_file_sha256(account_path) != account_sha_before:
         raise TradingOrderRevisionConflict("Trading account 在確認送單期間已變更")

@@ -3919,11 +3919,22 @@
       "section": "B2",
       "priority": "P1",
       "category": "GUI / Workbench Trading broker orders",
-      "item": "Explicit broker-order confirmation persists ORDERED/CANCELLED state without mutating account",
-      "gap": "Trading proposed-order artifact只屬盤前建議；只有使用者明確確認實際券商送單，才可將單筆proposal以PROPOSED→ORDERED寫入state/trading/orders.json。ORDERED record必須凍結plan fingerprint、information date、account revision、selected-param/candidate SHA與後續fill所需的limit/qty/reserved/stop/trail/target/ATR/security-profile semantics，並以revisioned hash-chain與optimistic revision防止stale/tamper。送單與取消都不得修改account cash/positions；同一proposal不得重複送單。只要仍有ORDERED，account mutation與新的盤前allocation必須fail-fast；即使同日ORDERED已全部CANCELLED，只要該information date曾有實際送單紀錄，仍不得重新allocation。本輪只允許ORDERED→CANCELLED，不得建立FILLED/PARTIAL或自動推定成交。",
+      "item": "Explicit broker-order confirmation persists submitted/cancelled state without mutating account",
+      "gap": "Trading proposed-order artifact只屬盤前建議；只有使用者明確確認實際券商送單，才可將單筆proposal以PROPOSED→ORDERED寫入state/trading/orders.json。ORDERED record必須凍結plan fingerprint、information date、account revision、selected-param/candidate SHA與後續fill所需的limit/qty/reserved/stop/trail/target/ATR/security-profile semantics；送單本身不得修改account cash/positions，同一proposal不得重複送單。ORDERED與PARTIAL皆屬active broker order，account mutation與新的盤前allocation必須fail-fast；ORDERED/PARTIAL未成交餘額只能由使用者明確確認取消為CANCELLED，已成交部分不得回滾。即使同一information date的實際送單之後全部FILLED/CANCELLED，也不得重新allocation。order state必須維持revisioned hash-chain與optimistic revision guard；confirmed fill的account mutation由獨立B366契約治理，不得由submission/cancel seam自行重算帳務。",
       "entry": "`core/trading_order_state.py`, `services/trading/order_state.py`, `services/trading/order_planning.py`, `services/trading/account_state.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 353
+    },
+    {
+      "id": "B366",
+      "section": "B2",
+      "priority": "P1",
+      "category": "GUI / Workbench Trading confirmed fills",
+      "item": "Explicit broker fills reconcile PARTIAL/FILLED order state with account exact accounting",
+      "gap": "Trading confirmed BUY fill只能由使用者輸入券商實際成交股數、成交價與成交日觸發，不得由市場high/low、shadow fill或其他行情資料自動推定。ORDERED送單時必須凍結當次盤前實際使用的單一strategy-param payload與hash；跨日尚未成交時，即使current selected params已被新training覆寫，後續position state仍只能消費該frozen params。ORDERED/PARTIAL每次fill qty必須大於0且不超過remaining qty，BUY實際成交價不得高於原limit；同一order的多次partial fill只允許同一實際交易日累積。每次fill的cash debit必須重用canonical exact buy accounting；第一次fill建立strategy position，後續partial以同一order累積gross weighted-average execution price、exact cost basis與原frozen ATR/params重建單一position。未全數成交轉PARTIAL並持續active lock，全數成交轉FILLED；PARTIAL可取消剩餘量為CANCELLED且既有fill/account mutation不得回滾。account.json與orders.json的confirmed-fill更新必須以state/trading/fill_transaction.json write-ahead journal形成可恢復transaction；journal只允許original/target狀態完成既定target，任何第三方漂移fail-fast，正常完成後立即刪除，不得成為第三份長期truth。",
+      "entry": "`core/trading_fill_transaction.py`, `core/trading_order_state.py`, `core/trading_account_state.py`, `services/trading/fill_reconciliation.py`, `services/trading/order_state.py`, `services/trading/account_state.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 354
     }
   ],
   "tests": [
@@ -7315,6 +7326,13 @@
       "description": "`validate_trading_pending_order_state_contract_case` 覆蓋proposal-only/no-state、explicit PROPOSED→ORDERED、immutable plan/account/param/candidate binding、broker-order ID、no-account-mutation、duplicate/stale/tamper guards、active-order account/replan lock、cancelled same-day reallocation lock、ORDERED→CANCELLED與Workbench explicit confirmation controls。",
       "initial_status": "NEW",
       "order": 475
+    },
+    {
+      "id": "T486",
+      "b_id": "B366",
+      "description": "`validate_trading_confirmed_fill_reconciliation_contract_case` 覆蓋frozen submitted params、explicit actual-fill inputs、above-limit/overfill/date guards、PARTIAL→FILLED、PARTIAL→CANCELLED保留既有fill、canonical cash/position accounting、write-ahead crash recovery、state drift fail-fast與Workbench no-market-bar-auto-fill controls。",
+      "initial_status": "NEW",
+      "order": 476
     }
   ],
   "transitions": [
@@ -24469,6 +24487,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_pending_order_state_contract_case`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "B366",
+      "description": "新增Trading confirmed BUY fill reconciliation、frozen submitted params與可恢復account/order transaction。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/trading_fill_transaction.py`, `services/trading/fill_reconciliation.py`, `core/trading_order_state.py`, `core/trading_account_state.py`"
+    },
+    {
+      "date": "2026-09-04",
+      "id": "T486",
+      "description": "新增Trading confirmed-fill direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_confirmed_fill_reconciliation_contract_case`"
     }
   ]
 }

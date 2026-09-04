@@ -45,7 +45,7 @@ python apps/workbench.py
 # Workbench
 
 - `apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口；同一 Workbench 亦承接實際 Trading 操作。
-- 主頁籤為「單股回測檢視／投組回測檢視／實際交易」；實際交易頁可分步執行「1 更新資料／2 更新 Params／3 Scanner 候選」，也可用「每日流程 1→2→3」依序完成資料、參數與候選更新。Scanner只在Trading params與目前Trading data同一最新交易日且selector解析為單一runtime member時執行。完成Scanner後可按「4 建議掛單」：系統會以目前`state/trading/account.json`的真實cash／持股、最新Trading收盤價、canonical max positions／position sizing／reserved-capital語意產生account-aware proposed orders，輸出至`outputs/trading/proposed_orders/`；proposal本身不代表已送單或成交。使用者實際在券商送出某筆買單後，必須選取該proposal並按「確認選取已送單」，才會寫入`state/trading/orders.json`的`ORDERED` broker truth；券商確認取消後再以「確認選取已取消」轉為`CANCELLED`。ORDERED/CANCELLED都不改account cash／positions，本輪尚不處理FILLED/PARTIAL；有未解決ORDERED時禁止修改account或重建新的盤前allocation，而且同一information date只要曾有實際送單，即使之後全部CANCELLED也不得重新allocation。頁面同時可初始化 Trading account、更新現金、登記既有持股，以及修正／移除尚未有賣出歷史且尚未由策略接管的 manual-adopted 持股。所有帳戶與掛單變更都必須由Trading services寫入各自state，禁止手動編輯JSON。
+- 主頁籤為「單股回測檢視／投組回測檢視／實際交易」；實際交易頁可分步執行「1 更新資料／2 更新 Params／3 Scanner 候選」，也可用「每日流程 1→2→3」依序完成資料、參數與候選更新。Scanner只在Trading params與目前Trading data同一最新交易日且selector解析為單一runtime member時執行。完成Scanner後可按「4 建議掛單」：系統會以目前`state/trading/account.json`的真實cash／持股、最新Trading收盤價、canonical max positions／position sizing／reserved-capital語意產生account-aware proposed orders，輸出至`outputs/trading/proposed_orders/`；proposal本身不代表已送單或成交。使用者實際在券商送出某筆買單後，必須選取該proposal並按「確認選取已送單」，才會寫入`state/trading/orders.json`的`ORDERED` broker truth，且同時凍結當次盤前決策實際使用的strategy params。券商有實際成交時，使用者再輸入「本次成交股數／本次成交價／成交日」並按「確認選取成交」；系統只接受使用者明確輸入的實際fill，不依high/low自動猜成交，部分成交轉`PARTIAL`並保留剩餘掛單，全部成交轉`FILLED`，cash／持股只在此時透過canonical exact accounting更新。`ORDERED/PARTIAL`的未成交餘額可用「確認選取剩餘委託已取消」轉為`CANCELLED`，已成交部分不回滾。有未解決`ORDERED/PARTIAL`時禁止修改account或重建新的盤前allocation，而且同一information date只要曾有實際送單，即使之後全部FILLED/CANCELLED也不得重新allocation。頁面同時可初始化 Trading account、更新現金、登記既有持股，以及修正／移除尚未有賣出歷史且尚未由策略接管的 manual-adopted 持股。所有帳戶、掛單與成交變更都必須由Trading services寫入各自state；confirmed fill使用可恢復write-ahead journal避免account/order跨檔半完成，禁止手動編輯JSON。
 - 單股 Workbench 上方控制列提供股票代號輸入、常用股票下拉、候選股掃描與歷史績效股掃描。
 - K 線檢視中，交易明細與 Console 為獨立分頁。
 - 日常 GUI 問題先檢查 `services/workbench_ui/single_stock_inspector.py`，再看 `services/workbench_ui/workbench.py`。
@@ -370,7 +370,7 @@ outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_
 - `outputs/vip_scanner/`：scanner issue log。
 - `outputs/trading/smart_downloader/`：Trading downloader issue log；不由 Research/local-regression retention 清理。
 - `outputs/trading/scanner/`：Trading Scanner issue log與`candidate_snapshot.json`；snapshot綁定同次Trading data date與selected-param SHA，只供account allocator消費，不是持股／pending-order truth。
-- `outputs/trading/proposed_orders/`：account-aware建議掛單JSON與人讀摘要；只屬盤前proposal output，不改`state/trading/account.json`，亦不代表已送單或成交。實際送單／取消的broker truth只存在`state/trading/orders.json`，不得回寫成output truth。
+- `outputs/trading/proposed_orders/`：account-aware建議掛單JSON與人讀摘要；只屬盤前proposal output，不改`state/trading/account.json`，亦不代表已送單或成交。實際送單／partial fill／filled／cancelled的broker truth只存在`state/trading/orders.json`；cash／positions只存在`state/trading/account.json`。confirmed fill期間若需跨兩份state恢復，只使用短生命週期`state/trading/fill_transaction.json` write-ahead journal，不得把journal或output提升成第三份current truth。
 - `outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界。
 - `outputs/workbench_ui/`：Workbench GUI runtime 快取；目前用於常用股票中文名稱快取；若 reduced 代碼組變動或缺名，Workbench 會優先查官方 CSV / ISIN 名錄並於必要時做 SSL 容錯與 HTTP fallback。

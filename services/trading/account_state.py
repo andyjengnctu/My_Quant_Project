@@ -9,6 +9,7 @@ from uuid import uuid4
 from core.file_integrity import atomic_write_json, load_json_strict
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.runtime_utils import get_taipei_now
+from core.trading_fill_transaction import TRADING_FILL_TRANSACTION_FILENAME
 from core.trading_order_state import (
     TRADING_ORDER_STATE_FILENAME,
     has_active_trading_orders,
@@ -58,6 +59,9 @@ def _read_state_with_sha(path: Path) -> tuple[dict[str, Any], str]:
 
 def _read_order_guard_sha(project_root) -> str | None:
     paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
+    fill_tx_path = Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
+    if fill_tx_path.is_file():
+        raise RuntimeError("Trading 尚有未完成 fill transaction；請先由 Workbench 重新整理以完成 recovery")
     if paths.state_root is None:
         raise RuntimeError("Trading runtime domain 缺少 state_root")
     order_path = Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
@@ -87,6 +91,10 @@ def _assert_order_guard_unchanged(project_root, expected_sha: str | None) -> Non
 
 
 def load_trading_account_state(project_root, *, required: bool = True) -> dict[str, Any] | None:
+    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
+    fill_tx_path = Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
+    if fill_tx_path.is_file():
+        raise RuntimeError("Trading 尚有未完成 fill transaction；必須先完成 recovery 才能讀取 account state")
     path = resolve_trading_account_state_path(project_root)
     if not path.is_file():
         if required:

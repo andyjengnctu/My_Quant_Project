@@ -9,10 +9,15 @@ from typing import Any
 from core.entry_plans import build_position_from_entry_fill
 from core.exact_accounting import (
     allocate_cost_basis_milli,
+    build_buy_ledger_from_price,
     build_sell_ledger_from_price,
     calc_average_price_from_total_milli,
+    calc_initial_risk_total_milli,
     milli_to_money,
+    milli_to_price,
     money_to_milli,
+    rate_to_ppm,
+    sync_position_display_fields,
 )
 from core.file_integrity import canonical_json_sha256
 from core.position_step import execute_confirmed_position_sell_fill
@@ -369,6 +374,7 @@ def apply_confirmed_strategy_buy_fill(
     entry_atr=None,
     security_profile=None,
     entry_type: str = "normal",
+    entry_order_id: str | None = None,
 ) -> dict[str, Any]:
     validate_trading_account_state(state)
     ticker_key = _normalize_ticker(ticker)
@@ -415,6 +421,7 @@ def apply_confirmed_strategy_buy_fill(
             "remaining_cost_basis_milli": int(position_state["remaining_cost_basis_milli"]),
             "realized_pnl_milli": int(position_state.get("realized_pnl_milli", 0) or 0),
             "entry_date": trade_date_text,
+            "entry_order_id": None if entry_order_id is None else str(entry_order_id),
         },
         "strategy_management": {
             "status": MANAGEMENT_STATUS_ACTIVE,
@@ -433,6 +440,147 @@ def apply_confirmed_strategy_buy_fill(
             "trade_date": trade_date_text,
             "entry_fill_price_milli": int(position_state["entry_fill_price_milli"]),
             "net_buy_total_milli": net_buy_total_milli,
+            "cash_milli_after": int(updated["cash_milli"]),
+            "entry_order_id": None if entry_order_id is None else str(entry_order_id),
+        },
+    )
+
+
+def apply_confirmed_strategy_buy_fill_increment(
+    state: dict[str, Any],
+    *,
+    entry_order_id: str,
+    ticker: object,
+    qty: int,
+    buy_price: object,
+    params,
+    timestamp: str,
+    mutation_id: str,
+    trade_date: object,
+    init_sl=None,
+    init_trail=None,
+    target_price=None,
+    limit_price=None,
+    entry_atr=None,
+    security_profile=None,
+    entry_type: str = "normal",
+) -> dict[str, Any]:
+    """Apply an additional confirmed fill for the same still-active BUY order.
+
+    Partial fills are conservatively limited to one trade date. The broker/account
+    cost basis accumulates the exact per-fill ledgers, while the strategy position
+    is rebuilt from the gross weighted-average execution price and the original
+    frozen entry ATR so stop/trail/target remain on the canonical entry-plan seam.
+    """
+    validate_trading_account_state(state)
+    ticker_key = _normalize_ticker(ticker)
+    if ticker_key not in state["positions"]:
+        raise ValueError(f"Trading 不存在可累積 partial fill 的 open position: {ticker_key}")
+    record = state["positions"][ticker_key]
+    if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+        raise ValueError(f"Trading partial fill 只能累積到 strategy_fill position: {ticker_key}")
+    broker = record.get("broker") or {}
+    if str(broker.get("entry_order_id") or "") != str(entry_order_id or ""):
+        raise ValueError(f"Trading partial fill order_id 與既有 position 不一致: {ticker_key}")
+    if _has_confirmed_sell_history(state, ticker_key):
+        raise ValueError(f"已有 confirmed sell history 的 position 不得再累積買入 partial fill: {ticker_key}")
+
+    trade_date_text = _normalize_iso_date(trade_date, field_name="trade_date")
+    if trade_date_text is None:
+        raise ValueError("trade_date 必填")
+    if str(broker.get("entry_date") or "") != trade_date_text:
+        raise ValueError("同一 Trading order 的多次 partial fill 必須發生於同一交易日")
+    fill_qty = int(qty)
+    if fill_qty <= 0:
+        raise ValueError("Trading partial fill qty 必須 > 0")
+    cash_milli = state.get("cash_milli")
+    if cash_milli is None:
+        raise ValueError("Trading cash 尚未設定，不能確認買入成交")
+
+    management = record.get("strategy_management") or {}
+    position_state = management.get("position_state")
+    if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position_state, dict):
+        raise ValueError(f"Trading strategy position state 不合法: {ticker_key}")
+
+    new_ledger = build_buy_ledger_from_price(buy_price, fill_qty, params)
+    new_cost_milli = int(new_ledger["net_buy_total_milli"])
+    if new_cost_milli > int(cash_milli):
+        raise ValueError(
+            f"Trading cash 不足：需要 {milli_to_money(new_cost_milli):.2f}，"
+            f"可用 {milli_to_money(int(cash_milli)):.2f}"
+        )
+
+    existing_qty = int(position_state["qty"])
+    total_qty = existing_qty + fill_qty
+    total_gross_milli = int(position_state.get("gross_buy_milli", 0) or 0) + int(new_ledger["gross_buy_milli"])
+    total_fee_milli = int(position_state.get("buy_fee_milli", 0) or 0) + int(new_ledger["buy_fee_milli"])
+    total_net_milli = int(position_state.get("net_buy_total_milli", 0) or 0) + new_cost_milli
+    average_fill_price_milli = (total_gross_milli + total_qty // 2) // total_qty
+
+    rebuilt = build_position_from_entry_fill(
+        buy_price=milli_to_price(average_fill_price_milli),
+        qty=total_qty,
+        params=params,
+        entry_type=entry_type,
+        init_sl=init_sl,
+        init_trail=init_trail,
+        target_price=target_price,
+        limit_price=limit_price,
+        entry_atr=entry_atr,
+        ticker=ticker_key,
+        security_profile=security_profile,
+        trade_date=trade_date_text,
+    )
+    rebuilt["gross_buy_milli"] = total_gross_milli
+    rebuilt["buy_fee_milli"] = total_fee_milli
+    rebuilt["net_buy_total_milli"] = total_net_milli
+    rebuilt["remaining_cost_basis_milli"] = total_net_milli
+    rebuilt["entry_fill_price_milli"] = int(average_fill_price_milli)
+    rebuilt["entry_fill_price"] = milli_to_price(int(average_fill_price_milli))
+    rebuilt["pure_buy_price_milli"] = int(average_fill_price_milli)
+    rebuilt["pure_buy_price"] = milli_to_price(int(average_fill_price_milli))
+    rebuilt["highest_high_since_entry_milli"] = max(
+        int(position_state.get("highest_high_since_entry_milli", average_fill_price_milli) or average_fill_price_milli),
+        int(average_fill_price_milli),
+    )
+    rebuilt["highest_high_since_entry"] = milli_to_price(int(rebuilt["highest_high_since_entry_milli"]))
+    stop_ledger = build_sell_ledger_from_price(
+        rebuilt["initial_stop"],
+        total_qty,
+        params,
+        ticker=ticker_key,
+        security_profile=security_profile,
+        trade_date=trade_date_text,
+    )
+    rebuilt["initial_risk_total_milli"] = calc_initial_risk_total_milli(
+        total_net_milli,
+        int(stop_ledger["net_sell_total_milli"]),
+        rate_to_ppm(params.fixed_risk),
+    )
+    rebuilt = sync_position_display_fields(rebuilt)
+
+    updated = deepcopy(state)
+    updated["cash_milli"] = int(cash_milli) - new_cost_milli
+    target = updated["positions"][ticker_key]
+    target_broker = target["broker"]
+    target_broker["qty"] = total_qty
+    target_broker["initial_qty"] = total_qty
+    target_broker["initial_cost_basis_milli"] = total_net_milli
+    target_broker["remaining_cost_basis_milli"] = total_net_milli
+    target["strategy_management"]["position_state"] = _json_safe(rebuilt)
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="confirm_strategy_buy_fill_increment",
+        timestamp=timestamp,
+        details={
+            "ticker": ticker_key,
+            "entry_order_id": str(entry_order_id),
+            "fill_qty": fill_qty,
+            "fill_price_milli": int(new_ledger["fill_price_milli"]),
+            "net_buy_total_milli": new_cost_milli,
+            "cumulative_qty": total_qty,
+            "cumulative_cost_basis_milli": total_net_milli,
             "cash_milli_after": int(updated["cash_milli"]),
         },
     )
@@ -573,6 +721,9 @@ def validate_trading_account_state(state: dict[str, Any]) -> None:
         if initial_cost <= 0 or remaining_cost < 0 or remaining_cost > initial_cost:
             raise ValueError(f"Trading position cost basis 不合法: {ticker}")
         _normalize_iso_date(broker.get("entry_date"), field_name="entry_date")
+        entry_order_id = broker.get("entry_order_id")
+        if entry_order_id is not None and not str(entry_order_id).strip():
+            raise ValueError(f"Trading position entry_order_id 不合法: {ticker}")
         management = record.get("strategy_management")
         if not isinstance(management, dict) or management.get("status") not in MANAGEMENT_STATUSES:
             raise ValueError(f"Trading strategy management status 不合法: {ticker}")
@@ -648,6 +799,7 @@ __all__ = [
     "correct_manual_trading_position",
     "remove_manual_trading_position",
     "apply_confirmed_strategy_buy_fill",
+    "apply_confirmed_strategy_buy_fill_increment",
     "apply_confirmed_sell_fill",
     "validate_trading_account_state",
     "build_trading_account_read_model",

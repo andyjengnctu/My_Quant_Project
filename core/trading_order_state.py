@@ -11,8 +11,10 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 TRADING_ORDER_STATE_SCHEMA_VERSION = 1
 TRADING_ORDER_STATE_FILENAME = "orders.json"
 TRADING_ORDER_STATUS_ORDERED = "ORDERED"
+TRADING_ORDER_STATUS_PARTIAL = "PARTIAL"
+TRADING_ORDER_STATUS_FILLED = "FILLED"
 TRADING_ORDER_STATUS_CANCELLED = "CANCELLED"
-TRADING_ACTIVE_ORDER_STATUSES = frozenset({TRADING_ORDER_STATUS_ORDERED})
+TRADING_ACTIVE_ORDER_STATUSES = frozenset({TRADING_ORDER_STATUS_ORDERED, TRADING_ORDER_STATUS_PARTIAL})
 TRADING_ORDER_SIDE_BUY = "BUY"
 
 
@@ -103,6 +105,7 @@ def append_ordered_trading_proposal(
     mutation_id: str,
     broker_order_id: str | None = None,
     note: str | None = None,
+    frozen_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_trading_order_state(state)
     order_id_text = str(order_id or "").strip()
@@ -140,6 +143,9 @@ def append_ordered_trading_proposal(
     entry_atr_value = proposal.get("entry_atr")
     entry_atr_milli = None if entry_atr_value is None else price_to_milli(entry_atr_value)
 
+    frozen_params_payload = None if frozen_params is None else deepcopy(frozen_params)
+    frozen_params_sha256 = None if frozen_params_payload is None else canonical_json_sha256(frozen_params_payload)
+
     record = {
         "order_id": order_id_text,
         "proposal_key": proposal_key,
@@ -164,6 +170,12 @@ def append_ordered_trading_proposal(
         "entry_atr_milli": entry_atr_milli,
         "security_profile": deepcopy(proposal.get("security_profile")),
         "status": TRADING_ORDER_STATUS_ORDERED,
+        "filled_qty": 0,
+        "remaining_qty": qty,
+        "fills": [],
+        "filled_at": None,
+        "frozen_params": frozen_params_payload,
+        "frozen_params_sha256": frozen_params_sha256,
         "ordered_at": str(timestamp),
         "broker_order_id": _normalize_optional_text(broker_order_id),
         "cancelled_at": None,
@@ -193,6 +205,96 @@ def append_ordered_trading_proposal(
     )
 
 
+
+def record_trading_buy_order_fill(
+    state: dict[str, Any],
+    *,
+    order_id: str,
+    fill_id: str,
+    fill_qty: int,
+    fill_price,
+    trade_date: str,
+    net_buy_total_milli: int,
+    timestamp: str,
+    mutation_id: str,
+) -> dict[str, Any]:
+    validate_trading_order_state(state)
+    order_id_text = str(order_id or "").strip()
+    if order_id_text not in state["orders"]:
+        raise ValueError(f"Trading order 不存在: {order_id_text}")
+    updated = deepcopy(state)
+    record = updated["orders"][order_id_text]
+    from_status = str(record.get("status") or "")
+    if from_status not in TRADING_ACTIVE_ORDER_STATUSES:
+        raise ValueError(
+            f"Trading order 只有 ORDERED/PARTIAL 可確認成交: {order_id_text} status={from_status}"
+        )
+    qty = int(fill_qty)
+    if qty <= 0:
+        raise ValueError("Trading fill_qty 必須 > 0")
+    remaining_before = int(record.get("remaining_qty") or 0)
+    if qty > remaining_before:
+        raise ValueError(
+            f"Trading fill_qty 超過未成交股數: fill={qty}, remaining={remaining_before}"
+        )
+    fill_price_milli = price_to_milli(fill_price)
+    if fill_price_milli <= 0:
+        raise ValueError("Trading fill_price 必須 > 0")
+    if fill_price_milli > int(record["limit_price_milli"]):
+        raise ValueError("Trading BUY 實際成交價不可高於原始買入限價")
+    trade_date_text = str(trade_date or "").strip()
+    if not trade_date_text:
+        raise ValueError("Trading fill trade_date 必填")
+    fills = list(record.get("fills") or [])
+    if fills and any(str(row.get("trade_date") or "") != trade_date_text for row in fills):
+        raise ValueError("同一 Trading order 的多次 partial fill 必須發生於同一交易日")
+    fill_id_text = str(fill_id or "").strip()
+    if not fill_id_text:
+        raise ValueError("Trading fill_id 不可為空")
+    if any(str(row.get("fill_id") or "") == fill_id_text for row in fills):
+        raise ValueError(f"Trading fill_id 已存在: {fill_id_text}")
+    net_buy = int(net_buy_total_milli)
+    if net_buy <= 0:
+        raise ValueError("Trading fill net_buy_total_milli 必須 > 0")
+
+    fills.append({
+        "fill_id": fill_id_text,
+        "qty": qty,
+        "fill_price_milli": fill_price_milli,
+        "trade_date": trade_date_text,
+        "net_buy_total_milli": net_buy,
+        "confirmed_at": str(timestamp),
+    })
+    filled_qty = sum(int(row["qty"]) for row in fills)
+    remaining_qty = int(record["qty"]) - filled_qty
+    if remaining_qty < 0:
+        raise RuntimeError("Trading order cumulative fill 超過原始 qty")
+    to_status = TRADING_ORDER_STATUS_FILLED if remaining_qty == 0 else TRADING_ORDER_STATUS_PARTIAL
+    record["fills"] = fills
+    record["filled_qty"] = filled_qty
+    record["remaining_qty"] = remaining_qty
+    record["status"] = to_status
+    record["filled_at"] = str(timestamp) if to_status == TRADING_ORDER_STATUS_FILLED else None
+    return _append_event(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="confirm_order_fill",
+        timestamp=timestamp,
+        details={
+            "order_id": order_id_text,
+            "ticker": record["ticker"],
+            "fill_id": fill_id_text,
+            "fill_qty": qty,
+            "fill_price_milli": fill_price_milli,
+            "trade_date": trade_date_text,
+            "net_buy_total_milli": net_buy,
+            "filled_qty": filled_qty,
+            "remaining_qty": remaining_qty,
+            "from_status": from_status,
+            "to_status": to_status,
+        },
+    )
+
 def cancel_ordered_trading_order(
     state: dict[str, Any],
     *,
@@ -207,9 +309,10 @@ def cancel_ordered_trading_order(
         raise ValueError(f"Trading order 不存在: {order_id_text}")
     updated = deepcopy(state)
     record = updated["orders"][order_id_text]
-    if record.get("status") != TRADING_ORDER_STATUS_ORDERED:
+    from_status = str(record.get("status") or "")
+    if from_status not in TRADING_ACTIVE_ORDER_STATUSES:
         raise ValueError(
-            f"Trading order 只有 ORDERED 可確認取消: {order_id_text} status={record.get('status')}"
+            f"Trading order 只有 ORDERED/PARTIAL 可確認取消: {order_id_text} status={from_status}"
         )
     record["status"] = TRADING_ORDER_STATUS_CANCELLED
     record["cancelled_at"] = str(timestamp)
@@ -222,7 +325,7 @@ def cancel_ordered_trading_order(
         details={
             "order_id": order_id_text,
             "ticker": record["ticker"],
-            "from_status": TRADING_ORDER_STATUS_ORDERED,
+            "from_status": from_status,
             "to_status": TRADING_ORDER_STATUS_CANCELLED,
             "broker_order_id": record.get("broker_order_id"),
             "note": record.get("cancel_note"),
@@ -268,7 +371,7 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
             raise ValueError("Trading order proposal_key 必須存在且不可重複")
         proposal_keys.add(proposal_key)
         if str(record.get("side") or "") != TRADING_ORDER_SIDE_BUY:
-            raise ValueError("Trading Round 8 order side 只允許 BUY")
+            raise ValueError("Trading broker order side 目前只允許 BUY")
         _normalize_ticker(record.get("ticker"))
         if int(record.get("rank") or 0) <= 0 or int(record.get("qty") or 0) <= 0:
             raise ValueError("Trading order rank/qty 不合法")
@@ -280,14 +383,71 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
             if int(record.get(field) or 0) <= 0:
                 raise ValueError(f"Trading order {field} 不合法")
         status = str(record.get("status") or "")
-        if status not in {TRADING_ORDER_STATUS_ORDERED, TRADING_ORDER_STATUS_CANCELLED}:
+        allowed_statuses = {
+            TRADING_ORDER_STATUS_ORDERED,
+            TRADING_ORDER_STATUS_PARTIAL,
+            TRADING_ORDER_STATUS_FILLED,
+            TRADING_ORDER_STATUS_CANCELLED,
+        }
+        if status not in allowed_statuses:
             raise ValueError(f"Trading order status 不合法: {status}")
         if not str(record.get("ordered_at") or ""):
-            raise ValueError("Trading ORDERED record 必須有 ordered_at")
-        if status == TRADING_ORDER_STATUS_ORDERED and record.get("cancelled_at") is not None:
-            raise ValueError("Trading ORDERED record 不得有 cancelled_at")
-        if status == TRADING_ORDER_STATUS_CANCELLED and not str(record.get("cancelled_at") or ""):
-            raise ValueError("Trading CANCELLED record 必須有 cancelled_at")
+            raise ValueError("Trading order record 必須有 ordered_at")
+
+        frozen_params = record.get("frozen_params")
+        frozen_params_sha = record.get("frozen_params_sha256")
+        if frozen_params is not None:
+            if not isinstance(frozen_params, dict):
+                raise ValueError("Trading order frozen_params 必須是 object")
+            if str(frozen_params_sha or "") != canonical_json_sha256(frozen_params):
+                raise ValueError("Trading order frozen_params hash 不一致")
+
+        fills = record.get("fills", [])
+        if not isinstance(fills, list):
+            raise ValueError("Trading order fills 必須是 list")
+        fill_ids = set()
+        filled_qty = 0
+        fill_trade_dates = set()
+        for fill in fills:
+            if not isinstance(fill, dict):
+                raise ValueError("Trading order fill record 必須是 object")
+            fill_id = str(fill.get("fill_id") or "")
+            if not fill_id or fill_id in fill_ids:
+                raise ValueError("Trading order fill_id 必須存在且不可重複")
+            fill_ids.add(fill_id)
+            fill_qty = int(fill.get("qty") or 0)
+            if fill_qty <= 0 or int(fill.get("fill_price_milli") or 0) <= 0:
+                raise ValueError("Trading order fill qty/price 不合法")
+            if int(fill.get("net_buy_total_milli") or 0) <= 0:
+                raise ValueError("Trading order fill net_buy_total_milli 不合法")
+            trade_date = str(fill.get("trade_date") or "")
+            if not trade_date or not str(fill.get("confirmed_at") or ""):
+                raise ValueError("Trading order fill 缺少 trade_date/confirmed_at")
+            fill_trade_dates.add(trade_date)
+            filled_qty += fill_qty
+        if len(fill_trade_dates) > 1:
+            raise ValueError("同一 Trading order 的 partial fills 不得跨交易日")
+        declared_filled = int(record.get("filled_qty", 0) or 0)
+        declared_remaining = int(record.get("remaining_qty", int(record["qty"]) - declared_filled) or 0)
+        if declared_filled != filled_qty or declared_remaining != int(record["qty"]) - filled_qty:
+            raise ValueError("Trading order filled_qty/remaining_qty 與 fills 不一致")
+        if filled_qty < 0 or filled_qty > int(record["qty"]):
+            raise ValueError("Trading order filled_qty 不合法")
+        if filled_qty > 0 and frozen_params is None:
+            raise ValueError("Trading 已成交 order 必須持有 frozen_params")
+
+        if status == TRADING_ORDER_STATUS_ORDERED:
+            if filled_qty != 0 or record.get("cancelled_at") is not None or record.get("filled_at") is not None:
+                raise ValueError("Trading ORDERED record 的 fill/cancel 狀態不一致")
+        elif status == TRADING_ORDER_STATUS_PARTIAL:
+            if not (0 < filled_qty < int(record["qty"])) or record.get("cancelled_at") is not None or record.get("filled_at") is not None:
+                raise ValueError("Trading PARTIAL record 狀態不一致")
+        elif status == TRADING_ORDER_STATUS_FILLED:
+            if filled_qty != int(record["qty"]) or not str(record.get("filled_at") or "") or record.get("cancelled_at") is not None:
+                raise ValueError("Trading FILLED record 狀態不一致")
+        elif status == TRADING_ORDER_STATUS_CANCELLED:
+            if filled_qty >= int(record["qty"]) or not str(record.get("cancelled_at") or "") or record.get("filled_at") is not None:
+                raise ValueError("Trading CANCELLED record 狀態不一致")
         for field in (
             "plan_fingerprint",
             "information_date",
@@ -330,12 +490,23 @@ def build_trading_order_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "ticker": record["ticker"],
                 "status": record["status"],
                 "qty": int(record["qty"]),
+                "filled_qty": int(record.get("filled_qty", 0) or 0),
+                "remaining_qty": int(record.get("remaining_qty", record["qty"]) or 0),
+                "average_fill_price": (
+                    None
+                    if not record.get("fills")
+                    else milli_to_price(
+                        sum(int(fill["fill_price_milli"]) * int(fill["qty"]) for fill in record["fills"])
+                        // max(1, sum(int(fill["qty"]) for fill in record["fills"]))
+                    )
+                ),
                 "limit_price": milli_to_price(int(record["limit_price_milli"])),
                 "reserved_cost": milli_to_money(int(record["reserved_cost_milli"])),
                 "broker_order_id": record.get("broker_order_id"),
                 "information_date": record["information_date"],
                 "ordered_at": record["ordered_at"],
                 "cancelled_at": record.get("cancelled_at"),
+                "filled_at": record.get("filled_at"),
                 "plan_fingerprint": record["plan_fingerprint"],
             }
         )
@@ -353,12 +524,15 @@ __all__ = [
     "TRADING_ORDER_STATE_SCHEMA_VERSION",
     "TRADING_ORDER_STATE_FILENAME",
     "TRADING_ORDER_STATUS_ORDERED",
+    "TRADING_ORDER_STATUS_PARTIAL",
+    "TRADING_ORDER_STATUS_FILLED",
     "TRADING_ORDER_STATUS_CANCELLED",
     "TRADING_ACTIVE_ORDER_STATUSES",
     "TRADING_ORDER_SIDE_BUY",
     "build_empty_trading_order_state",
     "build_trading_proposal_key",
     "append_ordered_trading_proposal",
+    "record_trading_buy_order_fill",
     "cancel_ordered_trading_order",
     "active_trading_orders",
     "has_active_trading_orders",

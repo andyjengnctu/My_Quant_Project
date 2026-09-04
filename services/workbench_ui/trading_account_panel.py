@@ -16,6 +16,11 @@ from services.trading.daily_workflow import (
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
 from services.trading.order_planning import build_trading_proposed_order_plan
+from services.trading.fill_reconciliation import (
+    TradingFillRevisionConflict,
+    confirm_trading_buy_order_fill,
+    recover_trading_fill_transaction,
+)
 from services.trading.order_state import (
     TradingOrderRevisionConflict,
     confirm_trading_order_cancellation,
@@ -89,6 +94,7 @@ def format_trading_money(value) -> str:
 
 
 def build_trading_account_panel_snapshot(project_root=WORKBENCH_PROJECT_ROOT) -> dict[str, object]:
+    recover_trading_fill_transaction(project_root)
     policy = get_trading_policy_snapshot()
     state = load_trading_account_state(project_root, required=False)
     account_path = resolve_trading_account_state_path(project_root)
@@ -301,21 +307,22 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._confirm_ordered_button.pack(side="right")
 
-        pending_box = ttk.LabelFrame(self, text="券商掛單狀態（ORDERED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        pending_box = ttk.LabelFrame(self, text="券商掛單狀態（ORDERED / PARTIAL / FILLED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         pending_box.grid(row=7, column=0, sticky="nsew", pady=(8, 0))
         pending_box.rowconfigure(1, weight=1)
         pending_box.columnconfigure(0, weight=1)
         self._order_status_var = tk.StringVar(value="尚無實際送單紀錄。")
         ttk.Label(pending_box, textvariable=self._order_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
-        order_columns = ("ticker", "status", "limit", "qty", "reserved", "broker_id", "info_date", "ordered_at", "cancelled_at")
+        order_columns = ("ticker", "status", "limit", "qty", "filled", "remaining", "avg_fill", "broker_id", "info_date", "ordered_at", "filled_at", "cancelled_at")
         self._order_tree = ttk.Treeview(pending_box, columns=order_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
         order_headings = {
-            "ticker": "股票", "status": "狀態", "limit": "限價", "qty": "股數", "reserved": "預留資金",
-            "broker_id": "券商委託號", "info_date": "資訊日", "ordered_at": "送單時間", "cancelled_at": "取消時間",
+            "ticker": "股票", "status": "狀態", "limit": "限價", "qty": "委託股數", "filled": "已成交",
+            "remaining": "未成交", "avg_fill": "平均成交價", "broker_id": "券商委託號", "info_date": "資訊日",
+            "ordered_at": "送單時間", "filled_at": "完成時間", "cancelled_at": "取消時間",
         }
         order_widths = {
-            "ticker": 80, "status": 90, "limit": 95, "qty": 85, "reserved": 115, "broker_id": 130,
-            "info_date": 105, "ordered_at": 160, "cancelled_at": 160,
+            "ticker": 80, "status": 90, "limit": 95, "qty": 95, "filled": 90, "remaining": 90, "avg_fill": 105,
+            "broker_id": 130, "info_date": 105, "ordered_at": 160, "filled_at": 160, "cancelled_at": 160,
         }
         for key in order_columns:
             self._order_tree.heading(key, text=order_headings[key])
@@ -326,11 +333,30 @@ class TradingAccountPanel(ttk.Frame):
         self._order_tree.grid(row=1, column=0, sticky="nsew")
         order_y.grid(row=1, column=1, sticky="ns")
         order_x.grid(row=2, column=0, sticky="ew")
+        fill_row = ttk.Frame(pending_box, style=WORKBENCH_FRAME_STYLE)
+        fill_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Label(fill_row, text="本次成交股數", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._fill_qty_var = tk.StringVar()
+        ttk.Entry(fill_row, textvariable=self._fill_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        ttk.Label(fill_row, text="本次成交價", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._fill_price_var = tk.StringVar()
+        ttk.Entry(fill_row, textvariable=self._fill_price_var, width=12, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        ttk.Label(fill_row, text="成交日 YYYY-MM-DD", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._fill_date_var = tk.StringVar()
+        ttk.Entry(fill_row, textvariable=self._fill_date_var, width=14, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        self._confirm_fill_button = ttk.Button(
+            fill_row,
+            text="確認選取成交",
+            command=self._confirm_selected_fill,
+            style=WORKBENCH_BUTTON_STYLE,
+        )
+        self._confirm_fill_button.pack(side="right")
+
         pending_buttons = ttk.Frame(pending_box, style=WORKBENCH_FRAME_STYLE)
-        pending_buttons.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        pending_buttons.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self._cancel_order_button = ttk.Button(
             pending_buttons,
-            text="確認選取已取消",
+            text="確認選取剩餘委託已取消",
             command=self._cancel_selected_order,
             style=WORKBENCH_BUTTON_STYLE,
         )
@@ -338,7 +364,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(pending_buttons, text="刷新掛單狀態", command=self.refresh_order_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
         ttk.Label(
             pending_buttons,
-            text="只有使用者確認實際送單才建立 ORDERED；取消只改 order state，不改 cash／持股。",
+            text="成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。",
             foreground=WORKBENCH_MUTED,
             style=WORKBENCH_LABEL_STYLE,
         ).pack(side="left", padx=(12, 0))
@@ -508,10 +534,13 @@ class TradingAccountPanel(ttk.Frame):
                     row.get("status") or "-",
                     self._format_candidate_number(row.get("limit_price"), digits=2),
                     f"{int(row.get('qty') or 0):,}",
-                    self._format_candidate_number(row.get("reserved_cost"), digits=0),
+                    f"{int(row.get('filled_qty') or 0):,}",
+                    f"{int(row.get('remaining_qty') or 0):,}",
+                    self._format_candidate_number(row.get("average_fill_price"), digits=2),
                     row.get("broker_order_id") or "-",
                     row.get("information_date") or "-",
                     row.get("ordered_at") or "-",
+                    row.get("filled_at") or "-",
                     row.get("cancelled_at") or "-",
                 ),
             )
@@ -519,7 +548,7 @@ class TradingAccountPanel(ttk.Frame):
         revision = snapshot.get("revision")
         state_path = project_relative_display_path(resolve_trading_order_state_path(WORKBENCH_PROJECT_ROOT), project_root=WORKBENCH_PROJECT_ROOT)
         self._order_status_var.set(
-            f"{'ACTIVE' if active else 'CLEAR'} | revision {revision if revision is not None else '-'} | ORDERED {active} | 總紀錄 {int(snapshot.get('order_count') or 0)} | {state_path}"
+            f"{'ACTIVE' if active else 'CLEAR'} | revision {revision if revision is not None else '-'} | active {active} | 總紀錄 {int(snapshot.get('order_count') or 0)} | {state_path}"
         )
         self._apply_order_lock_to_account_controls()
 
@@ -567,20 +596,81 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_order_state()
         messagebox.showinfo("Trading 掛單", f"{ticker} 已記錄為 ORDERED；account cash／positions 未變更。", parent=self)
 
-    def _cancel_selected_order(self):
+    def _confirm_selected_fill(self):
         selected = self._order_tree.selection()
         if not selected:
-            messagebox.showerror("Trading 掛單", "請先選取一筆 ORDERED 掛單。", parent=self)
+            messagebox.showerror("Trading 成交", "請先選取一筆 ORDERED / PARTIAL 掛單。", parent=self)
             return
         order_id = str(selected[0])
         row = self._order_rows.get(order_id) or {}
-        if str(row.get("status")) != "ORDERED":
-            messagebox.showerror("Trading 掛單", "只有 ORDERED 掛單可確認取消。", parent=self)
+        if str(row.get("status")) not in {"ORDERED", "PARTIAL"}:
+            messagebox.showerror("Trading 成交", "只有 ORDERED / PARTIAL 掛單可確認成交。", parent=self)
+            return
+        try:
+            fill_qty = parse_trading_qty_text(self._fill_qty_var.get(), "本次成交股數")
+            fill_price = parse_trading_money_text(self._fill_price_var.get(), "本次成交價", allow_zero=False)
+            trade_date = self._fill_date_var.get().strip()
+            if not trade_date:
+                raise ValueError("成交日必填")
+        except ValueError as exc:
+            messagebox.showerror("Trading 成交", str(exc), parent=self)
+            return
+        remaining = int(row.get("remaining_qty") or 0)
+        if fill_qty > remaining:
+            messagebox.showerror("Trading 成交", f"本次成交股數不可超過未成交股數 {remaining:,}", parent=self)
+            return
+        ticker = str(row.get("ticker") or "")
+        if not messagebox.askyesno(
+            "確認券商成交",
+            f"確認券商實際成交 {ticker}？\n\n本次成交：{fill_qty:,} 股 @ {fill_price}\n成交日：{trade_date}\n\n只有實際券商成交才可確認；此動作會以 canonical exact accounting 更新 cash／持股。",
+            parent=self,
+        ):
+            return
+        try:
+            result = confirm_trading_buy_order_fill(
+                WORKBENCH_PROJECT_ROOT,
+                order_id=order_id,
+                fill_qty=fill_qty,
+                fill_price=fill_price,
+                trade_date=trade_date,
+                expected_order_revision=int(self._current_order_revision()),
+                expected_account_revision=int(self._current_revision()),
+            )
+        except TradingFillRevisionConflict as exc:
+            messagebox.showerror("Trading 成交狀態已更新", f"{exc}\n\n已重新讀取最新 account／order state。", parent=self)
+            self.refresh_account()
+            self.refresh_order_state()
+            return
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            messagebox.showerror("Trading 成交失敗", str(exc), parent=self)
+            self.refresh_account()
+            self.refresh_order_state()
+            return
+        self._fill_qty_var.set("")
+        self._fill_price_var.set("")
+        self._fill_date_var.set("")
+        self.refresh_account()
+        self.refresh_order_state()
+        messagebox.showinfo(
+            "Trading 成交",
+            f"{ticker} 已更新為 {result.get('status')}；累計成交 {int(result.get('filled_qty') or 0):,}，未成交 {int(result.get('remaining_qty') or 0):,}。",
+            parent=self,
+        )
+
+    def _cancel_selected_order(self):
+        selected = self._order_tree.selection()
+        if not selected:
+            messagebox.showerror("Trading 掛單", "請先選取一筆 ORDERED / PARTIAL 掛單。", parent=self)
+            return
+        order_id = str(selected[0])
+        row = self._order_rows.get(order_id) or {}
+        if str(row.get("status")) not in {"ORDERED", "PARTIAL"}:
+            messagebox.showerror("Trading 掛單", "只有 ORDERED / PARTIAL 掛單可確認取消剩餘委託。", parent=self)
             return
         ticker = str(row.get("ticker") or "")
         if not messagebox.askyesno(
             "確認券商取消",
-            f"確認券商端 {ticker} 掛單已取消？\n\n此動作不會修改 cash／持股。",
+            f"確認券商端 {ticker} 未成交剩餘委託已取消？\n\n已成交部位不回滾；此動作只結束未成交餘額。",
             parent=self,
         ):
             return
