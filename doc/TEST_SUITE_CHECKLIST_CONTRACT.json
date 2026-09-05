@@ -4012,6 +4012,17 @@
       "entry": "`core/trading_order_state.py`, `core/trading_capabilities.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_order_submission.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/trading/daily_workflow.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 361
+    },
+    {
+      "id": "B374",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research reporting / Canonical contract",
+      "item": "Model Standard SOP absorbs reusable head learnability while retired geometry diagnostics leave persistent comparison",
+      "gap": "使用者明確授權精簡Continuous DL常駐報表：multi-head Head Learnability屬基本learnability，必須成為Standard SOP 1條件式子表；Truth / Prediction Geometry保留歷史scientific payload但退出persistent single/cross-model report extension；HS-Conditional extension刪除重複Safety/head/attribution欄位，cross-model不再nested reference comparison；Evidence Coverage在6/6 AVAILABLE時compact，Rolling/Robustness定位為Standard Mode Evidence。Canonical report contract與renderer必須同源，舊artifact可直接讀取，不得因report schema升級重訓。",
+      "entry": "`core/research_report_contract.py`, `services/breakout_quality/standard_model_sop.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
+      "initial_status": "NEW",
+      "order": 362
     }
   ],
   "tests": [
@@ -7459,6 +7470,13 @@
       "description": "`validate_trading_indicator_sell_execution_contract_case` 覆蓋completed-bar full-position MARKET obligation、immutable signal identity、cancel/retry attempt、protection-first cancellation、explicit submission/no hidden fill、canonical IND_SELL event、Workbench explicit action與all-required-live capability completion；daily/operations/pre-live regressions同步覆蓋Data→rollforward→Indicator→Params→Scanner、D3/D4 SELL-cash session lock與runtime safety audit。",
       "initial_status": "NEW",
       "order": 483
+    },
+    {
+      "id": "T494",
+      "b_id": "B374",
+      "description": "`validate_research_report_contract_freeze_case` 與既有model/CLI regressions驗Standard SOP v8 / comparison v12 approved fingerprints、Head Learnability上移、retired geometry不再persistent render、HS-Conditional去重、compact evidence、Standard Mode Evidence命名、robustness aggregation與legacy payload相容。",
+      "initial_status": "NEW",
+      "order": 484
     }
   ],
   "transitions": [
@@ -24741,6 +24759,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_indicator_sell_execution_contract_case`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "B374",
+      "description": "收斂Continuous DL常駐報表為Standard Head Learnability +精簡model/mode evidence，退役Truth/Prediction Geometry常駐Extension。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "T494",
+      "description": "更新canonical report-contract synthetic regressions，覆蓋新SOP/Extension邊界與舊artifact相容。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_research_report_contract_freeze_case`"
     }
   ]
 }

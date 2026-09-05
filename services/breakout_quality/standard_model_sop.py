@@ -2,8 +2,8 @@
 
 Forward, Rolling, and robustness consumers must provide evaluation score frames to this
 module instead of reimplementing Standard SOP metrics.  Mode-specific evidence (for
-example Rolling fold/year stability) is carried as an extension and never changes the
-common six-section metric payload.
+example Rolling fold/year stability) is carried as Standard Mode Evidence and never
+changes the common six-section metric payload.
 """
 
 from __future__ import annotations
@@ -14,9 +14,123 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+from core.research_report_contract import table_contract
 from services.breakout_quality import ranker_training as ranker_api
 
 STANDARD_SPLIT_KEYS = ("validation", "oos", "breakout_candidate_oos")
+
+
+def extract_standard_head_learnability_rows(
+    payload: Mapping[str, Any],
+    *,
+    oos_scope_label: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build the optional Standard SOP head-level learnability subtable.
+
+    Head metrics are existing canonical validation evidence.  This function only
+    normalizes capability payloads into the Standard SOP table; it never recomputes
+    a metric and never branches on MR identity.
+    """
+
+    source = dict(payload or {})
+    persisted = source.get("standard_head_learnability_rows")
+    if isinstance(persisted, list):
+        return [dict(row) for row in persisted]
+
+    standard = dict(source.get("standard_model_sop") or {})
+    evaluation_mode = str(standard.get("evaluation_mode") or "forward_oos").strip().lower()
+    oos_label = oos_scope_label or ("Rolling OOS" if evaluation_mode == "rolling_oos" else "Forward OOS")
+    scopes = (("Validation", "validation"), (oos_label, "oos"), ("Breakout slice", "breakout_candidate_oos"))
+    rows: list[dict[str, Any]] = []
+
+    def add(evaluation: Mapping[str, Any], heads: tuple[tuple[str, str], ...]) -> None:
+        data = dict(evaluation or {})
+        if not data:
+            return
+        for split_label, split_key in scopes:
+            scope = dict(data.get(split_key) or {})
+            for head_label, head_key in heads:
+                metric = dict(scope.get(head_key) or {})
+                if not metric:
+                    continue
+                rows.append({
+                    "split": split_label,
+                    "head": head_label,
+                    "mean_daily_spearman": metric.get("mean_daily_spearman"),
+                    "global_spearman_vs_raw_target": metric.get("global_spearman_vs_raw_target"),
+                    "pairwise_concordance": metric.get("pairwise_concordance"),
+                })
+
+    add(source.get("conditional_mfe_safety_evaluation") or {}, (("Primary MFE", "primary_mfe"), ("Conditional Safety", "conditional_safety")))
+    add(source.get("reverse_conditional_mfe_evaluation") or {}, (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")))
+    add(source.get("safety_primary_evaluation") or {}, (("Raw Safety", "raw_safety"), ("Economic Target", "primary_target")))
+
+    raw_eval = (
+        source.get("safety_raw_mfe_joint_min_evaluation")
+        or source.get("safety_raw_mfe_hmhs_evaluation")
+        or source.get("safety_raw_mfe_evaluation")
+        or {}
+    )
+    add(raw_eval, (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")))
+    add(source.get("hs_conditional_mfe_evaluation") or {}, (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe_true_hs")))
+    add(source.get("hs_priority_mfe_evaluation") or {}, (("Raw Safety", "raw_safety"), ("HS-Priority MFE", "hs_priority_mfe")))
+
+    # One capability should own each Split/Head pair.  De-duplicate defensively while
+    # preserving deterministic first-owner ordering; conflicting values are illegal.
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    for row in rows:
+        key = (str(row["split"]), str(row["head"]))
+        if key not in unique:
+            unique[key] = row
+            order.append(key)
+        elif unique[key] != row:
+            raise ValueError(f"Standard Head Learnability duplicate capability conflict: {key}")
+    return [unique[key] for key in order]
+
+
+def aggregate_standard_head_learnability_rows(
+    seed_rows: list[list[Mapping[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Arithmetic benchmark-seed mean for the optional Standard SOP head table."""
+
+    if not seed_rows:
+        return []
+    normalized = [[dict(row) for row in rows] for rows in seed_rows]
+    if all(not rows for rows in normalized):
+        return []
+    if any(not rows for rows in normalized):
+        raise ValueError("Robustness Head Learnability evidence跨seed不完整")
+
+    table = table_contract("model.standard_sop", "learnability", "head_learnability")
+    identity_keys = tuple(column.key for column in table.columns if column.format_kind == "text")
+    metric_keys = tuple(column.key for column in table.columns if column.key not in identity_keys)
+    indexed: list[dict[tuple[Any, ...], dict[str, Any]]] = []
+    for rows in normalized:
+        current: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for row in rows:
+            identity = tuple(row.get(key) for key in identity_keys)
+            if identity in current:
+                raise ValueError(f"Robustness Head Learnability row identity重複: {identity}")
+            current[identity] = row
+        indexed.append(current)
+    identities = [set(item) for item in indexed]
+    if any(values != identities[0] for values in identities[1:]):
+        raise ValueError("Robustness Head Learnability row identity跨seed不一致")
+
+    result: list[dict[str, Any]] = []
+    for identity in sorted(identities[0], key=lambda value: tuple(str(item) for item in value)):
+        row = {key: value for key, value in zip(identity_keys, identity)}
+        for key in metric_keys:
+            values = [item[identity].get(key) for item in indexed]
+            if any(value is None for value in values):
+                if not all(value is None for value in values):
+                    raise ValueError(f"Robustness Head Learnability metric跨seed不完整: {identity}/{key}")
+                row[key] = None
+            else:
+                row[key] = float(np.mean([float(value) for value in values]))
+        result.append(row)
+    return result
 
 
 def _ranking_dates(frame: pd.DataFrame) -> np.ndarray:
@@ -226,7 +340,7 @@ def build_standard_model_sop(
             percentile_target=percentile_target,
         )
     return {
-        "schema": "standard_model_sop_v7",
+        "schema": "standard_model_sop_v8",
         "evaluation_mode": str(evaluation_mode),
         "training": {"objective": str(training_objective)},
         "split_metrics": split_metrics,
@@ -253,7 +367,7 @@ def migrate_legacy_forward_standard_model_sop(payload: Mapping[str, Any]) -> dic
     if not required.issubset(splits) or not required.issubset(alignment):
         return None
     return {
-        "schema": "standard_model_sop_v7_migrated_metrics_only",
+        "schema": "standard_model_sop_v8_migrated_metrics_only",
         "evaluation_mode": "forward_oos",
         "training": {"objective": str((report.get("training") or {}).get("objective") or "")},
         "split_metrics": {key: dict(splits[key]) for key in STANDARD_SPLIT_KEYS},
@@ -446,7 +560,7 @@ def aggregate_standard_model_sop_robustness(
         mode_extensions["rolling"] = _aggregate_rolling_extension(rolling_payloads)
 
     return {
-        "schema": "standard_model_sop_v7_robustness_mean",
+        "schema": "standard_model_sop_v8_robustness_mean",
         "evaluation_mode": str(next(iter(modes))),
         "training": {"objective": str(next(iter(objectives)))},
         "split_metrics": split_metrics,

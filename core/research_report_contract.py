@@ -89,7 +89,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=7,
+    version=8,
     role="persistent_standard_model_sop_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=(
@@ -102,6 +102,12 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("top_score_decile_raw_target_mean", "Top 10% Target", 4, preference="higher", format_kind="number"),
                 C("bottom_score_decile_raw_target_mean", "Bottom 10% Target", 4, preference="lower", format_kind="number"),
                 C("top_bottom_raw_target_gap", "Top-Bottom Target", 4, preference="higher", format_kind="number"),
+            )),
+            T("head_learnability", (
+                C("split", "Split", alignment="left"), C("head", "Head", alignment="left"),
+                C("mean_daily_spearman", "Daily rho", 4, preference="higher", format_kind="number"),
+                C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
+                C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
             )),
         )),
         S("generalization", 2, "Generalization", "validation_and_oos", (
@@ -188,7 +194,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=11,
+    version=12,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -196,7 +202,7 @@ MODEL_STANDARD_COMPARISON = PersistentReportContract(
 
 MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
     "rolling_stability": ModelExtensionContract(
-        "rolling_stability", "Rolling-specific Extension｜Fold / Year Stability", "rolling_oos_only",
+        "rolling_stability", "Standard Mode Evidence｜Rolling Stability", "rolling_oos_only",
         (T("rolling_stability", (
             C("metric", "Metric", alignment="left"), C("value", "Value", alignment="right"),
         )),
@@ -212,7 +218,7 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
         ))),
     ),
     "robustness_stability": ModelExtensionContract(
-        "robustness_stability", "Robustness-specific Extension｜Across-seed Stability", "robustness_only",
+        "robustness_stability", "Standard Mode Evidence｜Across-seed Stability", "robustness_only",
         (T("robustness_stability", (
             C("model", "Model", alignment="left"),
             C("seed_count", "Seeds", 0, format_kind="int"),
@@ -233,61 +239,16 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
 
 
 MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
-    "multi_head_learnability": ModelExtensionContract(
-        "multi_head_learnability", "Multi-head Learnability",
-        "multi_head_only",
-        (T("multi_head", (
-            C("split", "Split", alignment="left"), C("head", "Head", alignment="left"),
-            C("mean_daily_spearman", "Daily rho", 4, preference="higher", format_kind="number"),
-            C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
-            C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
-        )),),
-        comparison_mode="row_tables",
-        comparison_row_keys=(("multi_head", "rows"),),
-        evidence_family="safety_raw_mfe",
-        robustness_aggregation="row_mean",
-    ),
-    "truth_prediction_geometry": ModelExtensionContract(
-        "truth_prediction_geometry", "Truth / Prediction Geometry",
-        "geometry_models",
-        (
-            T("geometry_summary", (
-                C("metric", "Metric", alignment="left"), C("value", "Value", alignment="right"),
-            )),
-            T("truth_5x5", (
-                C("safety", "Actual Safety \\ Pure-MFE", alignment="left"),
-                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
-            )),
-            T("predicted_5x5", (
-                C("safety", "Pred Safety \\ Raw-MFE", alignment="left"),
-                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
-            )),
-            T("safety_cohorts", (
-                C("safety", "Pred Safety", alignment="left"), C("n", "N", 0, format_kind="int"),
-                C("raw_mfe_to_actual_mfe_mean_daily_spearman", "Raw-MFE→MFE rho", 4, preference="higher", format_kind="number"),
-                C("high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
-                C("hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
-            )),
-        ),
-        comparison_mode="truth_geometry",
-        evidence_family="safety_raw_mfe",
-        robustness_aggregation="single_seed_only",
-    ),
     "hs_conditional_mfe_gate": ModelExtensionContract(
         "hs_conditional_mfe_gate", "HS-Qualification / Conditional-MFE Gate",
         "true_hs_conditional_mfe_duo",
         (
             T("hs_conditional_gate", (
                 C("split", "Split", alignment="left"),
-                C("safety_daily_rho", "Safety Daily rho", 4, preference="higher", format_kind="number"),
-                C("safety_global_rho", "Safety Global rho", 4, preference="higher", format_kind="number"),
-                C("safety_pair", "Safety Pair", 2, "%", "higher", "fraction_pct"),
                 C("hs_only_daily_rho", "HS-only rho", 4, preference="higher", format_kind="number"),
                 C("hs_only_pair", "HS-only Pair", 2, "%", "higher", "fraction_pct"),
                 C("pred_hs_true_ls_pct", "Pred-HS true-LS", 2, "%", "lower", "pct"),
                 C("true_hs_recall_pct", "True-HS recall", 2, "%", "higher", "pct"),
-                C("topk_hmhs_pct", "TopK HM/HS", 2, "%", "higher", "pct"),
-                C("topk_hmls_pct", "TopK HM/LS", 2, "%", "lower", "pct"),
                 C("ls_contamination_lift", "LS contam ×", 2, preference="lower", format_kind="number"),
             )),
             T("hs_qualification_boundary", (
@@ -295,8 +256,6 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
                 C("qualification_pair", "HS-Qual Pair", 2, "%", "higher", "fraction_pct"),
                 C("p40_p60_pair", "P40–P60 Pair", 2, "%", "higher", "fraction_pct"),
                 C("p45_p55_pair", "P45–P55 Pair", 2, "%", "higher", "fraction_pct"),
-                C("pred_hs_true_ls_pct", "Pred-HS true-LS", 2, "%", "lower", "pct"),
-                C("true_hs_recall_pct", "True-HS recall", 2, "%", "higher", "pct"),
             )),
             T("true_hs_oracle_gap", (
                 C("split", "Split", alignment="left"),
@@ -315,9 +274,6 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
                 C("ls_rank_p50", "LS Cond-rank P50", 3, preference="lower", format_kind="number"),
                 C("ls_rank_p90", "P90", 3, preference="lower", format_kind="number"),
                 C("ls_rank_p99", "P99", 3, preference="lower", format_kind="number"),
-                C("hmhs_enrichment", "HM/HS ×", 2, preference="higher", format_kind="number"),
-                C("mean_mfe_r", "Mean MFE", 3, "R", "higher", "number"),
-                C("mean_adverse_r", "Mean Adverse", 3, "R", "lower", "number"),
             )),
             T("hs_attribution_control", (
                 C("model", "Model", alignment="left"),
@@ -326,7 +282,6 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
                 C("topk_high_safety_pct", "TopK High-Safety", 2, "%", "higher", "pct"),
                 C("topk_hmhs_pct", "TopK HM/HS", 2, "%", "higher", "pct"),
                 C("topk_hmls_pct", "TopK HM/LS", 2, "%", "lower", "pct"),
-                C("pred_hs_true_ls_pct", "Pred-HS true-LS", 2, "%", "lower", "pct"),
             )),
         ),
         comparison_mode="row_tables",
@@ -335,7 +290,6 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             ("hs_qualification_boundary", "boundary_rows"),
             ("true_hs_oracle_gap", "oracle_rows"),
             ("ls_contamination_tail", "contamination_rows"),
-            ("hs_attribution_control", "control_rows"),
         ),
         evidence_family="hs_conditional_mfe",
         robustness_aggregation="row_mean",
@@ -590,57 +544,15 @@ def _derive_row_table_comparison_contract(
     )
 
 
-def _truth_geometry_comparison_contract(
-    extension: ModelExtensionContract,
-) -> ModelExtensionContract:
-    return ModelExtensionContract(
-        extension.extension_id, extension.title, extension.applicability,
-        (
-            T("geometry_summary_comparison", (
-                C("model", "Model", alignment="left"),
-                C("actual_safety_to_mfe_daily_rho", "Actual Safety↔MFE rho", 4, format_kind="number"),
-                C("pred_safety_to_raw_mfe_daily_rho", "Pred Safety↔Raw-MFE rho", 4, format_kind="number"),
-                C("actual_s5_m5", "Actual S5×M5", alignment="right"),
-                C("actual_s4p_m4p", "Actual S4+×M4+", alignment="right"),
-                C("pred_s5_m5_n", "Pred S5×M5 N", 0, preference="higher", format_kind="int"),
-                C("joint_product_to_actual_hmhs_daily_rho", "Joint→actual HM/HS rho", 4, preference="higher", format_kind="number"),
-            )),
-            # Actual truth is shared by all methods in the same scope and is rendered once.
-            T("truth_5x5", (
-                C("safety", "Actual Safety \\ Pure-MFE", alignment="left"),
-                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
-            )),
-            T("predicted_5x5_comparison", (
-                C("model", "Model", alignment="left"),
-                C("safety", "Pred Safety \\ Raw-MFE", alignment="left"),
-                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
-            )),
-            T("safety_cohorts_comparison", (
-                C("model", "Model", alignment="left"),
-                C("safety", "Pred Safety", alignment="left"),
-                C("n", "N", 0, format_kind="int"),
-                C("raw_mfe_to_actual_mfe_mean_daily_spearman", "Raw-MFE→MFE rho", 4, preference="higher", format_kind="number"),
-                C("high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
-                C("hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
-            )),
-        ),
-        comparison_mode=extension.comparison_mode,
-        comparison_row_keys=extension.comparison_row_keys,
-        evidence_family=extension.evidence_family,
-        robustness_aggregation=extension.robustness_aggregation,
-    )
-
-
 def _derive_comparison_extension_contract(
     extension: ModelExtensionContract,
 ) -> ModelExtensionContract:
     if extension.comparison_mode == "row_tables":
         return _derive_row_table_comparison_contract(extension)
-    if extension.comparison_mode == "truth_geometry":
-        return _truth_geometry_comparison_contract(extension)
     raise ValueError(
         f"未知Model extension comparison_mode: {extension.extension_id}={extension.comparison_mode}"
     )
+
 
 
 def comparison_extension_ids() -> tuple[str, ...]:
@@ -790,8 +702,8 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "7c8b4b930e2e047e",
-    "model.standard_sop": "56e5fb1173404d7f",
+    "model.standard_comparison": "a586067f58467ea4",
+    "model.standard_sop": "c96c1d5380ed303f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }

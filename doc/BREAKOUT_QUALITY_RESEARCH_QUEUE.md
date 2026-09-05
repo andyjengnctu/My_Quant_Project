@@ -162,6 +162,7 @@
 - 2026-09-03：B356依使用者formal bundle修正B355後的synthetic fixture fidelity：舊Forward fake contract缺`report_path`使coverage suite整體exception，現已補齊正式shape並明確走current fitted-model readiness precondition；production reuse contract未放寬。此為engineering-only closure，不改MR-13BF scientific priority；Priority 1仍為BF Seed42 Forward Model Gate。
 - 2026-09-03：B357依使用者MR-13BF Rolling實跑恢復compact TRAIN fold細部進度：單次Rolling現在與Robustness共用canonical training progress語意，持續顯示fold/elapsed/epoch select-refit x/y，不恢復verbose metric洗版；engineering-only，不改BF Gate、checkpoint reuse或scientific priority。Priority 1仍為MR-13BF Seed42 Forward Model Gate。
 - 2026-09-04：B358依formal evidence修正歷史MR-13AS synthetic的固定`len(reference)+1`假設；[3]～[6] membership仍完全由reference∪current的ordered exact de-duplicating SSOT產生，production/current research不變。engineering-only，不改MR-13BG/BH scientific priority。
+- 2026-09-05：B374依使用者明確授權收斂Continuous DL常駐報表：Head Learnability上移Standard SOP 1、Truth / Prediction Geometry退出persistent extension但保留歷史payload、HS-Conditional欄位去重、Evidence Coverage compact、Rolling/Robustness改列Standard Mode Evidence。engineering-only，不改current scientific priority、任何MR identity或既有結果，也不要求重訓。
 
 - 2026-09-04：MR-13BF Forward+Rolling均未突破Safety ceiling；HS-only Conditional-MFE近AO，但Safety rho/Pair、Pred-HS purity與P45–P55 boundary無material improvement。依BF事前規則raw global-attention family應停止；使用者明確要求在轉information/target uncertainty前先測GRU，故Priority 1改MR-13BG parameter-matched gated recurrent control。此為具名人工覆寫，不恢復Transformer sweep；BG若FAIL即停止GRU family tuning。
 

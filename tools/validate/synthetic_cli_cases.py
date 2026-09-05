@@ -686,7 +686,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             },
         }
         conditional_payload["standard_model_sop"] = {
-            "schema": "standard_model_sop_v7",
+            "schema": "standard_model_sop_v8",
             "evaluation_mode": "forward_oos",
             "training": {"objective": "daily_pairwise_ranking"},
             "split_metrics": dict(conditional_payload["split_metrics"]),
@@ -714,14 +714,16 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             "breakout_quality_mr13p_simple_report_uses_standard_model_sop_with_conditional_head_evidence",
             "標準模型 SOP｜1. Learnability" in conditional_console
             and "標準模型 SOP｜2. Generalization" in conditional_console
-            and "Model-specific Extension｜MR-13P｜Multi-head Learnability" in conditional_console
+            and "Head Learnability" in conditional_console
+            and "Model-specific Extension｜MR-13P｜Multi-head Learnability" not in conditional_console
             and "標準模型 SOP｜3. Multi-head Learnability" not in conditional_console
             and "Forward OOS" in conditional_console
             and "Conditional Safety" in conditional_console
             and "0.2876" in conditional_console
             and "59.88%" in conditional_console
             and "標準模型 SOP｜1. Learnability" in conditional_markdown
-            and "Model-specific Extension｜MR-13P｜Multi-head Learnability" in conditional_markdown
+            and "Head Learnability" in conditional_markdown
+            and "Model-specific Extension｜MR-13P｜Multi-head Learnability" not in conditional_markdown
             and "標準模型 SOP｜3. Multi-head Learnability" not in conditional_markdown
             and "0.2876" in conditional_markdown
             and "59.88%" in conditional_markdown

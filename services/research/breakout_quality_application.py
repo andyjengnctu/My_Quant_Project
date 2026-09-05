@@ -97,7 +97,9 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from services.breakout_quality.standard_model_sop import (
+    aggregate_standard_head_learnability_rows,
     aggregate_standard_model_sop_robustness,
+    extract_standard_head_learnability_rows,
     migrate_legacy_forward_standard_model_sop,
 )
 from services.breakout_quality.fitted_model_artifacts import (
@@ -542,40 +544,18 @@ def _model_sop_view(payload: dict) -> dict:
             "delta_top_bottom": delta(top_bottom(oos), top_bottom(breakout)),
         })
 
-    multi_head_rows = []
-    for evaluation, heads in (
-        (dict(source_payload.get("conditional_mfe_safety_evaluation") or {}), (("Primary MFE", "primary_mfe"), ("Conditional Safety", "conditional_safety"))),
-        (dict(source_payload.get("reverse_conditional_mfe_evaluation") or {}), (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe"))),
-    ):
-        if not evaluation:
-            continue
-        for scope_label, scope_key in (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            scope = dict(evaluation.get(scope_key) or {})
-            for head_label, head_key in heads:
-                row = dict(scope.get(head_key) or {})
-                if row:
-                    multi_head_rows.append({
-                        "split": scope_label,
-                        "head": head_label,
-                        "mean_daily_spearman": row.get("mean_daily_spearman"),
-                        "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
-                        "pairwise_concordance": row.get("pairwise_concordance"),
-                    })
-
-    safety_primary_eval = dict(source_payload.get("safety_primary_evaluation") or {})
-    if safety_primary_eval:
-        for scope_label, scope_key in (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            scope = dict(safety_primary_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Economic Target", "primary_target")):
-                row = dict(scope.get(head_key) or {})
-                if row:
-                    multi_head_rows.append({
-                        "split": scope_label,
-                        "head": head_label,
-                        "mean_daily_spearman": row.get("mean_daily_spearman"),
-                        "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
-                        "pairwise_concordance": row.get("pairwise_concordance"),
-                    })
+    head_learnability_rows = extract_standard_head_learnability_rows(
+        source_payload, oos_scope_label=oos_scope_label
+    )
+    if not head_learnability_rows:
+        # Compatibility for already-persisted robustness comparison payloads from
+        # the pre-v8 report schema.  Reuse their aggregated rows without preserving
+        # the retired Model-specific Extension presentation.
+        for legacy_extension in list(source_payload.get("comparison_extensions") or []):
+            legacy = dict(legacy_extension or {})
+            if str(legacy.get("id") or "") == "multi_head_learnability":
+                head_learnability_rows = [dict(row) for row in list(legacy.get("rows") or [])]
+                break
 
     joint_min_eval = dict(source_payload.get("safety_raw_mfe_joint_min_evaluation") or {})
     raw_eval = dict(
@@ -584,26 +564,6 @@ def _model_sop_view(payload: dict) -> dict:
         or source_payload.get("safety_raw_mfe_evaluation")
         or {}
     )
-    if raw_eval:
-        for scope_label, scope_key in (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            scope = dict(raw_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
-                row = dict(scope.get(head_key) or {})
-                if row:
-                    multi_head_rows.append({
-                        "split": scope_label,
-                        "head": head_label,
-                        "mean_daily_spearman": row.get("mean_daily_spearman"),
-                        "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
-                        "pairwise_concordance": row.get("pairwise_concordance"),
-                    })
-
-    geometry_scopes = []
-    for scope_label, scope_key in ((oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
-        scope = dict(raw_eval.get(scope_key) or {})
-        gate = dict(scope.get("model_gate") or {})
-        if gate:
-            geometry_scopes.append((scope_label, gate))
 
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
     ranking = None
@@ -732,10 +692,6 @@ def _model_sop_view(payload: dict) -> dict:
     ]
 
     extensions = []
-    if multi_head_rows:
-        extensions.append({"id": "multi_head_learnability", "rows": multi_head_rows})
-    if geometry_scopes:
-        extensions.append({"id": "truth_prediction_geometry", "geometry": geometry_scopes})
     hs_conditional_eval = dict(source_payload.get("hs_conditional_mfe_evaluation") or {})
     if hs_conditional_eval:
         gate_rows = []
@@ -747,7 +703,6 @@ def _model_sop_view(payload: dict) -> dict:
             scope = dict(hs_conditional_eval.get(scope_key) or {})
             if not scope:
                 continue
-            safety = dict(scope.get("raw_safety") or {})
             learn = dict(scope.get("conditional_mfe_true_hs") or {})
             qualification = dict(scope.get("hs_qualification") or {})
             boundary = dict(scope.get("hs_qualification_boundary") or {})
@@ -757,15 +712,10 @@ def _model_sop_view(payload: dict) -> dict:
             oracle = dict(scope.get("true_hs_oracle_gate") or {})
             gate_rows.append({
                 "split": scope_label,
-                "safety_daily_rho": safety.get("mean_daily_spearman"),
-                "safety_global_rho": safety.get("global_spearman_vs_raw_target"),
-                "safety_pair": safety.get("pairwise_concordance"),
                 "hs_only_daily_rho": learn.get("mean_daily_spearman"),
                 "hs_only_pair": learn.get("pairwise_concordance"),
                 "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
                 "true_hs_recall_pct": gate.get("true_hs_recall_pct"),
-                "topk_hmhs_pct": gate.get("selected_hmhs_pct"),
-                "topk_hmls_pct": gate.get("selected_hmls_pct"),
                 "ls_contamination_lift": gate.get("true_ls_contamination_lift_vs_predicted_hs"),
             })
             boundary_rows.append({
@@ -773,8 +723,6 @@ def _model_sop_view(payload: dict) -> dict:
                 "qualification_pair": qualification.get("pairwise_concordance"),
                 "p40_p60_pair": p40.get("pairwise_concordance"),
                 "p45_p55_pair": p45.get("pairwise_concordance"),
-                "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
-                "true_hs_recall_pct": gate.get("true_hs_recall_pct"),
             })
             oracle_rows.append({
                 "split": scope_label,
@@ -793,9 +741,6 @@ def _model_sop_view(payload: dict) -> dict:
                 "ls_rank_p50": gate.get("true_ls_conditional_rank_percentile_p50"),
                 "ls_rank_p90": gate.get("true_ls_conditional_rank_percentile_p90"),
                 "ls_rank_p99": gate.get("true_ls_conditional_rank_percentile_p99"),
-                "hmhs_enrichment": gate.get("hmhs_enrichment_vs_predicted_hs"),
-                "mean_mfe_r": gate.get("selected_mean_favorable_r"),
-                "mean_adverse_r": gate.get("selected_mean_adverse_r"),
             })
         control_rows = []
         reference = dict(hs_conditional_eval.get("lexicographic_reference_control") or {})
@@ -813,7 +758,6 @@ def _model_sop_view(payload: dict) -> dict:
                         "topk_high_safety_pct": gate.get("selected_high_safety_pct"),
                         "topk_hmhs_pct": gate.get("selected_hmhs_pct"),
                         "topk_hmls_pct": gate.get("selected_hmls_pct"),
-                        "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
                     })
         extensions.append({
             "id": "hs_conditional_mfe_gate",
@@ -914,7 +858,7 @@ def _model_sop_view(payload: dict) -> dict:
     for raw_extension in list(source_payload.get("comparison_extensions") or []):
         normalized_extension = dict(raw_extension or {})
         extension_id = str(normalized_extension.get("id") or "").strip()
-        if not extension_id:
+        if not extension_id or extension_id in {"multi_head_learnability", "truth_prediction_geometry"}:
             continue
         extensions = [
             extension for extension in extensions
@@ -926,8 +870,7 @@ def _model_sop_view(payload: dict) -> dict:
         "split_names": split_names,
         "learnability": learnability_rows,
         "generalization": generalization_rows,
-        "multi_head": multi_head_rows,
-        "geometry": geometry_scopes,
+        "head_learnability": head_learnability_rows,
         "ranking": ranking,
         "evidence": evidence,
         "upside_downside_alignment": alignment_rows,
@@ -1000,66 +943,6 @@ def _render_model_contract_table(
     body = ["| " + " | ".join(row) + " |" for row in rendered]
     return "\n".join([header, separator, *body])
 
-
-def _truth_geometry_cell(cell: dict) -> str:
-    cell = dict(cell or {})
-    if not cell:
-        return "0 / - / -"
-    pct = cell.get("population_pct")
-    enrich = cell.get("independence_enrichment")
-    return (
-        f"{int(cell.get('n', 0) or 0):,} / "
-        f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
-        f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
-    )
-
-
-def _truth_geometry_extension_scopes(geometry_scopes: list[tuple[str, dict]]) -> list[dict]:
-    rendered_scopes = []
-    for scope_label, raw_gate in geometry_scopes:
-        gate = dict(raw_gate or {})
-        actual = dict(gate.get("actual_truth_geometry") or {})
-        upper = dict(gate.get("upper_right_s5_m5") or {})
-        summary_rows = [
-            {"metric": "Actual Safety↔MFE Daily rho", "value": _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))},
-            {"metric": "Pred Safety↔Raw-MFE Daily rho", "value": _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))},
-            {"metric": "Actual S5×M5", "value": _truth_geometry_cell(actual.get("s5_m5"))},
-            {"metric": "Actual S4+×M4+", "value": _truth_geometry_cell(actual.get("s4plus_m4plus"))},
-            {"metric": "Pred S5×M5 N", "value": f"{int(upper.get('n', 0) or 0):,}"},
-            {"metric": "Joint product→actual HM/HS Daily rho", "value": _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))},
-        ]
-        truth_rows = [
-            {"safety": f"S{s_idx}", **{f"m{i}": _truth_geometry_cell(cell) for i, cell in enumerate(row, start=1)}}
-            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1)
-        ]
-        predicted_rows = []
-        for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
-            cells = {}
-            for i, raw_cell in enumerate(row, start=1):
-                cell = dict(raw_cell or {})
-                pct = cell.get("actual_hmhs_pct")
-                cells[f"m{i}"] = f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}"
-            predicted_rows.append({"safety": f"S{s_idx}", **cells})
-        cohort_rows = []
-        for raw_cohort in list(gate.get("safety_cohorts") or []):
-            cohort = dict(raw_cohort or {})
-            cohort_rows.append({
-                "safety": f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
-                "n": int(cohort.get("n", 0) or 0),
-                "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
-                "high_mfe_pct": cohort.get("high_mfe_pct"),
-                "hmhs_pct": cohort.get("hmhs_pct"),
-            })
-        rendered_scopes.append({
-            "scope": scope_label,
-            "summary": summary_rows,
-            "truth_5x5": truth_rows,
-            "predicted_5x5": predicted_rows,
-            "safety_cohorts": cohort_rows,
-            "actual_s5_n": int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0),
-            "pred_s5_n": int(upper.get("n", 0) or 0),
-        })
-    return rendered_scopes
 
 
 def _render_model_comparison_specific_extensions(views: list[dict], *, target: str) -> list[str]:
@@ -1143,75 +1026,6 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
                 parts.extend(extension_parts)
             continue
 
-        if extension_spec.comparison_mode == "truth_geometry":
-            by_scope: dict[str, list[tuple[str, dict]]] = {}
-            scope_order: list[str] = []
-            for model_id, ext in methods:
-                for scope in _truth_geometry_extension_scopes(list(ext.get("geometry") or [])):
-                    scope_name = str(scope.get("scope") or "")
-                    if scope_name not in by_scope:
-                        by_scope[scope_name] = []
-                        scope_order.append(scope_name)
-                    by_scope[scope_name].append((model_id, scope))
-
-            for scope_name in scope_order:
-                scoped_methods = by_scope[scope_name]
-                extension_parts.append(scope_heading(scope_name))
-
-                summary_rows = []
-                truth_rows = None
-                predicted_rows = []
-                cohort_rows = []
-                for model_id, scope in scoped_methods:
-                    summary = {str(row.get("metric")): row.get("value") for row in scope.get("summary", [])}
-                    summary_rows.append({
-                        "model": model_id,
-                        "actual_safety_to_mfe_daily_rho": summary.get("Actual Safety↔MFE Daily rho"),
-                        "pred_safety_to_raw_mfe_daily_rho": summary.get("Pred Safety↔Raw-MFE Daily rho"),
-                        "actual_s5_m5": summary.get("Actual S5×M5"),
-                        "actual_s4p_m4p": summary.get("Actual S4+×M4+"),
-                        "pred_s5_m5_n": summary.get("Pred S5×M5 N"),
-                        "joint_product_to_actual_hmhs_daily_rho": summary.get("Joint product→actual HM/HS Daily rho"),
-                    })
-
-                    current_truth = [dict(row) for row in scope.get("truth_5x5", [])]
-                    if current_truth:
-                        if truth_rows is None:
-                            truth_rows = current_truth
-                        elif current_truth != truth_rows:
-                            raise ValueError(
-                                f"Model comparison同scope Actual truth geometry不一致: scope={scope_name}"
-                            )
-                    for row in scope.get("predicted_5x5", []):
-                        predicted_rows.append({"model": model_id, **dict(row)})
-                    for row in scope.get("safety_cohorts", []):
-                        cohort_rows.append({"model": model_id, **dict(row)})
-
-                extension_parts.append(_render_model_contract_table(
-                    tables["geometry_summary_comparison"],
-                    summary_rows,
-                    target=target,
-                    best_worst_style=True,
-                ))
-                if truth_rows:
-                    extension_parts.append(_render_model_contract_table(
-                        tables["truth_5x5"], truth_rows, target=target,
-                    ))
-                if predicted_rows:
-                    extension_parts.append(_render_model_contract_table(
-                        tables["predicted_5x5_comparison"], predicted_rows, target=target,
-                    ))
-                if cohort_rows:
-                    extension_parts.append(_render_model_contract_table(
-                        tables["safety_cohorts_comparison"],
-                        cohort_rows,
-                        target=target,
-                        best_worst_style=True,
-                        best_worst_group_keys=("safety",),
-                    ))
-            if extension_parts:
-                parts.append(extension_heading(extension_id))
-                parts.extend(extension_parts)
     return parts
 
 
@@ -1268,6 +1082,14 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             view["learnability"], target="console", scope_styler=scope_text,
         ),
     ])
+    if view.get("head_learnability"):
+        lines.extend([
+            paint("Head Learnability", "light_yellow", enabled=color, bold=True),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "learnability", "head_learnability"),
+                view["head_learnability"], target="console", scope_styler=scope_text,
+            ),
+        ])
     if view["generalization"]:
         lines.extend([
             section("generalization"),
@@ -1305,10 +1127,18 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         ])
 
     evidence_rows = []
-    for label, status in view["evidence"]:
-        normalized = str(status).upper()
-        signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
-        evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="console", enabled=color, bold=True)})
+    evidence_items = list(view["evidence"])
+    available_count = sum(str(status).upper() in {"AVAILABLE", "READY"} for _label, status in evidence_items)
+    if evidence_items and available_count == len(evidence_items):
+        evidence_rows.append({
+            "evidence": "Coverage",
+            "status": styled_signal(f"{available_count}/{len(evidence_items)} AVAILABLE", SIGNAL_POSITIVE, target="console", enabled=color, bold=True),
+        })
+    else:
+        for label, status in evidence_items:
+            normalized = str(status).upper()
+            signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
+            evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="console", enabled=color, bold=True)})
     lines.extend([
         section("evidence_coverage"),
         _render_model_contract_table(
@@ -1319,7 +1149,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
 
     rolling_rows = _rolling_specific_extension_rows(view)
     if rolling_rows:
-        lines.append(extension("Rolling-specific Extension｜Fold / Year Stability"))
+        lines.append(extension(mode_extension_contract("rolling_stability").title))
         lines.append(_render_model_contract_table(
             mode_extension_contract("rolling_stability").tables[0],
             rolling_rows,
@@ -1329,27 +1159,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
         lines.append(extension(_model_extension_title(payload, ext_id)))
-        if ext_id == "multi_head_learnability":
-            lines.append(_render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
-            ))
-        elif ext_id == "truth_prediction_geometry":
-            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
-            for scope in _truth_geometry_extension_scopes(list(ext.get("geometry") or [])):
-                lines.append(scope_text(scope["scope"]))
-                summary_rows = [dict(row) for row in scope["summary"]]
-                if scope["actual_s5_n"] > 0 and scope["pred_s5_n"] == 0:
-                    for row in summary_rows:
-                        if row.get("metric") == "Pred S5×M5 N":
-                            row["value"] = styled_signal(
-                                row["value"], SIGNAL_NEGATIVE, target="console", enabled=color, bold=True,
-                            )
-                lines.append(_render_model_contract_table(tables["geometry_summary"], summary_rows, target="console"))
-                for table_id in ("truth_5x5", "predicted_5x5", "safety_cohorts"):
-                    table_rows = list(scope.get(table_id) or [])
-                    if table_rows:
-                        lines.append(_render_model_contract_table(tables[table_id], table_rows, target="console"))
-        elif ext_id == "hs_conditional_mfe_gate":
+        if ext_id == "hs_conditional_mfe_gate":
             tables = {table.table_id: table for table in extension_contract(ext_id).tables}
             for table_id, row_key in (("hs_conditional_gate", "gate_rows"), ("hs_qualification_boundary", "boundary_rows"), ("true_hs_oracle_gap", "oracle_rows"), ("ls_contamination_tail", "contamination_rows"), ("hs_attribution_control", "control_rows")):
                 rows = list(ext.get(row_key) or [])
@@ -1396,6 +1206,14 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     lines = ["", section("learnability"), "", _render_model_contract_table(
         table_contract("model.standard_sop", "learnability", "learnability"), view["learnability"], target="markdown", scope_styler=scope_text,
     )]
+    if view.get("head_learnability"):
+        lines.extend([
+            "", f"### {markdown_tone('Head Learnability', 'light_yellow', bold=True)}", "",
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "learnability", "head_learnability"),
+                view["head_learnability"], target="markdown", scope_styler=scope_text,
+            ),
+        ])
     if view["generalization"]:
         lines.extend(["", section("generalization"), "", _render_model_contract_table(
             table_contract("model.standard_sop", "generalization", "generalization"), view["generalization"], target="markdown", delta_style=True,
@@ -1419,10 +1237,18 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         )])
 
     evidence_rows = []
-    for label, status in view["evidence"]:
-        normalized = str(status).upper()
-        signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
-        evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="markdown", bold=True)})
+    evidence_items = list(view["evidence"])
+    available_count = sum(str(status).upper() in {"AVAILABLE", "READY"} for _label, status in evidence_items)
+    if evidence_items and available_count == len(evidence_items):
+        evidence_rows.append({
+            "evidence": "Coverage",
+            "status": styled_signal(f"{available_count}/{len(evidence_items)} AVAILABLE", SIGNAL_POSITIVE, target="markdown", bold=True),
+        })
+    else:
+        for label, status in evidence_items:
+            normalized = str(status).upper()
+            signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
+            evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="markdown", bold=True)})
     lines.extend(["", section("evidence_coverage"), "", _render_model_contract_table(
         table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"), evidence_rows, target="markdown",
     )])
@@ -1430,7 +1256,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     rolling_rows = _rolling_specific_extension_rows(view)
     if rolling_rows:
         lines.extend([
-            "", extension("Rolling-specific Extension｜Fold / Year Stability"), "",
+            "", extension(mode_extension_contract("rolling_stability").title), "",
             _render_model_contract_table(
                 mode_extension_contract("rolling_stability").tables[0],
                 rolling_rows,
@@ -1441,27 +1267,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
         lines.extend(["", extension(_model_extension_title(payload, ext_id)), ""])
-        if ext_id == "multi_head_learnability":
-            lines.append(_render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
-            ))
-        elif ext_id == "truth_prediction_geometry":
-            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
-            for scope in _truth_geometry_extension_scopes(list(ext.get("geometry") or [])):
-                lines.extend([f"### {markdown_tone(scope['scope'], 'blue', bold=True)}", ""])
-                summary_rows = [dict(row) for row in scope["summary"]]
-                if scope["actual_s5_n"] > 0 and scope["pred_s5_n"] == 0:
-                    for row in summary_rows:
-                        if row.get("metric") == "Pred S5×M5 N":
-                            row["value"] = styled_signal(
-                                row["value"], SIGNAL_NEGATIVE, target="markdown", bold=True,
-                            )
-                lines.extend([_render_model_contract_table(tables["geometry_summary"], summary_rows, target="markdown"), ""])
-                for table_id, label in (("truth_5x5", "Actual 5×5"), ("predicted_5x5", "Predicted 5×5"), ("safety_cohorts", "Safety cohorts")):
-                    table_rows = list(scope.get(table_id) or [])
-                    if table_rows:
-                        lines.extend([f"#### {label}", "", _render_model_contract_table(tables[table_id], table_rows, target="markdown"), ""])
-        elif ext_id == "hs_conditional_mfe_gate":
+        if ext_id == "hs_conditional_mfe_gate":
             tables = {table.table_id: table for table in extension_contract(ext_id).tables}
             for table_id, row_key in (("hs_conditional_gate", "gate_rows"), ("hs_qualification_boundary", "boundary_rows"), ("true_hs_oracle_gap", "oracle_rows"), ("ls_contamination_tail", "contamination_rows"), ("hs_attribution_control", "control_rows")):
                 rows = list(ext.get(row_key) or [])
@@ -1647,6 +1453,7 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
 
     result: dict[str, object] = {
         "learnability": [],
+        "head_learnability": [],
         "generalization": [],
         "upside_downside_alignment": [],
         "top_tail_economic_quality": [],
@@ -1659,6 +1466,7 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
         view = dict(item["view"])
         for key in (
             "learnability",
+            "head_learnability",
             "generalization",
             "upside_downside_alignment",
             "top_tail_economic_quality",
@@ -1681,10 +1489,19 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
                 for row in list(ranking.get("rows") or [])
             )
 
-        for evidence, status in list(view.get("evidence") or []):
-            result["evidence_coverage"].append(
-                {"model": model, "evidence": evidence, "status": status}
-            )
+        evidence_items = list(view.get("evidence") or [])
+        available_count = sum(str(status).upper() in {"AVAILABLE", "READY"} for _evidence, status in evidence_items)
+        if evidence_items and available_count == len(evidence_items):
+            result["evidence_coverage"].append({
+                "model": model,
+                "evidence": "Coverage",
+                "status": f"{available_count}/{len(evidence_items)} AVAILABLE",
+            })
+        else:
+            for evidence, status in evidence_items:
+                result["evidence_coverage"].append(
+                    {"model": model, "evidence": evidence, "status": status}
+                )
     return result
 
 
@@ -1816,8 +1633,30 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 best_worst_style=True,
             ))
 
-    # 1. Learnability
-    append_scoped_section("learnability", "learnability", list(rows.get("learnability") or []))
+    # 1. Learnability: primary score plus optional head-level decomposition.
+    primary_learnability = list(rows.get("learnability") or [])
+    head_learnability = list(rows.get("head_learnability") or [])
+    scoped_primary = []
+    scoped_heads = []
+    for scope_label, aliases in scope_specs:
+        primary_rows = [dict(row) for row in primary_learnability if split_matches(dict(row), aliases)]
+        head_rows = [dict(row) for row in head_learnability if split_matches(dict(row), aliases)]
+        if primary_rows:
+            scoped_primary.append((scope_label, primary_rows))
+        if head_rows:
+            scoped_heads.append((scope_label, head_rows))
+    if scoped_primary or scoped_heads:
+        parts.append(section("learnability"))
+        for scope_label, table_rows in scoped_primary:
+            parts.append(scope_heading(scope_label))
+            parts.append(_render_model_comparison_contract_table(
+                "learnability", "learnability", table_rows, target=target, best_worst_style=True,
+            ))
+        for scope_label, head_rows in scoped_heads:
+            parts.append(scope_heading(f"Head Learnability｜{scope_label}"))
+            parts.append(_render_model_comparison_contract_table(
+                "learnability", "head_learnability", head_rows, target=target, best_worst_style=True,
+            ))
 
     # 2. Generalization. One section title, then two independent transition tables.
     generalization_rows = [dict(row) for row in list(rows.get("generalization") or [])]
@@ -1887,13 +1726,15 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
     for raw_row in list(rows.get("evidence_coverage") or []):
         row = dict(raw_row)
         normalized = str(row.get("status") or "").upper()
-        signal = {
-            "AVAILABLE": SIGNAL_POSITIVE,
-            "READY": SIGNAL_POSITIVE,
-            "PARTIAL": SIGNAL_WARNING,
-            "BLOCKED": SIGNAL_NEGATIVE,
-            "MISSING": SIGNAL_NEGATIVE,
-        }.get(normalized, SIGNAL_NEUTRAL)
+        signal = (
+            SIGNAL_POSITIVE
+            if normalized in {"AVAILABLE", "READY"} or normalized.endswith(" AVAILABLE")
+            else {
+                "PARTIAL": SIGNAL_WARNING,
+                "BLOCKED": SIGNAL_NEGATIVE,
+                "MISSING": SIGNAL_NEGATIVE,
+            }.get(normalized, SIGNAL_NEUTRAL)
+        )
         row["status"] = styled_signal(
             row.get("status"),
             signal,
@@ -1923,7 +1764,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
     if rolling_oos:
         rolling_rows = _rolling_specific_comparison_rows(views)
         if rolling_rows:
-            extension_title = "Rolling-specific Extension｜Fold / Year Stability"
+            extension_title = mode_extension_contract("rolling_stability").title
             if target == "console":
                 parts.append(render_section(paint(extension_title, "cyan", enabled=color, bold=True)))
             else:
@@ -5482,6 +5323,9 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             seed_views.append(_model_sop_view(dict(payload)))
             source_reports.append(Path(path))
         aggregated = aggregate_standard_model_sop_robustness(seed_payloads, seeds=seeds)
+        aggregated_head_rows = aggregate_standard_head_learnability_rows(
+            [list(seed_view.get("head_learnability") or []) for seed_view in seed_views]
+        )
         aggregated_extensions = []
         aggregation_status = {}
         for extension_id in _expected_comparison_extension_ids(settings):
@@ -5510,6 +5354,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             "payload": {
                 "model_research_id": str(model_id),
                 "standard_model_sop": aggregated,
+                "standard_head_learnability_rows": aggregated_head_rows,
                 "comparison_extensions": aggregated_extensions,
                 "comparison_extension_aggregation": aggregation_status,
             },

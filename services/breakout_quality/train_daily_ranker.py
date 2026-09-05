@@ -84,7 +84,7 @@ from filters.breakout_quality.ranking_score_store import (
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
 from core.display_common import InlineProgress
-from core.research_report_contract import format_contract_value, section_contract, table_contract
+from core.research_report_contract import extension_contract, format_contract_value, section_contract, table_contract
 from core.report_style import markdown_tone, signal_for_delta, styled_signal
 
 from services.breakout_quality import ranker_training as ranker_api
@@ -554,6 +554,7 @@ def _dual_component_metrics(
 from services.breakout_quality.standard_model_sop import (
     calculate_upside_downside_alignment_metrics,
     build_standard_model_sop,
+    extract_standard_head_learnability_rows,
 )
 
 # Backward-compatible private alias for historical synthetic/import consumers.
@@ -616,6 +617,21 @@ def _render_markdown(payload: dict) -> str:
             bold=True,
         )
 
+    def contract_markdown(table, rows: list[dict]) -> list[str]:
+        header = "| " + " | ".join(table.headers) + " |"
+        separator = "|" + "|".join(
+            "---" if column.alignment == "left" else "---:"
+            for column in table.columns
+        ) + "|"
+        body = [
+            "| " + " | ".join(
+                format_contract_value(column, row.get(column.key))
+                for column in table.columns
+            ) + " |"
+            for row in rows
+        ]
+        return [header, separator, *body]
+
     lines = [
         f"# {markdown_tone('Detailed Model Research Report', 'blue', bold=True)}",
         "",
@@ -657,6 +673,18 @@ def _render_markdown(payload: dict) -> str:
             f"| {fmt(None if row.get('top_score_decile_raw_target_mean') is None or row.get('bottom_score_decile_raw_target_mean') is None else float(row['top_score_decile_raw_target_mean']) - float(row['bottom_score_decile_raw_target_mean']))} |"
         )
 
+    head_rows = extract_standard_head_learnability_rows(payload, oos_scope_label="Forward OOS")
+    if head_rows:
+        lines.extend([
+            "",
+            f"### {markdown_tone('Head Learnability', 'light_yellow', bold=True)}",
+            "",
+            *contract_markdown(
+                table_contract("model.standard_sop", "learnability", "head_learnability"),
+                head_rows,
+            ),
+        ])
+
     validation = dict((payload.get("split_metrics") or {}).get("validation") or {})
     oos = dict((payload.get("split_metrics") or {}).get("oos") or {})
     breakout = dict((payload.get("split_metrics") or {}).get("breakout_candidate_oos") or {})
@@ -678,30 +706,6 @@ def _render_markdown(payload: dict) -> str:
         )
     alignment_eval = dict(payload.get("upside_downside_alignment_evaluation") or {})
     if alignment_eval:
-        def contract_markdown(table_id: str, rows: list[dict]) -> list[str]:
-            section_id = (
-                "upside_downside_alignment"
-                if table_id == "upside_downside_alignment"
-                else "top_tail_economic_quality"
-            )
-            table = table_contract("model.standard_sop", section_id, table_id)
-            header = "| " + " | ".join(table.headers) + " |"
-            separator = "|" + "|".join(
-                "---" if column.alignment == "left" else "---:"
-                for column in table.columns
-            ) + "|"
-            body = []
-            for row in rows:
-                body.append(
-                    "| "
-                    + " | ".join(
-                        format_contract_value(column, row.get(column.key))
-                        for column in table.columns
-                    )
-                    + " |"
-                )
-            return [header, separator, *body]
-
         def qdisplay(top: dict, key: str) -> str:
             item = dict((top.get("quadrants") or {}).get(key) or {})
             pct = item.get("pct")
@@ -743,12 +747,12 @@ def _render_markdown(payload: dict) -> str:
             standard_section("upside_downside_alignment"),
             "",
             "- Safety固定為actual Low-Adverse（`-Adverse`）方向；數值越高越安全。",
-            *contract_markdown("upside_downside_alignment", alignment_rows),
+            *contract_markdown(table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"), alignment_rows),
             "",
             standard_section("top_tail_economic_quality"),
             "",
             "- High-MFE / High-Safety使用Daily-universal同日actual percentile；Breakout只filter，不在subset內重新排名truth。",
-            *contract_markdown("top_tail_economic_quality", top_tail_rows),
+            *contract_markdown(table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"), top_tail_rows),
         ])
 
     if direct_hmhs_only:
@@ -886,36 +890,21 @@ def _render_markdown(payload: dict) -> str:
     if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri:
         lines.extend([
             (
-                "- Safety→Raw-MFE→Direct-HM/HS objective：MR-13S raw 300×10與兩個marginal heads全部保留；"
-                "新增shared-latent Direct HM/HS head，target=1[Safety percentile>=0.5 and Pure-MFE percentile>=0.5]；"
-                "三head固定等權full-list Delta-NDCG，epoch selection仍依Raw-MFE Validation Dailyρ。"
+                "- Safety→Raw-MFE→Direct-HM/HS objective：raw 300×10與兩個marginal heads全部保留；"
+                "新增shared-latent Direct HM/HS head；三head固定等權full-list Delta-NDCG。"
                 if safety_raw_mfe_hmhs_tri
-                else "- Safety + Raw-MFE dual-head objective：共用shared encoder與Raw Safety auxiliary head；"
-                "Raw-MFE final head學absolute Pure-MFE percentile U。Safety在MFE側的使用方式由profile training contract固定"
-                "（可為stop-gradient head context或stop-gradient pair supervision）；兩head固定等權full-list Delta-NDCG，"
-                "final score只使用Raw-MFE head，無lambda／threshold／calibration。"
+                else "- Safety + Raw-MFE dual-head objective：共用shared encoder；Head Learnability已納入Standard SOP 1，"
+                "不再另印AK-style Multi-head Extension。"
             ),
-            "",
-            section(f"Model-specific Extension｜{payload['model_research_id']}｜Multi-head Learnability"),
-            "",
-            "| Scope | Head | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
-            "|---|---|---:|---:|---:|---:|---:|---:|",
         ])
         raw_eval = dict(payload.get("safety_raw_mfe_hmhs_evaluation") or payload.get("safety_raw_mfe_evaluation") or {})
-        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
-            scope = dict(raw_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
-                row = dict(scope.get(head_key) or {})
-                pair = row.get("pairwise_concordance")
-                lines.append(
-                    f"| {scope_label} | {head_label} | {int(row.get('group_count', 0) or 0):,} "
-                    f"| {fmt(row.get('mean_daily_spearman'))} | {fmt(row.get('global_spearman_vs_raw_target'))} "
-                    f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
-                    f"| {fmt(row.get('top_score_decile_raw_target_mean'))} | {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
-                )
-            joint = dict(scope.get("joint_hmhs") or {})
-            product = dict(scope.get("joint_product_control") or {})
-            if joint:
+        if safety_raw_mfe_hmhs_tri:
+            for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+                scope = dict(raw_eval.get(scope_key) or {})
+                joint = dict(scope.get("joint_hmhs") or {})
+                product = dict(scope.get("joint_product_control") or {})
+                if not joint:
+                    continue
                 def pct(value):
                     return "-" if value is None else f"{float(value)*100:.2f}%"
                 def pct100(value):
@@ -936,229 +925,99 @@ def _render_markdown(payload: dict) -> str:
                     f"| Top 20% HM/HS | {pct100(top20.get('hmhs_pct'))} / {fmt(top20.get('hmhs_enrichment'), 2)}× | - |",
                     f"| Population HM/HS | {pct100(joint.get('population_hmhs_pct'))} | same truth |",
                 ])
-        geometry_title_rendered = False
-        for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
-            gate = dict((raw_eval.get(scope_key) or {}).get("model_gate") or {})
-            if not gate:
-                continue
-            if not geometry_title_rendered:
-                lines.extend([
-                    "",
-                    section(f"Model-specific Extension｜{payload['model_research_id']}｜Truth / Prediction Geometry"),
-                ])
-                geometry_title_rendered = True
-            upper = dict(gate.get("upper_right_s5_m5") or {})
-            actual = dict(gate.get("actual_truth_geometry") or {})
-
-            def truth_cell(cell):
-                cell = dict(cell or {})
-                pct = cell.get("population_pct")
-                enrich = cell.get("independence_enrichment")
-                return (
-                    f"{int(cell.get('n', 0) or 0):,} / "
-                    f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
-                    f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
-                )
-
-            lines.extend([
-                "",
-                section(scope_label, level=3),
-                "",
-                f"- Actual Safety↔MFE Dailyρ：`{fmt(actual.get('safety_to_mfe_mean_daily_spearman'), 4)}`",
-                f"- Pred Safety↔Raw-MFE Dailyρ：`{fmt(gate.get('predicted_safety_to_raw_mfe_mean_daily_spearman'), 4)}`",
-                f"- Actual S5×M5：`{truth_cell(actual.get('s5_m5'))}`（N / population / independence enrichment）",
-                f"- Actual S4+×M4+：`{truth_cell(actual.get('s4plus_m4plus'))}`",
-                f"- Predicted S5×M5：`N={int(upper.get('n', 0) or 0):,}`",
-                f"- Joint product→actual HM/HS Dailyρ：`{fmt(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'), 4)}`",
-                "- Geometry只作frozen model evaluation；不得用OOS cell結果fit weight／threshold／calibration。",
-                "",
-                "| Actual Safety \\ Pure-MFE | M1 | M2 | M3 | M4 | M5 |",
-                "|---|---|---|---|---|---|",
-            ])
-            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
-                lines.append(
-                    f"| S{s_idx} | "
-                    + " | ".join(truth_cell(cell) for cell in row)
-                    + " |"
-                )
-            lines.extend([
-                "",
-                "| Pred Safety \\ Raw-MFE | M1 | M2 | M3 | M4 | M5 |",
-                "|---|---|---|---|---|---|",
-            ])
-            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
-                cells = []
-                for cell in row:
-                    cell = dict(cell or {})
-                    pct = cell.get("actual_hmhs_pct")
-                    cells.append(
-                        f"{int(cell.get('n', 0) or 0):,} / "
-                        f"{'-' if pct is None else f'{float(pct):.2f}%'}"
-                    )
-                lines.append(f"| S{s_idx} | " + " | ".join(cells) + " |")
-            lines.extend([
-                "",
-                "| Pred Safety quintile | N | Raw-MFE→actual MFE Dailyρ | High-MFE | HM/HS |",
-                "|---|---:|---:|---:|---:|",
-            ])
-            for cohort in list(gate.get("safety_cohorts") or []):
-                cohort = dict(cohort or {})
-                lines.append(
-                    f"| S{int(cohort.get('predicted_safety_quintile', 0) or 0)} "
-                    f"| {int(cohort.get('n', 0) or 0):,} "
-                    f"| {fmt(cohort.get('raw_mfe_to_actual_mfe_mean_daily_spearman'), 3)} "
-                    f"| {'-' if cohort.get('high_mfe_pct') is None else f"{float(cohort['high_mfe_pct']):.2f}%"} "
-                    f"| {'-' if cohort.get('hmhs_pct') is None else f"{float(cohort['hmhs_pct']):.2f}%"} |"
-                )
+        # Truth / Prediction Geometry remains in the persisted scientific payload for
+        # historical/on-demand audit, but is no longer a persistent report section.
 
     hs_eval = dict(payload.get("hs_conditional_mfe_evaluation") or {})
     if hs_eval:
         primary_semantic = str(hs_eval.get("primary_head_semantic") or "continuous_safety_ranking")
-        direct_hs_qualification = primary_semantic == "binary_hs_qualification"
-        top_hs_safety_ranking = primary_semantic == "top_hs_safety_ranking"
-        qualification_style = direct_hs_qualification or top_hs_safety_ranking
-        extension_title = (
-            "Top-HS Safety NDCG@K + True-HS Conditional-MFE"
-            if top_hs_safety_ranking
-            else
-            "HS-Qualification + True-HS Conditional-MFE"
-            if direct_hs_qualification
-            else "True-HS Conditional-MFE"
-        )
-        primary_bullet = (
-            "- Safety head：LS relevance=0、HS保留same-date Safety relevance；每天K=true-HS數，NDCG discount在K之後歸零，直接優化top-half HS membership並讓越安全HS越優先。"
-            if top_hs_safety_ranking
-            else
-            "- Qualification head：全daily universe exposure，但truth為Safety percentile≥0.50的binary HS；只有HS↔LS pairs有方向。"
-            if direct_hs_qualification
-            else "- Safety head：全daily universe supervision；Conditional-MFE head：只有true-HS items形成獨立full-list ΔNDCG sublist。"
-        )
-        inference_bullet = (
-            "- Inference diagnostic固定為Pred-HS同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal qualification percentile，只filter不rerank。"
-            if qualification_style
-            else "- Inference diagnostic固定為Pred-Safety同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal predicted-Safety percentile，只filter不rerank。"
-        )
+        qualification_style = primary_semantic in {"binary_hs_qualification", "top_hs_safety_ranking"}
         lines.extend([
             "",
-            section(f"Model-specific Extension｜{payload['model_research_id']}｜{extension_title}"),
+            section(f"Model-specific Extension｜{payload['model_research_id']}｜HS-Qualification / Conditional-MFE Gate"),
             "",
-            primary_bullet,
-            "- Conditional-MFE head：只有true-HS items形成獨立full-list ΔNDCG sublist；不吃第一head prediction。",
-            inference_bullet,
-            "",
-            "| Scope | HS-only Daily rho | HS-only Pair | Pred-HS true-LS | TopK High-MFE | TopK High-Safety | TopK HM/HS | TopK HM/LS | LS contamination lift |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "- Raw Safety / Conditional-MFE head learnability已由Standard SOP 1 Head Learnability呈現；此處只保留qualification、oracle與LS contamination的獨立診斷。",
         ])
-        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+        contract = extension_contract("hs_conditional_mfe_gate")
+        tables = {table.table_id: table for table in contract.tables}
+        gate_rows = []
+        boundary_rows = []
+        oracle_rows = []
+        contamination_rows = []
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
             scope = dict(hs_eval.get(key) or {})
+            if not scope:
+                continue
             learn = dict(scope.get("conditional_mfe_true_hs") or {})
             gate = dict(scope.get("lexicographic_model_gate") or {})
-            pair = learn.get("pairwise_concordance")
-            def p(value):
-                return "-" if value is None else f"{float(value):.2f}%"
-            lines.append(
-                f"| {label} | {fmt(learn.get('mean_daily_spearman'))} "
-                f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
-                f"| {p(gate.get('predicted_hs_true_ls_pct'))} "
-                f"| {p(gate.get('selected_high_mfe_pct'))} "
-                f"| {p(gate.get('selected_high_safety_pct'))} "
-                f"| {p(gate.get('selected_hmhs_pct'))} "
-                f"| {p(gate.get('selected_hmls_pct'))} "
-                f"| {fmt(gate.get('true_ls_contamination_lift_vs_predicted_hs'), 2)}× |"
-            )
-        lines.extend([
-            "",
-            "| Scope | Pred-HS HM/HS | True-HS Oracle HM/HS | Δ vs Oracle | Pred-HS High-MFE | Oracle High-MFE | Δ vs Oracle | Pred-HS Mean MFE R | Oracle Mean MFE R | Δ vs Oracle |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-        ])
-        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
-            scope = dict(hs_eval.get(key) or {})
-            gate = dict(scope.get("lexicographic_model_gate") or {})
             oracle = dict(scope.get("true_hs_oracle_gate") or {})
-            def pp(value):
-                return "-" if value is None else f"{float(value):+.2f}pp"
-            lines.append(
-                f"| {label} | {p(gate.get('selected_hmhs_pct'))} "
-                f"| {p(oracle.get('selected_hmhs_pct'))} "
-                f"| {pp(gate.get('hmhs_gap_vs_true_hs_oracle_pp'))} "
-                f"| {p(gate.get('selected_high_mfe_pct'))} "
-                f"| {p(oracle.get('selected_high_mfe_pct'))} "
-                f"| {pp(gate.get('high_mfe_gap_vs_true_hs_oracle_pp'))} "
-                f"| {fmt(gate.get('selected_mean_favorable_r'), 3)} "
-                f"| {fmt(oracle.get('selected_mean_favorable_r'), 3)} "
-                f"| {fmt(gate.get('mean_favorable_r_gap_vs_true_hs_oracle'), 3)} |"
-            )
-        if qualification_style:
-            lines.extend([
-                "",
-                "| Scope | HS-Qualification Pair | P40–P60 Boundary Pair | P45–P55 Boundary Pair | Pred-HS true-LS | True-HS recall |",
-                "|---|---:|---:|---:|---:|---:|",
-            ])
-            for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
-                scope = dict(hs_eval.get(key) or {})
-                qualification = dict(scope.get("hs_qualification") or {})
-                boundary = dict(scope.get("hs_qualification_boundary") or {})
-                p40 = dict(boundary.get("p40_p60") or {})
-                p45 = dict(boundary.get("p45_p55") or {})
-                gate = dict(scope.get("lexicographic_model_gate") or {})
-                pair = qualification.get("pairwise_concordance")
-                p40_pair = p40.get("pairwise_concordance")
-                p45_pair = p45.get("pairwise_concordance")
-                pred_ls = gate.get("predicted_hs_true_ls_pct")
-                recall = gate.get("true_hs_recall_pct")
-                lines.append(
-                    f"| {label} | {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
-                    f"| {'-' if p40_pair is None else f'{float(p40_pair)*100:.2f}%'} "
-                    f"| {'-' if p45_pair is None else f'{float(p45_pair)*100:.2f}%'} "
-                    f"| {'-' if pred_ls is None else f'{float(pred_ls):.2f}%'} "
-                    f"| {'-' if recall is None else f'{float(recall):.2f}%'} |"
-                )
-        lines.extend([
-            "",
-            "| Scope | LS Cond-rank P50 | P90 | P99 | HM/HS enrichment | Mean MFE R | Mean Adverse R |",
-            "|---|---:|---:|---:|---:|---:|---:|",
-        ])
-        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
-            gate = dict((hs_eval.get(key) or {}).get("lexicographic_model_gate") or {})
-            lines.append(
-                f"| {label} | {fmt(gate.get('true_ls_conditional_rank_percentile_p50'), 3)} "
-                f"| {fmt(gate.get('true_ls_conditional_rank_percentile_p90'), 3)} "
-                f"| {fmt(gate.get('true_ls_conditional_rank_percentile_p99'), 3)} "
-                f"| {fmt(gate.get('hmhs_enrichment_vs_predicted_hs'), 2)}× "
-                f"| {fmt(gate.get('selected_mean_favorable_r'), 3)} "
-                f"| {fmt(gate.get('selected_mean_adverse_r'), 3)} |"
-            )
+            qualification = dict(scope.get("hs_qualification") or {})
+            boundary = dict(scope.get("hs_qualification_boundary") or {})
+            gate_rows.append({
+                "split": label,
+                "hs_only_daily_rho": learn.get("mean_daily_spearman"),
+                "hs_only_pair": learn.get("pairwise_concordance"),
+                "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
+                "true_hs_recall_pct": gate.get("true_hs_recall_pct"),
+                "ls_contamination_lift": gate.get("true_ls_contamination_lift_vs_predicted_hs"),
+            })
+            if qualification_style:
+                boundary_rows.append({
+                    "split": label,
+                    "qualification_pair": qualification.get("pairwise_concordance"),
+                    "p40_p60_pair": dict(boundary.get("p40_p60") or {}).get("pairwise_concordance"),
+                    "p45_p55_pair": dict(boundary.get("p45_p55") or {}).get("pairwise_concordance"),
+                })
+            oracle_rows.append({
+                "split": label,
+                "actual_hmhs_pct": gate.get("selected_hmhs_pct"),
+                "oracle_hmhs_pct": oracle.get("selected_hmhs_pct"),
+                "hmhs_gap_pp": gate.get("hmhs_gap_vs_true_hs_oracle_pp"),
+                "actual_high_mfe_pct": gate.get("selected_high_mfe_pct"),
+                "oracle_high_mfe_pct": oracle.get("selected_high_mfe_pct"),
+                "high_mfe_gap_pp": gate.get("high_mfe_gap_vs_true_hs_oracle_pp"),
+                "actual_mean_mfe_r": gate.get("selected_mean_favorable_r"),
+                "oracle_mean_mfe_r": oracle.get("selected_mean_favorable_r"),
+                "mean_mfe_gap_r": gate.get("mean_favorable_r_gap_vs_true_hs_oracle"),
+            })
+            contamination_rows.append({
+                "split": label,
+                "ls_rank_p50": gate.get("true_ls_conditional_rank_percentile_p50"),
+                "ls_rank_p90": gate.get("true_ls_conditional_rank_percentile_p90"),
+                "ls_rank_p99": gate.get("true_ls_conditional_rank_percentile_p99"),
+            })
+        for table_id, rows in (("hs_conditional_gate", gate_rows), ("hs_qualification_boundary", boundary_rows), ("true_hs_oracle_gap", oracle_rows), ("ls_contamination_tail", contamination_rows)):
+            if rows:
+                lines.extend(["", *contract_markdown(tables[table_id], rows)])
+
+        # Attribution control remains useful in a single-model diagnostic report, but
+        # is intentionally excluded from cross-model comparison to avoid nested comparison.
         reference_control = dict(hs_eval.get("lexicographic_reference_control") or {})
         if reference_control.get("available"):
-            lines.extend([
-                "",
-                f"### Attribution control｜{reference_control.get('reference_profile')}",
-                "",
-                f"- Control使用既有frozen Forward scores與reference自身第一head同日P50 qualification；第二階段ranking使用reference `{reference_control.get('reference_ranking_head', 'primary')}` score。",
-                "",
-                "| Scope | Model | TopK High-MFE | TopK High-Safety | TopK HM/HS | TopK HM/LS | Pred-HS true-LS |",
-                "|---|---|---:|---:|---:|---:|---:|",
-            ])
-            for label, key in (("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            control_rows = []
+            reference_model_id = str(reference_control.get("reference_model_id") or "Reference")
+            current_model_id = str(payload.get("model_research_id") or "MODEL")
+            for label, key in (("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
                 current_gate = dict((hs_eval.get(key) or {}).get("lexicographic_model_gate") or {})
                 reference_gate = dict((reference_control.get(key) or {}).get("lexicographic_model_gate") or {})
-                reference_label = f"{reference_control.get('reference_model_id', 'Reference')} same-gate control"
-                for model_label, gate in ((payload.get("model_research_id"), current_gate), (reference_label, reference_gate)):
-                    lines.append(
-                        f"| {label} | {model_label} "
-                        f"| {p(gate.get('selected_high_mfe_pct'))} "
-                        f"| {p(gate.get('selected_high_safety_pct'))} "
-                        f"| {p(gate.get('selected_hmhs_pct'))} "
-                        f"| {p(gate.get('selected_hmls_pct'))} "
-                        f"| {p(gate.get('predicted_hs_true_ls_pct'))} |"
-                    )
+                for model_id, gate in ((current_model_id, current_gate), (reference_model_id, reference_gate)):
+                    control_rows.append({
+                        "model": model_id,
+                        "split": label,
+                        "topk_high_mfe_pct": gate.get("selected_high_mfe_pct"),
+                        "topk_high_safety_pct": gate.get("selected_high_safety_pct"),
+                        "topk_hmhs_pct": gate.get("selected_hmhs_pct"),
+                        "topk_hmls_pct": gate.get("selected_hmls_pct"),
+                    })
+            if control_rows:
+                lines.extend([
+                    "",
+                    f"### Attribution control｜{reference_control.get('reference_profile')}",
+                    "",
+                    *contract_markdown(tables["hs_attribution_control"], control_rows),
+                ])
         elif reference_control:
-            lines.extend([
-                "",
-                "### Attribution control",
-                "",
-                f"- Reference control unavailable：`{reference_control.get('not_available_reason')}`",
-            ])
+            lines.extend(["", "### Attribution control", "", f"- Reference control unavailable：`{reference_control.get('not_available_reason')}`"])
 
     hs_priority_eval = dict(payload.get("hs_priority_mfe_evaluation") or {})
     if hs_priority_eval:

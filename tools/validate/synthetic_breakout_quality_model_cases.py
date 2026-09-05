@@ -5555,12 +5555,11 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
     ).read_text(encoding="utf-8")
     check_true(
-        "mr13s_joint_geometry_is_model_specific_extension_without_new_audit",
-        "Model-specific Extension｜{payload['model_research_id']}｜Multi-head Learnability" in report_source
-        and "Model-specific Extension｜{payload['model_research_id']}｜Truth / Prediction Geometry" in report_source
-        and "Truth / Prediction Geometry" in report_source
-        and "predicted_joint_geometry" in report_source
-        and "safety_cohorts" in report_source
+        "mr13s_joint_geometry_remains_scientific_payload_but_is_retired_from_persistent_report_extension",
+        "Head Learnability" in report_source
+        and "Model-specific Extension｜{payload['model_research_id']}｜Multi-head Learnability" not in report_source
+        and "Model-specific Extension｜{payload['model_research_id']}｜Truth / Prediction Geometry" not in report_source
+        and "persisted scientific payload" in report_source
         and "markdown_tone" in report_source,
     )
     app_source = (
@@ -5568,11 +5567,11 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     ).read_text(encoding="utf-8")
     contract_source = (project_root / "core" / "research_report_contract.py").read_text(encoding="utf-8")
     check_true(
-        "mr13s_truth_geometry_is_extension_not_standard_section_without_dedicated_menu",
-        '"truth_prediction_geometry": ModelExtensionContract(' in contract_source
+        "mr13s_truth_geometry_is_retired_from_persistent_contract_without_dedicated_menu",
+        '"truth_prediction_geometry": ModelExtensionContract(' not in contract_source
         and 'S("truth_prediction_geometry"' not in contract_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source
-        and "Pred Safety↔Raw-MFE Daily rho" in app_source,
+        and "Model-specific Extension｜Truth / Prediction Geometry" not in app_source,
     )
 
     summary["training_performed"] = False

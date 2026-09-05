@@ -11787,3 +11787,15 @@ Decision：`MR13BL_RESULT_AVAILABLE_NOT_PROMOTED / MR13BM_IMPLEMENTED_RESULT_PEN
 
 Decision：`MR13BN_FORWARD_GATE_FAIL / MR13BO_IMPLEMENTED_RESULT_PENDING / EXPLICIT_PRICE_TIME_COORDINATES / POSITION_AWARE_VAP / MFE_PATH_EXACT / CAPACITY_NEUTRAL / FORWARD_GATE_FIRST`。
 
+## 2026-09-05 — B374 Standard Model report contract consolidation
+
+- **User authorization**：使用者先要求檢視Extension是否應上移SOP、欄位重複與AK Extension必要性，確認方案後明確回覆「進行」；因此依PROJECT_SETTINGS B18/B19合法更新persistent report contract與approved fingerprints。
+- **Head Learnability**：原`Multi-head Learnability`不再是AK／model-specific常駐Extension，改為Standard SOP 1 optional `Head Learnability`。AK仍保留scientific/reference角色；只是基本head learnability回到共用SOP，不再靠AK-specific報表格式存在。
+- **Geometry retirement**：`Truth / Prediction Geometry`已完成其歷史joint-collapse機制診斷任務，退出persistent single/cross-model report。`safety_raw_mfe_evaluation`中的actual/predicted geometry與cohort原始evidence不刪除、不改寫，可依需求作historical/on-demand diagnostic。
+- **HS-Conditional去重**：Safety Daily/Global/Pair由Head Learnability承接；gate只保留HS-only rho/Pair、Pred-HS true-LS、True-HS recall、LS contamination；boundary只留qualification/P40-P60/P45-P55 Pair；LS-tail只留P50/P90/P99；cross-model不再嵌入`hs_attribution_control` reference-vs-current第二層comparison。
+- **Display / SSOT**：Evidence Coverage全數正常時compact為`6/6 AVAILABLE`，異常才展開；Rolling/Robustness改標`Standard Mode Evidence`。Detailed single-model與[3]/[4]/[5]/[6] renderer均以canonical table contract組裝新欄位，不再維護Truth Geometry comparison第二schema。
+- **Contract versions**：`model.standard_sop v8` fingerprint=`c96c1d5380ed303f`；`model.standard_comparison v12` fingerprint=`a586067f58467ea4`。`standard_model_sop`新producer/robustness schema label同步v8；既有v7 artifact可直接compatibility read，無需重訓。
+- **Independent GPT checks**：`validate_research_report_contract_freeze_case=34/34 PASS`；`validate_breakout_quality_safety_raw_mfe_duo_contract_case=14/14 PASS`；`validate_breakout_quality_app_simple_report_contract_case=15/15 PASS`；approved fingerprint validation=`PASS`。GPT未執行`apps/test_suite.py`或`apps/run_bundle.py`。
+
+Decision：`B374_DONE / T494_DONE / REPORT_SURFACE_CONSOLIDATED / LEGACY_EVIDENCE_PRESERVED / NO_MODEL_RETRAIN / NO_SCIENTIFIC_CHANGE`。
+

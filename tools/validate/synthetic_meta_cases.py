@@ -3437,8 +3437,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(errors),
     )
     check_true(
-        "standard_model_sop_v7_common_section_order_is_contiguous_1_to_6",
-        int(MODEL_STANDARD_SOP.version) == 7
+        "standard_model_sop_v8_common_section_order_is_contiguous_1_to_6",
+        int(MODEL_STANDARD_SOP.version) == 8
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
@@ -3451,7 +3451,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop_and_evidence_capabilities",
-        int(MODEL_STANDARD_COMPARISON.version) == 11
+        int(MODEL_STANDARD_COMPARISON.version) == 12
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_extension_ids() == tuple(
@@ -3459,8 +3459,7 @@ def validate_research_report_contract_freeze_case(_base_params):
             for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
             if extension.comparison_mode is not None
         )
-        and set(comparison_extension_ids())
-        >= {"multi_head_learnability", "truth_prediction_geometry", "hs_conditional_mfe_gate"}
+        and comparison_extension_ids() == ("hs_conditional_mfe_gate",)
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -3482,72 +3481,63 @@ def validate_research_report_contract_freeze_case(_base_params):
         ),
     )
 
+    head_table = table_contract("model.standard_sop", "learnability", "head_learnability")
+    head_comparison_table = next(
+        table for section in MODEL_STANDARD_COMPARISON.sections
+        if section.section_id == "learnability"
+        for table in section.tables if table.table_id == "head_learnability"
+    )
     check_true(
-        "comparison_extension_schema_adds_source_model_dimension_from_single_evidence_registry",
-        extension_contract("multi_head_learnability").tables[0].headers
-        == ("Split", "Head", "Daily rho", "Global rho", "Pair")
-        and comparison_extension_contract("multi_head_learnability").tables[0].headers
-        == ("Model", "Split", "Head", "Daily rho", "Global rho", "Pair")
-        and comparison_extension_contract("truth_prediction_geometry").tables[-1].headers
-        == ("Model", "Pred Safety", "N", "Raw-MFE→MFE rho", "High-MFE", "HM/HS")
-        and comparison_extension_contract("hs_conditional_mfe_gate").tables[0].headers[0:6]
-        == ("Model", "Split", "Safety Daily rho", "Safety Global rho", "Safety Pair", "HS-only rho")
-        and comparison_extension_contract("hs_conditional_mfe_gate").tables[-1].headers[0:3]
-        == ("Source Model", "Model", "Split"),
+        "head_learnability_is_standard_sop_optional_table_and_hs_gate_is_only_cross_model_extension",
+        head_table.headers == ("Split", "Head", "Daily rho", "Global rho", "Pair")
+        and head_comparison_table.headers == ("Model", "Head", "Daily rho", "Global rho", "Pair")
+        and comparison_extension_contract("hs_conditional_mfe_gate").tables[0].headers
+        == ("Model", "Split", "HS-only rho", "HS-only Pair", "Pred-HS true-LS", "True-HS recall", "LS contam ×")
+        and comparison_extension_contract("hs_conditional_mfe_gate").tables[-1].headers
+        == ("Model", "Split", "LS Cond-rank P50", "P90", "P99"),
     )
 
     check_true(
-        "comparison_extension_applicability_and_robustness_aggregation_are_owned_by_extension_contract",
-        comparison_extension_ids_for_evidence_families(("safety_raw_mfe",))
-        == ("multi_head_learnability", "truth_prediction_geometry")
+        "retired_multihead_geometry_are_not_persistent_extensions_and_hs_gate_owns_robustness",
+        comparison_extension_ids_for_evidence_families(("safety_raw_mfe",)) == ()
         and comparison_extension_ids_for_evidence_families(("hs_conditional_mfe",))
         == ("hs_conditional_mfe_gate",)
-        and extension_contract("multi_head_learnability").robustness_aggregation == "row_mean"
-        and extension_contract("hs_conditional_mfe_gate").robustness_aggregation == "row_mean"
-        and extension_contract("truth_prediction_geometry").robustness_aggregation == "single_seed_only",
+        and "multi_head_learnability" not in MODEL_EXTENSION_SCHEMAS
+        and "truth_prediction_geometry" not in MODEL_EXTENSION_SCHEMAS
+        and extension_contract("hs_conditional_mfe_gate").robustness_aggregation == "row_mean",
     )
 
+    from services.breakout_quality.standard_model_sop import aggregate_standard_head_learnability_rows
+    aggregated_heads = aggregate_standard_head_learnability_rows([
+        [{"split": "Forward OOS", "head": "Raw Safety", "mean_daily_spearman": 0.2,
+          "global_spearman_vs_raw_target": 0.3, "pairwise_concordance": 0.6}],
+        [{"split": "Forward OOS", "head": "Raw Safety", "mean_daily_spearman": 0.4,
+          "global_spearman_vs_raw_target": 0.5, "pairwise_concordance": 0.8}],
+    ])
+    aggregated_head = dict(aggregated_heads[0])
     seed_extension_a = {
-        "id": "multi_head_learnability",
-        "rows": [
-            {
-                "split": "Forward OOS", "head": "Raw Safety",
-                "mean_daily_spearman": 0.2,
-                "global_spearman_vs_raw_target": 0.3,
-                "pairwise_concordance": 0.6,
-            }
-        ],
+        "id": "hs_conditional_mfe_gate",
+        "gate_rows": [{"split": "Forward OOS", "hs_only_daily_rho": 0.2, "hs_only_pair": 0.6,
+                       "pred_hs_true_ls_pct": 40.0, "true_hs_recall_pct": 60.0, "ls_contamination_lift": 1.4}],
     }
     seed_extension_b = {
-        "id": "multi_head_learnability",
-        "rows": [
-            {
-                "split": "Forward OOS", "head": "Raw Safety",
-                "mean_daily_spearman": 0.4,
-                "global_spearman_vs_raw_target": 0.5,
-                "pairwise_concordance": 0.8,
-            }
-        ],
+        "id": "hs_conditional_mfe_gate",
+        "gate_rows": [{"split": "Forward OOS", "hs_only_daily_rho": 0.4, "hs_only_pair": 0.8,
+                       "pred_hs_true_ls_pct": 36.0, "true_hs_recall_pct": 64.0, "ls_contamination_lift": 1.2}],
     }
     aggregated_extension = aggregate_robustness_row_extension(
-        "multi_head_learnability", (seed_extension_a, seed_extension_b)
+        "hs_conditional_mfe_gate", (seed_extension_a, seed_extension_b)
     )
-    aggregated_row = dict((aggregated_extension.get("rows") or [None])[0] or {})
-    truth_geometry_rejected = False
-    try:
-        aggregate_robustness_row_extension(
-            "truth_prediction_geometry", (seed_extension_a, seed_extension_b)
-        )
-    except ValueError:
-        truth_geometry_rejected = True
+    aggregated_gate = dict((aggregated_extension.get("gate_rows") or [None])[0] or {})
     check_true(
-        "robustness_extension_aggregation_means_only_contract_declared_row_metrics",
-        aggregated_row.get("split") == "Forward OOS"
-        and aggregated_row.get("head") == "Raw Safety"
-        and abs(float(aggregated_row.get("mean_daily_spearman")) - 0.3) < 1e-12
-        and abs(float(aggregated_row.get("global_spearman_vs_raw_target")) - 0.4) < 1e-12
-        and abs(float(aggregated_row.get("pairwise_concordance")) - 0.7) < 1e-12
-        and truth_geometry_rejected,
+        "robustness_standard_head_and_extension_aggregation_mean_only_contract_metrics",
+        aggregated_head.get("split") == "Forward OOS"
+        and aggregated_head.get("head") == "Raw Safety"
+        and abs(float(aggregated_head.get("mean_daily_spearman")) - 0.3) < 1e-12
+        and abs(float(aggregated_head.get("global_spearman_vs_raw_target")) - 0.4) < 1e-12
+        and abs(float(aggregated_head.get("pairwise_concordance")) - 0.7) < 1e-12
+        and abs(float(aggregated_gate.get("hs_only_daily_rho")) - 0.3) < 1e-12
+        and abs(float(aggregated_gate.get("true_hs_recall_pct")) - 62.0) < 1e-12,
     )
 
     app_source = Path(app.__file__).read_text(encoding="utf-8")
@@ -3563,9 +3553,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         "rolling_and_robustness_use_mode_extensions_not_duplicate_persistent_report_contracts",
         set(MODEL_MODE_EXTENSION_SCHEMAS) == {"rolling_stability", "robustness_stability"}
         and mode_extension_contract("rolling_stability").title
-            == "Rolling-specific Extension｜Fold / Year Stability"
+            == "Standard Mode Evidence｜Rolling Stability"
         and mode_extension_contract("robustness_stability").title
-            == "Robustness-specific Extension｜Across-seed Stability"
+            == "Standard Mode Evidence｜Across-seed Stability"
         and len(mode_extension_contract("robustness_stability").tables) == 2
         and mode_extension_contract("robustness_stability").tables[1].headers
             == ("Model Extension", "Across-seed aggregation", "Status")
@@ -3683,7 +3673,7 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     def payload(model_id, objective):
         standard = {
-            "schema": "standard_model_sop_v7",
+            "schema": "standard_model_sop_v8",
             "evaluation_mode": "forward_oos",
             "training": {"objective": objective},
             "split_metrics": json.loads(json.dumps(base_metrics)),
@@ -3879,8 +3869,6 @@ def validate_research_report_contract_freeze_case(_base_params):
         for key, text in rendered.items()
     }
     extension_expectations = {
-        "multi_head_learnability": ("control", "MODEL-CONTROL"),
-        "truth_prediction_geometry": ("control", "MODEL-CONTROL"),
         "direct_hmhs_joint_retrieval": ("joint", "MODEL-JOINT"),
         "direct_hmhs_h_only": ("h_only", "MODEL-HONLY"),
         "joint_min_retrieval": ("joint_min", "MODEL-JOINT-MIN"),
@@ -3974,18 +3962,14 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "multi_model_comparison_merges_same_extension_methods_into_shared_tables",
-        comparison_text.count("Model-specific Extension｜Multi-head Learnability") == 1
-        and comparison_text.count("Model-specific Extension｜Truth / Prediction Geometry") == 1
-        and "Model-specific Extension｜MODEL-A｜" not in comparison_text
-        and "Model-specific Extension｜MODEL-B｜" not in comparison_text
-        and "Model-specific Extension｜MODEL-C｜" not in comparison_text
-        and "Model    Split" in comparison_text
-        and "Model    Actual Safety↔MFE rho" in comparison_text
-        and "Model    Pred Safety" in comparison_text
+        "multi_model_comparison_moves_head_learnability_into_standard_sop_and_retires_geometry_extension",
+        "Head Learnability｜Forward OOS" in comparison_text
+        and "Head Learnability｜Breakout slice" in comparison_text
+        and "Raw Safety" in comparison_text
+        and "Raw MFE" in comparison_text
+        and "Model-specific Extension｜Multi-head Learnability" not in comparison_text
+        and "Model-specific Extension｜Truth / Prediction Geometry" not in comparison_text
         and all(model_id in comparison_text for model_id in ("MODEL-A", "MODEL-B", "MODEL-C"))
-        and comparison_text.find("模型比較 SOP｜6. Evidence Coverage")
-            < comparison_text.find("Model-specific Extension｜Multi-head Learnability")
         and "標準模型 SOP｜3. Multi-head Learnability" not in comparison_text
         and "模型比較 SOP｜3. Multi-head Learnability" not in comparison_text,
         detail=comparison_text,
@@ -4008,7 +3992,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "HS-only rho" in conditional_comparison
         and "P45–P55 Pair" in conditional_comparison
         and "True-HS Oracle HM/HS" in conditional_comparison
-        and "Source Model" in conditional_comparison,
+        and "Source Model" not in conditional_comparison,
         detail=conditional_comparison,
     )
     check_true(
@@ -4026,13 +4010,13 @@ def validate_research_report_contract_freeze_case(_base_params):
         ],
         target="console",
     )
-    non_multi_extension = non_multi_comparison.split("Model-specific Extension｜Multi-head Learnability", 1)[1]
+    head_scope = non_multi_comparison.split("Head Learnability｜Forward OOS", 1)[1].split("模型比較 SOP｜2. Generalization", 1)[0]
     check_true(
-        "comparison_model_specific_extensions_are_payload_capability_driven_not_mr_or_objective_hardcoded",
-        "Model-specific Extension｜Multi-head Learnability" in non_multi_comparison
-        and "Model-specific Extension｜Truth / Prediction Geometry" in non_multi_comparison
-        and "MODEL-MULTI" in non_multi_extension
-        and "MODEL-NONMULTI" not in non_multi_extension
+        "standard_head_learnability_is_payload_capability_driven_not_mr_or_objective_hardcoded",
+        "Model-specific Extension｜Multi-head Learnability" not in non_multi_comparison
+        and "Model-specific Extension｜Truth / Prediction Geometry" not in non_multi_comparison
+        and "MODEL-MULTI" in head_scope
+        and "MODEL-NONMULTI" not in head_scope
         and "Direct HM/HS H-only Learnability" not in non_multi_comparison,
         detail=non_multi_comparison,
     )
@@ -4073,29 +4057,24 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "| Model | Δ Daily rho | Δ Pair | Δ Top-Bottom |" in comparison_markdown,
     )
 
-    cohort_low = json.loads(json.dumps(control_payload))
-    cohort_high = json.loads(json.dumps(control_payload))
-    cohort_low["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][0]["high_mfe_pct"] = 40.0
-    cohort_high["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][0]["high_mfe_pct"] = 80.0
-    cohort_low["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][4]["high_mfe_pct"] = 90.0
-    cohort_high["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][4]["high_mfe_pct"] = 20.0
-    cohort_markdown = app._render_standard_model_comparison(
+    head_low = json.loads(json.dumps(control_payload))
+    head_high = json.loads(json.dumps(control_payload))
+    head_low["safety_raw_mfe_evaluation"]["oos"]["raw_safety"]["mean_daily_spearman"] = 0.20
+    head_high["safety_raw_mfe_evaluation"]["oos"]["raw_safety"]["mean_daily_spearman"] = 0.40
+    head_markdown = app._render_standard_model_comparison(
         [
-            {"model_id": "COHORT-A", "payload": cohort_low},
-            {"model_id": "COHORT-B", "payload": cohort_high},
+            {"model_id": "HEAD-A", "payload": head_low},
+            {"model_id": "HEAD-B", "payload": head_high},
         ],
         target="markdown",
     )
-    cohort_extension = cohort_markdown.split("| Model | Pred Safety | N | Raw-MFE→MFE rho | High-MFE | HM/HS |", 1)[1]
-    s1_a = next(line for line in cohort_extension.splitlines() if "COHORT-A" in line and "S1" in line)
-    s1_b = next(line for line in cohort_extension.splitlines() if "COHORT-B" in line and "S1" in line)
-    s5_a = next(line for line in cohort_extension.splitlines() if "COHORT-A" in line and "S5" in line)
-    s5_b = next(line for line in cohort_extension.splitlines() if "COHORT-B" in line and "S5" in line)
+    head_section = head_markdown.split("Head Learnability｜Forward OOS", 1)[1].split("Head Learnability｜Breakout slice", 1)[0]
+    head_a = next(line for line in head_section.splitlines() if "HEAD-A" in line and "Raw Safety" in line)
+    head_b = next(line for line in head_section.splitlines() if "HEAD-B" in line and "Raw Safety" in line)
     check_true(
-        "comparison_extension_reuses_sop_best_worst_colors_within_same_pred_safety_cohort",
-        "#C62828" in s1_a and "#188038" in s1_b
-        and "#188038" in s5_a and "#C62828" in s5_b,
-        detail="\n".join((s1_a, s1_b, s5_a, s5_b)),
+        "standard_head_learnability_reuses_sop_best_worst_colors_within_same_head",
+        "#C62828" in head_a and "#188038" in head_b,
+        detail="\n".join((head_a, head_b)),
     )
 
     rolling_payload = json.loads(json.dumps(control_payload))
@@ -4132,13 +4111,13 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "validation" in rolling_simple.lower()
         and "Validation → OOS" in rolling_simple
         and "OOS → Breakout slice" in rolling_simple
-        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_simple
+        and "Standard Mode Evidence｜Rolling Stability" in rolling_simple
         and rolling_comparison.count("模型比較 SOP｜1. Learnability") == 1
         and "Rolling OOS" in rolling_comparison
         and "Breakout slice" in rolling_comparison
         and "Validation → OOS" in rolling_comparison
         and "OOS → Breakout slice" in rolling_comparison
-        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_comparison
+        and "Standard Mode Evidence｜Rolling Stability" in rolling_comparison
         and "Fold count" in rolling_comparison
         and all(model in rolling_comparison for model in ("ROLL-A", "ROLL-B")),
         detail=rolling_comparison,
@@ -4151,14 +4130,15 @@ def validate_research_report_contract_freeze_case(_base_params):
         target="console",
     )
     check_true(
-        "rolling_comparison_keeps_multi_head_extensions_outside_standard_sop_and_before_mode_extension",
-        "Model-specific Extension｜Multi-head Learnability" in rolling_multi_comparison
-        and "Model-specific Extension｜Truth / Prediction Geometry" in rolling_multi_comparison
+        "rolling_comparison_keeps_head_learnability_in_standard_sop_before_mode_evidence",
+        "Head Learnability｜Rolling OOS" in rolling_multi_comparison
+        and "Model-specific Extension｜Multi-head Learnability" not in rolling_multi_comparison
+        and "Model-specific Extension｜Truth / Prediction Geometry" not in rolling_multi_comparison
         and "ROLL-MULTI" in rolling_multi_comparison
         and "Rolling OOS" in rolling_multi_comparison
-        and rolling_multi_comparison.find("模型比較 SOP｜6. Evidence Coverage")
-            < rolling_multi_comparison.find("Model-specific Extension｜Multi-head Learnability")
-            < rolling_multi_comparison.find("Rolling-specific Extension｜Fold / Year Stability"),
+        and rolling_multi_comparison.find("Head Learnability｜Rolling OOS")
+            < rolling_multi_comparison.find("模型比較 SOP｜6. Evidence Coverage")
+            < rolling_multi_comparison.find("Standard Mode Evidence｜Rolling Stability"),
         detail=rolling_multi_comparison,
     )
 
@@ -4210,7 +4190,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "模型比較 SOP｜6. Evidence Coverage" in robust_comparison
         and "Validation → OOS" in robust_comparison
         and "OOS → Breakout slice" in robust_comparison
-        and "Robustness-specific Extension｜Across-seed Stability" in robust_comparison
+        and "Standard Mode Evidence｜Across-seed Stability" in robust_comparison
         and "OOS Daily rho σ" in robust_comparison
         and all(model in robust_comparison for model in ("ROBUST-A", "ROBUST-B")),
         detail=robust_comparison,
