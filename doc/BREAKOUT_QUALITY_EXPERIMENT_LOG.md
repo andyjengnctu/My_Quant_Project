@@ -11863,3 +11863,16 @@ Decision：`MR13BQ_IMPLEMENTED_RESULT_PENDING / AO_ARCHITECTURE_EXACT / SCC_PRET
 
 Decision：`ENGINEERING_ONLY / PROFILE_REGISTRY_SINGLE_OWNER / RESEARCH_SPEC_ATTACHMENT_ORDER_NON_SEMANTIC / ATTACHMENT_DRIFT_FAIL_FAST / NO_SCIENTIFIC_CHANGE`。
 
+## 2026-09-05 — MR-13BQ Seed42 Forward Model Gate closure
+
+- **User evidence**：使用者於`apps/research.py → Continuous DL → [3] Forward OOS模型比較`完成MR-13BQ缺失Forward工件BUILD與Standard Model SOP comparison；BQ selected epoch=`1`，Selection完整重訓=`1 epoch`。
+- **Primary reference**：MR-13AO。BQ與AO的正式supervised architecture/target/loss/split/inference相同，唯一treatment為`stock_code_classification_v1` encoder pretraining。
+- **Overall output**：BQ Forward Daily/Global/Pair=`0.3937/0.3383/63.61%` vs AO=`0.4042/0.3368/63.96%`；Breakout=`0.3712/0.4142/64.62%` vs AO=`0.3850/0.3804/64.73%`。Breakout Global rho與Top-Bottom存在局部正向，但非primary Safety learnability突破。
+- **Raw Safety primary Gate**：BQ Forward Raw Safety Daily/Global/Pair=`0.3332/0.2761/61.95%`，全面低於AO=`0.3532/0.2929/62.68%`；Breakout=`0.2892/0.3260/63.09%`亦全面低於AO=`0.3135/0.3554/63.65%`。因此SCC initialization沒有改善Safety representation，且方向不是marginal positive。
+- **Conditional-MFE**：BQ Forward HS-only Daily/Global/Pair=`0.3779/0.2993/63.24%` vs AO=`0.3969/0.3104/63.90%`；Breakout=`0.4046/0.4633/66.94%` vs AO=`0.4116/0.4353/67.22%`。Breakout Global rho局部提高，但Daily/Pair與Forward皆未形成共同增量。
+- **Qualification / top-tail**：BQ Pred-HS true-LS Forward=`37.42%` vs AO=`36.84%`，Breakout=`39.53%` vs `36.94%`；Pred-HS HM/HS Forward=`25.47%` vs `25.94%`，Breakout=`23.96%` vs `24.07%`。BQ Pred-HS MFE雖Forward=`1.662R`、Breakout=`1.086R`高於AO=`1.585R/1.000R`，但伴隨更高LS contamination，不能視為Safety成功。
+- **Stop-rule application**：事前已明定若BQ仍只有約1～3% marginal shift即不展開pretraining hyperparameter/task sweep；本次實際primary Safety更是共同退化，因此證據已足夠直接結案，不需要Rolling、Robustness或額外Audit。SCC LR/epoch/freeze/batch、MAP/SSC/其他pretext task均不啟動。
+- **Current workflow**：MR-13BQ保留完整identity/result/implementation以供歷史重現，但退出current Training/Compare focus；canonical Training pair回MR-13AO作scientific reference/fallback，這不重開AO歷史Gate。MR-13BP維持`IMPLEMENTED / RESULT_PENDING / DEFERRED_BY_USER_PRIORITY_CHANGE`，不因BQ FAIL自動恢復。下一個尚未分配identity的研究問題為PIT-safe orthogonal information expansion，需先確認information family與PIT source contract後才實作。
+
+Decision：`SCC_PRETRAINING_DOES_NOT_BREAK_SAFETY_CEILING / RAW_SAFETY_DEGRADES / CONDITIONAL_MFE_NOT_IMPROVED / MODEL_GATE_FAIL / CLOSED / NO_ROLLING / NO_ROBUSTNESS / NO_PRETEXT_SWEEP / AO_REFERENCE_FALLBACK / NEXT_ORTHOGONAL_INFORMATION_DESIGN`。
+
