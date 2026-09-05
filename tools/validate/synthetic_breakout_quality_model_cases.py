@@ -4445,6 +4445,43 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and np.array_equal(prepared_perf[:, -1], perf_final),
     )
 
+    # Regression for Pandas Copy-on-Write environments: DataFrame.to_numpy(copy=False)
+    # can be read-only.  The vectorized grouped-rank path must own a writable array
+    # before applying in-place percentile normalization.
+    _cow_original = pd.options.mode.copy_on_write
+    try:
+        pd.options.mode.copy_on_write = True
+        cow_values = np.asarray(
+            [
+                [3.0, 1.0, 2.0],
+                [2.0, 2.0, 2.0],
+                [1.0, 3.0, 2.0],
+                [4.0, 5.0, 6.0],
+                [5.0, 4.0, 6.0],
+            ],
+            dtype=np.float32,
+        )
+        cow_dates = pd.to_datetime(
+            ["2025-01-02", "2025-01-02", "2025-01-02", "2025-01-03", "2025-01-03"]
+        )
+        cow_ranked = AdaptiveHorizonSafetyTargetProvider._same_date_percentile_matrix(
+            cow_values, cow_dates
+        )
+        cow_expected = np.column_stack([
+            build_same_date_percentile_targets(
+                cow_values[:, column],
+                np.ones(len(cow_values), dtype=bool),
+                cow_dates,
+            ).astype(np.float32)
+            for column in range(cow_values.shape[1])
+        ])
+        check_true(
+            "adaptive_horizon_vectorized_rank_supports_pandas_copy_on_write",
+            np.array_equal(cow_ranked, cow_expected),
+        )
+    finally:
+        pd.options.mode.copy_on_write = _cow_original
+
     # Regression for the first BU final-refit attempt: epoch selection resolved the
     # canonical loss handler, while fit_final once referenced an unbound local before
     # constructing the adaptive provider.  Exercise the public final-refit function

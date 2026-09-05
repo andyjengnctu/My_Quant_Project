@@ -11977,3 +11977,12 @@ Decision：`ENGINEERING_FIX_ONLY / SCIENTIFIC_CONTRACT_UNCHANGED / FORWARD_RESUL
 - **Isolated benchmark**：含ties的`19,200 rows × 40 horizons` synthetic，prepared-scope與原lazy complete-date target **bitwise exact**；target build約`6.76s → 0.32s`（約`20.8×`），terminal endpoint仍bitwise AO exact。此數字只作工程相對benchmark，不宣稱等同使用者完整資料上的實際加速倍率。
 
 Decision：`EXECUTION_ONLY_TARGET_PRECOMPUTE / BITWISE_TARGET_PARITY / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-09-05 — MR-13BU prepared-target Pandas Copy-on-Write compatibility fix
+
+- **Observed failure**：套用adaptive target feeding performance optimization後，BU在進入Epoch 1前建立fitting-scope trajectory時觸發`ValueError: assignment destination is read-only`；因此未產生新的BU Forward scientific result。
+- **Root cause**：vectorized same-date grouped-rank使用`DataFrame.to_numpy(copy=False)`取得rank matrix，隨後以in-place subtraction/division轉成percentile。Pandas Copy-on-Write模式會把該NumPy view標成read-only；新版Pandas亦逐步把CoW作為預設語意，因此runtime不應依賴view可寫。
+- **Fix**：不再修改`to_numpy(copy=False)`回傳的rank view；grouped-rank結果保持唯讀可接受，percentile normalization直接寫入最終`float32` output buffer。這同時避免CoW read-only錯誤與額外複製整個fitting-scope `float64` rank matrix。target values、rank method、ties、sample/date membership、AO h40 SSOT、loss、seed與optimizer semantics全部不變。
+- **Regression**：synthetic contract明確在`pd.options.mode.copy_on_write=True`下執行vectorized percentile path，並逐欄與canonical `build_same_date_percentile_targets` bitwise比較；測試結束後恢復原Pandas option。
+
+Decision：`ENGINEERING_COMPATIBILITY_FIX_ONLY / PANDAS_COW_WRITABLE_RANK_OWNER / SCIENTIFIC_IDENTITY_UNCHANGED / RERUN_SAME_BU_FORWARD`。

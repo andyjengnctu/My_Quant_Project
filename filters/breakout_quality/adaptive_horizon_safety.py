@@ -75,19 +75,24 @@ class AdaptiveHorizonSafetyTargetProvider:
         if bool(np.any(date_codes < 0)):
             raise ValueError("adaptive-horizon percentile matrix date factorization失敗")
         ranks = frame.groupby(date_codes, sort=False).rank(method="average")
+        # Pandas Copy-on-Write may expose ``to_numpy(copy=False)`` as a read-only
+        # view (and newer Pandas versions increasingly use CoW semantics).  Do not
+        # mutate that view.  Normalize into the final float32 result buffer instead;
+        # this preserves canonical rank arithmetic while avoiding a second full-size
+        # float64 copy of the fitting-scope rank matrix.
         rank_values = ranks.to_numpy(dtype=np.float64, copy=False)
         counts_by_code = np.bincount(date_codes)
         counts = counts_by_code[date_codes].astype(np.int64, copy=False)
         singleton = counts == 1
-        non_singleton = ~singleton
-        if bool(np.any(non_singleton)):
-            rank_values[non_singleton] -= 1.0
-            rank_values[non_singleton] /= (counts[non_singleton, None] - 1.0)
+        denominator = np.maximum(counts - 1, 1).astype(np.float64, copy=False)
+        percentile = np.empty(rank_values.shape, dtype=np.float32)
+        np.subtract(rank_values, 1.0, out=percentile, casting="unsafe")
+        np.divide(percentile, denominator[:, None], out=percentile)
         if bool(np.any(singleton)):
-            rank_values[singleton] = 0.5
-        if not bool(np.isfinite(rank_values).all()):
+            percentile[singleton] = 0.5
+        if not bool(np.isfinite(percentile).all()):
             raise ValueError("adaptive-horizon percentile matrix產生non-finite value")
-        return rank_values.astype(np.float32)
+        return percentile
 
     def prepare_ids(self, group_ids: np.ndarray) -> None:
         """Eagerly materialize one fitting scope without changing target semantics."""
