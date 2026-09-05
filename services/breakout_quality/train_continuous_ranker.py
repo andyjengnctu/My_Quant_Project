@@ -4664,6 +4664,7 @@ def fit_final(
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
     training_policy = execution_recipe.training_policy
+    loss_handler = str(training_policy.loss_handler)
     training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
     adaptive_horizon_target_provider = None
     if (

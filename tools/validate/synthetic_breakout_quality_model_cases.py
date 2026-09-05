@@ -4390,6 +4390,78 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and np.array_equal(perturbed_trajectory[:, -1], canonical_final_safety),
     )
 
+    # Regression for the first BU final-refit attempt: epoch selection resolved the
+    # canonical loss handler, while fit_final once referenced an unbound local before
+    # constructing the adaptive provider.  Exercise the public final-refit function
+    # with collaborators isolated so both stages must consume the same training-policy
+    # loss-handler semantics without experiment-specific branching.
+    import services.breakout_quality.train_continuous_ranker as _ranker_module
+
+    _sentinel_provider = object()
+    _originals = {
+        "_training_target_for_profile": _ranker_module._training_target_for_profile,
+        "AdaptiveHorizonSafetyTargetProvider": _ranker_module.AdaptiveHorizonSafetyTargetProvider,
+        "_new_model_and_optimizer": _ranker_module._new_model_and_optimizer,
+        "build_grad_scaler": _ranker_module.build_grad_scaler,
+        "_train_epoch": _ranker_module._train_epoch,
+    }
+    _provider_seen = {"value": False}
+
+    class _DummyFinalModel:
+        def eval(self):
+            return self
+
+    class _DummyFinalArgs:
+        experiment_profile = adaptive_profile.name
+        model_architecture = adaptive_profile.model_architecture
+        batch_size = 4
+        seed = 42
+        gradient_clip_norm = 1.0
+        train_prefetch_batches = 0
+        train_prefetch_workers = 0
+
+    try:
+        _ranker_module._training_target_for_profile = lambda *_args, **_kwargs: np.column_stack([
+            np.asarray([0.2, 0.4, 0.6, 0.8], dtype=np.float32),
+            np.asarray([0.8, 0.6, 0.4, 0.2], dtype=np.float32),
+        ])
+        _ranker_module.AdaptiveHorizonSafetyTargetProvider = (
+            lambda **_kwargs: _sentinel_provider
+        )
+        _ranker_module._new_model_and_optimizer = (
+            lambda *_args, **_kwargs: (_DummyFinalModel(), object())
+        )
+        _ranker_module.build_grad_scaler = lambda *_args, **_kwargs: None
+        def _fake_train_epoch(*_args, **_kwargs):
+            _provider_seen["value"] = (
+                _kwargs.get("adaptive_horizon_target_provider") is _sentinel_provider
+            )
+            return 0.123
+        _ranker_module._train_epoch = _fake_train_epoch
+        _final_model, _final_history = _ranker_module.fit_final(
+            torch,
+            np.zeros((4, 300, 10), dtype=np.float32),
+            np.empty((4, 0), dtype=np.float32),
+            np.ones(4, dtype=np.float32),
+            np.ones(4, dtype=np.float32),
+            pd.DataFrame({"date": pd.date_range("2020-01-01", periods=4, freq="D")}),
+            np.arange(4, dtype=np.int64),
+            epochs=1,
+            args=_DummyFinalArgs(),
+            plan=object(),
+            phase_label="synthetic BU final refit",
+        )
+        check_true(
+            "adaptive_horizon_final_refit_resolves_loss_handler_from_training_policy",
+            _provider_seen["value"]
+            and isinstance(_final_model, _DummyFinalModel)
+            and len(_final_history) == 1
+            and abs(float(_final_history[0]["batch_loss"]) - 0.123) < 1e-12,
+        )
+    finally:
+        for _name, _value in _originals.items():
+            setattr(_ranker_module, _name, _value)
+
     # Same-date dynamic hypergraph is a reusable Safety-only relational primitive.
     # It must start exactly from AO, consume detached same-date latent nodes, and
     # never allow inference/training batches to mix trading dates.

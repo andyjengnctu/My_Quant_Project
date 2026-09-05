@@ -11959,3 +11959,11 @@ Decision：`MR13BU_IMPLEMENTED_RESULT_PENDING / AO_40BAR_FINAL_SAFETY_IDENTITY_E
 
 Decision：`ENGINEERING_FIX_ONLY / TERMINAL_HORIZON_CANONICAL_AO_SSOT / MR13BU_IDENTITY_UNCHANGED / FORWARD_RESULT_STILL_PENDING`。
 
+## 2026-09-05 — MR-13BU final-refit loss-handler wiring fix
+
+- **Observed failure**：BU第一次通過terminal Safety SSOT修正後，Inner epoch selection可正常完成Epoch 1/2，但進入`Daily Selection完整重訓`前在`fit_final()`觸發`NameError: loss_handler is not defined`。因此沒有產生完成的BU Forward model/report，不能把此次中止視為scientific result。
+- **Root cause**：`select_epoch()`已由`execution_recipe.training_policy.loss_handler`解析canonical loss handler；`fit_final()`建立adaptive-horizon target provider時卻漏了同一個local binding，形成execution-stage wiring分叉。
+- **Fix**：`fit_final()`現在與epoch-selection完全同源，以`loss_handler = str(training_policy.loss_handler)`解析 capability，再決定是否建立adaptive provider；不改BU target、loss、architecture、seed、epoch-selection或artifact identity。
+- **Regression**：新增隔離final-refit regression，直接驗證adaptive-horizon final refit能從training policy解析loss handler、建立provider並傳入canonical `_train_epoch` seam；不以MR identity branch修補。
+
+Decision：`ENGINEERING_FIX_ONLY / SCIENTIFIC_CONTRACT_UNCHANGED / FORWARD_RESULT_NOT_YET_AVAILABLE / RERUN_SAME_BU_FORWARD`。
