@@ -415,6 +415,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIS
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_scc_pretrained_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_price_volume_structure_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
@@ -515,6 +518,7 @@ DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_uni
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
+STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE = "stock_code_classification_v1"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
 TRAINING_SAMPLING_UNIQUE_TICKER_DATE = "unique_ticker_date"
@@ -608,6 +612,7 @@ class BreakoutQualityExperimentProfile:
     training_sample_scope: str = TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
     raw_r_huber_delta_r: float | None = None
     model_architecture: str | None = None
+    encoder_pretraining_profile: str | None = None
     numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT
     bf16_backward_retry_scales: tuple[float, ...] = ()
 
@@ -662,6 +667,10 @@ class BreakoutQualityExperimentProfile:
                 raise ValueError("profile model_architecture 必須是非空白小寫名稱")
             if any(token in architecture for token in ("/", "\\", "\x00")):
                 raise ValueError("profile model_architecture 必須是安全名稱")
+        if self.encoder_pretraining_profile is not None:
+            get_breakout_quality_encoder_pretraining_profile(
+                self.encoder_pretraining_profile
+            )
         if self.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
             if self.continuous_target_id is not None:
                 raise ValueError("binary classification profile 不得指定 continuous_target_id")
@@ -791,6 +800,12 @@ class BreakoutQualityExperimentProfile:
                 payload["training_label_scope"] = self.training_label_scope
         if self.model_architecture is not None:
             payload["model_architecture"] = str(self.model_architecture)
+        if self.encoder_pretraining_profile is not None:
+            payload["encoder_pretraining"] = (
+                get_breakout_quality_encoder_pretraining_profile(
+                    self.encoder_pretraining_profile
+                ).as_manifest_payload()
+            )
         if self.numerical_execution_policy != NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT:
             payload["numerical_execution_policy"] = str(self.numerical_execution_policy)
             payload["bf16_backward_retry_scales"] = [
@@ -948,6 +963,99 @@ def build_breakout_quality_pretraining_profile_payload(
         temporal_unit=profile.temporal_unit if temporal_unit is None else int(temporal_unit),
     )
     return resolved.as_manifest_payload()
+
+
+@dataclass(frozen=True)
+class BreakoutQualityEncoderPretrainingProfile:
+    """Formal encoder-initialization recipe for downstream ranker experiments.
+
+    This is deliberately separate from the legacy TS2Vec artifact profile above.
+    Encoder pretraining here is part of the downstream experiment identity and is
+    rebuilt inside each fitting scope; it is not a reusable cross-fold checkpoint.
+    """
+
+    name: str
+    task: str
+    optimizer_name: str
+    epochs: int
+    batch_size: int
+    learning_rate: float
+    weight_decay: float
+    gradient_clip_norm: float
+    sampling_mode: str
+    source_scope: str
+    downstream_finetune: str
+
+    def __post_init__(self) -> None:
+        normalized_name = str(self.name).strip().lower()
+        if not normalized_name or normalized_name != self.name:
+            raise ValueError("encoder pretraining profile name 必須是非空白小寫名稱")
+        if any(token in normalized_name for token in ("/", "\\", "\x00")):
+            raise ValueError("encoder pretraining profile name 必須是安全名稱")
+        if self.task != "stock_code_classification":
+            raise ValueError(f"不支援的 encoder pretraining task: {self.task!r}")
+        if self.optimizer_name != "adam":
+            raise ValueError("stock-code encoder pretraining 固定使用 Adam")
+        if int(self.epochs) < 1 or int(self.batch_size) < 2:
+            raise ValueError("encoder pretraining epochs 必須>=1且batch_size必須>=2")
+        if float(self.learning_rate) <= 0.0:
+            raise ValueError("encoder pretraining learning_rate 必須>0")
+        if float(self.weight_decay) < 0.0 or float(self.gradient_clip_norm) < 0.0:
+            raise ValueError("encoder pretraining weight_decay/gradient_clip_norm 必須>=0")
+        if self.sampling_mode != "ticker_balanced_one_window_per_ticker_per_epoch":
+            raise ValueError("SCC encoder pretraining sampling mode 不符合scientific contract")
+        if self.source_scope != "downstream_fitting_rows_only":
+            raise ValueError("SCC encoder pretraining source scope 必須限制於downstream fitting rows")
+        if self.downstream_finetune != "full_unfrozen":
+            raise ValueError("SCC encoder pretraining downstream 必須full-unfrozen fine-tune")
+
+    def as_manifest_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "task": self.task,
+            "optimizer_name": self.optimizer_name,
+            "epochs": int(self.epochs),
+            "batch_size": int(self.batch_size),
+            "learning_rate": float(self.learning_rate),
+            "weight_decay": float(self.weight_decay),
+            "gradient_clip_norm": float(self.gradient_clip_norm),
+            "sampling_mode": self.sampling_mode,
+            "source_scope": self.source_scope,
+            "downstream_finetune": self.downstream_finetune,
+        }
+
+
+_ENCODER_PRETRAINING_PROFILES = {
+    STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE: BreakoutQualityEncoderPretrainingProfile(
+        name=STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE,
+        task="stock_code_classification",
+        optimizer_name="adam",
+        epochs=100,
+        batch_size=128,
+        learning_rate=0.001,
+        weight_decay=0.0001,
+        gradient_clip_norm=1.0,
+        sampling_mode="ticker_balanced_one_window_per_ticker_per_epoch",
+        source_scope="downstream_fitting_rows_only",
+        downstream_finetune="full_unfrozen",
+    ),
+}
+SUPPORTED_BREAKOUT_QUALITY_ENCODER_PRETRAINING_PROFILES = tuple(
+    _ENCODER_PRETRAINING_PROFILES
+)
+
+
+def get_breakout_quality_encoder_pretraining_profile(
+    value: str,
+) -> BreakoutQualityEncoderPretrainingProfile:
+    normalized = str(value).strip().lower()
+    try:
+        return _ENCODER_PRETRAINING_PROFILES[normalized]
+    except KeyError as exc:
+        allowed = ", ".join(SUPPORTED_BREAKOUT_QUALITY_ENCODER_PRETRAINING_PROFILES)
+        raise ValueError(
+            f"不支援的 encoder pretraining profile: {value!r}；可用值: {allowed}"
+        ) from exc
 
 _EXPERIMENT_PROFILES = {
     BASELINE_EXPERIMENT_PROFILE: BreakoutQualityExperimentProfile(
@@ -1382,6 +1490,19 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_v1",
+        encoder_pretraining_profile=STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE,
     ),
     DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -2988,6 +3109,39 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="explicit_pairwise_temporal_relation_safety_plus_true_hs_conditional_mfe",
         score_semantic_id="daily_explicit_pairwise_temporal_relation_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BQ",
+        experiment_name="MR-13BQ SCC-Pretrained AO Shared Ranker",
+        phase="13BQ",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "exact_MR13AO_head1_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "exact_MR13AO_head2_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "MR-13AO supervised scientific contract exact control：同一300x10 input、shared InceptionTime architecture、"
+            "continuous Safety full-list Delta-NDCG、true-HS=P50 Conditional-MFE sublist、1:1 head weighting、Seed42/Adam/"
+            "split/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。唯一scientific treatment是在每次"
+            "downstream fitting前，僅以該fitting scope內daily-universal rows做PIT-safe Stock Code Classification encoder "
+            "pretraining：每epoch每ticker均勻抽一個合法300-bar window、100 fixed epochs、Adam lr=1e-3、batch=128、"
+            "weight_decay=1e-4、clip=1.0、無augmentation。Inner epoch-selection只允許Inner-Train pretraining，Validation完全"
+            "不參與；final refit重新random initialize並只用完整Selection重新pretrain。temporary SCC head隨後丟棄，AO Safety/"
+            "MFE heads fresh initialize，shared encoder從第一個AO step起full-unfrozen fine-tune；ticker identity不成為正式"
+            "inference input。Primary reference=MR-13AO。Seed42 Forward first；若只得到既有約1-3%級marginal shift，不做"
+            "pretrain LR/epoch/freeze/batch/task sweep。"
+        ),
+        metric_scope="ao_with_pit_safe_stock_code_encoder_pretraining",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
         secondary_pair_scope_threshold=0.50,

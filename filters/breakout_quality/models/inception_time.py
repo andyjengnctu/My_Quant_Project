@@ -398,6 +398,42 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             z = self.encode_feature_map(x)
             return torch.mean(z, dim=2)
 
+        @property
+        def encoder_embedding_width(self):
+            return int(module_output_channels)
+
+        def encoder_parameters(self):
+            return tuple(self.inception_modules.parameters()) + tuple(
+                self.residual_projections.parameters()
+            )
+
+        def export_encoder_state_dict(self):
+            state = {}
+            for owner_name in ("inception_modules", "residual_projections"):
+                owner = getattr(self, owner_name)
+                for key, value in owner.state_dict().items():
+                    state[f"{owner_name}.{key}"] = value.detach().cpu().clone()
+            return state
+
+        def load_encoder_state_dict(self, state):
+            supplied = {str(key): value for key, value in dict(state).items()}
+            expected = set(self.export_encoder_state_dict())
+            if set(supplied) != expected:
+                missing = sorted(expected.difference(supplied))
+                extra = sorted(set(supplied).difference(expected))
+                raise ValueError(
+                    "pretrained encoder state keys不符合AO shared encoder contract: "
+                    f"missing={missing[:5]} extra={extra[:5]}"
+                )
+            for owner_name in ("inception_modules", "residual_projections"):
+                prefix = f"{owner_name}."
+                owner_state = {
+                    key[len(prefix):]: value
+                    for key, value in supplied.items()
+                    if key.startswith(prefix)
+                }
+                getattr(self, owner_name).load_state_dict(owner_state, strict=True)
+
         def safety_attention_weights(self, x):
             if self.safety_attention_scorer is None:
                 raise ValueError("目前architecture沒有Safety temporal attention pooling")

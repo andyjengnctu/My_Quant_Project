@@ -2632,8 +2632,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from core.breakout_quality_registry import (
+        DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+        STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE,
         get_breakout_quality_experiment_profile,
+        get_breakout_quality_encoder_pretraining_profile,
         get_continuous_ranker_research_spec,
     )
     from core.breakout_quality_policy import (
@@ -2653,8 +2656,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
         build_daily_full_horizon_equal_rank_mfe_low_adverse_contract,
     )
+    from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.daily_ranker_data import build_equal_rank_mfe_low_adverse_target
     from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.encoder_pretraining import (
+        build_ticker_balanced_epoch_ids,
+    )
     from filters.breakout_quality.models.architectures import (
         ARCHITECTURE_DESCRIPTORS,
         ArchitectureDescriptor,
@@ -2695,6 +2702,104 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     )
     from services.breakout_quality import ranker_training as ranker_api
     from services.breakout_quality import train_continuous_ranker as training_module
+
+    scc_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    scc_pretraining = get_breakout_quality_encoder_pretraining_profile(
+        STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE
+    )
+    check(
+        "scc_pretraining_is_declarative_ao_initialization_only",
+        (
+            "MR-13BQ",
+            "inception_time_shared_safety_mfe_v1",
+            "stock_code_classification",
+            100,
+            128,
+            "downstream_fitting_rows_only",
+            "full_unfrozen",
+        ),
+        (
+            get_continuous_ranker_research_spec(scc_profile.name).model_research_id,
+            scc_profile.model_architecture,
+            scc_pretraining.task,
+            int(scc_pretraining.epochs),
+            int(scc_pretraining.batch_size),
+            scc_pretraining.source_scope,
+            scc_pretraining.downstream_finetune,
+        ),
+    )
+    scc_sample_table = pd.DataFrame(
+        {
+            "ticker": ["A", "A", "B", "B", "C", "C"],
+            "date": pd.to_datetime(
+                [
+                    "2020-01-01",
+                    "2020-01-02",
+                    "2020-01-01",
+                    "2020-01-02",
+                    "2020-01-01",
+                    "2020-01-02",
+                ]
+            ),
+        }
+    )
+    balanced_ids, balanced_tickers = build_ticker_balanced_epoch_ids(
+        scc_sample_table,
+        np.arange(6, dtype=np.int64),
+        seed=42,
+        epoch=1,
+    )
+    balanced_names = scc_sample_table.iloc[balanced_ids]["ticker"].astype(str).tolist()
+    check(
+        "scc_pretraining_sampler_uses_exactly_one_window_per_ticker",
+        (("A", "B", "C"), ("A", "B", "C"), 3),
+        (
+            tuple(balanced_tickers),
+            tuple(sorted(balanced_names)),
+            int(len(balanced_ids)),
+        ),
+    )
+    torch, _nn = require_torch()
+    torch.manual_seed(42)
+    scc_control_model = build_active_model(
+        feature_count=len(FEATURE_COLUMNS),
+        context_count=0,
+        architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+    )
+    pretrained_state = scc_control_model.export_encoder_state_dict()
+    floating_key = next(
+        key for key, value in pretrained_state.items() if torch.is_floating_point(value)
+    )
+    pretrained_state[floating_key] = pretrained_state[floating_key] + 0.125
+    torch.manual_seed(42)
+    scc_initialized_model = build_active_model(
+        feature_count=len(FEATURE_COLUMNS),
+        context_count=0,
+        architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+    )
+    scc_initialized_model.load_encoder_state_dict(pretrained_state)
+    head_keys = tuple(
+        key
+        for key in scc_control_model.state_dict()
+        if key.startswith("raw_safety_classifier.")
+        or key.startswith("raw_mfe_classifier.")
+    )
+    check_true(
+        "scc_encoder_state_load_preserves_fresh_same_seed_ao_heads",
+        torch.equal(
+            scc_initialized_model.export_encoder_state_dict()[floating_key],
+            pretrained_state[floating_key],
+        )
+        and all(
+            torch.equal(
+                scc_control_model.state_dict()[key],
+                scc_initialized_model.state_dict()[key],
+            )
+            for key in head_keys
+        ),
+    )
 
     # Dual-component regression is a reusable learning formulation. Resolve the
     # registered capability owner dynamically instead of inventing a fake experiment

@@ -159,6 +159,7 @@ from filters.breakout_quality.hs_conditional_mfe import (
 from filters.breakout_quality.continuous_ranker_quality import (
     daily_top_k_metrics as shared_daily_top_k_metrics,
 )
+from filters.breakout_quality.encoder_pretraining import pretrain_encoder_state
 from filters.breakout_quality.continuous_target import (
     STRATEGY_ALIGNED_TARGET_ID,
     TARGET_TRADE_MATCHES_CSV_FILENAME,
@@ -774,13 +775,27 @@ def epoch_selection_metrics(
     }
 
 
-def _new_model_and_optimizer(torch, *, feature_count: int, context_count: int, args, plan):
+def _new_model_and_optimizer(
+    torch,
+    *,
+    feature_count: int,
+    context_count: int,
+    args,
+    plan,
+    pretrained_encoder_state=None,
+):
     seed_torch(torch, seed=int(args.seed), plan=plan)
     model = build_model(
         feature_count=feature_count,
         context_count=context_count,
         architecture=str(args.model_architecture),
     ).to(plan.device)
+    if pretrained_encoder_state is not None:
+        if not hasattr(model, "load_encoder_state_dict"):
+            raise ValueError(
+                f"architecture不支援formal encoder state initialization: {args.model_architecture}"
+            )
+        model.load_encoder_state_dict(pretrained_encoder_state)
     optimizer = torch.optim.Adam(
         [parameter for parameter in model.parameters() if parameter.requires_grad],
         lr=float(args.lr),
@@ -3682,12 +3697,29 @@ def select_epoch(
         and profile.raw_r_huber_delta_r is not None
         else None
     )
+    pretrained_encoder_state = None
+    encoder_pretraining_summary = None
+    if profile.encoder_pretraining_profile is not None:
+        pretrained_encoder_state, encoder_pretraining_summary = pretrain_encoder_state(
+            torch,
+            feature_bank=feature_bank,
+            group_table=group_table,
+            fit_ids=train_ids,
+            feature_count=int(feature_bank.shape[2]),
+            context_count=int(group_context.shape[1]),
+            model_architecture=str(args.model_architecture),
+            pretraining_profile_name=str(profile.encoder_pretraining_profile),
+            seed=int(args.seed),
+            plan=plan,
+            stage="inner_train_epoch_selection",
+        )
     model, optimizer = _new_model_and_optimizer(
         torch,
         feature_count=int(feature_bank.shape[2]),
         context_count=int(group_context.shape[1]),
         args=args,
         plan=plan,
+        pretrained_encoder_state=pretrained_encoder_state,
     )
     grad_scaler = build_grad_scaler(torch, plan)
     best_epoch = 0
@@ -4339,7 +4371,7 @@ def select_epoch(
             break
     if best_epoch < 1:
         raise ValueError("continuous model無法選出best epoch")
-    return {
+    result = {
         "best_epoch": int(best_epoch),
         "best_validation_mean_daily_spearman": float(best_daily_spearman),
         "best_validation_conditional_safety_mean_daily_spearman": (
@@ -4424,6 +4456,9 @@ def select_epoch(
         "completed_epochs": int(len(history)),
         "history": history,
     }
+    if encoder_pretraining_summary is not None:
+        result["encoder_pretraining"] = encoder_pretraining_summary
+    return result
 
 
 def fit_final(
@@ -4457,12 +4492,29 @@ def fit_final(
         and profile.raw_r_huber_delta_r is not None
         else None
     )
+    pretrained_encoder_state = None
+    encoder_pretraining_summary = None
+    if profile.encoder_pretraining_profile is not None:
+        pretrained_encoder_state, encoder_pretraining_summary = pretrain_encoder_state(
+            torch,
+            feature_bank=feature_bank,
+            group_table=group_table,
+            fit_ids=final_ids,
+            feature_count=int(feature_bank.shape[2]),
+            context_count=int(group_context.shape[1]),
+            model_architecture=str(args.model_architecture),
+            pretraining_profile_name=str(profile.encoder_pretraining_profile),
+            seed=int(args.seed),
+            plan=plan,
+            stage="full_selection_final_refit",
+        )
     model, optimizer = _new_model_and_optimizer(
         torch,
         feature_count=int(feature_bank.shape[2]),
         context_count=int(group_context.shape[1]),
         args=args,
         plan=plan,
+        pretrained_encoder_state=pretrained_encoder_state,
     )
     grad_scaler = build_grad_scaler(torch, plan)
     history: list[dict[str, Any]] = []
@@ -4507,6 +4559,8 @@ def fit_final(
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})
         if not compact_console:
             print(f"  Epoch {epoch:>3}/{int(epochs)} | Batch Loss {loss:.6f} | {elapsed:.1f}s")
+    if encoder_pretraining_summary is not None:
+        model._encoder_pretraining_summary = encoder_pretraining_summary
     return model.eval(), history
 
 
@@ -4886,8 +4940,14 @@ def run(args) -> int:
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
     canonical_training_semantics = training_semantics(profile)
-    torch.save(
-        {
+    final_encoder_pretraining = getattr(model, "_encoder_pretraining_summary", None)
+    encoder_pretraining_audit = None
+    if final_encoder_pretraining is not None:
+        encoder_pretraining_audit = {
+            "epoch_selection": epoch_selection.get("encoder_pretraining"),
+            "final_refit": final_encoder_pretraining,
+        }
+    checkpoint_payload = {
             "model_state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
             "feature_count": int(feature_bank.shape[2]),
             "context_count": int(group_context.shape[1]),
@@ -4902,9 +4962,10 @@ def run(args) -> int:
             "torch_execution": plan.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
             "total_parameter_count": int(total_parameter_count),
-        },
-        artifact_paths.model_path,
-    )
+        }
+    if encoder_pretraining_audit is not None:
+        checkpoint_payload["encoder_pretraining"] = encoder_pretraining_audit
+    torch.save(checkpoint_payload, artifact_paths.model_path)
     split_assignments.to_csv(artifact_paths.split_path, index=False, encoding="utf-8-sig")
 
     # OOS target transformation and model inference occur only after the frozen
@@ -5160,6 +5221,8 @@ def run(args) -> int:
             "report_markdown": build_file_manifest(report_markdown_path),
         },
     }
+    if encoder_pretraining_audit is not None:
+        payload["training"]["encoder_pretraining"] = encoder_pretraining_audit
     write_json(artifact_paths.manifest_path, manifest)
 
     print("\nContinuous ranker完成")

@@ -2030,6 +2030,14 @@ def _train_fold(
         selected_epoch=selected_epoch,
         fold_contract=fold_contract,
     )
+    final_encoder_pretraining = getattr(model, "_encoder_pretraining_summary", None)
+    encoder_pretraining_audit = None
+    if final_encoder_pretraining is not None:
+        encoder_pretraining_audit = {
+            "epoch_selection": epoch_selection.get("encoder_pretraining"),
+            "final_refit": final_encoder_pretraining,
+        }
+        checkpoint_payload["encoder_pretraining"] = encoder_pretraining_audit
     torch.save(checkpoint_payload, model_path)
     frame.to_csv(score_path, index=False, encoding="utf-8-sig")
     validation_frame.to_csv(validation_score_path, index=False, encoding="utf-8-sig")
@@ -2052,6 +2060,8 @@ def _train_fold(
             "validation_scores": build_file_manifest(validation_score_path),
         },
     }
+    if encoder_pretraining_audit is not None:
+        manifest["encoder_pretraining"] = encoder_pretraining_audit
     write_json(fold_dir / FOLD_MANIFEST_FILENAME, manifest)
     return frame, manifest
 
