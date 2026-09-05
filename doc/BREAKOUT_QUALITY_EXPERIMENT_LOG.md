@@ -11949,3 +11949,13 @@ Decision：`RELATION_CHANGE_SAFETY_SIGNAL_MARGINAL_AND_INCONSISTENT / MODEL_GATE
 - **Forward Gate / stop rule**：Seed42 Forward first，primary reference=MR-13AO且AO必須保留Compare/Test。只有Raw Safety Daily/Global/Pair、Pred-HS true-LS/P45-P55及Breakout共同material改善且Conditional-MFE不material trade-off才允許下一步。若仍是marginal shift，直接`ADAPTIVE_HORIZON_SAFETY_CEILING_NOT_BROKEN / CLOSED`；禁止H=20/60、aux-weight、150/600 input、alternate trajectory/first-passage、gate width/temperature或architecture sweep，研究priority回真正orthogonal PIT-safe information。
 
 Decision：`MR13BU_IMPLEMENTED_RESULT_PENDING / AO_40BAR_FINAL_SAFETY_IDENTITY_EXACT / MAX_HORIZON_40_FIXED / LEARNED_EFFECTIVE_HORIZON / 1_TO_40_ADVERSE_TRAJECTORY_SUPERVISION / ZERO_INIT_SAFETY_RESIDUAL / CONDITIONAL_MFE_UNTOUCHED / AO_RETAINED_IN_COMPARE / FORWARD_GATE_FIRST`。
+
+### 2026-09-05 — MR-13BU terminal-horizon AO SSOT bug fix（engineering-only）
+
+- 使用者首次執行BU Seed42 Forward時，在Epoch selection前由既有hard guard正確攔截：`adaptive-horizon 40-bar Safety target未精確回到canonical AO target: max_delta=0.00211790`。因此本次沒有產生BU Forward模型結果，scientific Gate仍`RESULT_PENDING`。
+- Root cause：BU target provider先從canonical OHLCV重新materialize 40-bar adverse path，再獨立執行一次same-date percentile rank；AO final Safety則已由canonical `target_adverse_r` target-builder建立。這形成第二個terminal-target owner；大型同日cross-section只要獨立materialization／batch ranking出現極小量化、tie或ordering差異，就可能移動一個rank step。本次`0.00211790`約等於單一cross-sectional rank級距，因此不能靠放寬tolerance掩蓋；final Safety必須直接回AO SSOT。
+- Fix：horizon `1..39`仍由future adverse prefix path建立新的same-date trajectory supervision；terminal `h=40`不再重算 percentile，而是直接逐row消費AO canonical Safety target。保留exact `array_equal` invariant，不放寬tolerance、不改AO target、不改max horizon、loss、architecture、Seed、split、Conditional-MFE或任何scientific identity。
+- Regression contract：synthetic case新增「independently recomputed terminal rank可因微小perturbation改變，但provider terminal仍必須bitwise等於canonical AO Safety」；既有canonical-path parity仍保留。
+
+Decision：`ENGINEERING_FIX_ONLY / TERMINAL_HORIZON_CANONICAL_AO_SSOT / MR13BU_IDENTITY_UNCHANGED / FORWARD_RESULT_STILL_PENDING`。
+

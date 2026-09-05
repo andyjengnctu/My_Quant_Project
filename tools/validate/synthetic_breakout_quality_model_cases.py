@@ -4352,6 +4352,44 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and adaptive_provider.targets_for_ids(adaptive_ids) is adaptive_trajectory,
     )
 
+    # Regression for the first real BU run: the terminal trajectory percentile must
+    # not be independently re-ranked.  A tiny independently-materialized perturbation
+    # can alter same-date tie geometry by one rank step even though AO already owns
+    # the canonical 40-bar Safety truth.  Horizons 1..39 remain path-derived, while
+    # column 40 must consume that AO SSOT bit-for-bit.
+    class _PerturbedTerminalPathBank:
+        def __init__(self, base_bank):
+            self._base_bank = base_bank
+
+        def future_adverse_to_best_peak_path(self, group_ids, *, horizon_bars):
+            values = self._base_bank.future_adverse_to_best_peak_path(
+                group_ids, horizon_bars=horizon_bars
+            ).copy()
+            values[1, -1] = values[2, -1]
+            return values
+
+    perturbed_bank = _PerturbedTerminalPathBank(adaptive_bank)
+    perturbed_path = perturbed_bank.future_adverse_to_best_peak_path(
+        adaptive_ids, horizon_bars=40
+    )
+    independently_recomputed_terminal = build_same_date_percentile_targets(
+        -perturbed_path[:, -1].astype(np.float64),
+        np.ones(4, dtype=bool),
+        adaptive_group_dates,
+    ).astype(np.float32)
+    perturbed_provider = AdaptiveHorizonSafetyTargetProvider(
+        feature_bank=perturbed_bank,
+        group_dates=adaptive_group_dates,
+        final_safety_target=canonical_final_safety,
+        horizon_bars=40,
+    )
+    perturbed_trajectory = perturbed_provider.targets_for_ids(adaptive_ids)
+    check_true(
+        "adaptive_horizon_terminal_uses_canonical_ao_ssot_not_independent_rerank",
+        not np.array_equal(independently_recomputed_terminal, canonical_final_safety)
+        and np.array_equal(perturbed_trajectory[:, -1], canonical_final_safety),
+    )
+
     # Same-date dynamic hypergraph is a reusable Safety-only relational primitive.
     # It must start exactly from AO, consume detached same-date latent nodes, and
     # never allow inference/training batches to mix trading dates.
