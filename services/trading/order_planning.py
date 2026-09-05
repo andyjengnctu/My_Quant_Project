@@ -42,7 +42,7 @@ from core.trading_order_state import (
     validate_trading_order_state,
 )
 from services.trading.account_state import load_trading_account_state
-from services.trading.daily_workflow import (
+from services.trading.scanner_state import (
     load_trading_candidate_snapshot,
     load_trading_scanner_runtime,
     resolve_trading_candidate_snapshot_path,
