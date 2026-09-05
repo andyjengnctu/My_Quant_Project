@@ -3868,6 +3868,7 @@ def select_epoch(
             final_safety_target=np.asarray(training_target[:, 0], dtype=np.float32),
             horizon_bars=int(model_spec.adaptive_safety_horizon_bars or 0),
         )
+        adaptive_horizon_target_provider.prepare_ids(train_ids)
     raw_r_loss_name = (
         str(profile.loss_name)
         if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
@@ -4678,6 +4679,7 @@ def fit_final(
             final_safety_target=np.asarray(training_target[:, 0], dtype=np.float32),
             horizon_bars=int(model_spec.adaptive_safety_horizon_bars or 0),
         )
+        adaptive_horizon_target_provider.prepare_ids(final_ids)
     raw_r_loss_name = (
         str(profile.loss_name)
         if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R

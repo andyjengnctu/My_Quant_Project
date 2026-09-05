@@ -11967,3 +11967,13 @@ Decision：`ENGINEERING_FIX_ONLY / TERMINAL_HORIZON_CANONICAL_AO_SSOT / MR13BU_I
 - **Regression**：新增隔離final-refit regression，直接驗證adaptive-horizon final refit能從training policy解析loss handler、建立provider並傳入canonical `_train_epoch` seam；不以MR identity branch修補。
 
 Decision：`ENGINEERING_FIX_ONLY / SCIENTIFIC_CONTRACT_UNCHANGED / FORWARD_RESULT_NOT_YET_AVAILABLE / RERUN_SAME_BU_FORWARD`。
+
+## 2026-09-05 — MR-13BU adaptive-horizon target feeding performance optimization
+
+- **Observed runtime evidence**：使用者於MR-13BU Forward重跑時回報GPU利用率低於20%、CPU低於15%。前一輪亦顯示BU Epoch 1約`542.0s`、Epoch 2約`112.2s`，符合first-epoch target materialization造成GPU starvation的型態。
+- **Root cause**：`AdaptiveHorizonSafetyTargetProvider`原本於第一個epoch依complete-date mini-batch lazy建立1～40日future-adverse path，且對1～39 horizon逐欄呼叫same-date pandas rank。這個CPU-side工作發生在device-ready feature batch已交給trainer之後，GPU會等待；cache填滿後第二epoch才恢復正常feeding速度。
+- **Engineering fix**：每個合法fitting scope（Inner Train或Final Selection）在進入epoch loop前一次 materialize完整adaptive trajectory；future path以fitting IDs一次依ticker向量化建立，1～39 horizons以單一matrix grouped-rank建立，h40仍直接消費AO canonical Safety SSOT。batch runtime只作prepared target gather。Inner與Selection各自建立、絕不跨scope reuse。
+- **Scientific invariants**：sample membership/order、date-coherent batching、Seed42、optimizer update順序、loss、AO terminal Safety、1～39 trajectory定義、Conditional-MFE、epoch selection與PIT語意全部不變。這是execution-only optimization，不改MR-13BU identity/fingerprint。
+- **Isolated benchmark**：含ties的`19,200 rows × 40 horizons` synthetic，prepared-scope與原lazy complete-date target **bitwise exact**；target build約`6.76s → 0.32s`（約`20.8×`），terminal endpoint仍bitwise AO exact。此數字只作工程相對benchmark，不宣稱等同使用者完整資料上的實際加速倍率。
+
+Decision：`EXECUTION_ONLY_TARGET_PRECOMPUTE / BITWISE_TARGET_PARITY / SCIENTIFIC_IDENTITY_UNCHANGED`。

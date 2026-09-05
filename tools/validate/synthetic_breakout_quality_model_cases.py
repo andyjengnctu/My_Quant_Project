@@ -4390,6 +4390,61 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and np.array_equal(perturbed_trajectory[:, -1], canonical_final_safety),
     )
 
+    # Execution-only optimization regression: fitting-scope eager materialization
+    # must be bit-for-bit identical to the historical lazy complete-date batches.
+    # Include repeated values so average-rank tie semantics are covered.
+    perf_dates = pd.Series(pd.to_datetime([
+        "2020-01-02", "2020-01-02", "2020-01-02",
+        "2020-01-03", "2020-01-03", "2020-01-03",
+    ]))
+    perf_paths = np.asarray([
+        [0.10, 0.20, 0.20, 0.30],
+        [0.10, 0.25, 0.20, 0.35],
+        [0.15, 0.25, 0.40, 0.45],
+        [0.05, 0.10, 0.10, 0.20],
+        [0.07, 0.10, 0.15, 0.25],
+        [0.07, 0.12, 0.15, 0.30],
+    ], dtype=np.float32)
+
+    class _PreparedPathBank:
+        def future_adverse_to_best_peak_path(self, group_ids, *, horizon_bars):
+            return perf_paths[np.asarray(group_ids, dtype=np.int64), :int(horizon_bars)]
+
+    perf_final = np.concatenate([
+        build_same_date_percentile_targets(
+            -perf_paths[:3, -1].astype(np.float64), np.ones(3, dtype=bool), perf_dates.iloc[:3]
+        ),
+        build_same_date_percentile_targets(
+            -perf_paths[3:, -1].astype(np.float64), np.ones(3, dtype=bool), perf_dates.iloc[3:]
+        ),
+    ]).astype(np.float32)
+    lazy_perf_provider = AdaptiveHorizonSafetyTargetProvider(
+        feature_bank=_PreparedPathBank(),
+        group_dates=perf_dates,
+        final_safety_target=perf_final,
+        horizon_bars=4,
+    )
+    lazy_perf = np.vstack([
+        lazy_perf_provider.targets_for_ids(np.asarray([0, 1, 2], dtype=np.int64)),
+        lazy_perf_provider.targets_for_ids(np.asarray([3, 4, 5], dtype=np.int64)),
+    ])
+    prepared_perf_provider = AdaptiveHorizonSafetyTargetProvider(
+        feature_bank=_PreparedPathBank(),
+        group_dates=perf_dates,
+        final_safety_target=perf_final,
+        horizon_bars=4,
+    )
+    prepared_perf_provider.prepare_ids(np.arange(6, dtype=np.int64))
+    prepared_perf = np.vstack([
+        prepared_perf_provider.targets_for_ids(np.asarray([0, 1, 2], dtype=np.int64)),
+        prepared_perf_provider.targets_for_ids(np.asarray([3, 4, 5], dtype=np.int64)),
+    ])
+    check_true(
+        "adaptive_horizon_prepared_scope_is_bitwise_lazy_complete_date_exact",
+        np.array_equal(prepared_perf, lazy_perf)
+        and np.array_equal(prepared_perf[:, -1], perf_final),
+    )
+
     # Regression for the first BU final-refit attempt: epoch selection resolved the
     # canonical loss handler, while fit_final once referenced an unbound local before
     # constructing the adaptive provider.  Exercise the public final-refit function
@@ -4397,7 +4452,14 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # loss-handler semantics without experiment-specific branching.
     import services.breakout_quality.train_continuous_ranker as _ranker_module
 
-    _sentinel_provider = object()
+    class _SentinelAdaptiveProvider:
+        def __init__(self):
+            self.prepared_ids = None
+
+        def prepare_ids(self, ids):
+            self.prepared_ids = np.asarray(ids, dtype=np.int64).copy()
+
+    _sentinel_provider = _SentinelAdaptiveProvider()
     _originals = {
         "_training_target_for_profile": _ranker_module._training_target_for_profile,
         "AdaptiveHorizonSafetyTargetProvider": _ranker_module.AdaptiveHorizonSafetyTargetProvider,
@@ -4435,6 +4497,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         def _fake_train_epoch(*_args, **_kwargs):
             _provider_seen["value"] = (
                 _kwargs.get("adaptive_horizon_target_provider") is _sentinel_provider
+                and np.array_equal(
+                    _sentinel_provider.prepared_ids, np.arange(4, dtype=np.int64)
+                )
             )
             return 0.123
         _ranker_module._train_epoch = _fake_train_epoch
