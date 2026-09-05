@@ -419,6 +419,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_adaptive_horizon_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_ADAPTIVE_INPUT_CONTEXT_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_adaptive_input_context_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_dynamic_hypergraph_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
@@ -1579,6 +1582,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_adaptive_horizon_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_ADAPTIVE_INPUT_CONTEXT_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_ADAPTIVE_INPUT_CONTEXT_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_adaptive_input_context_safety_mfe_v1",
     ),
     DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3341,6 +3356,40 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "input-length, alternate-path-target, or gate-capacity sweep, then return to truly orthogonal PIT-safe information."
         ),
         metric_scope="ao_with_adaptive_future_horizon_safety_trajectory",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_ADAPTIVE_INPUT_CONTEXT_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_ADAPTIVE_INPUT_CONTEXT_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BV",
+        experiment_name="MR-13BV Adaptive Input-Context Safety Shared Ranker",
+        phase="13BV",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "exact_MR13AO_head1_40bar_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "exact_MR13AO_head2_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "User-authorized adaptive past-context experiment after MR-13BU adaptive future-horizon Forward failed. All target/loss "
+            "semantics revert exactly to MR-13AO: canonical 40-bar Safety full-list Delta-NDCG, true-HS=P50 Conditional-MFE sublist, "
+            "equal head weighting, Seed42, Adam, split/PIT/epoch-selection and Pred-Safety->Conditional-MFE inference. Maximum input "
+            "remains the canonical 300x10 window. The only scientific treatment is a Safety-only adaptive look-back residual over fixed "
+            "30/60/120/300-bar suffix views. The same AO InceptionTime encoder weights encode every view; 30/60/120-bar auxiliary "
+            "views are stop-gradient and cannot update BatchNorm running state, while the canonical 300-bar latent remains the sole "
+            "Conditional-MFE input. A sample-specific softmax gate chooses the four look-back weights and a zero-initialized two-logit "
+            "projection of adaptive-minus-300bar latent preserves same-seed AO-exact Safety at step 0. No future-horizon adaptation, "
+            "input-window sweep, extra target, loss weight, temperature, hidden gate, or 600-bar extension is included. Primary "
+            "reference=MR-13AO and AO remains in Compare/Test. Seed42 Forward first; if Raw Safety Daily/Global/Pair, Pred-HS purity "
+            "and Breakout Safety do not materially improve without Conditional-MFE trade-off, close adaptive-input family without tuning."
+        ),
+        metric_scope="ao_with_adaptive_30_60_120_300bar_safety_input_context",
         score_semantic_id="daily_true_hs_conditional_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,

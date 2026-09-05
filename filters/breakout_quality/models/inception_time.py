@@ -17,6 +17,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_safety_conditional_mfe = descriptor.has_capability("safety_conditional_mfe")
     use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
     use_adaptive_horizon_safety = descriptor.has_capability("adaptive_horizon_safety")
+    use_adaptive_input_context_safety = descriptor.has_capability("adaptive_input_context_safety")
     use_same_date_dynamic_hypergraph_safety = descriptor.has_capability(
         "same_date_dynamic_hypergraph_safety"
     )
@@ -56,6 +57,10 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         raise ValueError("Pairwise temporal relation bias必須建立在Safety temporal self-attention上")
     if use_adaptive_horizon_safety and not use_shared_safety_mfe:
         raise ValueError("adaptive-horizon Safety residual必須建立在shared Safety/MFE architecture上")
+    if use_adaptive_input_context_safety and not use_shared_safety_mfe:
+        raise ValueError("adaptive input-context Safety residual必須建立在shared Safety/MFE architecture上")
+    if use_adaptive_horizon_safety and use_adaptive_input_context_safety:
+        raise ValueError("adaptive future-horizon與adaptive input-context不可在同一architecture同時啟用")
     if use_same_date_dynamic_hypergraph_safety and not use_shared_safety_mfe:
         raise ValueError("same-date dynamic hypergraph Safety residual必須建立在shared Safety/MFE architecture上")
     if use_same_date_dynamic_hypergraph_relation_change_safety and not use_same_date_dynamic_hypergraph_safety:
@@ -389,6 +394,21 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 )
             else:
                 self.adaptive_horizon_safety_branch = None
+            if use_adaptive_input_context_safety:
+                from filters.breakout_quality.models.adaptive_input_context import (
+                    build_adaptive_input_context_safety_branch,
+                )
+
+                self.adaptive_input_context_safety_branch = (
+                    build_adaptive_input_context_safety_branch(
+                        nn,
+                        torch,
+                        latent_width=module_output_channels,
+                        spec=spec,
+                    )
+                )
+            else:
+                self.adaptive_input_context_safety_branch = None
             if use_same_date_dynamic_hypergraph_safety:
                 from filters.breakout_quality.models.dynamic_hypergraph import (
                     build_same_date_dynamic_hypergraph_safety_residual,
@@ -485,8 +505,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 }
                 getattr(self, owner_name).load_state_dict(owner_state, strict=True)
 
-        def _encode_relation_view_without_state_update(self, x):
-            """Encode relational-only inputs without gradient or BatchNorm state mutation."""
+        def _encode_auxiliary_view_without_state_update(self, x):
+            """Encode an auxiliary view without gradient or BatchNorm state mutation."""
 
             owners = (self.inception_modules, self.residual_projections)
             training_states = tuple(bool(owner.training) for owner in owners)
@@ -498,6 +518,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             finally:
                 for owner, was_training in zip(owners, training_states):
                     owner.train(was_training)
+
+        def _encode_relation_view_without_state_update(self, x):
+            return self._encode_auxiliary_view_without_state_update(x)
 
         def safety_attention_weights(self, x):
             if self.safety_attention_scorer is None:
@@ -596,6 +619,33 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             mfe_logits = self.raw_mfe_classifier(shared_encoded)
             return safety_logits, mfe_logits, horizon_logits, horizon_weights
 
+        def forward_adaptive_input_context_safety_mfe_heads(self, x, context):
+            branch = self.adaptive_input_context_safety_branch
+            if branch is None:
+                raise ValueError("目前architecture沒有adaptive input-context Safety branch")
+            if self.raw_safety_classifier is None or self.raw_mfe_classifier is None:
+                raise ValueError("adaptive input-context architecture需要AO Raw Safety / MFE heads")
+            if x.ndim != 3 or int(x.shape[1]) != int(branch.context_bars[-1]):
+                raise ValueError("adaptive input-context需要完整canonical max-window input")
+            _primary_input, shared_encoded = self._encoded_for_heads(x, context)
+            context_latents = []
+            for bars in branch.context_bars:
+                if int(bars) == int(x.shape[1]):
+                    latent = shared_encoded.detach()
+                else:
+                    latent = self._encode_auxiliary_view_without_state_update(
+                        x[:, -int(bars):, :]
+                    )
+                context_latents.append(latent)
+            stacked = torch.stack(context_latents, dim=1)
+            residual_logits, gate_logits, context_weights = branch(
+                shared_encoded, stacked
+            )
+            base_safety_logits = self.raw_safety_classifier(shared_encoded)
+            safety_logits = base_safety_logits + residual_logits.to(base_safety_logits.dtype)
+            mfe_logits = self.raw_mfe_classifier(shared_encoded)
+            return safety_logits, mfe_logits, gate_logits, context_weights
+
         def forward_safety_mfe_heads(self, x, context, *, relation_history_x=None):
             """Return the canonical Raw-Safety + final-MFE pair for duo-head training.
 
@@ -610,6 +660,10 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 if relation_history_x is not None:
                     raise ValueError("adaptive-horizon Safety architecture不得收到relation-history tensor")
                 return self.forward_adaptive_horizon_safety_mfe_heads(x, context)[:2]
+            if self.adaptive_input_context_safety_branch is not None:
+                if relation_history_x is not None:
+                    raise ValueError("adaptive input-context architecture不得收到relation-history tensor")
+                return self.forward_adaptive_input_context_safety_mfe_heads(x, context)[:2]
             if self.same_date_dynamic_hypergraph_safety_residual is not None:
                 _primary_input, shared_encoded = self._encoded_for_heads(x, context)
                 safety_logits = self.raw_safety_classifier(shared_encoded)

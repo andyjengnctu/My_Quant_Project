@@ -2635,6 +2635,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_ADAPTIVE_INPUT_CONTEXT_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -2695,6 +2696,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
         INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1,
+        INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1,
@@ -4192,6 +4194,154 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             if parameter.grad is not None:
                 total += float(parameter.grad.detach().abs().sum().item())
         return total
+
+    # BV tests adaptive past context as a Safety-only correction while keeping
+    # AO's canonical 300-bar latent as the only Conditional-MFE input.
+    adaptive_input_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_ADAPTIVE_INPUT_CONTEXT_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    adaptive_input_spec = get_model_spec(
+        INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1
+    )
+    check(
+        "adaptive_input_context_profile_is_ao_objective_with_fixed_multiscale_windows",
+        (
+            "MR-13BV",
+            "inception_time_shared_adaptive_input_context_safety_mfe_v1",
+            (30, 60, 120, 300),
+            True,
+            True,
+            "daily_shared_safety_hs_conditional_mfe_pairwise_ranking",
+            "daily_full_horizon_pure_mfe_r_v1",
+        ),
+        (
+            get_continuous_ranker_research_spec(adaptive_input_profile.name).model_research_id,
+            adaptive_input_profile.model_architecture,
+            tuple(adaptive_input_spec.adaptive_input_context_bars),
+            bool(adaptive_input_spec.adaptive_input_context_stop_gradient),
+            bool(adaptive_input_spec.adaptive_input_context_zero_init_residual),
+            adaptive_input_profile.training_objective,
+            adaptive_input_profile.continuous_target_id,
+        ),
+    )
+    torch.manual_seed(20260906)
+    adaptive_input_ao = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
+    )
+    torch.manual_seed(20260906)
+    adaptive_input_model = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1
+    )
+    adaptive_input_ao_state = adaptive_input_ao.state_dict()
+    adaptive_input_state = adaptive_input_model.state_dict()
+    adaptive_input_extra = sorted(
+        set(adaptive_input_state).difference(adaptive_input_ao_state)
+    )
+    check_true(
+        "adaptive_input_context_same_seed_preserves_all_ao_parameters",
+        not (set(adaptive_input_ao_state) - set(adaptive_input_state))
+        and all(
+            torch.equal(adaptive_input_ao_state[key], adaptive_input_state[key])
+            for key in adaptive_input_ao_state
+        )
+        and adaptive_input_extra
+        == [
+            "adaptive_input_context_safety_branch.gate.bias",
+            "adaptive_input_context_safety_branch.gate.weight",
+            "adaptive_input_context_safety_branch.residual_projection.weight",
+        ],
+    )
+    torch.manual_seed(20260906)
+    adaptive_input_x = torch.randn((6, 300, 10), dtype=torch.float32)
+    adaptive_input_context = torch.empty((6, 0), dtype=torch.float32)
+    adaptive_input_ao.eval()
+    adaptive_input_model.eval()
+    recorded_lookbacks = []
+    _adaptive_original_encode = adaptive_input_model._encode_auxiliary_view_without_state_update
+    def _record_adaptive_view(view):
+        recorded_lookbacks.append(int(view.shape[1]))
+        return _adaptive_original_encode(view)
+    adaptive_input_model._encode_auxiliary_view_without_state_update = _record_adaptive_view
+    with torch.no_grad():
+        adaptive_input_ao_safety, adaptive_input_ao_mfe = (
+            adaptive_input_ao.forward_safety_mfe_heads(
+                adaptive_input_x, adaptive_input_context
+            )
+        )
+        (
+            adaptive_input_safety,
+            adaptive_input_mfe,
+            adaptive_input_gate_logits,
+            adaptive_input_weights,
+        ) = adaptive_input_model.forward_adaptive_input_context_safety_mfe_heads(
+            adaptive_input_x, adaptive_input_context
+        )
+    adaptive_input_model._encode_auxiliary_view_without_state_update = _adaptive_original_encode
+    check_true(
+        "adaptive_input_context_zero_init_step0_is_ao_exact_uniform_and_uses_suffix_views",
+        torch.equal(adaptive_input_ao_safety, adaptive_input_safety)
+        and torch.equal(adaptive_input_ao_mfe, adaptive_input_mfe)
+        and tuple(adaptive_input_gate_logits.shape) == (6, 4)
+        and tuple(adaptive_input_weights.shape) == (6, 4)
+        and torch.allclose(
+            adaptive_input_weights,
+            torch.full_like(adaptive_input_weights, 0.25),
+            rtol=0.0,
+            atol=1e-7,
+        )
+        and recorded_lookbacks == [30, 60, 120],
+    )
+
+    # Short look-back views must not add encoder gradients or BatchNorm updates.
+    torch.manual_seed(20260907)
+    bn_ao = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    torch.manual_seed(20260907)
+    bn_adaptive = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1
+    )
+    bn_ao.train()
+    bn_adaptive.train()
+    bn_x = torch.randn((8, 300, 10), dtype=torch.float32)
+    bn_context = torch.empty((8, 0), dtype=torch.float32)
+    bn_ao.forward_safety_mfe_heads(bn_x, bn_context)
+    bn_adaptive.forward_safety_mfe_heads(bn_x, bn_context)
+    bn_ao_state = bn_ao.export_encoder_state_dict()
+    bn_adaptive_state = bn_adaptive.export_encoder_state_dict()
+    check_true(
+        "adaptive_input_context_aux_views_do_not_mutate_encoder_batchnorm_state",
+        set(bn_ao_state) == set(bn_adaptive_state)
+        and all(
+            torch.equal(bn_ao_state[key], bn_adaptive_state[key])
+            for key in bn_ao_state
+        ),
+    )
+
+    # Primitive gradient ownership: all input latents are detached; once the
+    # zero-init projection learns, the sample-specific gate must become trainable.
+    branch = adaptive_input_model.adaptive_input_context_safety_branch
+    branch.train()
+    full_latent = torch.randn((9, adaptive_input_model.encoder_embedding_width), requires_grad=True)
+    context_latents = torch.randn(
+        (9, 4, adaptive_input_model.encoder_embedding_width), requires_grad=True
+    )
+    branch_optimizer = torch.optim.Adam(branch.parameters(), lr=1e-2)
+    gate_before = branch.gate.weight.detach().clone()
+    projection_before = branch.residual_projection.weight.detach().clone()
+    target_margin = torch.linspace(-0.6, 0.6, 9)
+    for _ in range(2):
+        branch_optimizer.zero_grad(set_to_none=True)
+        residual_logits, _gate_logits, _weights = branch(full_latent, context_latents)
+        margin = residual_logits[:, 1] - residual_logits[:, 0]
+        branch_loss = torch.mean((margin - target_margin) ** 2)
+        branch_loss.backward()
+        branch_optimizer.step()
+    check_true(
+        "adaptive_input_context_branch_learns_after_zero_init_without_encoder_gradient",
+        full_latent.grad is None
+        and context_latents.grad is None
+        and not torch.equal(projection_before, branch.residual_projection.weight.detach())
+        and not torch.equal(gate_before, branch.gate.weight.detach()),
+    )
 
     # BU adds adaptive future-horizon Safety supervision while preserving the
     # canonical AO 40-bar Safety identity and untouched Conditional-MFE path.

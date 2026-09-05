@@ -581,6 +581,24 @@ def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
                 options.get("adaptive_safety_zero_init_residual", False)
             ),
         )
+    adaptive_input_context_bars = tuple(
+        int(value) for value in options.get("adaptive_input_context_bars", ())
+    )
+    if adaptive_input_context_bars:
+        if tuple(sorted(set(adaptive_input_context_bars))) != adaptive_input_context_bars:
+            raise ValueError("adaptive input context bars必須嚴格遞增且不得重複")
+        if spec.input_window_bars is None or adaptive_input_context_bars[-1] != int(spec.input_window_bars):
+            raise ValueError("adaptive input context最後一個window必須等於architecture input window")
+        spec = replace(
+            spec,
+            adaptive_input_context_bars=adaptive_input_context_bars,
+            adaptive_input_context_stop_gradient=bool(
+                options.get("adaptive_input_context_stop_gradient", False)
+            ),
+            adaptive_input_context_zero_init_residual=bool(
+                options.get("adaptive_input_context_zero_init_residual", False)
+            ),
+        )
     same_date_hyperedge_count = options.get("same_date_hyperedge_count")
     if same_date_hyperedge_count is not None:
         count = int(same_date_hyperedge_count)

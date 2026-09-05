@@ -56,6 +56,9 @@ class BreakoutQualityModelSpec:
     same_date_relation_history_steps: int | None = None
     adaptive_safety_horizon_bars: int | None = None
     adaptive_safety_zero_init_residual: bool | None = None
+    adaptive_input_context_bars: tuple[int, ...] = ()
+    adaptive_input_context_stop_gradient: bool | None = None
+    adaptive_input_context_zero_init_residual: bool | None = None
     window_normalization_epsilon: float | None = None
     inception_depth: int | None = None
     inception_filters: int | None = None
@@ -173,6 +176,15 @@ class BreakoutQualityModelSpec:
         """Return topology semantics for Safety + true-HS Conditional-MFE objectives."""
 
         heads = set(self.pooling)
+        if "adaptive_input_context_safety_residual" in heads:
+            return {
+                "architecture": "shared_inception_encoder_plus_adaptive_input_context_safety_residual",
+                "conditional_mfe_head_inputs": "canonical_300bar_shared_latent_only_no_adaptive_context_input_no_predicted_safety_context",
+                "safety_base_input": "canonical_300bar_shared_latent",
+                "adaptive_input_contexts": "sample_specific_softmax_over_30_60_120_300bar_stop_gradient_auxiliary_views",
+                "adaptive_context_encoder": "same_ao_encoder_weights_no_gradient_no_batchnorm_state_update_for_short_views",
+                "safety_residual_initialization": "zero_init_two_logit_residual_preserves_ao_step0_safety",
+            }
         if "adaptive_horizon_safety_residual" in heads:
             return {
                 "architecture": "shared_inception_encoder_plus_adaptive_horizon_safety_residual",
@@ -262,6 +274,8 @@ class BreakoutQualityModelSpec:
             "same_date_relation_history_steps": self.same_date_relation_history_steps,
             "adaptive_safety_horizon_bars": self.adaptive_safety_horizon_bars,
             "adaptive_safety_zero_init_residual": self.adaptive_safety_zero_init_residual,
+            "adaptive_input_context_stop_gradient": self.adaptive_input_context_stop_gradient,
+            "adaptive_input_context_zero_init_residual": self.adaptive_input_context_zero_init_residual,
             "inception_depth": self.inception_depth,
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,
@@ -364,6 +378,10 @@ class BreakoutQualityModelSpec:
             payload["pairwise_temporal_relation_features"] = list(
                 self.pairwise_temporal_relation_features
             )
+        if self.adaptive_input_context_bars:
+            payload["adaptive_input_context_bars"] = [
+                int(value) for value in self.adaptive_input_context_bars
+            ]
         if self.window_normalization_epsilon is not None:
             payload["window_normalization_epsilon"] = float(
                 self.window_normalization_epsilon

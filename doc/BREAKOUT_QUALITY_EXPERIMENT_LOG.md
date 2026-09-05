@@ -11986,3 +11986,13 @@ Decision：`EXECUTION_ONLY_TARGET_PRECOMPUTE / BITWISE_TARGET_PARITY / SCIENTIFI
 - **Regression**：synthetic contract明確在`pd.options.mode.copy_on_write=True`下執行vectorized percentile path，並逐欄與canonical `build_same_date_percentile_targets` bitwise比較；測試結束後恢復原Pandas option。
 
 Decision：`ENGINEERING_COMPATIBILITY_FIX_ONLY / PANDAS_COW_WRITABLE_RANK_OWNER / SCIENTIFIC_IDENTITY_UNCHANGED / RERUN_SAME_BU_FORWARD`。
+
+## 2026-09-06 — MR-13BU Forward closure / MR-13BV Adaptive Input Context authorization
+
+- **BU completed Forward evidence**：overall Daily/Global/Pair=`0.3989/0.3090/63.77%` vs AO=`0.4042/0.3368/63.96%`；Breakout=`0.3733/0.3566/64.50%` vs AO=`0.3850/0.3804/64.73%`。Primary Raw Safety=`0.3484/0.2874/62.51%` vs AO=`0.3532/0.2929/62.68%`；Breakout Raw Safety=`0.3043/0.3459/63.61%` vs AO=`0.3135/0.3554/63.65%`。Pred-HS true-LS=`36.91%` vs `36.84%`，Breakout=`38.04%` vs `36.94%`。HS-only Conditional-MFE Forward=`0.3879/0.2768/63.56%` vs AO=`0.3969/0.3104/63.90%`，Breakout=`0.3974/0.3968/66.72%` vs `0.4116/0.4353/67.22%`。因此adaptive future-horizon supervision不是Safety ceiling breaker，且有MFE collateral damage。
+- **BU decision**：`ADAPTIVE_HORIZON_SAFETY_DEGRADES / CONDITIONAL_MFE_DEGRADES / MODEL_GATE_FAIL / CLOSED / NO_ROLLING / NO_ROBUSTNESS / NO_HORIZON_SWEEP / NOT_PROMOTED`。效能優化後Epoch 1/2=`116.0s/116.8s`、Selection refit=`124.3s`，故本次scientific FAIL與先前CPU target-feeding問題已乾淨分離。
+- **New user authorization**：BU結案後使用者明確追問「input length自己學剛才試了嗎」；確認BU只學future horizon、未測adaptive past context後，使用者明確回覆「進行」。這構成對BU原stop rule中`NO_INPUT_LENGTH_SWEEP`的具名新scientific identity override；不得覆寫BU或當作BU tuning。分配`MR-13BV`。
+- **MR-13BV scientific contract**：max input仍300 bars，固定look-back candidates=`30/60/120/300`，future max horizon/target/loss全部恢復AO：40-bar full-universe Safety + true-HS Conditional-MFE，Seed42/Adam/split/PIT/epoch-selection/inference固定。相同AO encoder weights產生各suffix view；30/60/120 auxiliary views stop-gradient並禁止BatchNorm running-state mutation。Sample-specific softmax gate從canonical 300-bar latent決定4個look-back weights；adaptive latent與300-bar latent之差只進zero-init two-logit Safety residual。Conditional-MFE仍只讀canonical 300-bar latent。
+- **Attribution / stopping**：BV不加future-horizon trajectory、aux loss、600-bar、temperature、hidden gate、window-count sweep、remove-detach或其他input architecture。Seed42 Forward first，primary reference=AO。只有Raw Safety Daily/Global/Pair、Pred-HS purity/P45-P55及Breakout共同material改善且Conditional-MFE不material退化才允許後續；否則直接關閉adaptive-input family。
+
+Decision：`MR13BV_IMPLEMENTED_RESULT_PENDING / ADAPTIVE_30_60_120_300BAR_PAST_CONTEXT / AO_40BAR_TARGET_AND_LOSS_EXACT / SAFETY_ONLY_ZERO_INIT_RESIDUAL / SHORT_VIEW_STOP_GRADIENT / CONDITIONAL_MFE_300BAR_ONLY / AO_RETAINED_IN_COMPARE / FORWARD_GATE_FIRST`。
