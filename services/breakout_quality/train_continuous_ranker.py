@@ -47,6 +47,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
@@ -139,6 +140,9 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.adaptive_horizon_safety import (
+    AdaptiveHorizonSafetyTargetProvider,
+)
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets, source_data_end
 from filters.breakout_quality.conditional_mfe_safety import (
     ConditionalMfeSafetyTargets,
@@ -1604,6 +1608,7 @@ def _combine_training_head_losses(
 
 _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS = frozenset({
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
@@ -1624,6 +1629,7 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
     secondary_pair_scope_threshold: float | None,
     pairwise_reduction: str,
     relation_history_x=None,
+    adaptive_horizon_targets=None,
 ):
     """Canonical shared Safety + scoped Conditional-MFE batch loss.
 
@@ -1648,7 +1654,34 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
     elif str(secondary_pair_scope) != CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
         raise ValueError(f"unsupported secondary pair scope: {secondary_pair_scope!r}")
 
-    if relation_history_x is None:
+    horizon_trajectory_loss = None
+    if adaptive_horizon_targets is not None:
+        if relation_history_x is not None:
+            raise ValueError("adaptive-horizon Safety objective不得使用relation-history tensor")
+        if not hasattr(model, "forward_adaptive_horizon_safety_mfe_heads"):
+            raise ValueError("adaptive-horizon Safety objective需要trajectory-capable architecture")
+        (
+            safety_logits,
+            conditional_mfe_logits,
+            horizon_logits,
+            _horizon_weights,
+        ) = model.forward_adaptive_horizon_safety_mfe_heads(xb, cb)
+        if adaptive_horizon_targets.ndim != 2:
+            raise ValueError("adaptive-horizon Safety target必須為[N,H]")
+        if horizon_logits.ndim != 3 or int(horizon_logits.shape[2]) != 2:
+            raise ValueError("adaptive-horizon Safety logits必須為[N,H,2]")
+        if tuple(horizon_logits.shape[:2]) != tuple(adaptive_horizon_targets.shape):
+            raise ValueError("adaptive-horizon Safety logits/target shape不一致")
+        horizon_margin = (
+            horizon_logits.float()[:, :, LABEL_PASS]
+            - horizon_logits.float()[:, :, LABEL_REJECT]
+        )
+        horizon_trajectory_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+            horizon_margin,
+            adaptive_horizon_targets.float(),
+            reduction="mean",
+        )
+    elif relation_history_x is None:
         safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
     else:
         safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(
@@ -1717,6 +1750,13 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
             ),
             pair_truth_weight_policy=primary_truth_weight_policy,
             ndcg_top_k_threshold=top_hs_ndcg_threshold,
+        )
+
+    if horizon_trajectory_loss is not None:
+        safety_loss = _combine_training_head_losses(
+            (safety_loss, horizon_trajectory_loss),
+            combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            component_count=2,
         )
 
     if (
@@ -1792,6 +1832,7 @@ def _fp32_retry_shared_safety_loss(
     secondary_pair_scope_threshold: float | None,
     pairwise_reduction: str,
     relation_history_x=None,
+    adaptive_horizon_targets=None,
 ):
     with torch.autocast(device_type=xb.device.type, enabled=False):
         return _compute_shared_safety_scoped_mfe_duo_loss(
@@ -1807,6 +1848,11 @@ def _fp32_retry_shared_safety_loss(
             pairwise_reduction=pairwise_reduction,
             relation_history_x=(
                 None if relation_history_x is None else relation_history_x.float()
+            ),
+            adaptive_horizon_targets=(
+                None
+                if adaptive_horizon_targets is None
+                else adaptive_horizon_targets.float()
             ),
         )
 
@@ -1968,6 +2014,7 @@ def _train_epoch(
     raw_r_huber_delta_r: float | None = None,
     numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
     bf16_backward_retry_scales: tuple[float, ...] = (),
+    adaptive_horizon_target_provider=None,
 ) -> float:
     model.train()
     training_policy = get_continuous_ranker_training_policy(training_objective)
@@ -2033,6 +2080,17 @@ def _train_epoch(
             relation_history_plan,
             plan=plan,
         )
+        adaptive_horizon_targets = None
+        if (
+            loss_handler
+            == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+        ):
+            if adaptive_horizon_target_provider is None:
+                raise ValueError("adaptive-horizon Safety training缺少target provider")
+            adaptive_np = adaptive_horizon_target_provider.targets_for_ids(ids)
+            adaptive_horizon_targets = torch.from_numpy(
+                np.array(adaptive_np, dtype=np.float32, copy=True, order="C")
+            ).to(plan.device, non_blocking=True)
         with autocast_context(torch, plan):
             if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 3:
@@ -2082,6 +2140,7 @@ def _train_epoch(
                         secondary_pair_scope_threshold=secondary_pair_scope_threshold,
                         pairwise_reduction=pairwise_reduction,
                         relation_history_x=relation_history_xb,
+                        adaptive_horizon_targets=adaptive_horizon_targets,
                     )
                 except FloatingPointError as exc:
                     if not guarded_retry:
@@ -2100,6 +2159,7 @@ def _train_epoch(
                         secondary_pair_scope_threshold=secondary_pair_scope_threshold,
                         pairwise_reduction=pairwise_reduction,
                         relation_history_x=relation_history_xb,
+                        adaptive_horizon_targets=adaptive_horizon_targets,
                     )
                     if loss is None:
                         continue
@@ -2284,6 +2344,8 @@ def _train_epoch(
                 secondary_pair_scope=secondary_pair_scope,
                 secondary_pair_scope_threshold=secondary_pair_scope_threshold,
                 pairwise_reduction=pairwise_reduction,
+                relation_history_x=relation_history_xb,
+                adaptive_horizon_targets=adaptive_horizon_targets,
             )
             if retry_loss is None:
                 raise FloatingPointError("same-batch FP32 retry缺少有效ranking supervision")
@@ -2365,6 +2427,8 @@ def _train_epoch(
                     secondary_pair_scope=secondary_pair_scope,
                     secondary_pair_scope_threshold=secondary_pair_scope_threshold,
                     pairwise_reduction=pairwise_reduction,
+                    relation_history_x=relation_history_xb,
+                    adaptive_horizon_targets=adaptive_horizon_targets,
                 )
                 if retry_loss is None:
                     raise FloatingPointError("same-batch FP32 retry缺少有效ranking supervision")
@@ -3792,6 +3856,18 @@ def select_epoch(
     training_target = _training_target_for_profile(
         profile, raw_target, percentile_target, group_table
     )
+    adaptive_horizon_target_provider = None
+    if (
+        loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+    ):
+        model_spec = get_model_spec(str(profile.model_architecture))
+        adaptive_horizon_target_provider = AdaptiveHorizonSafetyTargetProvider(
+            feature_bank=feature_bank,
+            group_dates=group_table["date"],
+            final_safety_target=np.asarray(training_target[:, 0], dtype=np.float32),
+            horizon_bars=int(model_spec.adaptive_safety_horizon_bars or 0),
+        )
     raw_r_loss_name = (
         str(profile.loss_name)
         if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
@@ -3904,6 +3980,7 @@ def select_epoch(
             raw_r_huber_delta_r=raw_r_delta,
             numerical_execution_policy=profile.numerical_execution_policy,
             bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
+            adaptive_horizon_target_provider=adaptive_horizon_target_provider,
         )
         validation_conditional_metrics = None
         validation_reverse_conditional_metrics = None
@@ -4588,6 +4665,18 @@ def fit_final(
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
     training_policy = execution_recipe.training_policy
     training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
+    adaptive_horizon_target_provider = None
+    if (
+        loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+    ):
+        model_spec = get_model_spec(str(profile.model_architecture))
+        adaptive_horizon_target_provider = AdaptiveHorizonSafetyTargetProvider(
+            feature_bank=feature_bank,
+            group_dates=group_table["date"],
+            final_safety_target=np.asarray(training_target[:, 0], dtype=np.float32),
+            horizon_bars=int(model_spec.adaptive_safety_horizon_bars or 0),
+        )
     raw_r_loss_name = (
         str(profile.loss_name)
         if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
@@ -4661,6 +4750,7 @@ def fit_final(
             raw_r_huber_delta_r=raw_r_delta,
             numerical_execution_policy=profile.numerical_execution_policy,
             bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
+            adaptive_horizon_target_provider=adaptive_horizon_target_provider,
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})

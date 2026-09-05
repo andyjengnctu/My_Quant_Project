@@ -54,6 +54,8 @@ class BreakoutQualityModelSpec:
     same_date_relation_stop_gradient: bool | None = None
     same_date_relation_zero_init_residual: bool | None = None
     same_date_relation_history_steps: int | None = None
+    adaptive_safety_horizon_bars: int | None = None
+    adaptive_safety_zero_init_residual: bool | None = None
     window_normalization_epsilon: float | None = None
     inception_depth: int | None = None
     inception_filters: int | None = None
@@ -171,6 +173,15 @@ class BreakoutQualityModelSpec:
         """Return topology semantics for Safety + true-HS Conditional-MFE objectives."""
 
         heads = set(self.pooling)
+        if "adaptive_horizon_safety_residual" in heads:
+            return {
+                "architecture": "shared_inception_encoder_plus_adaptive_horizon_safety_residual",
+                "conditional_mfe_head_inputs": "shared_latent_only_no_adaptive_horizon_context_no_predicted_safety_context",
+                "safety_base_target": "canonical_40bar_same_date_low_adverse_safety_percentile",
+                "adaptive_horizon_trajectory": "1_to_40bar_same_date_low_adverse_safety_percentiles_from_adverse_to_best_peak_path",
+                "adaptive_horizon_aggregation": "sample_specific_softmax_horizon_gate_over_40_auxiliary_safety_margins",
+                "safety_residual_initialization": "zero_init_scalar_gain_preserves_ao_step0_safety",
+            }
         if "previous_date_hyperedge_relation_change_safety_residual" in heads:
             return {
                 "architecture": "shared_inception_encoder_plus_same_date_dynamic_hypergraph_and_previous_date_relation_change_safety_residual",
@@ -249,6 +260,8 @@ class BreakoutQualityModelSpec:
             "same_date_relation_stop_gradient": self.same_date_relation_stop_gradient,
             "same_date_relation_zero_init_residual": self.same_date_relation_zero_init_residual,
             "same_date_relation_history_steps": self.same_date_relation_history_steps,
+            "adaptive_safety_horizon_bars": self.adaptive_safety_horizon_bars,
+            "adaptive_safety_zero_init_residual": self.adaptive_safety_zero_init_residual,
             "inception_depth": self.inception_depth,
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,

@@ -2634,6 +2634,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -2665,6 +2666,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         LazyDailyFeatureBank,
         build_equal_rank_mfe_low_adverse_target,
     )
+    from filters.breakout_quality.adaptive_horizon_safety import (
+        AdaptiveHorizonSafetyTargetProvider,
+    )
+    from filters.breakout_quality.continuous_ranker_data import (
+        build_same_date_percentile_targets,
+    )
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.inference import strict_parallel_batched_logits
     from filters.breakout_quality.same_date_relations import (
@@ -2687,6 +2694,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_RISK_CONTEXT_V1,
         INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
+        INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1,
@@ -4184,6 +4192,165 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             if parameter.grad is not None:
                 total += float(parameter.grad.detach().abs().sum().item())
         return total
+
+    # BU adds adaptive future-horizon Safety supervision while preserving the
+    # canonical AO 40-bar Safety identity and untouched Conditional-MFE path.
+    adaptive_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    adaptive_spec = get_model_spec(
+        INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1
+    )
+    check(
+        "adaptive_horizon_profile_preserves_ao_final_safety_and_40bar_envelope",
+        (
+            "MR-13BU",
+            "inception_time_shared_adaptive_horizon_safety_mfe_v1",
+            40,
+            True,
+            "daily_full_horizon_pure_mfe_r_v1",
+        ),
+        (
+            get_continuous_ranker_research_spec(adaptive_profile.name).model_research_id,
+            adaptive_profile.model_architecture,
+            int(adaptive_spec.adaptive_safety_horizon_bars),
+            bool(adaptive_spec.adaptive_safety_zero_init_residual),
+            adaptive_profile.continuous_target_id,
+        ),
+    )
+    torch.manual_seed(20260905)
+    adaptive_ao = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
+    )
+    torch.manual_seed(20260905)
+    adaptive_model = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1
+    )
+    adaptive_ao_state = adaptive_ao.state_dict()
+    adaptive_state = adaptive_model.state_dict()
+    adaptive_extra_keys = sorted(set(adaptive_state).difference(adaptive_ao_state))
+    check_true(
+        "adaptive_horizon_same_seed_preserves_all_ao_parameters_and_only_adds_horizon_branch",
+        not (set(adaptive_ao_state) - set(adaptive_state))
+        and all(
+            torch.equal(adaptive_ao_state[key], adaptive_state[key])
+            for key in adaptive_ao_state
+        )
+        and adaptive_extra_keys
+        == [
+            "adaptive_horizon_safety_branch.horizon_classifier.bias",
+            "adaptive_horizon_safety_branch.horizon_classifier.weight",
+            "adaptive_horizon_safety_branch.horizon_gate.bias",
+            "adaptive_horizon_safety_branch.horizon_gate.weight",
+            "adaptive_horizon_safety_branch.residual_gain",
+        ],
+    )
+    torch.manual_seed(20260905)
+    adaptive_x = torch.randn((7, 300, 10), dtype=torch.float32)
+    adaptive_context = torch.empty((7, 0), dtype=torch.float32)
+    adaptive_ao.eval()
+    adaptive_model.eval()
+    with torch.no_grad():
+        adaptive_ao_safety, adaptive_ao_mfe = adaptive_ao.forward_safety_mfe_heads(
+            adaptive_x, adaptive_context
+        )
+        (
+            adaptive_safety,
+            adaptive_mfe,
+            adaptive_horizon_logits,
+            adaptive_horizon_weights,
+        ) = adaptive_model.forward_adaptive_horizon_safety_mfe_heads(
+            adaptive_x, adaptive_context
+        )
+    check_true(
+        "adaptive_horizon_zero_init_step0_is_bitwise_ao_exact_and_uniform",
+        torch.equal(adaptive_ao_safety, adaptive_safety)
+        and torch.equal(adaptive_ao_mfe, adaptive_mfe)
+        and tuple(adaptive_horizon_logits.shape) == (7, 40, 2)
+        and tuple(adaptive_horizon_weights.shape) == (7, 40)
+        and torch.allclose(
+            adaptive_horizon_weights,
+            torch.full_like(adaptive_horizon_weights, 1.0 / 40.0),
+            rtol=0.0,
+            atol=1e-7,
+        )
+        and float(adaptive_model.adaptive_horizon_safety_branch.residual_gain.detach()) == 0.0,
+    )
+
+    # Canonical path parity: column 40 of the adaptive adverse trajectory must
+    # reproduce the exact AO adverse-to-best-peak target, then the same-date
+    # percentile provider must hard-return the canonical final Safety target.
+    adaptive_dates = pd.date_range("2020-01-01", periods=345, freq="D")
+    adaptive_frames = []
+    for stock_index in range(4):
+        step = np.arange(345, dtype=np.float64)
+        close = 100.0 + 5.0 * stock_index + 0.015 * step
+        high = close * (1.01 + 0.001 * stock_index)
+        low = close * (0.99 - 0.0015 * stock_index)
+        # Give each stock a distinct prefix geometry without invalid OHLCV.
+        high[304 + stock_index : 310 + stock_index] *= 1.0 + 0.01 * stock_index
+        low[302 + stock_index : 307 + stock_index] *= 1.0 - 0.004 * stock_index
+        adaptive_frames.append(
+            pd.DataFrame(
+                {
+                    "Open": close,
+                    "High": high,
+                    "Low": low,
+                    "Close": close,
+                    "Volume": 1000.0 + 10.0 * stock_index + step,
+                },
+                index=adaptive_dates,
+            )
+        )
+    adaptive_bank = LazyDailyFeatureBank(
+        frames=tuple(adaptive_frames),
+        benchmark=adaptive_frames[0],
+        ticker_ids=np.arange(4, dtype=np.int32),
+        source_positions=np.full(4, 299, dtype=np.int32),
+        benchmark_positions=np.full(4, 299, dtype=np.int32),
+        policy=SimpleNamespace(feature_window_bars=300),
+    )
+    adaptive_ids = np.arange(4, dtype=np.int64)
+    adaptive_path = adaptive_bank.future_adverse_to_best_peak_path(
+        adaptive_ids, horizon_bars=40
+    )
+    adaptive_target_spec = StrategyAlignedContinuousTargetSpec.from_label_policy(
+        DEFAULT_LABEL_POLICY
+    )
+    canonical_adverse = np.asarray(
+        [
+            compute_daily_opportunity_target_batch(
+                frame,
+                np.asarray([299], dtype=np.int64),
+                spec=adaptive_target_spec,
+                target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+            ).adverse_return_to_peak[0]
+            for frame in adaptive_frames
+        ],
+        dtype=np.float32,
+    )
+    adaptive_group_dates = pd.Series(
+        pd.to_datetime([adaptive_dates[299]] * 4)
+    )
+    canonical_final_safety = build_same_date_percentile_targets(
+        -canonical_adverse.astype(np.float64),
+        np.ones(4, dtype=bool),
+        adaptive_group_dates,
+    ).astype(np.float32)
+    adaptive_provider = AdaptiveHorizonSafetyTargetProvider(
+        feature_bank=adaptive_bank,
+        group_dates=adaptive_group_dates,
+        final_safety_target=canonical_final_safety,
+        horizon_bars=40,
+    )
+    adaptive_trajectory = adaptive_provider.targets_for_ids(adaptive_ids)
+    check_true(
+        "adaptive_horizon_day40_path_and_percentile_are_canonical_ao_exact",
+        np.allclose(adaptive_path[:, -1], canonical_adverse, rtol=0.0, atol=1e-7)
+        and np.array_equal(adaptive_trajectory[:, -1], canonical_final_safety)
+        and tuple(adaptive_trajectory.shape) == (4, 40)
+        and adaptive_provider.targets_for_ids(adaptive_ids) is adaptive_trajectory,
+    )
 
     # Same-date dynamic hypergraph is a reusable Safety-only relational primitive.
     # It must start exactly from AO, consume detached same-date latent nodes, and

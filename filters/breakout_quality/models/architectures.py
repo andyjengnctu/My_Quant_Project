@@ -36,6 +36,9 @@ INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1 = (
 INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1 = (
     "inception_time_shared_safety_dynamic_hypergraph_relation_change_mfe_v1"
 )
+INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1 = (
+    "inception_time_shared_adaptive_horizon_safety_mfe_v1"
+)
 INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_STRUCTURE_V1 = (
     "inception_time_shared_safety_mfe_price_volume_structure_v1"
 )
@@ -198,6 +201,30 @@ _ARCHITECTURE_DESCRIPTORS = (
         same_date_relation_stop_gradient=True,
         same_date_relation_zero_init_residual=True,
         same_date_relation_history_steps=1,
+    ),
+    _descriptor(
+        INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1,
+        active=True,
+        active_order=36,
+        spec_builder="inception_variant",
+        runtime_builder="inception_time",
+        capabilities=(
+            "shared_safety_mfe",
+            "adaptive_horizon_safety",
+        ),
+        family="inception_time_shared_adaptive_horizon_safety_mfe",
+        pooling=(
+            "global_average",
+            "adaptive_horizon_safety_trajectory",
+            "adaptive_horizon_safety_residual",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+        use_dataset_context=False,
+        sequence_input_paths=("raw_level",),
+        head_width=None,
+        adaptive_safety_horizon_bars=40,
+        adaptive_safety_zero_init_residual=True,
     ),
     _descriptor(
         INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_STRUCTURE_V1,

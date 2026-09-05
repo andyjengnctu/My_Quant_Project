@@ -56,6 +56,9 @@ TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING = (
 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING = (
     "daily_shared_safety_hs_conditional_mfe_pairwise_ranking"
 )
+TRAINING_OBJECTIVE_DAILY_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING = (
+    "daily_shared_adaptive_horizon_safety_hs_conditional_mfe_pairwise_ranking"
+)
 TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING = (
     "daily_shared_hs_qualification_conditional_mfe_pairwise_ranking"
 )
@@ -390,6 +393,9 @@ CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE = (
 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE = (
     "shared_safety_scoped_mfe_duo_pairwise"
 )
+CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE = (
+    "shared_adaptive_horizon_safety_scoped_mfe_duo_pairwise"
+)
 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE = (
     "shared_hs_qualification_scoped_mfe_duo_pairwise"
 )
@@ -419,6 +425,9 @@ CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE = "safety_raw_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE = "shared_safety_weighted_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY = "shared_safety_weighted_primary"
 CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE = "shared_safety_hs_conditional_mfe"
+CONTINUOUS_RANKER_SEMANTICS_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE = (
+    "shared_adaptive_horizon_safety_hs_conditional_mfe"
+)
 CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE = (
     "shared_hs_qualification_conditional_mfe"
 )
@@ -1188,6 +1197,25 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
             uses_pairwise_loss=True,
         ),
+        TRAINING_OBJECTIVE_DAILY_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("adaptive_horizon_safety_aux_bce_plus_dual_head_pairwise_logistic", "hs_conditional_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            allowed_secondary_pair_scopes=(
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+            ),
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
+            uses_pairwise_loss=True,
+        ),
         TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
@@ -1602,6 +1630,7 @@ __all__ = (
     "CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE",

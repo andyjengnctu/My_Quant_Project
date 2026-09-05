@@ -37,6 +37,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
@@ -414,6 +415,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIS
 )
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_adaptive_horizon_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_dynamic_hypergraph_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
@@ -1563,6 +1567,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="adaptive_horizon_safety_aux_bce_plus_dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_adaptive_horizon_safety_mfe_v1",
     ),
     DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3287,6 +3303,44 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "the OHLCV cross-stock relational family and move to genuinely new PIT-safe information."
         ),
         metric_scope="ao_with_dynamic_hypergraph_previous_date_relation_change_safety_residual",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BU",
+        experiment_name="MR-13BU Adaptive-Horizon Safety Shared Ranker",
+        phase="13BU",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "final_head1_exact_MR13AO_40bar_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "auxiliary_head1_1_to_40bar_same_date_adverse_path_safety_percentiles; "
+            "head2_exact_MR13AO_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "User-authorized new supervision family after OHLCV cross-stock relational family closure. MR-13AO raw 300x10 input, "
+            "shared InceptionTime base, canonical 40-bar Safety economics, true-HS=P50 Conditional-MFE target/sublist, Seed42, "
+            "Adam/split/PIT/epoch-selection and Pred-Safety->Conditional-MFE inference remain exact. The only scientific treatment "
+            "is adaptive future-horizon Safety supervision: each fitting batch materializes PIT-matured adverse-to-best-peak prefixes "
+            "for horizons 1..40, converts each horizon to same-date low-adverse Safety percentiles, and hard-asserts horizon 40 equals "
+            "the canonical AO Safety target. A 40-horizon two-logit trajectory head plus sample-specific softmax horizon gate learns "
+            "effective horizon; its symmetric Safety residual is multiplied by a zero-initialized scalar gain so same-seed step-0 "
+            "final Safety remains AO-exact. Safety composite loss is equal mean of canonical 40-bar full-list Delta-NDCG pairwise "
+            "loss and 1..40 soft-BCE trajectory loss; the top-level Safety-composite versus true-HS Conditional-MFE composition remains "
+            "equal mean with no lambda sweep. Conditional-MFE topology/input/supervision is unchanged and does not consume horizon "
+            "weights. Maximum future maturity remains 40 bars; the model learns effective horizon inside that fixed legal envelope. "
+            "Primary reference=MR-13AO and AO must remain in every Compare/Test list. Seed42 Forward first; if Raw Safety Daily/Global/"
+            "Pair and Pred-HS purity do not materially improve, close this adaptive-horizon family without horizon-count, auxiliary-loss, "
+            "input-length, alternate-path-target, or gate-capacity sweep, then return to truly orthogonal PIT-safe information."
+        ),
+        metric_scope="ao_with_adaptive_future_horizon_safety_trajectory",
         score_semantic_id="daily_true_hs_conditional_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,

@@ -35,6 +35,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    get_continuous_ranker_training_policy,
     normalize_continuous_ranker_pair_weight_configuration,
 )
 from core.breakout_quality_runtime_resolver import (
@@ -53,7 +54,6 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
 )
@@ -589,7 +589,18 @@ def _render_markdown(payload: dict) -> str:
     )
     conditional_mfe_single = objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    hs_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING
+    try:
+        render_training_policy = get_continuous_ranker_training_policy(objective)
+    except ValueError:
+        # Historical/synthetic reports may carry an objective that predates the
+        # declarative runtime registry. Preserve legacy rendering instead of
+        # turning report generation into a migration gate.
+        render_training_policy = None
+    hs_conditional_mfe_duo = bool(
+        render_training_policy is not None
+        and render_training_policy.target_builder
+        == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+    )
     safety_raw_mfe_duo = (
         objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
         or bool(payload.get("safety_raw_mfe_evaluation"))

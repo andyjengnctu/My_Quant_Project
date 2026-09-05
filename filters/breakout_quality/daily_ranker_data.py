@@ -309,6 +309,73 @@ class LazyDailyFeatureBank:
             values[local] = out.astype(np.float32)
         return values, names
 
+    def future_adverse_to_best_peak_path(
+        self,
+        group_ids: np.ndarray,
+        *,
+        horizon_bars: int,
+    ) -> np.ndarray:
+        """Return adverse-to-best-peak return for every prefix horizon.
+
+        For each h=1..H this reproduces the canonical full-horizon opportunity
+        geometry on the prefix [1,h]: choose the highest future High seen so far,
+        then measure the worst Low from the decision anchor through that selected
+        peak.  Column H therefore equals the canonical ``target_adverse_return_to_peak``
+        when the downstream target uses the same H-bar full-horizon opportunity rule.
+        """
+
+        ids = np.asarray(group_ids, dtype=np.int64).reshape(-1)
+        horizon = int(horizon_bars)
+        if horizon < 1:
+            raise ValueError("future adverse path horizon_bars必須>=1")
+        if bool(np.any(ids < 0)) or bool(np.any(ids >= len(self))):
+            raise IndexError("future adverse path group id超出範圍")
+        out = np.empty((len(ids), horizon), dtype=np.float32)
+        if len(ids) == 0:
+            return out
+
+        ticker_ids = self._ticker_ids[ids]
+        source_positions = self._source_positions[ids]
+        offsets = np.arange(1, horizon + 1, dtype=np.int64)
+        for ticker_id in np.unique(ticker_ids):
+            local = np.flatnonzero(ticker_ids == ticker_id)
+            positions = source_positions[local].astype(np.int64, copy=False)
+            frame = self._frame_arrays[int(ticker_id)]
+            if bool(np.any(positions + horizon >= len(frame))):
+                raise ValueError("future adverse path存在未完整成熟row")
+            future = frame[positions[:, None] + offsets[None, :]]
+            anchor = frame[positions, 3]
+            highs = future[:, :, 1]
+            lows = future[:, :, 2]
+            if not bool(
+                np.all(np.isfinite(anchor) & (anchor > 0.0))
+                and np.all(np.isfinite(highs) & np.isfinite(lows))
+                and np.all(highs > 0.0)
+                and np.all(lows > 0.0)
+                and np.all(highs >= lows)
+            ):
+                raise ValueError("future adverse path遇到invalid canonical OHLCV")
+
+            favorable = highs / anchor[:, None] - 1.0
+            running_low = np.minimum.accumulate(lows, axis=1)
+            best_index = np.zeros(len(local), dtype=np.int64)
+            best_value = favorable[:, 0].copy()
+            row_index = np.arange(len(local), dtype=np.int64)
+            local_out = np.empty((len(local), horizon), dtype=np.float64)
+            for column in range(horizon):
+                if column > 0:
+                    improved = favorable[:, column] > best_value
+                    best_value[improved] = favorable[improved, column]
+                    best_index[improved] = column
+                selected_low = running_low[row_index, best_index]
+                local_out[:, column] = np.maximum(
+                    0.0, 1.0 - selected_low / anchor
+                )
+            if not bool(np.isfinite(local_out).all()):
+                raise ValueError("future adverse path產生non-finite value")
+            out[local] = local_out.astype(np.float32)
+        return out
+
     def future_first_passage(
         self,
         group_ids: np.ndarray,

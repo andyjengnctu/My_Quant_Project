@@ -569,6 +569,18 @@ def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
         sequence_input_paths=tuple(options["sequence_input_paths"]),
         head_width=options.get("head_width"),
     )
+    adaptive_safety_horizon_bars = options.get("adaptive_safety_horizon_bars")
+    if adaptive_safety_horizon_bars is not None:
+        horizon_bars = int(adaptive_safety_horizon_bars)
+        if horizon_bars < 2:
+            raise ValueError("adaptive Safety horizon至少需要2 bars")
+        spec = replace(
+            spec,
+            adaptive_safety_horizon_bars=horizon_bars,
+            adaptive_safety_zero_init_residual=bool(
+                options.get("adaptive_safety_zero_init_residual", False)
+            ),
+        )
     same_date_hyperedge_count = options.get("same_date_hyperedge_count")
     if same_date_hyperedge_count is not None:
         count = int(same_date_hyperedge_count)

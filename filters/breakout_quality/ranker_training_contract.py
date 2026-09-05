@@ -32,6 +32,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE,
@@ -170,6 +171,24 @@ SHARED_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT = {
     "shared_encoder_gradient": "safety_all_rows_plus_conditional_mfe_true_hs_only",
     "head_weighting": "fixed_equal_mean_no_lambda_sweep",
     "epoch_selection": "hs_conditional_mfe_mean_daily_spearman",
+    "runtime_score": "conditional_mfe_pass_probability_after_predicted_safety_qualification",
+    "runtime_status": "seed42_forward_model_gate_only_no_pit_no_strategy_conversion",
+    "batching": "whole_date_pack_no_date_split",
+}
+
+
+SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days_full_universe_encoder_exposure",
+    "final_safety_target": "canonical_40bar_same_date_low_adverse_safety_percentile_over_full_universe",
+    "adaptive_safety_trajectory_target": "same_date_percentile_of_negative_adverse_to_best_peak_for_each_prefix_horizon_1_to_40",
+    "adaptive_safety_trajectory_loss": "mean_soft_binary_cross_entropy_over_40_horizon_margins",
+    "safety_composite_loss": "equal_mean_of_final_40bar_full_list_delta_ndcg_and_adaptive_horizon_trajectory_bce",
+    "conditional_mfe_target": "same_date_pure_mfe_percentile_within_true_hs_cohort",
+    "true_hs_definition": "canonical_40bar_same_date_low_adverse_safety_percentile_gte_0.50",
+    "conditional_mfe_supervision_scope": "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg",
+    "shared_encoder_gradient": "adaptive_safety_trajectory_plus_final_safety_all_rows_plus_conditional_mfe_true_hs_only",
+    "head_weighting": "fixed_equal_mean_safety_composite_vs_conditional_mfe_no_lambda_sweep",
+    "epoch_selection": "hs_conditional_mfe_mean_daily_spearman_same_as_mr13ao",
     "runtime_score": "conditional_mfe_pass_probability_after_predicted_safety_qualification",
     "runtime_status": "seed42_forward_model_gate_only_no_pit_no_strategy_conversion",
     "batching": "whole_date_pack_no_date_split",
@@ -388,6 +407,7 @@ _EXTENDED_SEMANTIC_KEYS = (
     "safety_raw_mfe_duo_head_contract",
     "shared_safety_weighted_mfe_duo_head_contract",
     "shared_safety_weighted_primary_duo_head_contract",
+    "shared_adaptive_horizon_safety_hs_conditional_mfe_duo_head_contract",
     "safety_raw_mfe_hmhs_tri_head_contract",
     "safety_raw_mfe_joint_min_tri_head_contract",
     "direct_hmhs_single_head_contract",
@@ -462,6 +482,10 @@ _PAIRWISE_SPECIALIZED_CONTRACTS = {
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE: (
         "shared_safety_hs_conditional_mfe_duo_head_contract",
         SHARED_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT,
+    ),
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE: (
+        "shared_adaptive_horizon_safety_hs_conditional_mfe_duo_head_contract",
+        SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT,
     ),
     CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE: (
         "shared_hs_qualification_conditional_mfe_duo_head_contract",
@@ -554,7 +578,10 @@ def training_semantics(profile) -> dict[str, Any]:
             contract["architecture"] = topology_contract["architecture"]
             contract["primary_head_inputs"] = topology_contract["mfe_head_inputs"]
             contract["primary_target_id"] = str(profile.continuous_target_id)
-        elif semantics_key == CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE:
+        elif semantics_key in {
+            CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
+            CONTINUOUS_RANKER_SEMANTICS_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE,
+        }:
             from filters.breakout_quality.models.spec import get_model_spec
 
             model_spec = get_model_spec(str(profile.model_architecture))
@@ -659,6 +686,7 @@ __all__ = [
     "SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
+    "SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_HS_PRIORITY_MFE_DUO_HEAD_TRAINING_CONTRACT",
