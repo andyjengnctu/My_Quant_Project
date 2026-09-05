@@ -205,13 +205,19 @@ def validate_downloader_market_date_fallback_case(base_params):
          patch.object(universe.rt, "get_taipei_now", return_value=fixed_now):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            actual_date = universe.get_market_last_date()
+            try:
+                universe.get_market_last_date()
+            except RuntimeError as exc:
+                fail_closed_error = str(exc)
+            else:
+                fail_closed_error = ""
 
     out = stdout.getvalue()
-    add_check(results, "synthetic_error_paths", case_id, "fallback_previous_weekday_date", "2026-04-03", actual_date)
+    add_check(results, "synthetic_error_paths", case_id, "provider_failure_is_fail_closed", True, bool(fail_closed_error))
+    add_check(results, "synthetic_error_paths", case_id, "provider_failure_rejects_guessed_weekday", True, "不能把平日推算當成實際交易日" in fail_closed_error)
     add_check(results, "synthetic_error_paths", case_id, "finmind_failure_logged", True, any(section == "最新交易日(FinMind)失敗" and "RequestException: finmind down" in "\n".join(lines) for section, lines in issue_sections))
     add_check(results, "synthetic_error_paths", case_id, "yf_failure_logged", True, any(section == "最新交易日(YF備援)失敗" and "RequestException: yf down" in "\n".join(lines) for section, lines in issue_sections))
-    add_check(results, "synthetic_error_paths", case_id, "stdout_contains_fallback_notice", True, "使用智能推算平日備用日期: 2026-04-03" in out)
+    add_check(results, "synthetic_error_paths", case_id, "stdout_has_no_guessed_weekday_fallback", False, "使用智能推算平日備用日期" in out)
     summary["downloader_fallback_cases"] = 1
     return results, summary
 
