@@ -50,6 +50,9 @@ class BreakoutQualityModelSpec:
     price_volume_local_map_geometry_latent_dim: int | None = None
     pairwise_temporal_relation_features: tuple[str, ...] = ()
     pairwise_temporal_relation_hidden_dim: int | None = None
+    same_date_hyperedge_count: int | None = None
+    same_date_relation_stop_gradient: bool | None = None
+    same_date_relation_zero_init_residual: bool | None = None
     window_normalization_epsilon: float | None = None
     inception_depth: int | None = None
     inception_filters: int | None = None
@@ -125,6 +128,13 @@ class BreakoutQualityModelSpec:
         """Return canonical final-MFE topology semantics without changing model identity."""
 
         heads = set(self.pooling)
+        if "same_date_low_rank_dynamic_hypergraph_safety_residual" in heads:
+            return {
+                "architecture": "shared_inception_encoder_plus_same_date_dynamic_hypergraph_safety_residual",
+                "mfe_head_inputs": "shared_latent_only_no_relational_input_no_safety_prediction_input",
+                "safety_relational_input": "stop_gradient_same_date_shared_latent",
+                "safety_residual_initialization": "zero_init_two_logit_residual_with_learned_gate",
+            }
         if "safety_patch_token_global_average" in heads and "mfe_inception_global_average" in heads:
             return {
                 "architecture": "independent_patch_transformer_safety_encoder_plus_inceptiontime_conditional_mfe_encoder",
@@ -152,6 +162,13 @@ class BreakoutQualityModelSpec:
         """Return topology semantics for Safety + true-HS Conditional-MFE objectives."""
 
         heads = set(self.pooling)
+        if "same_date_low_rank_dynamic_hypergraph_safety_residual" in heads:
+            return {
+                "architecture": "shared_inception_encoder_plus_same_date_dynamic_hypergraph_safety_residual",
+                "conditional_mfe_head_inputs": "shared_latent_only_no_relational_input_no_predicted_safety_context",
+                "safety_relational_input": "stop_gradient_same_date_shared_latent",
+                "safety_residual_initialization": "zero_init_two_logit_residual_with_learned_gate",
+            }
         if "safety_patch_token_global_average" in heads and "mfe_inception_global_average" in heads:
             return {
                 "architecture": "independent_patch_transformer_safety_encoder_plus_inceptiontime_conditional_mfe_encoder",
@@ -211,6 +228,9 @@ class BreakoutQualityModelSpec:
             "price_volume_local_map_price_span_atr": self.price_volume_local_map_price_span_atr,
             "price_volume_local_map_geometry_latent_dim": self.price_volume_local_map_geometry_latent_dim,
             "pairwise_temporal_relation_hidden_dim": self.pairwise_temporal_relation_hidden_dim,
+            "same_date_hyperedge_count": self.same_date_hyperedge_count,
+            "same_date_relation_stop_gradient": self.same_date_relation_stop_gradient,
+            "same_date_relation_zero_init_residual": self.same_date_relation_zero_init_residual,
             "inception_depth": self.inception_depth,
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,

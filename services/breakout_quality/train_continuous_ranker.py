@@ -810,6 +810,7 @@ def _date_coherent_batches(
     *,
     batch_size: int,
     seed: int,
+    single_date_per_batch: bool = False,
 ) -> list[np.ndarray]:
     """Pack whole trading dates into deterministic mini-batches for cross-sectional ranking."""
 
@@ -826,6 +827,11 @@ def _date_coherent_batches(
     rng = np.random.default_rng(int(seed))
     rng.shuffle(date_keys)
     batches: list[np.ndarray] = []
+    if bool(single_date_per_batch):
+        return [
+            np.asarray(by_date[pd.Timestamp(date_key)], dtype=np.int64)
+            for date_key in date_keys
+        ]
     current: list[int] = []
     for date_key in date_keys:
         day_ids = by_date[pd.Timestamp(date_key)]
@@ -1975,6 +1981,9 @@ def _train_epoch(
             group_dates,
             batch_size=int(batch_size),
             seed=int(seed),
+            single_date_per_batch=bool(
+                getattr(model, "requires_same_date_relations", False)
+            ),
         )
 
     losses: list[float] = []
@@ -2375,6 +2384,21 @@ def _train_epoch(
         return float(np.mean(losses))
     return float(weighted_loss_sum / float(weighted_loss_count))
 
+def _same_date_inference_labels(
+    model,
+    group_dates: pd.Series | np.ndarray | None,
+    ids: np.ndarray,
+) -> np.ndarray | None:
+    if not bool(getattr(model, "requires_same_date_relations", False)):
+        return None
+    if group_dates is None:
+        raise ValueError("same-date relational model prediction缺少group dates")
+    dates = pd.to_datetime(pd.Series(group_dates), errors="raise").dt.normalize()
+    if len(dates) <= int(ids.max(initial=-1)):
+        raise ValueError("same-date relational model prediction group dates長度不足")
+    return dates.iloc[ids].to_numpy()
+
+
 def predict_scores(
     torch,
     model,
@@ -2385,6 +2409,7 @@ def predict_scores(
     batch_size: int,
     plan,
     training_objective: str,
+    group_dates: pd.Series | np.ndarray | None = None,
 ) -> np.ndarray:
     ids = np.asarray(group_ids, dtype=np.int64)
     logits = strict_parallel_batched_logits(
@@ -2396,6 +2421,7 @@ def predict_scores(
         batch_size=int(batch_size),
         workers=1,
         execution_plan=plan,
+        same_date_group_labels=_same_date_inference_labels(model, group_dates, ids),
     )
     training_policy = get_continuous_ranker_training_policy(training_objective)
     if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R:
@@ -2441,6 +2467,7 @@ def predict_safety_conditional_mfe_scores(
     *,
     batch_size: int,
     plan,
+    group_dates: pd.Series | np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     ids = np.asarray(group_ids, dtype=np.int64)
     logits = strict_parallel_batched_logits(
@@ -2453,6 +2480,7 @@ def predict_safety_conditional_mfe_scores(
         workers=1,
         execution_plan=plan,
         output_head="both",
+        same_date_group_labels=_same_date_inference_labels(model, group_dates, ids),
     )
     if logits.ndim != 2 or int(logits.shape[1]) != 4:
         raise ValueError("Safety→Conditional-MFE model output必須為[N,4]")
@@ -3868,6 +3896,7 @@ def select_epoch(
             validation_head_scores = predict_safety_conditional_mfe_scores(
                 torch, model, feature_bank, group_context, validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
+                group_dates=group_table["date"],
             )
             validation_hs_conditional_mfe_metrics = hs_conditional_mfe_metrics(
                 validation_ids, group_table, hs_conditional_targets, validation_head_scores
@@ -4994,6 +5023,7 @@ def run(args) -> int:
             batch_size=int(args.evaluation_batch_size),
             plan=plan,
             training_objective=profile.training_objective,
+            group_dates=group_table["date"],
         )
         score_by_group[ids] = scores
         all_group_split_metrics[name] = split_metrics(
@@ -5051,6 +5081,7 @@ def run(args) -> int:
             batch_size=int(args.evaluation_batch_size),
             plan=plan,
             training_objective=profile.training_objective,
+            group_dates=group_table["date"],
         )
 
     role_by_group = np.full((group_count,), "selection_other", dtype=object)

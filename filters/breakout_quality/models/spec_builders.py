@@ -561,7 +561,7 @@ def _build_inception_spec(
 
 def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
     options = get_architecture_descriptor(architecture).spec_options_dict()
-    return _build_inception_spec(
+    spec = _build_inception_spec(
         architecture,
         family=str(options["family"]),
         pooling=tuple(options["pooling"]),
@@ -569,6 +569,22 @@ def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
         sequence_input_paths=tuple(options["sequence_input_paths"]),
         head_width=options.get("head_width"),
     )
+    same_date_hyperedge_count = options.get("same_date_hyperedge_count")
+    if same_date_hyperedge_count is not None:
+        count = int(same_date_hyperedge_count)
+        if count < 2:
+            raise ValueError("same-date dynamic hypergraph至少需要2個hyperedges")
+        spec = replace(
+            spec,
+            same_date_hyperedge_count=count,
+            same_date_relation_stop_gradient=bool(
+                options.get("same_date_relation_stop_gradient", False)
+            ),
+            same_date_relation_zero_init_residual=bool(
+                options.get("same_date_relation_zero_init_residual", False)
+            ),
+        )
+    return spec
 
 
 def build_inception_hmhs_mlp_spec(architecture: str) -> BreakoutQualityModelSpec:

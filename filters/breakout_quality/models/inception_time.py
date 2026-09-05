@@ -16,6 +16,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_conditional_mfe_safety = descriptor.has_capability("conditional_mfe_safety")
     use_safety_conditional_mfe = descriptor.has_capability("safety_conditional_mfe")
     use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
+    use_same_date_dynamic_hypergraph_safety = descriptor.has_capability(
+        "same_date_dynamic_hypergraph_safety"
+    )
     use_task_specific_safety_mfe = descriptor.has_capability("task_specific_safety_mfe")
     use_safety_attention_pool = descriptor.has_capability("safety_attention_pool")
     use_safety_temporal_self_attention = descriptor.has_capability("safety_temporal_self_attention")
@@ -47,6 +50,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         raise ValueError("Safety scalar pooling與temporal self-attention不可同時啟用")
     if use_safety_pairwise_temporal_relation_bias and not use_safety_temporal_self_attention:
         raise ValueError("Pairwise temporal relation bias必須建立在Safety temporal self-attention上")
+    if use_same_date_dynamic_hypergraph_safety and not use_shared_safety_mfe:
+        raise ValueError("same-date dynamic hypergraph Safety residual必須建立在shared Safety/MFE architecture上")
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
     use_nonlinear_hmhs_head = descriptor.has_capability("nonlinear_hmhs_head")
     use_joint_attention_pool = descriptor.has_capability("joint_attention_pool")
@@ -363,6 +368,24 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 )
             else:
                 self.price_volume_position_aware_multiscale_encoder = None
+            if use_same_date_dynamic_hypergraph_safety:
+                from filters.breakout_quality.models.dynamic_hypergraph import (
+                    build_same_date_dynamic_hypergraph_safety_residual,
+                )
+
+                self.same_date_dynamic_hypergraph_safety_residual = (
+                    build_same_date_dynamic_hypergraph_safety_residual(
+                        nn,
+                        torch,
+                        latent_width=module_output_channels,
+                        spec=spec,
+                    )
+                )
+            else:
+                self.same_date_dynamic_hypergraph_safety_residual = None
+            self.requires_same_date_relations = bool(
+                use_same_date_dynamic_hypergraph_safety
+            )
 
         def _run_residual_stack(self, z, modules, projections):
             residual = z
@@ -527,6 +550,16 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             """
             if self.raw_safety_classifier is None:
                 raise ValueError("目前architecture沒有Raw Safety head")
+            if self.same_date_dynamic_hypergraph_safety_residual is not None:
+                _primary_input, shared_encoded = self._encoded_for_heads(x, context)
+                safety_logits = self.raw_safety_classifier(shared_encoded)
+                safety_logits = safety_logits + self.same_date_dynamic_hypergraph_safety_residual(
+                    shared_encoded
+                ).to(safety_logits.dtype)
+                if self.raw_mfe_classifier is None:
+                    raise ValueError("Dynamic-hypergraph architecture沒有Raw MFE head")
+                mfe_logits = self.raw_mfe_classifier(shared_encoded)
+                return safety_logits, mfe_logits
             if use_task_specific_safety_mfe:
                 safety_map, mfe_map = self.encode_task_specific_feature_maps(x)
                 safety_pooled = (

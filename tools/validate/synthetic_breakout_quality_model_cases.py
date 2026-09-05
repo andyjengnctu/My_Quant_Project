@@ -2632,6 +2632,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from core.breakout_quality_registry import (
+        DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -2664,6 +2665,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         build_equal_rank_mfe_low_adverse_target,
     )
     from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.inference import strict_parallel_batched_logits
     from filters.breakout_quality.encoder_pretraining import (
         build_ticker_balanced_epoch_ids,
     )
@@ -2679,6 +2681,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         LEGACY_MODEL_ARCHITECTURES,
         SUPPORTED_MODEL_ARCHITECTURES,
         INCEPTION_TIME_RISK_CONTEXT_V1,
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1,
@@ -4176,6 +4179,139 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             if parameter.grad is not None:
                 total += float(parameter.grad.detach().abs().sum().item())
         return total
+
+    # Same-date dynamic hypergraph is a reusable Safety-only relational primitive.
+    # It must start exactly from AO, consume detached same-date latent nodes, and
+    # never allow inference/training batches to mix trading dates.
+    hypergraph_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    hypergraph_spec = get_model_spec(
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1
+    )
+    check(
+        "dynamic_hypergraph_profile_is_ao_objective_with_relational_architecture_only",
+        (
+            "MR-13BS",
+            "inception_time_shared_safety_dynamic_hypergraph_mfe_v1",
+            16,
+            True,
+            True,
+        ),
+        (
+            get_continuous_ranker_research_spec(hypergraph_profile.name).model_research_id,
+            hypergraph_profile.model_architecture,
+            int(hypergraph_spec.same_date_hyperedge_count),
+            bool(hypergraph_spec.same_date_relation_stop_gradient),
+            bool(hypergraph_spec.same_date_relation_zero_init_residual),
+        ),
+    )
+    torch.manual_seed(20260905)
+    hypergraph_ao = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
+    )
+    torch.manual_seed(20260905)
+    hypergraph_model = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1
+    )
+    ao_state = hypergraph_ao.state_dict()
+    hypergraph_state = hypergraph_model.state_dict()
+    extra_hypergraph_keys = sorted(set(hypergraph_state).difference(ao_state))
+    check_true(
+        "dynamic_hypergraph_same_seed_preserves_all_ao_parameters_and_adds_only_relational_branch",
+        not (set(ao_state) - set(hypergraph_state))
+        and all(torch.equal(ao_state[key], hypergraph_state[key]) for key in ao_state)
+        and extra_hypergraph_keys
+        == [
+            "same_date_dynamic_hypergraph_safety_residual.gate.bias",
+            "same_date_dynamic_hypergraph_safety_residual.gate.weight",
+            "same_date_dynamic_hypergraph_safety_residual.incidence.weight",
+            "same_date_dynamic_hypergraph_safety_residual.relation_projection.0.bias",
+            "same_date_dynamic_hypergraph_safety_residual.relation_projection.0.weight",
+            "same_date_dynamic_hypergraph_safety_residual.residual_logits.bias",
+            "same_date_dynamic_hypergraph_safety_residual.residual_logits.weight",
+        ],
+    )
+    torch.manual_seed(20260905)
+    hypergraph_x = torch.randn((8, 300, 10), dtype=torch.float32)
+    hypergraph_context = torch.empty((8, 0), dtype=torch.float32)
+    hypergraph_ao.eval()
+    hypergraph_model.eval()
+    with torch.no_grad():
+        ao_safety, ao_mfe = hypergraph_ao.forward_safety_mfe_heads(
+            hypergraph_x, hypergraph_context
+        )
+        graph_safety, graph_mfe = hypergraph_model.forward_safety_mfe_heads(
+            hypergraph_x, hypergraph_context
+        )
+    check_true(
+        "dynamic_hypergraph_zero_init_step0_outputs_are_bitwise_ao_exact",
+        torch.equal(ao_safety, graph_safety) and torch.equal(ao_mfe, graph_mfe),
+    )
+    relation_module = hypergraph_model.same_date_dynamic_hypergraph_safety_residual
+    with torch.no_grad():
+        relation_module.residual_logits.weight.fill_(0.05)
+        relation_module.residual_logits.bias.zero_()
+    detached_probe = torch.randn(
+        (6, int(hypergraph_model.encoder_embedding_width)),
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    relation_module.zero_grad(set_to_none=True)
+    relation_module(detached_probe).sum().backward()
+    check_true(
+        "dynamic_hypergraph_relational_branch_stop_gradient_blocks_encoder_latent_gradient",
+        detached_probe.grad is None
+        and _gradient_total(relation_module.incidence.parameters()) > 0.0,
+    )
+    relation_dates = np.asarray(
+        ["2025-01-02"] * 4 + ["2025-01-03"] * 4,
+        dtype=object,
+    )
+    date_batches = training_module._date_coherent_batches(
+        np.arange(8, dtype=np.int64),
+        pd.Series(pd.to_datetime(relation_dates)),
+        batch_size=128,
+        seed=42,
+        single_date_per_batch=True,
+    )
+    check_true(
+        "dynamic_hypergraph_training_batches_are_exactly_one_complete_date",
+        len(date_batches) == 2
+        and all(
+            len(set(relation_dates[batch].tolist())) == 1
+            and len(batch) == 4
+            for batch in date_batches
+        ),
+    )
+    inference_features = hypergraph_x.detach().cpu().numpy().astype(np.float32)
+    inference_context = np.empty((8, 0), dtype=np.float32)
+    grouped_logits = strict_parallel_batched_logits(
+        torch,
+        hypergraph_model,
+        inference_features,
+        inference_context,
+        indices=None,
+        batch_size=3,
+        workers=1,
+        same_date_group_labels=relation_dates,
+        output_head="both",
+    )
+    manual_logits = []
+    hypergraph_model.eval()
+    with torch.inference_mode():
+        for start in (0, 4):
+            manual_logits.append(
+                hypergraph_model.forward_output_head(
+                    torch.from_numpy(inference_features[start : start + 4]),
+                    torch.from_numpy(inference_context[start : start + 4]),
+                    "both",
+                ).float().cpu().numpy()
+            )
+    check_true(
+        "dynamic_hypergraph_inference_is_date_coherent_even_when_batch_size_would_split_dates",
+        np.array_equal(grouped_logits, np.concatenate(manual_logits, axis=0)),
+    )
 
     # Price/Volume structural Safety representation is a reusable InceptionTime
     # primitive.  It must preserve every AO-common parameter and the complete MFE

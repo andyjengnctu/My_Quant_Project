@@ -284,6 +284,13 @@ def predict_score_output_payload(
         workers=1,
         execution_plan=plan,
         output_head=str(output_policy.output_head),
+        same_date_group_labels=(
+            pd.to_datetime(bundle.group_table.iloc[ids]["date"], errors="raise")
+            .dt.normalize()
+            .to_numpy()
+            if bool(getattr(model, "requires_same_date_relations", False))
+            else None
+        ),
     ).astype(np.float32)
     expected_width = 2 * len(output_policy.head_names)
     if logits.ndim != 2 or int(logits.shape[1]) != expected_width:
@@ -347,6 +354,7 @@ def predict_safety_conditional_mfe_scores(
     return ranker_api.predict_safety_conditional_mfe_scores(
         torch, model, bundle.feature_bank, bundle.group_context,
         np.asarray(group_ids, dtype=np.int64), batch_size=int(batch_size), plan=plan,
+        group_dates=bundle.group_table["date"],
     )
 
 

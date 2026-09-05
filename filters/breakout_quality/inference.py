@@ -90,6 +90,7 @@ def strict_parallel_batched_logits(
     market_set_bank: IndexedMarketSetBank | None = None,
     market_group_indices: np.ndarray | None = None,
     output_head: str | None = None,
+    same_date_group_labels: np.ndarray | None = None,
 ) -> np.ndarray:
     """Run fixed-boundary inference while preserving row and reduction order.
 
@@ -128,9 +129,32 @@ def strict_parallel_batched_logits(
         raise TypeError("market-set inference 需要 IndexedFeatureBank 或 explicit market_group_indices")
     if market_set_bank is None and bool(getattr(model, "requires_market_set", False)):
         raise ValueError("market-set model inference 缺少 IndexedMarketSetBank")
+    requires_same_date_relations = bool(
+        getattr(model, "requires_same_date_relations", False)
+    )
+    relation_labels = (
+        None
+        if same_date_group_labels is None
+        else np.asarray(same_date_group_labels)
+    )
+    if requires_same_date_relations:
+        if market_set_bank is not None:
+            raise ValueError("same-date relational inference不得與legacy market-set batching混用")
+        if relation_labels is None or relation_labels.shape != (row_count,):
+            raise ValueError(
+                "same-date relational model inference需要與requested rows對齊的date labels"
+            )
 
     local_positions = np.arange(row_count, dtype=np.int64)
-    if market_set_bank is None:
+    if requires_same_date_relations:
+        positions_by_label: dict[Any, list[int]] = {}
+        for position, label in enumerate(relation_labels.tolist()):
+            positions_by_label.setdefault(label, []).append(int(position))
+        jobs = [
+            np.asarray(positions, dtype=np.int64)
+            for positions in positions_by_label.values()
+        ]
+    elif market_set_bank is None:
         jobs = [
             local_positions[start:start + normalized_batch_size]
             for start in range(0, row_count, normalized_batch_size)
