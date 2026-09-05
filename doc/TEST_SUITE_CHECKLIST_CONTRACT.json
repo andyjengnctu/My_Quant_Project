@@ -4056,6 +4056,17 @@
       "entry": "`core/research_report_contract.py`, `core/breakout_quality_runtime.py`, `services/breakout_quality/model_report_extensions.py`, `services/breakout_quality/standard_model_sop.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py`",
       "initial_status": "NEW",
       "order": 365
+    },
+    {
+      "id": "B378",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research reporting / Comparison surface",
+      "item": "Cross-model SOP compacts Generalization and separates Standard SOP from Model-specific Extension",
+      "gap": "使用者明確授權調整Continuous DL模型比較常駐報表：`model.standard_comparison`的Generalization將既有`Validation → OOS`與`OOS → Breakout slice`三項canonical delta只作display pivot，合併成Model加六個delta的單一七欄表，不得由raw score重算metric；comparison的Evidence Coverage整節移除，但single-model `model.standard_sop v9`及其Evidence Coverage保持不變。Standard SOP 1～5結束後，Model-specific Extension必須以與主Comparison相同層級的`====` major title明確分區，再由既有capability/scope renderer輸出Extension；不得新增MR identity branch、改scientific metric或觸發重訓。Persistent comparison升v14並同步approved fingerprint。",
+      "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`",
+      "initial_status": "NEW",
+      "order": 366
     }
   ],
   "tests": [
@@ -7528,9 +7539,16 @@
     {
       "id": "T497",
       "b_id": "B377",
-      "description": "`validate_model_extension_architecture_contract_case` 驗head semantics來自canonical score-output policy、AK Raw-MFE與AO Conditional-MFE不混欄、OOS/Breakout同schema分scope、all-model N/A=`-`與applicable missing=`MISSING`、optional head union、training evidence-family applicability、shared composition renderer與無MR identity branching；`validate_research_report_contract_freeze_case`同步鎖Standard SOP v9 / comparison v13與compact HS extension。",
+      "description": "`validate_model_extension_architecture_contract_case` 驗head semantics來自canonical score-output policy、AK Raw-MFE與AO Conditional-MFE不混欄、OOS/Breakout同schema分scope、all-model N/A=`-`與applicable missing=`MISSING`、optional head union、training evidence-family applicability、shared composition renderer與無MR identity branching。",
       "initial_status": "NEW",
       "order": 487
+    },
+    {
+      "id": "T498",
+      "b_id": "B378",
+      "description": "`validate_research_report_contract_freeze_case` 驗Standard SOP v9保持不變、comparison v14只含SOP 1～5、Generalization單一七欄pivot、comparison無Evidence Coverage、SOP→Model-specific Extension major separator、既有Extension capability/Robustness/Mode Evidence及approved fingerprint無回歸。",
+      "initial_status": "NEW",
+      "order": 488
     }
   ],
   "transitions": [
@@ -24877,6 +24895,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_model_extension_architecture_contract_case`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "B378",
+      "description": "完成cross-model Generalization七欄合併、comparison Evidence Coverage移除與SOP/Model-specific Extension major分區；single-model SOP維持v9。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "T498",
+      "description": "同步report freeze regression驗comparison v14 compact surface與major Extension separator。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_research_report_contract_freeze_case`"
     }
   ]
 }

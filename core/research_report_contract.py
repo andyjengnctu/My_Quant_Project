@@ -227,22 +227,53 @@ def _model_comparison_table(table: ReportTableContract) -> ReportTableContract:
     )
 
 
+def _model_comparison_generalization_table() -> ReportTableContract:
+    """Pivot the two canonical Generalization transitions into one comparison row.
+
+    The source evidence remains the Standard-SOP ``comparison + three deltas`` rows.
+    Cross-model comparison only reshapes those already-canonical deltas so one model is
+    one row; it does not recompute any metric from raw scores.
+    """
+
+    return T(
+        "generalization",
+        (
+            C("model", "Model", alignment="left"),
+            C("validation_to_oos_delta_daily_rho", "Val→OOS Δ Daily rho", 4, preference="higher", format_kind="signed_number"),
+            C("validation_to_oos_delta_pair", "Val→OOS Δ Pair", 2, "pp", "higher", "signed_pp"),
+            C("validation_to_oos_delta_top_bottom", "Val→OOS Δ Top-Bottom", 4, preference="higher", format_kind="signed_number"),
+            C("oos_to_breakout_delta_daily_rho", "OOS→Breakout Δ Daily rho", 4, preference="higher", format_kind="signed_number"),
+            C("oos_to_breakout_delta_pair", "OOS→Breakout Δ Pair", 2, "pp", "higher", "signed_pp"),
+            C("oos_to_breakout_delta_top_bottom", "OOS→Breakout Δ Top-Bottom", 4, preference="higher", format_kind="signed_number"),
+        ),
+    )
+
+
 def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
-    return tuple(
-        S(
+    sections: list[ReportSectionContract] = []
+    for section in MODEL_STANDARD_SOP.sections:
+        # Evidence Coverage remains a single-model SOP diagnostic. The authorized
+        # cross-model surface deliberately stops at Ranking / Boundary.
+        if section.section_id == "evidence_coverage":
+            continue
+        tables = (
+            (_model_comparison_generalization_table(),)
+            if section.section_id == "generalization"
+            else tuple(_model_comparison_table(table) for table in section.tables)
+        )
+        sections.append(S(
             section.section_id,
             section.number,
             section.title,
             section.applicability,
-            tuple(_model_comparison_table(table) for table in section.tables),
-        )
-        for section in MODEL_STANDARD_SOP.sections
-    )
+            tables,
+        ))
+    return tuple(sections)
 
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=13,
+    version=14,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -768,7 +799,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "95065df1bec1ed81",
+    "model.standard_comparison": "e1a9b52b45992a62",
     "model.standard_sop": "7a2be4dbb363e3fd",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",

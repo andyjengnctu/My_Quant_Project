@@ -11810,3 +11810,14 @@ Decision：`B374_DONE / T494_DONE / REPORT_SURFACE_CONSOLIDATED / LEGACY_EVIDENC
 
 Decision：`B377_DONE / T497_DONE / MODEL_EXTENSION_SSOT / MULTI_HEAD_BACK_TO_EXTENSION / HEADS_AS_COLUMNS / OOS_BREAKOUT_SCOPED / HS_EXTENSION_COMPACT / NO_SCIENTIFIC_CHANGE`。
 
+## 2026-09-05 — B378 Cross-model Standard SOP surface compaction
+
+- 使用者明確授權三項persistent comparison變更：`Generalization`兩個transition合併為一個七欄表、`模型比較 SOP｜6. Evidence Coverage`移除、Standard SOP與Model-specific Extension以`render_title`同層major separator分區。
+- 修改半徑刻意只落在`model.standard_comparison`：single-model `model.standard_sop`仍為v9／fingerprint `7a2be4dbb363e3fd`，其Evidence Coverage與internal completeness guard均保留。
+- Generalization沒有重算任何metric；renderer只將既有`Validation → OOS`與`OOS → Breakout slice`canonical delta row pivot成`Model + 6 deltas`。
+- `model.standard_comparison`升v14，approved fingerprint=`e1a9b52b45992a62`；B377 capability-driven Multi-head / HS Quality extension contract完全沿用。
+- 同輪閉環前次formal evidence：本輪最新完整ZIP仍含T497同列兩個formal test entry；canonical Checklist已將T497修為單一`validate_model_extension_architecture_contract_case`，新增T498單獨綁`validate_research_report_contract_freeze_case`，沒有修改或放寬formal/meta validator。
+- GPT targeted regression：`validate_research_report_contract_freeze_case` 35/35 PASS；persistent fingerprint只有`model.standard_comparison`依本次授權改變，Standard SOP與其他persistent reports不變。
+
+Decision：`B378_DONE / MODEL_COMPARISON_V14 / GENERALIZATION_SINGLE_7_COLUMN_TABLE / EVIDENCE_COVERAGE_NOT_RENDERED_IN_COMPARISON / SOP_EXTENSION_MAJOR_SEPARATOR / NO_RETRAIN / NO_SCIENTIFIC_CHANGE`。
+

@@ -1481,7 +1481,6 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
         "upside_downside_alignment": [],
         "top_tail_economic_quality": [],
         "ranking_boundary": [],
-        "evidence_coverage": [],
         "ranking_settings": [],
     }
     for item in views:
@@ -1511,19 +1510,6 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
                 for row in list(ranking.get("rows") or [])
             )
 
-        evidence_items = list(view.get("evidence") or [])
-        available_count = sum(str(status).upper() in {"AVAILABLE", "READY"} for _evidence, status in evidence_items)
-        if evidence_items and available_count == len(evidence_items):
-            result["evidence_coverage"].append({
-                "model": model,
-                "evidence": "Coverage",
-                "status": f"{available_count}/{len(evidence_items)} AVAILABLE",
-            })
-        else:
-            for evidence, status in evidence_items:
-                result["evidence_coverage"].append(
-                    {"model": model, "evidence": evidence, "status": status}
-                )
     return result
 
 
@@ -1598,10 +1584,10 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
 
     [1][4] does not render Validation as a raw split table. For each scope-bearing
     Standard section, one numbered section title is followed by Forward OOS and
-    Breakout slice tables. Generalization uses two independent transition tables:
-    Validation → OOS and OOS → Breakout slice. The common scorecard remains
-    invariant; authorized capability-driven Model-specific extensions are appended
-    after Standard SOP section 6 and before evaluation-mode extensions.
+    Breakout slice tables. Generalization pivots the two canonical transitions into
+    one seven-column model-comparison table. Evidence Coverage is intentionally not
+    rendered on the cross-model surface. Authorized capability-driven Model-specific
+    extensions are appended after Standard SOP section 5 and before mode evidence.
     """
 
     views = _standard_model_comparison_views(models)
@@ -1663,28 +1649,41 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         list(rows.get("learnability") or []),
     )
 
-    # 2. Generalization. One section title, then two independent transition tables.
+    # 2. Generalization. The two canonical transition rows are display-pivoted into
+    # one model row; no metric is recomputed here.
     generalization_rows = [dict(row) for row in list(rows.get("generalization") or [])]
-    transition_specs = ("Validation → OOS", "OOS → Breakout slice")
-    scoped_generalization = []
-    for transition_label in transition_specs:
-        table_rows = [
-            dict(row) for row in generalization_rows
-            if str(row.get("comparison") or "").strip() == transition_label
-        ]
-        if table_rows:
-            scoped_generalization.append((transition_label, table_rows))
-    if scoped_generalization:
+    generalization_by_model: dict[str, dict[str, dict]] = {}
+    for row in generalization_rows:
+        model = str(row.get("model") or "")
+        comparison = str(row.get("comparison") or "").strip()
+        if model and comparison:
+            generalization_by_model.setdefault(model, {})[comparison] = row
+    generalization_table_rows: list[dict] = []
+    for item in views:
+        model = str(item.get("model_id") or "")
+        transitions = generalization_by_model.get(model, {})
+        validation_to_oos = dict(transitions.get("Validation → OOS") or {})
+        oos_to_breakout = dict(transitions.get("OOS → Breakout slice") or {})
+        if not validation_to_oos or not oos_to_breakout:
+            continue
+        generalization_table_rows.append({
+            "model": model,
+            "validation_to_oos_delta_daily_rho": validation_to_oos.get("delta_daily_rho"),
+            "validation_to_oos_delta_pair": validation_to_oos.get("delta_pair"),
+            "validation_to_oos_delta_top_bottom": validation_to_oos.get("delta_top_bottom"),
+            "oos_to_breakout_delta_daily_rho": oos_to_breakout.get("delta_daily_rho"),
+            "oos_to_breakout_delta_pair": oos_to_breakout.get("delta_pair"),
+            "oos_to_breakout_delta_top_bottom": oos_to_breakout.get("delta_top_bottom"),
+        })
+    if generalization_table_rows:
         parts.append(section("generalization"))
-        for transition_label, table_rows in scoped_generalization:
-            parts.append(scope_heading(transition_label))
-            parts.append(_render_model_comparison_contract_table(
-                "generalization",
-                "generalization",
-                table_rows,
-                target=target,
-                best_worst_style=True,
-            ))
+        parts.append(_render_model_comparison_contract_table(
+            "generalization",
+            "generalization",
+            generalization_table_rows,
+            target=target,
+            best_worst_style=True,
+        ))
 
     # 3. Upside / Downside Alignment
     append_scoped_section(
@@ -1726,45 +1725,27 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 best_worst_style=True,
             ))
 
-    # 6. Evidence Coverage is always last and retains status-color semantics.
-    evidence_rows = []
-    for raw_row in list(rows.get("evidence_coverage") or []):
-        row = dict(raw_row)
-        normalized = str(row.get("status") or "").upper()
-        signal = (
-            SIGNAL_POSITIVE
-            if normalized in {"AVAILABLE", "READY"} or normalized.endswith(" AVAILABLE")
-            else {
-                "PARTIAL": SIGNAL_WARNING,
-                "BLOCKED": SIGNAL_NEGATIVE,
-                "MISSING": SIGNAL_NEGATIVE,
-            }.get(normalized, SIGNAL_NEUTRAL)
-        )
-        row["status"] = styled_signal(
-            row.get("status"),
-            signal,
-            target=target,
-            enabled=color if target == "console" else None,
-            bold=True,
-        )
-        evidence_rows.append(row)
-    if evidence_rows:
-        parts.extend([
-            section("evidence_coverage"),
-            _render_model_comparison_contract_table(
-                "evidence_coverage",
-                "evidence_coverage",
-                evidence_rows,
-                target=target,
-            ),
-        ])
-
     # Model-specific evidence is appended outside the numbered Standard SOP and
-    # is capability-driven from each model payload. The persistent comparison
-    # contract authorizes which extension namespaces may appear here.
-    parts.extend(_render_model_comparison_specific_extensions(views, target=target))
+    # is capability-driven from each model payload. Give this namespace a major
+    # visual boundary equivalent to the comparison title so SOP and Extension do
+    # not visually run together.
+    extension_parts = _render_model_comparison_specific_extensions(views, target=target)
+    if extension_parts:
+        robustness = any(
+            bool(dict(item.get("view") or {}).get("robustness_specific"))
+            for item in views
+        )
+        extension_scope = "Rolling OOS" if rolling_oos else "Forward OOS"
+        if robustness:
+            extension_scope += " Robustness"
+        extension_title = f"{extension_scope} Model-specific Extension"
+        if target == "console":
+            parts.append(render_title(extension_title))
+        else:
+            parts.append(f"# {extension_title}")
+        parts.extend(extension_parts)
 
-    # Rolling keeps the exact same Standard SOP 1～6, then adds one mode-specific
+    # Rolling uses the same cross-model Standard SOP 1～5, then adds one mode-specific
     # stability extension. It is deliberately outside the numbered common SOP.
     if rolling_oos:
         rolling_rows = _rolling_specific_comparison_rows(views)
