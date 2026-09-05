@@ -11799,3 +11799,14 @@ Decision：`MR13BN_FORWARD_GATE_FAIL / MR13BO_IMPLEMENTED_RESULT_PENDING / EXPLI
 
 Decision：`B374_DONE / T494_DONE / REPORT_SURFACE_CONSOLIDATED / LEGACY_EVIDENCE_PRESERVED / NO_MODEL_RETRAIN / NO_SCIENTIFIC_CHANGE`。
 
+## 2026-09-05 — B377 Model Extension capability architecture consolidation
+
+- **User authorization**：使用者在檢視B374真實Rolling report後明確要求：(1) multi-head各DL定義不同，應留在Extension且head由列轉欄，無該head=`-`；(2) Extension依OOS/Breakout分子表；(3) Extension再合併精簡；並進一步要求先調整架構避免之後再亂掉，最後明確回覆「進行」。
+- **Standard / Extension boundary**：Standard SOP 1回到只顯示final model Learnability；`Head Learnability`不再是Standard subtable。`multi_head_learnability`成為capability-driven Model-specific Extension，semantic head由canonical score-output policy決定，Current AK=`Raw Safety + Raw MFE`、AO-family=`Raw Safety + Conditional MFE`，不是head1/head2或model-ID hard-code。
+- **Wide scoped display**：Multi-head table以Model為row、head semantic為column group；OOS與Breakout使用同一schema但各自獨立子表。comparison population固定保留所有已比較models；non-applicable head=`-`，applicable-but-missing=`MISSING`。未出現於目前models的optional semantic group不顯示，避免永久空欄。
+- **HS Quality**：原四張HS Conditional表收斂為一個scope table，保留七項decision metrics：Pred-HS true-LS、True-HS recall、P45–P55 Pair、Pred-HS HM/HS、Pred-HS High-MFE、Pred-HS MFE、Δ MFE vs Oracle。HS-only rho/Pair不重複、P40–P60/HS-Qual Pair/LS contamination/完整oracle/LS rank-tail退出常駐comparison但原scientific payload不刪。
+- **Architecture owner**：新增`services/breakout_quality/model_report_extensions.py`，只負責evidence→extension normalization；training policy持有capability，score-output policy持有head semantics，report contract持有display semantic/metric schema，renderer只格式化。single-model/comparison/robustness共用同一composition，Robustness移除舊`standard_head_learnability_rows`special path。
+- **Persistent contract**：`model.standard_sop v9` fingerprint=`7a2be4dbb363e3fd`；`model.standard_comparison v13` fingerprint=`95065df1bec1ed81`。沒有修改模型、target、loss、split、seed、optimizer、epoch selection、PIT、checkpoint identity或任何既有研究數值；無需重訓。
+
+Decision：`B377_DONE / T497_DONE / MODEL_EXTENSION_SSOT / MULTI_HEAD_BACK_TO_EXTENSION / HEADS_AS_COLUMNS / OOS_BREAKOUT_SCOPED / HS_EXTENSION_COMPACT / NO_SCIENTIFIC_CHANGE`。
+

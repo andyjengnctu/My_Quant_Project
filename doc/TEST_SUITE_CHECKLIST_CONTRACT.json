@@ -4045,6 +4045,17 @@
       "entry": "`core/trading_stop_exit_progress.py`, `core/trading_order_state.py`, `core/trading_account_state.py`, `services/trading/protection_planning.py`, `services/trading/protection_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/position_rollforward.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 364
+    },
+    {
+      "id": "B377",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Research reporting / Extension architecture",
+      "item": "Capability-driven semantic-head Model Extension composition prevents report schema drift",
+      "gap": "使用者明確要求先調整架構再改Extension顯示，避免後續新增DL/head/scope時再次分叉。Standard SOP只保留所有DL共同final-output語意；Multi-head Learnability回Model-specific Extension並以canonical score-output head semantics橫向成欄，comparison模型無該head顯示`-`、應有但缺evidence顯示`MISSING`。OOS/Breakout是同一extension schema的scope dimension並分子表；HS Qualification / Conditional-MFE Quality收斂為Pred-HS true-LS、True-HS recall、P45–P55 Pair、Pred-HS HM/HS、Pred-HS High-MFE、Pred-HS MFE、Δ MFE vs Oracle七項核心decision surface。Applicability必須由training report-evidence capability與既有score-output policy派生，禁止MR identity branch；single-model/comparison/robustness共用同一extension composition payload與generic renderer。Truth/Prediction Geometry及細部oracle/LS-tail evidence只保留historical/on-demand diagnostic，不回流persistent comparison；report-only schema升級不得觸發重訓或改scientific/artifact identity。",
+      "entry": "`core/research_report_contract.py`, `core/breakout_quality_runtime.py`, `services/breakout_quality/model_report_extensions.py`, `services/breakout_quality/standard_model_sop.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py`",
+      "initial_status": "NEW",
+      "order": 365
     }
   ],
   "tests": [
@@ -7513,6 +7524,13 @@
       "description": "`validate_trading_stop_remainder_forced_exit_contract_case` 以真實temp account/order lifecycle覆蓋STOP partial fill→persistent trigger identity→active original reconcile-only→explicit cancel→full-remainder MARKET submission→partial forced fill→cancel→retry→flat，並驗restart obligation reconstruction、attempt/key continuity、entry lineage isolation、Indicator priority guard、Operations next-action與既有Trading regressions無回歸。",
       "initial_status": "NEW",
       "order": 486
+    },
+    {
+      "id": "T497",
+      "b_id": "B377",
+      "description": "`validate_model_extension_architecture_contract_case` 驗head semantics來自canonical score-output policy、AK Raw-MFE與AO Conditional-MFE不混欄、OOS/Breakout同schema分scope、all-model N/A=`-`與applicable missing=`MISSING`、optional head union、training evidence-family applicability、shared composition renderer與無MR identity branching；`validate_research_report_contract_freeze_case`同步鎖Standard SOP v9 / comparison v13與compact HS extension。",
+      "initial_status": "NEW",
+      "order": 487
     }
   ],
   "transitions": [
@@ -24843,6 +24861,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_stop_remainder_forced_exit_contract_case`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "B377",
+      "description": "收斂Continuous DL Model Extension為capability/scoped/semantic-head單一composition contract，Multi-head回Extension並精簡HS Quality。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/breakout_quality/model_report_extensions.py`, `core/research_report_contract.py`, `services/research/breakout_quality_application.py`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "T497",
+      "description": "新增Model Extension architecture direct synthetic並納入正式synthetic registry。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_model_extension_architecture_contract_case`"
     }
   ]
 }

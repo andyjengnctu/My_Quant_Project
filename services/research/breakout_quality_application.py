@@ -79,6 +79,7 @@ from core.research_report_contract import (
     report_contract,
     section_contract,
     table_contract,
+    visible_extension_table,
 )
 from core.report_style import (
     SIGNAL_NEGATIVE,
@@ -97,10 +98,12 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from services.breakout_quality.standard_model_sop import (
-    aggregate_standard_head_learnability_rows,
     aggregate_standard_model_sop_robustness,
-    extract_standard_head_learnability_rows,
     migrate_legacy_forward_standard_model_sop,
+)
+from services.breakout_quality.model_report_extensions import (
+    build_core_model_report_extensions,
+    extension_missing_evidence,
 )
 from services.breakout_quality.fitted_model_artifacts import (
     current_default_fitting_settings,
@@ -544,19 +547,6 @@ def _model_sop_view(payload: dict) -> dict:
             "delta_top_bottom": delta(top_bottom(oos), top_bottom(breakout)),
         })
 
-    head_learnability_rows = extract_standard_head_learnability_rows(
-        source_payload, oos_scope_label=oos_scope_label
-    )
-    if not head_learnability_rows:
-        # Compatibility for already-persisted robustness comparison payloads from
-        # the pre-v8 report schema.  Reuse their aggregated rows without preserving
-        # the retired Model-specific Extension presentation.
-        for legacy_extension in list(source_payload.get("comparison_extensions") or []):
-            legacy = dict(legacy_extension or {})
-            if str(legacy.get("id") or "") == "multi_head_learnability":
-                head_learnability_rows = [dict(row) for row in list(legacy.get("rows") or [])]
-                break
-
     joint_min_eval = dict(source_payload.get("safety_raw_mfe_joint_min_evaluation") or {})
     raw_eval = dict(
         joint_min_eval
@@ -691,83 +681,9 @@ def _model_sop_view(payload: dict) -> dict:
         ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
     ]
 
-    extensions = []
-    hs_conditional_eval = dict(source_payload.get("hs_conditional_mfe_evaluation") or {})
-    if hs_conditional_eval:
-        gate_rows = []
-        boundary_rows = []
-        oracle_rows = []
-        contamination_rows = []
-        scope_pairs = (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos"))
-        for scope_label, scope_key in scope_pairs:
-            scope = dict(hs_conditional_eval.get(scope_key) or {})
-            if not scope:
-                continue
-            learn = dict(scope.get("conditional_mfe_true_hs") or {})
-            qualification = dict(scope.get("hs_qualification") or {})
-            boundary = dict(scope.get("hs_qualification_boundary") or {})
-            p40 = dict(boundary.get("p40_p60") or {})
-            p45 = dict(boundary.get("p45_p55") or {})
-            gate = dict(scope.get("lexicographic_model_gate") or {})
-            oracle = dict(scope.get("true_hs_oracle_gate") or {})
-            gate_rows.append({
-                "split": scope_label,
-                "hs_only_daily_rho": learn.get("mean_daily_spearman"),
-                "hs_only_pair": learn.get("pairwise_concordance"),
-                "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
-                "true_hs_recall_pct": gate.get("true_hs_recall_pct"),
-                "ls_contamination_lift": gate.get("true_ls_contamination_lift_vs_predicted_hs"),
-            })
-            boundary_rows.append({
-                "split": scope_label,
-                "qualification_pair": qualification.get("pairwise_concordance"),
-                "p40_p60_pair": p40.get("pairwise_concordance"),
-                "p45_p55_pair": p45.get("pairwise_concordance"),
-            })
-            oracle_rows.append({
-                "split": scope_label,
-                "actual_hmhs_pct": gate.get("selected_hmhs_pct"),
-                "oracle_hmhs_pct": oracle.get("selected_hmhs_pct"),
-                "hmhs_gap_pp": gate.get("hmhs_gap_vs_true_hs_oracle_pp"),
-                "actual_high_mfe_pct": gate.get("selected_high_mfe_pct"),
-                "oracle_high_mfe_pct": oracle.get("selected_high_mfe_pct"),
-                "high_mfe_gap_pp": gate.get("high_mfe_gap_vs_true_hs_oracle_pp"),
-                "actual_mean_mfe_r": gate.get("selected_mean_favorable_r"),
-                "oracle_mean_mfe_r": oracle.get("selected_mean_favorable_r"),
-                "mean_mfe_gap_r": gate.get("mean_favorable_r_gap_vs_true_hs_oracle"),
-            })
-            contamination_rows.append({
-                "split": scope_label,
-                "ls_rank_p50": gate.get("true_ls_conditional_rank_percentile_p50"),
-                "ls_rank_p90": gate.get("true_ls_conditional_rank_percentile_p90"),
-                "ls_rank_p99": gate.get("true_ls_conditional_rank_percentile_p99"),
-            })
-        control_rows = []
-        reference = dict(hs_conditional_eval.get("lexicographic_reference_control") or {})
-        if reference.get("available"):
-            reference_model_id = str(reference.get("reference_model_id") or "Reference")
-            current_model_id = str(source_payload.get("model_research_id") or "MODEL")
-            for scope_label, scope_key in ((oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
-                current_gate = dict((hs_conditional_eval.get(scope_key) or {}).get("lexicographic_model_gate") or {})
-                reference_gate = dict((reference.get(scope_key) or {}).get("lexicographic_model_gate") or {})
-                for model_id, gate in ((current_model_id, current_gate), (reference_model_id, reference_gate)):
-                    control_rows.append({
-                        "model": model_id,
-                        "split": scope_label,
-                        "topk_high_mfe_pct": gate.get("selected_high_mfe_pct"),
-                        "topk_high_safety_pct": gate.get("selected_high_safety_pct"),
-                        "topk_hmhs_pct": gate.get("selected_hmhs_pct"),
-                        "topk_hmls_pct": gate.get("selected_hmls_pct"),
-                    })
-        extensions.append({
-            "id": "hs_conditional_mfe_gate",
-            "gate_rows": gate_rows,
-            "boundary_rows": boundary_rows,
-            "oracle_rows": oracle_rows,
-            "contamination_rows": contamination_rows,
-            "control_rows": control_rows,
-        })
-
+    extensions = build_core_model_report_extensions(
+        source_payload, oos_scope_label=oos_scope_label
+    )
     if direct_hmhs_only:
         ext_rows = []
         for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
@@ -858,7 +774,7 @@ def _model_sop_view(payload: dict) -> dict:
     for raw_extension in list(source_payload.get("comparison_extensions") or []):
         normalized_extension = dict(raw_extension or {})
         extension_id = str(normalized_extension.get("id") or "").strip()
-        if not extension_id or extension_id in {"multi_head_learnability", "truth_prediction_geometry"}:
+        if not extension_id or extension_id == "truth_prediction_geometry":
             continue
         extensions = [
             extension for extension in extensions
@@ -870,7 +786,6 @@ def _model_sop_view(payload: dict) -> dict:
         "split_names": split_names,
         "learnability": learnability_rows,
         "generalization": generalization_rows,
-        "head_learnability": head_learnability_rows,
         "ranking": ranking,
         "evidence": evidence,
         "upside_downside_alignment": alignment_rows,
@@ -946,12 +861,11 @@ def _render_model_contract_table(
 
 
 def _render_model_comparison_specific_extensions(views: list[dict], *, target: str) -> list[str]:
-    """Render comparison-specific Model extensions as cross-model tables.
+    """Render capability-driven cross-model extensions from the canonical contract.
 
-    Extension capability remains per model, but the comparison surface groups every
-    method that exposes the same extension into one canonical table.  Best/worst
-    colors reuse the Standard SOP contract and are scoped to truly comparable rows
-    (same split/head or same Pred-Safety cohort).
+    Scope-bearing extensions are split into independent OOS/Breakout subtables.
+    ``comparison_population=all_models`` keeps non-applicable models visible with
+    ``-`` cells; otherwise only models exposing that evidence capability appear.
     """
 
     allowed_ids = comparison_extension_ids()
@@ -965,67 +879,191 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
             return render_section(paint(title, "cyan", enabled=color, bold=True))
         return f"## {markdown_tone(title, 'blue', bold=True)}"
 
-    def scope_cell(value: str) -> str:
+    def scope_heading(value: str) -> str:
         if target == "console":
-            tone = "gray" if str(value).lower() == "validation" else "light_yellow"
-            return paint(str(value), tone, enabled=color, bold=str(value).lower() != "validation")
-        tone = "gray" if str(value).lower() == "validation" else "light_yellow"
-        return markdown_tone(value, tone, bold=str(value).lower() != "validation")
+            return paint(str(value), "light_yellow", enabled=color, bold=True)
+        return f"### {markdown_tone(value, 'light_yellow', bold=True)}"
+
+    def ordered_scopes(values: list[str]) -> list[str]:
+        unique = list(dict.fromkeys(str(value) for value in values if str(value).strip()))
+        preferred = ("Forward OOS", "Rolling OOS", "Breakout slice")
+        return [value for value in preferred if value in unique] + [
+            value for value in unique if value not in preferred
+        ]
+
+    all_models = [str(item.get("model_id") or "MODEL") for item in views]
+    extension_by_model: dict[str, dict[str, dict]] = {}
+    for item in views:
+        model_id = str(item.get("model_id") or "MODEL")
+        view = dict(item.get("view") or {})
+        extension_by_model[model_id] = {
+            str(ext.get("id") or ""): dict(ext)
+            for ext in list(view.get("extensions") or [])
+        }
+
+    parts: list[str] = []
+    for extension_id in allowed_ids:
+        spec = extension_contract(extension_id)
+        present_models = [
+            model_id for model_id in all_models
+            if extension_id in extension_by_model.get(model_id, {})
+        ]
+        if not present_models:
+            continue
+        population = (
+            all_models
+            if spec.comparison_population == "all_models"
+            else present_models
+        )
+        comparison_tables = {
+            table.table_id: table
+            for table in comparison_extension_contract(extension_id).tables
+        }
+        extension_parts: list[str] = []
+
+        if spec.comparison_mode == "row_tables":
+            scope_key = str(spec.comparison_scope_key or "")
+            for table_id, row_key in spec.comparison_row_keys:
+                comparison_table = comparison_tables[f"{table_id}_comparison"]
+                source_model_key = comparison_table.columns[0].key
+                rows_by_model = {
+                    model_id: [
+                        dict(row)
+                        for row in list(
+                            extension_by_model.get(model_id, {})
+                            .get(extension_id, {})
+                            .get(row_key)
+                            or []
+                        )
+                    ]
+                    for model_id in population
+                }
+
+                if scope_key:
+                    scopes = ordered_scopes([
+                        str(row.get(scope_key) or "")
+                        for model_rows in rows_by_model.values()
+                        for row in model_rows
+                    ])
+                    for scope in scopes:
+                        table_rows: list[dict] = []
+                        for model_id in population:
+                            matches = [
+                                row for row in rows_by_model[model_id]
+                                if str(row.get(scope_key) or "") == scope
+                            ]
+                            if not matches and spec.comparison_population == "all_models":
+                                matches = [{}]
+                            for row in matches:
+                                table_rows.append({source_model_key: model_id, **row})
+                        if not table_rows:
+                            continue
+                        visible_table = visible_extension_table(
+                            extension_id, comparison_table, table_rows
+                        )
+                        # A table with only Model contains no applicable head/evidence.
+                        if len(visible_table.columns) <= 1:
+                            continue
+                        extension_parts.append(scope_heading(scope))
+                        extension_parts.append(_render_model_contract_table(
+                            visible_table,
+                            table_rows,
+                            target=target,
+                            best_worst_style=True,
+                        ))
+                else:
+                    table_rows = [
+                        {source_model_key: model_id, **row}
+                        for model_id in population
+                        for row in rows_by_model[model_id]
+                    ]
+                    if table_rows:
+                        visible_table = visible_extension_table(
+                            extension_id, comparison_table, table_rows
+                        )
+                        extension_parts.append(_render_model_contract_table(
+                            visible_table,
+                            table_rows,
+                            target=target,
+                            best_worst_style=True,
+                        ))
+
+        if extension_parts:
+            parts.append(extension_heading(extension_id))
+            parts.extend(extension_parts)
+
+    return parts
+
+
+def _render_single_model_core_extensions(view: dict, *, target: str) -> list[str]:
+    """Render canonical comparison-capable model extensions for one model.
+
+    The extension contract owns scope splitting and visible metric groups; this
+    renderer only formats rows.  Scientific applicability is resolved upstream.
+    """
+
+    color = console_color_enabled()
+
+    def extension_heading(extension_id: str) -> str:
+        title = f"Model-specific Extension｜{extension_contract(extension_id).title}"
+        if target == "console":
+            return render_section(paint(title, "cyan", enabled=color, bold=True))
+        return f"## {markdown_tone(title, 'blue', bold=True)}"
 
     def scope_heading(value: str) -> str:
         if target == "console":
             return paint(str(value), "light_yellow", enabled=color, bold=True)
         return f"### {markdown_tone(value, 'light_yellow', bold=True)}"
 
-    extension_views: dict[str, list[tuple[str, dict]]] = {extension_id: [] for extension_id in allowed_ids}
-    for item in views:
-        model_id = str(item.get("model_id") or "MODEL")
-        view = dict(item.get("view") or {})
-        extensions = {str(ext.get("id")): dict(ext) for ext in list(view.get("extensions") or [])}
-        for extension_id in allowed_ids:
-            ext = extensions.get(extension_id)
-            if ext:
-                extension_views[extension_id].append((model_id, ext))
+    def ordered_scopes(values: list[str]) -> list[str]:
+        unique = list(dict.fromkeys(str(value) for value in values if str(value).strip()))
+        preferred = ("Validation", "Forward OOS", "Rolling OOS", "Breakout slice")
+        return [value for value in preferred if value in unique] + [
+            value for value in unique if value not in preferred
+        ]
 
+    by_id = {
+        str(ext.get("id") or ""): dict(ext)
+        for ext in list(view.get("extensions") or [])
+    }
     parts: list[str] = []
-    for extension_id in allowed_ids:
-        methods = extension_views.get(extension_id) or []
-        if not methods:
+    for extension_id in comparison_extension_ids():
+        ext = by_id.get(extension_id)
+        if not ext:
             continue
-        tables = {table.table_id: table for table in comparison_extension_contract(extension_id).tables}
+        spec = extension_contract(extension_id)
         extension_parts: list[str] = []
-
-        extension_spec = extension_contract(extension_id)
-        if extension_spec.comparison_mode == "row_tables":
-            base_tables = {table.table_id: table for table in extension_spec.tables}
-            for table_id, row_key in extension_spec.comparison_row_keys:
-                base_table = base_tables[table_id]
-                comparison_table = tables[f"{table_id}_comparison"]
-                source_model_key = comparison_table.columns[0].key
-                rows = []
-                for model_id, ext in methods:
-                    for raw_row in list(ext.get(row_key) or []):
-                        rows.append({**dict(raw_row), source_model_key: model_id})
+        if spec.comparison_mode == "row_tables":
+            scope_key = str(spec.comparison_scope_key or "")
+            tables = {table.table_id: table for table in spec.tables}
+            for table_id, row_key in spec.comparison_row_keys:
+                table = tables[table_id]
+                rows = [dict(row) for row in list(ext.get(row_key) or [])]
                 if not rows:
                     continue
-                group_keys = tuple(
-                    column.key
-                    for column in base_table.columns
-                    if column.format_kind == "text" and column.preference == "neutral"
-                )
-                extension_parts.append(_render_model_contract_table(
-                    comparison_table,
-                    rows,
-                    target=target,
-                    scope_styler=scope_cell if "split" in group_keys else None,
-                    best_worst_style=True,
-                    best_worst_group_keys=group_keys,
-                ))
-            if extension_parts:
-                parts.append(extension_heading(extension_id))
-                parts.extend(extension_parts)
-            continue
-
+                if scope_key:
+                    scopes = ordered_scopes([str(row.get(scope_key) or "") for row in rows])
+                    projected = type(table)(
+                        table.table_id,
+                        tuple(column for column in table.columns if column.key != scope_key),
+                    )
+                    for scope in scopes:
+                        scope_rows = [row for row in rows if str(row.get(scope_key) or "") == scope]
+                        visible_table = visible_extension_table(extension_id, projected, scope_rows)
+                        if not visible_table.columns:
+                            continue
+                        extension_parts.append(scope_heading(scope))
+                        extension_parts.append(_render_model_contract_table(
+                            visible_table, scope_rows, target=target, best_worst_style=False,
+                        ))
+                else:
+                    visible_table = visible_extension_table(extension_id, table, rows)
+                    extension_parts.append(_render_model_contract_table(
+                        visible_table, rows, target=target, best_worst_style=False,
+                    ))
+        if extension_parts:
+            parts.append(extension_heading(extension_id))
+            parts.extend(extension_parts)
     return parts
 
 
@@ -1082,14 +1120,6 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             view["learnability"], target="console", scope_styler=scope_text,
         ),
     ])
-    if view.get("head_learnability"):
-        lines.extend([
-            paint("Head Learnability", "light_yellow", enabled=color, bold=True),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "learnability", "head_learnability"),
-                view["head_learnability"], target="console", scope_styler=scope_text,
-            ),
-        ])
     if view["generalization"]:
         lines.extend([
             section("generalization"),
@@ -1147,27 +1177,15 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         ),
     ])
 
-    rolling_rows = _rolling_specific_extension_rows(view)
-    if rolling_rows:
-        lines.append(extension(mode_extension_contract("rolling_stability").title))
-        lines.append(_render_model_contract_table(
-            mode_extension_contract("rolling_stability").tables[0],
-            rolling_rows,
-            target="console",
-        ))
+    lines.extend(_render_single_model_core_extensions(view, target="console"))
 
+    core_extension_ids = set(comparison_extension_ids())
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
+        if ext_id in core_extension_ids:
+            continue
         lines.append(extension(_model_extension_title(payload, ext_id)))
-        if ext_id == "hs_conditional_mfe_gate":
-            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
-            for table_id, row_key in (("hs_conditional_gate", "gate_rows"), ("hs_qualification_boundary", "boundary_rows"), ("true_hs_oracle_gap", "oracle_rows"), ("ls_contamination_tail", "contamination_rows"), ("hs_attribution_control", "control_rows")):
-                rows = list(ext.get(row_key) or [])
-                if rows:
-                    lines.append(_render_model_contract_table(
-                        tables[table_id], rows, target="console", scope_styler=scope_text,
-                    ))
-        elif ext_id == "direct_hmhs_h_only":
+        if ext_id == "direct_hmhs_h_only":
             if ext.get("generalization"):
                 lines.append("Generalization")
                 lines.append(_render_model_contract_table(
@@ -1185,6 +1203,15 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             lines.append(_render_model_contract_table(
                 extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
             ))
+
+    rolling_rows = _rolling_specific_extension_rows(view)
+    if rolling_rows:
+        lines.append(extension(mode_extension_contract("rolling_stability").title))
+        lines.append(_render_model_contract_table(
+            mode_extension_contract("rolling_stability").tables[0],
+            rolling_rows,
+            target="console",
+        ))
     return "\n".join(line for line in lines if line)
 
 
@@ -1206,14 +1233,6 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     lines = ["", section("learnability"), "", _render_model_contract_table(
         table_contract("model.standard_sop", "learnability", "learnability"), view["learnability"], target="markdown", scope_styler=scope_text,
     )]
-    if view.get("head_learnability"):
-        lines.extend([
-            "", f"### {markdown_tone('Head Learnability', 'light_yellow', bold=True)}", "",
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "learnability", "head_learnability"),
-                view["head_learnability"], target="markdown", scope_styler=scope_text,
-            ),
-        ])
     if view["generalization"]:
         lines.extend(["", section("generalization"), "", _render_model_contract_table(
             table_contract("model.standard_sop", "generalization", "generalization"), view["generalization"], target="markdown", delta_style=True,
@@ -1253,29 +1272,17 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"), evidence_rows, target="markdown",
     )])
 
-    rolling_rows = _rolling_specific_extension_rows(view)
-    if rolling_rows:
-        lines.extend([
-            "", extension(mode_extension_contract("rolling_stability").title), "",
-            _render_model_contract_table(
-                mode_extension_contract("rolling_stability").tables[0],
-                rolling_rows,
-                target="markdown",
-            ),
-        ])
+    core_parts = _render_single_model_core_extensions(view, target="markdown")
+    for part in core_parts:
+        lines.extend(["", part])
 
+    core_extension_ids = set(comparison_extension_ids())
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
+        if ext_id in core_extension_ids:
+            continue
         lines.extend(["", extension(_model_extension_title(payload, ext_id)), ""])
-        if ext_id == "hs_conditional_mfe_gate":
-            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
-            for table_id, row_key in (("hs_conditional_gate", "gate_rows"), ("hs_qualification_boundary", "boundary_rows"), ("true_hs_oracle_gap", "oracle_rows"), ("ls_contamination_tail", "contamination_rows"), ("hs_attribution_control", "control_rows")):
-                rows = list(ext.get(row_key) or [])
-                if rows:
-                    lines.extend([_render_model_contract_table(
-                        tables[table_id], rows, target="markdown", scope_styler=scope_text,
-                    ), ""])
-        elif ext_id == "direct_hmhs_h_only":
+        if ext_id == "direct_hmhs_h_only":
             if ext.get("generalization"):
                 lines.extend(["### Generalization", "", _render_model_contract_table(
                     extension_contract(ext_id).tables[1], ext["generalization"], target="markdown", delta_style=True,
@@ -1291,6 +1298,17 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
             lines.append(_render_model_contract_table(
                 extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
             ))
+
+    rolling_rows = _rolling_specific_extension_rows(view)
+    if rolling_rows:
+        lines.extend([
+            "", extension(mode_extension_contract("rolling_stability").title), "",
+            _render_model_contract_table(
+                mode_extension_contract("rolling_stability").tables[0],
+                rolling_rows,
+                target="markdown",
+            ),
+        ])
     return lines
 
 
@@ -1333,14 +1351,20 @@ def _comparison_evidence_issues(payload: dict, settings) -> tuple[str, ...]:
         return ()
     view = _model_sop_view(dict(payload or {}))
     available = {
-        str(dict(extension).get("id") or "")
+        str(dict(extension).get("id") or ""): dict(extension)
         for extension in list(view.get("extensions") or [])
     }
-    return tuple(
-        f"model_extension:{extension_id} missing"
-        for extension_id in expected
-        if extension_id not in available
-    )
+    issues: list[str] = []
+    for extension_id in expected:
+        extension = available.get(extension_id)
+        if extension is None:
+            issues.append(f"model_extension:{extension_id} missing")
+            continue
+        issues.extend(
+            f"model_extension:{extension_id}:{reason}"
+            for reason in extension_missing_evidence(extension)
+        )
+    return tuple(dict.fromkeys(issues))
 
 
 def _standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
@@ -1453,7 +1477,6 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
 
     result: dict[str, object] = {
         "learnability": [],
-        "head_learnability": [],
         "generalization": [],
         "upside_downside_alignment": [],
         "top_tail_economic_quality": [],
@@ -1466,7 +1489,6 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
         view = dict(item["view"])
         for key in (
             "learnability",
-            "head_learnability",
             "generalization",
             "upside_downside_alignment",
             "top_tail_economic_quality",
@@ -1633,30 +1655,13 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 best_worst_style=True,
             ))
 
-    # 1. Learnability: primary score plus optional head-level decomposition.
-    primary_learnability = list(rows.get("learnability") or [])
-    head_learnability = list(rows.get("head_learnability") or [])
-    scoped_primary = []
-    scoped_heads = []
-    for scope_label, aliases in scope_specs:
-        primary_rows = [dict(row) for row in primary_learnability if split_matches(dict(row), aliases)]
-        head_rows = [dict(row) for row in head_learnability if split_matches(dict(row), aliases)]
-        if primary_rows:
-            scoped_primary.append((scope_label, primary_rows))
-        if head_rows:
-            scoped_heads.append((scope_label, head_rows))
-    if scoped_primary or scoped_heads:
-        parts.append(section("learnability"))
-        for scope_label, table_rows in scoped_primary:
-            parts.append(scope_heading(scope_label))
-            parts.append(_render_model_comparison_contract_table(
-                "learnability", "learnability", table_rows, target=target, best_worst_style=True,
-            ))
-        for scope_label, head_rows in scoped_heads:
-            parts.append(scope_heading(f"Head Learnability｜{scope_label}"))
-            parts.append(_render_model_comparison_contract_table(
-                "learnability", "head_learnability", head_rows, target=target, best_worst_style=True,
-            ))
+    # 1. Learnability: common final-model score only.  Semantic head metrics live
+    # in the capability-driven Multi-head Model-specific Extension.
+    append_scoped_section(
+        "learnability",
+        "learnability",
+        list(rows.get("learnability") or []),
+    )
 
     # 2. Generalization. One section title, then two independent transition tables.
     generalization_rows = [dict(row) for row in list(rows.get("generalization") or [])]
@@ -5323,9 +5328,6 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             seed_views.append(_model_sop_view(dict(payload)))
             source_reports.append(Path(path))
         aggregated = aggregate_standard_model_sop_robustness(seed_payloads, seeds=seeds)
-        aggregated_head_rows = aggregate_standard_head_learnability_rows(
-            [list(seed_view.get("head_learnability") or []) for seed_view in seed_views]
-        )
         aggregated_extensions = []
         aggregation_status = {}
         for extension_id in _expected_comparison_extension_ids(settings):
@@ -5354,7 +5356,6 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             "payload": {
                 "model_research_id": str(model_id),
                 "standard_model_sop": aggregated,
-                "standard_head_learnability_rows": aggregated_head_rows,
                 "comparison_extensions": aggregated_extensions,
                 "comparison_extension_aggregation": aggregation_status,
             },

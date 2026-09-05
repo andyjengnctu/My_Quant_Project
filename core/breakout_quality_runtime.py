@@ -1136,7 +1136,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE,
-            report_evidence_families=("safety_raw_mfe",),
+            report_evidence_families=("multi_head_learnability", "safety_raw_mfe"),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1152,7 +1152,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE,
-            report_evidence_families=("safety_raw_mfe",),
+            report_evidence_families=("multi_head_learnability", "safety_raw_mfe"),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1185,7 +1185,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
-            report_evidence_families=("hs_conditional_mfe",),
+            report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1204,7 +1204,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
-            report_evidence_families=("hs_conditional_mfe",),
+            report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1224,7 +1224,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
-            report_evidence_families=("hs_conditional_mfe",),
+            report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1238,7 +1238,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
-            report_evidence_families=("hs_conditional_mfe",),
+            report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -1252,7 +1252,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
-            report_evidence_families=("hs_conditional_mfe",),
+            report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(

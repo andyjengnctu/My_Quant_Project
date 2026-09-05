@@ -84,7 +84,7 @@ from filters.breakout_quality.ranking_score_store import (
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
 from core.display_common import InlineProgress
-from core.research_report_contract import extension_contract, format_contract_value, section_contract, table_contract
+from core.research_report_contract import extension_contract, format_contract_value, section_contract, table_contract, visible_extension_table
 from core.report_style import markdown_tone, signal_for_delta, styled_signal
 
 from services.breakout_quality import ranker_training as ranker_api
@@ -554,8 +554,8 @@ def _dual_component_metrics(
 from services.breakout_quality.standard_model_sop import (
     calculate_upside_downside_alignment_metrics,
     build_standard_model_sop,
-    extract_standard_head_learnability_rows,
 )
+from services.breakout_quality.model_report_extensions import build_core_model_report_extensions
 
 # Backward-compatible private alias for historical synthetic/import consumers.
 _upside_downside_alignment_metrics = calculate_upside_downside_alignment_metrics
@@ -632,6 +632,44 @@ def _render_markdown(payload: dict) -> str:
         ]
         return [header, separator, *body]
 
+    def core_extension_markdown(extension_payload: dict) -> list[str]:
+        extension_id = str(extension_payload.get("id") or "")
+        contract = extension_contract(extension_id)
+        result = [
+            "",
+            section(f"Model-specific Extension｜{contract.title}"),
+        ]
+        scope_key = str(contract.comparison_scope_key or "")
+        tables = {table.table_id: table for table in contract.tables}
+        preferred_scopes = ("Forward OOS", "Rolling OOS", "Breakout slice")
+        for table_id, row_key in contract.comparison_row_keys:
+            table = tables[table_id]
+            rows = [dict(row) for row in list(extension_payload.get(row_key) or [])]
+            if not rows:
+                continue
+            if scope_key:
+                seen = list(dict.fromkeys(str(row.get(scope_key) or "") for row in rows if str(row.get(scope_key) or "").strip()))
+                scopes = [value for value in preferred_scopes if value in seen] + [value for value in seen if value not in preferred_scopes]
+                projected = type(table)(
+                    table.table_id,
+                    tuple(column for column in table.columns if column.key != scope_key),
+                )
+                for scope in scopes:
+                    scope_rows = [row for row in rows if str(row.get(scope_key) or "") == scope]
+                    visible = visible_extension_table(extension_id, projected, scope_rows)
+                    if not visible.columns:
+                        continue
+                    result.extend([
+                        "",
+                        f"### {markdown_tone(scope, 'light_yellow', bold=True)}",
+                        "",
+                        *contract_markdown(visible, scope_rows),
+                    ])
+            else:
+                visible = visible_extension_table(extension_id, table, rows)
+                result.extend(["", *contract_markdown(visible, rows)])
+        return result
+
     lines = [
         f"# {markdown_tone('Detailed Model Research Report', 'blue', bold=True)}",
         "",
@@ -672,18 +710,6 @@ def _render_markdown(payload: dict) -> str:
             f"| {fmt(row.get('bottom_score_decile_raw_target_mean'))} "
             f"| {fmt(None if row.get('top_score_decile_raw_target_mean') is None or row.get('bottom_score_decile_raw_target_mean') is None else float(row['top_score_decile_raw_target_mean']) - float(row['bottom_score_decile_raw_target_mean']))} |"
         )
-
-    head_rows = extract_standard_head_learnability_rows(payload, oos_scope_label="Forward OOS")
-    if head_rows:
-        lines.extend([
-            "",
-            f"### {markdown_tone('Head Learnability', 'light_yellow', bold=True)}",
-            "",
-            *contract_markdown(
-                table_contract("model.standard_sop", "learnability", "head_learnability"),
-                head_rows,
-            ),
-        ])
 
     validation = dict((payload.get("split_metrics") or {}).get("validation") or {})
     oos = dict((payload.get("split_metrics") or {}).get("oos") or {})
@@ -754,6 +780,9 @@ def _render_markdown(payload: dict) -> str:
             "- High-MFE / High-Safety使用Daily-universal同日actual percentile；Breakout只filter，不在subset內重新排名truth。",
             *contract_markdown(table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"), top_tail_rows),
         ])
+
+    for core_extension in build_core_model_report_extensions(payload, oos_scope_label="Forward OOS"):
+        lines.extend(core_extension_markdown(core_extension))
 
     if direct_hmhs_only:
         lines.extend([
@@ -893,8 +922,7 @@ def _render_markdown(payload: dict) -> str:
                 "- Safety→Raw-MFE→Direct-HM/HS objective：raw 300×10與兩個marginal heads全部保留；"
                 "新增shared-latent Direct HM/HS head；三head固定等權full-list Delta-NDCG。"
                 if safety_raw_mfe_hmhs_tri
-                else "- Safety + Raw-MFE dual-head objective：共用shared encoder；Head Learnability已納入Standard SOP 1，"
-                "不再另印AK-style Multi-head Extension。"
+                else "- Safety + Raw-MFE dual-head objective：共用shared encoder；head-level learnability由canonical Multi-head Learnability Extension呈現。"
             ),
         ])
         raw_eval = dict(payload.get("safety_raw_mfe_hmhs_evaluation") or payload.get("safety_raw_mfe_evaluation") or {})
@@ -927,97 +955,6 @@ def _render_markdown(payload: dict) -> str:
                 ])
         # Truth / Prediction Geometry remains in the persisted scientific payload for
         # historical/on-demand audit, but is no longer a persistent report section.
-
-    hs_eval = dict(payload.get("hs_conditional_mfe_evaluation") or {})
-    if hs_eval:
-        primary_semantic = str(hs_eval.get("primary_head_semantic") or "continuous_safety_ranking")
-        qualification_style = primary_semantic in {"binary_hs_qualification", "top_hs_safety_ranking"}
-        lines.extend([
-            "",
-            section(f"Model-specific Extension｜{payload['model_research_id']}｜HS-Qualification / Conditional-MFE Gate"),
-            "",
-            "- Raw Safety / Conditional-MFE head learnability已由Standard SOP 1 Head Learnability呈現；此處只保留qualification、oracle與LS contamination的獨立診斷。",
-        ])
-        contract = extension_contract("hs_conditional_mfe_gate")
-        tables = {table.table_id: table for table in contract.tables}
-        gate_rows = []
-        boundary_rows = []
-        oracle_rows = []
-        contamination_rows = []
-        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            scope = dict(hs_eval.get(key) or {})
-            if not scope:
-                continue
-            learn = dict(scope.get("conditional_mfe_true_hs") or {})
-            gate = dict(scope.get("lexicographic_model_gate") or {})
-            oracle = dict(scope.get("true_hs_oracle_gate") or {})
-            qualification = dict(scope.get("hs_qualification") or {})
-            boundary = dict(scope.get("hs_qualification_boundary") or {})
-            gate_rows.append({
-                "split": label,
-                "hs_only_daily_rho": learn.get("mean_daily_spearman"),
-                "hs_only_pair": learn.get("pairwise_concordance"),
-                "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
-                "true_hs_recall_pct": gate.get("true_hs_recall_pct"),
-                "ls_contamination_lift": gate.get("true_ls_contamination_lift_vs_predicted_hs"),
-            })
-            if qualification_style:
-                boundary_rows.append({
-                    "split": label,
-                    "qualification_pair": qualification.get("pairwise_concordance"),
-                    "p40_p60_pair": dict(boundary.get("p40_p60") or {}).get("pairwise_concordance"),
-                    "p45_p55_pair": dict(boundary.get("p45_p55") or {}).get("pairwise_concordance"),
-                })
-            oracle_rows.append({
-                "split": label,
-                "actual_hmhs_pct": gate.get("selected_hmhs_pct"),
-                "oracle_hmhs_pct": oracle.get("selected_hmhs_pct"),
-                "hmhs_gap_pp": gate.get("hmhs_gap_vs_true_hs_oracle_pp"),
-                "actual_high_mfe_pct": gate.get("selected_high_mfe_pct"),
-                "oracle_high_mfe_pct": oracle.get("selected_high_mfe_pct"),
-                "high_mfe_gap_pp": gate.get("high_mfe_gap_vs_true_hs_oracle_pp"),
-                "actual_mean_mfe_r": gate.get("selected_mean_favorable_r"),
-                "oracle_mean_mfe_r": oracle.get("selected_mean_favorable_r"),
-                "mean_mfe_gap_r": gate.get("mean_favorable_r_gap_vs_true_hs_oracle"),
-            })
-            contamination_rows.append({
-                "split": label,
-                "ls_rank_p50": gate.get("true_ls_conditional_rank_percentile_p50"),
-                "ls_rank_p90": gate.get("true_ls_conditional_rank_percentile_p90"),
-                "ls_rank_p99": gate.get("true_ls_conditional_rank_percentile_p99"),
-            })
-        for table_id, rows in (("hs_conditional_gate", gate_rows), ("hs_qualification_boundary", boundary_rows), ("true_hs_oracle_gap", oracle_rows), ("ls_contamination_tail", contamination_rows)):
-            if rows:
-                lines.extend(["", *contract_markdown(tables[table_id], rows)])
-
-        # Attribution control remains useful in a single-model diagnostic report, but
-        # is intentionally excluded from cross-model comparison to avoid nested comparison.
-        reference_control = dict(hs_eval.get("lexicographic_reference_control") or {})
-        if reference_control.get("available"):
-            control_rows = []
-            reference_model_id = str(reference_control.get("reference_model_id") or "Reference")
-            current_model_id = str(payload.get("model_research_id") or "MODEL")
-            for label, key in (("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-                current_gate = dict((hs_eval.get(key) or {}).get("lexicographic_model_gate") or {})
-                reference_gate = dict((reference_control.get(key) or {}).get("lexicographic_model_gate") or {})
-                for model_id, gate in ((current_model_id, current_gate), (reference_model_id, reference_gate)):
-                    control_rows.append({
-                        "model": model_id,
-                        "split": label,
-                        "topk_high_mfe_pct": gate.get("selected_high_mfe_pct"),
-                        "topk_high_safety_pct": gate.get("selected_high_safety_pct"),
-                        "topk_hmhs_pct": gate.get("selected_hmhs_pct"),
-                        "topk_hmls_pct": gate.get("selected_hmls_pct"),
-                    })
-            if control_rows:
-                lines.extend([
-                    "",
-                    f"### Attribution control｜{reference_control.get('reference_profile')}",
-                    "",
-                    *contract_markdown(tables["hs_attribution_control"], control_rows),
-                ])
-        elif reference_control:
-            lines.extend(["", "### Attribution control", "", f"- Reference control unavailable：`{reference_control.get('not_available_reason')}`"])
 
     hs_priority_eval = dict(payload.get("hs_priority_mfe_evaluation") or {})
     if hs_priority_eval:

@@ -74,6 +74,18 @@ class ModelExtensionContract:
     # extension-ID whitelist that can drift when a new model/evidence family lands.
     comparison_mode: str | None = None
     comparison_row_keys: tuple[tuple[str, str], ...] = ()
+    # When set, the scope dimension remains in canonical rows but is rendered as
+    # independent OOS/Breakout subtables rather than a repeated table column.
+    comparison_scope_key: str | None = None
+    # Most extensions show only applicable models.  Multi-head comparison is the
+    # deliberate exception: all compared models stay visible and non-applicable
+    # head cells render as ``-`` instead of disappearing from the comparison set.
+    comparison_population: str = "applicable_models"
+    # Optional column groups are part of the persistent contract.  A group may be
+    # omitted only when every row is non-applicable/missing for every key in it.
+    # This keeps the fixed canonical schema while avoiding permanently-wide empty
+    # head families on a particular comparison surface.
+    optional_column_groups: tuple[tuple[str, tuple[str, ...]], ...] = ()
     # Stable evidence-family handshake with the training-composition owner.
     # A workflow never names model IDs or extension IDs to decide applicability.
     evidence_family: str | None = None
@@ -83,13 +95,55 @@ class ModelExtensionContract:
     robustness_aggregation: str = "single_seed_only"
 
 
+@dataclass(frozen=True)
+class HeadLearnabilitySemanticContract:
+    semantic_id: str
+    label: str
+
+    @property
+    def metric_keys(self) -> tuple[str, str, str]:
+        prefix = str(self.semantic_id)
+        return (f"{prefix}_daily_rho", f"{prefix}_global_rho", f"{prefix}_pair")
+
+
+# Canonical display registry for generic head-level rank learnability.  Runtime
+# head applicability is NOT defined here; it comes from the existing
+# ContinuousRankerScoreOutputPolicy / evidence payload.  Adding a genuinely new
+# comparable head semantic therefore changes one registry, not every renderer.
+MODEL_HEAD_LEARNABILITY_SEMANTICS: tuple[HeadLearnabilitySemanticContract, ...] = (
+    HeadLearnabilitySemanticContract("raw_safety", "Raw Safety"),
+    HeadLearnabilitySemanticContract("raw_mfe", "Raw MFE"),
+    HeadLearnabilitySemanticContract("conditional_mfe", "Conditional MFE"),
+    HeadLearnabilitySemanticContract("primary_mfe", "Primary MFE"),
+    HeadLearnabilitySemanticContract("conditional_safety", "Conditional Safety"),
+    HeadLearnabilitySemanticContract("primary_target", "Economic Target"),
+    HeadLearnabilitySemanticContract("hs_priority_mfe", "HS-Priority MFE"),
+)
+
+
+def _head_learnability_columns() -> tuple[ReportColumnContract, ...]:
+    columns: list[ReportColumnContract] = [C("split", "Split", alignment="left")]
+    for semantic in MODEL_HEAD_LEARNABILITY_SEMANTICS:
+        daily_key, global_key, pair_key = semantic.metric_keys
+        columns.extend((
+            C(daily_key, f"{semantic.label} Daily", 4, preference="higher", format_kind="number"),
+            C(global_key, f"{semantic.label} Global", 4, preference="higher", format_kind="number"),
+            C(pair_key, f"{semantic.label} Pair", 2, "%", "higher", "fraction_pct"),
+        ))
+    return tuple(columns)
+
+
+def _head_learnability_optional_groups() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple((semantic.semantic_id, semantic.metric_keys) for semantic in MODEL_HEAD_LEARNABILITY_SEMANTICS)
+
+
 C = ReportColumnContract
 T = ReportTableContract
 S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=8,
+    version=9,
     role="persistent_standard_model_sop_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=(
@@ -102,12 +156,6 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("top_score_decile_raw_target_mean", "Top 10% Target", 4, preference="higher", format_kind="number"),
                 C("bottom_score_decile_raw_target_mean", "Bottom 10% Target", 4, preference="lower", format_kind="number"),
                 C("top_bottom_raw_target_gap", "Top-Bottom Target", 4, preference="higher", format_kind="number"),
-            )),
-            T("head_learnability", (
-                C("split", "Split", alignment="left"), C("head", "Head", alignment="left"),
-                C("mean_daily_spearman", "Daily rho", 4, preference="higher", format_kind="number"),
-                C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
-                C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
             )),
         )),
         S("generalization", 2, "Generalization", "validation_and_oos", (
@@ -194,7 +242,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=12,
+    version=13,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -239,58 +287,36 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
 
 
 MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
+    "multi_head_learnability": ModelExtensionContract(
+        "multi_head_learnability", "Multi-head Learnability",
+        "multi_head_rank_output",
+        (T("multi_head_learnability", _head_learnability_columns()),),
+        comparison_mode="row_tables",
+        comparison_row_keys=(("multi_head_learnability", "rows"),),
+        comparison_scope_key="split",
+        comparison_population="all_models",
+        optional_column_groups=_head_learnability_optional_groups(),
+        evidence_family="multi_head_learnability",
+        robustness_aggregation="row_mean",
+    ),
     "hs_conditional_mfe_gate": ModelExtensionContract(
-        "hs_conditional_mfe_gate", "HS-Qualification / Conditional-MFE Gate",
+        "hs_conditional_mfe_gate", "HS Qualification / Conditional-MFE Quality",
         "true_hs_conditional_mfe_duo",
         (
-            T("hs_conditional_gate", (
+            T("hs_conditional_quality", (
                 C("split", "Split", alignment="left"),
-                C("hs_only_daily_rho", "HS-only rho", 4, preference="higher", format_kind="number"),
-                C("hs_only_pair", "HS-only Pair", 2, "%", "higher", "fraction_pct"),
                 C("pred_hs_true_ls_pct", "Pred-HS true-LS", 2, "%", "lower", "pct"),
                 C("true_hs_recall_pct", "True-HS recall", 2, "%", "higher", "pct"),
-                C("ls_contamination_lift", "LS contam ×", 2, preference="lower", format_kind="number"),
-            )),
-            T("hs_qualification_boundary", (
-                C("split", "Split", alignment="left"),
-                C("qualification_pair", "HS-Qual Pair", 2, "%", "higher", "fraction_pct"),
-                C("p40_p60_pair", "P40–P60 Pair", 2, "%", "higher", "fraction_pct"),
                 C("p45_p55_pair", "P45–P55 Pair", 2, "%", "higher", "fraction_pct"),
-            )),
-            T("true_hs_oracle_gap", (
-                C("split", "Split", alignment="left"),
                 C("actual_hmhs_pct", "Pred-HS HM/HS", 2, "%", "higher", "pct"),
-                C("oracle_hmhs_pct", "True-HS Oracle HM/HS", 2, "%", "higher", "pct"),
-                C("hmhs_gap_pp", "Δ HM/HS vs Oracle", 2, "pp", "higher", "signed_pp"),
                 C("actual_high_mfe_pct", "Pred-HS High-MFE", 2, "%", "higher", "pct"),
-                C("oracle_high_mfe_pct", "Oracle High-MFE", 2, "%", "higher", "pct"),
-                C("high_mfe_gap_pp", "Δ High-MFE vs Oracle", 2, "pp", "higher", "signed_pp"),
                 C("actual_mean_mfe_r", "Pred-HS MFE", 3, "R", "higher", "number"),
-                C("oracle_mean_mfe_r", "Oracle MFE", 3, "R", "higher", "number"),
                 C("mean_mfe_gap_r", "Δ MFE vs Oracle", 3, "R", "higher", "signed_number"),
-            )),
-            T("ls_contamination_tail", (
-                C("split", "Split", alignment="left"),
-                C("ls_rank_p50", "LS Cond-rank P50", 3, preference="lower", format_kind="number"),
-                C("ls_rank_p90", "P90", 3, preference="lower", format_kind="number"),
-                C("ls_rank_p99", "P99", 3, preference="lower", format_kind="number"),
-            )),
-            T("hs_attribution_control", (
-                C("model", "Model", alignment="left"),
-                C("split", "Split", alignment="left"),
-                C("topk_high_mfe_pct", "TopK High-MFE", 2, "%", "higher", "pct"),
-                C("topk_high_safety_pct", "TopK High-Safety", 2, "%", "higher", "pct"),
-                C("topk_hmhs_pct", "TopK HM/HS", 2, "%", "higher", "pct"),
-                C("topk_hmls_pct", "TopK HM/LS", 2, "%", "lower", "pct"),
             )),
         ),
         comparison_mode="row_tables",
-        comparison_row_keys=(
-            ("hs_conditional_gate", "gate_rows"),
-            ("hs_qualification_boundary", "boundary_rows"),
-            ("true_hs_oracle_gap", "oracle_rows"),
-            ("ls_contamination_tail", "contamination_rows"),
-        ),
+        comparison_row_keys=(("hs_conditional_quality", "rows"),),
+        comparison_scope_key="split",
         evidence_family="hs_conditional_mfe",
         robustness_aggregation="row_mean",
     ),
@@ -530,9 +556,14 @@ def _derive_row_table_comparison_contract(
             raise KeyError(
                 f"{extension.extension_id} comparison row table不存在: {table_id}"
             ) from exc
+        scope_key = str(extension.comparison_scope_key or "")
+        metric_columns = tuple(
+            column for column in base.columns
+            if not scope_key or column.key != scope_key
+        )
         tables.append(T(
             f"{base.table_id}_comparison",
-            (_comparison_source_column(base), *base.columns),
+            (_comparison_source_column(base), *metric_columns),
         ))
     return ModelExtensionContract(
         extension.extension_id,
@@ -541,6 +572,11 @@ def _derive_row_table_comparison_contract(
         tuple(tables),
         comparison_mode=extension.comparison_mode,
         comparison_row_keys=extension.comparison_row_keys,
+        comparison_scope_key=extension.comparison_scope_key,
+        comparison_population=extension.comparison_population,
+        optional_column_groups=extension.optional_column_groups,
+        evidence_family=extension.evidence_family,
+        robustness_aggregation=extension.robustness_aggregation,
     )
 
 
@@ -553,6 +589,36 @@ def _derive_comparison_extension_contract(
         f"未知Model extension comparison_mode: {extension.extension_id}={extension.comparison_mode}"
     )
 
+
+
+def visible_extension_table(
+    extension_id: str,
+    table: ReportTableContract,
+    rows: Sequence[Mapping[str, Any]],
+) -> ReportTableContract:
+    """Project optional extension column groups using only canonical contract rules.
+
+    A head family disappears only when every row has no value for every metric in
+    that family.  If at least one model exposes the family, the full family remains
+    visible and non-applicable models render ``-`` in those cells.
+    """
+
+    extension = extension_contract(extension_id)
+    omit_keys: set[str] = set()
+    normalized = [dict(row) for row in rows]
+    for _group_id, keys in extension.optional_column_groups:
+        if all(
+            row.get(key) in {None, "", "-"}
+            for row in normalized
+            for key in keys
+        ):
+            omit_keys.update(keys)
+    if not omit_keys:
+        return table
+    return T(
+        table.table_id,
+        tuple(column for column in table.columns if column.key not in omit_keys),
+    )
 
 
 def comparison_extension_ids() -> tuple[str, ...]:
@@ -702,8 +768,8 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "a586067f58467ea4",
-    "model.standard_sop": "c96c1d5380ed303f",
+    "model.standard_comparison": "95065df1bec1ed81",
+    "model.standard_sop": "7a2be4dbb363e3fd",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }
@@ -735,7 +801,8 @@ __all__ = [
     "STRATEGY_CONSISTENCY_REPORT", "STRATEGY_STANDARD_SOP",
     "TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R", "TRADE_OUTCOME_PATH_REPORT", "ModelExtensionContract",
     "PersistentReportContract", "ReportColumnContract", "ReportSectionContract",
-    "ReportTableContract", "aggregate_robustness_row_extension", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "comparison_extension_ids_for_evidence_families", "extension_contract", "mode_extension_contract", "format_contract_value", "persistent_report_contract_fingerprint",
+    "ReportTableContract", "HeadLearnabilitySemanticContract", "MODEL_HEAD_LEARNABILITY_SEMANTICS",
+    "aggregate_robustness_row_extension", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "comparison_extension_ids_for_evidence_families", "extension_contract", "mode_extension_contract", "visible_extension_table", "format_contract_value", "persistent_report_contract_fingerprint",
     "persistent_report_contract_fingerprints", "report_contract", "section_contract",
     "table_contract", "validate_approved_persistent_report_contracts",
 ]

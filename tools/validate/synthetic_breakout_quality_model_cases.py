@@ -5556,7 +5556,7 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     ).read_text(encoding="utf-8")
     check_true(
         "mr13s_joint_geometry_remains_scientific_payload_but_is_retired_from_persistent_report_extension",
-        "Head Learnability" in report_source
+        "build_core_model_report_extensions" in report_source
         and "Model-specific Extension｜{payload['model_research_id']}｜Multi-head Learnability" not in report_source
         and "Model-specific Extension｜{payload['model_research_id']}｜Truth / Prediction Geometry" not in report_source
         and "persisted scientific payload" in report_source
