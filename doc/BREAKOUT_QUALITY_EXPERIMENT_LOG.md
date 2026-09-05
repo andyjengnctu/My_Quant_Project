@@ -11926,3 +11926,15 @@ Decision：`MR13BS_IMPLEMENTED_RESULT_PENDING / AO_SUPERVISED_CONTRACT_EXACT / S
 
 Decision：`MR13BT_IMPLEMENTED_RESULT_PENDING / BS_STATE_CONTROL_EXACT / PREVIOUS_TRADING_DATE_RELATION_CHANGE_ONLY / FULL_PRIOR_DATE_CANONICAL_300X10 / SHARED_INCIDENCE_EDGE_IDENTITY / NO_GRAD_NO_BN_STATE_RELATION_VIEWS / SECOND_ZERO_INIT_GATED_SAFETY_RESIDUAL / MFE_UNTOUCHED / FINAL_OHLCV_RELATIONAL_GATE / FORWARD_FIRST`。
 
+## 2026-09-05 — MR-13BT Forward result / final OHLCV cross-stock relational family closure
+
+- **User evidence**：使用者完成`Forward OOS模型比較`。MR-13BT overall Daily/Global/Pair=`0.4025/0.3088/63.91%` vs AO=`0.4042/0.3368/63.96%`；Breakout=`0.3848/0.3843/64.96%` vs AO=`0.3850/0.3804/64.73%`。
+- **Primary Raw Safety Gate**：BT Forward Daily/Global/Pair=`0.3566/0.2882/62.79%` vs AO=`0.3532/0.2929/62.68%`，即`+0.0034/-0.0047/+0.11pp`，方向不一致且遠低於事前material Gate；Pred-HS true-LS=`36.81%` vs AO=`36.84%`僅改善`0.03pp`。Breakout Raw Safety=`0.3209/0.3639/63.62%` vs AO=`0.3135/0.3554/63.65%`，Daily/Global局部上升但Pair反而`-0.03pp`；Pred-HS true-LS=`35.85%` vs `36.94%`改善`1.09pp`，仍未達約2pp Gate且不是full-universe共同改善。
+- **Conditional-MFE / economic geometry**：BT HS-only Forward=`0.3971/0.2789/63.91%` vs AO=`0.3969/0.3104/63.90%`；Global rho明顯下降。Breakout=`0.4233/0.4438/67.59%` vs AO=`0.4116/0.4353/67.22%`局部改善，但Pred-HS MFE=`0.940R`低於AO `1.000R`。因此relation-change仍呈現「局部Breakout/path訊號，不是Safety ceiling breaker」。
+- **Ranking cost**：full-universe NDCG@K=`0.7397` vs AO=`0.7475`、Top-K Lift=`1.5805R` vs `1.8273R`、Oracle overlap=`8.69%` vs `10.73%`、Boundary=`49.24%` vs `50.84%`、Boundary gap=`-0.1140` vs `+0.2068`；overall Top-Bottom=`1.7772R`亦低於AO `1.8767R`。這些負面證據阻止以Breakout局部gain進Rolling。
+- **Scientific conclusion**：BS已證明same-date learned group state幾乎不移動Safety；BT再加入previous-trading-date hyperedge deterioration後仍只得到marginal/inconsistent Safety shift。依BT建立前明定的final-gate stop rule，這足以停止**OHLCV-derived cross-stock Dynamic Graph/Hypergraph relational family**。不做BT Rolling、robustness、lag/EMA、Hawkes、pairwise graph、sector prior、k/layer/head/detach或graph topology sweep。
+- **MR-13BP disposition**：BP從未取得Forward結果，因此不寫`MODEL_GATE_FAIL`；但BT已是使用者授權的family final gate，故BP改為`IMPLEMENTED / UNEXECUTED / CLOSED_BY_FAMILY_STOP / NOT_A_MODEL_FAIL`，保留identity/code供歷史重現，不再作pending extension。
+- **Current workflow**：Training pair回MR-13AO scientific reference/fallback；BS/BT artifacts與implementation保留歷史重現，不自動promotion。下一個Priority 1只能是**真正新增PIT-safe orthogonal information source**的設計/Data Gate；尚未選定information family、尚未分配新MR identity。
+
+Decision：`RELATION_CHANGE_SAFETY_SIGNAL_MARGINAL_AND_INCONSISTENT / MODEL_GATE_FAIL / CLOSED / NO_ROLLING / NO_ROBUSTNESS / CROSS_STOCK_OHLCV_RELATIONAL_FAMILY_STOP / BP_UNEXECUTED_CLOSED_BY_FAMILY_STOP / AO_REFERENCE_FALLBACK / NEXT_ORTHOGONAL_INFORMATION_DESIGN`。
+
