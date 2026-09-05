@@ -24,9 +24,12 @@ _TRADING_CAPABILITIES = {
         "description": "Confirmed strategy positions advance from completed Trading daily bars using each source entry order's frozen params; broker fills and exits remain explicit separate events.",
     },
     "indicator_sell_execution": {
-        "implemented": False,
+        "implemented": True,
         "required_for_live": True,
-        "description": "Full rule-based ind_sell_signal is not yet wired to the actual Trading broker-order lifecycle.",
+        "description": (
+            "Completed-bar full rule-based ind_sell_signal persists as an immutable next-session "
+            "MARKET SELL obligation and reconciles only explicit broker submission/fill/cancellation events."
+        ),
     },
 }
 

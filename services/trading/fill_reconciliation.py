@@ -24,8 +24,9 @@ from core.trading_fill_transaction import (
 from core.trading_order_state import (
     TRADING_ACTIVE_ORDER_STATUSES,
     record_trading_buy_order_fill,
-    record_trading_protection_sell_order_fill,
+    record_trading_sell_order_fill,
     TRADING_ORDER_SIDE_SELL,
+    TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
     validate_trading_order_state,
@@ -275,7 +276,7 @@ def confirm_trading_buy_order_fill(
     }
 
 
-def confirm_trading_protection_sell_order_fill(
+def _confirm_trading_sell_order_fill(
     project_root,
     *,
     order_id: str,
@@ -284,8 +285,8 @@ def confirm_trading_protection_sell_order_fill(
     trade_date,
     expected_order_revision: int,
     expected_account_revision: int,
+    allowed_purposes: frozenset[str],
 ) -> dict[str, Any]:
-    """Apply one externally confirmed protection SELL fill to account + broker-order state."""
     root = Path(project_root).resolve()
     recover_trading_fill_transaction(root)
     account_path = resolve_trading_account_state_path(root)
@@ -304,85 +305,79 @@ def confirm_trading_protection_sell_order_fill(
     record = (orders.get("orders") or {}).get(oid)
     if not isinstance(record, dict):
         raise ValueError(f"Trading order 不存在: {oid}")
-    if str(record.get("side") or "") != TRADING_ORDER_SIDE_SELL or str(record.get("purpose") or "") not in {
-        TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP,
-    }:
-        raise ValueError("此入口只允許 protection SELL order")
+    purpose = str(record.get("purpose") or "")
+    if str(record.get("side") or "") != TRADING_ORDER_SIDE_SELL or purpose not in allowed_purposes:
+        raise ValueError("此入口不允許該 SELL order purpose")
     if str(record.get("status") or "") not in TRADING_ACTIVE_ORDER_STATUSES:
-        raise ValueError(f"Trading protection SELL 目前不可確認成交: {record.get('status')}")
+        raise ValueError(f"Trading SELL 目前不可確認成交: {record.get('status')}")
     ticker = str(record.get("ticker") or "")
     position = (account.get("positions") or {}).get(ticker)
     if not isinstance(position, dict) or str(position.get("source") or "") != "strategy_fill":
-        raise RuntimeError(f"Trading protection SELL 找不到 strategy_fill position: {ticker}")
+        raise RuntimeError(f"Trading SELL 找不到 strategy_fill position: {ticker}")
     entry_order_id = str(record.get("entry_order_id") or "")
     if str((position.get("broker") or {}).get("entry_order_id") or "") != entry_order_id:
-        raise RuntimeError("Trading protection SELL entry-order lineage 與 account position 不一致")
+        raise RuntimeError("Trading SELL entry-order lineage 與 account position 不一致")
     entry_order = (orders.get("orders") or {}).get(entry_order_id)
     frozen_params = None if not isinstance(entry_order, dict) else entry_order.get("frozen_params")
     if not isinstance(frozen_params, dict):
-        raise RuntimeError("Trading protection SELL 來源 entry order 缺少 frozen_params")
+        raise RuntimeError("Trading SELL 來源 entry order 缺少 frozen_params")
     params = build_params_from_mapping(frozen_params)
     fill_qty_int = int(fill_qty)
     remaining_before = int(record.get("remaining_qty") or 0)
     will_complete = fill_qty_int == remaining_before
-    purpose = str(record.get("purpose") or "")
-    event = "STOP" if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP else "TP_HALF"
+    if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
+        event = "IND_SELL"
+    elif purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
+        event = "STOP"
+    else:
+        event = "TP_HALF"
     timestamp = _timestamp()
     account_target = apply_confirmed_sell_fill(
-        account,
-        ticker=ticker,
-        qty=fill_qty_int,
-        exec_price=fill_price,
-        params=params,
-        timestamp=timestamp,
-        mutation_id=_mutation_id(),
-        trade_date=trade_date,
-        event=event,
+        account, ticker=ticker, qty=fill_qty_int, exec_price=fill_price, params=params,
+        timestamp=timestamp, mutation_id=_mutation_id(), trade_date=trade_date, event=event,
         mark_tp_half_complete=(purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP and will_complete),
     )
     details = account_target["events"][-1].get("details") or {}
-    order_target = record_trading_protection_sell_order_fill(
-        orders,
-        order_id=oid,
-        fill_id=_mutation_id(),
-        fill_qty=fill_qty_int,
-        fill_price=fill_price,
-        trade_date=str(trade_date),
-        net_sell_total_milli=int(details.get("net_sell_total_milli") or 0),
-        allocated_cost_milli=int(details.get("allocated_cost_milli") or 0),
-        realized_pnl_milli=int(details.get("realized_pnl_milli") or 0),
-        timestamp=timestamp,
-        mutation_id=_mutation_id(),
+    order_target = record_trading_sell_order_fill(
+        orders, order_id=oid, fill_id=_mutation_id(), fill_qty=fill_qty_int, fill_price=fill_price,
+        trade_date=str(trade_date), net_sell_total_milli=int(details.get("net_sell_total_milli") or 0),
+        allocated_cost_milli=int(details.get("allocated_cost_milli") or 0), realized_pnl_milli=int(details.get("realized_pnl_milli") or 0),
+        timestamp=timestamp, mutation_id=_mutation_id(),
     )
     if int(account_target["revision"]) != int(account["revision"]) + 1 or int(order_target["revision"]) != int(orders["revision"]) + 1:
         raise RuntimeError("Trading SELL fill transaction 每個 state 必須恰好增加一個 revision")
     if _read_bytes_sha(account_path) != account_bytes_sha or _read_bytes_sha(order_path) != order_bytes_sha:
         raise TradingFillRevisionConflict("Trading state 在 SELL fill transaction prepare 前已被修改")
     tx_path = resolve_trading_fill_transaction_path(root)
-    if tx_path.exists():
-        raise TradingFillRevisionConflict("Trading 已存在 pending fill transaction")
+    if tx_path.exists(): raise TradingFillRevisionConflict("Trading 已存在 pending fill transaction")
     journal = build_trading_fill_transaction_journal(
-        transaction_id=_mutation_id(), created_at=timestamp,
-        account_original=account, account_target=account_target,
+        transaction_id=_mutation_id(), created_at=timestamp, account_original=account, account_target=account_target,
         order_original=orders, order_target=order_target,
     )
     atomic_write_json(tx_path, journal)
     if _read_bytes_sha(account_path) != account_bytes_sha or _read_bytes_sha(order_path) != order_bytes_sha:
         raise TradingFillRevisionConflict("Trading state 在 SELL fill transaction commit 前已被其他流程修改")
-    atomic_write_json(account_path, account_target)
-    atomic_write_json(order_path, order_target)
-    recover_trading_fill_transaction(root)
-    final_account = _read_account(account_path)
-    final_orders = _read_orders(order_path)
-    final_record = final_orders["orders"][oid]
+    atomic_write_json(account_path, account_target); atomic_write_json(order_path, order_target); recover_trading_fill_transaction(root)
+    final_account = _read_account(account_path); final_orders = _read_orders(order_path); final_record = final_orders["orders"][oid]
     return {
-        "status": str(final_record["status"]), "order_id": oid, "ticker": ticker,
-        "fill_qty": fill_qty_int, "filled_qty": int(final_record.get("filled_qty") or 0),
-        "remaining_qty": int(final_record.get("remaining_qty") or 0),
+        "status": str(final_record["status"]), "order_id": oid, "ticker": ticker, "fill_qty": fill_qty_int,
+        "filled_qty": int(final_record.get("filled_qty") or 0), "remaining_qty": int(final_record.get("remaining_qty") or 0),
         "account_revision": int(final_account["revision"]), "order_revision": int(final_orders["revision"]),
         "oco_cancelled_order_ids": list((final_orders["events"][-1].get("details") or {}).get("oco_cancelled_order_ids") or []),
         "account": final_account, "orders": final_orders,
     }
+
+
+def confirm_trading_protection_sell_order_fill(project_root, **kwargs) -> dict[str, Any]:
+    return _confirm_trading_sell_order_fill(
+        project_root, allowed_purposes=frozenset({TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP}), **kwargs
+    )
+
+
+def confirm_trading_indicator_sell_order_fill(project_root, **kwargs) -> dict[str, Any]:
+    return _confirm_trading_sell_order_fill(
+        project_root, allowed_purposes=frozenset({TRADING_ORDER_PURPOSE_INDICATOR_EXIT}), **kwargs
+    )
 
 
 __all__ = [
@@ -391,4 +386,5 @@ __all__ = [
     "recover_trading_fill_transaction",
     "confirm_trading_buy_order_fill",
     "confirm_trading_protection_sell_order_fill",
+    "confirm_trading_indicator_sell_order_fill",
 ]

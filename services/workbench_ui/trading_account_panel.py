@@ -23,6 +23,11 @@ from services.trading.protection_planning import (
     build_trading_protection_plan,
     get_trading_protection_plan_read_model,
 )
+from services.trading.indicator_exit_planning import (
+    build_trading_indicator_exit_plan,
+    get_trading_indicator_exit_plan_read_model,
+)
+from services.trading.indicator_exit_order_submission import confirm_trading_indicator_exit_submission
 from services.trading.protection_order_submission import (
     confirm_trading_protection_leg_submission,
     confirm_trading_protection_oco_submission,
@@ -31,6 +36,7 @@ from services.trading.fill_reconciliation import (
     TradingFillRevisionConflict,
     confirm_trading_buy_order_fill,
     confirm_trading_protection_sell_order_fill,
+    confirm_trading_indicator_sell_order_fill,
     recover_trading_fill_transaction,
 )
 from services.trading.order_state import (
@@ -141,6 +147,8 @@ class TradingAccountPanel(ttk.Frame):
         self._order_rows: dict[str, dict[str, object]] = {}
         self._protection_snapshot: dict[str, object] = {}
         self._protection_rows: list[dict[str, object]] = []
+        self._indicator_snapshot: dict[str, object] = {}
+        self._indicator_rows: list[dict[str, object]] = []
         self._workflow_thread = None
         self._workflow_token = 0
         self._workflow_buttons = []
@@ -150,6 +158,7 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_account()
         self.refresh_order_state()
         self.refresh_protection_plan()
+        self.refresh_indicator_exit_plan()
         self.refresh_daily_workflow()
         self.refresh_operations_status()
 
@@ -160,6 +169,7 @@ class TradingAccountPanel(ttk.Frame):
         self.rowconfigure(7, weight=1)
         self.rowconfigure(8, weight=1)
         self.rowconfigure(9, weight=1)
+        self.rowconfigure(10, weight=1)
 
         operations_box = ttk.LabelFrame(self, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
         operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -167,7 +177,7 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_status_var = tk.StringVar(value="讀取 Trading 整體狀態...")
         self._operations_next_var = tk.StringVar(value="下一步：-")
         self._operations_detail_var = tk.StringVar(value="-")
-        self._live_audit_var = tk.StringVar(value="實盤就緒：LIVE_BLOCKED｜尚未執行實盤就緒檢查")
+        self._live_audit_var = tk.StringVar(value="實盤就緒：尚未執行實盤就緒檢查")
         ttk.Label(operations_box, textvariable=self._operations_status_var, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
         ttk.Label(operations_box, textvariable=self._operations_next_var, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=0, sticky="w", pady=(4, 0))
         ttk.Label(operations_box, textvariable=self._operations_detail_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=2, column=0, sticky="w", pady=(4, 0))
@@ -507,6 +517,29 @@ class TradingAccountPanel(ttk.Frame):
             foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE,
         ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
+        indicator_box = ttk.LabelFrame(self, text="Indicator SELL 計畫", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        indicator_box.grid(row=10, column=0, sticky="nsew", pady=(8, 0))
+        indicator_box.rowconfigure(1, weight=1)
+        indicator_box.columnconfigure(0, weight=1)
+        self._indicator_status_var = tk.StringVar(value="尚未建立 Indicator SELL 計畫。")
+        ttk.Label(indicator_box, textvariable=self._indicator_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        columns=("ticker","signal","qty","entry_date","type","carried")
+        self._indicator_tree=ttk.Treeview(indicator_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
+        headings={"ticker":"股票","signal":"Signal日","qty":"賣出股數","entry_date":"Entry日","type":"委託","carried":"狀態"}
+        widths={"ticker":90,"signal":100,"qty":100,"entry_date":100,"type":90,"carried":110}
+        for key in columns:
+            self._indicator_tree.heading(key,text=headings[key]); self._indicator_tree.column(key,width=widths[key],anchor="center")
+        iy=ttk.Scrollbar(indicator_box,orient="vertical",command=self._indicator_tree.yview,style=WORKBENCH_VSCROLL_STYLE)
+        self._indicator_tree.configure(yscrollcommand=iy.set); self._indicator_tree.grid(row=1,column=0,sticky="nsew"); iy.grid(row=1,column=1,sticky="ns")
+        buttons=ttk.Frame(indicator_box,style=WORKBENCH_FRAME_STYLE); buttons.grid(row=2,column=0,columnspan=2,sticky="w",pady=(8,0))
+        ttk.Button(buttons,text="建立／刷新 Indicator SELL 計畫",command=self._rebuild_indicator_exit_plan,style=WORKBENCH_BUTTON_STYLE).pack(side="left")
+        ttk.Button(buttons,text="刷新 Indicator SELL 狀態",command=self.refresh_indicator_exit_plan,style=WORKBENCH_BUTTON_STYLE).pack(side="left",padx=(8,0))
+        ttk.Label(buttons,text="券商委託號",style=WORKBENCH_LABEL_STYLE).pack(side="left",padx=(14,0))
+        self._indicator_broker_id_var=tk.StringVar()
+        ttk.Entry(buttons,textvariable=self._indicator_broker_id_var,width=16,style=WORKBENCH_ENTRY_STYLE).pack(side="left",padx=(6,8))
+        ttk.Button(buttons,text="確認選取 MARKET SELL 已送單",command=self._confirm_indicator_exit_submitted,style=WORKBENCH_BUTTON_STYLE).pack(side="left")
+        ttk.Label(indicator_box,text="Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。",foreground=WORKBENCH_MUTED,style=WORKBENCH_LABEL_STYLE).grid(row=3,column=0,columnspan=2,sticky="w",pady=(6,0))
+
     def _reload_protection_rows(self, rows):
         for item in self._protection_tree.get_children():
             self._protection_tree.delete(item)
@@ -647,6 +680,53 @@ class TradingAccountPanel(ttk.Frame):
         )
         return result
 
+    def _reload_indicator_rows(self, rows):
+        for item in self._indicator_tree.get_children():
+            self._indicator_tree.delete(item)
+        self._indicator_rows=[dict(row) for row in list(rows or [])]
+        for row in self._indicator_rows:
+            signal_key=str(row.get("signal_key") or "")
+            iid=signal_key or f"{row.get('ticker')}:{row.get('signal_information_date')}"
+            self._indicator_tree.insert("", "end", iid=iid, values=(row.get("ticker") or "-", row.get("signal_information_date") or "-", f"{int(row.get('qty') or 0):,}", row.get("entry_trade_date") or "-", row.get("order_type") or "MARKET", "CARRIED" if row.get("carried_forward") else "NEW"))
+
+    def _selected_indicator_row(self):
+        selected=self._indicator_tree.selection()
+        if not selected: return None
+        key=str(selected[0])
+        for row in self._indicator_rows:
+            if str(row.get("signal_key") or "")==key: return dict(row)
+        return None
+
+    def refresh_indicator_exit_plan(self):
+        try:
+            snapshot=get_trading_indicator_exit_plan_read_model(WORKBENCH_PROJECT_ROOT)
+        except (ValueError,RuntimeError,OSError) as exc:
+            self._indicator_snapshot={}; self._reload_indicator_rows([]); self._indicator_status_var.set(f"Indicator SELL 計畫讀取失敗：{exc}"); return
+        self._indicator_snapshot=snapshot; self._reload_indicator_rows(snapshot.get("exits") or [])
+        if not snapshot.get("exists"):
+            self._indicator_status_var.set(f"尚未建立 Indicator SELL 計畫 | {snapshot.get('json_path') or '-'}"); return
+        self._indicator_status_var.set(f"{'FRESH' if snapshot.get('fresh') else 'STALE'} | exits {int(snapshot.get('exit_count') or 0)} | active broker Indicator SELL {int(snapshot.get('active_indicator_exit_order_count') or 0)} | {snapshot.get('text_path') or '-'}")
+
+    def _rebuild_indicator_exit_plan(self):
+        try:
+            result=build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
+        except (ValueError,RuntimeError,OSError,FileNotFoundError) as exc:
+            messagebox.showerror("Trading Indicator SELL 計畫",str(exc),parent=self); self.refresh_indicator_exit_plan(); return None
+        self.refresh_indicator_exit_plan(); self.refresh_operations_status(); return result
+
+    def _confirm_indicator_exit_submitted(self):
+        row=self._selected_indicator_row()
+        if not row:
+            messagebox.showerror("Trading Indicator SELL","請先選取一筆 Indicator SELL 計畫。",parent=self); return
+        ticker=str(row.get("ticker") or "")
+        if not messagebox.askyesno("確認 Indicator MARKET SELL 已送券商",f"確認已在券商實際送出 {ticker} 全倉 MARKET SELL？\n\n此動作只建立 ORDERED broker truth，不代表成交；若仍有 active Stop/TP 必須先在券商取消並於掛單表確認。",parent=self): return
+        try:
+            confirm_trading_indicator_exit_submission(WORKBENCH_PROJECT_ROOT,signal_key=str(row.get("signal_key") or ""),expected_order_revision=int(self._current_order_revision()),broker_order_id=self._indicator_broker_id_var.get().strip() or None,note="Workbench confirmed Indicator MARKET SELL submission")
+        except (TradingOrderRevisionConflict,ValueError,RuntimeError,FileNotFoundError) as exc:
+            messagebox.showerror("Trading Indicator SELL 送單失敗",str(exc),parent=self); self.refresh_order_state(); self.refresh_indicator_exit_plan(); return
+        self._indicator_broker_id_var.set(""); self.refresh_order_state(); self.refresh_indicator_exit_plan(); self.refresh_operations_status()
+        messagebox.showinfo("Trading Indicator SELL",f"{ticker} Indicator MARKET SELL 已記錄為 ORDERED；account 未修改。",parent=self)
+
     def refresh_operations_status(self):
         try:
             snapshot = build_trading_operations_status(WORKBENCH_PROJECT_ROOT)
@@ -662,7 +742,7 @@ class TradingAccountPanel(ttk.Frame):
             f"{snapshot.get('overall_status') or '-'} | Data {snapshot.get('latest_data_date') or '-'} | "
             f"Account rev {snapshot.get('account_revision') if snapshot.get('account_revision') is not None else '-'} | "
             f"持股 strategy/manual {int(snapshot.get('strategy_position_count') or 0)}/{int(snapshot.get('manual_position_count') or 0)} | "
-            f"Active BUY/SELL {int(snapshot.get('active_entry_order_count') or 0)}/{int(snapshot.get('active_protection_order_count') or 0)}"
+            f"Active BUY/protection/indicator {int(snapshot.get('active_entry_order_count') or 0)}/{int(snapshot.get('active_protection_order_count') or 0)}/{int(snapshot.get('active_indicator_exit_order_count') or 0)}"
         )
         self._operations_next_var.set(
             f"下一步：{snapshot.get('next_action_label') or '-'} | {snapshot.get('next_action_detail') or '-'}"
@@ -671,6 +751,7 @@ class TradingAccountPanel(ttk.Frame):
             f"Scanner {'FRESH' if snapshot.get('candidate_snapshot_fresh') else 'STALE/EMPTY'}({int(snapshot.get('candidate_count') or 0)})",
             f"Proposed {'FRESH' if snapshot.get('proposed_orders_fresh') else 'STALE/EMPTY'}({int(snapshot.get('proposed_order_count') or 0)})",
             f"Protection {'FRESH' if snapshot.get('protection_plan_fresh') else 'STALE/EMPTY'}",
+            f"Indicator {'FRESH' if snapshot.get('indicator_exit_plan_fresh') else 'STALE/EMPTY'}",
         ]
         rollforward_due = list(snapshot.get('rollforward_due_tickers') or [])
         if rollforward_due:
@@ -722,6 +803,7 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_account()
         self.refresh_order_state()
         self.refresh_protection_plan()
+        self.refresh_indicator_exit_plan()
         self.refresh_daily_workflow()
         self.refresh_operations_status()
         if recovery_error:
@@ -801,6 +883,8 @@ class TradingAccountPanel(ttk.Frame):
                 result = run_trading_market_data_update(project_root=WORKBENCH_PROJECT_ROOT)
             elif action == "rollforward":
                 result = run_trading_position_rollforward(project_root=WORKBENCH_PROJECT_ROOT)
+                if str(result.get("status") or "") != "NO_ACCOUNT":
+                    build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
             elif action == "params":
                 result = run_trading_strategy_param_training(project_root=WORKBENCH_PROJECT_ROOT)
             elif action == "scanner":
@@ -1014,7 +1098,12 @@ class TradingAccountPanel(ttk.Frame):
         ):
             return
         try:
-            fill_fn = confirm_trading_buy_order_fill if str(row.get("side") or "BUY") == "BUY" else confirm_trading_protection_sell_order_fill
+            if str(row.get("side") or "BUY") == "BUY":
+                fill_fn = confirm_trading_buy_order_fill
+            elif str(row.get("purpose") or "") == "INDICATOR_EXIT":
+                fill_fn = confirm_trading_indicator_sell_order_fill
+            else:
+                fill_fn = confirm_trading_protection_sell_order_fill
             result = fill_fn(
                 WORKBENCH_PROJECT_ROOT,
                 order_id=order_id,
@@ -1045,6 +1134,7 @@ class TradingAccountPanel(ttk.Frame):
         except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
             protection_error = str(exc)
         self.refresh_protection_plan()
+        self.refresh_indicator_exit_plan()
         message = (
             f"{ticker} 已更新為 {result.get('status')}；累計成交 {int(result.get('filled_qty') or 0):,}，"
             f"未成交 {int(result.get('remaining_qty') or 0):,}。"
@@ -1096,6 +1186,7 @@ class TradingAccountPanel(ttk.Frame):
             except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
                 protection_refresh_error = str(exc)
         self.refresh_protection_plan()
+        self.refresh_indicator_exit_plan()
         message = f"{ticker} 已記錄為 CANCELLED。"
         if protection_refresh_error:
             message += f"\n\n取消已記錄，但保護單計畫刷新失敗：{protection_refresh_error}"
@@ -1127,6 +1218,7 @@ class TradingAccountPanel(ttk.Frame):
             )
             self.refresh_account()
             self.refresh_protection_plan()
+            self.refresh_indicator_exit_plan()
         elif action == "params":
             self._workflow_status_var.set(
                 f"Params 更新完成：through {result.get('latest_data_date') or '-'} | {result.get('selected_policy') or result.get('param_selector') or '-'}"
@@ -1164,6 +1256,7 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_account()
         self.refresh_order_state()
         self.refresh_protection_plan()
+        self.refresh_indicator_exit_plan()
         self._reload_proposed_order_rows([])
         self._proposed_status_var.set("帳戶已變更；既有建議掛單已失效，請重新執行 4 建議掛單。")
         self.refresh_operations_status()

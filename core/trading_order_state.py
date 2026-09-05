@@ -20,12 +20,18 @@ TRADING_ORDER_SIDE_SELL = "SELL"
 TRADING_ORDER_PURPOSE_ENTRY = "ENTRY_BUY"
 TRADING_ORDER_PURPOSE_PROTECTION_STOP = "PROTECTION_STOP"
 TRADING_ORDER_PURPOSE_PROTECTION_TP = "PROTECTION_TP"
+TRADING_ORDER_PURPOSE_INDICATOR_EXIT = "INDICATOR_EXIT"
 TRADING_PROTECTION_ORDER_PURPOSES = frozenset({
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
 })
+TRADING_SELL_ORDER_PURPOSES = frozenset({
+    *TRADING_PROTECTION_ORDER_PURPOSES,
+    TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
+})
 TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
 TRADING_PROTECTION_ORDER_TYPE_LIMIT = "LIMIT"
+TRADING_INDICATOR_ORDER_TYPE_MARKET = "MARKET"
 
 
 def _event_hash_payload(event: dict[str, Any]) -> dict[str, Any]:
@@ -235,6 +241,23 @@ def build_trading_protection_key(
     )
 
 
+def build_trading_indicator_exit_key(*, signal_key: str, ticker: str, attempt: int) -> str:
+    key = str(signal_key or "").strip()
+    attempt_int = int(attempt)
+    if not key:
+        raise ValueError("Trading indicator exit signal_key 不可為空")
+    if attempt_int <= 0:
+        raise ValueError("Trading indicator exit attempt 必須 > 0")
+    return canonical_json_sha256(
+        {
+            "signal_key": key,
+            "ticker": _normalize_ticker(ticker),
+            "purpose": TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
+            "attempt": attempt_int,
+        }
+    )
+
+
 def _build_ordered_protection_record(
     *,
     order_id: str,
@@ -327,6 +350,95 @@ def _build_ordered_protection_record(
         "cancel_note": None,
         "note": _normalize_optional_text(note),
     }
+
+
+def append_ordered_trading_indicator_exit(
+    state: dict[str, Any],
+    *,
+    order_id: str,
+    exit_plan: dict[str, Any],
+    plan: dict[str, Any],
+    timestamp: str,
+    mutation_id: str,
+    broker_order_id: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    validate_trading_order_state(state)
+    order_id_text = str(order_id or "").strip()
+    if not order_id_text or order_id_text in state["orders"]:
+        raise ValueError("Trading indicator exit order_id 不可為空或重複")
+    plan_fingerprint = str(plan.get("plan_fingerprint") or "").strip()
+    position_fp = str(exit_plan.get("position_plan_fingerprint") or "").strip()
+    signal_key = str(exit_plan.get("signal_key") or "").strip()
+    ticker = _normalize_ticker(exit_plan.get("ticker"))
+    if not plan_fingerprint or not position_fp or not signal_key:
+        raise ValueError("Trading indicator exit plan 缺少 immutable fingerprint/signal_key")
+    qty = int(exit_plan.get("qty") or 0)
+    position_qty = int(exit_plan.get("position_qty") or 0)
+    if qty <= 0 or qty != position_qty:
+        raise ValueError("Trading Indicator SELL 必須為送單時完整持股 qty")
+    information_date = str(exit_plan.get("signal_information_date") or "").strip()
+    entry_order_id = str(exit_plan.get("entry_order_id") or "").strip()
+    if not information_date or not entry_order_id:
+        raise ValueError("Trading indicator exit 缺少 signal date/entry_order_id")
+    prior = [
+        row for row in state["orders"].values()
+        if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT
+        and str(row.get("signal_key") or "") == signal_key
+        and _normalize_ticker(row.get("ticker")) == ticker
+    ]
+    if any(str(row.get("status") or "") != TRADING_ORDER_STATUS_CANCELLED for row in prior):
+        raise ValueError("同一 Trading indicator signal 已有未取消／已完成 order，不得重複送單")
+    attempt = max([int(row.get("signal_attempt") or 0) for row in prior] or [0]) + 1
+    proposal_key = build_trading_indicator_exit_key(signal_key=signal_key, ticker=ticker, attempt=attempt)
+    if any(str(row.get("proposal_key") or "") == proposal_key for row in state["orders"].values()):
+        raise ValueError("同一 Trading indicator exit attempt 已存在")
+    record = {
+        "order_id": order_id_text,
+        "proposal_key": proposal_key,
+        "plan_fingerprint": plan_fingerprint,
+        "indicator_plan_fingerprint": plan_fingerprint,
+        "position_plan_fingerprint": position_fp,
+        "signal_key": signal_key,
+        "signal_attempt": attempt,
+        "information_date": information_date,
+        "account_revision": int(plan.get("account_revision")),
+        "side": TRADING_ORDER_SIDE_SELL,
+        "purpose": TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
+        "ticker": ticker,
+        "rank": int(exit_plan.get("priority") or 1),
+        "qty": qty,
+        "position_qty_at_submission": position_qty,
+        "entry_order_id": entry_order_id,
+        "entry_trade_date": str(exit_plan.get("entry_trade_date") or ""),
+        "order_type": TRADING_INDICATOR_ORDER_TYPE_MARKET,
+        "trigger_price_milli": None,
+        "limit_price_milli": None,
+        "reserved_cost_milli": 0,
+        "position_state_sha256": str(exit_plan.get("position_state_sha256") or ""),
+        "frozen_params_sha256": str(exit_plan.get("frozen_params_sha256") or ""),
+        "market_data_sha256": str(exit_plan.get("signal_origin_market_data_sha256") or exit_plan.get("market_data_sha256") or ""),
+        "status": TRADING_ORDER_STATUS_ORDERED,
+        "filled_qty": 0,
+        "remaining_qty": qty,
+        "fills": [],
+        "filled_at": None,
+        "ordered_at": str(timestamp),
+        "broker_order_id": _normalize_optional_text(broker_order_id),
+        "broker_native_oco_confirmed": False,
+        "broker_oco_group_id": None,
+        "cancelled_at": None,
+        "cancel_note": None,
+        "note": _normalize_optional_text(note),
+    }
+    updated = deepcopy(state)
+    updated["orders"][order_id_text] = record
+    return _append_event(
+        updated, mutation_id=mutation_id, mutation_type="confirm_indicator_exit_submission", timestamp=timestamp,
+        details={"order_id": order_id_text, "ticker": ticker, "signal_key": signal_key, "attempt": attempt,
+                 "qty": qty, "from_status": "PROPOSED_INDICATOR_EXIT", "to_status": TRADING_ORDER_STATUS_ORDERED,
+                 "broker_order_id": record["broker_order_id"]},
+    )
 
 
 def append_ordered_trading_protection_leg(
@@ -549,19 +661,12 @@ def record_trading_buy_order_fill(
     )
 
 
-def record_trading_protection_sell_order_fill(
+def record_trading_sell_order_fill(
     state: dict[str, Any],
     *,
-    order_id: str,
-    fill_id: str,
-    fill_qty: int,
-    fill_price,
-    trade_date: str,
-    net_sell_total_milli: int,
-    allocated_cost_milli: int,
-    realized_pnl_milli: int,
-    timestamp: str,
-    mutation_id: str,
+    order_id: str, fill_id: str, fill_qty: int, fill_price, trade_date: str,
+    net_sell_total_milli: int, allocated_cost_milli: int, realized_pnl_milli: int,
+    timestamp: str, mutation_id: str,
 ) -> dict[str, Any]:
     validate_trading_order_state(state)
     oid = str(order_id or "").strip()
@@ -569,11 +674,12 @@ def record_trading_protection_sell_order_fill(
         raise ValueError(f"Trading order 不存在: {oid}")
     updated = deepcopy(state)
     record = updated["orders"][oid]
-    if str(record.get("side") or "") != TRADING_ORDER_SIDE_SELL or str(record.get("purpose") or "") not in TRADING_PROTECTION_ORDER_PURPOSES:
-        raise ValueError("Trading SELL fill reconciliation 只允許 protection SELL order")
+    purpose = str(record.get("purpose") or "")
+    if str(record.get("side") or "") != TRADING_ORDER_SIDE_SELL or purpose not in TRADING_SELL_ORDER_PURPOSES:
+        raise ValueError("Trading SELL fill reconciliation 只允許 canonical SELL order")
     from_status = str(record.get("status") or "")
     if from_status not in TRADING_ACTIVE_ORDER_STATUSES:
-        raise ValueError(f"Trading protection SELL 只有 ORDERED/PARTIAL 可確認成交: {oid} status={from_status}")
+        raise ValueError(f"Trading SELL 只有 ORDERED/PARTIAL 可確認成交: {oid} status={from_status}")
     qty = int(fill_qty)
     remaining_before = int(record.get("remaining_qty") or 0)
     if qty <= 0 or qty > remaining_before:
@@ -581,11 +687,13 @@ def record_trading_protection_sell_order_fill(
     fill_price_milli = price_to_milli(fill_price)
     if fill_price_milli <= 0:
         raise ValueError("Trading SELL fill_price 必須 > 0")
-    if str(record.get("purpose")) == TRADING_ORDER_PURPOSE_PROTECTION_TP and fill_price_milli < int(record.get("limit_price_milli") or 0):
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP and fill_price_milli < int(record.get("limit_price_milli") or 0):
         raise ValueError("Trading TP 實際成交價不可低於原始賣出限價")
     trade_date_text = str(trade_date or "").strip()
     if not trade_date_text:
         raise ValueError("Trading SELL fill trade_date 必填")
+    if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT and trade_date_text <= str(record.get("information_date") or ""):
+        raise ValueError("Trading Indicator SELL 成交日必須晚於 signal information date")
     fill_id_text = str(fill_id or "").strip()
     fills = list(record.get("fills") or [])
     if not fill_id_text or any(str(x.get("fill_id") or "") == fill_id_text for x in fills):
@@ -601,22 +709,26 @@ def record_trading_protection_sell_order_fill(
     record.update({"fills": fills, "filled_qty": filled_qty, "remaining_qty": remaining_qty, "status": to_status,
                    "filled_at": str(timestamp) if to_status == TRADING_ORDER_STATUS_FILLED else None})
     oco_cancelled=[]
-    if bool(record.get("broker_native_oco_confirmed")):
+    if purpose in TRADING_PROTECTION_ORDER_PURPOSES and bool(record.get("broker_native_oco_confirmed")):
         group=str(record.get("broker_oco_group_id") or "")
         for peer_id, peer in updated["orders"].items():
             if peer_id == oid: continue
             if str(peer.get("side") or "") != TRADING_ORDER_SIDE_SELL: continue
+            if str(peer.get("purpose") or "") not in TRADING_PROTECTION_ORDER_PURPOSES: continue
             if str(peer.get("broker_oco_group_id") or "") != group: continue
             if str(peer.get("status") or "") in TRADING_ACTIVE_ORDER_STATUSES:
                 peer["status"] = TRADING_ORDER_STATUS_CANCELLED
                 peer["cancelled_at"] = str(timestamp)
                 peer["cancel_note"] = f"broker-native OCO peer fill: {oid}"
                 oco_cancelled.append(peer_id)
-    return _append_event(updated, mutation_id=mutation_id, mutation_type="confirm_protection_sell_fill", timestamp=timestamp, details={
-        "order_id": oid, "ticker": record["ticker"], "purpose": record["purpose"], "fill_id": fill_id_text, "fill_qty": qty,
+    mutation_type = "confirm_indicator_sell_fill" if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT else "confirm_protection_sell_fill"
+    return _append_event(updated, mutation_id=mutation_id, mutation_type=mutation_type, timestamp=timestamp, details={
+        "order_id": oid, "ticker": record["ticker"], "purpose": purpose, "fill_id": fill_id_text, "fill_qty": qty,
         "fill_price_milli": fill_price_milli, "trade_date": trade_date_text, "net_sell_total_milli": net_sell,
         "allocated_cost_milli": allocated, "realized_pnl_milli": pnl, "filled_qty": filled_qty, "remaining_qty": remaining_qty,
         "from_status": from_status, "to_status": to_status, "oco_cancelled_order_ids": oco_cancelled})
+
+
 
 def cancel_ordered_trading_order(
     state: dict[str, Any],
@@ -683,6 +795,18 @@ def active_trading_protection_orders(state: dict[str, Any]) -> list[dict[str, An
         if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL
         and str(row.get("purpose") or "") in TRADING_PROTECTION_ORDER_PURPOSES
     ]
+
+
+def active_trading_indicator_exit_orders(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        row for row in active_trading_orders(state)
+        if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL
+        and str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT
+    ]
+
+
+def active_trading_sell_orders(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [row for row in active_trading_orders(state) if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL]
 
 
 def validate_trading_order_state(state: dict[str, Any]) -> None:
@@ -788,36 +912,53 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
                 if not str(record.get(field) or ""):
                     raise ValueError(f"Trading BUY order 缺少 immutable binding: {field}")
         else:
-            if purpose not in TRADING_PROTECTION_ORDER_PURPOSES:
-                raise ValueError("Trading SELL order 本輪只允許 protection purpose")
+            if purpose not in TRADING_SELL_ORDER_PURPOSES:
+                raise ValueError("Trading SELL order purpose 不合法")
             for fill in fills:
                 if int(fill.get("net_sell_total_milli") or 0) <= 0 or int(fill.get("allocated_cost_milli") or 0) < 0:
-                    raise ValueError("Trading protection SELL fill exact-accounting payload 不合法")
+                    raise ValueError("Trading SELL fill exact-accounting payload 不合法")
                 if int(fill.get("realized_pnl_milli") or 0) != int(fill.get("net_sell_total_milli") or 0) - int(fill.get("allocated_cost_milli") or 0):
-                    raise ValueError("Trading protection SELL fill PnL reconciliation 不一致")
+                    raise ValueError("Trading SELL fill PnL reconciliation 不一致")
+                if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT and str(fill.get("trade_date") or "") <= str(record.get("information_date") or ""):
+                    raise ValueError("Trading Indicator SELL fill 不得發生於 signal information date 當日或之前")
             if int(record.get("reserved_cost_milli") or 0) != 0:
-                raise ValueError("Trading protection SELL 不得保留 BUY reserved cost")
+                raise ValueError("Trading SELL 不得保留 BUY reserved cost")
             position_qty = int(record.get("position_qty_at_submission") or 0)
             if position_qty <= 0 or qty > position_qty:
-                raise ValueError("Trading protection SELL qty 不得超過送單時實際持股")
+                raise ValueError("Trading SELL qty 不得超過送單時實際持股")
             if not str(record.get("entry_order_id") or ""):
-                raise ValueError("Trading protection SELL 缺少來源 entry_order_id")
-            for field in ("plan_fingerprint", "protection_plan_fingerprint", "position_plan_fingerprint"):
+                raise ValueError("Trading SELL 缺少來源 entry_order_id")
+            for field in ("plan_fingerprint", "position_plan_fingerprint"):
                 if not str(record.get(field) or ""):
-                    raise ValueError(f"Trading protection SELL 缺少 immutable binding: {field}")
+                    raise ValueError(f"Trading SELL 缺少 immutable binding: {field}")
             order_type = str(record.get("order_type") or "")
             trigger = record.get("trigger_price_milli")
             limit = record.get("limit_price_milli")
-            if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
-                if order_type != TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET or int(trigger or 0) <= 0 or limit is not None:
-                    raise ValueError("Trading protection STOP order semantics 不合法")
+            if purpose in TRADING_PROTECTION_ORDER_PURPOSES:
+                if not str(record.get("protection_plan_fingerprint") or ""):
+                    raise ValueError("Trading protection SELL 缺少 protection plan fingerprint")
+                if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
+                    if order_type != TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET or int(trigger or 0) <= 0 or limit is not None:
+                        raise ValueError("Trading protection STOP order semantics 不合法")
+                else:
+                    if order_type != TRADING_PROTECTION_ORDER_TYPE_LIMIT or int(limit or 0) <= 0 or trigger is not None:
+                        raise ValueError("Trading protection TP order semantics 不合法")
+                oco_confirmed = bool(record.get("broker_native_oco_confirmed"))
+                oco_group = _normalize_optional_text(record.get("broker_oco_group_id"))
+                if oco_confirmed != bool(oco_group):
+                    raise ValueError("Trading protection OCO confirmed/group binding 不一致")
             else:
-                if order_type != TRADING_PROTECTION_ORDER_TYPE_LIMIT or int(limit or 0) <= 0 or trigger is not None:
-                    raise ValueError("Trading protection TP order semantics 不合法")
-            oco_confirmed = bool(record.get("broker_native_oco_confirmed"))
-            oco_group = _normalize_optional_text(record.get("broker_oco_group_id"))
-            if oco_confirmed != bool(oco_group):
-                raise ValueError("Trading protection OCO confirmed/group binding 不一致")
+                for field in ("indicator_plan_fingerprint", "signal_key", "position_state_sha256", "frozen_params_sha256", "market_data_sha256"):
+                    if not str(record.get(field) or ""):
+                        raise ValueError(f"Trading Indicator SELL 缺少 immutable binding: {field}")
+                if int(record.get("signal_attempt") or 0) <= 0 or not str(record.get("information_date") or ""):
+                    raise ValueError("Trading Indicator SELL signal attempt/date 不合法")
+                if order_type != TRADING_INDICATOR_ORDER_TYPE_MARKET or trigger is not None or limit is not None:
+                    raise ValueError("Trading Indicator SELL 必須使用 MARKET 且不得有 trigger/limit")
+                if qty != position_qty:
+                    raise ValueError("Trading Indicator SELL 必須完整覆蓋送單時持股")
+                if bool(record.get("broker_native_oco_confirmed")) or _normalize_optional_text(record.get("broker_oco_group_id")):
+                    raise ValueError("Trading Indicator SELL 不得標記為 OCO")
 
         if status == TRADING_ORDER_STATUS_ORDERED:
             if filled_qty != 0 or record.get("cancelled_at") is not None or record.get("filled_at") is not None:
@@ -889,6 +1030,10 @@ def build_trading_order_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "ordered_at": record["ordered_at"],
                 "cancelled_at": record.get("cancelled_at"),
                 "filled_at": record.get("filled_at"),
+                "latest_fill_trade_date": max(
+                    (str(fill.get("trade_date") or "") for fill in list(record.get("fills") or [])),
+                    default="",
+                ) or None,
                 "plan_fingerprint": record["plan_fingerprint"],
             }
         )
@@ -897,7 +1042,9 @@ def build_trading_order_read_model(state: dict[str, Any]) -> dict[str, Any]:
         "revision": int(state["revision"]),
         "active_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES),
         "active_entry_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES and row["side"] == TRADING_ORDER_SIDE_BUY),
-        "active_protection_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES and row["side"] == TRADING_ORDER_SIDE_SELL),
+        "active_sell_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES and row["side"] == TRADING_ORDER_SIDE_SELL),
+        "active_protection_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES and row["purpose"] in TRADING_PROTECTION_ORDER_PURPOSES),
+        "active_indicator_exit_order_count": sum(1 for row in rows if row["status"] in TRADING_ACTIVE_ORDER_STATUSES and row["purpose"] == TRADING_ORDER_PURPOSE_INDICATOR_EXIT),
         "order_count": len(rows),
         "orders": rows,
         "updated_at": state.get("updated_at"),
@@ -917,22 +1064,29 @@ __all__ = [
     "TRADING_ORDER_PURPOSE_ENTRY",
     "TRADING_ORDER_PURPOSE_PROTECTION_STOP",
     "TRADING_ORDER_PURPOSE_PROTECTION_TP",
+    "TRADING_ORDER_PURPOSE_INDICATOR_EXIT",
     "TRADING_PROTECTION_ORDER_PURPOSES",
+    "TRADING_SELL_ORDER_PURPOSES",
     "TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET",
     "TRADING_PROTECTION_ORDER_TYPE_LIMIT",
+    "TRADING_INDICATOR_ORDER_TYPE_MARKET",
     "build_empty_trading_order_state",
     "build_trading_proposal_key",
     "build_trading_protection_key",
+    "build_trading_indicator_exit_key",
     "append_ordered_trading_proposal",
     "append_ordered_trading_protection_leg",
     "append_ordered_trading_protection_oco_group",
+    "append_ordered_trading_indicator_exit",
     "record_trading_buy_order_fill",
-    "record_trading_protection_sell_order_fill",
+    "record_trading_sell_order_fill",
     "cancel_ordered_trading_order",
     "active_trading_orders",
     "has_active_trading_orders",
     "active_trading_entry_orders",
     "active_trading_protection_orders",
+    "active_trading_indicator_exit_orders",
+    "active_trading_sell_orders",
     "validate_trading_order_state",
     "build_trading_order_read_model",
 ]

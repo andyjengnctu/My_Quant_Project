@@ -4001,6 +4001,17 @@
       "entry": "`core/position_step.py`, `core/trading_account_state.py`, `core/trading_capabilities.py`, `services/trading/account_state.py`, `services/trading/position_rollforward.py`, `services/trading/daily_workflow.py`, `services/trading/protection_planning.py`, `services/trading/operations_status.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 360
+    },
+    {
+      "id": "B373",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Trading rule-based indicator exit execution",
+      "item": "Completed-bar ind_sell_signal persists into explicit next-session broker MARKET SELL lifecycle",
+      "gap": "Full rule-based strategy_fill持股在完成daily position roll-forward後，必須以source entry order frozen params於completed bar判定ind_sell_signal；signal一旦成立即以immutable signal_key保存為完整持股MARKET SELL義務，後續completed bar即使signal轉false也不得洗掉，直到該broker-order lifecycle明確FILLED或持股關閉。Indicator plan不得宣稱已送券商或依OHLC推定成交；實際送單必須由使用者確認，且同ticker仍有active Stop/TP時必須先確認券商取消，避免SELL exposure超過持股。Indicator SELL only可在signal information date之後確認實際fill，partial/final fill必須沿用entry frozen params與canonical exact-accounting/position sell seam並記為IND_SELL；active order禁止同signal重複送單，取消剩餘量後才可用同signal建立下一attempt。Operations Status/Workbench必須優先處理persistent indicator obligation、submission/reconciliation與protection conflict；任何SELL fill發生於目前latest completed information date之後時，依D3/D4鎖住同一交易session新allocation，不得重用盤中釋放資金。daily workflow固定為Data→position roll-forward→Indicator plan→Params→Scanner。完成後indicator_sell_execution required-live capability可移除最後implementation blocker；pre-live audit仍須驗account/cash、roll-forward、fresh indicator plan與open-position SELL coverage，不能因implementation complete便把不安全runtime state誤報LIVE_READY。",
+      "entry": "`core/trading_order_state.py`, `core/trading_capabilities.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_order_submission.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/trading/daily_workflow.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 361
     }
   ],
   "tests": [
@@ -7438,9 +7449,16 @@
     {
       "id": "T492",
       "b_id": "B372",
-      "description": "`validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、source entry frozen params、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、active protection共存與stale fingerprint、no-hidden-recovery/no-market-fill、Workbench explicit action與daily data→rollforward→params→scanner順序；既有operations/pre-live regressions同步鎖住next-action與剩餘ind_sell live blocker。",
+      "description": "`validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、source entry frozen params、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、active protection共存與stale fingerprint、no-hidden-recovery/no-market-fill、Workbench explicit action，並鎖住daily Data→rollforward→Indicator plan→Params→Scanner順序及indicator execution capability完成後的相容性。",
       "initial_status": "NEW",
       "order": 482
+    },
+    {
+      "id": "T493",
+      "b_id": "B373",
+      "description": "`validate_trading_indicator_sell_execution_contract_case` 覆蓋completed-bar full-position MARKET obligation、immutable signal identity、cancel/retry attempt、protection-first cancellation、explicit submission/no hidden fill、canonical IND_SELL event、Workbench explicit action與all-required-live capability completion；daily/operations/pre-live regressions同步覆蓋Data→rollforward→Indicator→Params→Scanner、D3/D4 SELL-cash session lock與runtime safety audit。",
+      "initial_status": "NEW",
+      "order": 483
     }
   ],
   "transitions": [
@@ -24707,6 +24725,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_position_rollforward_contract_case`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "B373",
+      "description": "完成Full rule-based completed-bar Indicator SELL至實際broker MARKET order/fill lifecycle，並補persistent signal與D3/D4 session-capital guard。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/fill_reconciliation.py`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "T493",
+      "description": "新增Trading Indicator SELL execution direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_indicator_sell_execution_contract_case`"
     }
   ]
 }

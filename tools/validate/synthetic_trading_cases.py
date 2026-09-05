@@ -380,10 +380,11 @@ def validate_trading_daily_workflow_contract_case(base_params):
     call_order = []
     with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: call_order.append("data") or {"status": "READY"}), \
          patch("services.trading.position_rollforward.run_trading_position_rollforward", side_effect=lambda **_kwargs: call_order.append("rollforward") or {"status": "UP_TO_DATE"}), \
+         patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", side_effect=lambda **_kwargs: call_order.append("indicator") or {"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}), \
          patch.object(daily_workflow, "run_trading_strategy_param_training", side_effect=lambda **_kwargs: call_order.append("params") or {"status": "READY"}), \
          patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
         workflow_result = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
-    add_check(results, "trading_daily", case_id, "daily_workflow_executes_data_rollforward_params_scanner_in_order", ["data", "rollforward", "params", "scanner"], call_order)
+    add_check(results, "trading_daily", case_id, "daily_workflow_executes_data_rollforward_indicator_params_scanner_in_order", ["data", "rollforward", "indicator", "params", "scanner"], call_order)
     add_check(results, "trading_daily", case_id, "daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
@@ -1583,7 +1584,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
 
     capability = build_trading_capability_snapshot()
     add_check(results, "trading_rollforward", case_id, "daily_position_rollforward_capability_is_implemented", True, bool(capability["capabilities"]["daily_position_rollforward"]["implemented"]))
-    add_check(results, "trading_rollforward", case_id, "indicator_sell_execution_remains_separate_live_blocker", True, "indicator_sell_execution" in set(capability.get("live_blocking_capabilities") or []))
+    add_check(results, "trading_rollforward", case_id, "indicator_sell_execution_capability_is_implemented", True, bool(capability["capabilities"]["indicator_sell_execution"]["implemented"]))
 
     service_source = (project_root / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
@@ -1592,7 +1593,56 @@ def validate_trading_position_rollforward_contract_case(base_params):
     add_check(results, "trading_rollforward", case_id, "read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
     add_check(results, "trading_rollforward", case_id, "rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
     add_check(results, "trading_rollforward", case_id, "workbench_exposes_explicit_position_rollforward_action", True, '"持股日終推進", "rollforward"' in panel_source and 'elif action == "rollforward"' in panel_source)
-    add_check(results, "trading_rollforward", case_id, "daily_workflow_orders_rollforward_after_data_before_param_training", True, daily_source.index("data_result = run_trading_market_data_update") < daily_source.index("rollforward_result = run_trading_position_rollforward") < daily_source.index("param_result = run_trading_strategy_param_training"))
+    add_check(results, "trading_rollforward", case_id, "daily_workflow_orders_rollforward_and_indicator_after_data_before_param_training", True, daily_source.index("data_result = run_trading_market_data_update") < daily_source.index("rollforward_result = run_trading_position_rollforward") < daily_source.index("indicator_result = build_trading_indicator_exit_plan") < daily_source.index("param_result = run_trading_strategy_param_training"))
+
+    summary["checks"] = len(results)
+    return results, summary
+
+def validate_trading_indicator_sell_execution_contract_case(base_params):
+    case_id = "TRADING_INDICATOR_SELL_EXECUTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.trading_capabilities import build_trading_capability_snapshot
+    from core.trading_order_state import (
+        TRADING_INDICATOR_ORDER_TYPE_MARKET, TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
+        TRADING_ORDER_STATUS_CANCELLED, active_trading_indicator_exit_orders,
+        append_ordered_trading_indicator_exit, build_empty_trading_order_state, cancel_ordered_trading_order,
+    )
+
+    state = build_empty_trading_order_state(timestamp="2026-09-05T08:00:00+08:00", mutation_id="init")
+    exit_row = {
+        "ticker":"2454", "qty":1000, "position_qty":1000, "entry_order_id":"ENTRY-1", "entry_trade_date":"2026-09-04",
+        "priority":1, "signal_key":"sig-1", "signal_information_date":"2026-09-04", "position_plan_fingerprint":"pos-fp",
+        "position_state_sha256":"pos-sha", "frozen_params_sha256":"params-sha", "market_data_sha256":"market-sha",
+    }
+    plan={"plan_fingerprint":"plan-fp", "account_revision":1}
+    ordered = append_ordered_trading_indicator_exit(state, order_id="IND-1", exit_plan=exit_row, plan=plan, timestamp="2026-09-05T08:01:00+08:00", mutation_id="submit", broker_order_id="BROKER-1")
+    row=ordered["orders"]["IND-1"]
+    add_check(results,"trading_indicator_sell",case_id,"indicator_order_purpose_is_distinct",TRADING_ORDER_PURPOSE_INDICATOR_EXIT,row["purpose"] )
+    add_check(results,"trading_indicator_sell",case_id,"indicator_order_is_market",TRADING_INDICATOR_ORDER_TYPE_MARKET,row["order_type"] )
+    add_check(results,"trading_indicator_sell",case_id,"indicator_order_is_full_position",row["position_qty_at_submission"],row["qty"] )
+    add_check(results,"trading_indicator_sell",case_id,"indicator_order_has_no_trigger",None,row["trigger_price_milli"] )
+    add_check(results,"trading_indicator_sell",case_id,"indicator_order_has_no_limit",None,row["limit_price_milli"] )
+    add_check(results,"trading_indicator_sell",case_id,"active_indicator_order_is_explicit",1,len(active_trading_indicator_exit_orders(ordered)) )
+    cancelled=cancel_ordered_trading_order(ordered,order_id="IND-1",timestamp="2026-09-05T08:02:00+08:00",mutation_id="cancel")
+    add_check(results,"trading_indicator_sell",case_id,"cancelled_indicator_can_leave_active_set",0,len(active_trading_indicator_exit_orders(cancelled)) )
+    retry=append_ordered_trading_indicator_exit(cancelled,order_id="IND-2",exit_plan=exit_row,plan=plan,timestamp="2026-09-05T08:03:00+08:00",mutation_id="retry")
+    add_check(results,"trading_indicator_sell",case_id,"cancelled_signal_retry_advances_attempt",2,retry["orders"]["IND-2"]["signal_attempt"] )
+    capability=build_trading_capability_snapshot()
+    add_check(results,"trading_indicator_sell",case_id,"all_required_live_capabilities_are_implemented",True,bool(capability.get("all_required_live_capabilities_ready")) )
+    add_check(results,"trading_indicator_sell",case_id,"no_implementation_live_blocker_remains",[],list(capability.get("live_blocking_capabilities") or []) )
+    project_root=Path(__file__).resolve().parents[2]
+    planning=(project_root/"services/trading/indicator_exit_planning.py").read_text(encoding="utf-8")
+    submit=(project_root/"services/trading/indicator_exit_order_submission.py").read_text(encoding="utf-8")
+    fill=(project_root/"services/trading/fill_reconciliation.py").read_text(encoding="utf-8")
+    protection=(project_root/"services/trading/protection_order_submission.py").read_text(encoding="utf-8")
+    panel=(project_root/"services/workbench_ui/trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results,"trading_indicator_sell",case_id,"planning_does_not_infer_broker_fill",False,"confirm_trading_indicator_sell_order_fill(" in planning )
+    add_check(results,"trading_indicator_sell",case_id,"submission_requires_protection_cancellation",True,"active Stop/TP protection SELL" in submit )
+    add_check(results,"trading_indicator_sell",case_id,"fill_reconciliation_uses_canonical_ind_sell_event",True,'event = "IND_SELL"' in fill )
+    add_check(results,"trading_indicator_sell",case_id,"protection_submission_blocks_active_indicator_sell",True,"active Indicator MARKET SELL" in protection )
+    add_check(results,"trading_indicator_sell",case_id,"workbench_exposes_indicator_market_sell_confirmation",True,"Indicator SELL 計畫" in panel and "確認選取 MARKET SELL 已送單" in panel and "confirm_trading_indicator_sell_order_fill" in panel )
 
     summary["checks"] = len(results)
     return results, summary
@@ -1616,6 +1666,9 @@ def validate_trading_operations_status_contract_case(base_params):
         NEXT_SET_CASH,
         NEXT_SUBMIT_PROPOSED,
         NEXT_SUBMIT_PROTECTION_STOP,
+        NEXT_CANCEL_PROTECTION_FOR_INDICATOR,
+        NEXT_SUBMIT_INDICATOR_EXIT,
+        NEXT_RECONCILE_INDICATOR_EXIT,
         NEXT_UPDATE_PARAMS,
         OPERATIONS_STATUS_BLOCKED,
         OPERATIONS_STATUS_LOCKED_TODAY,
@@ -1632,6 +1685,7 @@ def validate_trading_operations_status_contract_case(base_params):
     candidate = {"exists": True, "valid": True, "fresh": True, "candidate_count": 3, "information_date": "2026-09-04"}
     proposed = {"exists": False, "valid": False, "fresh": False, "order_count": 0}
     protection = {"exists": False, "fresh": False, "positions": []}
+    indicator_clear = {"exists": True, "fresh": True, "exit_count": 0, "exits": [], "active_indicator_exit_order_count": 0, "active_indicator_exit_tickers": []}
 
     def derive(**overrides):
         inputs = {
@@ -1641,6 +1695,7 @@ def validate_trading_operations_status_contract_case(base_params):
             "candidate": deepcopy(candidate),
             "proposed": deepcopy(proposed),
             "protection": deepcopy(protection),
+            "indicator_exit": deepcopy(indicator_clear),
             "fill_transaction_pending": False,
             "component_errors": {},
         }
@@ -1697,6 +1752,15 @@ def validate_trading_operations_status_contract_case(base_params):
     add_check(results, "trading_operations", case_id, "stale_active_protection_requires_explicit_cancel_resubmit_sequence", NEXT_REPLACE_PROTECTION, stale_protection["next_action_code"])
     add_check(results, "trading_operations", case_id, "stale_active_protection_blocks_new_allocation", False, stale_protection["workflow_action_availability"]["orders"])
 
+    indicator_due = {"exists": True, "fresh": True, "exit_count": 1, "exits": [{"ticker": "2317", "signal_key": "sig-1"}], "active_indicator_exit_order_count": 0, "active_indicator_exit_tickers": []}
+    due_with_stop = derive(account=strategy_account, orders=active_stop_orders, protection=fresh_protection, indicator_exit=indicator_due)
+    add_check(results, "trading_operations", case_id, "indicator_due_with_active_protection_requires_cancel_first", NEXT_CANCEL_PROTECTION_FOR_INDICATOR, due_with_stop["next_action_code"])
+    due_without_stop = derive(account=strategy_account, protection=fresh_protection, indicator_exit=indicator_due)
+    add_check(results, "trading_operations", case_id, "indicator_due_without_protection_requires_market_submission", NEXT_SUBMIT_INDICATOR_EXIT, due_without_stop["next_action_code"])
+    active_indicator_orders = {"revision": 6, "orders": [{"order_id":"ind1","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","status":"ORDERED","information_date":"2026-09-04"}]}
+    active_indicator = derive(account=strategy_account, orders=active_indicator_orders, protection=fresh_protection, indicator_exit=indicator_due)
+    add_check(results, "trading_operations", case_id, "active_indicator_order_requires_reconciliation", NEXT_RECONCILE_INDICATOR_EXIT, active_indicator["next_action_code"])
+
     active_entry_orders = {
         "revision": 6,
         "orders": [{
@@ -1738,6 +1802,12 @@ def validate_trading_operations_status_contract_case(base_params):
     add_check(results, "trading_operations", case_id, "same_day_lock_disables_step4_only", False, locked["workflow_action_availability"]["orders"])
     add_check(results, "trading_operations", case_id, "same_day_lock_keeps_scanner_available", True, locked["workflow_action_availability"]["scanner"])
 
+    sell_fill_history = {"revision": 8, "orders": [{"order_id":"selldone","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","status":"FILLED","information_date":"2026-09-04","latest_fill_trade_date":"2026-09-05"}]}
+    sell_locked = derive(orders=sell_fill_history)
+    add_check(results, "trading_operations", case_id, "sell_fill_after_latest_completed_date_locks_same_session_reallocation", NEXT_DAY_LOCKED, sell_locked["next_action_code"])
+    add_check(results, "trading_operations", case_id, "sell_session_lock_disables_step4", False, sell_locked["workflow_action_availability"]["orders"])
+    add_check(results, "trading_operations", case_id, "sell_session_lock_is_explicit", True, sell_locked["same_session_sell_locked"])
+
     build_proposed = derive()
     add_check(results, "trading_operations", case_id, "fresh_candidate_without_fresh_proposal_requires_step4", NEXT_BUILD_PROPOSED, build_proposed["next_action_code"])
 
@@ -1763,6 +1833,7 @@ def validate_trading_operations_status_contract_case(base_params):
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     add_check(results, "trading_operations", case_id, "operations_status_is_read_only_composition", False, any(token in source for token in ("atomic_write_json(", "confirm_trading_", "run_trading_market_data_update(")))
     add_check(results, "trading_operations", case_id, "operations_status_disables_hidden_protection_recovery", True, "get_trading_protection_plan_read_model(root, recover_pending_fill=False)" in source)
+    add_check(results, "trading_operations", case_id, "operations_status_disables_hidden_indicator_recovery", True, "get_trading_indicator_exit_plan_read_model(root, recover_pending_fill=False)" in source)
     rollforward_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
     rollforward_snapshot_body = rollforward_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
     add_check(results, "trading_operations", case_id, "operations_rollforward_snapshot_has_no_hidden_fill_recovery", False, "recover_trading_fill_transaction(" in rollforward_snapshot_body)
@@ -1856,6 +1927,7 @@ __all__ = [
     "validate_trading_protection_order_submission_contract_case",
     "validate_trading_protection_sell_fill_reconciliation_contract_case",
     "validate_trading_position_rollforward_contract_case",
+    "validate_trading_indicator_sell_execution_contract_case",
     "validate_trading_operations_status_contract_case",
     "validate_trading_workbench_account_panel_contract_case",
 ]
@@ -1959,7 +2031,7 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
     capability = build_trading_capability_snapshot()
     blockers = set(capability.get("live_blocking_capabilities") or [])
     add_check(results, "trading_prelive", case_id, "daily_position_rollforward_is_implemented_and_no_longer_live_blocker", False, "daily_position_rollforward" in blockers)
-    add_check(results, "trading_prelive", case_id, "indicator_sell_execution_remains_explicit_live_blocker", True, "indicator_sell_execution" in blockers)
+    add_check(results, "trading_prelive", case_id, "indicator_sell_execution_is_implemented_and_no_longer_live_blocker", False, "indicator_sell_execution" in blockers)
     add_check(results, "trading_prelive", case_id, "completed_daily_bar_seal_is_implemented", True, bool((capability["capabilities"]["completed_daily_bar_seal"]["implemented"])))
 
     with tempfile.TemporaryDirectory() as temp_dir:

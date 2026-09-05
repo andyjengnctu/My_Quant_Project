@@ -13,14 +13,9 @@ from typing import Any
 
 import pandas as pd
 
-from core.data_utils import (
-    discover_unique_csv_map,
-    get_required_min_rows,
-    sanitize_ohlcv_dataframe,
-)
 from core.params_io import build_params_from_mapping
 from core.position_step import rollforward_position_management_from_completed_bar
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import (
     MANAGEMENT_STATUS_ACTIVE,
@@ -33,57 +28,19 @@ from services.trading.account_state import (
     rollforward_trading_strategy_management,
 )
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
-from services.trading.order_state import load_trading_order_state
+from services.trading.position_market_context import (
+    load_trading_position_market_frame,
+    normalize_trading_date,
+    resolve_trading_strategy_position_sources,
+)
 from services.trading.protection_planning import build_trading_protection_plan
 
 TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
 
 
-def _normalize_date(value: object | None) -> str | None:
-    if value is None or str(value).strip() == "":
-        return None
-    return pd.Timestamp(value).normalize().strftime("%Y-%m-%d")
-
-
-def _load_position_market_frame(*, file_path: str, ticker: str, params, allowed_date: str) -> pd.DataFrame:
-    raw = pd.read_csv(file_path)
-    df, _stats = sanitize_ohlcv_dataframe(
-        raw,
-        ticker,
-        min_rows=get_required_min_rows(params),
-    )
-    allowed_ts = pd.Timestamp(allowed_date).normalize()
-    if pd.Timestamp(df.index.max()).normalize() > allowed_ts:
-        raise RuntimeError(
-            f"Trading position data 含尚未完成日K: {ticker} "
-            f"latest={pd.Timestamp(df.index.max()).strftime('%Y-%m-%d')} > allowed={allowed_date}"
-        )
-    return df
-
-
-def _resolve_strategy_position_sources(project_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
-    account = load_trading_account_state(project_root, required=False)
-    if account is None:
-        return {}, {}, {}
-    orders = load_trading_order_state(project_root, required=False)
-    if orders is None:
-        orders = {"orders": {}}
-    has_strategy_positions = any(
-        isinstance(record, dict) and record.get("source") == POSITION_SOURCE_STRATEGY_FILL
-        for record in (account.get("positions") or {}).values()
-    )
-    if not has_strategy_positions:
-        return account, orders, {}
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    csv_map, duplicate_issues = discover_unique_csv_map(paths.data_dir)
-    if duplicate_issues:
-        raise RuntimeError("Trading dataset 存在重複ticker CSV：" + "；".join(duplicate_issues[:5]))
-    return account, orders, csv_map
-
-
 def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    account, orders, csv_map = _resolve_strategy_position_sources(root)
+    account, orders, csv_map = resolve_trading_strategy_position_sources(root)
     allowed_date = latest_allowed_completed_daily_date()
     if not account:
         return {
@@ -113,9 +70,9 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
         if not file_path:
             raise FileNotFoundError(f"Trading dataset 缺少持股 {ticker} CSV")
         params = build_params_from_mapping(order["frozen_params"])
-        df = _load_position_market_frame(file_path=file_path, ticker=ticker, params=params, allowed_date=allowed_date)
-        entry_date = _normalize_date(broker.get("entry_date"))
-        last_rollforward = _normalize_date(management.get("last_rollforward_date"))
+        df = load_trading_position_market_frame(file_path=file_path, ticker=ticker, params=params, allowed_date=allowed_date)
+        entry_date = normalize_trading_date(broker.get("entry_date"))
+        last_rollforward = normalize_trading_date(management.get("last_rollforward_date"))
         eligible = df.index
         if entry_date is not None:
             eligible = eligible[eligible >= pd.Timestamp(entry_date)]
@@ -147,7 +104,7 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
 def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     recover_trading_fill_transaction(root)
-    account, orders, csv_map = _resolve_strategy_position_sources(root)
+    account, orders, csv_map = resolve_trading_strategy_position_sources(root)
     allowed_date = latest_allowed_completed_daily_date()
     if not account:
         return {
@@ -181,12 +138,12 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
         if not file_path:
             raise FileNotFoundError(f"Trading dataset 缺少持股 {ticker} CSV")
         params = build_params_from_mapping(order["frozen_params"])
-        df = _load_position_market_frame(file_path=file_path, ticker=ticker, params=params, allowed_date=allowed_date)
+        df = load_trading_position_market_frame(file_path=file_path, ticker=ticker, params=params, allowed_date=allowed_date)
         precomputed = generate_signals(df, params, ticker=ticker)
         atr_values, _buy_values, _sell_values, _limits = unpack_precomputed_signals(precomputed)
 
-        entry_date = _normalize_date(broker.get("entry_date"))
-        last_rollforward = _normalize_date(management.get("last_rollforward_date"))
+        entry_date = normalize_trading_date(broker.get("entry_date"))
+        last_rollforward = normalize_trading_date(management.get("last_rollforward_date"))
         processed_dates: list[str] = []
         previous_stop_milli = int(position.get("sl_milli") or 0)
         previous_high_milli = int(position.get("highest_high_since_entry_milli") or 0)

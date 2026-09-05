@@ -138,6 +138,37 @@ def build_trading_operational_audit(project_root: str | Path) -> dict[str, Any]:
             }
         )
 
+    account_initialized = bool(operations.get("account_initialized"))
+    checks.append({"id":"trading_account_initialized","status":"PASS" if account_initialized else "FAIL","detail":"Trading account canonical state exists" if account_initialized else "Trading account 尚未初始化"})
+    if not account_initialized:
+        blockers.append("Trading account 尚未初始化")
+    cash_configured = account_initialized and operations.get("cash") is not None
+    checks.append({"id":"trading_cash_configured","status":"PASS" if cash_configured else "FAIL","detail":"cash configured" if cash_configured else "cash 尚未設定"})
+    if account_initialized and not cash_configured:
+        blockers.append("Trading cash 尚未設定")
+
+    rollforward_due = int(operations.get("rollforward_due_count") or 0)
+    checks.append({"id":"trading_position_rollforward_current","status":"PASS" if rollforward_due == 0 else "FAIL","detail":f"due_count={rollforward_due}"})
+    if rollforward_due:
+        blockers.append("Trading strategy positions 尚有 daily roll-forward 未完成")
+
+    strategy_position_count = int(operations.get("strategy_position_count") or 0)
+    indicator_plan_ready = strategy_position_count == 0 or bool(operations.get("indicator_exit_plan_fresh"))
+    checks.append({"id":"trading_indicator_exit_plan_current","status":"PASS" if indicator_plan_ready else "FAIL","detail":f"strategy_positions={strategy_position_count}, fresh={bool(operations.get('indicator_exit_plan_fresh'))}"})
+    if not indicator_plan_ready:
+        blockers.append("Trading strategy positions 缺少 fresh Indicator SELL plan")
+
+    stale_protection = list(operations.get("stale_active_protection_order_ids") or [])
+    missing_stop = list(operations.get("missing_stop_tickers") or [])
+    indicator_conflict = list(operations.get("indicator_protection_conflict_tickers") or [])
+    indicator_due = list(operations.get("indicator_exit_due_tickers") or [])
+    active_indicator = set(str(x) for x in operations.get("active_indicator_exit_tickers") or [])
+    unsubmitted_indicator = sorted(set(str(x) for x in indicator_due) - active_indicator)
+    broker_sell_safe = not stale_protection and not missing_stop and not indicator_conflict and not unsubmitted_indicator
+    checks.append({"id":"trading_open_position_sell_coverage","status":"PASS" if broker_sell_safe else "FAIL","detail":f"stale={len(stale_protection)}, missing_stop={missing_stop}, indicator_conflict={indicator_conflict}, unsubmitted_indicator={unsubmitted_indicator}"})
+    if not broker_sell_safe:
+        blockers.append("Trading open positions 尚未具備安全且互斥的實際 SELL coverage")
+
     if str(operations.get("overall_status") or "") == "BLOCKED":
         for item in list(operations.get("blockers") or []):
             blockers.append(f"Operations Status: {item}")
@@ -197,8 +228,8 @@ def _render_operational_audit_markdown(audit: dict[str, Any]) -> str:
             f"- Overall: `{audit['operations_status'].get('overall_status')}`",
             f"- Next action: `{audit['operations_status'].get('next_action_code')}` - {audit['operations_status'].get('next_action_label')}",
             "",
-            "> LIVE_READY only means the currently implemented Trading capability set and runtime state pass this audit. "
-            "It does not infer broker fills or bypass explicit user confirmation.",
+            "> LIVE_READY only means required Trading capabilities and the current operational safety state pass this audit. "
+            "It never infers broker submission/fills or bypasses explicit user confirmation.",
             "",
         ]
     )

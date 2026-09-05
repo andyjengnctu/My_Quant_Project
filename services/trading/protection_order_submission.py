@@ -16,6 +16,7 @@ from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
 from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
+    active_trading_indicator_exit_orders,
     active_trading_protection_orders,
     append_ordered_trading_protection_leg,
     append_ordered_trading_protection_oco_group,
@@ -137,6 +138,8 @@ def confirm_trading_protection_leg_submission(
     source_guard = _build_source_guard(root)
 
     def mutate(state, timestamp, mutation_id):
+        if any(_normalize_ticker(row.get("ticker")) == _normalize_ticker(ticker) for row in active_trading_indicator_exit_orders(state)):
+            raise RuntimeError("Trading 此持股已有 active Indicator MARKET SELL；完成成交／取消 reconciliation 前不得再掛 protection SELL")
         active = active_trading_protection_orders(state)
         _assert_no_active_duplicate(active, ticker=ticker, purpose=purpose)
         exposure_after = _effective_protection_exposure(active, ticker=ticker) + int(leg.get("qty") or 0)
@@ -191,6 +194,8 @@ def confirm_trading_protection_oco_submission(
     source_guard = _build_source_guard(root)
 
     def mutate(state, timestamp, mutation_id):
+        if any(_normalize_ticker(row.get("ticker")) == _normalize_ticker(ticker) for row in active_trading_indicator_exit_orders(state)):
+            raise RuntimeError("Trading 此持股已有 active Indicator MARKET SELL；完成成交／取消 reconciliation 前不得再掛 protection SELL")
         active = active_trading_protection_orders(state)
         if any(_normalize_ticker(row.get("ticker")) == _normalize_ticker(ticker) for row in active):
             raise RuntimeError("Trading 此持股已有 active protection SELL；建立新 OCO 前必須先確認券商取消舊單")
