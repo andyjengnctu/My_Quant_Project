@@ -19,6 +19,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_task_specific_safety_mfe = descriptor.has_capability("task_specific_safety_mfe")
     use_safety_attention_pool = descriptor.has_capability("safety_attention_pool")
     use_safety_temporal_self_attention = descriptor.has_capability("safety_temporal_self_attention")
+    use_safety_pairwise_temporal_relation_bias = descriptor.has_capability(
+        "safety_pairwise_temporal_relation_bias"
+    )
     use_price_volume_structure_safety = descriptor.has_capability("price_volume_structure_safety")
     use_price_volume_local_structure_safety = descriptor.has_capability(
         "price_volume_local_structure_safety"
@@ -42,6 +45,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         raise ValueError("Price-Volume local/position-aware treatment不可同時啟用")
     if use_safety_attention_pool and use_safety_temporal_self_attention:
         raise ValueError("Safety scalar pooling與temporal self-attention不可同時啟用")
+    if use_safety_pairwise_temporal_relation_bias and not use_safety_temporal_self_attention:
+        raise ValueError("Pairwise temporal relation bias必須建立在Safety temporal self-attention上")
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
     use_nonlinear_hmhs_head = descriptor.has_capability("nonlinear_hmhs_head")
     use_joint_attention_pool = descriptor.has_capability("joint_attention_pool")
@@ -290,6 +295,19 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 if use_safety_temporal_self_attention
                 else None
             )
+            if use_safety_pairwise_temporal_relation_bias:
+                from filters.breakout_quality.models.pairwise_temporal_relation import (
+                    build_pairwise_temporal_relation_bias,
+                )
+
+                self.safety_temporal_relation_bias = build_pairwise_temporal_relation_bias(
+                    nn,
+                    torch,
+                    feature_count=int(feature_count),
+                    spec=spec,
+                )
+            else:
+                self.safety_temporal_relation_bias = None
             if use_price_volume_structure_safety:
                 from filters.breakout_quality.models.price_volume_structure import (
                     build_price_volume_local_structure_encoder,
@@ -397,7 +415,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             weights = torch.softmax(logits.float(), dim=1).to(feature_map.dtype)
             return torch.sum(feature_map * weights.unsqueeze(1), dim=2)
 
-        def _safety_temporal_interaction(self, feature_map):
+        def _safety_temporal_interaction(self, feature_map, sequence_input=None):
             if (
                 self.safety_temporal_query is None
                 or self.safety_temporal_key is None
@@ -407,9 +425,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             query = self.safety_temporal_query(feature_map).transpose(1, 2).unsqueeze(1)
             key = self.safety_temporal_key(feature_map).transpose(1, 2).unsqueeze(1)
             value = self.safety_temporal_value(feature_map).transpose(1, 2).unsqueeze(1)
-            context = torch.nn.functional.scaled_dot_product_attention(
-                query, key, value, dropout_p=0.0, is_causal=False
-            )
+            if self.safety_temporal_relation_bias is not None:
+                if sequence_input is None:
+                    raise ValueError("Pairwise temporal relation bias需要原始sequence input")
+                context = self.safety_temporal_relation_bias.scaled_dot_product_attention(
+                    query, key, value, sequence_input
+                )
+            else:
+                context = torch.nn.functional.scaled_dot_product_attention(
+                    query,
+                    key,
+                    value,
+                    dropout_p=0.0,
+                    is_causal=False,
+                )
             return feature_map + context.squeeze(1).transpose(1, 2).to(feature_map.dtype)
 
         def joint_attention_weights(self, x):
@@ -483,7 +512,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     safety_pooled = self._safety_attention_pool(feature_map)
                 else:
                     safety_pooled = torch.mean(
-                        self._safety_temporal_interaction(feature_map), dim=2
+                        self._safety_temporal_interaction(feature_map, x), dim=2
                     )
                 # Preserve AO's single dropout RNG draw on the MFE path and reuse the same
                 # mask for Safety.  This keeps the controlled contrast focused on the

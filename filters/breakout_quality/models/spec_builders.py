@@ -450,6 +450,13 @@ def _build_inception_spec(
     price_volume_local_map_price_bins = descriptor_options.get("price_volume_local_map_price_bins")
     price_volume_local_map_price_span_atr = descriptor_options.get("price_volume_local_map_price_span_atr")
     price_volume_local_map_geometry_latent_dim = descriptor_options.get("price_volume_local_map_geometry_latent_dim")
+    pairwise_temporal_relation_features = tuple(
+        str(value)
+        for value in descriptor_options.get("pairwise_temporal_relation_features", ())
+    )
+    pairwise_temporal_relation_hidden_dim = descriptor_options.get(
+        "pairwise_temporal_relation_hidden_dim"
+    )
     if filters < 1 or bottleneck_channels < 1:
         raise ValueError("InceptionTime descriptor width必須為正整數")
     if input_window_bars is not None and input_window_bars < 1:
@@ -536,6 +543,12 @@ def _build_inception_spec(
         ),
         price_volume_local_map_geometry_latent_dim=(
             None if price_volume_local_map_geometry_latent_dim is None else int(price_volume_local_map_geometry_latent_dim)
+        ),
+        pairwise_temporal_relation_features=pairwise_temporal_relation_features,
+        pairwise_temporal_relation_hidden_dim=(
+            None
+            if pairwise_temporal_relation_hidden_dim is None
+            else int(pairwise_temporal_relation_hidden_dim)
         ),
         inception_depth=depth,
         inception_filters=filters,

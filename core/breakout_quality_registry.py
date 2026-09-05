@@ -451,6 +451,9 @@ DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_ATTN_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIR
 DAILY_UNIVERSAL_SHARED_SAFETY_SELF_ATTN_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_self_attn_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SHARED_SAFETY_PAIRWISE_RELATION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_shared_safety_pairwise_relation_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_patch_safety_inception_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
@@ -1523,6 +1526,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_self_attn_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_PAIRWISE_RELATION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_PAIRWISE_RELATION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_pairwise_relation_mfe_v1",
     ),
 
 DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
@@ -2940,6 +2955,39 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="safety_temporal_self_attention_interaction_plus_true_hs_conditional_mfe",
         score_semantic_id="daily_safety_temporal_self_attention_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_PAIRWISE_RELATION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_PAIRWISE_RELATION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BP",
+        experiment_name="MR-13BP AO-Objective Explicit Pairwise Temporal-Relation Safety Ranker",
+        phase="13BP",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "exact_MR13AO_head1_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "exact_MR13AO_head2_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "MR-13AO scientific contract exact control：AO shared InceptionTime、continuous Safety full-list Delta-NDCG、"
+            "true-HS=P50 Conditional-MFE target/sublist、1:1 head weighting、raw 300x10 input、Seed42/Adam/split/"
+            "epoch selection與Pred-Safety→Conditional-MFE inference全部固定。唯一scientific treatment是Safety path在"
+            "single-head temporal self-attention score加入由既有stock OHLCV batch-time deterministic建立的explicit "
+            "pairwise relation bias：delta-log Close/High/Low、delta canonical normalized-log-volume、normalized signed "
+            "time distance；5D relation經固定8D MLP輸出scalar additive attention bias。Raw price relation由canonical "
+            "P/anchor_close-1 channels使用log1p差取得，不新增normalization、persistent artifact、pivot/extrema/support label或"
+            "future-confirmed structure。Conditional-MFE仍直接讀AO shared feature map→GAP，relation branch只由Safety loss更新。"
+            "Primary scientific reference=MR-13AO；MR-13AY為mechanistic self-attention-without-explicit-relation control。"
+            "Seed42 Forward first；若只有小增量，不做relation feature/window/hidden/head/topology sweep。"
+        ),
+        metric_scope="explicit_pairwise_temporal_relation_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_explicit_pairwise_temporal_relation_safety_then_true_hs_conditional_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
         secondary_pair_scope_threshold=0.50,

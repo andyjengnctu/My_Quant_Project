@@ -48,6 +48,8 @@ class BreakoutQualityModelSpec:
     price_volume_local_map_price_bins: int | None = None
     price_volume_local_map_price_span_atr: float | None = None
     price_volume_local_map_geometry_latent_dim: int | None = None
+    pairwise_temporal_relation_features: tuple[str, ...] = ()
+    pairwise_temporal_relation_hidden_dim: int | None = None
     window_normalization_epsilon: float | None = None
     inception_depth: int | None = None
     inception_filters: int | None = None
@@ -208,6 +210,7 @@ class BreakoutQualityModelSpec:
             "price_volume_local_map_price_bins": self.price_volume_local_map_price_bins,
             "price_volume_local_map_price_span_atr": self.price_volume_local_map_price_span_atr,
             "price_volume_local_map_geometry_latent_dim": self.price_volume_local_map_geometry_latent_dim,
+            "pairwise_temporal_relation_hidden_dim": self.pairwise_temporal_relation_hidden_dim,
             "inception_depth": self.inception_depth,
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,
@@ -306,6 +309,10 @@ class BreakoutQualityModelSpec:
             )
         if self.sequence_input_paths:
             payload["sequence_input_paths"] = list(self.sequence_input_paths)
+        if self.pairwise_temporal_relation_features:
+            payload["pairwise_temporal_relation_features"] = list(
+                self.pairwise_temporal_relation_features
+            )
         if self.window_normalization_epsilon is not None:
             payload["window_normalization_epsilon"] = float(
                 self.window_normalization_epsilon

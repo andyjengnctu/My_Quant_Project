@@ -2669,6 +2669,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_RISK_CONTEXT_V1,
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1,
@@ -4899,6 +4900,162 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check_true(
         "safety_temporal_self_attention_gradient_is_safety_only",
         safety_to_qkv_grad > 0.0 and mfe_to_qkv_grad == 0.0,
+    )
+
+    # Explicit pairwise relation bias is a new Safety-only relation primitive layered on
+    # the existing AY self-attention mechanism.  It must expose signed bar-to-bar market
+    # relations directly without changing AO target/input artifacts or the MFE path.
+    relation_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1)
+    relation_manifest = relation_spec.as_manifest_payload()
+    check_true(
+        "pairwise_temporal_relation_spec_declares_fixed_five_feature_bias_contract",
+        tuple(relation_spec.pairwise_temporal_relation_features)
+        == (
+            "delta_log_close",
+            "delta_log_high",
+            "delta_log_low",
+            "delta_normalized_log_volume",
+            "normalized_time_distance",
+        )
+        and int(relation_spec.pairwise_temporal_relation_hidden_dim) == 8
+        and tuple(relation_spec.sequence_input_paths)
+        == (
+            "raw_level",
+            "derived_pairwise_stock_ohlcv_price_volume_time_relations",
+        )
+        and tuple(relation_spec.pooling)
+        == (
+            "safety_single_head_temporal_self_attention_plus_explicit_pairwise_relation_bias_residual",
+            "safety_global_average",
+            "mfe_global_average",
+            "raw_safety_head",
+            "raw_mfe_head",
+        )
+        and model_spec_from_manifest(relation_manifest) == relation_spec,
+    )
+    torch.manual_seed(20260905)
+    relation_ay_control = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1
+    )
+    torch.manual_seed(20260905)
+    relation_model = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1
+    )
+    relation_ay_state = relation_ay_control.state_dict()
+    relation_state = relation_model.state_dict()
+    relation_extra_keys = sorted(set(relation_state).difference(relation_ay_state))
+    check_true(
+        "pairwise_temporal_relation_same_seed_adds_only_relation_mlp_after_ay",
+        not (set(relation_ay_state) - set(relation_state))
+        and relation_extra_keys
+        == [
+            "safety_temporal_relation_bias.relation_mlp.0.bias",
+            "safety_temporal_relation_bias.relation_mlp.0.weight",
+            "safety_temporal_relation_bias.relation_mlp.2.weight",
+        ]
+        and all(
+            torch.equal(relation_ay_state[key], relation_state[key])
+            for key in relation_ay_state
+        )
+        and (
+            sum(parameter.numel() for parameter in relation_model.parameters())
+            - sum(parameter.numel() for parameter in relation_ay_control.parameters())
+        )
+        == 56,
+    )
+    relation_x = torch.zeros((2, 32, 10), dtype=torch.float32)
+    relation_base = torch.linspace(-0.15, 0.12, steps=32)
+    relation_x[:, :, 0] = relation_base
+    relation_x[:, :, 1] = relation_base + 0.03
+    relation_x[:, :, 2] = relation_base - 0.03
+    relation_x[:, :, 3] = relation_base + 0.01
+    relation_x[:, :, 4] = torch.linspace(-1.0, 1.0, steps=32)
+    relation_features = relation_model.safety_temporal_relation_bias.build_relation_features(
+        relation_x
+    )
+    direct_relation_bias = relation_model.safety_temporal_relation_bias.relation_mlp(
+        relation_features
+    ).squeeze(3)
+    compact_relation_bias = relation_model.safety_temporal_relation_bias(relation_x)
+    check_true(
+        "pairwise_temporal_relation_primitives_are_signed_antisymmetric_and_pit_local",
+        tuple(relation_features.shape) == (2, 32, 32, 5)
+        and bool(torch.isfinite(relation_features).all())
+        and bool(
+            torch.allclose(
+                relation_features + relation_features.transpose(1, 2),
+                torch.zeros_like(relation_features),
+                atol=1e-6,
+                rtol=0.0,
+            )
+        )
+        and abs(float(relation_features[0, -1, 0, 4]) - 1.0) < 1e-6
+        and abs(float(relation_features[0, 0, -1, 4]) + 1.0) < 1e-6
+        and bool(
+            torch.allclose(
+                direct_relation_bias,
+                compact_relation_bias,
+                atol=1e-6,
+                rtol=1e-6,
+            )
+        ),
+    )
+    relation_ay_control.eval()
+    relation_model.eval()
+    with torch.no_grad():
+        relation_ay_safety, relation_ay_mfe = relation_ay_control.forward_safety_mfe_heads(
+            relation_x, None
+        )
+        relation_safety, relation_mfe = relation_model.forward_safety_mfe_heads(
+            relation_x, None
+        )
+    check_true(
+        "pairwise_temporal_relation_preserves_ay_ao_mfe_path_and_changes_safety",
+        torch.equal(relation_ay_mfe, relation_mfe)
+        and not torch.equal(relation_ay_safety, relation_safety),
+    )
+    from filters.breakout_quality.models import pairwise_temporal_relation as relation_module
+
+    with patch.object(
+        relation_module,
+        "_MAX_PAIR_CELLS_PER_ATTENTION_CHUNK",
+        int(relation_x.shape[1]) ** 2,
+    ):
+        with torch.no_grad():
+            chunked_relation_safety, chunked_relation_mfe = (
+                relation_model.forward_safety_mfe_heads(relation_x, None)
+            )
+    check_true(
+        "pairwise_temporal_relation_execution_chunking_preserves_model_semantics",
+        bool(
+            torch.allclose(
+                relation_safety,
+                chunked_relation_safety,
+                atol=1e-6,
+                rtol=1e-6,
+            )
+        )
+        and torch.equal(relation_mfe, chunked_relation_mfe),
+    )
+    relation_model.zero_grad(set_to_none=True)
+    relation_safety, _relation_mfe = relation_model.forward_safety_mfe_heads(
+        relation_x, None
+    )
+    relation_safety[:, 1].sum().backward()
+    safety_to_relation_grad = _gradient_total(
+        relation_model.safety_temporal_relation_bias.parameters()
+    )
+    relation_model.zero_grad(set_to_none=True)
+    _relation_safety, relation_mfe = relation_model.forward_safety_mfe_heads(
+        relation_x, None
+    )
+    relation_mfe[:, 1].sum().backward()
+    mfe_to_relation_grad = _gradient_total(
+        relation_model.safety_temporal_relation_bias.parameters()
+    )
+    check_true(
+        "pairwise_temporal_relation_gradient_is_safety_only",
+        safety_to_relation_grad > 0.0 and mfe_to_relation_grad == 0.0,
     )
 
     # Dual-encoder architecture: Safety gets the frozen historical Patch recipe while
