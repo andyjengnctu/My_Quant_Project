@@ -345,6 +345,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
                 "expected_value": 0.3,
                 "proj_cost": 100000,
                 "text": "synthetic candidate",
+                "trade_date": "2026-09-04",
                 "execution_plan_seed": {"ticker": "2330", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0, "target_price": 106.0, "entry_atr": 2.0, "trade_date": "2026-09-04"},
             }],
             "scanner_issue_log_path": None,
@@ -457,6 +458,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
         candidate_rows = [
             {
                 "ticker": "2330",
+                "trade_date": "2026-09-04",
                 "kind": "extended_tbd",
                 "sort_value": 3.0,
                 "expected_value": 0.5,
@@ -464,6 +466,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
             },
             {
                 "ticker": "2454",
+                "trade_date": "2026-09-04",
                 "kind": "buy",
                 "sort_value": 2.0,
                 "expected_value": 0.4,
@@ -471,6 +474,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
             },
             {
                 "ticker": "2603",
+                "trade_date": "2026-09-04",
                 "kind": "buy",
                 "sort_value": 1.0,
                 "expected_value": 0.3,
@@ -581,6 +585,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
         candidate_rows = [
             {
                 "ticker": "2454",
+                "trade_date": "2026-09-04",
                 "kind": "buy",
                 "sort_value": 2.0,
                 "expected_value": 0.4,
@@ -592,6 +597,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
             },
             {
                 "ticker": "2603",
+                "trade_date": "2026-09-04",
                 "kind": "buy",
                 "sort_value": 1.0,
                 "expected_value": 0.3,
@@ -789,7 +795,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
             "param_latest_data_date": "2026-09-04",
             "selected_params_sha256": compute_file_sha256(selected_path),
             "candidate_rows": [{
-                "ticker": "2454", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
+                "ticker": "2454", "trade_date": "2026-09-04", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
                 "execution_plan_seed": {
                     "ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0,
                     "target_price": 210.0, "entry_atr": 4.0, "trade_date": "2026-09-04",
@@ -1482,7 +1488,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
             "param_latest_data_date": "2026-09-04",
             "selected_params_sha256": compute_file_sha256(selected_path),
             "candidate_rows": [{
-                "ticker": "2454", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
+                "ticker": "2454", "trade_date": "2026-09-04", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
                 "execution_plan_seed": {
                     "ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0,
                     "target_price": 230.0, "entry_atr": 4.0, "trade_date": "2026-09-04",
@@ -2056,6 +2062,218 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
     audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
     add_check(results, "trading_prelive", case_id, "workbench_exposes_explicit_prelive_audit_action", True, "實盤就緒檢查" in panel_source)
     add_check(results, "trading_prelive", case_id, "operational_audit_does_not_mutate_trading_state", False, any(token in audit_source for token in ("confirm_trading_", "mutate_trading_", "set_trading_cash_balance(")))
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+def validate_trading_live_readiness_hardening_contract_case(base_params):
+    """Audit-derived guards for actionable signal date and TP retry integrity."""
+    case_id = "TRADING_LIVE_READINESS_HARDENING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from core.file_integrity import atomic_write_json, canonical_json_sha256
+    from core.params_io import params_to_json_dict
+    from core.price_utils import calc_half_take_profit_sell_qty
+    from core.trading_order_state import (
+        TRADING_ORDER_PURPOSE_PROTECTION_TP,
+        append_ordered_trading_proposal,
+        build_empty_trading_order_state,
+    )
+    from services.downloader import runtime as downloader_runtime
+    from services.downloader import universe as downloader_universe
+    from services.trading.fill_reconciliation import (
+        confirm_trading_buy_order_fill,
+        confirm_trading_protection_sell_order_fill,
+    )
+    from services.trading.order_state import (
+        confirm_trading_order_cancellation,
+        resolve_trading_order_state_path,
+    )
+    from services.trading.protection_order_submission import (
+        confirm_trading_protection_oco_submission,
+        confirm_trading_protection_leg_submission,
+    )
+    from services.trading.protection_planning import build_trading_protection_plan
+    from services.trading.scanner_state import partition_trading_candidate_rows_for_information_date
+
+    current_row = {
+        "ticker": "2330",
+        "kind": "buy",
+        "trade_date": "2026-09-04",
+        "execution_plan_seed": {"ticker": "2330", "trade_date": "2026-09-04"},
+    }
+    stale_row = {
+        "ticker": "2454",
+        "kind": "buy",
+        "trade_date": "2026-09-03",
+        "execution_plan_seed": {"ticker": "2454", "trade_date": "2026-09-03"},
+    }
+    current, stale = partition_trading_candidate_rows_for_information_date(
+        [current_row, stale_row], information_date="2026-09-04"
+    )
+    add_check(results, "trading_live_readiness", case_id, "old_ticker_signal_is_not_actionable_on_dataset_latest_date", ["2330"], [row["ticker"] for row in current])
+    add_check(results, "trading_live_readiness", case_id, "stale_signal_is_explicitly_reported", [{"ticker": "2454", "trade_date": "2026-09-03"}], stale)
+    try:
+        partition_trading_candidate_rows_for_information_date(
+            [{**current_row, "execution_plan_seed": {"ticker": "2330", "trade_date": "2026-09-03"}}],
+            information_date="2026-09-04",
+        )
+    except ValueError:
+        seed_mismatch_rejected = True
+    else:
+        seed_mismatch_rejected = False
+    add_check(results, "trading_live_readiness", case_id, "candidate_and_execution_seed_date_mismatch_is_fail_fast", True, seed_mismatch_rejected)
+
+    class _FailLoader:
+        def get_data(self, **_kwargs):
+            raise ValueError("synthetic market-date provider failure")
+
+    class _FailTicker:
+        def history(self, **_kwargs):
+            raise ValueError("synthetic yfinance market-date failure")
+
+    class _FailYF:
+        @staticmethod
+        def Ticker(_ticker):
+            return _FailTicker()
+
+    after_close = datetime(2026, 9, 4, 14, 30, tzinfo=ZoneInfo("Asia/Taipei"))
+    with (
+        patch.object(downloader_runtime, "get_taipei_now", return_value=after_close),
+        patch.object(downloader_runtime, "get_finmind_loader", return_value=_FailLoader()),
+        patch.object(downloader_runtime, "get_yfinance_module", return_value=_FailYF()),
+        patch.object(downloader_runtime, "append_downloader_issues", return_value=None),
+    ):
+        try:
+            downloader_universe.get_market_last_date()
+        except RuntimeError:
+            guessed_weekday_rejected = True
+        else:
+            guessed_weekday_rejected = False
+    add_check(results, "trading_live_readiness", case_id, "market_date_provider_failure_never_falls_back_to_guessed_weekday", True, guessed_weekday_rejected)
+
+    frozen_params = params_to_json_dict(base_params)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        qty = 100
+        tp_target = calc_half_take_profit_sell_qty(qty, base_params.tp_percent)
+        if tp_target <= 1:
+            raise RuntimeError("synthetic TP target 太小，無法驗 partial-cancel retry")
+        reserved = build_buy_ledger_from_price(100.0, qty, base_params)["net_buy_total_milli"]
+        order_state = build_empty_trading_order_state(
+            timestamp="2026-09-03T09:00:00+08:00", mutation_id="live-hardening-init"
+        )
+        plan = {
+            "plan_fingerprint": "live-hardening-entry-plan",
+            "information_date": "2026-09-03",
+            "account_revision": int(account["revision"]),
+            "selected_params_sha256": canonical_json_sha256(frozen_params),
+            "candidate_snapshot_sha256": "live-hardening-candidate",
+            "strategy_id": "full_rule_based_no_dl",
+            "param_selector": "base_finalist_best",
+        }
+        proposal = {
+            "rank": 1,
+            "ticker": "2454",
+            "kind": "buy",
+            "entry_type": "normal",
+            "qty": qty,
+            "limit_price": 100.0,
+            "reserved_cost_milli": int(reserved),
+            "init_sl": 90.0,
+            "init_trail": 90.0,
+            "target_price": 110.0,
+            "entry_atr": 5.0,
+            "security_profile": {},
+        }
+        order_state = append_ordered_trading_proposal(
+            order_state,
+            order_id="live-hardening-entry",
+            proposal=proposal,
+            plan=plan,
+            timestamp="2026-09-03T09:01:00+08:00",
+            mutation_id="live-hardening-submit",
+            frozen_params=frozen_params,
+        )
+        atomic_write_json(resolve_trading_order_state_path(root), order_state)
+        bought = confirm_trading_buy_order_fill(
+            root,
+            order_id="live-hardening-entry",
+            fill_qty=qty,
+            fill_price=99.0,
+            trade_date="2026-09-03",
+            expected_order_revision=int(order_state["revision"]),
+            expected_account_revision=int(account["revision"]),
+        )
+        first_plan = build_trading_protection_plan(root)
+        first_row = first_plan["positions"][0]
+        add_check(results, "trading_live_readiness", case_id, "tp_target_is_bound_to_original_entry_qty", tp_target, int(first_row["tp_target_qty"]))
+        oco = confirm_trading_protection_oco_submission(
+            root,
+            ticker="2454",
+            expected_order_revision=int(bought["order_revision"]),
+            broker_oco_group_id="LIVE-HARDENING-OCO",
+            stop_broker_order_id="LIVE-HARDENING-STOP",
+            tp_broker_order_id="LIVE-HARDENING-TP",
+        )
+        tp_order = next(
+            row for row in oco["orders"].values()
+            if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_TP
+        )
+        partial_qty = max(1, tp_target // 2)
+        partial = confirm_trading_protection_sell_order_fill(
+            root,
+            order_id=tp_order["order_id"],
+            fill_qty=partial_qty,
+            fill_price=111.0,
+            trade_date="2026-09-04",
+            expected_order_revision=int(oco["revision"]),
+            expected_account_revision=int(bought["account_revision"]),
+        )
+        cancelled = confirm_trading_order_cancellation(
+            root,
+            order_id=tp_order["order_id"],
+            expected_revision=int(partial["order_revision"]),
+            note="synthetic partial TP broker cancel",
+        )
+        retry_plan = build_trading_protection_plan(root)
+        retry_row = retry_plan["positions"][0]
+        expected_remaining = tp_target - partial_qty
+        add_check(results, "trading_live_readiness", case_id, "tp_retry_keeps_original_target_after_partial_cancel", expected_remaining, int(retry_row["tp_sell_qty"]))
+        add_check(results, "trading_live_readiness", case_id, "tp_retry_reports_cumulative_confirmed_qty", partial_qty, int(retry_row["tp_confirmed_qty"]))
+        wrong_rederived = calc_half_take_profit_sell_qty(qty - partial_qty, base_params.tp_percent)
+        add_check(results, "trading_live_readiness", case_id, "tp_retry_is_not_rederived_from_reduced_position", False, int(retry_row["tp_sell_qty"]) == int(wrong_rederived) and int(wrong_rederived) != expected_remaining)
+
+        retry_order_state = confirm_trading_protection_leg_submission(
+            root,
+            ticker="2454",
+            action="TP_HALF",
+            expected_order_revision=int(cancelled["revision"]),
+            broker_order_id="LIVE-HARDENING-TP-RETRY",
+        )
+        retry_order = next(
+            row for row in retry_order_state["orders"].values()
+            if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_TP
+            and row.get("broker_order_id") == "LIVE-HARDENING-TP-RETRY"
+        )
+        completed = confirm_trading_protection_sell_order_fill(
+            root,
+            order_id=retry_order["order_id"],
+            fill_qty=expected_remaining,
+            fill_price=112.0,
+            trade_date="2026-09-04",
+            expected_order_revision=int(retry_order_state["revision"]),
+            expected_account_revision=int(partial["account_revision"]),
+        )
+        final_position = completed["account"]["positions"]["2454"]
+        add_check(results, "trading_live_readiness", case_id, "fragmented_tp_attempts_complete_canonical_sold_half_once", True, bool(final_position["strategy_management"]["position_state"]["sold_half"]))
+        add_check(results, "trading_live_readiness", case_id, "fragmented_tp_attempts_sell_exact_original_target", qty - tp_target, int(final_position["broker"]["qty"]))
 
     summary["checks"] = len(results)
     return results, summary

@@ -41,13 +41,12 @@ def get_market_last_date():
         rt.append_downloader_issues("最新交易日(YF備援)失敗", [f"{type(e).__name__}: {e}"])
         print(f"注意：YFinance 備援失敗: {type(e).__name__}: {e}")
 
-    fallback_date = pd.Timestamp(latest_allowed_completed_daily_date(now=rt.get_taipei_now())).to_pydatetime()
-    while fallback_date.weekday() >= 5:
-        fallback_date -= timedelta(days=1)
-
-    fallback_str = fallback_date.strftime("%Y-%m-%d")
-    print(f"注意：無法取得精準日期，使用智能推算平日備用日期: {fallback_str}")
-    return fallback_str
+    allowed_completed = latest_allowed_completed_daily_date(now=rt.get_taipei_now())
+    raise RuntimeError(
+        "無法由 FinMind 或 YFinance 可靠確認台股最新完整交易日；"
+        f"僅能推得 calendar cutoff={allowed_completed}，不能把平日推算當成實際交易日。"
+        "依 Trading 保守原則本次資料更新中止。"
+    )
 
 
 def get_or_update_universe():

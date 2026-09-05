@@ -398,6 +398,7 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
         orders.append({
             "rank": rank,
             "ticker": str(row["ticker"]),
+            "signal_date": str(row.get("trade_date") or ""),
             "kind": str(row.get("kind") or row.get("type") or ""),
             "limit_price": float(plan["limit_price"]),
             "qty": int(plan["qty"]),

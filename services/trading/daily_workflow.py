@@ -15,6 +15,7 @@ from services.trading.scanner_state import (
     get_trading_candidate_snapshot_read_model,
     load_trading_candidate_snapshot,
     load_trading_scanner_runtime,
+    partition_trading_candidate_rows_for_information_date,
     resolve_trading_candidate_snapshot_path,
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
@@ -60,7 +61,11 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         output_dir=output_dir,
         include_execution_context=True,
     )
-    candidate_rows = [_json_safe(dict(row)) for row in list(result.get('candidate_rows') or [])]
+    raw_candidate_rows = [_json_safe(dict(row)) for row in list(result.get('candidate_rows') or [])]
+    candidate_rows, stale_candidate_rows = partition_trading_candidate_rows_for_information_date(
+        raw_candidate_rows,
+        information_date=runtime['latest_data_date'],
+    )
     snapshot_path = resolve_trading_candidate_snapshot_path(root)
     snapshot_payload = {
         'schema_version': TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
@@ -72,11 +77,14 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         'selected_params_path': project_relative_display_path(runtime['selected_path'], project_root=root),
         'selected_params_sha256': compute_file_sha256(runtime['selected_path']),
         'candidate_rows': candidate_rows,
+        'stale_candidate_rows_skipped': stale_candidate_rows,
     }
     atomic_write_json(snapshot_path, snapshot_payload)
     return {
         **dict(result),
         'candidate_rows': candidate_rows,
+        'stale_candidate_rows_skipped': stale_candidate_rows,
+        'stale_candidate_count': len(stale_candidate_rows),
         "status": "READY",
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "strategy_id": runtime["profile"].strategy_id,

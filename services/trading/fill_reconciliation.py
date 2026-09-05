@@ -31,6 +31,7 @@ from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
     validate_trading_order_state,
 )
+from core.trading_tp_progress import build_trading_tp_half_progress
 from services.trading.account_state import resolve_trading_account_state_path
 from services.trading.order_state import resolve_trading_order_state_path
 
@@ -323,8 +324,20 @@ def _confirm_trading_sell_order_fill(
         raise RuntimeError("Trading SELL 來源 entry order 缺少 frozen_params")
     params = build_params_from_mapping(frozen_params)
     fill_qty_int = int(fill_qty)
-    remaining_before = int(record.get("remaining_qty") or 0)
-    will_complete = fill_qty_int == remaining_before
+    tp_half_complete = False
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP:
+        broker = position.get("broker") or {}
+        tp_progress = build_trading_tp_half_progress(
+            orders,
+            ticker=ticker,
+            entry_order_id=entry_order_id,
+            initial_qty=int(broker.get("initial_qty") or 0),
+            tp_percent=params.tp_percent,
+        )
+        tp_half_complete = (
+            int(tp_progress["target_qty"]) > 0
+            and int(tp_progress["confirmed_qty"]) + fill_qty_int >= int(tp_progress["target_qty"])
+        )
     if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
         event = "IND_SELL"
     elif purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
@@ -335,7 +348,7 @@ def _confirm_trading_sell_order_fill(
     account_target = apply_confirmed_sell_fill(
         account, ticker=ticker, qty=fill_qty_int, exec_price=fill_price, params=params,
         timestamp=timestamp, mutation_id=_mutation_id(), trade_date=trade_date, event=event,
-        mark_tp_half_complete=(purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP and will_complete),
+        mark_tp_half_complete=tp_half_complete,
     )
     details = account_target["events"][-1].get("details") or {}
     order_target = record_trading_sell_order_fill(

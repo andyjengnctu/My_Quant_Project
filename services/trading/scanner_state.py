@@ -15,6 +15,60 @@ from core.trading_policy import get_trading_strategy_profile, resolve_trading_se
 TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 1
 
 
+def _normalize_candidate_date(value: object, *, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"Trading Scanner candidate 缺少 {field_name}")
+    try:
+        from datetime import date
+
+        return date.fromisoformat(text).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"Trading Scanner candidate {field_name} 不是合法 ISO 日期: {text}") from exc
+
+
+def partition_trading_candidate_rows_for_information_date(
+    candidate_rows: list[dict[str, Any]],
+    *,
+    information_date: object,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Keep only actionable rows whose own signal bar is the information date.
+
+    The dataset-wide latest date is not sufficient proof that every ticker was
+    updated to that date (suspension/provider lag are both possible).  Trading
+    may therefore persist an old per-ticker scanner row for diagnostics, but it
+    must never turn that old signal into today's proposed order.
+    """
+
+    expected_date = _normalize_candidate_date(information_date, field_name="information_date")
+    current_rows: list[dict[str, Any]] = []
+    stale_rows: list[dict[str, str]] = []
+    for raw in list(candidate_rows or []):
+        if not isinstance(raw, dict):
+            raise TypeError("Trading Scanner candidate row 必須是 object")
+        row = dict(raw)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if not ticker:
+            raise ValueError("Trading Scanner candidate 缺少 ticker")
+        row_date = _normalize_candidate_date(row.get("trade_date"), field_name="trade_date")
+        seed = row.get("execution_plan_seed")
+        if not isinstance(seed, dict):
+            raise ValueError(f"Trading Scanner candidate 缺少 canonical execution_plan_seed: {ticker}")
+        seed_ticker = str(seed.get("ticker") or "").strip().upper()
+        if seed_ticker != ticker:
+            raise ValueError(f"Trading Scanner candidate ticker 與 execution_plan_seed 不一致: {ticker}/{seed_ticker or '-'}")
+        seed_date = _normalize_candidate_date(seed.get("trade_date"), field_name="execution_plan_seed.trade_date")
+        if seed_date != row_date:
+            raise ValueError(
+                f"Trading Scanner candidate trade_date 與 execution_plan_seed 不一致: {ticker} {row_date}/{seed_date}"
+            )
+        if row_date != expected_date:
+            stale_rows.append({"ticker": ticker, "trade_date": row_date})
+            continue
+        current_rows.append(row)
+    return current_rows, stale_rows
+
+
 def _selected_payload_latest_data_date(payload: dict[str, Any]) -> str:
     meta = dict(payload.get("meta") or {})
     policy = dict(meta.get("walk_forward_policy") or {})
@@ -153,6 +207,12 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
         raise ValueError("Trading candidate snapshot 缺少 selected_params_sha256")
     if not isinstance(payload.get("candidate_rows"), list):
         raise ValueError("Trading candidate snapshot candidate_rows 必須是 list")
+    current_rows, stale_rows = partition_trading_candidate_rows_for_information_date(
+        list(payload.get("candidate_rows") or []),
+        information_date=payload.get("latest_data_date"),
+    )
+    if stale_rows or len(current_rows) != len(list(payload.get("candidate_rows") or [])):
+        raise ValueError("Trading candidate snapshot 含非 information-date 的舊訊號；請重新執行 Scanner")
 
 
 def load_trading_candidate_snapshot(
@@ -218,6 +278,8 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
         "valid": True,
         "fresh": freshness_error is None,
         "candidate_count": len(payload.get("candidate_rows") or []),
+        "stale_candidate_rows_skipped": list(payload.get("stale_candidate_rows_skipped") or []),
+        "stale_candidate_count": len(payload.get("stale_candidate_rows_skipped") or []),
         "information_date": payload.get("latest_data_date"),
         "selected_params_sha256": payload.get("selected_params_sha256"),
         "error": freshness_error,
@@ -231,5 +293,6 @@ __all__ = [
     "get_trading_candidate_snapshot_read_model",
     "load_trading_candidate_snapshot",
     "load_trading_scanner_runtime",
+    "partition_trading_candidate_rows_for_information_date",
     "resolve_trading_candidate_snapshot_path",
 ]

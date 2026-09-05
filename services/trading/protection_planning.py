@@ -20,7 +20,6 @@ from core.file_integrity import (
     load_json_strict,
 )
 from core.params_io import build_params_from_mapping
-from core.price_utils import calc_half_take_profit_sell_qty
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.trading_account_state import (
     MANAGEMENT_STATUS_ACTIVE,
@@ -28,6 +27,7 @@ from core.trading_account_state import (
     validate_trading_account_state,
 )
 from core.trading_order_state import active_trading_protection_orders, validate_trading_order_state
+from core.trading_tp_progress import build_trading_tp_half_progress
 from core.runtime_utils import get_taipei_now
 from services.trading.account_state import resolve_trading_account_state_path
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
@@ -129,6 +129,7 @@ def _build_source_hashes(
 def _build_position_plan(
     source: dict[str, Any],
     source_orders: dict[str, dict[str, Any]],
+    orders: dict[str, Any],
 ) -> dict[str, Any]:
     ticker = str(source["ticker"])
     broker = source["broker"]
@@ -146,7 +147,32 @@ def _build_position_plan(
         raise RuntimeError(f"Trading position 無法形成有效 Stop/TP 保護單: {ticker}")
 
     sold_half = bool(position.get("sold_half", False))
-    tp_qty = 0 if sold_half else calc_half_take_profit_sell_qty(qty, params.tp_percent)
+    initial_qty = int(broker.get("initial_qty") or 0)
+    tp_progress = build_trading_tp_half_progress(
+        orders,
+        ticker=ticker,
+        entry_order_id=order_id,
+        initial_qty=initial_qty,
+        tp_percent=params.tp_percent,
+    )
+    if int(tp_progress["overfill_qty"]) > 0:
+        raise RuntimeError(
+            f"Trading {ticker} confirmed TP fills 已超過 canonical TP_HALF target："
+            f"target={tp_progress['target_qty']}, confirmed={tp_progress['confirmed_qty']}"
+        )
+    if sold_half and int(tp_progress["remaining_qty"]) > 0:
+        raise RuntimeError(
+            f"Trading {ticker} sold_half state 與 confirmed TP fills 不一致："
+            f"remaining={tp_progress['remaining_qty']}"
+        )
+    if not sold_half and int(tp_progress["remaining_qty"]) == 0 and int(tp_progress["target_qty"]) > 0:
+        raise RuntimeError(f"Trading {ticker} TP_HALF target 已由 confirmed fills 完成但 sold_half 尚未同步")
+    tp_qty = 0 if sold_half else int(tp_progress["remaining_qty"])
+    if tp_qty > qty:
+        raise RuntimeError(
+            f"Trading {ticker} TP_HALF remaining obligation 超過目前持股，禁止建立錯誤 SELL："
+            f"remaining_tp={tp_qty}, held={qty}"
+        )
     legs: list[dict[str, Any]] = [
         {
             "action": PROTECTION_STOP_ACTION,
@@ -192,6 +218,8 @@ def _build_position_plan(
         "target_price_milli": target_milli,
         "target_price": milli_to_price(target_milli),
         "sold_half": sold_half,
+        "tp_target_qty": int(tp_progress["target_qty"]),
+        "tp_confirmed_qty": int(tp_progress["confirmed_qty"]),
         "tp_sell_qty": int(tp_qty),
         "same_bar_priority": PROTECTION_SAME_BAR_PRIORITY,
         "frozen_params_sha256": str(order.get("frozen_params_sha256") or ""),
@@ -210,7 +238,7 @@ def _build_plan_payload(
     manual_skipped: list[str],
 ) -> dict[str, Any]:
     strategy_positions_sha256, source_orders_sha256 = _build_source_hashes(strategy_positions, source_orders)
-    position_plans = [_build_position_plan(row, source_orders) for row in strategy_positions]
+    position_plans = [_build_position_plan(row, source_orders, orders) for row in strategy_positions]
     identity = {
         "schema_version": PROTECTION_PLAN_SCHEMA_VERSION,
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
