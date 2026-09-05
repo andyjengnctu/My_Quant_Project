@@ -26,7 +26,14 @@ from core.trading_account_state import (
     POSITION_SOURCE_STRATEGY_FILL,
     validate_trading_account_state,
 )
-from core.trading_order_state import active_trading_protection_orders, validate_trading_order_state
+from core.trading_order_state import (
+    TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+    TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
+    TRADING_ORDER_PURPOSE_PROTECTION_TP,
+    active_trading_protection_orders,
+    validate_trading_order_state,
+)
+from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from core.trading_tp_progress import build_trading_tp_half_progress
 from core.runtime_utils import get_taipei_now
 from services.trading.account_state import resolve_trading_account_state_path
@@ -38,8 +45,10 @@ PROTECTION_PLAN_STATUS = "PROPOSED_PROTECTION"
 PROTECTION_BROKER_STATUS = "NOT_SUBMITTED"
 PROTECTION_STOP_ACTION = "STOP_FULL"
 PROTECTION_TP_ACTION = "TP_HALF"
+PROTECTION_STOP_REMAINDER_ACTION = "STOP_REMAINDER_EXIT"
 PROTECTION_STOP_ORDER_TYPE = "STOP_MARKET"
 PROTECTION_TP_ORDER_TYPE = "LIMIT"
+PROTECTION_STOP_REMAINDER_ORDER_TYPE = "MARKET"
 PROTECTION_SAME_BAR_PRIORITY = "STOP_OVER_TP"
 
 
@@ -149,11 +158,7 @@ def _build_position_plan(
     sold_half = bool(position.get("sold_half", False))
     initial_qty = int(broker.get("initial_qty") or 0)
     tp_progress = build_trading_tp_half_progress(
-        orders,
-        ticker=ticker,
-        entry_order_id=order_id,
-        initial_qty=initial_qty,
-        tp_percent=params.tp_percent,
+        orders, ticker=ticker, entry_order_id=order_id, initial_qty=initial_qty, tp_percent=params.tp_percent,
     )
     if int(tp_progress["overfill_qty"]) > 0:
         raise RuntimeError(
@@ -162,46 +167,65 @@ def _build_position_plan(
         )
     if sold_half and int(tp_progress["remaining_qty"]) > 0:
         raise RuntimeError(
-            f"Trading {ticker} sold_half state 與 confirmed TP fills 不一致："
-            f"remaining={tp_progress['remaining_qty']}"
+            f"Trading {ticker} sold_half state 與 confirmed TP fills 不一致：remaining={tp_progress['remaining_qty']}"
         )
     if not sold_half and int(tp_progress["remaining_qty"]) == 0 and int(tp_progress["target_qty"]) > 0:
         raise RuntimeError(f"Trading {ticker} TP_HALF target 已由 confirmed fills 完成但 sold_half 尚未同步")
-    tp_qty = 0 if sold_half else int(tp_progress["remaining_qty"])
+
+    stop_progress = build_trading_stop_exit_progress(orders, ticker=ticker, entry_order_id=order_id)
+    stop_forced = bool(stop_progress["triggered"])
+    tp_qty = 0 if stop_forced or sold_half else int(tp_progress["remaining_qty"])
     if tp_qty > qty:
         raise RuntimeError(
             f"Trading {ticker} TP_HALF remaining obligation 超過目前持股，禁止建立錯誤 SELL："
             f"remaining_tp={tp_qty}, held={qty}"
         )
-    legs: list[dict[str, Any]] = [
-        {
-            "action": PROTECTION_STOP_ACTION,
-            "side": "SELL",
-            "order_type": PROTECTION_STOP_ORDER_TYPE,
-            "qty": qty,
-            "trigger_price_milli": stop_milli,
-            "trigger_price": milli_to_price(stop_milli),
-            "limit_price_milli": None,
-            "limit_price": None,
-            "priority": 1,
-            "broker_status": PROTECTION_BROKER_STATUS,
-        }
-    ]
-    if tp_qty > 0:
-        legs.append(
+
+    if stop_forced:
+        legs: list[dict[str, Any]] = [
             {
-                "action": PROTECTION_TP_ACTION,
+                "action": PROTECTION_STOP_REMAINDER_ACTION,
                 "side": "SELL",
-                "order_type": PROTECTION_TP_ORDER_TYPE,
-                "qty": int(tp_qty),
+                "order_type": PROTECTION_STOP_REMAINDER_ORDER_TYPE,
+                "qty": qty,
                 "trigger_price_milli": None,
                 "trigger_price": None,
-                "limit_price_milli": target_milli,
-                "limit_price": milli_to_price(target_milli),
-                "priority": 2,
+                "limit_price_milli": None,
+                "limit_price": None,
+                "priority": 1,
                 "broker_status": PROTECTION_BROKER_STATUS,
             }
-        )
+        ]
+    else:
+        legs = [
+            {
+                "action": PROTECTION_STOP_ACTION,
+                "side": "SELL",
+                "order_type": PROTECTION_STOP_ORDER_TYPE,
+                "qty": qty,
+                "trigger_price_milli": stop_milli,
+                "trigger_price": milli_to_price(stop_milli),
+                "limit_price_milli": None,
+                "limit_price": None,
+                "priority": 1,
+                "broker_status": PROTECTION_BROKER_STATUS,
+            }
+        ]
+        if tp_qty > 0:
+            legs.append(
+                {
+                    "action": PROTECTION_TP_ACTION,
+                    "side": "SELL",
+                    "order_type": PROTECTION_TP_ORDER_TYPE,
+                    "qty": int(tp_qty),
+                    "trigger_price_milli": None,
+                    "trigger_price": None,
+                    "limit_price_milli": target_milli,
+                    "limit_price": milli_to_price(target_milli),
+                    "priority": 2,
+                    "broker_status": PROTECTION_BROKER_STATUS,
+                }
+            )
 
     row = {
         "ticker": ticker,
@@ -221,6 +245,14 @@ def _build_position_plan(
         "tp_target_qty": int(tp_progress["target_qty"]),
         "tp_confirmed_qty": int(tp_progress["confirmed_qty"]),
         "tp_sell_qty": int(tp_qty),
+        "stop_forced_exit": stop_forced,
+        "stop_forced_exit_key": stop_progress.get("forced_exit_key"),
+        "stop_trigger_order_id": stop_progress.get("trigger_order_id"),
+        "stop_trigger_fill_id": stop_progress.get("trigger_fill_id"),
+        "stop_trigger_trade_date": stop_progress.get("trigger_trade_date"),
+        "stop_confirmed_exit_qty": int(stop_progress.get("confirmed_stop_exit_qty") or 0),
+        "stop_active_exit_order_ids": list(stop_progress.get("active_exit_order_ids") or []),
+        "stop_active_exit_remaining_qty": int(stop_progress.get("active_exit_remaining_qty") or 0),
         "same_bar_priority": PROTECTION_SAME_BAR_PRIORITY,
         "frozen_params_sha256": str(order.get("frozen_params_sha256") or ""),
         "legs": legs,
@@ -288,15 +320,27 @@ def validate_trading_protection_plan(plan: dict[str, Any]) -> None:
             raise ValueError("Trading protection position qty 必須 > 0")
         legs = row.get("legs")
         if not isinstance(legs, list) or not legs:
-            raise ValueError("Trading protection position 至少必須有 STOP leg")
+            raise ValueError("Trading protection position 至少必須有 STOP/forced-exit leg")
         stop_legs = [leg for leg in legs if leg.get("action") == PROTECTION_STOP_ACTION]
-        if len(stop_legs) != 1 or int(stop_legs[0].get("qty") or 0) != qty:
-            raise ValueError("Trading protection STOP leg 必須完整保護目前持股 qty")
-        if str(stop_legs[0].get("order_type") or "") != PROTECTION_STOP_ORDER_TYPE:
-            raise ValueError("Trading protection STOP 必須使用 canonical stop-market semantics")
+        forced_legs = [leg for leg in legs if leg.get("action") == PROTECTION_STOP_REMAINDER_ACTION]
+        if len(stop_legs) + len(forced_legs) != 1:
+            raise ValueError("Trading protection position 必須恰好有一個 STOP 或 STOP remainder forced-exit leg")
+        if bool(row.get("stop_forced_exit")):
+            if stop_legs or len(forced_legs) != 1 or int(forced_legs[0].get("qty") or 0) != qty:
+                raise ValueError("Trading STOP triggered 後必須只保留完整剩餘持股 forced-exit leg")
+            if str(forced_legs[0].get("order_type") or "") != PROTECTION_STOP_REMAINDER_ORDER_TYPE:
+                raise ValueError("Trading STOP remainder forced exit 必須使用 MARKET")
+            for field in ("stop_forced_exit_key", "stop_trigger_order_id", "stop_trigger_fill_id", "stop_trigger_trade_date"):
+                if not str(row.get(field) or ""):
+                    raise ValueError(f"Trading STOP remainder plan 缺少 immutable binding: {field}")
+        else:
+            if forced_legs or len(stop_legs) != 1 or int(stop_legs[0].get("qty") or 0) != qty:
+                raise ValueError("Trading protection STOP leg 必須完整保護目前持股 qty")
+            if str(stop_legs[0].get("order_type") or "") != PROTECTION_STOP_ORDER_TYPE:
+                raise ValueError("Trading protection STOP 必須使用 canonical stop-market semantics")
         tp_legs = [leg for leg in legs if leg.get("action") == PROTECTION_TP_ACTION]
-        if len(tp_legs) > 1:
-            raise ValueError("Trading protection TP leg 不得重複")
+        if len(tp_legs) > 1 or (bool(row.get("stop_forced_exit")) and tp_legs):
+            raise ValueError("Trading STOP triggered 後不得重新建立 TP；一般 TP leg 亦不得重複")
         if tp_legs and int(tp_legs[0].get("qty") or 0) != int(row.get("tp_sell_qty") or 0):
             raise ValueError("Trading protection TP qty 與 canonical half-take-profit qty 不一致")
         if any(str(leg.get("broker_status") or "") != PROTECTION_BROKER_STATUS for leg in legs):
@@ -330,9 +374,17 @@ def _render_protection_plan_text(plan: dict[str, Any]) -> str:
         lines.extend(
             [
                 f"[{row['ticker']}] 持股 {int(row['position_qty']):,} | 成交均價 {row['entry_fill_price']:.3f} | entry order {row['entry_order_status']}",
-                f"  STOP_FULL : {int(row['position_qty']):,} 股，Stop trigger {row['effective_stop']:.3f}，STOP_MARKET（尚未送券商）",
             ]
         )
+        if bool(row.get("stop_forced_exit")):
+            lines.append(
+                f"  STOP_REMAINDER_EXIT : {int(row['position_qty']):,} 股，MARKET forced exit；"
+                f"原 STOP trigger fill={row.get('stop_trigger_trade_date') or '-'}（尚未送新券商單）"
+            )
+        else:
+            lines.append(
+                f"  STOP_FULL : {int(row['position_qty']):,} 股，Stop trigger {row['effective_stop']:.3f}，STOP_MARKET（尚未送券商）"
+            )
         if int(row["tp_sell_qty"]) > 0:
             lines.append(
                 f"  TP_HALF   : {int(row['tp_sell_qty']):,} 股，Limit {row['target_price']:.3f}（尚未送券商）"
@@ -395,6 +447,41 @@ def load_trading_protection_plan(project_root: str | Path, *, required: bool = F
     return plan
 
 
+def _active_protection_matches_current_plan(order: dict[str, Any], position_plan: dict[str, Any]) -> bool:
+    purpose = str(order.get("purpose") or "")
+    status = str(order.get("status") or "")
+    remaining = int(order.get("remaining_qty") or 0)
+    position_qty = int(position_plan.get("position_qty") or 0)
+    if str(order.get("entry_order_id") or "") != str(position_plan.get("entry_order_id") or ""):
+        return False
+    if bool(position_plan.get("stop_forced_exit")):
+        if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
+            return status == "PARTIAL" and int(order.get("filled_qty") or 0) > 0 and remaining == position_qty
+        if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER:
+            return (
+                remaining == position_qty
+                and str(order.get("order_type") or "") == PROTECTION_STOP_REMAINDER_ORDER_TYPE
+                and str(order.get("stop_forced_exit_key") or "") == str(position_plan.get("stop_forced_exit_key") or "")
+            )
+        return False
+
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
+        leg = next((x for x in position_plan.get("legs") or [] if x.get("action") == PROTECTION_STOP_ACTION), None)
+        return bool(
+            leg
+            and remaining == int(leg.get("qty") or 0)
+            and int(order.get("trigger_price_milli") or 0) == int(leg.get("trigger_price_milli") or 0)
+        )
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP:
+        leg = next((x for x in position_plan.get("legs") or [] if x.get("action") == PROTECTION_TP_ACTION), None)
+        return bool(
+            leg
+            and remaining == int(leg.get("qty") or 0)
+            and int(order.get("limit_price_milli") or 0) == int(leg.get("limit_price_milli") or 0)
+        )
+    return False
+
+
 def get_trading_protection_plan_read_model(
     project_root: str | Path,
     *,
@@ -437,14 +524,11 @@ def get_trading_protection_plan_read_model(
     stale_active_order_ids: list[str] = []
     stale_active_tickers: set[str] = set()
     if fresh and account_path.is_file() and order_path.is_file():
-        current_position_fps = {
-            str(row.get("ticker") or ""): str(row.get("position_plan_fingerprint") or "")
-            for row in plan.get("positions") or []
-        }
+        current_positions = {str(row.get("ticker") or ""): row for row in plan.get("positions") or []}
         for order in active_trading_protection_orders(orders):
             ticker = str(order.get("ticker") or "")
-            current_fp = current_position_fps.get(ticker)
-            if not current_fp or str(order.get("position_plan_fingerprint") or "") != current_fp:
+            current_plan = current_positions.get(ticker)
+            if not isinstance(current_plan, dict) or not _active_protection_matches_current_plan(order, current_plan):
                 stale_active_order_ids.append(str(order.get("order_id") or ""))
                 if ticker:
                     stale_active_tickers.add(ticker)
@@ -452,14 +536,23 @@ def get_trading_protection_plan_read_model(
     rows = []
     for row in plan.get("positions") or []:
         stop_leg = next((leg for leg in row.get("legs") or [] if leg.get("action") == PROTECTION_STOP_ACTION), {})
+        forced_leg = next((leg for leg in row.get("legs") or [] if leg.get("action") == PROTECTION_STOP_REMAINDER_ACTION), {})
         tp_leg = next((leg for leg in row.get("legs") or [] if leg.get("action") == PROTECTION_TP_ACTION), {})
+        effective_leg = forced_leg or stop_leg
         rows.append(
             {
                 "ticker": row.get("ticker"),
                 "position_qty": int(row.get("position_qty") or 0),
                 "entry_fill_price": row.get("entry_fill_price"),
-                "stop_qty": int(stop_leg.get("qty") or 0),
-                "stop_price": stop_leg.get("trigger_price"),
+                "stop_action": effective_leg.get("action"),
+                "stop_order_type": effective_leg.get("order_type"),
+                "stop_qty": int(effective_leg.get("qty") or 0),
+                "stop_price": effective_leg.get("trigger_price"),
+                "stop_forced_exit": bool(row.get("stop_forced_exit")),
+                "stop_forced_exit_key": row.get("stop_forced_exit_key"),
+                "stop_trigger_trade_date": row.get("stop_trigger_trade_date"),
+                "stop_active_exit_order_ids": list(row.get("stop_active_exit_order_ids") or []),
+                "stop_active_exit_remaining_qty": int(row.get("stop_active_exit_remaining_qty") or 0),
                 "tp_qty": int(tp_leg.get("qty") or 0),
                 "target_price": tp_leg.get("limit_price"),
                 "entry_order_status": row.get("entry_order_status"),
@@ -500,6 +593,7 @@ __all__ = [
     "PROTECTION_BROKER_STATUS",
     "PROTECTION_STOP_ACTION",
     "PROTECTION_TP_ACTION",
+    "PROTECTION_STOP_REMAINDER_ACTION",
     "PROTECTION_SAME_BAR_PRIORITY",
     "resolve_trading_protection_plan_dir",
     "resolve_trading_protection_plan_json_path",

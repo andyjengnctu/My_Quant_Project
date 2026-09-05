@@ -14,6 +14,7 @@ from core.trading_order_state import (
     active_trading_protection_orders,
     append_ordered_trading_indicator_exit,
 )
+from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.account_state import load_trading_account_state, resolve_trading_account_state_path
 from services.trading.indicator_exit_planning import load_current_trading_indicator_exit_plan, resolve_trading_indicator_exit_plan_json_path
 from services.trading.order_state import mutate_trading_order_state
@@ -55,6 +56,11 @@ def confirm_trading_indicator_exit_submission(project_root: str | Path, *, signa
     root=Path(project_root).resolve(); plan=load_current_trading_indicator_exit_plan(root); exit_plan=_find_exit_plan(plan,signal_key); _account,qty=_load_position_truth(root,exit_plan); ticker=_normalize_ticker(exit_plan["ticker"])
     guard=_build_source_guard(root)
     def mutator(state: dict[str, Any], timestamp: str, mutation_id: str) -> dict[str, Any]:
+        stop_progress = build_trading_stop_exit_progress(
+            state, ticker=ticker, entry_order_id=str(exit_plan.get("entry_order_id") or "")
+        )
+        if bool(stop_progress.get("triggered")):
+            raise RuntimeError("Trading STOP 已觸發；剩餘持股必須沿 STOP forced-exit obligation 完成退出，不得改送 Indicator SELL")
         if any(_normalize_ticker(x.get("ticker"))==ticker for x in active_trading_protection_orders(state)):
             raise RuntimeError("Trading 此持股仍有 active Stop/TP protection SELL；必須先確認券商取消，才可送 Indicator MARKET SELL")
         if any(_normalize_ticker(x.get("ticker"))==ticker for x in active_trading_indicator_exit_orders(state)):

@@ -16,6 +16,7 @@ from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
 from core.trading_order_state import (
     TRADING_ACTIVE_ORDER_STATUSES,
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+    TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
     TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
     TRADING_ORDER_SIDE_BUY,
@@ -51,6 +52,10 @@ NEXT_ROLLFORWARD_POSITIONS = "ROLLFORWARD_POSITIONS"
 NEXT_REPLACE_PROTECTION = "REPLACE_STALE_PROTECTION"
 NEXT_REFRESH_PROTECTION = "REFRESH_PROTECTION_PLAN"
 NEXT_SUBMIT_PROTECTION_STOP = "SUBMIT_PROTECTION_STOP"
+NEXT_REFRESH_STOP_REMAINDER = "REFRESH_STOP_REMAINDER_PLAN"
+NEXT_SUBMIT_STOP_REMAINDER = "SUBMIT_STOP_REMAINDER_MARKET"
+NEXT_RECONCILE_STOP_REMAINDER = "RECONCILE_STOP_REMAINDER"
+NEXT_CANCEL_SELL_FOR_STOP_REMAINDER = "CANCEL_SELL_FOR_STOP_REMAINDER"
 NEXT_REFRESH_INDICATOR_EXIT = "REFRESH_INDICATOR_EXIT_PLAN"
 NEXT_CANCEL_PROTECTION_FOR_INDICATOR = "CANCEL_PROTECTION_FOR_INDICATOR_EXIT"
 NEXT_SUBMIT_INDICATOR_EXIT = "SUBMIT_INDICATOR_EXIT"
@@ -168,6 +173,7 @@ def _workflow_action_availability(
     same_session_sell_locked: bool,
     rollforward_due_count: int,
     stale_active_protection_count: int,
+    forced_stop_exit_count: int,
 ) -> dict[str, bool]:
     if fill_transaction_pending:
         return {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}
@@ -175,7 +181,7 @@ def _workflow_action_availability(
     account_ready = bool(account.get("initialized")) and account.get("cash") is not None
     return {
         "data": True,
-        "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0 and active_entry_count == 0),
+        "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0 and active_entry_count == 0 and forced_stop_exit_count == 0),
         "params": bool(latest_data_date),
         "scanner": bool(workflow.get("params_ready_for_scan")),
         "orders": bool(
@@ -186,10 +192,11 @@ def _workflow_action_availability(
             and indicator_due_count == 0
             and rollforward_due_count == 0
             and stale_active_protection_count == 0
+            and forced_stop_exit_count == 0
             and not same_day_entry_locked
             and not same_session_sell_locked
         ),
-        "all": bool(active_entry_count == 0 and active_indicator_count == 0),
+        "all": bool(active_entry_count == 0 and active_indicator_count == 0 and forced_stop_exit_count == 0),
     }
 
 
@@ -212,11 +219,15 @@ def derive_trading_operations_status(
     position_rollforward = dict(position_rollforward or _empty_position_rollforward())
     indicator_exit = dict(indicator_exit or _empty_indicator_exit())
     positions = [dict(row) for row in list(account.get("positions") or [])]
-    strategy_tickers = sorted(
-        str(row.get("ticker") or "")
+    strategy_lineage_by_ticker = {
+        str(row.get("ticker") or ""): str(row.get("entry_order_id") or "")
         for row in positions
-        if str(row.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL and int(row.get("qty") or 0) > 0
-    )
+        if str(row.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL
+        and int(row.get("qty") or 0) > 0
+        and str(row.get("ticker") or "")
+        and str(row.get("entry_order_id") or "")
+    }
+    strategy_tickers = sorted(strategy_lineage_by_ticker)
     manual_tickers = sorted(
         str(row.get("ticker") or "")
         for row in positions
@@ -226,17 +237,36 @@ def derive_trading_operations_status(
     order_rows = [dict(row) for row in list(orders.get("orders") or [])]
     active_rows = [row for row in order_rows if str(row.get("status") or "") in TRADING_ACTIVE_ORDER_STATUSES]
     active_entry_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_BUY]
-    active_protection_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL and str(row.get("purpose") or "") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP}]
+    active_protection_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL and str(row.get("purpose") or "") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER, TRADING_ORDER_PURPOSE_PROTECTION_TP}]
     active_indicator_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL and str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT]
+    def _matches_current_strategy_lineage(row: dict[str, Any]) -> bool:
+        ticker = str(row.get("ticker") or "")
+        return bool(
+            ticker
+            and ticker in strategy_lineage_by_ticker
+            and str(row.get("entry_order_id") or "") == strategy_lineage_by_ticker[ticker]
+        )
+
     active_stop_tickers = sorted({
         str(row.get("ticker") or "")
         for row in active_protection_rows
-        if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_STOP
+        if str(row.get("purpose") or "") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER}
+        and _matches_current_strategy_lineage(row)
     })
+    stop_triggered_tickers = sorted({
+        str(row.get("ticker") or "")
+        for row in order_rows
+        if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_STOP
+        and int(row.get("filled_qty") or 0) > 0
+        and _matches_current_strategy_lineage(row)
+    })
+    forced_stop_exit_tickers = stop_triggered_tickers
+    active_stop_exit_tickers = sorted(set(forced_stop_exit_tickers) & set(active_stop_tickers))
     active_tp_tickers = sorted({
         str(row.get("ticker") or "")
         for row in active_protection_rows
         if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_TP
+        and _matches_current_strategy_lineage(row)
     })
     missing_stop_tickers = sorted(set(strategy_tickers) - set(active_stop_tickers))
 
@@ -254,8 +284,22 @@ def derive_trading_operations_status(
     protection_fresh = bool(protection.get("exists") and protection.get("fresh"))
     indicator_plan_fresh = bool(indicator_exit.get("exists") and indicator_exit.get("fresh"))
     indicator_due_tickers = sorted({str(row.get("ticker") or "") for row in list(indicator_exit.get("exits") or []) if str(row.get("ticker") or "")}) if indicator_plan_fresh else []
-    active_indicator_tickers = sorted({str(row.get("ticker") or "") for row in active_indicator_rows if str(row.get("ticker") or "")})
+    active_indicator_tickers = sorted({
+        str(row.get("ticker") or "")
+        for row in active_indicator_rows
+        if str(row.get("ticker") or "") and _matches_current_strategy_lineage(row)
+    })
     indicator_protection_conflict_tickers = sorted(set(indicator_due_tickers) & {str(row.get("ticker") or "") for row in active_protection_rows})
+    forced_stop_conflict_tickers = sorted(
+        set(forced_stop_exit_tickers)
+        & (set(active_tp_tickers) | set(active_indicator_tickers))
+    )
+    forced_stop_unsubmitted_tickers = sorted(set(forced_stop_exit_tickers) - set(active_stop_exit_tickers))
+    protection_forced_tickers = sorted({
+        str(row.get("ticker") or "")
+        for row in list(protection.get("positions") or [])
+        if bool(row.get("stop_forced_exit")) and str(row.get("ticker") or "")
+    })
     active_indicator_count = len(active_indicator_rows)
     same_session_sell_locked = bool(
         latest_data_date and any(
@@ -267,7 +311,7 @@ def derive_trading_operations_status(
     rollforward_due_tickers = sorted(str(x) for x in list(position_rollforward.get("due_tickers") or []))
     stale_active_protection_order_ids = [str(x) for x in list(protection.get("stale_active_protection_order_ids") or []) if str(x)]
     stale_active_protection_tickers = sorted(str(x) for x in list(protection.get("stale_active_protection_tickers") or []))
-    missing_stop_tickers = sorted(set(missing_stop_tickers) - set(indicator_due_tickers) - set(active_indicator_tickers))
+    missing_stop_tickers = sorted(set(missing_stop_tickers) - set(indicator_due_tickers) - set(active_indicator_tickers) - set(forced_stop_exit_tickers))
 
     availability = _workflow_action_availability(
         fill_transaction_pending=bool(fill_transaction_pending),
@@ -281,6 +325,7 @@ def derive_trading_operations_status(
         same_session_sell_locked=same_session_sell_locked,
         rollforward_due_count=len(rollforward_due_tickers),
         stale_active_protection_count=len(stale_active_protection_order_ids),
+        forced_stop_exit_count=len(forced_stop_exit_tickers),
     )
     if "workflow" in errors:
         availability = {key: False for key in availability}
@@ -305,6 +350,8 @@ def derive_trading_operations_status(
         warnings.append("active broker protection 已與目前 position plan 不一致: " + ",".join(stale_active_protection_tickers))
     if same_session_sell_locked:
         warnings.append("本交易 session 已確認 SELL fill；Trading completed data 尚未追上成交日，依 D3/D4 禁止重新 allocation")
+    if forced_stop_exit_tickers:
+        warnings.append("STOP 已觸發且仍有剩餘持股，退出義務不得恢復為等待觸價 Stop: " + ",".join(forced_stop_exit_tickers))
 
     if fill_transaction_pending:
         blockers.append("存在未完成 fill transaction，必須先完成 recovery")
@@ -328,6 +375,26 @@ def derive_trading_operations_status(
         next_code = NEXT_SET_CASH
         next_label = "設定 Trading 現金"
         next_detail = "Account 已建立但 cash 尚未設定，不能建立實際建議掛單。"
+    elif forced_stop_conflict_tickers:
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_CANCEL_SELL_FOR_STOP_REMAINDER
+        next_label = "先確認券商取消衝突 SELL"
+        next_detail = "STOP 已觸發，剩餘持股必須完成退出；先取消同 ticker TP/Indicator SELL: " + ",".join(forced_stop_conflict_tickers)
+    elif active_stop_exit_tickers:
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_RECONCILE_STOP_REMAINDER
+        next_label = "確認已觸發 STOP 剩餘成交或取消"
+        next_detail = "STOP 已觸發且 broker exit order 仍 active；只做 fill/cancel reconciliation，不得重建等待觸價 Stop: " + ",".join(active_stop_exit_tickers)
+    elif forced_stop_unsubmitted_tickers and (not protection_fresh or not set(forced_stop_unsubmitted_tickers).issubset(set(protection_forced_tickers))):
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_REFRESH_STOP_REMAINDER
+        next_label = "刷新 STOP 剩餘強制退出計畫"
+        next_detail = "原 STOP 已有 confirmed fill 且剩餘 broker order 不再 active；建立 MARKET forced-exit plan: " + ",".join(forced_stop_unsubmitted_tickers)
+    elif forced_stop_unsubmitted_tickers:
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_SUBMIT_STOP_REMAINDER
+        next_label = "確認 STOP 剩餘 MARKET SELL 已送券商"
+        next_detail = "Persistent STOP forced-exit obligation: " + ",".join(forced_stop_unsubmitted_tickers)
     elif "position_rollforward" in errors:
         overall = OPERATIONS_STATUS_BLOCKED
         next_code = NEXT_ROLLFORWARD_POSITIONS
@@ -468,6 +535,11 @@ def derive_trading_operations_status(
         "indicator_protection_conflict_tickers": indicator_protection_conflict_tickers,
         "active_stop_tickers": active_stop_tickers,
         "active_tp_tickers": active_tp_tickers,
+        "forced_stop_exit_count": len(forced_stop_exit_tickers),
+        "forced_stop_exit_tickers": forced_stop_exit_tickers,
+        "active_stop_exit_tickers": active_stop_exit_tickers,
+        "forced_stop_unsubmitted_tickers": forced_stop_unsubmitted_tickers,
+        "forced_stop_conflict_tickers": forced_stop_conflict_tickers,
         "missing_stop_tickers": missing_stop_tickers,
         "rollforward_due_count": len(rollforward_due_tickers),
         "rollforward_due_tickers": rollforward_due_tickers,

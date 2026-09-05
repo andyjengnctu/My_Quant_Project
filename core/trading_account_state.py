@@ -873,6 +873,7 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "remaining_cost_basis": milli_to_money(remaining_cost_milli),
                 "realized_pnl": milli_to_money(int(broker.get("realized_pnl_milli", 0) or 0)),
                 "entry_date": broker.get("entry_date"),
+                "entry_order_id": broker.get("entry_order_id"),
                 "management_status": record["strategy_management"]["status"],
                 "last_rollforward_date": record["strategy_management"].get("last_rollforward_date"),
                 "effective_stop": (

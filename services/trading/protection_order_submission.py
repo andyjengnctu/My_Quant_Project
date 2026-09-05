@@ -15,6 +15,7 @@ from core.file_integrity import compute_file_sha256
 from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
 from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+    TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
     active_trading_indicator_exit_orders,
     active_trading_protection_orders,
@@ -27,6 +28,7 @@ from services.trading.order_state import (
 )
 from services.trading.protection_planning import (
     PROTECTION_STOP_ACTION,
+    PROTECTION_STOP_REMAINDER_ACTION,
     PROTECTION_TP_ACTION,
     load_current_trading_protection_plan,
     resolve_trading_protection_plan_json_path,
@@ -131,6 +133,8 @@ def confirm_trading_protection_leg_submission(
         if action == PROTECTION_STOP_ACTION
         else TRADING_ORDER_PURPOSE_PROTECTION_TP
         if action == PROTECTION_TP_ACTION
+        else TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+        if action == PROTECTION_STOP_REMAINDER_ACTION
         else None
     )
     if purpose is None:
@@ -142,6 +146,11 @@ def confirm_trading_protection_leg_submission(
             raise RuntimeError("Trading 此持股已有 active Indicator MARKET SELL；完成成交／取消 reconciliation 前不得再掛 protection SELL")
         active = active_trading_protection_orders(state)
         _assert_no_active_duplicate(active, ticker=ticker, purpose=purpose)
+        ticker_active = [row for row in active if _normalize_ticker(row.get("ticker")) == _normalize_ticker(ticker)]
+        if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER and ticker_active:
+            raise RuntimeError(
+                "Trading STOP 已觸發；建立 forced-exit MARKET 前，原 STOP/TP 剩餘委託必須先依實際券商狀態完成成交／取消 reconciliation"
+            )
         exposure_after = _effective_protection_exposure(active, ticker=ticker) + int(leg.get("qty") or 0)
         if exposure_after > held_qty:
             raise RuntimeError(

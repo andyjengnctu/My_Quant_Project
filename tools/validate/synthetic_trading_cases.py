@@ -1724,7 +1724,7 @@ def validate_trading_operations_status_contract_case(base_params):
         "initialized": True,
         "revision": 8,
         "cash": 400_000.0,
-        "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "management_status": "active"}],
+        "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "entry_order_id": "ENTRY-2317", "management_status": "active"}],
     }
     rollforward_due = derive(account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
     add_check(results, "trading_operations", case_id, "due_strategy_position_requires_rollforward_before_protection_or_allocation", NEXT_ROLLFORWARD_POSITIONS, rollforward_due["next_action_code"])
@@ -1743,12 +1743,24 @@ def validate_trading_operations_status_contract_case(base_params):
         "revision": 5,
         "orders": [{
             "order_id": "stop1", "ticker": "2317", "side": "SELL", "purpose": "PROTECTION_STOP",
-            "status": "ORDERED", "information_date": "2026-09-04",
+            "entry_order_id": "ENTRY-2317", "status": "ORDERED", "information_date": "2026-09-04",
         }],
     }
     protected = derive(account=strategy_account, orders=active_stop_orders, protection=fresh_protection)
     add_check(results, "trading_operations", case_id, "active_stop_clears_missing_stop_gap", [], protected["missing_stop_tickers"])
     add_check(results, "trading_operations", case_id, "long_lived_protection_sell_does_not_block_new_allocation", True, protected["workflow_action_availability"]["orders"])
+
+    old_lineage_stop_history = {
+        "revision": 6,
+        "orders": [{
+            "order_id": "old-stop", "ticker": "2317", "side": "SELL", "purpose": "PROTECTION_STOP",
+            "entry_order_id": "ENTRY-OLD", "status": "CANCELLED", "filled_qty": 20, "remaining_qty": 80,
+            "information_date": "2026-08-20",
+        }],
+    }
+    old_lineage = derive(account=strategy_account, orders=old_lineage_stop_history)
+    add_check(results, "trading_operations", case_id, "historical_stop_fill_from_old_entry_lineage_never_forces_new_position_exit", [], old_lineage["forced_stop_exit_tickers"])
+    add_check(results, "trading_operations", case_id, "new_entry_lineage_without_stop_still_reports_missing_protection", ["2317"], old_lineage["missing_stop_tickers"])
 
     stale_protection = derive(
         account=strategy_account,
@@ -1763,7 +1775,7 @@ def validate_trading_operations_status_contract_case(base_params):
     add_check(results, "trading_operations", case_id, "indicator_due_with_active_protection_requires_cancel_first", NEXT_CANCEL_PROTECTION_FOR_INDICATOR, due_with_stop["next_action_code"])
     due_without_stop = derive(account=strategy_account, protection=fresh_protection, indicator_exit=indicator_due)
     add_check(results, "trading_operations", case_id, "indicator_due_without_protection_requires_market_submission", NEXT_SUBMIT_INDICATOR_EXIT, due_without_stop["next_action_code"])
-    active_indicator_orders = {"revision": 6, "orders": [{"order_id":"ind1","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","status":"ORDERED","information_date":"2026-09-04"}]}
+    active_indicator_orders = {"revision": 6, "orders": [{"order_id":"ind1","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","entry_order_id":"ENTRY-2317","status":"ORDERED","information_date":"2026-09-04"}]}
     active_indicator = derive(account=strategy_account, orders=active_indicator_orders, protection=fresh_protection, indicator_exit=indicator_due)
     add_check(results, "trading_operations", case_id, "active_indicator_order_requires_reconciliation", NEXT_RECONCILE_INDICATOR_EXIT, active_indicator["next_action_code"])
 
@@ -2277,3 +2289,218 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
 
     summary["checks"] = len(results)
     return results, summary
+
+
+def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
+    """A triggered STOP remains a persistent full-exit obligation until flat."""
+    case_id = "TRADING_STOP_REMAINDER_FORCED_EXIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.file_integrity import atomic_write_json, canonical_json_sha256
+    from core.params_io import params_to_json_dict
+    from core.trading_account_state import build_trading_account_read_model
+    from core.trading_order_state import (
+        TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+        TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
+        TRADING_ORDER_STATUS_PARTIAL,
+        append_ordered_trading_proposal,
+        build_empty_trading_order_state,
+        build_trading_order_read_model,
+    )
+    from core.trading_stop_exit_progress import build_trading_stop_exit_progress
+    from services.trading.account_state import initialize_trading_account_state, load_trading_account_state
+    from services.trading.fill_reconciliation import (
+        confirm_trading_buy_order_fill,
+        confirm_trading_protection_sell_order_fill,
+    )
+    from services.trading.operations_status import (
+        NEXT_RECONCILE_STOP_REMAINDER,
+        NEXT_SUBMIT_STOP_REMAINDER,
+        derive_trading_operations_status,
+    )
+    from services.trading.order_state import (
+        confirm_trading_order_cancellation,
+        load_trading_order_state,
+        resolve_trading_order_state_path,
+    )
+    from services.trading.protection_order_submission import confirm_trading_protection_leg_submission
+    from services.trading.protection_planning import (
+        PROTECTION_STOP_REMAINDER_ACTION,
+        build_trading_protection_plan,
+        get_trading_protection_plan_read_model,
+    )
+
+    frozen_params = params_to_json_dict(base_params)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        qty = 100
+        reserved = build_buy_ledger_from_price(100.0, qty, base_params)["net_buy_total_milli"]
+        state = build_empty_trading_order_state(
+            timestamp="2026-09-03T09:00:00+08:00", mutation_id="stop-rem-init"
+        )
+        entry_plan = {
+            "plan_fingerprint": "stop-rem-entry-plan",
+            "information_date": "2026-09-03",
+            "account_revision": int(account["revision"]),
+            "selected_params_sha256": canonical_json_sha256(frozen_params),
+            "candidate_snapshot_sha256": "stop-rem-candidate",
+            "strategy_id": "full_rule_based_no_dl",
+            "param_selector": "base_finalist_best",
+        }
+        proposal = {
+            "rank": 1, "ticker": "2454", "kind": "buy", "entry_type": "normal", "qty": qty,
+            "limit_price": 100.0, "reserved_cost_milli": int(reserved), "init_sl": 90.0, "init_trail": 90.0,
+            "target_price": 110.0, "entry_atr": 5.0, "security_profile": {},
+        }
+        state = append_ordered_trading_proposal(
+            state, order_id="stop-rem-entry", proposal=proposal, plan=entry_plan,
+            timestamp="2026-09-03T09:01:00+08:00", mutation_id="stop-rem-submit", frozen_params=frozen_params,
+        )
+        atomic_write_json(resolve_trading_order_state_path(root), state)
+        bought = confirm_trading_buy_order_fill(
+            root, order_id="stop-rem-entry", fill_qty=qty, fill_price=99.0, trade_date="2026-09-03",
+            expected_order_revision=int(state["revision"]), expected_account_revision=int(account["revision"]),
+        )
+        build_trading_protection_plan(root)
+        stop_state = confirm_trading_protection_leg_submission(
+            root, ticker="2454", action="STOP_FULL", expected_order_revision=int(bought["order_revision"]),
+            broker_order_id="STOP-ORIGINAL",
+        )
+        stop_order = next(
+            row for row in stop_state["orders"].values()
+            if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP
+        )
+
+        first_stop_qty = 20
+        partial = confirm_trading_protection_sell_order_fill(
+            root, order_id=stop_order["order_id"], fill_qty=first_stop_qty, fill_price=89.0,
+            trade_date="2026-09-04", expected_order_revision=int(stop_state["revision"]),
+            expected_account_revision=int(bought["account_revision"]),
+        )
+        partial_stop = partial["orders"]["orders"][stop_order["order_id"]]
+        add_check(results, "trading_stop_remainder", case_id, "original_stop_partial_fill_stays_active_for_broker_reconciliation", TRADING_ORDER_STATUS_PARTIAL, partial_stop["status"])
+        add_check(results, "trading_stop_remainder", case_id, "first_stop_fill_reduces_real_position", qty - first_stop_qty, int(partial["account"]["positions"]["2454"]["broker"]["qty"]))
+
+        progress = build_trading_stop_exit_progress(
+            partial["orders"], ticker="2454", entry_order_id="stop-rem-entry"
+        )
+        forced_key = str(progress.get("forced_exit_key") or "")
+        add_check(results, "trading_stop_remainder", case_id, "any_confirmed_original_stop_fill_latches_forced_exit", True, bool(progress.get("triggered")))
+        add_check(results, "trading_stop_remainder", case_id, "forced_exit_identity_is_persistent_and_nonempty", True, bool(forced_key))
+        add_check(results, "trading_stop_remainder", case_id, "active_original_stop_remaining_matches_current_position", qty - first_stop_qty, int(progress.get("active_exit_remaining_qty") or 0))
+
+        forced_plan_while_active = build_trading_protection_plan(root)
+        forced_row = forced_plan_while_active["positions"][0]
+        forced_leg = forced_row["legs"][0]
+        add_check(results, "trading_stop_remainder", case_id, "triggered_stop_plan_never_returns_to_waiting_stop", PROTECTION_STOP_REMAINDER_ACTION, forced_leg["action"])
+        add_check(results, "trading_stop_remainder", case_id, "triggered_stop_plan_is_market_full_remainder", ["MARKET", qty - first_stop_qty], [forced_leg["order_type"], int(forced_leg["qty"])])
+        add_check(results, "trading_stop_remainder", case_id, "triggered_stop_plan_removes_take_profit", 1, len(forced_row["legs"]))
+        protection_rm = get_trading_protection_plan_read_model(root, recover_pending_fill=False)
+        add_check(results, "trading_stop_remainder", case_id, "active_partial_original_stop_is_not_false_stale_after_position_qty_reduces", [], protection_rm["stale_active_protection_order_ids"])
+
+        def operation_status(order_state, protection_model):
+            return derive_trading_operations_status(
+                workflow={"latest_data_date": "2026-09-04", "params_ready_for_scan": True, "param_selector": "base_finalist_best"},
+                account={"initialized": True, **build_trading_account_read_model(load_trading_account_state(root, required=True))},
+                orders=build_trading_order_read_model(order_state),
+                candidate={"exists": True, "valid": True, "fresh": True, "candidate_count": 0, "information_date": "2026-09-04"},
+                proposed={"exists": True, "valid": True, "fresh": True, "order_count": 0, "information_date": "2026-09-04"},
+                protection=protection_model,
+                indicator_exit={"exists": True, "fresh": True, "exit_count": 0, "exits": [], "active_indicator_exit_order_count": 0, "active_indicator_exit_tickers": []},
+                position_rollforward={"due_tickers": []},
+            )
+
+        active_ops = operation_status(partial["orders"], protection_rm)
+        add_check(results, "trading_stop_remainder", case_id, "active_triggered_stop_requires_reconciliation_not_resubmission", NEXT_RECONCILE_STOP_REMAINDER, active_ops["next_action_code"])
+
+        try:
+            confirm_trading_protection_leg_submission(
+                root, ticker="2454", action=PROTECTION_STOP_REMAINDER_ACTION,
+                expected_order_revision=int(partial["order_revision"]), broker_order_id="FORCED-TOO-EARLY",
+            )
+        except RuntimeError:
+            active_original_blocks_duplicate = True
+        else:
+            active_original_blocks_duplicate = False
+        add_check(results, "trading_stop_remainder", case_id, "forced_market_cannot_duplicate_active_original_stop", True, active_original_blocks_duplicate)
+
+        cancelled = confirm_trading_order_cancellation(
+            root, order_id=stop_order["order_id"], expected_revision=int(partial["order_revision"]),
+            note="synthetic broker cancelled original stop remainder",
+        )
+        retry_plan = build_trading_protection_plan(root)
+        retry_row = retry_plan["positions"][0]
+        retry_leg = retry_row["legs"][0]
+        add_check(results, "trading_stop_remainder", case_id, "cancelled_original_stop_rebuilds_market_remainder_not_stop_market", [PROTECTION_STOP_REMAINDER_ACTION, "MARKET"], [retry_leg["action"], retry_leg["order_type"]])
+        add_check(results, "trading_stop_remainder", case_id, "first_forced_market_qty_is_all_current_remaining_position", qty - first_stop_qty, int(retry_leg["qty"]))
+        after_cancel_rm = get_trading_protection_plan_read_model(root, recover_pending_fill=False)
+        cancelled_ops = operation_status(cancelled, after_cancel_rm)
+        add_check(results, "trading_stop_remainder", case_id, "cancelled_triggered_stop_requires_forced_market_submission", NEXT_SUBMIT_STOP_REMAINDER, cancelled_ops["next_action_code"])
+
+        forced_state = confirm_trading_protection_leg_submission(
+            root, ticker="2454", action=PROTECTION_STOP_REMAINDER_ACTION,
+            expected_order_revision=int(cancelled["revision"]), broker_order_id="FORCED-1",
+        )
+        forced_order = next(
+            row for row in forced_state["orders"].values()
+            if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            and row.get("broker_order_id") == "FORCED-1"
+        )
+        add_check(results, "trading_stop_remainder", case_id, "forced_remainder_order_is_market", "MARKET", forced_order["order_type"])
+        add_check(results, "trading_stop_remainder", case_id, "forced_remainder_order_binds_original_trigger_identity", forced_key, forced_order["stop_forced_exit_key"])
+        add_check(results, "trading_stop_remainder", case_id, "first_forced_remainder_attempt_is_one", 1, int(forced_order["stop_forced_exit_attempt"]))
+
+        reloaded = load_trading_order_state(root, required=True)
+        restarted_progress = build_trading_stop_exit_progress(
+            reloaded, ticker="2454", entry_order_id="stop-rem-entry"
+        )
+        add_check(results, "trading_stop_remainder", case_id, "restart_reconstructs_same_forced_exit_obligation_from_order_history", forced_key, restarted_progress["forced_exit_key"])
+
+        forced_partial_qty = 30
+        forced_partial = confirm_trading_protection_sell_order_fill(
+            root, order_id=forced_order["order_id"], fill_qty=forced_partial_qty, fill_price=88.0,
+            trade_date="2026-09-04", expected_order_revision=int(forced_state["revision"]),
+            expected_account_revision=int(partial["account_revision"]),
+        )
+        remaining_after_two_fills = qty - first_stop_qty - forced_partial_qty
+        add_check(results, "trading_stop_remainder", case_id, "forced_market_partial_fill_keeps_same_stop_accounting_lineage", remaining_after_two_fills, int(forced_partial["account"]["positions"]["2454"]["broker"]["qty"]))
+        cancelled_forced = confirm_trading_order_cancellation(
+            root, order_id=forced_order["order_id"], expected_revision=int(forced_partial["order_revision"]),
+            note="synthetic broker cancelled forced remainder",
+        )
+        second_plan = build_trading_protection_plan(root)
+        second_row = second_plan["positions"][0]
+        second_leg = second_row["legs"][0]
+        add_check(results, "trading_stop_remainder", case_id, "forced_retry_qty_rebinds_to_entire_current_remaining_position", remaining_after_two_fills, int(second_leg["qty"]))
+        second_state = confirm_trading_protection_leg_submission(
+            root, ticker="2454", action=PROTECTION_STOP_REMAINDER_ACTION,
+            expected_order_revision=int(cancelled_forced["revision"]), broker_order_id="FORCED-2",
+        )
+        second_order = next(
+            row for row in second_state["orders"].values()
+            if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            and row.get("broker_order_id") == "FORCED-2"
+        )
+        add_check(results, "trading_stop_remainder", case_id, "forced_retry_increments_attempt_without_changing_obligation_key", [forced_key, 2], [second_order["stop_forced_exit_key"], int(second_order["stop_forced_exit_attempt"])])
+        completed = confirm_trading_protection_sell_order_fill(
+            root, order_id=second_order["order_id"], fill_qty=remaining_after_two_fills, fill_price=87.0,
+            trade_date="2026-09-04", expected_order_revision=int(second_state["revision"]),
+            expected_account_revision=int(forced_partial["account_revision"]),
+        )
+        add_check(results, "trading_stop_remainder", case_id, "forced_exit_retries_continue_until_position_is_flat", False, "2454" in completed["account"]["positions"])
+
+    project_root = Path(__file__).resolve().parents[2]
+    planner_source = (project_root / "services" / "trading" / "indicator_exit_planning.py").read_text(encoding="utf-8")
+    submit_source = (project_root / "services" / "trading" / "indicator_exit_order_submission.py").read_text(encoding="utf-8")
+    audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    add_check(results, "trading_stop_remainder", case_id, "indicator_plan_explicitly_skips_stop_forced_exit_lineage", True, "stop_forced_exit_skipped" in planner_source and "build_trading_stop_exit_progress" in planner_source)
+    add_check(results, "trading_stop_remainder", case_id, "indicator_submission_defensively_rejects_already_triggered_stop_lineage", True, "剩餘持股必須沿 STOP forced-exit obligation" in submit_source)
+    add_check(results, "trading_stop_remainder", case_id, "prelive_audit_has_explicit_forced_stop_continuity_gate", True, "trading_stop_forced_exit_continuity" in audit_source)
+    add_check(results, "trading_stop_remainder", case_id, "workbench_exposes_explicit_stop_remainder_market_submission", True, "確認 Stop 剩餘 MARKET 已送單" in panel_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+

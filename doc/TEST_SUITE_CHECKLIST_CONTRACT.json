@@ -4034,6 +4034,17 @@
       "entry": "`services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/order_planning.py`, `core/trading_tp_progress.py`, `services/trading/protection_planning.py`, `services/trading/fill_reconciliation.py`, `services/downloader/universe.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 363
+    },
+    {
+      "id": "B376",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading live-readiness / STOP forced-exit continuity",
+      "item": "Triggered STOP partial fills remain a persistent full-position exit obligation across cancel/retry/restart",
+      "gap": "任何來源entry lineage的PROTECTION_STOP一旦出現confirmed fill，即代表STOP已觸發；只要該strategy_fill持股仍有剩餘qty，就不得回復為等待價格再次觸發的STOP_MARKET、TP或Indicator SELL。原STOP若仍PARTIAL active，只能依實際broker狀態reconcile；只有明確確認其剩餘委託已取消後，才可建立PROTECTION_STOP_REMAINDER / MARKET，且qty必須等於當下全部剩餘持股。forced-exit obligation必須由canonical order history與原trigger fill identity持久推導，restart後不得遺失；每次retry必須保留同一forced_exit_key並遞增attempt，且前一attempt必須先明確CANCELLED。所有forced-remainder fills仍沿canonical STOP accounting seam；Operations/Workbench/rollforward/Indicator/pre-live必須以目前entry_order_id lineage精確綁定並讓STOP forced-exit優先，避免舊entry STOP history污染新持股、重複SELL exposure或以IND_SELL改寫已觸發STOP的退出語意。",
+      "entry": "`core/trading_stop_exit_progress.py`, `core/trading_order_state.py`, `core/trading_account_state.py`, `services/trading/protection_planning.py`, `services/trading/protection_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/position_rollforward.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 364
     }
   ],
   "tests": [
@@ -7495,6 +7506,13 @@
       "description": "`validate_trading_live_readiness_hardening_contract_case` 覆蓋candidate row/seed exact information-date gating、stale row explicit skip、market-date雙provider失敗時fail-closed，以及真實temp account/order lifecycle的TP partial fill→cancel→rebuild→retry→cumulative sold_half固定義務；既有daily/proposed-order/fill/protection/rollforward/indicator/operations/pre-live regressions同步驗證無回歸。",
       "initial_status": "NEW",
       "order": 485
+    },
+    {
+      "id": "T496",
+      "b_id": "B376",
+      "description": "`validate_trading_stop_remainder_forced_exit_contract_case` 以真實temp account/order lifecycle覆蓋STOP partial fill→persistent trigger identity→active original reconcile-only→explicit cancel→full-remainder MARKET submission→partial forced fill→cancel→retry→flat，並驗restart obligation reconstruction、attempt/key continuity、entry lineage isolation、Indicator priority guard、Operations next-action與既有Trading regressions無回歸。",
+      "initial_status": "NEW",
+      "order": 486
     }
   ],
   "transitions": [
@@ -24809,6 +24827,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_live_readiness_hardening_contract_case`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "B376",
+      "description": "完成STOP partial-fill remainder persistent forced-exit lifecycle、entry-lineage isolation與Indicator/rollforward/Operations/pre-live priority hardening。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/trading_stop_exit_progress.py`, `services/trading/protection_planning.py`, `services/trading/operations_status.py`"
+    },
+    {
+      "date": "2026-09-05",
+      "id": "T496",
+      "description": "新增STOP remainder forced-exit direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_stop_remainder_forced_exit_contract_case`"
     }
   ]
 }

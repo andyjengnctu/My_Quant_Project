@@ -164,8 +164,23 @@ def build_trading_operational_audit(project_root: str | Path) -> dict[str, Any]:
     indicator_due = list(operations.get("indicator_exit_due_tickers") or [])
     active_indicator = set(str(x) for x in operations.get("active_indicator_exit_tickers") or [])
     unsubmitted_indicator = sorted(set(str(x) for x in indicator_due) - active_indicator)
-    broker_sell_safe = not stale_protection and not missing_stop and not indicator_conflict and not unsubmitted_indicator
-    checks.append({"id":"trading_open_position_sell_coverage","status":"PASS" if broker_sell_safe else "FAIL","detail":f"stale={len(stale_protection)}, missing_stop={missing_stop}, indicator_conflict={indicator_conflict}, unsubmitted_indicator={unsubmitted_indicator}"})
+    forced_stop_due = list(operations.get("forced_stop_exit_tickers") or [])
+    forced_stop_unsubmitted = list(operations.get("forced_stop_unsubmitted_tickers") or [])
+    forced_stop_conflict = list(operations.get("forced_stop_conflict_tickers") or [])
+    checks.append({
+        "id": "trading_stop_forced_exit_continuity",
+        "status": "PASS" if not forced_stop_unsubmitted and not forced_stop_conflict else "FAIL",
+        "detail": f"due={forced_stop_due}, unsubmitted={forced_stop_unsubmitted}, conflict={forced_stop_conflict}",
+    })
+    broker_sell_safe = (
+        not stale_protection
+        and not missing_stop
+        and not indicator_conflict
+        and not unsubmitted_indicator
+        and not forced_stop_unsubmitted
+        and not forced_stop_conflict
+    )
+    checks.append({"id":"trading_open_position_sell_coverage","status":"PASS" if broker_sell_safe else "FAIL","detail":f"stale={len(stale_protection)}, missing_stop={missing_stop}, indicator_conflict={indicator_conflict}, unsubmitted_indicator={unsubmitted_indicator}, forced_stop_unsubmitted={forced_stop_unsubmitted}, forced_stop_conflict={forced_stop_conflict}"})
     if not broker_sell_safe:
         blockers.append("Trading open positions 尚未具備安全且互斥的實際 SELL coverage")
 

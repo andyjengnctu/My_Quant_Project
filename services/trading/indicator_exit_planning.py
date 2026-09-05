@@ -27,6 +27,7 @@ from core.trading_order_state import (
     TRADING_ORDER_STATUS_FILLED,
     active_trading_indicator_exit_orders,
 )
+from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.position_market_context import (
     load_trading_position_market_frame,
@@ -209,7 +210,14 @@ def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any
     allowed_date=latest_allowed_completed_daily_date()
     prior=load_trading_indicator_exit_plan(root, required=False)
     exits=[]
+    stop_forced_exit_skipped=[]
     for binding in bindings:
+        stop_progress = build_trading_stop_exit_progress(
+            orders, ticker=binding["ticker"], entry_order_id=binding["entry_order_id"]
+        )
+        if bool(stop_progress.get("triggered")):
+            stop_forced_exit_skipped.append(binding["ticker"])
+            continue
         carried=_prior_unresolved_row(prior, binding=binding, orders=orders)
         if carried is not None:
             exits.append(_build_exit_row(binding=binding, signal_information_date=str(carried["signal_information_date"]), carried_forward=True, signal_origin_market_data_sha256=str(carried.get("signal_origin_market_data_sha256") or carried.get("market_data_sha256") or binding["market_data_sha256"])))
@@ -232,7 +240,9 @@ def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any
         "status": INDICATOR_EXIT_PLAN_STATUS, "broker_status": INDICATOR_EXIT_BROKER_STATUS,
         "execution_semantics": INDICATOR_EXIT_EXECUTION_SEMANTICS, "allowed_completed_date": allowed_date,
         "account_revision": int(account["revision"]), "source_bindings_sha256": canonical_json_sha256(bindings),
-        "source_bindings": bindings, "manual_positions_skipped": manual, "exit_count": len(exits), "exits": exits,
+        "source_bindings": bindings, "manual_positions_skipped": manual,
+        "stop_forced_exit_skipped": sorted(stop_forced_exit_skipped),
+        "exit_count": len(exits), "exits": exits,
         "broker_submitted": False, "broker_fill_inferred": False,
     }
     plan=dict(identity); plan["generated_at"]=get_taipei_now().isoformat(timespec="seconds"); plan["plan_fingerprint"]=canonical_json_sha256(identity)

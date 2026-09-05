@@ -20,10 +20,12 @@ TRADING_ORDER_SIDE_SELL = "SELL"
 TRADING_ORDER_PURPOSE_ENTRY = "ENTRY_BUY"
 TRADING_ORDER_PURPOSE_PROTECTION_STOP = "PROTECTION_STOP"
 TRADING_ORDER_PURPOSE_PROTECTION_TP = "PROTECTION_TP"
+TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER = "PROTECTION_STOP_REMAINDER"
 TRADING_ORDER_PURPOSE_INDICATOR_EXIT = "INDICATOR_EXIT"
 TRADING_PROTECTION_ORDER_PURPOSES = frozenset({
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
+    TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
 })
 TRADING_SELL_ORDER_PURPOSES = frozenset({
     *TRADING_PROTECTION_ORDER_PURPOSES,
@@ -31,6 +33,7 @@ TRADING_SELL_ORDER_PURPOSES = frozenset({
 })
 TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
 TRADING_PROTECTION_ORDER_TYPE_LIMIT = "LIMIT"
+TRADING_PROTECTION_ORDER_TYPE_MARKET = "MARKET"
 TRADING_INDICATOR_ORDER_TYPE_MARKET = "MARKET"
 
 
@@ -286,6 +289,9 @@ def _build_ordered_protection_record(
     elif action == "TP_HALF":
         purpose = TRADING_ORDER_PURPOSE_PROTECTION_TP
         expected_type = TRADING_PROTECTION_ORDER_TYPE_LIMIT
+    elif action == "STOP_REMAINDER_EXIT":
+        purpose = TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+        expected_type = TRADING_PROTECTION_ORDER_TYPE_MARKET
     else:
         raise ValueError(f"Trading protection action 不合法: {action}")
     order_type = str(leg.get("order_type") or "").strip()
@@ -302,15 +308,20 @@ def _build_ordered_protection_record(
     if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
         if trigger_milli is None or trigger_milli <= 0 or limit_milli is not None:
             raise ValueError("Trading STOP protection 必須只有有效 trigger price")
-    else:
+    elif purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP:
         if limit_milli is None or limit_milli <= 0 or trigger_milli is not None:
             raise ValueError("Trading TP protection 必須只有有效 limit price")
+    else:
+        if trigger_milli is not None or limit_milli is not None:
+            raise ValueError("Trading STOP remainder forced exit 必須使用 MARKET 且不得有 trigger/limit")
     oco_group = _normalize_optional_text(broker_oco_group_id)
     oco_confirmed = bool(broker_native_oco_confirmed)
     if oco_confirmed and not oco_group:
         raise ValueError("確認 broker-native OCO 時必須提供券商 OCO/互斥群組識別")
     if not oco_confirmed and oco_group:
         raise ValueError("未確認 broker-native OCO 時不得記錄 OCO 群組")
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER and (oco_confirmed or oco_group):
+        raise ValueError("Trading STOP remainder forced exit 不得標記為 OCO")
     protection_identity = build_trading_protection_key(
         protection_plan_fingerprint=plan_fingerprint,
         position_plan_fingerprint=position_fp,
@@ -346,6 +357,31 @@ def _build_ordered_protection_record(
         "broker_order_id": _normalize_optional_text(broker_order_id),
         "broker_native_oco_confirmed": oco_confirmed,
         "broker_oco_group_id": oco_group,
+        "stop_forced_exit_key": (
+            str(position_plan.get("stop_forced_exit_key") or "")
+            if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            else None
+        ),
+        "stop_trigger_order_id": (
+            str(position_plan.get("stop_trigger_order_id") or "")
+            if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            else None
+        ),
+        "stop_trigger_fill_id": (
+            str(position_plan.get("stop_trigger_fill_id") or "")
+            if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            else None
+        ),
+        "stop_trigger_trade_date": (
+            str(position_plan.get("stop_trigger_trade_date") or "")
+            if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            else None
+        ),
+        "stop_forced_exit_attempt": (
+            int(position_plan.get("stop_forced_exit_attempt") or 0)
+            if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            else None
+        ),
         "cancelled_at": None,
         "cancel_note": None,
         "note": _normalize_optional_text(note),
@@ -455,10 +491,26 @@ def append_ordered_trading_protection_leg(
     note: str | None = None,
 ) -> dict[str, Any]:
     validate_trading_order_state(state)
+    position_payload = deepcopy(position_plan)
+    if str(leg.get("action") or "") == "STOP_REMAINDER_EXIT":
+        forced_key = str(position_payload.get("stop_forced_exit_key") or "").strip()
+        if not forced_key:
+            raise ValueError("Trading STOP remainder plan 缺少 persistent forced-exit key")
+        prior = [
+            row for row in state["orders"].values()
+            if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
+            and str(row.get("stop_forced_exit_key") or "") == forced_key
+            and _normalize_ticker(row.get("ticker")) == _normalize_ticker(position_payload.get("ticker"))
+        ]
+        if any(str(row.get("status") or "") != TRADING_ORDER_STATUS_CANCELLED for row in prior):
+            raise ValueError("同一 Trading STOP remainder obligation 已有未取消／已完成 order，不得重複送單")
+        position_payload["stop_forced_exit_attempt"] = max(
+            [int(row.get("stop_forced_exit_attempt") or 0) for row in prior] or [0]
+        ) + 1
     record = _build_ordered_protection_record(
         order_id=order_id,
         plan=plan,
-        position_plan=position_plan,
+        position_plan=position_payload,
         leg=leg,
         account_revision=account_revision,
         timestamp=timestamp,
@@ -940,13 +992,26 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
                 if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
                     if order_type != TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET or int(trigger or 0) <= 0 or limit is not None:
                         raise ValueError("Trading protection STOP order semantics 不合法")
-                else:
+                elif purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP:
                     if order_type != TRADING_PROTECTION_ORDER_TYPE_LIMIT or int(limit or 0) <= 0 or trigger is not None:
                         raise ValueError("Trading protection TP order semantics 不合法")
+                else:
+                    if order_type != TRADING_PROTECTION_ORDER_TYPE_MARKET or trigger is not None or limit is not None:
+                        raise ValueError("Trading STOP remainder forced exit 必須使用 MARKET 且不得有 trigger/limit")
+                    for field in ("stop_forced_exit_key", "stop_trigger_order_id", "stop_trigger_fill_id", "stop_trigger_trade_date"):
+                        if not str(record.get(field) or ""):
+                            raise ValueError(f"Trading STOP remainder forced exit 缺少 immutable binding: {field}")
+                    if int(record.get("stop_forced_exit_attempt") or 0) <= 0 or qty != position_qty:
+                        raise ValueError("Trading STOP remainder forced exit attempt/qty 不合法")
+                    for fill in fills:
+                        if str(fill.get("trade_date") or "") < str(record.get("stop_trigger_trade_date") or ""):
+                            raise ValueError("Trading STOP remainder fill 不得早於原 STOP trigger trade date")
                 oco_confirmed = bool(record.get("broker_native_oco_confirmed"))
                 oco_group = _normalize_optional_text(record.get("broker_oco_group_id"))
                 if oco_confirmed != bool(oco_group):
                     raise ValueError("Trading protection OCO confirmed/group binding 不一致")
+                if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER and (oco_confirmed or oco_group):
+                    raise ValueError("Trading STOP remainder forced exit 不得標記為 OCO")
             else:
                 for field in ("indicator_plan_fingerprint", "signal_key", "position_state_sha256", "frozen_params_sha256", "market_data_sha256"):
                     if not str(record.get(field) or ""):
@@ -1026,6 +1091,7 @@ def build_trading_order_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "broker_order_id": record.get("broker_order_id"),
                 "broker_native_oco_confirmed": bool(record.get("broker_native_oco_confirmed")),
                 "broker_oco_group_id": record.get("broker_oco_group_id"),
+                "entry_order_id": record.get("entry_order_id"),
                 "information_date": record.get("information_date") or record.get("entry_trade_date"),
                 "ordered_at": record["ordered_at"],
                 "cancelled_at": record.get("cancelled_at"),
@@ -1064,11 +1130,13 @@ __all__ = [
     "TRADING_ORDER_PURPOSE_ENTRY",
     "TRADING_ORDER_PURPOSE_PROTECTION_STOP",
     "TRADING_ORDER_PURPOSE_PROTECTION_TP",
+    "TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER",
     "TRADING_ORDER_PURPOSE_INDICATOR_EXIT",
     "TRADING_PROTECTION_ORDER_PURPOSES",
     "TRADING_SELL_ORDER_PURPOSES",
     "TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET",
     "TRADING_PROTECTION_ORDER_TYPE_LIMIT",
+    "TRADING_PROTECTION_ORDER_TYPE_MARKET",
     "TRADING_INDICATOR_ORDER_TYPE_MARKET",
     "build_empty_trading_order_state",
     "build_trading_proposal_key",

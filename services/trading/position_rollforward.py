@@ -23,6 +23,7 @@ from core.trading_account_state import (
 )
 from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.trading_order_state import active_trading_entry_orders
+from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.account_state import (
     load_trading_account_state,
     rollforward_trading_strategy_management,
@@ -66,6 +67,19 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
         order = (orders.get("orders") or {}).get(entry_order_id)
         if not isinstance(order, dict) or not isinstance(order.get("frozen_params"), dict):
             raise RuntimeError(f"Trading position 缺少來源 entry order frozen params: {ticker}")
+        stop_progress = build_trading_stop_exit_progress(orders, ticker=ticker, entry_order_id=entry_order_id)
+        if bool(stop_progress.get("triggered")):
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "entry_date": normalize_trading_date(broker.get("entry_date")),
+                    "last_rollforward_date": normalize_trading_date(management.get("last_rollforward_date")),
+                    "target_rollforward_date": None,
+                    "due": False,
+                    "stop_forced_exit": True,
+                }
+            )
+            continue
         file_path = csv_map.get(ticker)
         if not file_path:
             raise FileNotFoundError(f"Trading dataset 缺少持股 {ticker} CSV")
@@ -134,6 +148,9 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
         order = (orders.get("orders") or {}).get(entry_order_id)
         if not isinstance(order, dict) or not isinstance(order.get("frozen_params"), dict):
             raise RuntimeError(f"Trading position 缺少來源 entry order frozen params: {ticker}")
+        stop_progress = build_trading_stop_exit_progress(orders, ticker=ticker, entry_order_id=entry_order_id)
+        if bool(stop_progress.get("triggered")):
+            continue
         file_path = csv_map.get(ticker)
         if not file_path:
             raise FileNotFoundError(f"Trading dataset 缺少持股 {ticker} CSV")

@@ -12,6 +12,7 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/trading_account_state.py",
     "core/trading_order_state.py",
     "core/trading_tp_progress.py",
+    "core/trading_stop_exit_progress.py",
     "core/trading_fill_transaction.py",
     "services/trading/account_state.py",
     "services/trading/order_state.py",

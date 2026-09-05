@@ -20,6 +20,7 @@ from services.trading.position_rollforward import run_trading_position_rollforwa
 from services.trading.operations_status import build_trading_operations_status
 from services.trading.operational_audit import run_trading_operational_audit
 from services.trading.protection_planning import (
+    PROTECTION_STOP_REMAINDER_ACTION,
     build_trading_protection_plan,
     get_trading_protection_plan_read_model,
 )
@@ -491,6 +492,10 @@ class TradingAccountPanel(ttk.Frame):
             protection_submit, text="確認 Stop 已送單", command=lambda: self._confirm_protection_leg_submitted("STOP_FULL"), style=WORKBENCH_BUTTON_STYLE
         )
         self._confirm_stop_submitted_button.pack(side="left")
+        self._confirm_stop_remainder_submitted_button = ttk.Button(
+            protection_submit, text="確認 Stop 剩餘 MARKET 已送單", command=lambda: self._confirm_protection_leg_submitted(PROTECTION_STOP_REMAINDER_ACTION), style=WORKBENCH_BUTTON_STYLE
+        )
+        self._confirm_stop_remainder_submitted_button.pack(side="left", padx=(8, 0))
         self._confirm_tp_submitted_button = ttk.Button(
             protection_submit, text="確認 TP 已送單", command=lambda: self._confirm_protection_leg_submitted("TP_HALF"), style=WORKBENCH_BUTTON_STYLE
         )
@@ -554,7 +559,7 @@ class TradingAccountPanel(ttk.Frame):
                     f"{int(row.get('position_qty') or 0):,}",
                     self._format_candidate_number(row.get("entry_fill_price"), digits=2),
                     f"{int(row.get('stop_qty') or 0):,}",
-                    self._format_candidate_number(row.get("stop_price"), digits=2),
+                    ("MARKET" if bool(row.get("stop_forced_exit")) else self._format_candidate_number(row.get("stop_price"), digits=2)),
                     f"{int(row.get('tp_qty') or 0):,}",
                     self._format_candidate_number(row.get("target_price"), digits=2),
                     row.get("entry_order_status") or "-",
@@ -578,7 +583,11 @@ class TradingAccountPanel(ttk.Frame):
             messagebox.showerror("Trading 保護 SELL", "請先選取一筆成交後保護單計畫。", parent=self)
             return
         ticker = str(row.get("ticker") or "")
-        label = "Stop" if action == "STOP_FULL" else "TP"
+        label = (
+            "Stop" if action == "STOP_FULL"
+            else "Stop 剩餘 MARKET forced-exit" if action == PROTECTION_STOP_REMAINDER_ACTION
+            else "TP"
+        )
         if not messagebox.askyesno(
             "確認保護 SELL 已送券商",
             f"確認已在券商實際送出 {ticker} 的 {label} SELL？\n\n此動作只建立 ORDERED broker truth，不代表成交。若同時存在其他 SELL 委託，系統會依實際持股上限檢查。",
@@ -759,6 +768,9 @@ class TradingAccountPanel(ttk.Frame):
         stale_protection = list(snapshot.get('stale_active_protection_tickers') or [])
         if stale_protection:
             details.append("保護單待取消/重送: " + ",".join(stale_protection))
+        forced_stop = list(snapshot.get('forced_stop_exit_tickers') or [])
+        if forced_stop:
+            details.append("STOP已觸發/剩餘須退出: " + ",".join(forced_stop))
         missing_stop = list(snapshot.get('missing_stop_tickers') or [])
         if missing_stop:
             details.append("缺 active Stop: " + ",".join(missing_stop))

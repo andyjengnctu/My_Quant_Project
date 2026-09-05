@@ -28,6 +28,7 @@ from core.trading_order_state import (
     TRADING_ORDER_SIDE_SELL,
     TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+    TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
     validate_trading_order_state,
 )
@@ -340,7 +341,7 @@ def _confirm_trading_sell_order_fill(
         )
     if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
         event = "IND_SELL"
-    elif purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
+    elif purpose in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER}:
         event = "STOP"
     else:
         event = "TP_HALF"
@@ -383,7 +384,7 @@ def _confirm_trading_sell_order_fill(
 
 def confirm_trading_protection_sell_order_fill(project_root, **kwargs) -> dict[str, Any]:
     return _confirm_trading_sell_order_fill(
-        project_root, allowed_purposes=frozenset({TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP}), **kwargs
+        project_root, allowed_purposes=frozenset({TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER, TRADING_ORDER_PURPOSE_PROTECTION_TP}), **kwargs
     )
 
 
