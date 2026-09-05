@@ -11851,3 +11851,15 @@ Decision：`MR13BO_CLOSED / PRICE_VOLUME_STRUCTURE_FAMILY_CLOSED / MR13BP_IMPLEM
 - **Forward Gate / stop rule**：先跑Seed42 Forward `[1]`與必要`[3]`直接對AO。成功需Safety Daily/Global/Pair、Pred-HS true-LS/True-HS recall、Breakout/P45–P55形成material共同改善，且HS-only Conditional-MFE與Pred-HS HM/HS/High-MFE/MFE不可material trade-off。若仍只是既有約`1～3%` marginal shift，Decision應直接標記representation-pretraining ceiling未突破，**不做LR/epoch/freeze/batch/pretext-task sweep**；下一scientific問題轉向新增PIT-safe orthogonal information，而不是再換backbone。
 
 Decision：`MR13BQ_IMPLEMENTED_RESULT_PENDING / AO_ARCHITECTURE_EXACT / SCC_PRETRAINING_ONLY / INNER_VALIDATION_ISOLATED / FINAL_PRETRAIN_REBUILT_FROM_SCRATCH / AO_HEADS_FRESH_INIT / FULL_UNFROZEN_FINETUNE / BP_DEFERRED_NOT_FAILED / FORWARD_GATE_FIRST`。
+
+## 2026-09-05 — Engineering closure: Continuous profile registry owner → attachment contract
+
+- **Authoritative baseline**：`test-branch-1_20260905_152840_093ff95e.zip`，SHA256=`cea4fddbd677fd0980763e851e011a8c1f47f9afa167ad7587fe1c9b81aefb86`；formal evidence bundle=`to_chatgpt_bundle_20260905_152925_f273750b.zip`，SHA256=`c6aa3bfdcc7bbe037c437a740d4c7e5a2590c67bc118f67e051d5816713f33f0`。
+- **Formal evidence root cause**：`consistency` 唯一 failure=`continuous_profile_and_research_spec_registry_are_one_to_one`；71 個 continuous experiment profiles 與 71 個 `ContinuousRankerResearchSpec` 的 membership 完全相同，只有 dict insertion order 在 SCC-pretrained profile 附近不同。`meta quality` 的 `coverage_synthetic_suite_runs_successfully` 為同一 synthetic failure 的承接，不是第二個 production defect。
+- **Architecture correction**：`_EXPERIMENT_PROFILES` 現為 continuous supported membership/order 的唯一 owner；`_CONTINUOUS_RANKER_RESEARCH_SPECS` 降為 keyed metadata attachment。`SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES` 改由 owner registry filtering 派生，不再由 sidecar dict iteration 派生，因此 declaration insertion order 永久無語意。
+- **Fail-fast invariants**：module import 會驗 exact profile/spec coverage、`dict key == spec.profile_name`、`model_research_id` 唯一；缺 spec、多餘 spec、錯掛 key或重複 research identity 直接拒絕，不以排序或 validator wording 代替 scientific contract。
+- **Regression coverage**：既有 `BREAKOUT_QUALITY_MULTI_DL_RANKER_ARCHITECTURE` synthetic 改為 owner/attachment contract check，另加入 sidecar reverse-order 仍 PASS、缺 attachment 必須 FAIL、重複 research ID 必須 FAIL。GPT targeted execution=`7/7 PASS`；Python compile/import=`PASS`。GPT未執行`apps/test_suite.py`或`apps/run_bundle.py`，formal結果仍由使用者本機 `apps/run_bundle.py` double check。
+- **Scientific boundary**：沒有修改任何 MR profile內容、target、loss、architecture、seed、PIT、artifact identity、current workflow membership、Strategy semantics或Research Queue priority；MR-13BQ仍為current Priority 1。
+
+Decision：`ENGINEERING_ONLY / PROFILE_REGISTRY_SINGLE_OWNER / RESEARCH_SPEC_ATTACHMENT_ORDER_NON_SEMANTIC / ATTACHMENT_DRIFT_FAIL_FAST / NO_SCIENTIFIC_CHANGE`。
+

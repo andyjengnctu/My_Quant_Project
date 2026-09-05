@@ -8748,11 +8748,68 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         if get_breakout_quality_experiment_profile(name).training_objective
         in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
     )
-    check(
+    check_true(
         "continuous_profile_and_research_spec_registry_are_one_to_one",
-        continuous_profiles,
-        tuple(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES),
+        continuous_profiles == tuple(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
+        and all(
+            get_continuous_ranker_research_spec(name).profile_name == name
+            for name in continuous_profiles
+        ),
     )
+
+    from core import breakout_quality_registry as registry_module
+
+    original_spec_items = tuple(
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.items()
+    )
+    try:
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.clear()
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.update(
+            reversed(original_spec_items)
+        )
+        check(
+            "continuous_research_spec_attachment_order_is_non_semantic",
+            continuous_profiles,
+            registry_module._validate_continuous_ranker_research_spec_attachments(),
+        )
+
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.clear()
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.update(original_spec_items)
+        missing_key = continuous_profiles[-1]
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.pop(missing_key)
+        try:
+            registry_module._validate_continuous_ranker_research_spec_attachments()
+        except RuntimeError:
+            missing_attachment_rejected = True
+        else:
+            missing_attachment_rejected = False
+        check_true(
+            "continuous_research_spec_missing_attachment_fails_fast",
+            missing_attachment_rejected,
+        )
+
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.clear()
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.update(original_spec_items)
+        first_key, first_spec = original_spec_items[0]
+        second_key, second_spec = original_spec_items[1]
+        from dataclasses import replace
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS[second_key] = replace(
+            second_spec,
+            model_research_id=first_spec.model_research_id,
+        )
+        try:
+            registry_module._validate_continuous_ranker_research_spec_attachments()
+        except RuntimeError:
+            duplicate_research_id_rejected = True
+        else:
+            duplicate_research_id_rejected = False
+        check_true(
+            "continuous_research_spec_duplicate_research_id_fails_fast",
+            duplicate_research_id_rejected,
+        )
+    finally:
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.clear()
+        registry_module._CONTINUOUS_RANKER_RESEARCH_SPECS.update(original_spec_items)
 
     mr12b = get_continuous_ranker_research_spec(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE

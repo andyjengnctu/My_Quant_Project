@@ -3718,8 +3718,69 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
     ),
 }
 
-SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES = tuple(
-    _CONTINUOUS_RANKER_RESEARCH_SPECS
+def _continuous_ranker_profile_names_from_experiment_registry() -> tuple[str, ...]:
+    """Return continuous-profile membership/order from the canonical profile owner."""
+
+    return tuple(
+        name
+        for name, profile in _EXPERIMENT_PROFILES.items()
+        if profile.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
+    )
+
+
+def _validate_continuous_ranker_research_spec_attachments() -> tuple[str, ...]:
+    """Fail fast when continuous research metadata drifts from its profile owner.
+
+    ``_EXPERIMENT_PROFILES`` owns supported profile membership and order.  The
+    research-spec registry is a keyed metadata attachment only; its insertion
+    order is intentionally non-semantic and must never become a second supported
+    profile list.
+    """
+
+    owner_profiles = _continuous_ranker_profile_names_from_experiment_registry()
+    owner_set = set(owner_profiles)
+    attachment_keys = tuple(_CONTINUOUS_RANKER_RESEARCH_SPECS)
+    attachment_set = set(attachment_keys)
+
+    missing = tuple(name for name in owner_profiles if name not in attachment_set)
+    extra = tuple(name for name in attachment_keys if name not in owner_set)
+    key_mismatches = tuple(
+        key
+        for key, spec in _CONTINUOUS_RANKER_RESEARCH_SPECS.items()
+        if spec.profile_name != key
+    )
+
+    seen_research_ids: set[str] = set()
+    duplicate_research_ids: list[str] = []
+    for spec in _CONTINUOUS_RANKER_RESEARCH_SPECS.values():
+        if spec.model_research_id in seen_research_ids:
+            duplicate_research_ids.append(spec.model_research_id)
+        else:
+            seen_research_ids.add(spec.model_research_id)
+
+    if missing or extra or key_mismatches or duplicate_research_ids:
+        details = []
+        if missing:
+            details.append(f"missing_specs={missing}")
+        if extra:
+            details.append(f"extra_specs={extra}")
+        if key_mismatches:
+            details.append(f"key_profile_mismatches={key_mismatches}")
+        if duplicate_research_ids:
+            details.append(
+                "duplicate_model_research_ids="
+                f"{tuple(sorted(set(duplicate_research_ids)))}"
+            )
+        raise RuntimeError(
+            "continuous ranker profile/research-spec registry contract drift: "
+            + "; ".join(details)
+        )
+
+    return owner_profiles
+
+
+SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES = (
+    _validate_continuous_ranker_research_spec_attachments()
 )
 
 
