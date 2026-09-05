@@ -20,6 +20,7 @@ from core.breakout_quality_registry import (
 )
 from core.breakout_quality_runtime import get_continuous_ranker_training_policy
 from filters.breakout_quality.inference import strict_parallel_batched_logits
+from filters.breakout_quality.same_date_relations import build_previous_relation_date_indices
 from filters.breakout_quality.models.factory import (
     count_trainable_parameters,
     require_torch,
@@ -246,6 +247,7 @@ def predict_scores(
         batch_size=int(batch_size),
         plan=plan,
         training_objective=bundle.profile.training_objective,
+        group_dates=bundle.group_table["date"],
     )
 
 
@@ -287,8 +289,19 @@ def predict_score_output_payload(
         same_date_group_labels=(
             pd.to_datetime(bundle.group_table.iloc[ids]["date"], errors="raise")
             .dt.normalize()
-            .to_numpy()
+            .to_numpy(dtype="datetime64[D]")
             if bool(getattr(model, "requires_same_date_relations", False))
+            else None
+        ),
+        same_date_relation_history_indices=(
+            build_previous_relation_date_indices(
+                bundle.group_table["date"],
+                ids,
+                history_steps=int(
+                    getattr(model, "same_date_relation_history_steps", 0) or 0
+                ),
+            )
+            if int(getattr(model, "same_date_relation_history_steps", 0) or 0) > 0
             else None
         ),
     ).astype(np.float32)

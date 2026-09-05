@@ -53,6 +53,7 @@ class BreakoutQualityModelSpec:
     same_date_hyperedge_count: int | None = None
     same_date_relation_stop_gradient: bool | None = None
     same_date_relation_zero_init_residual: bool | None = None
+    same_date_relation_history_steps: int | None = None
     window_normalization_epsilon: float | None = None
     inception_depth: int | None = None
     inception_filters: int | None = None
@@ -128,6 +129,14 @@ class BreakoutQualityModelSpec:
         """Return canonical final-MFE topology semantics without changing model identity."""
 
         heads = set(self.pooling)
+        if "previous_date_hyperedge_relation_change_safety_residual" in heads:
+            return {
+                "architecture": "shared_inception_encoder_plus_same_date_dynamic_hypergraph_and_previous_date_relation_change_safety_residual",
+                "mfe_head_inputs": "shared_latent_only_no_relational_input_no_safety_prediction_input",
+                "safety_relational_input": "stop_gradient_current_and_previous_trading_date_shared_latent_hyperedge_states",
+                "relation_change": "current_minus_previous_trading_date_hyperedge_state_mapped_by_current_membership",
+                "safety_residual_initialization": "both_relational_two_logit_residuals_zero_init_with_learned_gates",
+            }
         if "same_date_low_rank_dynamic_hypergraph_safety_residual" in heads:
             return {
                 "architecture": "shared_inception_encoder_plus_same_date_dynamic_hypergraph_safety_residual",
@@ -162,6 +171,14 @@ class BreakoutQualityModelSpec:
         """Return topology semantics for Safety + true-HS Conditional-MFE objectives."""
 
         heads = set(self.pooling)
+        if "previous_date_hyperedge_relation_change_safety_residual" in heads:
+            return {
+                "architecture": "shared_inception_encoder_plus_same_date_dynamic_hypergraph_and_previous_date_relation_change_safety_residual",
+                "conditional_mfe_head_inputs": "shared_latent_only_no_relational_input_no_predicted_safety_context",
+                "safety_relational_input": "stop_gradient_current_and_previous_trading_date_shared_latent_hyperedge_states",
+                "relation_change": "current_minus_previous_trading_date_hyperedge_state_mapped_by_current_membership",
+                "safety_residual_initialization": "both_relational_two_logit_residuals_zero_init_with_learned_gates",
+            }
         if "same_date_low_rank_dynamic_hypergraph_safety_residual" in heads:
             return {
                 "architecture": "shared_inception_encoder_plus_same_date_dynamic_hypergraph_safety_residual",
@@ -231,6 +248,7 @@ class BreakoutQualityModelSpec:
             "same_date_hyperedge_count": self.same_date_hyperedge_count,
             "same_date_relation_stop_gradient": self.same_date_relation_stop_gradient,
             "same_date_relation_zero_init_residual": self.same_date_relation_zero_init_residual,
+            "same_date_relation_history_steps": self.same_date_relation_history_steps,
             "inception_depth": self.inception_depth,
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,

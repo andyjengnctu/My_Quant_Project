@@ -179,6 +179,10 @@ from filters.breakout_quality.contract import (
     LABEL_REJECT,
 )
 from filters.breakout_quality.inference import strict_parallel_batched_logits
+from filters.breakout_quality.same_date_relations import (
+    build_previous_relation_date_indices,
+    normalize_relation_date_key,
+)
 from filters.breakout_quality.mfe_safety_geometry import truth_geometry_5x5
 from filters.breakout_quality.models.active import (
     ACTIVE_MODEL_ARCHITECTURES,
@@ -1619,6 +1623,7 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
     secondary_pair_scope: str,
     secondary_pair_scope_threshold: float | None,
     pairwise_reduction: str,
+    relation_history_x=None,
 ):
     """Canonical shared Safety + scoped Conditional-MFE batch loss.
 
@@ -1643,7 +1648,12 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
     elif str(secondary_pair_scope) != CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
         raise ValueError(f"unsupported secondary pair scope: {secondary_pair_scope!r}")
 
-    safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
+    if relation_history_x is None:
+        safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
+    else:
+        safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(
+            xb, cb, relation_history_x=relation_history_x
+        )
     safety_margin = safety_logits.float()[:, LABEL_PASS] - safety_logits.float()[:, LABEL_REJECT]
     conditional_mfe_margin = (
         conditional_mfe_logits.float()[:, LABEL_PASS]
@@ -1781,6 +1791,7 @@ def _fp32_retry_shared_safety_loss(
     secondary_pair_scope: str,
     secondary_pair_scope_threshold: float | None,
     pairwise_reduction: str,
+    relation_history_x=None,
 ):
     with torch.autocast(device_type=xb.device.type, enabled=False):
         return _compute_shared_safety_scoped_mfe_duo_loss(
@@ -1794,6 +1805,9 @@ def _fp32_retry_shared_safety_loss(
             secondary_pair_scope=secondary_pair_scope,
             secondary_pair_scope_threshold=secondary_pair_scope_threshold,
             pairwise_reduction=pairwise_reduction,
+            relation_history_x=(
+                None if relation_history_x is None else relation_history_x.float()
+            ),
         )
 
 
@@ -1991,6 +2005,9 @@ def _train_epoch(
     weighted_loss_count = 0
     import torch.nn.functional as F
     group_dates_series = pd.Series(group_dates)
+    relation_history_plan = _same_date_relation_history_plan(
+        model, group_dates_series, ids_all
+    )
 
     for ids, xb, cb, target in _iter_device_training_batches(
         torch,
@@ -2007,6 +2024,15 @@ def _train_epoch(
         optimizer.zero_grad(set_to_none=True)
         guarded_retry = bool(architecture_guarded_retry)
         guarded_batch_dates = None
+        relation_history_xb = _relation_history_tensor_for_training_batch(
+            torch,
+            model,
+            feature_bank,
+            group_dates_series,
+            ids,
+            relation_history_plan,
+            plan=plan,
+        )
         with autocast_context(torch, plan):
             if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 3:
@@ -2055,6 +2081,7 @@ def _train_epoch(
                         secondary_pair_scope=secondary_pair_scope,
                         secondary_pair_scope_threshold=secondary_pair_scope_threshold,
                         pairwise_reduction=pairwise_reduction,
+                        relation_history_x=relation_history_xb,
                     )
                 except FloatingPointError as exc:
                     if not guarded_retry:
@@ -2072,6 +2099,7 @@ def _train_epoch(
                         secondary_pair_scope=secondary_pair_scope,
                         secondary_pair_scope_threshold=secondary_pair_scope_threshold,
                         pairwise_reduction=pairwise_reduction,
+                        relation_history_x=relation_history_xb,
                     )
                     if loss is None:
                         continue
@@ -2384,6 +2412,50 @@ def _train_epoch(
         return float(np.mean(losses))
     return float(weighted_loss_sum / float(weighted_loss_count))
 
+def _same_date_relation_history_plan(
+    model,
+    group_dates: pd.Series | np.ndarray | None,
+    ids: np.ndarray,
+):
+    steps = int(getattr(model, "same_date_relation_history_steps", 0) or 0)
+    if steps == 0:
+        return None
+    if group_dates is None:
+        raise ValueError("relation-change model缺少group dates")
+    return build_previous_relation_date_indices(
+        group_dates,
+        np.asarray(ids, dtype=np.int64),
+        history_steps=steps,
+    )
+
+
+def _relation_history_tensor_for_training_batch(
+    torch,
+    model,
+    feature_bank,
+    group_dates: pd.Series,
+    ids: np.ndarray,
+    history_plan,
+    *,
+    plan,
+):
+    steps = int(getattr(model, "same_date_relation_history_steps", 0) or 0)
+    if steps == 0:
+        return None
+    if history_plan is None:
+        raise RuntimeError("relation-change training缺少history plan")
+    batch_dates = pd.to_datetime(group_dates.iloc[np.asarray(ids, dtype=np.int64)], errors="raise").dt.normalize()
+    unique = pd.unique(batch_dates)
+    if len(unique) != 1:
+        raise ValueError("relation-change training batch必須恰好一個current date")
+    key = normalize_relation_date_key(unique[0])
+    if key not in history_plan:
+        raise ValueError(f"relation-change training缺少previous-date mapping: {key}")
+    previous_ids = np.asarray(history_plan[key], dtype=np.int64)
+    previous_features = np.asarray(feature_bank[previous_ids], dtype=np.float32)
+    return torch.from_numpy(previous_features).to(plan.device)
+
+
 def _same_date_inference_labels(
     model,
     group_dates: pd.Series | np.ndarray | None,
@@ -2396,7 +2468,7 @@ def _same_date_inference_labels(
     dates = pd.to_datetime(pd.Series(group_dates), errors="raise").dt.normalize()
     if len(dates) <= int(ids.max(initial=-1)):
         raise ValueError("same-date relational model prediction group dates長度不足")
-    return dates.iloc[ids].to_numpy()
+    return dates.iloc[ids].to_numpy(dtype="datetime64[D]")
 
 
 def predict_scores(
@@ -2422,6 +2494,9 @@ def predict_scores(
         workers=1,
         execution_plan=plan,
         same_date_group_labels=_same_date_inference_labels(model, group_dates, ids),
+        same_date_relation_history_indices=_same_date_relation_history_plan(
+            model, group_dates, ids
+        ),
     )
     training_policy = get_continuous_ranker_training_policy(training_objective)
     if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R:
@@ -2481,6 +2556,9 @@ def predict_safety_conditional_mfe_scores(
         execution_plan=plan,
         output_head="both",
         same_date_group_labels=_same_date_inference_labels(model, group_dates, ids),
+        same_date_relation_history_indices=_same_date_relation_history_plan(
+            model, group_dates, ids
+        ),
     )
     if logits.ndim != 2 or int(logits.shape[1]) != 4:
         raise ValueError("Safety→Conditional-MFE model output必須為[N,4]")

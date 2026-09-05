@@ -418,6 +418,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_dynamic_hypergraph_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_dynamic_hypergraph_relation_change_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_scc_pretrained_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
@@ -1572,6 +1575,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_dynamic_hypergraph_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_dynamic_hypergraph_relation_change_mfe_v1",
     ),
     DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3239,6 +3254,40 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="explicit_pairwise_temporal_relation_safety_plus_true_hs_conditional_mfe",
         score_semantic_id="daily_explicit_pairwise_temporal_relation_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BT",
+        experiment_name="MR-13BT AO + Dynamic Hypergraph Relation-Change Safety Residual",
+        phase="13BT",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "exact_MR13AO_head1_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "exact_MR13AO_head2_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "Final controlled OHLCV cross-stock relational gate after MR-13BS same-date state alone failed to move Safety. "
+            "MR-13AO 300x10/shared InceptionTime/full-universe Safety/true-HS Conditional-MFE/1:1 objective/Seed42/split/"
+            "epoch-selection/inference remain exact. MR-13BS k=16 soft dynamic hypergraph state residual is retained unchanged. "
+            "The only new treatment is one previous-trading-date relation change: current and immediately prior full score-eligible "
+            "stock universes are encoded by the same shared encoder in no-grad/no-BatchNorm-state-update relation views; the same "
+            "incidence projection anchors 16 latent hyperedges across dates; edge_change=current_edge_state-previous_edge_state is "
+            "mapped back through current membership and added as a second gated zero-init two-logit Safety residual. Previous-date "
+            "rows are input-only and strictly earlier than the decision date. Conditional-MFE never reads relational state. No Hawkes, "
+            "pairwise graph, sector/static prior, multi-head/layer HGNN, hyperedge-count, lag-length, EMA, or graph sweep. Primary "
+            "reference=MR-13AO; MR-13BS is the immediate mechanistic control. Seed42 Forward first; if Safety remains marginal, close "
+            "the OHLCV cross-stock relational family and move to genuinely new PIT-safe information."
+        ),
+        metric_scope="ao_with_dynamic_hypergraph_previous_date_relation_change_safety_residual",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
         secondary_pair_scope_threshold=0.50,

@@ -13,6 +13,7 @@ from core.breakout_quality_runtime import BREAKOUT_QUALITY_OUTPUT_SCHEMA
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
 from filters.breakout_quality.market_set import IndexedMarketSetBank, MarketSetBatch
 from filters.breakout_quality.torch_runtime import TorchExecutionPlan, autocast_context
+from filters.breakout_quality.same_date_relations import normalize_relation_date_key
 
 
 def _resolve_output_width(output_head: str | None) -> int:
@@ -61,6 +62,7 @@ def forward_breakout_quality_model(
     market_inputs=None,
     *,
     output_head: str | None = None,
+    relation_history_tensor=None,
 ):
     requires_market = bool(getattr(model, "requires_market_set", False))
     if requires_market:
@@ -73,7 +75,18 @@ def forward_breakout_quality_model(
         forward_head = getattr(model, "forward_output_head", None)
         if forward_head is None:
             raise ValueError("requested output head但model未提供forward_output_head")
+        if relation_history_tensor is not None:
+            return forward_head(
+                feature_tensor,
+                context_tensor,
+                str(output_head),
+                relation_history_x=relation_history_tensor,
+            )
         return forward_head(feature_tensor, context_tensor, str(output_head))
+    if relation_history_tensor is not None:
+        return model(
+            feature_tensor, context_tensor, relation_history_x=relation_history_tensor
+        )
     return model(feature_tensor, context_tensor)
 
 
@@ -91,6 +104,7 @@ def strict_parallel_batched_logits(
     market_group_indices: np.ndarray | None = None,
     output_head: str | None = None,
     same_date_group_labels: np.ndarray | None = None,
+    same_date_relation_history_indices: dict[Any, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Run fixed-boundary inference while preserving row and reduction order.
 
@@ -137,6 +151,17 @@ def strict_parallel_batched_logits(
         if same_date_group_labels is None
         else np.asarray(same_date_group_labels)
     )
+    relation_history_steps = int(
+        getattr(model, "same_date_relation_history_steps", 0) or 0
+    )
+    relation_history_indices = (
+        None
+        if same_date_relation_history_indices is None
+        else {
+            normalize_relation_date_key(key): np.asarray(value, dtype=np.int64).reshape(-1)
+            for key, value in same_date_relation_history_indices.items()
+        }
+    )
     if requires_same_date_relations:
         if market_set_bank is not None:
             raise ValueError("same-date relational inference不得與legacy market-set batching混用")
@@ -144,6 +169,10 @@ def strict_parallel_batched_logits(
             raise ValueError(
                 "same-date relational model inference需要與requested rows對齊的date labels"
             )
+        if relation_history_steps > 0 and relation_history_indices is None:
+            raise ValueError("relation-change model inference缺少previous-date relation index plan")
+        if relation_history_steps == 0 and relation_history_indices is not None:
+            raise ValueError("state-only same-date relational model不得收到relation-history index plan")
 
     local_positions = np.arange(row_count, dtype=np.int64)
     if requires_same_date_relations:
@@ -195,6 +224,25 @@ def strict_parallel_batched_logits(
         batch_features = features[row_indices]
         batch_context = np.asarray(context[row_indices], dtype=np.float32)
         market_batch = None
+        relation_history_features = None
+        if relation_history_steps > 0:
+            if relation_labels is None or relation_history_indices is None:
+                raise RuntimeError("relation-change inference internal history plan missing")
+            keys = {
+                normalize_relation_date_key(value)
+                for value in relation_labels[positions].tolist()
+            }
+            if len(keys) != 1:
+                raise ValueError("relation-change inference batch必須恰好一個current date")
+            current_key = next(iter(keys))
+            if current_key not in relation_history_indices:
+                raise ValueError(
+                    f"relation-change inference缺少current date history mapping: {current_key}"
+                )
+            history_ids = relation_history_indices[current_key]
+            relation_history_features = np.asarray(
+                features[history_ids], dtype=np.float32
+            )
         if market_set_bank is not None:
             if explicit_market_groups is not None:
                 group_indices = explicit_market_groups[positions]
@@ -204,15 +252,20 @@ def strict_parallel_batched_logits(
                     features.event_group_index[row_indices], dtype=np.int64
                 )
             market_batch = market_set_bank.materialize_for_group_indices(group_indices)
-        return batch_features, batch_context, market_batch
+        return batch_features, batch_context, market_batch, relation_history_features
 
     if worker_count == 1:
         device = torch.device("cpu") if execution_plan is None else execution_plan.device
         with torch.inference_mode():
             for positions in jobs:
-                batch_features, batch_context, market_batch = _batch_inputs(positions)
+                batch_features, batch_context, market_batch, relation_history_features = _batch_inputs(positions)
                 feature_tensor = torch.from_numpy(batch_features).to(device)
                 context_tensor = torch.from_numpy(batch_context).to(device)
+                relation_history_tensor = (
+                    None
+                    if relation_history_features is None
+                    else torch.from_numpy(relation_history_features).to(device)
+                )
                 market_inputs = (
                     None
                     if market_batch is None
@@ -227,6 +280,7 @@ def strict_parallel_batched_logits(
                     batch_logits = forward_breakout_quality_model(
                         model, feature_tensor, context_tensor, market_inputs,
                         output_head=output_head,
+                        relation_history_tensor=relation_history_tensor,
                     )
                 logits_np[positions] = batch_logits.float().cpu().numpy()
         return logits_np
@@ -243,11 +297,16 @@ def strict_parallel_batched_logits(
         outputs: list[tuple[np.ndarray, np.ndarray]] = []
         with torch.no_grad():
             for positions in assigned_jobs:
-                batch_features, batch_context, market_batch = _batch_inputs(positions)
+                batch_features, batch_context, market_batch, relation_history_features = _batch_inputs(positions)
                 market_inputs = (
                     None
                     if market_batch is None
                     else market_batch_to_torch(torch, market_batch, torch.device("cpu"))
+                )
+                relation_history_tensor = (
+                    None
+                    if relation_history_features is None
+                    else torch.from_numpy(relation_history_features)
                 )
                 batch_logits = forward_breakout_quality_model(
                     replica,
@@ -255,6 +314,7 @@ def strict_parallel_batched_logits(
                     torch.from_numpy(batch_context),
                     market_inputs,
                     output_head=output_head,
+                    relation_history_tensor=relation_history_tensor,
                 ).cpu().numpy().copy()
                 outputs.append((positions, batch_logits))
         return outputs

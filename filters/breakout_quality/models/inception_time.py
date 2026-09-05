@@ -19,6 +19,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_same_date_dynamic_hypergraph_safety = descriptor.has_capability(
         "same_date_dynamic_hypergraph_safety"
     )
+    use_same_date_dynamic_hypergraph_relation_change_safety = descriptor.has_capability(
+        "same_date_dynamic_hypergraph_relation_change_safety"
+    )
     use_task_specific_safety_mfe = descriptor.has_capability("task_specific_safety_mfe")
     use_safety_attention_pool = descriptor.has_capability("safety_attention_pool")
     use_safety_temporal_self_attention = descriptor.has_capability("safety_temporal_self_attention")
@@ -52,6 +55,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         raise ValueError("Pairwise temporal relation bias必須建立在Safety temporal self-attention上")
     if use_same_date_dynamic_hypergraph_safety and not use_shared_safety_mfe:
         raise ValueError("same-date dynamic hypergraph Safety residual必須建立在shared Safety/MFE architecture上")
+    if use_same_date_dynamic_hypergraph_relation_change_safety and not use_same_date_dynamic_hypergraph_safety:
+        raise ValueError("relation-change hypergraph Safety residual必須建立在same-date dynamic hypergraph上")
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
     use_nonlinear_hmhs_head = descriptor.has_capability("nonlinear_hmhs_head")
     use_joint_attention_pool = descriptor.has_capability("joint_attention_pool")
@@ -386,6 +391,13 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             self.requires_same_date_relations = bool(
                 use_same_date_dynamic_hypergraph_safety
             )
+            self.same_date_relation_history_steps = int(
+                spec.same_date_relation_history_steps or 0
+            )
+            if bool(use_same_date_dynamic_hypergraph_relation_change_safety) != bool(
+                self.same_date_relation_history_steps == 1
+            ):
+                raise ValueError("relation-change hypergraph capability與history-step contract不一致")
 
         def _run_residual_stack(self, z, modules, projections):
             residual = z
@@ -456,6 +468,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     if key.startswith(prefix)
                 }
                 getattr(self, owner_name).load_state_dict(owner_state, strict=True)
+
+        def _encode_relation_view_without_state_update(self, x):
+            """Encode relational-only inputs without gradient or BatchNorm state mutation."""
+
+            owners = (self.inception_modules, self.residual_projections)
+            training_states = tuple(bool(owner.training) for owner in owners)
+            try:
+                for owner in owners:
+                    owner.eval()
+                with torch.no_grad():
+                    return self.encode(x).detach()
+            finally:
+                for owner, was_training in zip(owners, training_states):
+                    owner.train(was_training)
 
         def safety_attention_weights(self, x):
             if self.safety_attention_scorer is None:
@@ -540,7 +566,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             )
             return primary_logits, conditional_logits
 
-        def forward_safety_mfe_heads(self, x, context):
+        def forward_safety_mfe_heads(self, x, context, *, relation_history_x=None):
             """Return the canonical Raw-Safety + final-MFE pair for duo-head training.
 
             The final MFE topology is owned by the model spec: an independent raw-MFE
@@ -553,8 +579,27 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             if self.same_date_dynamic_hypergraph_safety_residual is not None:
                 _primary_input, shared_encoded = self._encoded_for_heads(x, context)
                 safety_logits = self.raw_safety_classifier(shared_encoded)
+                relation_kwargs = {}
+                if int(self.same_date_relation_history_steps) == 1:
+                    if relation_history_x is None:
+                        raise ValueError("relation-change hypergraph缺少previous-trading-date feature tensor")
+                    relation_current_latent = self._encode_relation_view_without_state_update(x)
+                    if int(relation_history_x.shape[0]) == 0:
+                        previous_relation_latent = relation_current_latent.new_empty(
+                            (0, int(self.encoder_embedding_width))
+                        )
+                    else:
+                        previous_relation_latent = self._encode_relation_view_without_state_update(
+                            relation_history_x
+                        )
+                    relation_kwargs = {
+                        "relation_current_latent": relation_current_latent,
+                        "previous_relation_latent": previous_relation_latent,
+                    }
+                elif relation_history_x is not None:
+                    raise ValueError("same-date state-only hypergraph不得收到relation-history feature tensor")
                 safety_logits = safety_logits + self.same_date_dynamic_hypergraph_safety_residual(
-                    shared_encoded
+                    shared_encoded, **relation_kwargs
                 ).to(safety_logits.dtype)
                 if self.raw_mfe_classifier is None:
                     raise ValueError("Dynamic-hypergraph architecture沒有Raw MFE head")
@@ -693,13 +738,15 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             joint_hmhs_logits = self.joint_hmhs_classifier(joint_encoded)
             return safety_logits, raw_mfe_logits, joint_hmhs_logits
 
-        def forward_output_head(self, x, context, output_head: str):
+        def forward_output_head(self, x, context, output_head: str, *, relation_history_x=None):
             head = str(output_head).strip().lower()
             if head in {"primary", "mfe", "primary_mfe"}:
                 if self.conditional_safety_classifier is not None:
                     return self.forward_conditional_heads(x, context)[0]
                 if self.raw_mfe_classifier is not None:
-                    return self.forward_safety_mfe_heads(x, context)[1]
+                    return self.forward_safety_mfe_heads(
+                        x, context, relation_history_x=relation_history_x
+                    )[1]
                 if self.conditional_mfe_classifier is not None:
                     return self.forward_safety_conditional_mfe_heads(x, context)[1]
                 primary_input, _shared = self._encoded_for_heads(x, context)
@@ -708,7 +755,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 return self.forward_conditional_heads(x, context)[1]
             if head in {"conditional_both", "both"}:
                 if self.raw_mfe_classifier is not None:
-                    safety_logits, raw_mfe_logits = self.forward_safety_mfe_heads(x, context)
+                    safety_logits, raw_mfe_logits = self.forward_safety_mfe_heads(
+                        x, context, relation_history_x=relation_history_x
+                    )
                     return torch.cat([safety_logits, raw_mfe_logits], dim=1)
                 if self.conditional_mfe_classifier is not None:
                     safety_logits, conditional_mfe_logits = self.forward_safety_conditional_mfe_heads(x, context)
@@ -720,21 +769,27 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 return torch.cat([safety_logits, raw_mfe_logits, joint_hmhs_logits], dim=1)
             if head in {"raw_safety", "safety_condition"}:
                 if self.raw_mfe_classifier is not None:
-                    return self.forward_safety_mfe_heads(x, context)[0]
+                    return self.forward_safety_mfe_heads(
+                        x, context, relation_history_x=relation_history_x
+                    )[0]
                 return self.forward_safety_conditional_mfe_heads(x, context)[0]
             if head in {"conditional_mfe", "raw_mfe", "final"}:
                 if self.raw_mfe_classifier is not None:
-                    return self.forward_safety_mfe_heads(x, context)[1]
+                    return self.forward_safety_mfe_heads(
+                        x, context, relation_history_x=relation_history_x
+                    )[1]
                 return self.forward_safety_conditional_mfe_heads(x, context)[1]
             if head in {"joint_hmhs", "hmhs"}:
                 return self.forward_safety_raw_mfe_hmhs_heads(x, context)[2]
             raise ValueError(f"未知InceptionTime output head: {output_head!r}")
 
-        def forward(self, x, context):
+        def forward(self, x, context, *, relation_history_x=None):
             if self.conditional_safety_classifier is not None:
                 return self.forward_conditional_heads(x, context)[0]
             if self.raw_mfe_classifier is not None:
-                return self.forward_safety_mfe_heads(x, context)[1]
+                return self.forward_safety_mfe_heads(
+                    x, context, relation_history_x=relation_history_x
+                )[1]
             if self.conditional_mfe_classifier is not None:
                 return self.forward_safety_conditional_mfe_heads(x, context)[1]
             primary_input, _shared = self._encoded_for_heads(x, context)

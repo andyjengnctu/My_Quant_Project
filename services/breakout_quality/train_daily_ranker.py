@@ -1415,10 +1415,12 @@ def run(args) -> int:
         reverse_validation_heads = ranker_api.predict_safety_conditional_mfe_scores(
             torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
+            group_dates=bundle.group_table["date"],
         )
         reverse_forward_heads = ranker_api.predict_safety_conditional_mfe_scores(
             torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
+            group_dates=bundle.group_table["date"],
         )
         validation_scores = reverse_validation_heads["conditional_mfe"]
         forward_scores = reverse_forward_heads["conditional_mfe"]
@@ -1465,11 +1467,13 @@ def run(args) -> int:
             torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
             training_objective=bundle.profile.training_objective,
+            group_dates=bundle.group_table["date"],
         )
         forward_scores = ranker_api.predict_scores(
             torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
             training_objective=bundle.profile.training_objective,
+            group_dates=bundle.group_table["date"],
         )
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[forward_score_ids] = forward_scores

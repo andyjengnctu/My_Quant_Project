@@ -583,6 +583,11 @@ def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
             same_date_relation_zero_init_residual=bool(
                 options.get("same_date_relation_zero_init_residual", False)
             ),
+            same_date_relation_history_steps=(
+                None
+                if options.get("same_date_relation_history_steps") is None
+                else int(options.get("same_date_relation_history_steps"))
+            ),
         )
     return spec
 

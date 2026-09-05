@@ -574,6 +574,7 @@ def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
         batch_size=int(args.inference_batch_size),
         plan=execution_plan,
         training_objective=str(profile.training_objective),
+        group_dates=bundle.group_table["date"],
     )
     if len(scores) != len(score_ids) or not np.isfinite(scores).all():
         raise ValueError("workflow runtime ranker inference輸出長度或finite contract失敗")

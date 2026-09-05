@@ -33,6 +33,9 @@ INCEPTION_TIME_SHARED_SAFETY_MFE_V1 = "inception_time_shared_safety_mfe_v1"
 INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1 = (
     "inception_time_shared_safety_dynamic_hypergraph_mfe_v1"
 )
+INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1 = (
+    "inception_time_shared_safety_dynamic_hypergraph_relation_change_mfe_v1"
+)
 INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_STRUCTURE_V1 = (
     "inception_time_shared_safety_mfe_price_volume_structure_v1"
 )
@@ -164,6 +167,37 @@ _ARCHITECTURE_DESCRIPTORS = (
         same_date_hyperedge_count=16,
         same_date_relation_stop_gradient=True,
         same_date_relation_zero_init_residual=True,
+    ),
+    _descriptor(
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
+        active=True,
+        active_order=35,
+        spec_builder="inception_variant",
+        runtime_builder="inception_time",
+        capabilities=(
+            "shared_safety_mfe",
+            "same_date_dynamic_hypergraph_safety",
+            "same_date_dynamic_hypergraph_relation_change_safety",
+        ),
+        family="inception_time_shared_safety_dynamic_hypergraph_relation_change_mfe",
+        pooling=(
+            "global_average",
+            "same_date_low_rank_dynamic_hypergraph_safety_residual",
+            "previous_date_hyperedge_relation_change_safety_residual",
+            "raw_safety_head",
+            "raw_mfe_head",
+        ),
+        use_dataset_context=False,
+        sequence_input_paths=(
+            "raw_level",
+            "same_date_cross_stock_latent_relations",
+            "previous_trading_date_cross_stock_relation_change",
+        ),
+        head_width=None,
+        same_date_hyperedge_count=16,
+        same_date_relation_stop_gradient=True,
+        same_date_relation_zero_init_residual=True,
+        same_date_relation_history_steps=1,
     ),
     _descriptor(
         INCEPTION_TIME_SHARED_SAFETY_MFE_PRICE_VOLUME_STRUCTURE_V1,

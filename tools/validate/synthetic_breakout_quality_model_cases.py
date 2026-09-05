@@ -2633,6 +2633,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
 
     from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -2666,6 +2667,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     )
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.inference import strict_parallel_batched_logits
+    from filters.breakout_quality.same_date_relations import (
+        build_previous_relation_date_indices,
+    )
     from filters.breakout_quality.encoder_pretraining import (
         build_ticker_balanced_epoch_ids,
     )
@@ -2682,6 +2686,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         SUPPORTED_MODEL_ARCHITECTURES,
         INCEPTION_TIME_RISK_CONTEXT_V1,
         INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1,
@@ -4311,6 +4316,202 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check_true(
         "dynamic_hypergraph_inference_is_date_coherent_even_when_batch_size_would_split_dates",
         np.array_equal(grouped_logits, np.concatenate(manual_logits, axis=0)),
+    )
+
+    # BT is the final controlled OHLCV relational extension: retain the BS
+    # same-date graph exactly and add one strictly previous-trading-date
+    # hyperedge-state difference.  No current/future row may enter history.
+    relation_change_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    relation_change_spec = get_model_spec(
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1
+    )
+    check(
+        "dynamic_hypergraph_relation_change_is_single_step_bs_extension",
+        (
+            "MR-13BT",
+            "inception_time_shared_safety_dynamic_hypergraph_relation_change_mfe_v1",
+            16,
+            True,
+            True,
+            1,
+        ),
+        (
+            get_continuous_ranker_research_spec(relation_change_profile.name).model_research_id,
+            relation_change_profile.model_architecture,
+            int(relation_change_spec.same_date_hyperedge_count),
+            bool(relation_change_spec.same_date_relation_stop_gradient),
+            bool(relation_change_spec.same_date_relation_zero_init_residual),
+            int(relation_change_spec.same_date_relation_history_steps),
+        ),
+    )
+    torch.manual_seed(20260905)
+    relation_change_bs = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1
+    )
+    torch.manual_seed(20260905)
+    relation_change_model = build_active_model(
+        10, 0,
+        architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
+    )
+    bs_state = relation_change_bs.state_dict()
+    bt_state = relation_change_model.state_dict()
+    extra_bt_keys = sorted(set(bt_state).difference(bs_state))
+    check_true(
+        "dynamic_hypergraph_relation_change_same_seed_preserves_every_bs_parameter",
+        not (set(bs_state) - set(bt_state))
+        and all(torch.equal(bs_state[key], bt_state[key]) for key in bs_state)
+        and extra_bt_keys
+        == [
+            "same_date_dynamic_hypergraph_safety_residual.relation_change_gate.bias",
+            "same_date_dynamic_hypergraph_safety_residual.relation_change_gate.weight",
+            "same_date_dynamic_hypergraph_safety_residual.relation_change_projection.0.bias",
+            "same_date_dynamic_hypergraph_safety_residual.relation_change_projection.0.weight",
+            "same_date_dynamic_hypergraph_safety_residual.relation_change_residual_logits.bias",
+            "same_date_dynamic_hypergraph_safety_residual.relation_change_residual_logits.weight",
+        ],
+    )
+    torch.manual_seed(20260905)
+    previous_relation_x = torch.randn((7, 300, 10), dtype=torch.float32)
+    relation_change_bs.eval()
+    relation_change_model.eval()
+    with torch.no_grad():
+        bs_safety, bs_mfe = relation_change_bs.forward_safety_mfe_heads(
+            hypergraph_x, hypergraph_context
+        )
+        bt_safety, bt_mfe = relation_change_model.forward_safety_mfe_heads(
+            hypergraph_x,
+            hypergraph_context,
+            relation_history_x=previous_relation_x,
+        )
+    check_true(
+        "dynamic_hypergraph_relation_change_zero_init_step0_is_bitwise_bs_exact",
+        torch.equal(bs_safety, bt_safety) and torch.equal(bs_mfe, bt_mfe),
+    )
+
+    change_module = relation_change_model.same_date_dynamic_hypergraph_safety_residual
+    with torch.no_grad():
+        change_module.relation_change_residual_logits.weight.fill_(0.05)
+        change_module.relation_change_residual_logits.bias.zero_()
+    current_relation_probe = torch.randn(
+        (6, int(relation_change_model.encoder_embedding_width)),
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    previous_relation_probe = torch.randn(
+        (5, int(relation_change_model.encoder_embedding_width)),
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    shared_relation_probe = current_relation_probe.detach().clone().requires_grad_(True)
+    change_module.zero_grad(set_to_none=True)
+    change_module(
+        shared_relation_probe,
+        relation_current_latent=current_relation_probe,
+        previous_relation_latent=previous_relation_probe,
+    ).sum().backward()
+    check_true(
+        "dynamic_hypergraph_relation_change_blocks_current_and_previous_encoder_gradients",
+        shared_relation_probe.grad is None
+        and current_relation_probe.grad is None
+        and previous_relation_probe.grad is None
+        and _gradient_total(change_module.incidence.parameters()) > 0.0
+        and _gradient_total(change_module.relation_change_projection.parameters()) > 0.0,
+    )
+
+    relation_history_dates = pd.Series(
+        pd.to_datetime(
+            ["2025-01-02"] * 4 + ["2025-01-03"] * 4 + ["2025-01-06"] * 4
+        )
+    )
+    relation_history = build_previous_relation_date_indices(
+        relation_history_dates,
+        np.arange(12, dtype=np.int64),
+        history_steps=1,
+    )
+    check_true(
+        "dynamic_hypergraph_relation_change_history_is_strict_previous_full_trading_date",
+        len(relation_history[pd.Timestamp("2025-01-02").date()]) == 0
+        and np.array_equal(
+            relation_history[pd.Timestamp("2025-01-03").date()],
+            np.arange(0, 4, dtype=np.int64),
+        )
+        and np.array_equal(
+            relation_history[pd.Timestamp("2025-01-06").date()],
+            np.arange(4, 8, dtype=np.int64),
+        ),
+    )
+
+    # Relation-only current/previous encodes must not mutate the AO BatchNorm
+    # running state.  After one train-mode forward, all BS-common buffers remain
+    # bitwise equal to the same-seed BS control.
+    torch.manual_seed(20260906)
+    bn_bs = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1
+    )
+    torch.manual_seed(20260906)
+    bn_bt = build_active_model(
+        10, 0,
+        architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
+    )
+    bn_bs.train()
+    bn_bt.train()
+    bn_x = torch.randn((5, 300, 10), dtype=torch.float32)
+    bn_prev = torch.randn((6, 300, 10), dtype=torch.float32)
+    bn_context = torch.empty((5, 0), dtype=torch.float32)
+    bn_bs.forward_safety_mfe_heads(bn_x, bn_context)
+    bn_bt.forward_safety_mfe_heads(bn_x, bn_context, relation_history_x=bn_prev)
+    bs_after = bn_bs.state_dict()
+    bt_after = bn_bt.state_dict()
+    common_buffer_keys = [
+        key
+        for key in bs_after
+        if key in bt_after
+        and (key.endswith("running_mean") or key.endswith("running_var") or key.endswith("num_batches_tracked"))
+    ]
+    check_true(
+        "dynamic_hypergraph_relation_views_do_not_mutate_ao_batchnorm_state",
+        bool(common_buffer_keys)
+        and all(torch.equal(bs_after[key], bt_after[key]) for key in common_buffer_keys),
+    )
+
+    history_features = torch.randn((12, 300, 10), dtype=torch.float32).numpy().astype(np.float32)
+    history_context = np.empty((12, 0), dtype=np.float32)
+    history_labels = relation_history_dates.to_numpy(dtype="datetime64[D]")
+    relation_change_model.eval()
+    history_logits = strict_parallel_batched_logits(
+        torch,
+        relation_change_model,
+        history_features,
+        history_context,
+        indices=None,
+        batch_size=3,
+        workers=1,
+        same_date_group_labels=history_labels,
+        same_date_relation_history_indices=relation_history,
+        output_head="both",
+    )
+    manual_history_logits = []
+    with torch.inference_mode():
+        for start in (0, 4, 8):
+            current = torch.from_numpy(history_features[start : start + 4])
+            current_context = torch.from_numpy(history_context[start : start + 4])
+            if start == 0:
+                previous = torch.empty((0, 300, 10), dtype=torch.float32)
+            else:
+                previous = torch.from_numpy(history_features[start - 4 : start])
+            manual_history_logits.append(
+                relation_change_model.forward_output_head(
+                    current,
+                    current_context,
+                    "both",
+                    relation_history_x=previous,
+                ).float().cpu().numpy()
+            )
+    check_true(
+        "dynamic_hypergraph_relation_change_inference_matches_manual_previous_date_graph",
+        np.array_equal(history_logits, np.concatenate(manual_history_logits, axis=0)),
     )
 
     # Price/Volume structural Safety representation is a reusable InceptionTime
