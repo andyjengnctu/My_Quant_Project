@@ -2633,8 +2633,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
 
     from core.breakout_quality_registry import (
         DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
         STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE,
+        FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE,
         get_breakout_quality_experiment_profile,
         get_breakout_quality_encoder_pretraining_profile,
         get_continuous_ranker_research_spec,
@@ -2657,7 +2659,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         build_daily_full_horizon_equal_rank_mfe_low_adverse_contract,
     )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
-    from filters.breakout_quality.daily_ranker_data import build_equal_rank_mfe_low_adverse_target
+    from filters.breakout_quality.daily_ranker_data import (
+        LazyDailyFeatureBank,
+        build_equal_rank_mfe_low_adverse_target,
+    )
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.encoder_pretraining import (
         build_ticker_balanced_epoch_ids,
@@ -2799,6 +2804,86 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             )
             for key in head_keys
         ),
+    )
+
+    future_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    future_pretraining = get_breakout_quality_encoder_pretraining_profile(
+        FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE
+    )
+    check(
+        "future_path_pretraining_is_declarative_ao_initialization_only",
+        (
+            "MR-13BR",
+            "inception_time_shared_safety_mfe_v1",
+            "future_path_statistics_regression",
+            100,
+            128,
+            "matured_downstream_fitting_rows_only",
+            "full_unfrozen",
+            12,
+            "fitting_scope_zscore",
+            40,
+        ),
+        (
+            get_continuous_ranker_research_spec(future_profile.name).model_research_id,
+            future_profile.model_architecture,
+            future_pretraining.task,
+            int(future_pretraining.epochs),
+            int(future_pretraining.batch_size),
+            future_pretraining.source_scope,
+            future_pretraining.downstream_finetune,
+            int(len(future_pretraining.target_names)),
+            future_pretraining.target_standardization,
+            int(future_pretraining.future_path_max_horizon_bars),
+        ),
+    )
+
+    path_dates = pd.date_range("2020-01-01", periods=45, freq="D")
+    base = np.arange(45, dtype=np.float64)
+    frames = []
+    for offset in (0.0, 20.0):
+        close = 100.0 + offset + base
+        frame = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close * 1.01,
+                "Low": close * 0.99,
+                "Close": close,
+                "Volume": 1000.0 + base,
+            },
+            index=path_dates,
+        )
+        frames.append(frame)
+    path_bank = LazyDailyFeatureBank(
+        frames=tuple(frames),
+        benchmark=frames[0],
+        ticker_ids=np.asarray([0, 0, 1, 1], dtype=np.int32),
+        source_positions=np.asarray([2, 4, 2, 4], dtype=np.int32),
+        benchmark_positions=np.asarray([2, 4, 2, 4], dtype=np.int32),
+        policy=SimpleNamespace(feature_window_bars=3),
+    )
+    maturity = path_bank.future_path_maturity_mask(
+        np.arange(4, dtype=np.int64),
+        horizon_bars=40,
+        cutoff_date="2020-02-12",
+    )
+    check(
+        "future_path_maturity_excludes_rows_whose_40bar_target_crosses_fitting_cutoff",
+        (True, False, True, False),
+        tuple(bool(value) for value in maturity),
+    )
+    path_values, path_names = path_bank.future_path_statistics(
+        np.asarray([0, 2], dtype=np.int64),
+        cutoff_date="2020-02-12",
+        target_names=tuple(future_pretraining.target_names),
+        horizon_bars=int(future_pretraining.future_path_max_horizon_bars),
+    )
+    check(
+        "future_path_statistics_use_fixed_12_target_schema",
+        (tuple(future_pretraining.target_names), (2, 12), True),
+        (tuple(path_names), tuple(path_values.shape), bool(np.isfinite(path_values).all())),
     )
 
     # Dual-component regression is a reusable learning formulation. Resolve the

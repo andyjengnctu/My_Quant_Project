@@ -418,6 +418,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 DAILY_UNIVERSAL_SCC_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_scc_pretrained_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_future_path_pretrained_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_price_volume_structure_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
@@ -519,6 +522,13 @@ DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_univer
 
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE = "stock_code_classification_v1"
+FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE = "future_path_statistics_v1"
+FUTURE_PATH_STATISTICS_TARGET_NAMES = (
+    "terminal_return_5d", "terminal_return_10d", "terminal_return_20d", "terminal_return_40d",
+    "max_downside_10d", "max_downside_20d", "max_downside_40d",
+    "max_upside_10d", "max_upside_20d", "max_upside_40d",
+    "realized_volatility_10d", "realized_volatility_20d",
+)
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
 TRAINING_SAMPLING_UNIQUE_TICKER_DATE = "unique_ticker_date"
@@ -985,6 +995,11 @@ class BreakoutQualityEncoderPretrainingProfile:
     sampling_mode: str
     source_scope: str
     downstream_finetune: str
+    loss_name: str = "cross_entropy"
+    target_names: tuple[str, ...] = ()
+    target_standardization: str | None = None
+    smooth_l1_beta: float | None = None
+    future_path_max_horizon_bars: int | None = None
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -992,10 +1007,11 @@ class BreakoutQualityEncoderPretrainingProfile:
             raise ValueError("encoder pretraining profile name 必須是非空白小寫名稱")
         if any(token in normalized_name for token in ("/", "\\", "\x00")):
             raise ValueError("encoder pretraining profile name 必須是安全名稱")
-        if self.task != "stock_code_classification":
+        supported_tasks = {"stock_code_classification", "future_path_statistics_regression"}
+        if self.task not in supported_tasks:
             raise ValueError(f"不支援的 encoder pretraining task: {self.task!r}")
         if self.optimizer_name != "adam":
-            raise ValueError("stock-code encoder pretraining 固定使用 Adam")
+            raise ValueError("encoder pretraining 固定使用 Adam")
         if int(self.epochs) < 1 or int(self.batch_size) < 2:
             raise ValueError("encoder pretraining epochs 必須>=1且batch_size必須>=2")
         if float(self.learning_rate) <= 0.0:
@@ -1003,14 +1019,38 @@ class BreakoutQualityEncoderPretrainingProfile:
         if float(self.weight_decay) < 0.0 or float(self.gradient_clip_norm) < 0.0:
             raise ValueError("encoder pretraining weight_decay/gradient_clip_norm 必須>=0")
         if self.sampling_mode != "ticker_balanced_one_window_per_ticker_per_epoch":
-            raise ValueError("SCC encoder pretraining sampling mode 不符合scientific contract")
-        if self.source_scope != "downstream_fitting_rows_only":
-            raise ValueError("SCC encoder pretraining source scope 必須限制於downstream fitting rows")
+            raise ValueError("encoder pretraining sampling mode 不符合scientific contract")
         if self.downstream_finetune != "full_unfrozen":
-            raise ValueError("SCC encoder pretraining downstream 必須full-unfrozen fine-tune")
+            raise ValueError("encoder pretraining downstream 必須full-unfrozen fine-tune")
+        if self.task == "stock_code_classification":
+            if self.source_scope != "downstream_fitting_rows_only":
+                raise ValueError("SCC encoder pretraining source scope 必須限制於downstream fitting rows")
+            if self.loss_name != "cross_entropy":
+                raise ValueError("SCC encoder pretraining 必須使用cross_entropy")
+            if (
+                self.target_names
+                or self.target_standardization is not None
+                or self.smooth_l1_beta is not None
+                or self.future_path_max_horizon_bars is not None
+            ):
+                raise ValueError("SCC encoder pretraining 不得宣告future-path regression設定")
+        else:
+            expected_targets = FUTURE_PATH_STATISTICS_TARGET_NAMES
+            if self.source_scope != "matured_downstream_fitting_rows_only":
+                raise ValueError("future-path pretraining source scope 必須限制於fitting cutoff前已成熟rows")
+            if self.loss_name != "smooth_l1":
+                raise ValueError("future-path encoder pretraining 必須使用smooth_l1")
+            if tuple(self.target_names) != expected_targets:
+                raise ValueError("future-path encoder pretraining target set不符合scientific contract")
+            if self.target_standardization != "fitting_scope_zscore":
+                raise ValueError("future-path encoder pretraining 必須使用fitting-scope z-score")
+            if self.smooth_l1_beta is None or not math.isfinite(float(self.smooth_l1_beta)) or float(self.smooth_l1_beta) <= 0.0:
+                raise ValueError("future-path encoder pretraining smooth_l1_beta必須為有限正數")
+            if int(self.future_path_max_horizon_bars or 0) != 40:
+                raise ValueError("future-path encoder pretraining max horizon必須為40 bars")
 
     def as_manifest_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "task": self.task,
             "optimizer_name": self.optimizer_name,
@@ -1023,6 +1063,15 @@ class BreakoutQualityEncoderPretrainingProfile:
             "source_scope": self.source_scope,
             "downstream_finetune": self.downstream_finetune,
         }
+        if self.task == "future_path_statistics_regression":
+            payload.update({
+                "loss_name": self.loss_name,
+                "target_names": list(self.target_names),
+                "target_standardization": self.target_standardization,
+                "smooth_l1_beta": float(self.smooth_l1_beta),
+                "future_path_max_horizon_bars": int(self.future_path_max_horizon_bars),
+            })
+        return payload
 
 
 _ENCODER_PRETRAINING_PROFILES = {
@@ -1038,6 +1087,24 @@ _ENCODER_PRETRAINING_PROFILES = {
         sampling_mode="ticker_balanced_one_window_per_ticker_per_epoch",
         source_scope="downstream_fitting_rows_only",
         downstream_finetune="full_unfrozen",
+    ),
+    FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE: BreakoutQualityEncoderPretrainingProfile(
+        name=FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE,
+        task="future_path_statistics_regression",
+        optimizer_name="adam",
+        epochs=100,
+        batch_size=128,
+        learning_rate=0.001,
+        weight_decay=0.0001,
+        gradient_clip_norm=1.0,
+        sampling_mode="ticker_balanced_one_window_per_ticker_per_epoch",
+        source_scope="matured_downstream_fitting_rows_only",
+        downstream_finetune="full_unfrozen",
+        loss_name="smooth_l1",
+        target_names=FUTURE_PATH_STATISTICS_TARGET_NAMES,
+        target_standardization="fitting_scope_zscore",
+        smooth_l1_beta=1.0,
+        future_path_max_horizon_bars=40,
     ),
 }
 SUPPORTED_BREAKOUT_QUALITY_ENCODER_PRETRAINING_PROFILES = tuple(
@@ -1503,6 +1570,19 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
         encoder_pretraining_profile=STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE,
+    ),
+    DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_v1",
+        encoder_pretraining_profile=FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE,
     ),
     DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_PRICE_VOLUME_STRUCTURE_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -3141,6 +3221,42 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "pretrain LR/epoch/freeze/batch/task sweep。"
         ),
         metric_scope="ao_with_pit_safe_stock_code_encoder_pretraining",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_FUTURE_PATH_PRETRAINED_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BR",
+        experiment_name="MR-13BR Future-Path-Pretrained AO Shared Ranker",
+        phase="13BR",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "exact_MR13AO_head1_same_date_low_adverse_safety_percentile_over_full_universe; "
+            "exact_MR13AO_head2_same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "User-authorized second pretraining hypothesis after MR-13BQ SCC failed. MR-13AO supervised 300x10 input, "
+            "shared InceptionTime architecture, continuous Safety full-list Delta-NDCG, true-HS=P50 Conditional-MFE, "
+            "1:1 head weighting, Seed42/Adam/split/epoch selection and Pred-Safety→Conditional-MFE inference remain exact. "
+            "The only scientific treatment is fitting-scope PIT-safe future-path encoder pretraining. For each epoch, one "
+            "matured 300-bar window per ticker is sampled uniformly. A temporary 12-output regression head predicts raw "
+            "future path statistics: 5/10/20/40d terminal return, 10/20/40d max downside, 10/20/40d max upside and "
+            "10/20d realized volatility. Targets are generated only when the full 40-bar path ends on/before the fitting "
+            "cutoff, standardized with fitting-scope-only z-scores, and optimized by SmoothL1(beta=1) for 100 fixed epochs "
+            "with Adam lr=1e-3, batch=128, weight_decay=1e-4 and clip=1.0. No breakout/candidate/portfolio state enters "
+            "pretraining. Inner validation is untouched; final Selection pretraining is rebuilt from scratch. Temporary "
+            "future-path head is discarded, same-seed AO Safety/MFE heads are fresh initialized, and the shared encoder is "
+            "full-unfrozen from the first AO step. Primary reference=MR-13AO. Seed42 Forward first; if Safety does not "
+            "materially break the existing ceiling, do not sweep horizon/input length/MAP/masking/foundation-model variants."
+        ),
+        metric_scope="ao_with_pit_safe_future_path_encoder_pretraining",
         score_semantic_id="daily_true_hs_conditional_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,

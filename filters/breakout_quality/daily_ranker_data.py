@@ -175,6 +175,140 @@ class LazyDailyFeatureBank:
         self._benchmark_feature_cache[position] = feature
         return feature
 
+    def future_path_maturity_mask(
+        self,
+        group_ids: np.ndarray,
+        *,
+        horizon_bars: int,
+        cutoff_date,
+    ) -> np.ndarray:
+        """Return rows whose complete future path is known by the fitting cutoff."""
+
+        ids = np.asarray(group_ids, dtype=np.int64).reshape(-1)
+        horizon = int(horizon_bars)
+        if horizon <= 0:
+            raise ValueError("future-path horizon_bars必須>0")
+        if bool(np.any(ids < 0)) or bool(np.any(ids >= len(self))):
+            raise IndexError("future-path group id超出範圍")
+        cutoff = np.datetime64(pd.Timestamp(cutoff_date).normalize().date(), "D")
+        matured = np.zeros(len(ids), dtype=bool)
+        if len(ids) == 0:
+            return matured
+        ticker_ids = self._ticker_ids[ids]
+        source_positions = self._source_positions[ids]
+        for ticker_id in np.unique(ticker_ids):
+            local = np.flatnonzero(ticker_ids == ticker_id)
+            positions = source_positions[local].astype(np.int64, copy=False)
+            dates = self._frame_dates[int(ticker_id)]
+            complete = positions + horizon < len(dates)
+            if not bool(np.any(complete)):
+                continue
+            complete_local = local[complete]
+            end_dates = dates[positions[complete] + horizon]
+            matured[complete_local] = end_dates <= cutoff
+        return matured
+
+    def future_path_statistics(
+        self,
+        group_ids: np.ndarray,
+        *,
+        cutoff_date,
+        target_names: tuple[str, ...],
+        horizon_bars: int,
+    ) -> tuple[np.ndarray, tuple[str, ...]]:
+        """Materialize declarative multi-horizon future-path statistics.
+
+        Target identity belongs to the encoder-pretraining profile. This canonical
+        OHLCV provider only interprets the supported statistic grammar and enforces
+        that every requested row has its complete declared path ending on/before
+        ``cutoff_date``.
+        """
+
+        names = tuple(str(name) for name in target_names)
+        horizon = int(horizon_bars)
+        if horizon <= 0:
+            raise ValueError("future-path horizon_bars必須>0")
+        if not names or len(set(names)) != len(names):
+            raise ValueError("future-path target_names必須為非空且不可重複")
+        supported_components = {
+            "terminal_return",
+            "max_downside",
+            "max_upside",
+            "realized_volatility",
+        }
+        target_specs: list[tuple[str, int]] = []
+        for name in names:
+            component, separator, suffix = name.rpartition("_")
+            if (
+                not separator
+                or component not in supported_components
+                or not suffix.endswith("d")
+                or not suffix[:-1].isdigit()
+            ):
+                raise ValueError(f"不支援的future-path target: {name!r}")
+            target_horizon = int(suffix[:-1])
+            if target_horizon <= 0 or target_horizon > horizon:
+                raise ValueError(
+                    f"future-path target horizon超出宣告範圍: {name!r}, max={horizon}"
+                )
+            target_specs.append((component, target_horizon))
+
+        ids = np.asarray(group_ids, dtype=np.int64).reshape(-1)
+        if bool(np.any(ids < 0)) or bool(np.any(ids >= len(self))):
+            raise IndexError("future-path group id超出範圍")
+        matured = self.future_path_maturity_mask(
+            ids, horizon_bars=horizon, cutoff_date=cutoff_date
+        )
+        if not bool(np.all(matured)):
+            raise ValueError("future-path statistics要求全部rows於fitting cutoff前完整成熟")
+        values = np.empty((len(ids), len(names)), dtype=np.float32)
+        if len(ids) == 0:
+            return values, names
+
+        ticker_ids = self._ticker_ids[ids]
+        source_positions = self._source_positions[ids]
+        offsets = np.arange(1, horizon + 1, dtype=np.int64)
+        for ticker_id in np.unique(ticker_ids):
+            local = np.flatnonzero(ticker_ids == ticker_id)
+            positions = source_positions[local].astype(np.int64, copy=False)
+            frame = self._frame_arrays[int(ticker_id)]
+            future_index = positions[:, None] + offsets[None, :]
+            future = frame[future_index]
+            anchor = frame[positions, 3]
+            if not bool(
+                np.all(np.isfinite(anchor) & (anchor > 0.0))
+                and np.all(np.isfinite(future))
+                and np.all(future[:, :, :4] > 0.0)
+                and np.all(future[:, :, 1] >= future[:, :, 2])
+            ):
+                raise ValueError("future-path statistics遇到invalid canonical OHLCV")
+
+            closes = future[:, :, 3]
+            highs = future[:, :, 1]
+            lows = future[:, :, 2]
+            anchor_and_close = np.concatenate((anchor[:, None], closes), axis=1)
+            log_returns = np.diff(np.log(anchor_and_close), axis=1)
+            out = np.empty((len(local), len(names)), dtype=np.float64)
+            for column, (component, target_horizon) in enumerate(target_specs):
+                if component == "terminal_return":
+                    out[:, column] = closes[:, target_horizon - 1] / anchor - 1.0
+                elif component == "max_downside":
+                    out[:, column] = (
+                        np.min(lows[:, :target_horizon], axis=1) / anchor - 1.0
+                    )
+                elif component == "max_upside":
+                    out[:, column] = (
+                        np.max(highs[:, :target_horizon], axis=1) / anchor - 1.0
+                    )
+                else:
+                    out[:, column] = np.std(
+                        log_returns[:, :target_horizon], axis=1, ddof=0
+                    )
+            if not bool(np.isfinite(out).all()):
+                raise ValueError("future-path statistics產生non-finite target")
+            values[local] = out.astype(np.float32)
+        return values, names
+
     def future_first_passage(
         self,
         group_ids: np.ndarray,
