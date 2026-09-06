@@ -33,6 +33,8 @@ ACTIVE_RESEARCH_DATA_GENERATION = RESEARCH_DATA_GENERATION_V1
 # Market Data V2 bootstrap executor knobs are execution-only policy; they do not
 # participate in Research scientific identity.  Quota values remain live-provider
 # driven; these settings only control safety margin, polling and bounded retries.
+MARKET_DATA_V2_HTTP_TIMEOUT_SEC = 30.0
+
 MARKET_DATA_V2_EXECUTION_POLICY = {
     "quota_reserve_requests": 50,
     "quota_refresh_every_requests": 25,
@@ -80,6 +82,7 @@ __all__ = [
     "RESEARCH_DATA_GENERATIONS",
     "ACTIVE_RESEARCH_DATA_GENERATION",
     "TRADING_MARKET_DATA_LIFECYCLE",
+    "MARKET_DATA_V2_HTTP_TIMEOUT_SEC",
     "MARKET_DATA_V2_EXECUTION_POLICY",
     "MARKET_DATA_V2_STORAGE_POLICY",
     "MARKET_DATA_V2_TRADING_SYNC_POLICY",

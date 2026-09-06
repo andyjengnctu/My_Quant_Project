@@ -107,12 +107,17 @@ def _probe_spec(client: FinMindHttpClient, spec, *, as_of_date: str, probe_stock
                 _verify_exact_date_bulk(bulk, dataset=spec.dataset, expected_date=exact_date)
         elif spec.bootstrap_mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
             frames = []
+            probe_start = max(PREFLIGHT_FULL_RANGE_START, str(spec.bootstrap_start_date or PREFLIGHT_FULL_RANGE_START))
+            if spec.bootstrap_chunk_years > 0:
+                as_of_year = int(as_of_date[:4])
+                current_chunk_start = f"{as_of_year:04d}-01-01"
+                probe_start = max(probe_start, current_chunk_start)
             for data_id in spec.fixed_data_ids:
                 frames.append(
                     client.get_data(
                         dataset=spec.dataset,
                         data_id=data_id,
-                        start_date=PREFLIGHT_FULL_RANGE_START,
+                        start_date=probe_start,
                         end_date=as_of_date,
                     )
                 )

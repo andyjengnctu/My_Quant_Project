@@ -92,7 +92,13 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
         elif spec.bootstrap_mode == BOOTSTRAP_BULK_REFERENCE_DATES:
             expected_total += 2
         elif spec.bootstrap_mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
-            expected_total += len(spec.fixed_data_ids)
+            if spec.bootstrap_chunk_years > 0:
+                start_year = int(max("1900-01-01", str(spec.bootstrap_start_date or "1900-01-01"))[:4])
+                end_year = 2020
+                chunk_count = (end_year - start_year) // spec.bootstrap_chunk_years + 1
+                expected_total += len(spec.fixed_data_ids) * chunk_count
+            else:
+                expected_total += len(spec.fixed_data_ids)
     add_check(results, "market_data", case_id, "planner_total_is_registry_derived", expected_total, plan3.total_requests)
     add_check(results, "market_data", case_id, "planner_uses_live_quota_limit", 1600, plan3.quota_limit)
 

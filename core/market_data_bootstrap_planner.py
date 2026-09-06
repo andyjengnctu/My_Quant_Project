@@ -53,7 +53,7 @@ class BootstrapRequestPlan:
     rows: tuple[BootstrapPlanRow, ...]
 
 
-def _basis_for_mode(mode: str, *, historical_instrument_count: int, request_count: int) -> str:
+def _basis_for_mode(mode: str, *, historical_instrument_count: int, request_count: int, spec: MarketDatasetSpec) -> str:
     if mode in {BOOTSTRAP_SINGLE_NO_DATES, BOOTSTRAP_SINGLE_FULL_RANGE}:
         return "single canonical request"
     if mode == BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE:
@@ -61,6 +61,8 @@ def _basis_for_mode(mode: str, *, historical_instrument_count: int, request_coun
     if mode == BOOTSTRAP_BULK_REFERENCE_DATES:
         return f"{request_count} observed reference dates × 1 all-market exact-date request"
     if mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
+        if spec.bootstrap_chunk_years > 0:
+            return f"{len(spec.fixed_data_ids)} fixed data_id × calendar-{spec.bootstrap_chunk_years}y chunks ({request_count} requests)"
         return f"{request_count} fixed data_id × 1 full-range request"
     raise ValueError(f"不支援的 bootstrap_mode: {mode}")
 
@@ -98,6 +100,7 @@ def build_bootstrap_request_plan(
                 spec.bootstrap_mode,
                 historical_instrument_count=manifest.historical_instrument_count,
                 request_count=counts.get(spec.dataset, 0),
+                spec=spec,
             ),
         )
         for spec in included_specs

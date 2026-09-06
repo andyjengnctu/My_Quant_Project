@@ -7,6 +7,7 @@ planner, persistent ledger and later storage executor cannot drift apart.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date
 from hashlib import sha256
 import json
 from typing import Iterable, Mapping
@@ -26,6 +27,28 @@ BOOTSTRAP_FULL_RANGE_START = "1900-01-01"
 def _canonical_sha256(payload: object) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+
+
+def _effective_range_start(spec: MarketDatasetSpec, global_start: str) -> str:
+    specific = str(spec.bootstrap_start_date or "").strip()
+    return max(global_start, specific) if specific else global_start
+
+
+def _iter_calendar_year_chunks(start_date: str, end_date: str, years_per_chunk: int):
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    years = int(years_per_chunk)
+    if years <= 0:
+        yield start.isoformat(), end.isoformat()
+        return
+    cursor = start
+    while cursor <= end:
+        chunk_end_year = cursor.year + years - 1
+        chunk_end = min(end, date(chunk_end_year, 12, 31))
+        yield cursor.isoformat(), chunk_end.isoformat()
+        cursor = date(chunk_end.year + 1, 1, 1)
 
 
 def _normalize_instruments(instruments: Iterable[str]) -> tuple[str, ...]:
@@ -161,9 +184,14 @@ def build_bootstrap_request_manifest(
         elif mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
             if not spec.fixed_data_ids:
                 raise ValueError(f"{spec.dataset} fixed_data_ids 不可為空")
+            dataset_start = _effective_range_start(spec, range_start)
+            if dataset_start > as_of:
+                raise ValueError(f"{spec.dataset} bootstrap start 晚於 as_of: {dataset_start} > {as_of}")
+            ranges = tuple(_iter_calendar_year_chunks(dataset_start, as_of, spec.bootstrap_chunk_years))
             requests.extend(
-                BootstrapHttpRequest(spec.dataset, mode, data_id, range_start, as_of)
+                BootstrapHttpRequest(spec.dataset, mode, data_id, chunk_start, chunk_end)
                 for data_id in spec.fixed_data_ids
+                for chunk_start, chunk_end in ranges
             )
         else:
             raise ValueError(f"不支援的 bootstrap_mode: {spec.dataset} -> {mode}")

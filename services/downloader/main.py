@@ -93,11 +93,12 @@ def _run_market_data_v2_preflight() -> int:
 
     output_dir = Path(rt.OUTPUT_DIR) / "market_data_v2"
     try:
+        from config.market_data import MARKET_DATA_V2_HTTP_TIMEOUT_SEC
         result = run_market_data_v2_preflight(
             token=token,
             output_dir=output_dir,
             now=rt.get_taipei_now(),
-            timeout_sec=rt.REQUEST_TIMEOUT_SEC,
+            timeout_sec=MARKET_DATA_V2_HTTP_TIMEOUT_SEC,
         )
     except (RuntimeError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -161,7 +162,8 @@ def _run_market_data_v2_bootstrap() -> int:
     try:
         activation = prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
         existing = get_existing_bootstrap_summary(project_root=PROJECT_ROOT, activation=activation)
-        client = FinMindHttpClient(token=token, timeout_sec=rt.REQUEST_TIMEOUT_SEC)
+        from config.market_data import MARKET_DATA_V2_HTTP_TIMEOUT_SEC
+        client = FinMindHttpClient(token=token, timeout_sec=MARKET_DATA_V2_HTTP_TIMEOUT_SEC)
         usage = client.get_usage()
     except (MarketDataBootstrapActivationError, FinMindHttpError, RuntimeError, ValueError, OSError) as exc:
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -204,7 +206,7 @@ def _run_market_data_v2_bootstrap() -> int:
             token=token,
             project_root=PROJECT_ROOT,
             output_dir=output_dir,
-            timeout_sec=rt.REQUEST_TIMEOUT_SEC,
+            timeout_sec=MARKET_DATA_V2_HTTP_TIMEOUT_SEC,
             client=client,
             now_fn=rt.get_taipei_now,
             progress_fn=_progress,
