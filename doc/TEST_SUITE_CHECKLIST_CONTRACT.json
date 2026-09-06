@@ -4155,6 +4155,17 @@
       "entry": "`config/market_data.py`, `config/research.py`, `core/market_data_contract.py`, `services/downloader/runtime.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 374
+    },
+    {
+      "id": "B387",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Backer preflight / exact bootstrap planning contract",
+      "item": "Market Data V2 archive roster, capability evidence, quota accounting and bootstrap request plan remain registry-driven and fail closed",
+      "gap": "Market Data V2 provider-facing dataset roster/query strategy/PIT-review classification必須由`core/market_data_dataset_registry.py`單一持有；Preflight必須使用explicit direct-HTTP單次attempt primitive取得live quota、歷史instrument universe、dataset schema/capability與bulk evidence，不得依SDK hidden retry/async假定quota消耗。只有全部included dataset probe PASS且planner可由registry/evidence解析 request count 時才能輸出READY exact logical bootstrap plan；失敗dataset、未知bootstrap mode、缺evidence或不合法quota一律BLOCKED。Planner不得硬編Backer 1600/hour、historical instrument數或每股固定request數；Trading現行update與Research資料不得因Preflight side effect被修改。",
+      "entry": "`core/market_data_dataset_registry.py`, `core/market_data_bootstrap_planner.py`, `services/downloader/finmind_http.py`, `services/downloader/market_data_preflight.py`, `apps/smart_downloader.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 375
     }
   ],
   "tests": [
@@ -7693,6 +7704,13 @@
       "description": "`validate_market_data_governance_contract_case` 覆蓋canonical adjusted/raw dataset identity、raw direct-consumption禁止、自建adjusted-price engine禁止、retrospective-adjustment invariance要求、Research generation/cutoff/NOT_READY非promotion、Trading lifecycle/bootstrap generation，以及downloader dataset identity必須消費canonical owner且不得重複硬編。",
       "initial_status": "NEW",
       "order": 496
+    },
+    {
+      "id": "T507",
+      "b_id": "B387",
+      "description": "`validate_market_data_v2_preflight_planner_contract_case` 覆蓋archive include/exclude roster、raw/adjusted price、derivative product master、historical TWSE/TPEX+delisting universe、registry-driven planner、live quota adoption、instrument-count非硬編、failed probe fail-closed，以及direct HTTP request accounting/4xx no-hidden-retry。",
+      "initial_status": "NEW",
+      "order": 497
     }
   ],
   "transitions": [
@@ -25247,6 +25265,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_governance_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B387",
+      "description": "將Market Data V2 Backer Preflight、dataset registry、quota-visible direct HTTP與exact logical bootstrap planner納入正式治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_dataset_registry.py`, `services/downloader/market_data_preflight.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T507",
+      "description": "新增Market Data V2 Preflight/Planner dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_preflight_planner_contract_case`"
     }
   ]
 }
