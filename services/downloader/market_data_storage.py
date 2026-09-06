@@ -106,6 +106,104 @@ class PyArrowParquetCodec:
             raise MarketDataCommitError(f"Parquet verify 失敗: {type(exc).__name__}: {exc}") from exc
 
 
+
+
+def validate_market_data_raw_frame(frame: pd.DataFrame) -> None:
+    if not isinstance(frame, pd.DataFrame):
+        raise MarketDataCommitError("Storage sink 只接受 pandas.DataFrame")
+    labels = list(frame.columns)
+    if any(not isinstance(column, str) for column in labels):
+        raise MarketDataCommitError("FinMind raw schema column name 必須全部為字串")
+    if len(set(labels)) != len(labels):
+        raise MarketDataCommitError("FinMind raw schema 含 duplicate column name，禁止靜默改名")
+
+
+def validate_market_data_parquet_inspection(
+    inspection: ParquetArtifactInspection,
+    *,
+    expected_metadata: dict[str, object],
+    expected_columns: tuple[str, ...],
+    expected_rows: int,
+) -> None:
+    if inspection.row_count != int(expected_rows):
+        raise MarketDataCommitError(
+            f"Parquet row count 驗證失敗: actual={inspection.row_count}, expected={expected_rows}"
+        )
+    if inspection.columns != expected_columns:
+        raise MarketDataCommitError(
+            f"Parquet columns 驗證失敗: actual={inspection.columns}, expected={expected_columns}"
+        )
+    if inspection.metadata != expected_metadata:
+        raise MarketDataCommitError("Parquet Market Data identity metadata 驗證失敗")
+
+
+def commit_market_data_parquet_frame(
+    *,
+    frame: pd.DataFrame,
+    final_path: Path,
+    expected_metadata: dict[str, object],
+    policy: MarketDataStoragePolicy,
+    codec: ParquetCodec,
+    disk_usage_fn,
+) -> MarketDataCommitReceipt:
+    validate_market_data_raw_frame(frame)
+    dataset_dir = final_path.parent
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    frame_bytes = int(frame.memory_usage(index=False, deep=True).sum()) if len(frame.columns) else 0
+    staging = max(
+        policy.minimum_staging_headroom_bytes,
+        int(frame_bytes * policy.staging_headroom_multiplier),
+    )
+    required = int(policy.minimum_free_bytes + staging)
+    free = int(getattr(disk_usage_fn(dataset_dir), "free"))
+    if free < required:
+        raise MarketDataCommitError(
+            f"Market Data storage free-space gate: free={free} bytes < required={required} bytes"
+        )
+    expected_columns = tuple(str(column) for column in frame.columns)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{expected_metadata.get('request_id') or 'market_data'}.",
+        suffix=".parquet.tmp",
+        dir=str(dataset_dir),
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        codec.write(frame, temp_path, metadata=expected_metadata, compression=policy.compression)
+        staged = codec.inspect(temp_path)
+        validate_market_data_parquet_inspection(
+            staged,
+            expected_metadata=expected_metadata,
+            expected_columns=expected_columns,
+            expected_rows=len(frame),
+        )
+        compute_file_sha256(temp_path)
+        atomic_replace_with_retry(temp_path, final_path)
+        published = codec.inspect(final_path)
+        validate_market_data_parquet_inspection(
+            published,
+            expected_metadata=expected_metadata,
+            expected_columns=expected_columns,
+            expected_rows=len(frame),
+        )
+        return MarketDataCommitReceipt(
+            committed=True,
+            row_count=len(frame),
+            content_sha256=compute_file_sha256(final_path),
+        )
+    except MarketDataCommitError:
+        raise
+    except Exception as exc:
+        raise MarketDataCommitError(
+            f"Market Data parquet commit 失敗: {type(exc).__name__}: {exc}"
+        ) from exc
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError as exc:
+                _LOG.warning("Market Data staging temp cleanup failed for %s: %s", temp_path, exc)
+
 class MarketDataBootstrapStorageSink:
     def __init__(
         self,
@@ -152,13 +250,7 @@ class MarketDataBootstrapStorageSink:
 
     @staticmethod
     def _validate_frame(frame: pd.DataFrame) -> None:
-        if not isinstance(frame, pd.DataFrame):
-            raise MarketDataCommitError("Storage sink 只接受 pandas.DataFrame")
-        labels = list(frame.columns)
-        if any(not isinstance(column, str) for column in labels):
-            raise MarketDataCommitError("FinMind raw schema column name 必須全部為字串")
-        if len(set(labels)) != len(labels):
-            raise MarketDataCommitError("FinMind raw schema 含 duplicate column name，禁止靜默改名")
+        validate_market_data_raw_frame(frame)
 
     def _ensure_dataset_schema(self, request: BootstrapHttpRequest, frame: pd.DataFrame) -> dict[str, object]:
         schema_payload = build_frame_schema_payload(frame)
@@ -248,16 +340,12 @@ class MarketDataBootstrapStorageSink:
         expected_columns: tuple[str, ...],
         expected_rows: int,
     ) -> None:
-        if inspection.row_count != int(expected_rows):
-            raise MarketDataCommitError(
-                f"Parquet row count 驗證失敗: actual={inspection.row_count}, expected={expected_rows}"
-            )
-        if inspection.columns != expected_columns:
-            raise MarketDataCommitError(
-                f"Parquet columns 驗證失敗: actual={inspection.columns}, expected={expected_columns}"
-            )
-        if inspection.metadata != expected_metadata:
-            raise MarketDataCommitError("Parquet Market Data identity metadata 驗證失敗")
+        validate_market_data_parquet_inspection(
+            inspection,
+            expected_metadata=expected_metadata,
+            expected_columns=expected_columns,
+            expected_rows=expected_rows,
+        )
 
     def recover_committed(self, request: BootstrapHttpRequest) -> MarketDataCommitReceipt | None:
         self._validate_request(request)
@@ -308,70 +396,30 @@ class MarketDataBootstrapStorageSink:
                 )
             return existing
 
-        dataset_dir = resolve_market_data_dataset_dir(
-            self.project_root, self.manifest.manifest_fingerprint, request.dataset
-        )
-        self._assert_disk_headroom(dataset_dir, frame)
         schema_payload = self._ensure_dataset_schema(request, frame)
         expected_metadata = self._expected_metadata(
             request, row_count=len(frame), schema_payload=schema_payload
         )
-        expected_columns = tuple(str(column) for column in frame.columns)
         final_path = resolve_market_data_request_parquet_path(
             self.project_root, self.manifest.manifest_fingerprint, request
         )
-        fd, temp_name = tempfile.mkstemp(
-            prefix=f".{request.request_id}.", suffix=".parquet.tmp", dir=str(dataset_dir)
+        return commit_market_data_parquet_frame(
+            frame=frame,
+            final_path=final_path,
+            expected_metadata=expected_metadata,
+            policy=self.policy,
+            codec=self.codec,
+            disk_usage_fn=self.disk_usage_fn,
         )
-        os.close(fd)
-        temp_path = Path(temp_name)
-        try:
-            self.codec.write(
-                frame,
-                temp_path,
-                metadata=expected_metadata,
-                compression=self.policy.compression,
-            )
-            staged = self.codec.inspect(temp_path)
-            self._validate_inspection(
-                staged,
-                expected_metadata=expected_metadata,
-                expected_columns=expected_columns,
-                expected_rows=len(frame),
-            )
-            # Compute once before publication to ensure the staged bytes are
-            # readable; the final hash is recomputed after atomic replacement.
-            compute_file_sha256(temp_path)
-            atomic_replace_with_retry(temp_path, final_path)
-            published = self.codec.inspect(final_path)
-            self._validate_inspection(
-                published,
-                expected_metadata=expected_metadata,
-                expected_columns=expected_columns,
-                expected_rows=len(frame),
-            )
-            return MarketDataCommitReceipt(
-                committed=True,
-                row_count=len(frame),
-                content_sha256=compute_file_sha256(final_path),
-            )
-        except MarketDataCommitError:
-            raise
-        except Exception as exc:
-            raise MarketDataCommitError(
-                f"Market Data parquet commit 失敗: {type(exc).__name__}: {exc}"
-            ) from exc
-        finally:
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except OSError as exc:
-                    _LOG.warning("Market Data staging temp cleanup failed for %s: %s", temp_path, exc)
+
 
 
 __all__ = [
     "ParquetArtifactInspection",
     "ParquetCodec",
     "PyArrowParquetCodec",
+    "validate_market_data_raw_frame",
+    "validate_market_data_parquet_inspection",
+    "commit_market_data_parquet_frame",
     "MarketDataBootstrapStorageSink",
 ]

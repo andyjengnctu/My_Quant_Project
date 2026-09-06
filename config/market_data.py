@@ -58,7 +58,20 @@ MARKET_DATA_V2_STORAGE_POLICY = {
 TRADING_MARKET_DATA_LIFECYCLE = {
     "mode": "incremental_latest",
     "bootstrap_source_generation": RESEARCH_DATA_GENERATION_V2,
-    "status": "legacy_downloader_until_v2_ready",
+    # Execution-critical CSV truth remains in place while the V2 archive is
+    # maintained as a non-blocking sidecar.  Future DL Trading must explicitly
+    # declare V2 dataset dependencies before V2 may become execution-critical.
+    "status": "legacy_execution_with_v2_archive_sidecar",
+}
+
+# Trading Market Data V2 archive synchronization is operational only; these
+# repair windows do not change the active rule-based strategy/scientific truth.
+# A sidecar failure must not block current full_rule_based_no_dl execution.
+MARKET_DATA_V2_TRADING_SYNC_POLICY = {
+    "enabled": True,
+    "execution_fail_closed": False,
+    "recent_repair_calendar_days": 7,
+    "event_repair_calendar_days": 30,
 }
 
 __all__ = [
@@ -69,4 +82,5 @@ __all__ = [
     "TRADING_MARKET_DATA_LIFECYCLE",
     "MARKET_DATA_V2_EXECUTION_POLICY",
     "MARKET_DATA_V2_STORAGE_POLICY",
+    "MARKET_DATA_V2_TRADING_SYNC_POLICY",
 ]

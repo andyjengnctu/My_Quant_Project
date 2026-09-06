@@ -15,6 +15,7 @@ from services.trading.market_data_state import (
     get_trading_market_data_snapshot_sha256,
     load_trading_market_data_snapshot,
 )
+from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
 from services.trading.strategy_param_state import (
     get_trading_strategy_param_binding_sha256,
     load_trading_strategy_param_binding,
@@ -199,6 +200,15 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         and param_latest_data_date == latest_data_date
         and param_binding is not None
     )
+    try:
+        v2_archive = build_trading_market_data_v2_read_model(root)
+    except (OSError, TypeError, ValueError, RuntimeError) as exc:
+        v2_archive = {
+            "status": "STALE",
+            "provider_ready": False,
+            "latest_sync_target_date": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     return {
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "strategy_id": profile.strategy_id,
@@ -214,6 +224,10 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "dataset_content_sha256": (
             None if market_snapshot is None else str((market_snapshot.get("dataset_fingerprint") or {}).get("csv_content_sha256") or "") or None
         ),
+        "market_data_v2_archive_status": v2_archive.get("status"),
+        "market_data_v2_archive_provider_ready": bool(v2_archive.get("provider_ready")),
+        "market_data_v2_archive_latest_date": v2_archive.get("latest_sync_target_date"),
+        "market_data_v2_archive_error": v2_archive.get("error"),
         "selected_params_path": project_relative_display_path(selected_path, project_root=root),
         "selected_params_exists": selected_path.is_file(),
         "param_latest_data_date": param_latest_data_date or None,

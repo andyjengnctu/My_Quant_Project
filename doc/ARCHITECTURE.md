@@ -43,6 +43,9 @@ project/
 │  ├─ market_data_execution_policy.py # Market Data V2 quota/retry/lease execution policy resolver
 │  ├─ market_data_storage_policy.py   # Market Data V2 Parquet/ZSTD/disk-headroom execution policy resolver
 │  ├─ market_data_storage_contract.py # Market Data V2 bootstrap archive layout/metadata/commit receipt contract
+│  ├─ market_data_trading_sync_policy.py # Trading V2 archive sidecar repair cadence/non-blocking policy resolver
+│  ├─ market_data_trading_sync.py     # Provider snapshot → deterministic Trading daily sync request manifest
+│  ├─ market_data_trading_storage_contract.py # Trading V2 overlay/state/batch physical layout contract
 │  ├─ trading_market_clock.py          # Trading完整日K safety cutoff／information-date seal
 │  ├─ trading_capabilities.py          # Pre-live implementation capability facts／LIVE blocker SSOT
 │  ├─ trading_account_state.py        # Trading cash/positions atomic state + hash-chain mutation contract
@@ -396,3 +399,5 @@ Current strategy-parameter artifacts intentionally maintain two hashes. `compute
 
 - `core/training_policy.py`：Strategy Optimizer training policy 的 validation、derived snapshot、robustness seed resolver 與 runtime model-mode owner；`config/training_policy.py` 僅持有 declarative 使用者／專案設定。
 - `core/selection_policy.py`：history-selection 策略參數 schema 與 default snapshot 的唯一 owner；避免 training policy 為 selection schema 依賴完整 breakout strategy module。
+
+- **Market Data V2 → Trading / Workbench sidecar**：Workbench 的「更新 Trading 資料」仍先執行既有 canonical CSV downloader 並發布 execution-critical `market_data_snapshot`；Params、Scanner、allocation 與掛單 lineage 目前完全維持此既有 truth。若 neutral `provider_snapshot_manifest.json` 已 READY，同一次更新會再由 `services/downloader/market_data_trading_sync.py` 維護 Trading-owned `data/trading/market_data_v2/` overlay 與 `state/trading/market_data_v2/archive_state.json`。V2 sidecar 共用 quota-aware resumable executor，但使用獨立 `market_data_v2_trading_sync` workload namespace/batch identity，且 schema 先與 neutral provider archive 對齊、不得反寫 provider。daily repair query 由 `core/market_data_dataset_registry.py` declarative policy 決定：Backer full-market exact-date capability 用市場日期批次，periodic dataset 額外明確登記 month-start／quarter-end／recent-date／range lookback；這些 Trading-only cadence 不進 neutral bootstrap/provider artifact fingerprint。Provider Snapshot 尚未存在時 sidecar 回 `NOT_BOOTSTRAPPED` 且不呼叫 FinMind data API；同步失敗時目前 `full_rule_based_no_dl` 只標 `STALE`/warning，Workbench/Operations 可見但不改 `market_data_ready`、Params/Scanner currentness 或 allocation blocker。未來只有 active Trading strategy 明確宣告 V2 dataset dependency 後，該 dependency 才能升級為 execution fail-closed。

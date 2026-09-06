@@ -60,10 +60,51 @@ def run_trading_market_data_update(*, project_root: str | Path) -> dict[str, Any
         market_date=result.get("market_date"),
         required_position_tickers=required_position_tickers,
     )
+
+    # Market Data V2 is maintained as a Trading-owned archive sidecar.  It must
+    # never make the current full_rule_based_no_dl execution path fail closed;
+    # only future strategies that explicitly declare V2 dependencies may do so.
+    from services.downloader.market_data_trading_sync import sync_market_data_v2_trading_archive
+    from core.market_data_trading_sync_policy import get_market_data_trading_sync_policy
+
+    v2_output_dir = Path(downloader_runtime.OUTPUT_DIR) / "market_data_v2" / "trading_sync"
+    token = downloader_runtime.resolve_finmind_api_token(project_root=root)
+    v2_policy = get_market_data_trading_sync_policy()
+    try:
+        v2_archive = dict(
+            sync_market_data_v2_trading_archive(
+                project_root=root,
+                target_date=str(result.get("market_date") or ""),
+                token=token,
+                output_dir=v2_output_dir,
+            )
+        )
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        if v2_policy.execution_fail_closed:
+            raise
+        error = f"{type(exc).__name__}: {exc}"
+        try:
+            from services.trading.market_data_v2_state import publish_trading_market_data_v2_failure
+
+            publish_trading_market_data_v2_failure(
+                root,
+                target_date=str(result.get("market_date") or ""),
+                error=error,
+            )
+        except (OSError, ValueError, RuntimeError, TypeError) as state_exc:
+            error = f"{error}; V2 state persist failed: {type(state_exc).__name__}: {state_exc}"
+        v2_archive = {
+            "status": "STALE",
+            "execution_blocking": False,
+            "target_date": str(result.get("market_date") or ""),
+            "error": error,
+        }
+
     return {
         **result,
         "market_data_snapshot_fingerprint": snapshot["snapshot_fingerprint"],
         "dataset_content_sha256": snapshot["dataset_fingerprint"]["csv_content_sha256"],
+        "market_data_v2_archive": v2_archive,
     }
 
 

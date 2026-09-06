@@ -855,8 +855,11 @@ class TradingAccountPanel(ttk.Frame):
         latest = snapshot.get("latest_data_date") or "尚無資料"
         param_latest = snapshot.get("param_latest_data_date") or "尚無 Params"
         ready = bool(snapshot.get("params_ready_for_scan"))
+        v2_status = snapshot.get("market_data_v2_archive_status") or "NOT_BOOTSTRAPPED"
+        v2_date = snapshot.get("market_data_v2_archive_latest_date") or "-"
         self._workflow_status_var.set(
-            f"{'READY' if ready else 'NOT READY'} | Data {latest} | Params {param_latest} | selector {snapshot.get('param_selector') or '-'}"
+            f"{'READY' if ready else 'NOT READY'} | Data {latest} | Params {param_latest} | "
+            f"V2 Archive {v2_status} {v2_date} | selector {snapshot.get('param_selector') or '-'}"
         )
         member_count = int(snapshot.get("param_member_count") or 0)
         param_error = snapshot.get("param_error")
@@ -1229,8 +1232,11 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_daily_workflow()
         self.refresh_order_state()
         if action == "data":
+            v2 = dict(result.get("market_data_v2_archive") or {})
             self._workflow_status_var.set(
-                f"資料更新完成：market {result.get('market_date') or '-'} | 成功 {result.get('count_success', 0)} | 已最新 {result.get('count_skipped_latest', 0)} | 下載失敗 {result.get('download_error_count', 0)}"
+                f"資料更新完成：market {result.get('market_date') or '-'} | 成功 {result.get('count_success', 0)} | "
+                f"已最新 {result.get('count_skipped_latest', 0)} | 下載失敗 {result.get('download_error_count', 0)} | "
+                f"V2 Archive {v2.get('status') or 'NOT_BOOTSTRAPPED'}"
             )
         elif action == "rollforward":
             self._workflow_status_var.set(

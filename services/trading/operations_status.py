@@ -450,6 +450,13 @@ def derive_trading_operations_status(
         warnings.append("本交易 session 已確認 SELL fill；Trading completed data 尚未追上成交日，依 D3/D4 禁止重新 allocation")
     if forced_stop_exit_tickers:
         warnings.append("STOP 已觸發且仍有剩餘持股，退出義務不得恢復為等待觸價 Stop: " + ",".join(forced_stop_exit_tickers))
+    v2_archive_status = str(workflow.get("market_data_v2_archive_status") or "")
+    if v2_archive_status not in {"", "SYNCED", "NOT_BOOTSTRAPPED"}:
+        detail = str(workflow.get("market_data_v2_archive_error") or "").strip()
+        warnings.append(
+            "Market Data V2 archive sidecar 尚未同步；目前 active rule-based execution 不受阻擋"
+            + (f": {detail}" if detail else "")
+        )
 
     if fill_transaction_pending:
         blockers.append("存在未完成 fill transaction，必須先完成 recovery")
@@ -624,6 +631,9 @@ def derive_trading_operations_status(
         "market_data_ready": market_data_ready,
         "market_data_snapshot_sha256": workflow.get("market_data_snapshot_sha256"),
         "dataset_content_sha256": workflow.get("dataset_content_sha256"),
+        "market_data_v2_archive_status": workflow.get("market_data_v2_archive_status"),
+        "market_data_v2_archive_latest_date": workflow.get("market_data_v2_archive_latest_date"),
+        "market_data_v2_archive_error": workflow.get("market_data_v2_archive_error"),
         "params_ready_for_scan": bool(workflow.get("params_ready_for_scan")),
         "account_initialized": bool(account.get("initialized")),
         "account_revision": account.get("revision"),

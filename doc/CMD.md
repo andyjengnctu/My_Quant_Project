@@ -429,3 +429,5 @@ Round 3完成後，current `ensure_strategy_parameter_artifact()`不再掃描、
 ### Trading SELL 實際成交
 
 Workbench「實際交易」頁對`ORDERED/PARTIAL` Stop/TP、Indicator SELL與STOP remainder MARKET都只接受使用者輸入的券商實際成交股數、成交價與成交日；不得由行情觸發自動推定。成交透過同一canonical exact-accounting / position-sell seam同步account/order state；native OCO任一腿實際成交後，另一active腿同步記錄為券商互斥取消。STOP partial-fill/cancel後的剩餘MARKET retry仍維持原STOP accounting lineage，Indicator SELL不得覆蓋已觸發STOP的退出義務。
+
+- Workbench 的「更新 Trading 資料」現為雙層更新但單一 execution truth：先維持既有 `data/trading/tw_stock_data_vip/` + canonical Trading market-data snapshot，成功後才嘗試 Market Data V2 Trading archive sidecar。Provider Snapshot 尚未 READY 時 V2 顯示 `NOT_BOOTSTRAPPED` 且不耗用額外 FinMind data request；READY 後 sidecar 以 `data/trading/market_data_v2/` / `state/trading/market_data_v2/` 獨立 overlay 做 quota-aware resumable daily sync。V2 `SYNCED/STALE/NOT_BOOTSTRAPPED` 狀態會顯示在 Workbench/Operations Status，但在目前 `full_rule_based_no_dl` 下不改變既有 Trading Data、Params、Scanner 或掛單 READY。未來 DL-based Trading 必須由 active strategy 明確宣告需要的 V2 datasets 後，才可把相應 archive freshness 納入 fail-closed dependency。

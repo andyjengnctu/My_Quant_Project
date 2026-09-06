@@ -4210,6 +4210,17 @@
       "entry": "`core/market_data_provider_snapshot.py`, `core/market_data_storage_contract.py`, `services/downloader/market_data_ledger.py`, `services/downloader/market_data_bootstrap_completion.py`, `services/downloader/main.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 379
+    },
+    {
+      "id": "B392",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Trading archive / Workbench integration",
+      "item": "Workbench Trading data update preserves legacy execution truth while maintaining an isolated non-blocking Market Data V2 archive sidecar",
+      "gap": "Workbench的Trading「更新資料」仍必須先完成既有execution-critical canonical CSV update與market-data snapshot publication，Params/Scanner/掛單不得改用未完成的V2 archive identity。當neutral Provider Snapshot READY後，同一次更新可由Trading-owned sidecar以current registry-driven daily query policy維護`data/trading/market_data_v2/`與`state/trading/market_data_v2/`；sidecar共用quota-aware resumable executor但使用獨立`trading_sync` workload namespace與batch identity，storage schema先以neutral provider schema為基礎且不得寫回provider archive。daily/repair query不得展開成historical instrument逐股重抓：具Backer full-market exact-date能力者依recent/event/periodic policy作market-wide日期查詢，fixed-ID/macro資料使用range；periodic dataset必須在registry明確登記query mode與lookback，Trading-only cadence不得污染neutral bootstrap/provider artifact identity。Provider Snapshot不存在時sidecar回`NOT_BOOTSTRAPPED`且不得消耗FinMind data request；V2同步失敗在目前`full_rule_based_no_dl`下只標`STALE`/warning而不得改變legacy market-data READY、Params/Scanner lineage或allocation blocker，未來只有active strategy明確宣告V2 dependency時才可fail-closed。Workbench與Operations Status需顯示V2 archive狀態但不得把optional archive freshness誤作現行execution readiness。",
+      "entry": "`config/market_data.py`, `core/market_data_dataset_registry.py`, `core/market_data_trading_sync.py`, `core/market_data_trading_sync_policy.py`, `core/market_data_trading_storage_contract.py`, `services/downloader/market_data_trading_sync.py`, `services/downloader/market_data_trading_storage.py`, `services/trading/market_data_v2_state.py`, `services/trading/daily_workflow.py`, `services/trading/scanner_state.py`, `services/trading/operations_status.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 380
     }
   ],
   "tests": [
@@ -7783,6 +7794,13 @@
       "description": "`validate_market_data_v2_provider_snapshot_completion_contract_case` 覆蓋full-DONE ledger gate、Bootstrap storage manifest必要性、逐request local artifact verification、row/SHA ledger parity、immutable snapshot fingerprint/persistence、project-relative path、reverify REUSE、artifact SHA drift fail-closed與unfinished ledger不得發布 snapshot。",
       "initial_status": "NEW",
       "order": 501
+    },
+    {
+      "id": "T512",
+      "b_id": "B392",
+      "description": "`validate_market_data_v2_trading_workbench_sidecar_contract_case` 覆蓋periodic Trading query policy、deterministic daily manifest、全included dataset coverage、daily sync不展開historical stock universe、Trading data/state physical isolation、Provider Snapshot缺失時零API且NOT_BOOTSTRAPPED/non-blocking，以及Workbench/Scanner保留legacy execution producer並顯示V2 sidecar status。",
+      "initial_status": "NEW",
+      "order": 502
     }
   ],
   "transitions": [
@@ -25417,6 +25435,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_provider_snapshot_completion_contract_case`"
+    },
+    {
+      "date": "2026-09-07",
+      "id": "B392",
+      "description": "新增Market Data V2 Trading archive sidecar、daily sync與Workbench非阻擋整合治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_trading_sync.py`, `services/downloader/market_data_trading_sync.py`, `services/trading/daily_workflow.py`"
+    },
+    {
+      "date": "2026-09-07",
+      "id": "T512",
+      "description": "新增Market Data V2 Trading/Workbench sidecar dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_trading_workbench_sidecar_contract_case`"
     }
   ]
 }

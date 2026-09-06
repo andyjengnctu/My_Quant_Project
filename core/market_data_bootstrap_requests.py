@@ -104,8 +104,15 @@ class BootstrapRequestManifest:
 
 
 def build_registry_fingerprint(specs: Iterable[MarketDatasetSpec]) -> str:
-    ordered = sorted(
-        (asdict(spec) for spec in specs),
+    # Trading sync query cadence is execution-only sidecar policy.  It must not
+    # alter the neutral bootstrap/provider artifact identity.
+    ordered = []
+    for spec in specs:
+        item = asdict(spec)
+        item.pop("trading_query_mode", None)
+        item.pop("trading_lookback_periods", None)
+        ordered.append(item)
+    ordered.sort(
         key=lambda item: (str(item.get("dataset") or ""), str(item.get("archive_policy") or "")),
     )
     return _canonical_sha256(ordered)

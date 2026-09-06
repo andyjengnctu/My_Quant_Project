@@ -23,6 +23,12 @@ DAILY_RECENT_REPAIR = "recent_repair"
 DAILY_PERIODIC_REPAIR = "periodic_repair"
 DAILY_EVENT_REPAIR = "event_repair"
 
+TRADING_QUERY_AUTO = "auto"
+TRADING_QUERY_RECENT_DATES = "recent_dates"
+TRADING_QUERY_MONTH_STARTS = "month_starts"
+TRADING_QUERY_QUARTER_ENDS = "quarter_ends"
+TRADING_QUERY_RANGE = "range"
+
 PIT_EXACT_CANDIDATE = "exact_candidate"
 PIT_REVIEW_REQUIRED = "review_required"
 PIT_ARCHIVE_ONLY = "archive_only"
@@ -42,6 +48,8 @@ class MarketDatasetSpec:
     probe_data_id: str | None = None
     full_market_exact_date_expected: bool = False
     rationale: str = ""
+    trading_query_mode: str = TRADING_QUERY_AUTO
+    trading_lookback_periods: int = 0
 
     @property
     def included(self) -> bool:
@@ -60,6 +68,8 @@ def _include(
     probe_data_id: str | None = None,
     full_market_exact_date_expected: bool = False,
     rationale: str = "",
+    trading_query_mode: str = TRADING_QUERY_AUTO,
+    trading_lookback_periods: int = 0,
 ) -> MarketDatasetSpec:
     return MarketDatasetSpec(
         dataset=dataset,
@@ -73,6 +83,8 @@ def _include(
         probe_data_id=probe_data_id,
         full_market_exact_date_expected=full_market_exact_date_expected,
         rationale=rationale,
+        trading_query_mode=trading_query_mode,
+        trading_lookback_periods=int(trading_lookback_periods),
     )
 
 
@@ -114,32 +126,32 @@ MARKET_DATASET_SPECS: tuple[MarketDatasetSpec, ...] = (
     _include("TaiwanStockInstitutionalInvestorsBuySellWide", "chip", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Canonical flattened view; the long-format table is excluded as duplicate source data."),
     _include("TaiwanStockTotalInstitutionalInvestors", "chip_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "name")),
     _include("TaiwanStockShareholding", "chip", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
-    _include("TaiwanStockHoldingSharesPer", "ownership", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "HoldingSharesLevel"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock."),
+    _include("TaiwanStockHoldingSharesPer", "ownership", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "HoldingSharesLevel"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock.", trading_query_mode=TRADING_QUERY_RECENT_DATES, trading_lookback_periods=21),
     _include("TaiwanStockSecuritiesLending", "chip", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
-    _include("TaiwanStockMarginShortSaleSuspension", "trading_constraint", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID),
-    _include("TaiwanDailyShortSaleBalances", "chip", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID),
+    _include("TaiwanStockMarginShortSaleSuspension", "trading_constraint", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
+    _include("TaiwanDailyShortSaleBalances", "chip", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
     _include("TaiwanTotalExchangeMarginMaintenance", "chip_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED),
-    _include("TaiwanStockDispositionSecuritiesPeriod", "trading_constraint", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID),
-    _include("TaiwanStockDayTradingBorrowingFeeRate", "chip", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID),
+    _include("TaiwanStockDispositionSecuritiesPeriod", "trading_constraint", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
+    _include("TaiwanStockDayTradingBorrowingFeeRate", "chip", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
 
     # Fundamental / corporate actions.
-    _include("TaiwanStockFinancialStatements", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type", "origin_name"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock."),
-    _include("TaiwanStockBalanceSheet", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type", "origin_name"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock."),
-    _include("TaiwanStockCashFlowsStatement", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type", "origin_name"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock."),
+    _include("TaiwanStockFinancialStatements", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type", "origin_name"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock.", trading_query_mode=TRADING_QUERY_QUARTER_ENDS, trading_lookback_periods=8),
+    _include("TaiwanStockBalanceSheet", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type", "origin_name"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock.", trading_query_mode=TRADING_QUERY_QUARTER_ENDS, trading_lookback_periods=8),
+    _include("TaiwanStockCashFlowsStatement", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type", "origin_name"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock.", trading_query_mode=TRADING_QUERY_QUARTER_ENDS, trading_lookback_periods=8),
     _include("TaiwanStockDividend", "corporate_action", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
     _include("TaiwanStockDividendResult", "corporate_action", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
-    _include("TaiwanStockMonthRevenue", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "revenue_year", "revenue_month"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock."),
+    _include("TaiwanStockMonthRevenue", "fundamental", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "revenue_year", "revenue_month"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock.", trading_query_mode=TRADING_QUERY_MONTH_STARTS, trading_lookback_periods=15),
     _include("TaiwanStockCapitalReductionReferencePrice", "corporate_action", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id")),
     _include("TaiwanStockMarketValue", "market_cap", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
-    _include("TaiwanStockMarketValueWeight", "market_context", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock."),
+    _include("TaiwanStockMarketValueWeight", "market_context", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id", "type"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Correctness-first bootstrap: do not infer the market-wide historical date inventory from one probe stock.", trading_query_mode=TRADING_QUERY_RECENT_DATES, trading_lookback_periods=7),
     _include("TaiwanStockSplitPrice", "corporate_action", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id")),
     _include("TaiwanStockParValueChange", "corporate_action", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id")),
 
     # Low-volume regime/context datasets useful for future input experiments.
-    _include("TaiwanBusinessIndicator", "macro_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED),
+    _include("TaiwanBusinessIndicator", "macro_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, trading_query_mode=TRADING_QUERY_RANGE, trading_lookback_periods=450),
     _include("CnnFearGreedIndex", "macro_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, primary_key_hint=("date",)),
     _include("TaiwanExchangeRate", "macro_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, fixed_data_ids=("AUD", "CAD", "CHF", "CNY", "EUR", "GBP", "HKD", "IDR", "JPY", "KRW", "MYR", "NZD", "PHP", "SEK", "SGD", "THB", "USD", "VND", "ZAR")),
-    _include("InterestRate", "macro_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("BOE", "RBA", "FED", "PBOC", "BOC", "ECB", "RBNZ", "RBI", "CBR", "BCB", "BOJ", "SNB")),
+    _include("InterestRate", "macro_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_PERIODIC_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("BOE", "RBA", "FED", "PBOC", "BOC", "ECB", "RBNZ", "RBI", "CBR", "BCB", "BOJ", "SNB"), trading_query_mode=TRADING_QUERY_RANGE, trading_lookback_periods=450),
     _include("GovernmentBondsYield", "macro_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, fixed_data_ids=("United States 1-Month", "United States 2-Month", "United States 3-Month", "United States 6-Month", "United States 1-Year", "United States 2-Year", "United States 3-Year", "United States 5-Year", "United States 7-Year", "United States 10-Year", "United States 20-Year", "United States 30-Year")),
     _include("GoldPrice", "macro_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, primary_key_hint=("date",)),
     _include("CrudeOilPrices", "macro_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, fixed_data_ids=("Brent", "WTI")),
@@ -199,6 +211,18 @@ def validate_market_dataset_registry() -> dict[str, int]:
     if invalid_modes:
         raise ValueError(f"Market Data bootstrap_mode 未支援: {invalid_modes}")
 
+    supported_trading_query_modes = {
+        TRADING_QUERY_AUTO,
+        TRADING_QUERY_RECENT_DATES,
+        TRADING_QUERY_MONTH_STARTS,
+        TRADING_QUERY_QUARTER_ENDS,
+        TRADING_QUERY_RANGE,
+    }
+    exact_date_query_modes = {
+        TRADING_QUERY_RECENT_DATES,
+        TRADING_QUERY_MONTH_STARTS,
+        TRADING_QUERY_QUARTER_ENDS,
+    }
     for spec in MARKET_DATASET_SPECS:
         if spec.bootstrap_mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE and not spec.fixed_data_ids:
             raise ValueError(f"{spec.dataset} fixed_data_id mode 缺少 fixed_data_ids")
@@ -206,6 +230,16 @@ def validate_market_dataset_registry() -> dict[str, int]:
             raise ValueError(f"{spec.dataset} bootstrap probe 缺少 probe_data_id")
         if spec.archive_policy not in {ARCHIVE_INCLUDE, ARCHIVE_EXCLUDE}:
             raise ValueError(f"{spec.dataset} archive_policy 未支援: {spec.archive_policy}")
+        if spec.trading_query_mode not in supported_trading_query_modes:
+            raise ValueError(f"{spec.dataset} trading_query_mode 未支援: {spec.trading_query_mode}")
+        if spec.trading_query_mode != TRADING_QUERY_AUTO and spec.trading_lookback_periods < 1:
+            raise ValueError(f"{spec.dataset} trading_query_mode 已指定但 trading_lookback_periods < 1")
+        if spec.trading_query_mode == TRADING_QUERY_AUTO and spec.trading_lookback_periods != 0:
+            raise ValueError(f"{spec.dataset} trading_query_mode=auto 時不得設定 trading_lookback_periods")
+        if spec.daily_mode == DAILY_PERIODIC_REPAIR and spec.trading_query_mode == TRADING_QUERY_AUTO:
+            raise ValueError(f"{spec.dataset} periodic_repair 必須明確登記 Trading query policy")
+        if spec.trading_query_mode in exact_date_query_modes and not spec.full_market_exact_date_expected:
+            raise ValueError(f"{spec.dataset} exact-date Trading query 缺少 full-market capability 宣告")
 
     return {
         "total": len(MARKET_DATASET_SPECS),
@@ -228,6 +262,11 @@ __all__ = [
     "DAILY_RECENT_REPAIR",
     "DAILY_PERIODIC_REPAIR",
     "DAILY_EVENT_REPAIR",
+    "TRADING_QUERY_AUTO",
+    "TRADING_QUERY_RECENT_DATES",
+    "TRADING_QUERY_MONTH_STARTS",
+    "TRADING_QUERY_QUARTER_ENDS",
+    "TRADING_QUERY_RANGE",
     "PIT_EXACT_CANDIDATE",
     "PIT_REVIEW_REQUIRED",
     "PIT_ARCHIVE_ONLY",

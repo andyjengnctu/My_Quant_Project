@@ -117,8 +117,11 @@ def _row_to_job(row: sqlite3.Row) -> LedgerJob:
 
 
 class MarketDataJobLedger:
-    def __init__(self, path):
+    def __init__(self, path, *, workload_namespace: str = "market_data_v2_bootstrap"):
         self.path = Path(path)
+        self.workload_namespace = str(workload_namespace or "").strip()
+        if not self.workload_namespace:
+            raise ValueError("Market Data ledger workload_namespace 不可空白")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
@@ -196,9 +199,8 @@ class MarketDataJobLedger:
                 """
             )
 
-    @staticmethod
-    def workload_id_for_manifest(manifest: BootstrapRequestManifest) -> str:
-        return f"market_data_v2_bootstrap:{manifest.manifest_fingerprint}"
+    def workload_id_for_manifest(self, manifest: BootstrapRequestManifest) -> str:
+        return f"{self.workload_namespace}:{manifest.manifest_fingerprint}"
 
     def seed_manifest(self, manifest: BootstrapRequestManifest, *, now: datetime | None = None) -> str:
         workload_id = self.workload_id_for_manifest(manifest)

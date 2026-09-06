@@ -1192,3 +1192,104 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
 
     summary.update({"checks": len(results), "manifest_fingerprint": manifest.manifest_fingerprint})
     return results, summary
+
+
+def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params):
+    """Round-6 Trading integration stays isolated, resumable and non-blocking for current rule-based execution."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from core.market_data_bootstrap_requests import build_registry_fingerprint
+    from core.market_data_dataset_registry import (
+        DAILY_PERIODIC_REPAIR,
+        TRADING_QUERY_AUTO,
+        get_market_dataset_specs,
+        validate_market_dataset_registry,
+    )
+    from core.market_data_trading_storage_contract import (
+        resolve_trading_market_data_v2_root,
+        resolve_trading_market_data_v2_state_path,
+    )
+    from core.market_data_trading_sync import build_trading_sync_request_manifest
+    from core.market_data_trading_sync_policy import get_market_data_trading_sync_policy
+    from services.downloader.market_data_trading_sync import sync_market_data_v2_trading_archive
+
+    case_id = "MARKET_DATA_V2_TRADING_WORKBENCH_SIDECAR"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    registry = validate_market_dataset_registry()
+    specs = get_market_dataset_specs(included_only=True)
+    periodic = tuple(spec for spec in specs if spec.daily_mode == DAILY_PERIODIC_REPAIR)
+    add_check(results, "market_data", case_id, "registry_remains_valid_after_trading_query_contract", True, registry["included"] > 0)
+    add_check(results, "market_data", case_id, "periodic_datasets_have_explicit_query_policy", True, all(spec.trading_query_mode != TRADING_QUERY_AUTO for spec in periodic))
+    add_check(results, "market_data", case_id, "periodic_datasets_have_positive_lookback", True, all(spec.trading_lookback_periods > 0 for spec in periodic))
+
+    registry_fp = build_registry_fingerprint(specs)
+    provider = {
+        "status": "READY",
+        "snapshot_fingerprint": "a" * 64,
+        "manifest_fingerprint": "b" * 64,
+        "registry_fingerprint": registry_fp,
+        "as_of_date": "2026-09-04",
+        "historical_instrument_count": 3210,
+    }
+    policy = get_market_data_trading_sync_policy()
+    manifest_a = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+    )
+    manifest_b = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+    )
+    add_check(results, "market_data", case_id, "trading_manifest_is_deterministic", manifest_a.manifest_fingerprint, manifest_b.manifest_fingerprint)
+    add_check(results, "market_data", case_id, "trading_manifest_covers_every_included_dataset", {spec.dataset for spec in specs}, {request.dataset for request in manifest_a.requests})
+    add_check(results, "market_data", case_id, "trading_manifest_never_expands_to_historical_stock_universe", True, all(request.data_id is None or request.data_id in next(spec for spec in specs if spec.dataset == request.dataset).fixed_data_ids for request in manifest_a.requests))
+    add_check(results, "market_data", case_id, "trading_policy_is_non_blocking_for_current_execution", False, policy.execution_fail_closed)
+
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        trading_root = resolve_trading_market_data_v2_root(root)
+        state_path = resolve_trading_market_data_v2_state_path(root)
+        add_check(results, "market_data", case_id, "trading_archive_is_under_trading_data_domain", True, str(trading_root).replace("\\", "/").endswith("data/trading/market_data_v2"))
+        add_check(results, "market_data", case_id, "trading_state_is_under_trading_state_domain", True, str(state_path).replace("\\", "/").endswith("state/trading/market_data_v2/archive_state.json"))
+        add_check(results, "market_data", case_id, "trading_overlay_does_not_share_neutral_bootstrap_root", False, "/data/market_data_v2/bootstrap/" in str(trading_root).replace("\\", "/"))
+
+        class _NoCallClient:
+            data_request_count = 0
+            usage_request_count = 0
+
+            def __getattr__(self, name):
+                raise AssertionError(f"provider snapshot missing 時不應呼叫 FinMind client: {name}")
+
+        no_provider = sync_market_data_v2_trading_archive(
+            project_root=root,
+            target_date="2026-09-07",
+            token="",
+            output_dir=root / "outputs",
+            client=_NoCallClient(),
+        )
+        add_check(results, "market_data", case_id, "no_provider_snapshot_reports_not_bootstrapped", "NOT_BOOTSTRAPPED", no_provider["status"])
+        add_check(results, "market_data", case_id, "no_provider_snapshot_consumes_zero_data_requests", 0, no_provider["request_count"])
+        add_check(results, "market_data", case_id, "no_provider_snapshot_is_non_blocking", False, no_provider["execution_blocking"])
+
+    project_root = Path(__file__).resolve().parents[2]
+    workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
+    scanner_source = (project_root / "services" / "trading" / "scanner_state.py").read_text(encoding="utf-8")
+    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
+    add_check(results, "market_data", case_id, "legacy_execution_update_remains_primary_workbench_producer", True, workflow_source.find("run_trading_dataset_update(") < workflow_source.find("sync_market_data_v2_trading_archive("))
+    add_check(results, "market_data", case_id, "sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in workflow_source and "last_attempt_target_date" in state_source)
+    add_check(results, "market_data", case_id, "workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
+    add_check(results, "market_data", case_id, "scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
+
+    summary.update({"checks": len(results), "trading_request_count": manifest_a.total_requests})
+    return results, summary
