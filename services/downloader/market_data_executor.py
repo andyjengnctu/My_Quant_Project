@@ -1,8 +1,8 @@
 """Quota-aware resumable execution core for Market Data V2 bootstrap jobs.
 
-Round 2 deliberately stops at execution semantics.  A later storage round owns
-Parquet layout and atomic data publication; this executor only marks a request
-DONE after the injected sink returns an explicit committed receipt.
+Execution remains storage-agnostic, but a sink may expose ``recover_committed``
+so a crash after atomic publication and before ledger DONE can resume without
+issuing the same provider data request again.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import pandas as pd
 
 from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
 from core.market_data_execution_policy import MarketDataExecutionPolicy, get_market_data_execution_policy
+from core.market_data_storage_contract import MarketDataCommitError, MarketDataCommitReceipt
 from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError, FinMindUsage
 from services.downloader.market_data_ledger import (
     JOB_BLOCKED,
@@ -26,17 +27,6 @@ from services.downloader.market_data_ledger import (
     LedgerSummary,
     MarketDataJobLedger,
 )
-
-
-@dataclass(frozen=True)
-class MarketDataCommitReceipt:
-    committed: bool
-    row_count: int
-    content_sha256: str | None = None
-
-
-class MarketDataCommitError(RuntimeError):
-    pass
 
 
 @dataclass
@@ -213,6 +203,38 @@ class MarketDataBootstrapExecutor:
                     raise RuntimeError("Market Data ledger 有 unfinished jobs，但沒有可執行或可等待的 request")
 
                 request = job.to_request()
+                recover_fn = getattr(sink, "recover_committed", None)
+                if callable(recover_fn):
+                    try:
+                        recovered = recover_fn(request)
+                    except MarketDataCommitError as exc:
+                        self.ledger.mark_blocked(
+                            workload_id,
+                            job.request_id,
+                            error_kind="commit_recovery",
+                            message=str(exc),
+                            now=self._now(),
+                        )
+                        return self.ledger.get_summary(workload_id)
+                    if recovered is not None:
+                        if not isinstance(recovered, MarketDataCommitReceipt) or not recovered.committed:
+                            self.ledger.mark_blocked(
+                                workload_id,
+                                job.request_id,
+                                error_kind="commit_recovery_contract",
+                                message="Market Data sink recover_committed 未回傳合法 committed receipt",
+                                now=self._now(),
+                            )
+                            return self.ledger.get_summary(workload_id)
+                        self.ledger.mark_done(
+                            workload_id,
+                            job.request_id,
+                            row_count=recovered.row_count,
+                            content_sha256=recovered.content_sha256,
+                            now=self._now(),
+                        )
+                        continue
+
                 self._record_data_attempt(workload_id, job.request_id)
                 try:
                     frame = self._fetch(request)

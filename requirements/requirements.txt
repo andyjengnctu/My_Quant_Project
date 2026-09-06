@@ -12,3 +12,4 @@ coverage
 einops
 huggingface-hub
 safetensors
+pyarrow

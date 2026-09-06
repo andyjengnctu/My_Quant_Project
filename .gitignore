@@ -26,4 +26,5 @@ __pycache__/
 
 # 忽略本機 Trading 每日資料與實際帳戶狀態；不可進 Git/package ZIP
 /data/trading/
+/data/market_data_v2/
 /state/trading/

@@ -23,7 +23,7 @@ _IMPORT_NAME_OVERRIDES = {
 }
 _LOCAL_REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
 _LOCAL_REGRESSION_STEP_REQUIREMENTS = {
-    "quick_gate": {"numpy", "pandas", "openpyxl", "optuna", "SQLAlchemy"},
+    "quick_gate": {"numpy", "pandas", "pyarrow", "openpyxl", "optuna", "SQLAlchemy"},
     "consistency": {"numpy", "pandas", "openpyxl", "matplotlib"},
     "chain_checks": {"numpy", "pandas", "openpyxl"},
     "ml_smoke": {"numpy", "pandas", "openpyxl", "optuna", "SQLAlchemy"},

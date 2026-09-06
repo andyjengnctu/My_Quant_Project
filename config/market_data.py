@@ -43,6 +43,17 @@ MARKET_DATA_V2_EXECUTION_POLICY = {
     "executor_lock_seconds": 300.0,
 }
 
+# Market Data V2 storage knobs are operational only.  Bootstrap data is first
+# published into a neutral provider archive; Research V2 and Trading will branch
+# into isolated lifecycle snapshots in later rounds.
+MARKET_DATA_V2_STORAGE_POLICY = {
+    "format": "parquet",
+    "compression": "zstd",
+    "minimum_free_bytes": 10 * 1024**3,
+    "staging_headroom_multiplier": 2.0,
+    "minimum_staging_headroom_bytes": 64 * 1024**2,
+}
+
 TRADING_MARKET_DATA_LIFECYCLE = {
     "mode": "incremental_latest",
     "bootstrap_source_generation": RESEARCH_DATA_GENERATION_V2,
@@ -56,4 +67,5 @@ __all__ = [
     "ACTIVE_RESEARCH_DATA_GENERATION",
     "TRADING_MARKET_DATA_LIFECYCLE",
     "MARKET_DATA_V2_EXECUTION_POLICY",
+    "MARKET_DATA_V2_STORAGE_POLICY",
 ]

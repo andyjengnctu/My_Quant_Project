@@ -516,3 +516,222 @@ __all__ = [
     "validate_market_data_v2_preflight_planner_contract_case",
     "validate_market_data_v2_resumable_executor_contract_case",
 ]
+
+
+def validate_market_data_v2_parquet_storage_contract_case(_base_params):
+    """Round-3 atomic storage, schema drift, disk gate and commit recovery."""
+
+    from collections import namedtuple
+    from datetime import datetime, timezone
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from core.file_integrity import compute_file_sha256, load_json_strict
+    from core.market_data_bootstrap_requests import build_bootstrap_request_manifest
+    from core.market_data_dataset_registry import get_market_dataset_specs
+    from core.market_data_execution_policy import MarketDataExecutionPolicy
+    from core.market_data_storage_contract import (
+        MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME,
+        MARKET_DATA_DATASET_SCHEMA_FILENAME,
+        MarketDataCommitError,
+        resolve_market_data_bootstrap_archive_dir,
+        resolve_market_data_request_parquet_path,
+    )
+    from core.market_data_storage_policy import MarketDataStoragePolicy, get_market_data_storage_policy
+    from services.downloader.finmind_http import FinMindUsage
+    from services.downloader.market_data_executor import MarketDataBootstrapExecutor
+    from services.downloader.market_data_ledger import WORKLOAD_DONE, MarketDataJobLedger
+    from services.downloader.market_data_storage import (
+        MarketDataBootstrapStorageSink,
+        ParquetArtifactInspection,
+    )
+
+    case_id = "MARKET_DATA_V2_PARQUET_STORAGE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    trading_date_specs = tuple(
+        spec for spec in get_market_dataset_specs(included_only=True)
+        if spec.dataset == "TaiwanStockTradingDate"
+    )
+    trading_date_evidence = {
+        "TaiwanStockTradingDate": {"status": "PASS", "observed_dates": ("2026-09-04",)}
+    }
+    recovery_manifest = build_bootstrap_request_manifest(
+        specs=trading_date_specs,
+        historical_instruments=("2330",),
+        evidence_by_dataset=trading_date_evidence,
+        as_of_date="2026-09-04",
+    )
+    recovery_request = recovery_manifest.requests[0]
+
+    price_specs = tuple(
+        spec for spec in get_market_dataset_specs(included_only=True)
+        if spec.dataset == "TaiwanStockPrice"
+    )
+    price_evidence = {"TaiwanStockPrice": {"status": "PASS"}}
+    manifest = build_bootstrap_request_manifest(
+        specs=price_specs,
+        historical_instruments=("1101", "2330"),
+        evidence_by_dataset=price_evidence,
+        as_of_date="2026-09-04",
+    )
+    request, second_request = manifest.requests
+
+    class _JsonParquetCodec:
+        def __init__(self):
+            self.write_count = 0
+
+        def write(self, frame, path, *, metadata, compression):
+            self.write_count += 1
+            payload = {
+                "compression": compression,
+                "row_count": len(frame),
+                "columns": list(frame.columns),
+                "metadata": metadata,
+            }
+            Path(path).write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+        def inspect(self, path):
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+            return ParquetArtifactInspection(
+                row_count=int(payload["row_count"]),
+                columns=tuple(payload["columns"]),
+                metadata=dict(payload["metadata"]),
+            )
+
+    tiny_policy = MarketDataStoragePolicy(
+        format="parquet",
+        compression="zstd",
+        minimum_free_bytes=0,
+        staging_headroom_multiplier=1.0,
+        minimum_staging_headroom_bytes=0,
+    )
+    DiskUsage = namedtuple("DiskUsage", "total used free")
+    enough_disk = lambda _path: DiskUsage(10**9, 0, 10**9)
+
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        codec = _JsonParquetCodec()
+        sink = MarketDataBootstrapStorageSink(
+            project_root=root,
+            manifest=manifest,
+            policy=tiny_policy,
+            codec=codec,
+            disk_usage_fn=enough_disk,
+        )
+        archive_dir = resolve_market_data_bootstrap_archive_dir(root, manifest.manifest_fingerprint)
+        add_check(results, "market_data", case_id, "archive_root_is_neutral_market_data_v2_namespace", True, "data/market_data_v2/bootstrap" in archive_dir.as_posix())
+        bootstrap_payload = load_json_strict(archive_dir / MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME)
+        add_check(results, "market_data", case_id, "bootstrap_manifest_binds_request_manifest_fingerprint", manifest.manifest_fingerprint, bootstrap_payload["manifest_fingerprint"])
+        add_check(results, "market_data", case_id, "bootstrap_storage_format_is_parquet", "parquet", bootstrap_payload["format"])
+        add_check(results, "market_data", case_id, "bootstrap_storage_compression_is_zstd", "zstd", bootstrap_payload["compression"])
+
+        frame = pd.DataFrame([{"date": "2026-09-03", "stock_id": "2330"}, {"date": "2026-09-04", "stock_id": "2330"}])
+        receipt = sink(request, frame)
+        parquet_path = resolve_market_data_request_parquet_path(root, manifest.manifest_fingerprint, request)
+        add_check(results, "market_data", case_id, "commit_receipt_true_after_atomic_publication", True, receipt.committed)
+        add_check(results, "market_data", case_id, "commit_receipt_row_count_matches_frame", len(frame), receipt.row_count)
+        add_check(results, "market_data", case_id, "commit_receipt_hash_matches_published_file", compute_file_sha256(parquet_path), receipt.content_sha256)
+        add_check(results, "market_data", case_id, "published_request_artifact_exists", True, parquet_path.is_file())
+        temp_files = list(parquet_path.parent.glob("*.parquet.tmp")) + list(parquet_path.parent.glob(".*.parquet.tmp"))
+        add_check(results, "market_data", case_id, "atomic_commit_leaves_no_temp_file", 0, len(temp_files))
+        schema_payload = load_json_strict(parquet_path.parent / MARKET_DATA_DATASET_SCHEMA_FILENAME)
+        add_check(results, "market_data", case_id, "dataset_schema_preserves_provider_column_order", list(frame.columns), schema_payload["columns"])
+
+        recovered = sink.recover_committed(request)
+        add_check(results, "market_data", case_id, "committed_artifact_is_recoverable", True, recovered is not None and recovered.committed)
+        add_check(results, "market_data", case_id, "recovery_hash_matches_original_receipt", receipt.content_sha256, recovered.content_sha256)
+        add_check(results, "market_data", case_id, "recovery_does_not_rewrite_artifact", 1, codec.write_count)
+
+        try:
+            sink(second_request, pd.DataFrame([{"date": "2026-09-04", "new_column": 1}]))
+        except MarketDataCommitError:
+            drift_blocked = True
+        else:
+            drift_blocked = False
+        add_check(results, "market_data", case_id, "provider_schema_drift_fails_closed", True, drift_blocked)
+
+    with TemporaryDirectory() as td:
+        low_disk = lambda _path: DiskUsage(100, 99, 1)
+        policy = MarketDataStoragePolicy(
+            format="parquet",
+            compression="zstd",
+            minimum_free_bytes=100,
+            staging_headroom_multiplier=1.0,
+            minimum_staging_headroom_bytes=10,
+        )
+        sink = MarketDataBootstrapStorageSink(
+            project_root=Path(td),
+            manifest=manifest,
+            policy=policy,
+            codec=_JsonParquetCodec(),
+            disk_usage_fn=low_disk,
+        )
+        try:
+            sink(request, pd.DataFrame([{"date": "2026-09-04"}]))
+        except MarketDataCommitError as exc:
+            low_disk_blocked = "free-space gate" in str(exc)
+        else:
+            low_disk_blocked = False
+        add_check(results, "market_data", case_id, "low_disk_space_fails_before_publication", True, low_disk_blocked)
+
+    # Crash window regression: file is already atomically published but ledger
+    # was not marked DONE.  Executor must recover storage before issuing data HTTP.
+    class _RecoveryClient:
+        def __init__(self):
+            self.usage_request_count = 0
+            self.data_request_count = 0
+
+        def get_usage(self):
+            self.usage_request_count += 1
+            return FinMindUsage(user_count=0, api_request_limit=10)
+
+        def get_data(self, **_kwargs):
+            self.data_request_count += 1
+            raise AssertionError("committed artifact recovery 不應重新下載 FinMind data")
+
+    execution_policy = MarketDataExecutionPolicy(
+        quota_reserve_requests=1,
+        quota_refresh_every_requests=99,
+        quota_poll_seconds=1.0,
+        max_retryable_attempts=2,
+        retry_backoff_seconds=(1.0,),
+        job_lease_seconds=5.0,
+        executor_lock_seconds=5.0,
+    )
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        sink = MarketDataBootstrapStorageSink(
+            project_root=root,
+            manifest=recovery_manifest,
+            policy=tiny_policy,
+            codec=_JsonParquetCodec(),
+            disk_usage_fn=enough_disk,
+        )
+        sink(recovery_request, pd.DataFrame([{"date": "2026-09-04"}]))
+        client = _RecoveryClient()
+        ledger = MarketDataJobLedger(root / "ledger.sqlite3")
+        executor = MarketDataBootstrapExecutor(
+            ledger=ledger,
+            client=client,
+            policy=execution_policy,
+            now_fn=lambda: datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc),
+            sleep_fn=lambda _seconds: None,
+            owner_id="recovery-worker",
+        )
+        execution_summary = executor.run(manifest=recovery_manifest, sink=sink)
+        add_check(results, "market_data", case_id, "post_commit_pre_ledger_crash_recovers_to_done", WORKLOAD_DONE, execution_summary.workload_status)
+        add_check(results, "market_data", case_id, "post_commit_recovery_uses_zero_data_http", 0, client.data_request_count)
+        add_check(results, "market_data", case_id, "post_commit_recovery_ledger_http_attempts_zero", 0, execution_summary.http_attempts)
+
+    project_root = Path(__file__).resolve().parents[2]
+    requirements = (project_root / "requirements" / "requirements.txt").read_text(encoding="utf-8")
+    lock = (project_root / "requirements" / "requirements-lock.txt").read_text(encoding="utf-8")
+    add_check(results, "market_data", case_id, "pyarrow_declared_in_requirements", True, any(line.strip() == "pyarrow" for line in requirements.splitlines()))
+    add_check(results, "market_data", case_id, "pyarrow_exact_version_locked", True, any(line.strip().startswith("pyarrow==") for line in lock.splitlines()))
+    add_check(results, "market_data", case_id, "default_storage_policy_is_parquet_zstd", ("parquet", "zstd"), (get_market_data_storage_policy().format, get_market_data_storage_policy().compression))
+
+    summary.update({"checks": len(results), "manifest_fingerprint": manifest.manifest_fingerprint})
+    return results, summary
