@@ -38,14 +38,26 @@ def _estimate_bootstrap_eta_seconds(
     initial_done: int,
     total: int,
     elapsed_seconds: float,
+    quota_wait_seconds: float = 0.0,
     quota_limit: int | None,
     quota_reserve: int | None,
+    observed_sample_floor: int = 1,
 ) -> float | None:
+    """Estimate remaining wall-clock time without treating quota wait as slow I/O.
+
+    The sustainable provider quota is always an upper bound on throughput.  An
+    observed active-processing rate is used only after enough jobs have finished
+    in this process; quota wait time is removed from that active-rate sample.
+    """
+
     remaining = max(0, int(total) - int(done))
     if remaining == 0:
         return 0.0
     process_done = max(0, int(done) - int(initial_done))
-    observed_rate = process_done / elapsed_seconds if process_done > 0 and elapsed_seconds > 0 else None
+    active_elapsed = max(0.0, float(elapsed_seconds) - max(0.0, float(quota_wait_seconds)))
+    observed_rate = None
+    if process_done >= max(1, int(observed_sample_floor)) and active_elapsed > 0:
+        observed_rate = process_done / active_elapsed
     quota_rate = None
     if quota_limit is not None and int(quota_limit) > 0:
         safe_per_hour = max(1, int(quota_limit) - max(0, int(quota_reserve or 0)))
@@ -233,6 +245,23 @@ def _run_market_data_v2_bootstrap() -> int:
 
     progress_started = _monotonic_time.monotonic()
     initial_done = done
+    from core.market_data_execution_policy import get_market_data_execution_policy
+    progress_sample_floor = max(1, int(get_market_data_execution_policy().progress_every_committed_requests))
+
+    def _event_eta(event: dict[str, object], *, done_now: int, total: int, elapsed: float) -> float | None:
+        quota_limit = event.get("quota_limit")
+        quota_reserve = event.get("quota_reserve")
+        quota_wait_seconds = float(event.get("quota_wait_seconds") or event.get("waited_seconds") or 0.0)
+        return _estimate_bootstrap_eta_seconds(
+            done=done_now,
+            initial_done=initial_done,
+            total=total,
+            elapsed_seconds=elapsed,
+            quota_wait_seconds=quota_wait_seconds,
+            quota_limit=int(quota_limit) if quota_limit is not None else None,
+            quota_reserve=int(quota_reserve) if quota_reserve is not None else None,
+            observed_sample_floor=progress_sample_floor,
+        )
 
     def _progress(event: dict[str, object]) -> None:
         done_now = int(event.get("done") or 0)
@@ -243,15 +272,7 @@ def _run_market_data_v2_bootstrap() -> int:
         target = str(event.get("dataset") or "") + (f"/{data_id}" if data_id else "")
         elapsed = max(0.0, _monotonic_time.monotonic() - progress_started)
         quota_limit = event.get("quota_limit")
-        quota_reserve = event.get("quota_reserve")
-        eta = _estimate_bootstrap_eta_seconds(
-            done=done_now,
-            initial_done=initial_done,
-            total=total,
-            elapsed_seconds=elapsed,
-            quota_limit=int(quota_limit) if quota_limit is not None else None,
-            quota_reserve=int(quota_reserve) if quota_reserve is not None else None,
-        )
+        eta = _event_eta(event, done_now=done_now, total=total, elapsed=elapsed)
         quota_remaining = event.get("quota_remaining")
         quota_usable = event.get("quota_usable_remaining")
         if quota_remaining is None or quota_limit is None:
@@ -268,6 +289,40 @@ def _run_market_data_v2_bootstrap() -> int:
             f" | {target}{suffix}"
         )
 
+    def _quota_wait(event: dict[str, object]) -> None:
+        done_now = int(event.get("done") or initial_done)
+        total = int(event.get("total") or manifest.total_requests)
+        pct = 100.0 * done_now / total if total > 0 else 0.0
+        elapsed = max(0.0, _monotonic_time.monotonic() - progress_started)
+        waited = max(0.0, float(event.get("waited_seconds") or 0.0))
+        eta = _event_eta(event, done_now=done_now, total=total, elapsed=elapsed)
+        poll_seconds = max(0.0, float(event.get("poll_seconds") or 0.0))
+        quota_used = event.get("quota_user_count")
+        quota_limit = event.get("quota_limit")
+        safe_used_max = event.get("quota_safe_used_max")
+        needed_drop = event.get("quota_needed_drop")
+        if quota_used is not None and quota_limit is not None:
+            quota_text = f"quota={int(quota_used)}/{int(quota_limit)}"
+            if safe_used_max is not None:
+                quota_text += f" | 放行≤{int(safe_used_max)}"
+            if needed_drop is not None and int(needed_drop) > 0:
+                quota_text += f"(需回落≥{int(needed_drop)})"
+        else:
+            quota_text = "quota=查詢暫時失敗"
+        reason = str(event.get("reason") or "quota_capacity")
+        error = event.get("error")
+        extra = f" | {reason}" if reason != "quota_capacity" else ""
+        if error:
+            extra += f" | {error}"
+        print(
+            f"[Bootstrap WAIT_QUOTA] {done_now}/{total} ({pct:.1f}%)"
+            f" | 已過 {_format_bootstrap_duration(elapsed)}"
+            f" | 本輪等待 {_format_bootstrap_duration(waited)}"
+            f" | ETA≈{_format_bootstrap_duration(eta)}"
+            f" | {quota_text}"
+            f" | {int(round(poll_seconds))}s 後重查{extra}"
+        )
+
     try:
         result = execute_market_data_v2_bootstrap(
             activation=activation,
@@ -278,6 +333,7 @@ def _run_market_data_v2_bootstrap() -> int:
             client=client,
             now_fn=rt.get_taipei_now,
             progress_fn=_progress,
+            quota_wait_fn=_quota_wait,
         )
     except KeyboardInterrupt:
         print("\n⚠ Bootstrap 已由使用者中斷；已完成的 request/Parquet/ledger 會保留，下次選 [3] 可續傳。")

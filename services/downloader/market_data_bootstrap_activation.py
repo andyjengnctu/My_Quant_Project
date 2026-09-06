@@ -292,6 +292,7 @@ def execute_market_data_v2_bootstrap(
     now_fn: Callable[[], datetime] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
     progress_fn: Callable[[dict[str, object]], None] | None = None,
+    quota_wait_fn: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     """Execute/resume one explicitly prepared manifest until DONE or BLOCKED."""
 
@@ -315,6 +316,7 @@ def execute_market_data_v2_bootstrap(
         policy=resolved_policy,
         now_fn=now_fn,
         sleep_fn=sleep_fn,
+        quota_wait_observer=quota_wait_fn,
     )
     progress_sink = _ProgressStorageSink(
         sink=storage,

@@ -46,6 +46,7 @@ class MarketDataBootstrapExecutor:
         sleep_fn: Callable[[float], None] | None = None,
         owner_id: str | None = None,
         blocking_waits: bool = True,
+        quota_wait_observer: Callable[[dict[str, object]], None] | None = None,
     ):
         self.ledger = ledger
         self.client = client
@@ -54,7 +55,10 @@ class MarketDataBootstrapExecutor:
         self.sleep_fn = sleep_fn or time.sleep
         self.owner_id = str(owner_id or f"executor-{uuid4().hex}")
         self.blocking_waits = bool(blocking_waits)
+        self.quota_wait_observer = quota_wait_observer
         self._quota = _QuotaState()
+        self._quota_wait_started_at: datetime | None = None
+        self._quota_wait_accumulated_seconds = 0.0
 
     def _now(self) -> datetime:
         value = self.now_fn()
@@ -82,6 +86,65 @@ class MarketDataBootstrapExecutor:
         self._quota.usage = usage
         self._quota.local_data_attempts_since_refresh = 0
         return usage
+
+    def _quota_wait_seconds(self) -> float:
+        total = float(self._quota_wait_accumulated_seconds)
+        if self._quota_wait_started_at is not None:
+            total += max(0.0, (self._now() - self._quota_wait_started_at).total_seconds())
+        return total
+
+    def _begin_quota_wait(self) -> None:
+        if self._quota_wait_started_at is None:
+            self._quota_wait_started_at = self._now()
+
+    def _end_quota_wait(self) -> None:
+        if self._quota_wait_started_at is None:
+            return
+        self._quota_wait_accumulated_seconds += max(
+            0.0,
+            (self._now() - self._quota_wait_started_at).total_seconds(),
+        )
+        self._quota_wait_started_at = None
+
+    def _emit_quota_wait(
+        self,
+        workload_id: str,
+        *,
+        reason: str,
+        error: str | None = None,
+    ) -> None:
+        observer = self.quota_wait_observer
+        if observer is None:
+            return
+        usage = self._quota.usage
+        summary = self.ledger.get_summary(workload_id)
+        event: dict[str, object] = {
+            "kind": "WAIT_QUOTA",
+            "reason": str(reason),
+            "done": int(summary.done),
+            "total": int(summary.total),
+            "waited_seconds": self._quota_wait_seconds(),
+            "poll_seconds": float(self.policy.quota_poll_seconds),
+            "error": error,
+        }
+        if usage is not None:
+            limit = int(usage.api_request_limit)
+            reserve = self._effective_reserve(limit)
+            effective_used = int(usage.user_count) + int(self._quota.local_data_attempts_since_refresh)
+            safe_used_max = max(0, limit - reserve - 1)
+            remaining = int(limit - effective_used)
+            event.update(
+                {
+                    "quota_user_count": effective_used,
+                    "quota_limit": limit,
+                    "quota_remaining": remaining,
+                    "quota_usable_remaining": max(0, remaining - reserve),
+                    "quota_reserve": reserve,
+                    "quota_safe_used_max": safe_used_max,
+                    "quota_needed_drop": max(0, effective_used - safe_used_max),
+                }
+            )
+        observer(event)
 
     def _effective_reserve(self, limit: int) -> int:
         return min(self.policy.quota_reserve_requests, max(0, int(limit) - 1))
@@ -114,6 +177,7 @@ class MarketDataBootstrapExecutor:
                 "quota_remaining": None,
                 "quota_usable_remaining": None,
                 "quota_reserve": None,
+                "quota_wait_seconds": self._quota_wait_seconds(),
             }
         limit = int(usage.api_request_limit)
         remaining = max(0, self._estimated_remaining())
@@ -123,6 +187,7 @@ class MarketDataBootstrapExecutor:
             "quota_remaining": remaining,
             "quota_usable_remaining": max(0, remaining - reserve),
             "quota_reserve": reserve,
+            "quota_wait_seconds": self._quota_wait_seconds(),
         }
 
     def _refresh_usage_with_transient_wait(self, workload_id: str) -> FinMindUsage:
@@ -132,8 +197,14 @@ class MarketDataBootstrapExecutor:
             except FinMindHttpError as exc:
                 if not exc.retryable:
                     raise
+                self._begin_quota_wait()
                 self.ledger.set_workload_status(workload_id, status=WORKLOAD_WAIT_QUOTA, now=self._now())
                 self._renew_lock(workload_id)
+                self._emit_quota_wait(
+                    workload_id,
+                    reason="usage_refresh_retry",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
                 self.sleep_fn(self.policy.quota_poll_seconds)
 
     def _ensure_quota_capacity(self, workload_id: str) -> bool:
@@ -148,12 +219,16 @@ class MarketDataBootstrapExecutor:
             else:
                 self._refresh_usage()
         while not self._quota_has_capacity():
+            self._begin_quota_wait()
             self.ledger.set_workload_status(workload_id, status=WORKLOAD_WAIT_QUOTA, now=self._now())
             if not self.blocking_waits:
+                self._emit_quota_wait(workload_id, reason="quota_capacity")
                 return False
             self._renew_lock(workload_id)
+            self._emit_quota_wait(workload_id, reason="quota_capacity")
             self.sleep_fn(self.policy.quota_poll_seconds)
             self._refresh_usage_with_transient_wait(workload_id)
+        self._end_quota_wait()
         self.ledger.set_workload_status(workload_id, status=WORKLOAD_RUNNING, now=self._now())
         return True
 

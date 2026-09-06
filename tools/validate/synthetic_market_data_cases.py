@@ -322,6 +322,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             self.usage_values = [
                 FinMindUsage(user_count=0, api_request_limit=4),
                 FinMindUsage(user_count=4, api_request_limit=4),
+                FinMindUsage(user_count=4, api_request_limit=4),
                 FinMindUsage(user_count=0, api_request_limit=4),
             ]
             self.quota_raised = False
@@ -347,6 +348,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
 
     clock = _Clock()
     quota_client = _QuotaThenSuccessClient()
+    quota_wait_events = []
     committed = []
 
     def _sink(request, frame):
@@ -362,12 +364,45 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             now_fn=clock.now,
             sleep_fn=clock.sleep,
             owner_id="quota-worker",
+            quota_wait_observer=quota_wait_events.append,
         )
         execution_summary = executor.run(manifest=manifest, sink=_sink)
         add_check(results, "market_data", case_id, "quota_402_waits_and_resumes_to_done", WORKLOAD_DONE, execution_summary.workload_status)
         add_check(results, "market_data", case_id, "quota_resume_commits_every_logical_request", manifest.total_requests, execution_summary.done)
         add_check(results, "market_data", case_id, "quota_402_is_counted_as_actual_http_attempt", manifest.total_requests + 1, execution_summary.http_attempts)
         add_check(results, "market_data", case_id, "quota_wait_uses_injected_polling", True, bool(clock.sleeps))
+        add_check(results, "market_data", case_id, "quota_wait_emits_heartbeat_each_poll", True, len(quota_wait_events) >= 2)
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_does_not_add_usage_refresh", 4, quota_client.usage_request_count)
+        last_wait = quota_wait_events[-1]
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_uses_live_limit", 4, last_wait.get("quota_limit"))
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_safe_release_threshold", 2, last_wait.get("quota_safe_used_max"))
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_required_drop", 2, last_wait.get("quota_needed_drop"))
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_accumulates_wait_time", True, float(last_wait.get("waited_seconds") or 0.0) >= policy.quota_poll_seconds)
+
+        from services.downloader.main import _estimate_bootstrap_eta_seconds
+
+        early_resume_eta = _estimate_bootstrap_eta_seconds(
+            done=5700,
+            initial_done=5665,
+            total=69360,
+            elapsed_seconds=402.0,
+            quota_wait_seconds=390.0,
+            quota_limit=6000,
+            quota_reserve=50,
+            observed_sample_floor=100,
+        )
+        rolling_wait_eta = _estimate_bootstrap_eta_seconds(
+            done=5800,
+            initial_done=5665,
+            total=69360,
+            elapsed_seconds=886.0,
+            quota_wait_seconds=826.0,
+            quota_limit=6000,
+            quota_reserve=50,
+            observed_sample_floor=100,
+        )
+        add_check(results, "market_data", case_id, "eta_early_resume_uses_sustainable_quota_not_tiny_sample", True, early_resume_eta is not None and early_resume_eta < 12 * 3600)
+        add_check(results, "market_data", case_id, "eta_excludes_quota_wait_from_active_throughput", True, rolling_wait_eta is not None and rolling_wait_eta < 12 * 3600)
 
         class _NoCallClient:
             def __init__(self):
