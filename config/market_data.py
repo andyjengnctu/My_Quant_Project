@@ -29,6 +29,20 @@ RESEARCH_DATA_GENERATIONS = {
 # bootstrap/common-complete snapshot is built and frozen.
 ACTIVE_RESEARCH_DATA_GENERATION = RESEARCH_DATA_GENERATION_V1
 
+
+# Market Data V2 bootstrap executor knobs are execution-only policy; they do not
+# participate in Research scientific identity.  Quota values remain live-provider
+# driven; these settings only control safety margin, polling and bounded retries.
+MARKET_DATA_V2_EXECUTION_POLICY = {
+    "quota_reserve_requests": 50,
+    "quota_refresh_every_requests": 25,
+    "quota_poll_seconds": 30.0,
+    "max_retryable_attempts": 4,
+    "retry_backoff_seconds": (5.0, 30.0, 120.0),
+    "job_lease_seconds": 300.0,
+    "executor_lock_seconds": 300.0,
+}
+
 TRADING_MARKET_DATA_LIFECYCLE = {
     "mode": "incremental_latest",
     "bootstrap_source_generation": RESEARCH_DATA_GENERATION_V2,
@@ -41,4 +55,5 @@ __all__ = [
     "RESEARCH_DATA_GENERATIONS",
     "ACTIVE_RESEARCH_DATA_GENERATION",
     "TRADING_MARKET_DATA_LIFECYCLE",
+    "MARKET_DATA_V2_EXECUTION_POLICY",
 ]

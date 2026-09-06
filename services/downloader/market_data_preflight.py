@@ -10,6 +10,7 @@ from typing import Iterable
 import pandas as pd
 
 from core.market_data_bootstrap_planner import DatasetProbeEvidence, build_bootstrap_request_plan
+from core.market_data_bootstrap_requests import BOOTSTRAP_FULL_RANGE_START
 from core.market_data_dataset_registry import (
     BOOTSTRAP_BULK_REFERENCE_DATES,
     BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE,
@@ -23,7 +24,7 @@ from core.market_data_dataset_registry import (
 from core.trading_market_clock import select_latest_completed_daily_date
 from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError
 
-PREFLIGHT_FULL_RANGE_START = "1900-01-01"
+PREFLIGHT_FULL_RANGE_START = BOOTSTRAP_FULL_RANGE_START
 CURRENT_MARKET_TYPES = {"twse", "tpex"}
 
 
@@ -177,6 +178,8 @@ def _report_markdown(payload: dict[str, object]) -> str:
                 f"- per-instrument datasets: **{plan.get('per_instrument_dataset_count')}**",
                 f"- minimum quota-hours: **{float(plan.get('minimum_quota_hours') or 0):.2f}**",
                 f"- minimum quota windows: **{plan.get('minimum_quota_windows')}**",
+                f"- registry fingerprint: `{plan.get('registry_fingerprint')}`",
+                f"- request-manifest fingerprint: `{plan.get('manifest_fingerprint')}`",
                 "",
                 "| Dataset | Mode | Requests | Basis |",
                 "|---|---|---:|---|",
@@ -269,7 +272,7 @@ def run_market_data_v2_preflight(
         )
 
     payload: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "READY" if plan is not None and not failures else "BLOCKED",
         "generated_at": now.isoformat(),
         "as_of_date": as_of_date,

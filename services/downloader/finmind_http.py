@@ -1,8 +1,9 @@
-"""Small explicit FinMind HTTP client used by Market Data preflight/planning.
+"""Explicit single-attempt FinMind HTTP client for Market Data V2.
 
-Unlike the FinMind SDK path used by the legacy downloader, this client performs
-exactly one HTTP attempt per method call and exposes the attempt count.  That is
-required for quota accounting and capability probes.
+Each ``get_data``/``get_usage`` call performs exactly one HTTP attempt.  Error
+metadata is classified so the persistent bootstrap executor can distinguish
+quota wait, bounded transient retry and permanent fail-closed conditions without
+introducing hidden SDK retries.
 """
 from __future__ import annotations
 
@@ -17,13 +18,43 @@ FINMIND_USER_INFO_URL = "https://api.web.finmindtrade.com/v2/user_info"
 
 
 class FinMindHttpError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int | None = None,
+        api_status: int | str | None = None,
+        retryable: bool = False,
+        quota_exhausted: bool = False,
+    ):
+        super().__init__(message)
+        self.http_status = http_status
+        self.api_status = api_status
+        self.retryable = bool(retryable)
+        self.quota_exhausted = bool(quota_exhausted)
 
 
 @dataclass(frozen=True)
 class FinMindUsage:
     user_count: int
     api_request_limit: int
+
+
+def _status_traits(http_status: int | None, api_status: int | str | None = None) -> tuple[bool, bool]:
+    statuses: list[int] = []
+    if http_status is not None:
+        try:
+            statuses.append(int(http_status))
+        except (TypeError, ValueError):
+            pass
+    if api_status is not None:
+        try:
+            statuses.append(int(api_status))
+        except (TypeError, ValueError):
+            pass
+    quota = 402 in statuses
+    retryable = quota or any(status in {408, 425, 429} or status >= 500 for status in statuses)
+    return retryable, quota
 
 
 class FinMindHttpClient:
@@ -44,14 +75,24 @@ class FinMindHttpClient:
         return {"Authorization": f"Bearer {self._token}"}
 
     def _decode_json(self, response, *, operation: str) -> Mapping[str, Any]:
+        http_status = int(getattr(response, "status_code", 0) or 0)
+        retryable, quota = _status_traits(http_status)
         try:
             payload = response.json()
         except ValueError as exc:
             raise FinMindHttpError(
-                f"FinMind {operation} 回傳非 JSON：HTTP {getattr(response, 'status_code', '?')}"
+                f"FinMind {operation} 回傳非 JSON：HTTP {getattr(response, 'status_code', '?')}",
+                http_status=http_status,
+                retryable=retryable,
+                quota_exhausted=quota,
             ) from exc
         if not isinstance(payload, Mapping):
-            raise FinMindHttpError(f"FinMind {operation} JSON 格式不是 object")
+            raise FinMindHttpError(
+                f"FinMind {operation} JSON 格式不是 object",
+                http_status=http_status,
+                retryable=retryable,
+                quota_exhausted=quota,
+            )
         return payload
 
     def get_usage(self) -> FinMindUsage:
@@ -63,11 +104,20 @@ class FinMindHttpClient:
                 timeout=self._timeout_sec,
             )
         except requests.RequestException as exc:
-            raise FinMindHttpError(f"FinMind user_info request 失敗: {type(exc).__name__}: {exc}") from exc
-        payload = self._decode_json(response, operation="user_info")
-        if int(getattr(response, "status_code", 0) or 0) >= 400:
             raise FinMindHttpError(
-                f"FinMind user_info HTTP {response.status_code}: {payload.get('msg') or payload}"
+                f"FinMind user_info request 失敗: {type(exc).__name__}: {exc}",
+                retryable=True,
+            ) from exc
+        payload = self._decode_json(response, operation="user_info")
+        http_status = int(getattr(response, "status_code", 0) or 0)
+        if http_status >= 400:
+            retryable, quota = _status_traits(http_status, payload.get("status"))
+            raise FinMindHttpError(
+                f"FinMind user_info HTTP {response.status_code}: {payload.get('msg') or payload}",
+                http_status=http_status,
+                api_status=payload.get("status"),
+                retryable=retryable,
+                quota_exhausted=quota,
             )
         try:
             user_count = int(payload["user_count"])
@@ -109,15 +159,21 @@ class FinMindHttpClient:
             )
         except requests.RequestException as exc:
             raise FinMindHttpError(
-                f"FinMind data request 失敗: dataset={dataset_id} | {type(exc).__name__}: {exc}"
+                f"FinMind data request 失敗: dataset={dataset_id} | {type(exc).__name__}: {exc}",
+                retryable=True,
             ) from exc
         payload = self._decode_json(response, operation=f"data:{dataset_id}")
         http_status = int(getattr(response, "status_code", 0) or 0)
         api_status = payload.get("status")
         if http_status >= 400 or (api_status not in (None, 200, "200")):
+            retryable, quota = _status_traits(http_status, api_status)
             raise FinMindHttpError(
                 f"FinMind dataset={dataset_id} HTTP {http_status} status={api_status}: "
-                f"{payload.get('msg') or 'unknown error'}"
+                f"{payload.get('msg') or 'unknown error'}",
+                http_status=http_status,
+                api_status=api_status,
+                retryable=retryable,
+                quota_exhausted=quota,
             )
         raw_data = payload.get("data", [])
         if raw_data is None:

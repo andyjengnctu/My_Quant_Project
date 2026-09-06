@@ -2310,6 +2310,11 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "RESEARCH_DATA_GENERATIONS",
             "ACTIVE_RESEARCH_DATA_GENERATION",
             "TRADING_MARKET_DATA_LIFECYCLE",
+            "MARKET_DATA_V2_EXECUTION_POLICY",
+        },
+        "core.market_data_execution_policy": {
+            "MarketDataExecutionPolicy",
+            "get_market_data_execution_policy",
         },
         "core.market_data_contract": {
             "FINMIND_ADJUSTED_PRICE_DATASET",

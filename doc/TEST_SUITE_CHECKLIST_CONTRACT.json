@@ -4166,6 +4166,17 @@
       "entry": "`core/market_data_dataset_registry.py`, `core/market_data_bootstrap_planner.py`, `services/downloader/finmind_http.py`, `services/downloader/market_data_preflight.py`, `apps/smart_downloader.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 375
+    },
+    {
+      "id": "B388",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 resumable bootstrap execution contract",
+      "item": "Bootstrap logical request identity, persistent resume ledger, live-quota waiting and retry/fail-closed semantics remain deterministic and storage-commit gated",
+      "gap": "Market Data V2 planner與executor必須共用同一deterministic logical-request manifest/fingerprint，禁止plan count與實際job分叉。Bootstrap execution state必須持久保存於SQLite ledger：每個logical request具穩定request identity、attempt/http-attempt/status/lease，程序中斷或重啟不得重抓已DONE job；expired/orphan RUNNING job在executor合法取得workload lock後才可reclaim。Live quota必須由provider user_info驅動且不得硬編1600：接近config-driven reserve或遇402時進WAIT_QUOTA並自動poll/resume，402不得消耗transient retry budget；network/5xx採bounded config-driven retry/backoff，permanent 4xx一次fail-closed。Executor不得因HTTP成功即標DONE，只有storage sink回傳committed receipt且row count一致後才可完成job；Round 2尚未接正式storage sink，不得由正式menu啟動full bootstrap。",
+      "entry": "`core/market_data_bootstrap_requests.py`, `core/market_data_execution_policy.py`, `services/downloader/market_data_ledger.py`, `services/downloader/market_data_executor.py`, `services/downloader/finmind_http.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 376
     }
   ],
   "tests": [
@@ -7711,6 +7722,13 @@
       "description": "`validate_market_data_v2_preflight_planner_contract_case` 覆蓋archive include/exclude roster、raw/adjusted price、derivative product master、historical TWSE/TPEX+delisting universe、registry-driven planner、live quota adoption、instrument-count非硬編、failed probe fail-closed，以及direct HTTP request accounting/4xx no-hidden-retry。",
       "initial_status": "NEW",
       "order": 497
+    },
+    {
+      "id": "T508",
+      "b_id": "B388",
+      "description": "`validate_market_data_v2_resumable_executor_contract_case` 覆蓋planner/executor manifest identity、logical request uniqueness、executor lock互斥與expired takeover、orphan RUNNING reclaim、DONE restart零HTTP重抓、402 WAIT_QUOTA自動resume、transient bounded retry/exhaustion、permanent 4xx no-hidden-retry，以及storage committed receipt gate。",
+      "initial_status": "NEW",
+      "order": 498
     }
   ],
   "transitions": [
@@ -25281,6 +25299,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_preflight_planner_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B388",
+      "description": "新增Market Data V2 deterministic request manifest、SQLite resume ledger與quota-aware bootstrap executor正式治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_bootstrap_requests.py`, `services/downloader/market_data_ledger.py`, `services/downloader/market_data_executor.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T508",
+      "description": "新增Market Data V2 resumable executor dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_resumable_executor_contract_case`"
     }
   ]
 }

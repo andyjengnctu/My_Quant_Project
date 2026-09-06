@@ -1,0 +1,306 @@
+"""Quota-aware resumable execution core for Market Data V2 bootstrap jobs.
+
+Round 2 deliberately stops at execution semantics.  A later storage round owns
+Parquet layout and atomic data publication; this executor only marks a request
+DONE after the injected sink returns an explicit committed receipt.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import time
+from typing import Callable
+from uuid import uuid4
+
+import pandas as pd
+
+from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
+from core.market_data_execution_policy import MarketDataExecutionPolicy, get_market_data_execution_policy
+from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError, FinMindUsage
+from services.downloader.market_data_ledger import (
+    JOB_BLOCKED,
+    WORKLOAD_BLOCKED,
+    WORKLOAD_DONE,
+    WORKLOAD_RUNNING,
+    WORKLOAD_WAIT_QUOTA,
+    LedgerSummary,
+    MarketDataJobLedger,
+)
+
+
+@dataclass(frozen=True)
+class MarketDataCommitReceipt:
+    committed: bool
+    row_count: int
+    content_sha256: str | None = None
+
+
+class MarketDataCommitError(RuntimeError):
+    pass
+
+
+@dataclass
+class _QuotaState:
+    usage: FinMindUsage | None = None
+    local_data_attempts_since_refresh: int = 0
+
+
+class MarketDataBootstrapExecutor:
+    def __init__(
+        self,
+        *,
+        ledger: MarketDataJobLedger,
+        client: FinMindHttpClient,
+        policy: MarketDataExecutionPolicy | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
+        owner_id: str | None = None,
+    ):
+        self.ledger = ledger
+        self.client = client
+        self.policy = policy or get_market_data_execution_policy()
+        self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        self.sleep_fn = sleep_fn or time.sleep
+        self.owner_id = str(owner_id or f"executor-{uuid4().hex}")
+        self._quota = _QuotaState()
+
+    def _now(self) -> datetime:
+        value = self.now_fn()
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _lock_until(self, now: datetime) -> datetime:
+        return now + timedelta(seconds=self.policy.executor_lock_seconds)
+
+    def _job_lease_until(self, now: datetime) -> datetime:
+        return now + timedelta(seconds=self.policy.job_lease_seconds)
+
+    def _renew_lock(self, workload_id: str) -> None:
+        now = self._now()
+        self.ledger.renew_executor_lock(
+            workload_id,
+            owner_id=self.owner_id,
+            now=now,
+            lease_until=self._lock_until(now),
+        )
+
+    def _refresh_usage(self) -> FinMindUsage:
+        usage = self.client.get_usage()
+        self._quota.usage = usage
+        self._quota.local_data_attempts_since_refresh = 0
+        return usage
+
+    def _effective_reserve(self, limit: int) -> int:
+        return min(self.policy.quota_reserve_requests, max(0, int(limit) - 1))
+
+    def _estimated_remaining(self) -> int:
+        usage = self._quota.usage
+        if usage is None:
+            return 0
+        return int(usage.api_request_limit - usage.user_count - self._quota.local_data_attempts_since_refresh)
+
+    def _quota_has_capacity(self) -> bool:
+        usage = self._quota.usage
+        if usage is None:
+            return False
+        return self._estimated_remaining() > self._effective_reserve(usage.api_request_limit)
+
+    def _refresh_usage_with_transient_wait(self, workload_id: str) -> FinMindUsage:
+        while True:
+            try:
+                return self._refresh_usage()
+            except FinMindHttpError as exc:
+                if not exc.retryable:
+                    raise
+                self.ledger.set_workload_status(workload_id, status=WORKLOAD_WAIT_QUOTA, now=self._now())
+                self._renew_lock(workload_id)
+                self.sleep_fn(self.policy.quota_poll_seconds)
+
+    def _ensure_quota_capacity(self, workload_id: str) -> None:
+        should_refresh = (
+            self._quota.usage is None
+            or self._quota.local_data_attempts_since_refresh >= self.policy.quota_refresh_every_requests
+            or not self._quota_has_capacity()
+        )
+        if should_refresh:
+            self._refresh_usage_with_transient_wait(workload_id)
+        while not self._quota_has_capacity():
+            self.ledger.set_workload_status(workload_id, status=WORKLOAD_WAIT_QUOTA, now=self._now())
+            self._renew_lock(workload_id)
+            self.sleep_fn(self.policy.quota_poll_seconds)
+            self._refresh_usage_with_transient_wait(workload_id)
+        self.ledger.set_workload_status(workload_id, status=WORKLOAD_RUNNING, now=self._now())
+
+    def _record_data_attempt(self, workload_id: str, request_id: str) -> None:
+        self.ledger.record_http_attempt(workload_id, request_id, now=self._now())
+        self._quota.local_data_attempts_since_refresh += 1
+
+    def _sleep_until_retry_ready(self, workload_id: str) -> bool:
+        raw = self.ledger.next_retry_at(workload_id)
+        if not raw:
+            return False
+        target = datetime.fromisoformat(str(raw))
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        delay = max(0.0, (target.astimezone(timezone.utc) - self._now()).total_seconds())
+        if delay > 0:
+            # Renew before/after the wait. Retry backoff is bounded by config and
+            # may exceed the executor lock lease, so long waits are split.
+            remaining = delay
+            while remaining > 0:
+                self._renew_lock(workload_id)
+                step = min(remaining, max(0.1, self.policy.executor_lock_seconds / 2.0))
+                self.sleep_fn(step)
+                remaining -= step
+        return True
+
+    def _fetch(self, request: BootstrapHttpRequest) -> pd.DataFrame:
+        return self.client.get_data(
+            dataset=request.dataset,
+            data_id=request.data_id,
+            start_date=request.start_date,
+            end_date=request.end_date,
+        )
+
+    def run(
+        self,
+        *,
+        manifest: BootstrapRequestManifest,
+        sink: Callable[[BootstrapHttpRequest, pd.DataFrame], MarketDataCommitReceipt],
+    ) -> LedgerSummary:
+        workload_id = self.ledger.seed_manifest(manifest, now=self._now())
+        now = self._now()
+        self.ledger.acquire_executor_lock(
+            workload_id,
+            owner_id=self.owner_id,
+            now=now,
+            lease_until=self._lock_until(now),
+        )
+        self.ledger.recover_orphaned_running_jobs(workload_id, owner_id=self.owner_id, now=now)
+        try:
+            summary = self.ledger.get_summary(workload_id)
+            if summary.blocked:
+                return summary
+            if summary.done == summary.total and summary.total == manifest.total_requests:
+                self.ledger.set_workload_status(workload_id, status=WORKLOAD_DONE, now=self._now())
+                return self.ledger.get_summary(workload_id)
+
+            self._ensure_quota_capacity(workload_id)
+            while True:
+                self._renew_lock(workload_id)
+                summary = self.ledger.get_summary(workload_id)
+                if summary.blocked:
+                    self.ledger.set_workload_status(workload_id, status=WORKLOAD_BLOCKED, now=self._now())
+                    return self.ledger.get_summary(workload_id)
+                if summary.done == summary.total:
+                    self.ledger.set_workload_status(workload_id, status=WORKLOAD_DONE, now=self._now())
+                    return self.ledger.get_summary(workload_id)
+
+                self._ensure_quota_capacity(workload_id)
+                now = self._now()
+                job = self.ledger.claim_next_job(
+                    workload_id,
+                    owner_id=self.owner_id,
+                    now=now,
+                    lease_until=self._job_lease_until(now),
+                )
+                if job is None:
+                    if self._sleep_until_retry_ready(workload_id):
+                        continue
+                    # No runnable job while work remains implies an invalid/stale
+                    # ledger state; fail closed rather than spin forever.
+                    raise RuntimeError("Market Data ledger 有 unfinished jobs，但沒有可執行或可等待的 request")
+
+                request = job.to_request()
+                self._record_data_attempt(workload_id, job.request_id)
+                try:
+                    frame = self._fetch(request)
+                except FinMindHttpError as exc:
+                    if exc.quota_exhausted:
+                        self.ledger.mark_pending_after_quota(
+                            workload_id,
+                            job.request_id,
+                            message=str(exc),
+                            now=self._now(),
+                        )
+                        self._quota.usage = None
+                        self._quota.local_data_attempts_since_refresh = 0
+                        self._ensure_quota_capacity(workload_id)
+                        continue
+                    if exc.retryable:
+                        next_failure_count = job.retryable_failure_count + 1
+                        if next_failure_count >= self.policy.max_retryable_attempts:
+                            self.ledger.mark_blocked(
+                                workload_id,
+                                job.request_id,
+                                error_kind="finmind_retry_exhausted",
+                                message=str(exc),
+                                now=self._now(),
+                            )
+                            return self.ledger.get_summary(workload_id)
+                        delay = self.policy.retry_delay_seconds(next_failure_count)
+                        self.ledger.mark_retryable(
+                            workload_id,
+                            job.request_id,
+                            error_kind="finmind_transient",
+                            message=str(exc),
+                            not_before=self._now() + timedelta(seconds=delay),
+                            now=self._now(),
+                        )
+                        continue
+                    self.ledger.mark_blocked(
+                        workload_id,
+                        job.request_id,
+                        error_kind="finmind_permanent",
+                        message=str(exc),
+                        now=self._now(),
+                    )
+                    return self.ledger.get_summary(workload_id)
+
+                self._renew_lock(workload_id)
+                try:
+                    receipt = sink(request, frame)
+                except MarketDataCommitError as exc:
+                    self.ledger.mark_blocked(
+                        workload_id,
+                        job.request_id,
+                        error_kind="commit",
+                        message=str(exc),
+                        now=self._now(),
+                    )
+                    return self.ledger.get_summary(workload_id)
+                if not isinstance(receipt, MarketDataCommitReceipt) or not receipt.committed:
+                    self.ledger.mark_blocked(
+                        workload_id,
+                        job.request_id,
+                        error_kind="commit_contract",
+                        message="Market Data sink 未回傳 committed receipt",
+                        now=self._now(),
+                    )
+                    return self.ledger.get_summary(workload_id)
+                if int(receipt.row_count) != int(len(frame)):
+                    self.ledger.mark_blocked(
+                        workload_id,
+                        job.request_id,
+                        error_kind="commit_row_count",
+                        message=f"sink row_count={receipt.row_count} != fetched rows={len(frame)}",
+                        now=self._now(),
+                    )
+                    return self.ledger.get_summary(workload_id)
+                self.ledger.mark_done(
+                    workload_id,
+                    job.request_id,
+                    row_count=receipt.row_count,
+                    content_sha256=receipt.content_sha256,
+                    now=self._now(),
+                )
+        finally:
+            self.ledger.release_executor_lock(workload_id, owner_id=self.owner_id)
+
+
+__all__ = [
+    "MarketDataCommitReceipt",
+    "MarketDataCommitError",
+    "MarketDataBootstrapExecutor",
+]
