@@ -114,6 +114,7 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "services/downloader/market_data_ledger.py",
     "services/downloader/market_data_executor.py",
     "services/downloader/market_data_storage.py",
+    "services/downloader/market_data_bootstrap_activation.py",
     "services/downloader/universe.py",
     "services/downloader/sync.py",
     "services/trading/strategy_param_training.py",

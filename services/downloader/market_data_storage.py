@@ -80,6 +80,9 @@ class PyArrowParquetCodec:
         except Exception as exc:
             raise MarketDataCommitError(f"Parquet write 失敗: {type(exc).__name__}: {exc}") from exc
 
+    def validate_runtime(self) -> None:
+        self._modules()
+
     def inspect(self, path: Path) -> ParquetArtifactInspection:
         _pa, pq = self._modules()
         try:
@@ -207,6 +210,20 @@ class MarketDataBootstrapStorageSink:
         if free < required:
             raise MarketDataCommitError(
                 f"Market Data storage free-space gate: free={free} bytes < required={required} bytes"
+            )
+
+    def validate_activation_readiness(self) -> None:
+        """Fail before provider data HTTP when runtime/storage prerequisites are absent."""
+
+        validate_runtime = getattr(self.codec, "validate_runtime", None)
+        if callable(validate_runtime):
+            validate_runtime()
+        usage = self.disk_usage_fn(self.archive_dir)
+        free = int(getattr(usage, "free"))
+        required = int(self.policy.minimum_free_bytes + self.policy.minimum_staging_headroom_bytes)
+        if free < required:
+            raise MarketDataCommitError(
+                f"Market Data bootstrap startup free-space gate: free={free} bytes < required={required} bytes"
             )
 
     def _expected_metadata(

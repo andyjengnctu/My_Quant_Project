@@ -137,12 +137,106 @@ def _run_market_data_v2_preflight() -> int:
     return 0 if status == "READY" else 1
 
 
+
+def _run_market_data_v2_bootstrap() -> int:
+    try:
+        from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError
+        from services.downloader.market_data_bootstrap_activation import (
+            MarketDataBootstrapActivationError,
+            execute_market_data_v2_bootstrap,
+            get_existing_bootstrap_summary,
+            prepare_market_data_v2_bootstrap_activation,
+        )
+        rt = importlib.import_module("services.downloader.runtime")
+    except (ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    token = rt.resolve_finmind_api_token()
+    if not token:
+        print("❌ 找不到 FinMind API token；請使用既有 FINMIND_API_TOKEN 設定。", file=sys.stderr)
+        return 1
+
+    output_dir = Path(rt.OUTPUT_DIR) / "market_data_v2"
+    try:
+        activation = prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
+        existing = get_existing_bootstrap_summary(project_root=PROJECT_ROOT, activation=activation)
+        client = FinMindHttpClient(token=token, timeout_sec=rt.REQUEST_TIMEOUT_SEC)
+        usage = client.get_usage()
+    except (MarketDataBootstrapActivationError, FinMindHttpError, RuntimeError, ValueError, OSError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    manifest = activation.manifest
+    done = int(existing.done) if existing is not None else 0
+    print("=" * 88)
+    print(" Market Data V2｜完整 Bootstrap 開始 / 續傳")
+    print("=" * 88)
+    print(f"Preflight             : {project_relative_display_path(activation.preflight_path, project_root=PROJECT_ROOT)}")
+    print(f"資料截止              : {manifest.as_of_date}")
+    print(f"Historical instruments: {manifest.historical_instrument_count}")
+    print(f"Logical requests      : {manifest.total_requests}")
+    print(f"已完成 / 剩餘         : {done} / {manifest.total_requests - done}")
+    print(f"Manifest fingerprint  : {manifest.manifest_fingerprint}")
+    print(f"Live quota            : {usage.user_count} / {usage.api_request_limit}")
+    print("說明                  : 啟動後會跨 quota window 自動等待並續傳；Ctrl+C 可安全中斷後再次由本選項續傳。")
+    try:
+        confirmation = input("輸入 START 確認開始/續傳完整 bootstrap；其他輸入取消: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 0
+    if confirmation != "START":
+        print("已取消，未開始完整 bootstrap。")
+        return 0
+
+    def _progress(event: dict[str, object]) -> None:
+        done_now = int(event.get("done") or 0)
+        total = int(event.get("total") or 0)
+        pct = 100.0 * done_now / total if total > 0 else 0.0
+        suffix = " REUSE" if event.get("recovered") else " DONE"
+        data_id = event.get("data_id")
+        target = str(event.get("dataset") or "") + (f"/{data_id}" if data_id else "")
+        print(f"[Bootstrap] {done_now}/{total} ({pct:.1f}%) | {target}{suffix}")
+
+    try:
+        result = execute_market_data_v2_bootstrap(
+            activation=activation,
+            token=token,
+            project_root=PROJECT_ROOT,
+            output_dir=output_dir,
+            timeout_sec=rt.REQUEST_TIMEOUT_SEC,
+            client=client,
+            now_fn=rt.get_taipei_now,
+            progress_fn=_progress,
+        )
+    except KeyboardInterrupt:
+        print("\n⚠ Bootstrap 已由使用者中斷；已完成的 request/Parquet/ledger 會保留，下次選 [3] 可續傳。")
+        return 130
+    except (MarketDataBootstrapActivationError, FinMindHttpError, RuntimeError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    print("=" * 88)
+    print(" Market Data V2｜Bootstrap 執行結果")
+    print("=" * 88)
+    print(f"狀態                 : {result.get('status')}")
+    print(f"完成 / 總數          : {result.get('done')} / {result.get('total')}")
+    print(f"未完成               : {result.get('unfinished')}")
+    print(f"Blocked              : {result.get('blocked')}")
+    print(f"累積 data HTTP attempts: {result.get('http_attempts')}")
+    for label, key in (("Markdown", "markdown_path"), ("JSON", "json_path")):
+        raw_path = result.get(key)
+        if raw_path:
+            print(f"{label:<20}: {project_relative_display_path(raw_path, project_root=PROJECT_ROOT)}")
+    return 0 if str(result.get("status")) == "DONE" else 1
+
 def _interactive_menu() -> int:
     print("=" * 72)
     print(" Smart Downloader")
     print("=" * 72)
     print("[1] Trading 資料更新（現行正式流程）")
     print("[2] Market Data V2｜Backer Preflight + Exact Bootstrap Plan")
+    print("[3] Market Data V2｜開始 / 續傳完整 Bootstrap")
     print("[0] 離開")
     while True:
         try:
@@ -154,9 +248,11 @@ def _interactive_menu() -> int:
             return _run_trading_dataset_update()
         if choice == "2":
             return _run_market_data_v2_preflight()
+        if choice == "3":
+            return _run_market_data_v2_bootstrap()
         if choice == "0":
             return 0
-        print("請輸入 0、1 或 2。")
+        print("請輸入 0、1、2 或 3。")
 
 
 def main(argv=None):
@@ -166,7 +262,7 @@ def main(argv=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "services/downloader/main.py")
         print(f"用法: python {program_name}")
-        print("說明: 互動式入口提供現行 Trading 更新，以及 Market Data V2 Backer Preflight / Exact Planner。")
+        print("說明: 互動式入口提供現行 Trading 更新、Market Data V2 Backer Preflight / Exact Planner，以及明確選擇後的完整 Bootstrap 開始/續傳。")
         print("非互動環境維持既有行為：直接執行 Trading 資料更新。")
         return 0
 

@@ -78,6 +78,7 @@ from .synthetic_market_data_cases import (
     validate_market_data_v2_preflight_planner_contract_case,
     validate_market_data_v2_resumable_executor_contract_case,
     validate_market_data_v2_parquet_storage_contract_case,
+    validate_market_data_v2_bootstrap_activation_contract_case,
 )
 from .synthetic_meta_cases import (
     validate_checklist_generated_view_ssot_contract_case,
@@ -499,6 +500,7 @@ def get_synthetic_validator_entries():
         _entry(validate_market_data_v2_preflight_planner_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_market_data_v2_resumable_executor_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_market_data_v2_parquet_storage_contract_case, layer="meta_contract", cost_class="fast"),
+        _entry(validate_market_data_v2_bootstrap_activation_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_runtime_domain_isolation_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_trading_strategy_param_producer_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_test_suite_orchestrator_coverage_targets_case, layer="meta_contract", cost_class="fast"),

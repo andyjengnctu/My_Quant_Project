@@ -242,6 +242,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         retry_backoff_seconds=(1.0, 2.0),
         job_lease_seconds=5.0,
         executor_lock_seconds=4.0,
+        progress_every_committed_requests=2,
     )
 
     with TemporaryDirectory() as td:
@@ -512,10 +513,6 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
     return results, summary
 
 
-__all__ = [
-    "validate_market_data_v2_preflight_planner_contract_case",
-    "validate_market_data_v2_resumable_executor_contract_case",
-]
 
 
 def validate_market_data_v2_parquet_storage_contract_case(_base_params):
@@ -700,6 +697,7 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
         retry_backoff_seconds=(1.0,),
         job_lease_seconds=5.0,
         executor_lock_seconds=5.0,
+        progress_every_committed_requests=1,
     )
     with TemporaryDirectory() as td:
         root = Path(td)
@@ -735,3 +733,259 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
 
     summary.update({"checks": len(results), "manifest_fingerprint": manifest.manifest_fingerprint})
     return results, summary
+
+
+def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
+    """Round-4 activation requires newest READY evidence and exact identity parity."""
+
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from core.market_data_bootstrap_planner import DatasetProbeEvidence, build_bootstrap_request_plan
+    from core.market_data_dataset_registry import (
+        BOOTSTRAP_BULK_REFERENCE_DATES,
+        BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE,
+        get_market_dataset_spec,
+        get_market_dataset_specs,
+    )
+    from core.market_data_execution_policy import MarketDataExecutionPolicy
+    from core.market_data_storage_contract import MarketDataCommitError, MarketDataCommitReceipt
+    from services.downloader.finmind_http import FinMindUsage
+    from services.downloader.market_data_bootstrap_activation import (
+        MarketDataBootstrapActivationError,
+        execute_market_data_v2_bootstrap,
+        get_existing_bootstrap_summary,
+        prepare_market_data_v2_bootstrap_activation,
+    )
+    from services.downloader.market_data_ledger import WORKLOAD_DONE
+
+    case_id = "MARKET_DATA_V2_BOOTSTRAP_ACTIVATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    # Full-history completeness may not depend on one reference stock's observed
+    # dates. These historically sparse/periodic datasets therefore use the
+    # correctness-first per-instrument mode before activation is allowed.
+    correctness_first = (
+        "TaiwanStockHoldingSharesPer",
+        "TaiwanStockFinancialStatements",
+        "TaiwanStockBalanceSheet",
+        "TaiwanStockCashFlowsStatement",
+        "TaiwanStockMonthRevenue",
+        "TaiwanStockMarketValueWeight",
+    )
+    add_check(
+        results,
+        "market_data",
+        case_id,
+        "periodic_full_history_does_not_depend_on_probe_stock_date_union",
+        True,
+        all(
+            get_market_dataset_spec(dataset).bootstrap_mode == BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE
+            for dataset in correctness_first
+        ),
+    )
+    add_check(
+        results,
+        "market_data",
+        case_id,
+        "current_registry_has_no_probe_date_union_bootstrap_dependency",
+        0,
+        sum(
+            spec.bootstrap_mode == BOOTSTRAP_BULK_REFERENCE_DATES
+            for spec in get_market_dataset_specs(included_only=True)
+        ),
+    )
+
+    specs = get_market_dataset_specs(included_only=True)
+    instruments = ("1101", "2330")
+    evidence = {
+        spec.dataset: DatasetProbeEvidence(
+            dataset=spec.dataset,
+            status="PASS",
+            request_count=1,
+            row_count=1,
+            columns=("date", "stock_id"),
+            observed_dates=(),
+            earliest_date="2026-09-04",
+            latest_date="2026-09-04",
+        )
+        for spec in specs
+    }
+    plan = build_bootstrap_request_plan(
+        specs=specs,
+        historical_instruments=instruments,
+        evidence_by_dataset=evidence,
+        as_of_date="2026-09-04",
+        quota_limit=1600,
+    )
+
+    def _payload(*, status="READY", manifest_fingerprint=None):
+        payload = {
+            "schema_version": 2,
+            "status": status,
+            "generated_at": "2026-09-06T23:00:00+08:00",
+            "as_of_date": "2026-09-04",
+            "historical_instrument_count": len(instruments),
+            "historical_instruments": list(instruments),
+            "included_dataset_count": len(specs),
+            "excluded_dataset_count": 0,
+            "quota": {
+                "user_count_before": 0,
+                "user_count_after": 1,
+                "api_request_limit": 1600,
+                "observed_usage_delta": 1,
+                "accounting_warning": None,
+            },
+            "probes": [asdict(evidence[spec.dataset]) for spec in specs],
+            "probe_failures": [] if status == "READY" else [{"dataset": specs[0].dataset, "error": "synthetic"}],
+            "plan_error": None,
+            "plan": asdict(plan) if status == "READY" else None,
+        }
+        if manifest_fingerprint is not None and payload["plan"] is not None:
+            payload["plan"]["manifest_fingerprint"] = manifest_fingerprint
+        return payload
+
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        output_dir = root / "outputs" / "trading" / "smart_downloader" / "market_data_v2"
+        output_dir.mkdir(parents=True)
+        older = output_dir / "market_data_v2_preflight_plan_20260906_220000.json"
+        newer = output_dir / "market_data_v2_preflight_plan_20260906_230000.json"
+        older.write_text(json.dumps(_payload(), ensure_ascii=False), encoding="utf-8")
+        newer.write_text(json.dumps(_payload(status="BLOCKED"), ensure_ascii=False), encoding="utf-8")
+        try:
+            prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
+        except MarketDataBootstrapActivationError:
+            newest_blocked_stops = True
+        else:
+            newest_blocked_stops = False
+        add_check(results, "market_data", case_id, "newest_blocked_preflight_cannot_fall_back_to_older_ready", True, newest_blocked_stops)
+
+        newer.write_text(json.dumps(_payload(manifest_fingerprint="0" * 64), ensure_ascii=False), encoding="utf-8")
+        try:
+            prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
+        except MarketDataBootstrapActivationError:
+            drift_blocks = True
+        else:
+            drift_blocks = False
+        add_check(results, "market_data", case_id, "manifest_fingerprint_drift_blocks_activation", True, drift_blocks)
+
+        newer.write_text(json.dumps(_payload(), ensure_ascii=False), encoding="utf-8")
+        activation = prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
+        add_check(results, "market_data", case_id, "ready_preflight_rederives_exact_manifest", plan.manifest_fingerprint, activation.manifest.manifest_fingerprint)
+        add_check(results, "market_data", case_id, "ready_preflight_request_count_matches_plan", plan.total_requests, activation.planned_total_requests)
+        add_check(results, "market_data", case_id, "no_ledger_is_created_by_read_only_activation_prepare", None, get_existing_bootstrap_summary(project_root=root, activation=activation))
+
+        class _Client:
+            def __init__(self):
+                self.data_request_count = 0
+                self.usage_request_count = 0
+
+            def get_usage(self):
+                self.usage_request_count += 1
+                return FinMindUsage(user_count=0, api_request_limit=10000)
+
+            def get_data(self, *, dataset, data_id=None, start_date=None, end_date=None):
+                self.data_request_count += 1
+                return pd.DataFrame(
+                    [{"date": end_date or start_date or "2026-09-04", "stock_id": data_id or "ALL"}]
+                )
+
+        class _Sink:
+            def recover_committed(self, _request):
+                return None
+
+            def __call__(self, _request, frame):
+                return MarketDataCommitReceipt(committed=True, row_count=len(frame), content_sha256="a" * 64)
+
+        policy = MarketDataExecutionPolicy(
+            quota_reserve_requests=1,
+            quota_refresh_every_requests=9999,
+            quota_poll_seconds=1.0,
+            max_retryable_attempts=2,
+            retry_backoff_seconds=(1.0,),
+            job_lease_seconds=5.0,
+            executor_lock_seconds=5.0,
+            progress_every_committed_requests=10,
+        )
+        fixed_now = lambda: datetime(2026, 9, 6, 23, 30, tzinfo=timezone.utc)
+        class _RuntimeBlockedSink:
+            def validate_activation_readiness(self):
+                raise MarketDataCommitError("synthetic missing parquet runtime")
+
+        blocked_client = _Client()
+        try:
+            execute_market_data_v2_bootstrap(
+                activation=activation,
+                token="synthetic",
+                project_root=root / "runtime_blocked",
+                output_dir=output_dir,
+                client=blocked_client,
+                sink=_RuntimeBlockedSink(),
+                policy=policy,
+                now_fn=fixed_now,
+                sleep_fn=lambda _seconds: None,
+            )
+        except MarketDataCommitError:
+            startup_blocked = True
+        else:
+            startup_blocked = False
+        add_check(results, "market_data", case_id, "storage_runtime_gate_blocks_before_any_data_http", True, startup_blocked and blocked_client.data_request_count == 0)
+
+        progress = []
+        client = _Client()
+        result = execute_market_data_v2_bootstrap(
+            activation=activation,
+            token="synthetic",
+            project_root=root,
+            output_dir=output_dir,
+            client=client,
+            sink=_Sink(),
+            policy=policy,
+            now_fn=fixed_now,
+            sleep_fn=lambda _seconds: None,
+            progress_fn=progress.append,
+        )
+        add_check(results, "market_data", case_id, "explicit_activation_executes_manifest_to_done", WORKLOAD_DONE, result["status"])
+        add_check(results, "market_data", case_id, "activation_done_count_equals_exact_plan", plan.total_requests, result["done"])
+        add_check(results, "market_data", case_id, "activation_first_run_data_http_equals_logical_requests", plan.total_requests, client.data_request_count)
+        add_check(results, "market_data", case_id, "activation_emits_bounded_progress_events", True, 0 < len(progress) <= (plan.total_requests // 10 + 1))
+        add_check(results, "market_data", case_id, "activation_status_paths_are_project_relative", True, not str(result["archive_dir"]).startswith(str(root)))
+
+        resumed = get_existing_bootstrap_summary(project_root=root, activation=activation)
+        add_check(results, "market_data", case_id, "completed_ledger_is_visible_for_resume_preview", plan.total_requests, resumed.done if resumed else -1)
+        second_client = _Client()
+        second = execute_market_data_v2_bootstrap(
+            activation=activation,
+            token="synthetic",
+            project_root=root,
+            output_dir=output_dir,
+            client=second_client,
+            sink=_Sink(),
+            policy=policy,
+            now_fn=fixed_now,
+            sleep_fn=lambda _seconds: None,
+        )
+        add_check(results, "market_data", case_id, "completed_resume_stays_done", WORKLOAD_DONE, second["status"])
+        add_check(results, "market_data", case_id, "completed_resume_uses_zero_data_http", 0, second_client.data_request_count)
+
+    summary.update(
+        {
+            "checks": len(results),
+            "synthetic_exact_requests": plan.total_requests,
+            "per_instrument_dataset_count": plan.per_instrument_dataset_count,
+        }
+    )
+    return results, summary
+
+
+__all__ = [
+    "validate_market_data_v2_preflight_planner_contract_case",
+    "validate_market_data_v2_resumable_executor_contract_case",
+    "validate_market_data_v2_parquet_storage_contract_case",
+    "validate_market_data_v2_bootstrap_activation_contract_case",
+]

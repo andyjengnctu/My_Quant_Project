@@ -4173,7 +4173,7 @@
       "priority": "P0",
       "category": "Market Data V2 resumable bootstrap execution contract",
       "item": "Bootstrap logical request identity, persistent resume ledger, live-quota waiting and retry/fail-closed semantics remain deterministic and storage-commit gated",
-      "gap": "Market Data V2 planner與executor必須共用同一deterministic logical-request manifest/fingerprint，禁止plan count與實際job分叉。Bootstrap execution state必須持久保存於SQLite ledger：每個logical request具穩定request identity、attempt/http-attempt/status/lease，程序中斷或重啟不得重抓已DONE job；expired/orphan RUNNING job在executor合法取得workload lock後才可reclaim。Live quota必須由provider user_info驅動且不得硬編1600：接近config-driven reserve或遇402時進WAIT_QUOTA並自動poll/resume，402不得消耗transient retry budget；network/5xx採bounded config-driven retry/backoff，permanent 4xx一次fail-closed。Executor不得因HTTP成功即標DONE，只有storage sink回傳committed receipt且row count一致後才可完成job；正式storage publication/recovery另由B389治理；在bootstrap activation尚未接入正式menu前不得由一般Trading update隱式啟動full bootstrap。",
+      "gap": "Market Data V2 planner與executor必須共用同一deterministic logical-request manifest/fingerprint，禁止plan count與實際job分叉。Bootstrap execution state必須持久保存於SQLite ledger：每個logical request具穩定request identity、attempt/http-attempt/status/lease，程序中斷或重啟不得重抓已DONE job；expired/orphan RUNNING job在executor合法取得workload lock後才可reclaim。Live quota必須由provider user_info驅動且不得硬編1600：接近config-driven reserve或遇402時進WAIT_QUOTA並自動poll/resume，402不得消耗transient retry budget；network/5xx採bounded config-driven retry/backoff，permanent 4xx一次fail-closed。Executor不得因HTTP成功即標DONE，只有storage sink回傳committed receipt且row count一致後才可完成job；正式storage publication/recovery另由B389治理；full bootstrap只能依B390由明確互動activation入口啟動，一般Trading update與非互動Smart Downloader不得隱式觸發。",
       "entry": "`core/market_data_bootstrap_requests.py`, `core/market_data_execution_policy.py`, `services/downloader/market_data_ledger.py`, `services/downloader/market_data_executor.py`, `services/downloader/finmind_http.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 376
@@ -4188,6 +4188,17 @@
       "entry": "`core/market_data_storage_contract.py`, `core/market_data_storage_policy.py`, `services/downloader/market_data_storage.py`, `services/downloader/market_data_executor.py`, `config/market_data.py`, `requirements/requirements.txt`, `requirements/requirements-lock.txt`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 377
+    },
+    {
+      "id": "B390",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 explicit bootstrap activation / completeness gate",
+      "item": "Full bootstrap starts only from the newest READY preflight with current registry/request identity parity and resumable manifest-scoped state",
+      "gap": "Market Data V2完整bootstrap只能由`apps/smart_downloader.py`互動選項`[3]`明確選擇且再次輸入`START`後啟動；一般Trading update、非互動入口與Preflight不得side-effect啟動。Activation只可讀最新Preflight，最新報告不是READY時禁止回退舊READY；必須以current dataset registry、historical instruments與probe evidence重新建request manifest，registry/manifest fingerprint、total requests、instrument/dataset count與quota identity任一drift即fail-closed並要求重跑Preflight。完整歷史periodic/sparse dataset不得以單一probe股票observed-date union推定全市場日期；目前月營收、三大財報、持股分級與市值比重採correctness-first per-instrument full-history。Bootstrap ledger固定與manifest-scoped neutral archive同namespace，重啟必須沿用同一DONE state且不得重抓；正式storage runtime dependency與最低startup disk headroom必須在任何provider data HTTP前先驗證，避免因本機環境缺件浪費quota；進度頻率僅為config-driven execution knob。正常DONE/BLOCKED需寫人讀與machine-readable status evidence；本activation不得建立、切換或promotion Research V2/Trading runtime snapshot。",
+      "entry": "`apps/smart_downloader.py`, `services/downloader/main.py`, `services/downloader/market_data_bootstrap_activation.py`, `core/market_data_dataset_registry.py`, `core/market_data_storage_contract.py`, `config/market_data.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 378
     }
   ],
   "tests": [
@@ -7747,6 +7758,13 @@
       "description": "`validate_market_data_v2_parquet_storage_contract_case` 覆蓋neutral manifest-scoped archive path、Parquet/ZSTD policy、bootstrap/dataset schema manifests、atomic publication與SHA receipt、schema drift fail-closed、disk-space gate、committed artifact recovery，以及commit後ledger前crash重啟零data-HTTP重抓。",
       "initial_status": "NEW",
       "order": 499
+    },
+    {
+      "id": "T510",
+      "b_id": "B390",
+      "description": "`validate_market_data_v2_bootstrap_activation_contract_case` 覆蓋periodic full-history不依probe-date union、最新BLOCKED不得fallback舊READY、manifest drift fail-closed、READY evidence重建exact manifest、prepare無ledger side effect、storage startup gate於data HTTP前fail-closed、explicit execution到DONE、project-relative status path、completed ledger resume preview與DONE restart零data-HTTP重抓。",
+      "initial_status": "NEW",
+      "order": 500
     }
   ],
   "transitions": [
@@ -25349,6 +25367,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_parquet_storage_contract_case`"
+    },
+    {
+      "date": "2026-09-07",
+      "id": "B390",
+      "description": "新增Market Data V2 explicit bootstrap activation、latest READY/fingerprint gate、manifest-scoped resume與periodic completeness治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/downloader/market_data_bootstrap_activation.py`, `apps/smart_downloader.py`"
+    },
+    {
+      "date": "2026-09-07",
+      "id": "T510",
+      "description": "新增Market Data V2 bootstrap activation dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_bootstrap_activation_contract_case`"
     }
   ]
 }

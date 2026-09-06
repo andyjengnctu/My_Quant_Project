@@ -41,6 +41,7 @@ MARKET_DATA_V2_EXECUTION_POLICY = {
     "retry_backoff_seconds": (5.0, 30.0, 120.0),
     "job_lease_seconds": 300.0,
     "executor_lock_seconds": 300.0,
+    "progress_every_committed_requests": 100,
 }
 
 # Market Data V2 storage knobs are operational only.  Bootstrap data is first

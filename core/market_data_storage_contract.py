@@ -12,6 +12,7 @@ from core.market_data_storage_policy import MarketDataStoragePolicy
 MARKET_DATA_STORAGE_LAYOUT_VERSION = 1
 MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT = Path("data") / "market_data_v2" / "bootstrap"
 MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME = "bootstrap_manifest.json"
+MARKET_DATA_BOOTSTRAP_LEDGER_FILENAME = "bootstrap_ledger.sqlite3"
 MARKET_DATA_DATASET_SCHEMA_FILENAME = "dataset_schema.json"
 MARKET_DATA_PARQUET_METADATA_KEY = "my_quant_market_data_v2"
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -46,6 +47,10 @@ def _require_dataset_name(value: str) -> str:
 def resolve_market_data_bootstrap_archive_dir(project_root, manifest_fingerprint: str) -> Path:
     fingerprint = _require_hex64(manifest_fingerprint, field="manifest_fingerprint")
     return Path(project_root).resolve() / MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT / fingerprint
+
+
+def resolve_market_data_bootstrap_ledger_path(project_root, manifest_fingerprint: str) -> Path:
+    return resolve_market_data_bootstrap_archive_dir(project_root, manifest_fingerprint) / MARKET_DATA_BOOTSTRAP_LEDGER_FILENAME
 
 
 def resolve_market_data_dataset_dir(project_root, manifest_fingerprint: str, dataset: str) -> Path:
@@ -116,11 +121,13 @@ __all__ = [
     "MARKET_DATA_STORAGE_LAYOUT_VERSION",
     "MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT",
     "MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME",
+    "MARKET_DATA_BOOTSTRAP_LEDGER_FILENAME",
     "MARKET_DATA_DATASET_SCHEMA_FILENAME",
     "MARKET_DATA_PARQUET_METADATA_KEY",
     "MarketDataCommitReceipt",
     "MarketDataCommitError",
     "resolve_market_data_bootstrap_archive_dir",
+    "resolve_market_data_bootstrap_ledger_path",
     "resolve_market_data_dataset_dir",
     "resolve_market_data_request_parquet_path",
     "build_frame_schema_payload",

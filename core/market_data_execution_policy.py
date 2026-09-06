@@ -16,6 +16,7 @@ class MarketDataExecutionPolicy:
     retry_backoff_seconds: tuple[float, ...]
     job_lease_seconds: float
     executor_lock_seconds: float
+    progress_every_committed_requests: int
 
     def retry_delay_seconds(self, retryable_failure_count: int) -> float:
         # ``retryable_failure_count`` is the number of transient failures that
@@ -40,6 +41,7 @@ def get_market_data_execution_policy() -> MarketDataExecutionPolicy:
         retry_backoff_seconds = tuple(float(value) for value in raw["retry_backoff_seconds"])
         job_lease_seconds = float(raw["job_lease_seconds"])
         executor_lock_seconds = float(raw["executor_lock_seconds"])
+        progress_every_committed_requests = int(raw["progress_every_committed_requests"])
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("MARKET_DATA_V2_EXECUTION_POLICY 缺少合法 execution knob") from exc
 
@@ -59,6 +61,8 @@ def get_market_data_execution_policy() -> MarketDataExecutionPolicy:
         raise ValueError("Market Data lease 秒數必須 > 0")
     if executor_lock_seconds <= quota_poll_seconds:
         raise ValueError("executor_lock_seconds 必須大於 quota_poll_seconds，避免 quota wait 時誤失鎖")
+    if progress_every_committed_requests <= 0:
+        raise ValueError("progress_every_committed_requests 必須 > 0")
 
     return MarketDataExecutionPolicy(
         quota_reserve_requests=quota_reserve_requests,
@@ -68,6 +72,7 @@ def get_market_data_execution_policy() -> MarketDataExecutionPolicy:
         retry_backoff_seconds=retry_backoff_seconds,
         job_lease_seconds=job_lease_seconds,
         executor_lock_seconds=executor_lock_seconds,
+        progress_every_committed_requests=progress_every_committed_requests,
     )
 
 
