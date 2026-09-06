@@ -34,6 +34,10 @@ ACTIVE_RESEARCH_DATA_GENERATION = RESEARCH_DATA_GENERATION_V1
 # participate in Research scientific identity.  Quota values remain live-provider
 # driven; these settings only control safety margin, polling and bounded retries.
 MARKET_DATA_V2_HTTP_TIMEOUT_SEC = 30.0
+MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY = {
+    "retryable_attempts": 2,
+    "retry_backoff_seconds": (2.0,),
+}
 
 MARKET_DATA_V2_EXECUTION_POLICY = {
     "quota_reserve_requests": 50,
@@ -83,6 +87,7 @@ __all__ = [
     "ACTIVE_RESEARCH_DATA_GENERATION",
     "TRADING_MARKET_DATA_LIFECYCLE",
     "MARKET_DATA_V2_HTTP_TIMEOUT_SEC",
+    "MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY",
     "MARKET_DATA_V2_EXECUTION_POLICY",
     "MARKET_DATA_V2_STORAGE_POLICY",
     "MARKET_DATA_V2_TRADING_SYNC_POLICY",

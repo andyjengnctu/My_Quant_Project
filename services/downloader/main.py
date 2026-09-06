@@ -93,12 +93,14 @@ def _run_market_data_v2_preflight() -> int:
 
     output_dir = Path(rt.OUTPUT_DIR) / "market_data_v2"
     try:
-        from config.market_data import MARKET_DATA_V2_HTTP_TIMEOUT_SEC
+        from config.market_data import MARKET_DATA_V2_HTTP_TIMEOUT_SEC, MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY
         result = run_market_data_v2_preflight(
             token=token,
             output_dir=output_dir,
             now=rt.get_taipei_now(),
             timeout_sec=MARKET_DATA_V2_HTTP_TIMEOUT_SEC,
+            retryable_attempts=int(MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY["retryable_attempts"]),
+            retry_backoff_seconds=tuple(MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY["retry_backoff_seconds"]),
         )
     except (RuntimeError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)

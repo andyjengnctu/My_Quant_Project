@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -75,20 +76,37 @@ def _verify_exact_date_bulk(frame: pd.DataFrame, *, dataset: str, expected_date:
         raise ValueError(f"{dataset} exact-date probe 日期不純: expected={expected_date}, actual={sorted(dates)[:10]}")
 
 
-def _probe_spec(client: FinMindHttpClient, spec, *, as_of_date: str, probe_stock: str) -> DatasetProbeEvidence:
+
+def _probe_get_data(client: FinMindHttpClient, *, retryable_attempts: int, retry_backoff_seconds: tuple[float, ...], **kwargs) -> pd.DataFrame:
+    max_attempts = max(1, int(retryable_attempts))
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return client.get_data(**kwargs)
+        except FinMindHttpError as exc:
+            if exc.quota_exhausted or not exc.retryable or attempt >= max_attempts:
+                raise
+            if retry_backoff_seconds:
+                index = min(attempt - 1, len(retry_backoff_seconds) - 1)
+                delay = max(0.0, float(retry_backoff_seconds[index]))
+                if delay > 0:
+                    time.sleep(delay)
+    raise RuntimeError("unreachable preflight retry state")
+
+
+def _probe_spec(client: FinMindHttpClient, spec, *, as_of_date: str, probe_stock: str, retryable_attempts: int = 2, retry_backoff_seconds: tuple[float, ...] = (2.0,)) -> DatasetProbeEvidence:
     before = client.data_request_count
     try:
         if spec.bootstrap_mode == BOOTSTRAP_SINGLE_NO_DATES:
-            frame = client.get_data(dataset=spec.dataset)
+            frame = _probe_get_data(client, retryable_attempts=retryable_attempts, retry_backoff_seconds=retry_backoff_seconds, dataset=spec.dataset)
         elif spec.bootstrap_mode == BOOTSTRAP_SINGLE_FULL_RANGE:
-            frame = client.get_data(
+            frame = _probe_get_data(client, retryable_attempts=retryable_attempts, retry_backoff_seconds=retry_backoff_seconds, 
                 dataset=spec.dataset,
                 start_date=PREFLIGHT_FULL_RANGE_START,
                 end_date=as_of_date,
             )
         elif spec.bootstrap_mode in {BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, BOOTSTRAP_BULK_REFERENCE_DATES}:
             data_id = probe_stock if spec.probe_data_id == DEFAULT_EQUITY_PROBE_DATA_ID else (spec.probe_data_id or probe_stock)
-            frame = client.get_data(
+            frame = _probe_get_data(client, retryable_attempts=retryable_attempts, retry_backoff_seconds=retry_backoff_seconds, 
                 dataset=spec.dataset,
                 data_id=data_id,
                 start_date=PREFLIGHT_FULL_RANGE_START,
@@ -99,22 +117,28 @@ def _probe_spec(client: FinMindHttpClient, spec, *, as_of_date: str, probe_stock
                 if not dates:
                     raise ValueError(f"{spec.dataset} reference-stock full-history probe 沒有 date evidence")
                 exact_date = dates[-1]
-                bulk = client.get_data(dataset=spec.dataset, start_date=exact_date, end_date=exact_date)
+                bulk = _probe_get_data(client, retryable_attempts=retryable_attempts, retry_backoff_seconds=retry_backoff_seconds, dataset=spec.dataset, start_date=exact_date, end_date=exact_date)
                 _verify_exact_date_bulk(bulk, dataset=spec.dataset, expected_date=exact_date)
             elif spec.full_market_exact_date_expected and dates:
                 exact_date = dates[-1]
-                bulk = client.get_data(dataset=spec.dataset, start_date=exact_date, end_date=exact_date)
+                bulk = _probe_get_data(client, retryable_attempts=retryable_attempts, retry_backoff_seconds=retry_backoff_seconds, dataset=spec.dataset, start_date=exact_date, end_date=exact_date)
                 _verify_exact_date_bulk(bulk, dataset=spec.dataset, expected_date=exact_date)
         elif spec.bootstrap_mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
             frames = []
             probe_start = max(PREFLIGHT_FULL_RANGE_START, str(spec.bootstrap_start_date or PREFLIGHT_FULL_RANGE_START))
-            if spec.bootstrap_chunk_years > 0:
+            if spec.preflight_probe_calendar_days > 0:
+                as_of_day = datetime.fromisoformat(as_of_date).date()
+                probe_start_day = as_of_day - timedelta(days=spec.preflight_probe_calendar_days - 1)
+                probe_start = max(probe_start, probe_start_day.isoformat())
+            elif spec.bootstrap_chunk_months > 0:
+                probe_start = max(probe_start, f"{as_of_date[:7]}-01")
+            elif spec.bootstrap_chunk_years > 0:
                 as_of_year = int(as_of_date[:4])
                 current_chunk_start = f"{as_of_year:04d}-01-01"
                 probe_start = max(probe_start, current_chunk_start)
             for data_id in spec.fixed_data_ids:
                 frames.append(
-                    client.get_data(
+                    _probe_get_data(client, retryable_attempts=retryable_attempts, retry_backoff_seconds=retry_backoff_seconds, 
                         dataset=spec.dataset,
                         data_id=data_id,
                         start_date=probe_start,
@@ -198,6 +222,8 @@ def run_market_data_v2_preflight(
     now: datetime,
     timeout_sec: float = 30.0,
     client: FinMindHttpClient | None = None,
+    retryable_attempts: int = 2,
+    retry_backoff_seconds: tuple[float, ...] = (2.0,),
 ) -> dict[str, object]:
     registry_summary = validate_market_dataset_registry()
     specs = get_market_dataset_specs(included_only=True)
@@ -234,7 +260,10 @@ def run_market_data_v2_preflight(
         if spec.dataset in preloaded:
             evidence[spec.dataset] = preloaded[spec.dataset]
             continue
-        evidence[spec.dataset] = _probe_spec(http, spec, as_of_date=as_of_date, probe_stock=probe_stock)
+        evidence[spec.dataset] = _probe_spec(
+            http, spec, as_of_date=as_of_date, probe_stock=probe_stock,
+            retryable_attempts=retryable_attempts, retry_backoff_seconds=retry_backoff_seconds,
+        )
 
     usage_after = http.get_usage()
     failures = [item for item in evidence.values() if item.status != "PASS"]

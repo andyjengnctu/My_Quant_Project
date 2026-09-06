@@ -61,6 +61,8 @@ def _basis_for_mode(mode: str, *, historical_instrument_count: int, request_coun
     if mode == BOOTSTRAP_BULK_REFERENCE_DATES:
         return f"{request_count} observed reference dates × 1 all-market exact-date request"
     if mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
+        if spec.bootstrap_chunk_months > 0:
+            return f"{len(spec.fixed_data_ids)} fixed data_id × calendar-{spec.bootstrap_chunk_months}mo chunks ({request_count} requests)"
         if spec.bootstrap_chunk_years > 0:
             return f"{len(spec.fixed_data_ids)} fixed data_id × calendar-{spec.bootstrap_chunk_years}y chunks ({request_count} requests)"
         return f"{request_count} fixed data_id × 1 full-range request"

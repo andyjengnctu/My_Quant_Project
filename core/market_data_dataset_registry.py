@@ -53,6 +53,8 @@ class MarketDatasetSpec:
     trading_lookback_periods: int = 0
     bootstrap_start_date: str | None = None
     bootstrap_chunk_years: int = 0
+    bootstrap_chunk_months: int = 0
+    preflight_probe_calendar_days: int = 0
 
     @property
     def included(self) -> bool:
@@ -75,6 +77,8 @@ def _include(
     trading_lookback_periods: int = 0,
     bootstrap_start_date: str | None = None,
     bootstrap_chunk_years: int = 0,
+    bootstrap_chunk_months: int = 0,
+    preflight_probe_calendar_days: int = 0,
 ) -> MarketDatasetSpec:
     return MarketDatasetSpec(
         dataset=dataset,
@@ -92,6 +96,8 @@ def _include(
         trading_lookback_periods=int(trading_lookback_periods),
         bootstrap_start_date=bootstrap_start_date,
         bootstrap_chunk_years=int(bootstrap_chunk_years),
+        bootstrap_chunk_months=int(bootstrap_chunk_months),
+        preflight_probe_calendar_days=int(preflight_probe_calendar_days),
     )
 
 
@@ -166,7 +172,7 @@ MARKET_DATASET_SPECS: tuple[MarketDatasetSpec, ...] = (
     _include("TaiwanFuturesDaily", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TX",)),
     _include("TaiwanFuturesInstitutionalInvestors", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TX",)),
     _include("TaiwanFuturesOpenInterestLargeTraders", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXF",), rationale="This dataset uses futures product code TXF; it is not the TX code used by FuturesDaily/InstitutionalInvestors."),
-    _include("TaiwanOptionDaily", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",), bootstrap_start_date="2001-12-01", bootstrap_chunk_years=1, rationale="High-density strike/expiry option history is chunked by calendar year so bootstrap/preflight do not depend on one oversized multi-decade response."),
+    _include("TaiwanOptionDaily", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",), bootstrap_start_date="2001-12-01", bootstrap_chunk_months=1, preflight_probe_calendar_days=2, rationale="High-density strike/expiry option history is chunked by calendar month; capability preflight uses only the latest two completed-market calendar days to avoid oversized provider responses."),
     _include("TaiwanOptionInstitutionalInvestors", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",)),
     _include("TaiwanOptionOpenInterestLargeTraders", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",)),
     _include("TaiwanOptionVix", "derivative_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, primary_key_hint=("date",)),
@@ -249,8 +255,16 @@ def validate_market_dataset_registry() -> dict[str, int]:
             raise ValueError(f"{spec.dataset} exact-date Trading query 缺少 full-market capability 宣告")
         if spec.bootstrap_chunk_years < 0:
             raise ValueError(f"{spec.dataset} bootstrap_chunk_years 不得 < 0")
-        if spec.bootstrap_chunk_years and spec.bootstrap_mode != BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
-            raise ValueError(f"{spec.dataset} bootstrap_chunk_years 目前只允許 fixed_data_id_full_range")
+        if spec.bootstrap_chunk_months < 0:
+            raise ValueError(f"{spec.dataset} bootstrap_chunk_months 不得 < 0")
+        if spec.preflight_probe_calendar_days < 0:
+            raise ValueError(f"{spec.dataset} preflight_probe_calendar_days 不得 < 0")
+        if spec.bootstrap_chunk_years and spec.bootstrap_chunk_months:
+            raise ValueError(f"{spec.dataset} bootstrap chunk 只能擇一使用 years 或 months")
+        if (spec.bootstrap_chunk_years or spec.bootstrap_chunk_months) and spec.bootstrap_mode != BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
+            raise ValueError(f"{spec.dataset} bootstrap chunk 目前只允許 fixed_data_id_full_range")
+        if spec.preflight_probe_calendar_days and spec.bootstrap_mode != BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE:
+            raise ValueError(f"{spec.dataset} preflight_probe_calendar_days 目前只允許 fixed_data_id_full_range")
         if spec.bootstrap_start_date is not None:
             try:
                 date.fromisoformat(spec.bootstrap_start_date)

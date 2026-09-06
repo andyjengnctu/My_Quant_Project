@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date
+from calendar import monthrange
 from hashlib import sha256
 import json
 from typing import Iterable, Mapping
@@ -49,6 +50,29 @@ def _iter_calendar_year_chunks(start_date: str, end_date: str, years_per_chunk: 
         chunk_end = min(end, date(chunk_end_year, 12, 31))
         yield cursor.isoformat(), chunk_end.isoformat()
         cursor = date(chunk_end.year + 1, 1, 1)
+
+
+
+def _iter_calendar_month_chunks(start_date: str, end_date: str, months_per_chunk: int):
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    months = int(months_per_chunk)
+    if months <= 0:
+        yield start.isoformat(), end.isoformat()
+        return
+    cursor = start
+    while cursor <= end:
+        start_index = cursor.year * 12 + (cursor.month - 1)
+        end_index = start_index + months - 1
+        end_year, end_month0 = divmod(end_index, 12)
+        end_month = end_month0 + 1
+        chunk_end = min(end, date(end_year, end_month, monthrange(end_year, end_month)[1]))
+        yield cursor.isoformat(), chunk_end.isoformat()
+        if chunk_end >= end:
+            break
+        next_index = end_index + 1
+        next_year, next_month0 = divmod(next_index, 12)
+        cursor = date(next_year, next_month0 + 1, 1)
 
 
 def _normalize_instruments(instruments: Iterable[str]) -> tuple[str, ...]:
@@ -187,7 +211,10 @@ def build_bootstrap_request_manifest(
             dataset_start = _effective_range_start(spec, range_start)
             if dataset_start > as_of:
                 raise ValueError(f"{spec.dataset} bootstrap start 晚於 as_of: {dataset_start} > {as_of}")
-            ranges = tuple(_iter_calendar_year_chunks(dataset_start, as_of, spec.bootstrap_chunk_years))
+            if spec.bootstrap_chunk_months > 0:
+                ranges = tuple(_iter_calendar_month_chunks(dataset_start, as_of, spec.bootstrap_chunk_months))
+            else:
+                ranges = tuple(_iter_calendar_year_chunks(dataset_start, as_of, spec.bootstrap_chunk_years))
             requests.extend(
                 BootstrapHttpRequest(spec.dataset, mode, data_id, chunk_start, chunk_end)
                 for data_id in spec.fixed_data_ids
