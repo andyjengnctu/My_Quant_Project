@@ -407,9 +407,13 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
 
     issue_sections = []
 
-    table = pd.DataFrame({
-        "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電"],
-        "CFICode": ["CFICode", "skip", "ESVUFR"],
+    twse_table = pd.DataFrame({
+        "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電", "2317 鴻海", "9999 停牌股"],
+        "CFICode": ["CFICode", "skip", "ESVUFR", "ESVUFR", "ESVUFR"],
+    })
+    tpex_table = pd.DataFrame({
+        "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "0050 元大台灣50"],
+        "CFICode": ["CFICode", "skip", "CEOGEU"],
     })
 
     class _Response:
@@ -417,147 +421,148 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
         def raise_for_status(self):
             return None
 
+    class _BulkLoader:
+        def __init__(self, *, fail_dataset=None, missing_market_value=False):
+            self.calls = []
+            self.fail_dataset = fail_dataset
+            self.missing_market_value = missing_market_value
+
+        def get_data(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            dataset = kwargs.get("dataset")
+            if dataset == self.fail_dataset:
+                raise requests.RequestException(f"{dataset} synthetic failure")
+            if dataset == universe.rt.FINMIND_UNIVERSE_VOLUME_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-04-03", "2026-04-03", "2026-04-03", "2026-04-06"],
+                    "stock_id": ["2330", "2317", "0050", "2330"],
+                    "Trading_Volume": [2_000.0, 500.0, 3_000.0, 99_000_000.0],
+                })
+            if dataset == universe.rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
+                stock_ids = ["0050"] if self.missing_market_value else ["2330", "0050"]
+                values = [100_000_000_000.0] if self.missing_market_value else [2_000_000_000.0, 100_000_000_000.0]
+                return pd.DataFrame({
+                    "date": ["2026-04-03"] * len(stock_ids),
+                    "stock_id": stock_ids,
+                    "market_value": values,
+                })
+            raise AssertionError(f"unexpected dataset {dataset}")
+
     with tempfile.TemporaryDirectory(prefix="v16_downloader_universe_screening_") as tmp_dir:
         tmp_root = Path(tmp_dir)
-        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
-             patch.object(universe.rt, "SAVE_DIR", str(tmp_root)), \
-             patch.object(universe.rt.os.path, "exists", return_value=False), \
-             patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", return_value=[table]), \
-             patch.object(universe.rt, "get_yfinance_module", side_effect=ModuleNotFoundError("no module named yfinance")), \
-             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))), \
-             patch.object(universe.rt.time, "sleep", return_value=None):
-            try:
-                universe.get_or_update_universe(market_date="2026-04-03")
-                add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_rejected", True, False)
-            except RuntimeError as exc:
-                message = str(exc)
-                add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_reports_runtimeerror", True, "快篩初始化失敗" in message and "ModuleNotFoundError" in message)
-                add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_logs_issues", True, any(section == "快篩失敗" and "__INIT__ (yfinance) -> ModuleNotFoundError: no module named yfinance" in "\n".join(lines) for section, lines in issue_sections))
+        cache_path = tmp_root / "universe_cache_v3.json"
 
-        class _GoodFastInfo:
-            def get(self, key, default=0):
-                return {"lastVolume": 2_000_000, "marketCap": 1_000_000_000_000, "shares": 20_000_000}.get(key, default)
-
-        class _BrokenTicker:
-            def history(self, **kwargs):
-                raise requests.RequestException("screening transient failure")
-            @property
-            def fast_info(self):
-                raise requests.RequestException("screening transient failure")
-
-        class _GoodTicker:
-            def history(self, **kwargs):
-                return pd.DataFrame(
-                    {"Close": [100.0], "Volume": [2_000_000.0]},
-                    index=pd.to_datetime(["2026-04-03"]),
-                )
-            @property
-            def fast_info(self):
-                return _GoodFastInfo()
-
-        class _PartialScreenYF:
-            @staticmethod
-            def Ticker(symbol):
-                return _BrokenTicker() if symbol.startswith("2330") else _GoodTicker()
-
-        screening_issue_sections = []
-        cache_path = tmp_root / "universe_partial_screen.txt"
-        dual_table = pd.DataFrame({
-            "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電", "2317 鴻海"],
-            "CFICode": ["CFICode", "skip", "ESVUFR", "ESVUFR"],
-        })
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
              patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
              patch.object(universe.rt.os.path, "exists", return_value=False), \
              patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", return_value=[dual_table]), \
-             patch.object(universe.rt, "get_yfinance_module", return_value=_PartialScreenYF()), \
-             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: screening_issue_sections.append((section, list(lines)))), \
-             patch.object(universe.rt.time, "sleep", return_value=None):
+             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe.rt, "get_finmind_loader", side_effect=ModuleNotFoundError("no module named FinMind")), \
+             patch.object(universe.rt, "get_yfinance_module", side_effect=AssertionError("YFinance must not be used for universe screening")), \
+             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
             try:
                 universe.get_or_update_universe(market_date="2026-04-03")
-                partial_screen_rejected = False
-                partial_screen_message = ""
+                init_rejected = False
+                init_message = ""
             except RuntimeError as exc:
-                partial_screen_rejected = True
-                partial_screen_message = str(exc)
+                init_rejected = True
+                init_message = str(exc)
 
-        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_is_fail_closed", True, partial_screen_rejected)
-        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_reports_incomplete_result", True, "不得把不完整篩選結果發布" in partial_screen_message)
-        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_never_publishes_cache", False, cache_path.exists())
-        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_is_logged", True, any(section == "快篩失敗" and "2330" in "\n".join(lines) and "screening transient failure" in "\n".join(lines) for section, lines in screening_issue_sections))
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_is_fail_closed", True, init_rejected)
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_reports_provider", True, "FinMind Backer 全市場快篩失敗" in init_message and "ModuleNotFoundError" in init_message)
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_logs_issue", True, any(section == "FinMind bulk快篩失敗" and "ModuleNotFoundError" in "\n".join(lines) for section, lines in issue_sections))
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_never_publishes_cache", False, cache_path.exists())
 
-        completed_table = pd.DataFrame({
-            "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電"],
-            "CFICode": ["CFICode", "skip", "ESVUFR"],
-        })
-
-        class _AsOfFastInfo:
-            def get(self, key, default=0):
-                return {"lastVolume": 99_000_000, "marketCap": 99_000_000_000_000, "shares": 1_000_000_000}.get(key, default)
-
-        class _AsOfTicker:
-            @property
-            def fast_info(self):
-                return _AsOfFastInfo()
-            def history(self, **kwargs):
-                return pd.DataFrame(
-                    {"Close": [100.0, 110.0], "Volume": [100.0, 99_000_000.0]},
-                    index=pd.to_datetime(["2026-04-03", "2026-04-06"]),
-                )
-
-        class _AsOfYF:
-            @staticmethod
-            def Ticker(symbol):
-                return _AsOfTicker()
-
-        cache_v2 = tmp_root / "universe_cache_v2.json"
+        issue_sections.clear()
+        failing_loader = _BulkLoader(fail_dataset=universe.rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET)
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
-             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_v2)), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
              patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", return_value=[completed_table]), \
-             patch.object(universe.rt, "get_yfinance_module", return_value=_AsOfYF()), \
-             patch.object(universe.rt, "MIN_VOLUME", 1_000), \
-             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
-             patch.object(universe.rt.time, "sleep", return_value=None):
-            completed_membership = universe.get_or_update_universe(market_date="2026-04-03")
-        add_check(results, "synthetic_error_paths", case_id, "universe_screening_uses_completed_volume_not_intraday_fast_info_volume", [], completed_membership)
-        add_check(results, "synthetic_error_paths", case_id, "universe_v2_cache_is_machine_readable_and_published", True, cache_v2.is_file() and cache_v2.read_text(encoding="utf-8").lstrip().startswith("{"))
+             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe.rt, "get_finmind_loader", return_value=failing_loader), \
+             patch.object(universe.rt, "get_yfinance_module", side_effect=AssertionError("YFinance must not be used for universe screening")), \
+             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
+            try:
+                universe.get_or_update_universe(market_date="2026-04-03")
+                dataset_failure_rejected = False
+            except RuntimeError:
+                dataset_failure_rejected = True
+        add_check(results, "synthetic_error_paths", case_id, "either_finmind_bulk_dataset_failure_is_fail_closed", True, dataset_failure_rejected)
+        add_check(results, "synthetic_error_paths", case_id, "bulk_dataset_failure_never_publishes_cache", False, cache_path.exists())
 
-        class _CacheTicker(_AsOfTicker):
-            def history(self, **kwargs):
-                return pd.DataFrame(
-                    {"Close": [100.0], "Volume": [2_000.0]},
-                    index=pd.to_datetime(["2026-04-03"]),
-                )
-
-        class _CacheYF:
-            @staticmethod
-            def Ticker(symbol):
-                return _CacheTicker()
-
-        with patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_v2)), \
+        good_loader = _BulkLoader()
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
              patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", return_value=[completed_table]), \
-             patch.object(universe.rt, "get_yfinance_module", return_value=_CacheYF()), \
+             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe.rt, "get_finmind_loader", return_value=good_loader), \
+             patch.object(universe.rt, "get_yfinance_module", side_effect=AssertionError("YFinance must not be used for universe screening")), \
              patch.object(universe.rt, "MIN_VOLUME", 1_000), \
-             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
-             patch.object(universe.rt.time, "sleep", return_value=None):
-            cache_membership = universe.get_or_update_universe(market_date="2026-04-03")
-        add_check(results, "synthetic_error_paths", case_id, "completed_screening_can_publish_nonempty_v2_membership", ["2330"], cache_membership)
+             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
+            membership = universe.get_or_update_universe(market_date="2026-04-03")
+
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_uses_exact_market_date_not_future_row", ["2330", "0050"], membership)
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_does_not_call_yfinance", True, True)
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_uses_exactly_two_dataset_requests", 2, len(good_loader.calls))
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_price_request_omits_data_id", False, "data_id" in good_loader.calls[0])
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_market_value_request_omits_data_id", False, "data_id" in good_loader.calls[1])
+        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_requests_use_requested_market_date", ["2026-04-03", "2026-04-03"], [call.get("start_date") for call in good_loader.calls])
+        add_check(results, "synthetic_error_paths", case_id, "etf_qualifies_from_volume_without_market_value_requirement", True, "0050" in membership)
+        add_check(results, "synthetic_error_paths", case_id, "listed_symbol_without_exact_price_is_conservatively_excluded", False, "9999" in membership)
+        add_check(results, "synthetic_error_paths", case_id, "universe_v3_cache_is_machine_readable_and_published", True, cache_path.is_file() and cache_path.read_text(encoding="utf-8").lstrip().startswith("{"))
 
         with patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()), \
              patch.object(universe.rt, "MIN_VOLUME", 1_000), \
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
-            cache_reused = universe._load_reusable_universe_cache(cache_v2, now=universe.rt.get_taipei_now())
-        add_check(results, "synthetic_error_paths", case_id, "matching_universe_v2_contract_can_reuse_cache", ["2330"], cache_reused)
+            cache_reused = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now())
+        add_check(results, "synthetic_error_paths", case_id, "matching_universe_v3_contract_can_reuse_cache", ["2330", "0050"], cache_reused)
 
         with patch.object(universe.rt, "MIN_VOLUME", 2_000), \
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
              patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()):
-            stale_threshold_cache = universe._load_reusable_universe_cache(cache_v2, now=universe.rt.get_taipei_now())
-        add_check(results, "synthetic_error_paths", case_id, "universe_threshold_change_invalidates_cached_membership", None, stale_threshold_cache)
+            stale_threshold_cache = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now())
+        add_check(results, "synthetic_error_paths", case_id, "universe_threshold_change_invalidates_bulk_cache", None, stale_threshold_cache)
 
-    summary["issue_section_count"] = len(issue_sections)
+        cache_path.unlink(missing_ok=True)
+        missing_cap_loader = _BulkLoader(missing_market_value=True)
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
+             patch.object(universe.requests, "get", return_value=_Response()), \
+             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe.rt, "get_finmind_loader", return_value=missing_cap_loader), \
+             patch.object(universe.rt, "MIN_VOLUME", 1_000), \
+             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
+            try:
+                universe.get_or_update_universe(market_date="2026-04-03")
+                missing_cap_rejected = False
+                missing_cap_message = ""
+            except RuntimeError as exc:
+                missing_cap_rejected = True
+                missing_cap_message = str(exc)
+        add_check(results, "synthetic_error_paths", case_id, "high_volume_stock_missing_same_day_market_value_is_fail_closed", True, missing_cap_rejected)
+        add_check(results, "synthetic_error_paths", case_id, "missing_market_value_failure_names_missing_stock", True, "2330" in missing_cap_message)
+        add_check(results, "synthetic_error_paths", case_id, "missing_market_value_failure_never_publishes_cache", False, cache_path.exists())
+
+        duplicate_price = pd.DataFrame({
+            "date": ["2026-04-03", "2026-04-03"],
+            "stock_id": ["2330", "2330"],
+            "Trading_Volume": [2_000, 2_100],
+        })
+        try:
+            universe._normalize_finmind_bulk_screening_frame(
+                duplicate_price,
+                dataset=universe.rt.FINMIND_UNIVERSE_VOLUME_DATASET,
+                market_date="2026-04-03",
+                value_column="trading_volume",
+                allow_zero=True,
+            )
+            duplicate_rejected = False
+        except ValueError:
+            duplicate_rejected = True
+        add_check(results, "synthetic_error_paths", case_id, "duplicate_finmind_bulk_stock_id_is_rejected", True, duplicate_rejected)
+
+    summary["bulk_screening_checks"] = len(results)
     return results, summary

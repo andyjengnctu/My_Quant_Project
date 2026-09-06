@@ -20,7 +20,6 @@ from config.downloader import (
     DOWNLOADER_VERBOSE_DOWNLOAD_ERRORS as VERBOSE_DOWNLOAD_ERRORS,
     DOWNLOADER_VERBOSE_LAST_DATE_CHECK_ERRORS as VERBOSE_LAST_DATE_CHECK_ERRORS,
     DOWNLOADER_VERBOSE_UNIVERSE_FETCH_ERRORS as VERBOSE_UNIVERSE_FETCH_ERRORS,
-    DOWNLOADER_YF_SCREEN_SLEEP_SEC as YF_SCREEN_SLEEP_SEC,
 )
 from core.log_utils import append_issue_log, build_timestamped_log_path
 from core.runtime_utils import get_taipei_now, get_taipei_file_mtime
@@ -88,10 +87,12 @@ SAVE_DIR = _DOMAIN_PATHS.data_dir
 
 # # (AI註: 單一真理來源 - universe 名單路徑必須即時依 SAVE_DIR 推導，避免目錄重導後仍寫回舊路徑)
 def get_universe_list_file_path():
-    return os.path.join(SAVE_DIR, "universe_cache_v2.json")
+    return os.path.join(SAVE_DIR, "universe_cache_v3.json")
 
 
 FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
+FINMIND_UNIVERSE_VOLUME_DATASET = 'TaiwanStockPriceAdj'
+FINMIND_UNIVERSE_MARKET_VALUE_DATASET = 'TaiwanStockMarketValue'
 OUTPUT_DIR = resolve_runtime_output_dir(BASE_DIR, domain=RUNTIME_DOMAIN, category='smart_downloader')
 
 # # (AI註: 大量批次時避免逐筆錯誤洗板；詳細清單仍保留在摘要與 log)
@@ -128,10 +129,12 @@ EXPECTED_SCREENING_EXCEPTIONS = (
     requests.RequestException,
     ValueError,
     KeyError,
+    IndexError,
     TypeError,
     AttributeError,
     ImportError,
     ModuleNotFoundError,
+    pd.errors.EmptyDataError,
 ) + OPTIONAL_CURL_REQUEST_EXCEPTIONS
 
 EXPECTED_LAST_DATE_CHECK_EXCEPTIONS = (

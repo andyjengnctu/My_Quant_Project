@@ -4133,6 +4133,17 @@
       "entry": "`services/downloader/runtime.py`, `tools/validate/synthetic_error_cases.py`",
       "initial_status": "NEW",
       "order": 372
+    },
+    {
+      "id": "B385",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading downloader / FinMind bulk universe screening",
+      "item": "Trading universe screening uses FinMind Backer all-market bulk datasets instead of per-ticker YFinance calls",
+      "gap": "Trading universe identity仍由TWSE/TPEX ISIN來源界定純股票/ETF；每日快篩不得再對全市場逐檔呼叫YFinance。canonical screening必須以FinMind Backer全市場bulk request取得指定built market date的成交量與市值：成交量使用TaiwanStockPriceAdj之Trading_Volume，市值使用TaiwanStockMarketValue.market_value，兩個request均不得帶data_id；ETF只套成交量門檻，普通股票同時套成交量與市值門檻。只接受requested market_date的row，不得讓未來日期或intraday proxy進入membership；上市但該日無exact price row者保守視為當日不可actionable，高成交量普通股票若缺同日有效market_value則fail-closed且不得發布cache。universe cache identity必須綁定bulk dataset identity、threshold與contract fingerprint，舊YFinance screening cache不可誤REUSE。YFinance只保留latest market-date fallback，不再是正式universe screening provider。",
+      "entry": "`services/downloader/universe.py`, `services/downloader/runtime.py`, `config/downloader.py`, `tools/validate/synthetic_error_cases.py`",
+      "initial_status": "NEW",
+      "order": 373
     }
   ],
   "tests": [
@@ -7657,6 +7668,13 @@
       "description": "`validate_downloader_finmind_token_resolution_case` 覆蓋環境變數優先、`doc/FINMIND_API_TOKEN.md` API_TOKEN section fallback、缺section不誤讀其他credential，以及DataLoader初始化實際消費canonical resolver；synthetic值皆為隔離假token，不讀出或輸出使用者真實憑證。",
       "initial_status": "NEW",
       "order": 494
+    },
+    {
+      "id": "T505",
+      "b_id": "B385",
+      "description": "`validate_downloader_universe_screening_init_error_path_case` 覆蓋FinMind bulk loader/dataset fail-closed、兩個request皆省略data_id且使用同一market_date、YFinance screening不可被呼叫、exact-date membership、ETF volume-only、非交易/停牌listed symbol保守排除、高成交量股票缺market_value時禁止發布cache、duplicate stock_id拒絕、v3 cache identity/reuse與threshold invalidation。",
+      "initial_status": "NEW",
+      "order": 495
     }
   ],
   "transitions": [
@@ -25179,6 +25197,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_downloader_finmind_token_resolution_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B385",
+      "description": "將Trading universe screening由逐檔YFinance改為FinMind Backer全市場成交量+市值bulk join，保留同日PIT與fail-closed。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/downloader/universe.py`, `services/downloader/runtime.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T505",
+      "description": "更新downloader universe synthetic為FinMind bulk contract並納入正式治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_downloader_universe_screening_init_error_path_case`"
     }
   ]
 }
