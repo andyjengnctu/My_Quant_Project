@@ -989,3 +989,206 @@ __all__ = [
     "validate_market_data_v2_parquet_storage_contract_case",
     "validate_market_data_v2_bootstrap_activation_contract_case",
 ]
+
+def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_params):
+    """Round-5 finalization publishes READY only after full local artifact verification."""
+
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from core.file_integrity import canonical_json_sha256, load_json_strict
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
+    from core.market_data_storage_contract import MarketDataCommitReceipt, resolve_market_data_provider_snapshot_path
+    from services.downloader.market_data_bootstrap_activation import MarketDataBootstrapActivation
+    from services.downloader.market_data_bootstrap_completion import (
+        MarketDataBootstrapCompletionError,
+        finalize_market_data_v2_provider_snapshot,
+    )
+    from services.downloader.market_data_ledger import MarketDataJobLedger, WORKLOAD_DONE
+
+    case_id = "MARKET_DATA_V2_PROVIDER_SNAPSHOT_COMPLETION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    requests = (
+        BootstrapHttpRequest("TaiwanStockPriceAdj", "per_instrument_full_range", "2330", "1900-01-01", "2026-09-07"),
+        BootstrapHttpRequest("TaiwanStockPrice", "per_instrument_full_range", "2330", "1900-01-01", "2026-09-07"),
+    )
+    manifest = BootstrapRequestManifest(
+        as_of_date="2026-09-07",
+        full_range_start="1900-01-01",
+        registry_fingerprint=canonical_json_sha256({"registry": "synthetic"}),
+        manifest_fingerprint=canonical_json_sha256({"manifest": [request.request_id for request in requests]}),
+        historical_instrument_count=1,
+        requests=requests,
+    )
+    activation = MarketDataBootstrapActivation(
+        preflight_path=Path("outputs/trading/smart_downloader/market_data_v2/synthetic_preflight.json"),
+        manifest=manifest,
+        preflight_quota_limit=1600,
+        planned_total_requests=manifest.total_requests,
+    )
+    now = datetime(2026, 9, 7, 0, 30, tzinfo=timezone.utc)
+    receipts = {
+        requests[0].request_id: MarketDataCommitReceipt(True, 100, "a" * 64),
+        requests[1].request_id: MarketDataCommitReceipt(True, 120, "b" * 64),
+    }
+
+    class _Storage:
+        def __init__(self, values):
+            self.values = values
+
+        def recover_committed(self, request):
+            return self.values.get(request.request_id)
+
+    def _write_storage_manifest(root: Path):
+        from core.file_integrity import atomic_write_json
+        from core.market_data_storage_contract import (
+            MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME,
+            build_bootstrap_storage_manifest_payload,
+            resolve_market_data_bootstrap_archive_dir,
+        )
+        from core.market_data_storage_policy import get_market_data_storage_policy
+
+        archive_dir = resolve_market_data_bootstrap_archive_dir(root, manifest.manifest_fingerprint)
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            archive_dir / MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME,
+            build_bootstrap_storage_manifest_payload(manifest, get_market_data_storage_policy()),
+        )
+
+    def _seed_done(root: Path):
+        from core.market_data_storage_contract import resolve_market_data_bootstrap_ledger_path
+
+        _write_storage_manifest(root)
+        ledger = MarketDataJobLedger(
+            resolve_market_data_bootstrap_ledger_path(root, manifest.manifest_fingerprint)
+        )
+        workload_id = ledger.seed_manifest(manifest, now=now)
+        owner = "synthetic-finalizer"
+        ledger.acquire_executor_lock(
+            workload_id,
+            owner_id=owner,
+            now=now,
+            lease_until=now + timedelta(minutes=5),
+        )
+        for request in requests:
+            job = ledger.claim_next_job(
+                workload_id,
+                owner_id=owner,
+                now=now,
+                lease_until=now + timedelta(minutes=5),
+            )
+            if job is None or job.request_id != request.request_id:
+                raise AssertionError("synthetic ledger claim order mismatch")
+            receipt = receipts[request.request_id]
+            ledger.mark_done(
+                workload_id,
+                request.request_id,
+                row_count=receipt.row_count,
+                content_sha256=receipt.content_sha256,
+                now=now,
+            )
+        ledger.set_workload_status(workload_id, status=WORKLOAD_DONE, now=now)
+        return ledger, workload_id
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _ledger, _workload_id = _seed_done(root)
+        output_dir = root / "outputs" / "trading" / "smart_downloader" / "market_data_v2"
+        progress = []
+        result = finalize_market_data_v2_provider_snapshot(
+            activation=activation,
+            project_root=root,
+            output_dir=output_dir,
+            now_fn=lambda: now,
+            storage=_Storage(receipts),
+            progress_fn=lambda event: progress.append(dict(event)),
+            progress_every=1,
+        )
+        snapshot_path = resolve_market_data_provider_snapshot_path(root, manifest.manifest_fingerprint)
+        payload = load_json_strict(snapshot_path)
+        add_check(results, "market_data", case_id, "done_archive_finalizes_ready_snapshot", "READY", result["status"])
+        add_check(results, "market_data", case_id, "all_requests_verified_before_ready", manifest.total_requests, result["verified_requests"])
+        add_check(results, "market_data", case_id, "provider_snapshot_total_rows_are_ledger_derived", 220, result["total_rows"])
+        add_check(results, "market_data", case_id, "provider_snapshot_manifest_is_persisted", True, snapshot_path.is_file())
+        add_check(results, "market_data", case_id, "provider_snapshot_identity_matches_report", result["snapshot_fingerprint"], payload["snapshot_fingerprint"])
+        add_check(results, "market_data", case_id, "provider_snapshot_path_is_project_relative", False, str(result["provider_snapshot_path"]).startswith(str(root)))
+        add_check(results, "market_data", case_id, "verification_progress_reaches_total", manifest.total_requests, progress[-1]["verified"])
+
+        from core.market_data_storage_contract import (
+            MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME,
+            resolve_market_data_bootstrap_archive_dir,
+        )
+        bootstrap_manifest_path = resolve_market_data_bootstrap_archive_dir(
+            root, manifest.manifest_fingerprint
+        ) / MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME
+        bootstrap_manifest_path.unlink()
+        try:
+            finalize_market_data_v2_provider_snapshot(
+                activation=activation,
+                project_root=root,
+                output_dir=output_dir,
+                now_fn=lambda: now,
+                storage=_Storage(receipts),
+            )
+        except MarketDataBootstrapCompletionError:
+            missing_storage_manifest_blocks = True
+        else:
+            missing_storage_manifest_blocks = False
+        add_check(results, "market_data", case_id, "missing_storage_manifest_blocks_snapshot", True, missing_storage_manifest_blocks)
+        _write_storage_manifest(root)
+
+        reused = finalize_market_data_v2_provider_snapshot(
+            activation=activation,
+            project_root=root,
+            output_dir=output_dir,
+            now_fn=lambda: now + timedelta(minutes=1),
+            storage=_Storage(receipts),
+            progress_every=10,
+        )
+        add_check(results, "market_data", case_id, "immutable_snapshot_is_reused_after_reverification", True, reused["reused_existing_snapshot"])
+        add_check(results, "market_data", case_id, "reverify_keeps_same_snapshot_fingerprint", result["snapshot_fingerprint"], reused["snapshot_fingerprint"])
+
+        bad_receipts = dict(receipts)
+        bad_receipts[requests[0].request_id] = MarketDataCommitReceipt(True, 100, "c" * 64)
+        try:
+            finalize_market_data_v2_provider_snapshot(
+                activation=activation,
+                project_root=root,
+                output_dir=output_dir,
+                now_fn=lambda: now,
+                storage=_Storage(bad_receipts),
+            )
+        except MarketDataBootstrapCompletionError:
+            sha_mismatch_blocks = True
+        else:
+            sha_mismatch_blocks = False
+        add_check(results, "market_data", case_id, "artifact_sha_mismatch_blocks_snapshot", True, sha_mismatch_blocks)
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        from core.market_data_storage_contract import resolve_market_data_bootstrap_ledger_path
+
+        _write_storage_manifest(root)
+        ledger = MarketDataJobLedger(
+            resolve_market_data_bootstrap_ledger_path(root, manifest.manifest_fingerprint)
+        )
+        ledger.seed_manifest(manifest, now=now)
+        try:
+            finalize_market_data_v2_provider_snapshot(
+                activation=activation,
+                project_root=root,
+                output_dir=root / "outputs",
+                now_fn=lambda: now,
+                storage=_Storage(receipts),
+            )
+        except MarketDataBootstrapCompletionError:
+            incomplete_blocks = True
+        else:
+            incomplete_blocks = False
+        add_check(results, "market_data", case_id, "unfinished_ledger_cannot_publish_provider_snapshot", True, incomplete_blocks)
+
+    summary.update({"checks": len(results), "manifest_fingerprint": manifest.manifest_fingerprint})
+    return results, summary

@@ -49,6 +49,29 @@ class LedgerJob:
 
 
 @dataclass(frozen=True)
+class LedgerCommittedArtifact:
+    workload_id: str
+    request_id: str
+    ordinal: int
+    dataset: str
+    bootstrap_mode: str
+    data_id: str | None
+    start_date: str | None
+    end_date: str | None
+    row_count: int
+    content_sha256: str
+
+    def to_request(self) -> BootstrapHttpRequest:
+        return BootstrapHttpRequest(
+            dataset=self.dataset,
+            bootstrap_mode=self.bootstrap_mode,
+            data_id=self.data_id,
+            start_date=self.start_date,
+            end_date=self.end_date,
+        )
+
+
+@dataclass(frozen=True)
 class LedgerSummary:
     workload_id: str
     workload_status: str
@@ -594,6 +617,41 @@ class MarketDataJobLedger:
             http_attempts=total_http_attempts,
         )
 
+    def list_committed_artifacts(self, workload_id: str) -> tuple[LedgerCommittedArtifact, ...]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT workload_id, request_id, ordinal, dataset, bootstrap_mode,
+                       data_id, start_date, end_date, row_count, content_sha256
+                FROM jobs
+                WHERE workload_id = ? AND status = ?
+                ORDER BY ordinal
+                """,
+                (workload_id, JOB_DONE),
+            ).fetchall()
+        artifacts: list[LedgerCommittedArtifact] = []
+        for row in rows:
+            if row["row_count"] is None:
+                raise ValueError(f"DONE Market Data job 缺少 row_count: {row['request_id']}")
+            content_sha256 = str(row["content_sha256"] or "").strip().lower()
+            if len(content_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in content_sha256):
+                raise ValueError(f"DONE Market Data job 缺少合法 content_sha256: {row['request_id']}")
+            artifacts.append(
+                LedgerCommittedArtifact(
+                    workload_id=str(row["workload_id"]),
+                    request_id=str(row["request_id"]),
+                    ordinal=int(row["ordinal"]),
+                    dataset=str(row["dataset"]),
+                    bootstrap_mode=str(row["bootstrap_mode"]),
+                    data_id=row["data_id"],
+                    start_date=row["start_date"],
+                    end_date=row["end_date"],
+                    row_count=int(row["row_count"]),
+                    content_sha256=content_sha256,
+                )
+            )
+        return tuple(artifacts)
+
     def get_job(self, workload_id: str, request_id: str) -> LedgerJob:
         with self._connection() as conn:
             row = conn.execute(
@@ -617,6 +675,7 @@ __all__ = [
     "WORKLOAD_BLOCKED",
     "WORKLOAD_DONE",
     "LedgerJob",
+    "LedgerCommittedArtifact",
     "LedgerSummary",
     "MarketDataJobLedger",
 ]

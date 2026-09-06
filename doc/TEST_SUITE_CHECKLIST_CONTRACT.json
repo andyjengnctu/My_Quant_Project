@@ -4199,6 +4199,17 @@
       "entry": "`apps/smart_downloader.py`, `services/downloader/main.py`, `services/downloader/market_data_bootstrap_activation.py`, `core/market_data_dataset_registry.py`, `core/market_data_storage_contract.py`, `config/market_data.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 378
+    },
+    {
+      "id": "B391",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 provider snapshot completion / integrity contract",
+      "item": "Neutral provider snapshot 只有在完整 Bootstrap ledger 與所有 committed artifacts 通過本機 immutable integrity verification 後才能 READY",
+      "gap": "Market Data V2 neutral bootstrap archive不得因executor回報DONE就直接作Research V2／Trading source。只有current manifest對應ledger為WORKLOAD_DONE、job數與manifest完全一致、所有job皆DONE且具有合法row_count/content SHA256，並由storage owner逐一重開committed Parquet確認request identity、row count與重新計算的實體SHA256和ledger一致後，才可原子發布`provider_snapshot_manifest.json`。Provider snapshot identity必須包含provider、as-of、registry/manifest fingerprint、historical instrument count、request/row totals、per-dataset artifact fingerprint與全體artifact fingerprint；既有snapshot只可在重新驗證後REUSE相同identity，archive drift時fail-closed且禁止覆寫immutable snapshot。`[3]` requests全部DONE後自動finalize；`[4]`可純本機重驗／補finalization且不得使用FinMind data API quota。Provider snapshot READY只代表neutral provider source完成，不得自動建立、切換或promotion Research V2／Trading runtime。",
+      "entry": "`core/market_data_provider_snapshot.py`, `core/market_data_storage_contract.py`, `services/downloader/market_data_ledger.py`, `services/downloader/market_data_bootstrap_completion.py`, `services/downloader/main.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 379
     }
   ],
   "tests": [
@@ -7765,6 +7776,13 @@
       "description": "`validate_market_data_v2_bootstrap_activation_contract_case` 覆蓋periodic full-history不依probe-date union、最新BLOCKED不得fallback舊READY、manifest drift fail-closed、READY evidence重建exact manifest、prepare無ledger side effect、storage startup gate於data HTTP前fail-closed、explicit execution到DONE、project-relative status path、completed ledger resume preview與DONE restart零data-HTTP重抓。",
       "initial_status": "NEW",
       "order": 500
+    },
+    {
+      "id": "T511",
+      "b_id": "B391",
+      "description": "`validate_market_data_v2_provider_snapshot_completion_contract_case` 覆蓋full-DONE ledger gate、Bootstrap storage manifest必要性、逐request local artifact verification、row/SHA ledger parity、immutable snapshot fingerprint/persistence、project-relative path、reverify REUSE、artifact SHA drift fail-closed與unfinished ledger不得發布 snapshot。",
+      "initial_status": "NEW",
+      "order": 501
     }
   ],
   "transitions": [
@@ -25383,6 +25401,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_bootstrap_activation_contract_case`"
+    },
+    {
+      "date": "2026-09-07",
+      "id": "B391",
+      "description": "新增Market Data V2 provider snapshot completion/integrity與immutable neutral source治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_provider_snapshot.py`, `services/downloader/market_data_bootstrap_completion.py`"
+    },
+    {
+      "date": "2026-09-07",
+      "id": "T511",
+      "description": "新增Market Data V2 provider snapshot completion dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_provider_snapshot_completion_contract_case`"
     }
   ]
 }

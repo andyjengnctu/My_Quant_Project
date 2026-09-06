@@ -228,7 +228,79 @@ def _run_market_data_v2_bootstrap() -> int:
         raw_path = result.get(key)
         if raw_path:
             print(f"{label:<20}: {project_relative_display_path(raw_path, project_root=PROJECT_ROOT)}")
-    return 0 if str(result.get("status")) == "DONE" else 1
+    if str(result.get("status")) != "DONE":
+        return 1
+    print("Bootstrap requests 已全部 DONE；開始本機完整性驗證並建立 immutable provider snapshot（不會再打 FinMind data API）。")
+    return _finalize_market_data_v2_provider_snapshot(activation=activation, output_dir=output_dir, rt=rt)
+
+def _finalize_market_data_v2_provider_snapshot(*, activation, output_dir, rt) -> int:
+    try:
+        from services.downloader.market_data_bootstrap_completion import (
+            MarketDataBootstrapCompletionError,
+            finalize_market_data_v2_provider_snapshot,
+        )
+    except (ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    def _verify_progress(event: dict[str, object]) -> None:
+        verified = int(event.get("verified") or 0)
+        total = int(event.get("total") or 0)
+        pct = 100.0 * verified / total if total > 0 else 0.0
+        data_id = event.get("data_id")
+        target = str(event.get("dataset") or "") + (f"/{data_id}" if data_id else "")
+        print(f"[Verify] {verified}/{total} ({pct:.1f}%) | {target}")
+
+    try:
+        result = finalize_market_data_v2_provider_snapshot(
+            activation=activation,
+            project_root=PROJECT_ROOT,
+            output_dir=output_dir,
+            now_fn=rt.get_taipei_now,
+            progress_fn=_verify_progress,
+        )
+    except (MarketDataBootstrapCompletionError, RuntimeError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    print("=" * 88)
+    print(" Market Data V2｜Provider Snapshot Finalization")
+    print("=" * 88)
+    print(f"狀態                 : {result.get('status')}")
+    print(f"資料截止              : {result.get('as_of_date')}")
+    print(f"Verified requests     : {result.get('verified_requests')} / {result.get('total_requests')}")
+    print(f"Dataset 數            : {result.get('dataset_count')}")
+    print(f"總 rows               : {result.get('total_rows')}")
+    print(f"Snapshot fingerprint  : {result.get('snapshot_fingerprint')}")
+    print(f"既有 snapshot REUSE   : {result.get('reused_existing_snapshot')}")
+    for label, key in (("Provider Snapshot", "provider_snapshot_path"), ("Markdown", "markdown_path"), ("JSON", "json_path")):
+        raw_path = result.get(key)
+        if raw_path:
+            display = raw_path if key == "provider_snapshot_path" else project_relative_display_path(raw_path, project_root=PROJECT_ROOT)
+            print(f"{label:<20}: {display}")
+    print("說明                 : 這只是 neutral provider source READY；Research V2 / Trading 尚未因此自動切換。")
+    return 0
+
+
+def _run_market_data_v2_provider_snapshot_finalize() -> int:
+    try:
+        from services.downloader.market_data_bootstrap_activation import (
+            MarketDataBootstrapActivationError,
+            prepare_market_data_v2_bootstrap_activation,
+        )
+        rt = importlib.import_module("services.downloader.runtime")
+    except (ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    output_dir = Path(rt.OUTPUT_DIR) / "market_data_v2"
+    try:
+        activation = prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
+    except (MarketDataBootstrapActivationError, RuntimeError, ValueError, OSError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    return _finalize_market_data_v2_provider_snapshot(activation=activation, output_dir=output_dir, rt=rt)
+
 
 def _interactive_menu() -> int:
     print("=" * 72)
@@ -237,6 +309,7 @@ def _interactive_menu() -> int:
     print("[1] Trading 資料更新（現行正式流程）")
     print("[2] Market Data V2｜Backer Preflight + Exact Bootstrap Plan")
     print("[3] Market Data V2｜開始 / 續傳完整 Bootstrap")
+    print("[4] Market Data V2｜驗證 / 重建 Provider Snapshot（不使用 API quota）")
     print("[0] 離開")
     while True:
         try:
@@ -250,9 +323,11 @@ def _interactive_menu() -> int:
             return _run_market_data_v2_preflight()
         if choice == "3":
             return _run_market_data_v2_bootstrap()
+        if choice == "4":
+            return _run_market_data_v2_provider_snapshot_finalize()
         if choice == "0":
             return 0
-        print("請輸入 0、1、2 或 3。")
+        print("請輸入 0、1、2、3 或 4。")
 
 
 def main(argv=None):
@@ -262,7 +337,7 @@ def main(argv=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "services/downloader/main.py")
         print(f"用法: python {program_name}")
-        print("說明: 互動式入口提供現行 Trading 更新、Market Data V2 Backer Preflight / Exact Planner，以及明確選擇後的完整 Bootstrap 開始/續傳。")
+        print("說明: 互動式入口提供現行 Trading 更新、Market Data V2 Backer Preflight / Exact Planner、完整 Bootstrap 開始/續傳，以及不使用 API quota 的 Provider Snapshot 完整性驗證。")
         print("非互動環境維持既有行為：直接執行 Trading 資料更新。")
         return 0
 

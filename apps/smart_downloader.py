@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 互動式 Smart Downloader：現行 Trading 更新、Market Data V2 Backer Preflight / Exact Planner，以及明確選擇後的完整 Bootstrap 開始/續傳；Research 資料不會被修改。"
+HELP_DESCRIPTION = "說明: 互動式 Smart Downloader：現行 Trading 更新、Market Data V2 Backer Preflight / Exact Planner、完整 Bootstrap 開始/續傳，以及不使用 API quota 的 Provider Snapshot 完整性驗證；Research 資料不會被修改。"
 
 
 def main(argv=None):
