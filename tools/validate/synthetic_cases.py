@@ -271,6 +271,7 @@ from .synthetic_contract_cases import (
     validate_single_ticker_compounding_parity_contract_case,
 )
 from .synthetic_error_cases import (
+    validate_downloader_finmind_token_resolution_case,
     validate_downloader_main_error_path_case,
     validate_downloader_market_date_fallback_case,
     validate_downloader_sync_error_path_case,
@@ -590,6 +591,7 @@ def get_synthetic_validator_entries():
         _entry(validate_params_io_error_path_case, layer="error_path", cost_class="fast"),
         _entry(validate_module_loader_error_path_case, layer="error_path", cost_class="fast"),
         _entry(validate_preflight_error_path_case, layer="error_path", cost_class="fast"),
+        _entry(validate_downloader_finmind_token_resolution_case, layer="error_path", cost_class="fast"),
         _entry(validate_downloader_market_date_fallback_case, layer="error_path", cost_class="fast"),
         _entry(validate_downloader_universe_fetch_error_path_case, layer="error_path", cost_class="fast"),
         _entry(validate_downloader_universe_screening_init_error_path_case, layer="error_path", cost_class="fast"),

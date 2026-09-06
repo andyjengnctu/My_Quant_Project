@@ -4122,6 +4122,17 @@
       "entry": "`core/trading_dataset_identity.py`, `services/trading/market_data_state.py`, `services/trading/strategy_param_state.py`, `services/downloader/application.py`, `services/downloader/universe.py`, `services/trading/daily_workflow.py`, `services/trading/strategy_param_training.py`, `services/trading/scanner_state.py`, `services/trading/operations_status.py`, `tools/validate/synthetic_trading_cases.py`, `tools/validate/synthetic_error_cases.py`",
       "initial_status": "NEW",
       "order": 371
+    },
+    {
+      "id": "B384",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Downloader private credential resolution",
+      "item": "FinMind token resolves from environment first, then local private Markdown fallback",
+      "gap": "FinMind downloader credential必須由單一runtime owner解析；FINMIND_API_TOKEN環境變數具有最高優先權，未設定時才可自動讀取專案根目錄`doc/FINMIND_API_TOKEN.md`之`# API_TOKEN` section。不得讀取id/passwd欄位冒充token，不得把token值寫入console、log、artifact或synthetic evidence；Markdown不存在或未含API_TOKEN時維持未登入loader語意。FinMind DataLoader初始化必須呼叫同一canonical resolver，不得另外持有第二套credential來源。",
+      "entry": "`services/downloader/runtime.py`, `tools/validate/synthetic_error_cases.py`",
+      "initial_status": "NEW",
+      "order": 372
     }
   ],
   "tests": [
@@ -7639,6 +7650,13 @@
       "description": "`validate_trading_market_data_lineage_contract_case` 覆蓋account持股強制加入Data targets、canonical consumed-input dataset fingerprint、nested CSV不影響identity、duplicate ticker CSV fail-closed、market snapshot metadata與scientific identity分離、Params binding selected-SHA/content/date同源、同日期CSV變更失效、candidate/proposed currentness實際重hash、Params/Scanner執行中input TOCTOU fail-closed與candidate lineage；downloader universe error-path另覆蓋partial source/screening fail-closed、completed-bar membership、v2 cache contract reuse與threshold drift invalidation。",
       "initial_status": "NEW",
       "order": 493
+    },
+    {
+      "id": "T504",
+      "b_id": "B384",
+      "description": "`validate_downloader_finmind_token_resolution_case` 覆蓋環境變數優先、`doc/FINMIND_API_TOKEN.md` API_TOKEN section fallback、缺section不誤讀其他credential，以及DataLoader初始化實際消費canonical resolver；synthetic值皆為隔離假token，不讀出或輸出使用者真實憑證。",
+      "initial_status": "NEW",
+      "order": 494
     }
   ],
   "transitions": [
@@ -25145,6 +25163,22 @@
       "from_status": "PARTIAL",
       "to_status": "DONE",
       "note": "`validate_trading_market_data_lineage_contract_case`, `validate_downloader_universe_screening_init_error_path_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B384",
+      "description": "新增FinMind private Markdown token自動解析，保留環境變數優先並集中於downloader runtime單一owner。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/downloader/runtime.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T504",
+      "description": "新增FinMind token resolution dedicated synthetic並納入正式synthetic registry。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_downloader_finmind_token_resolution_case`"
     }
   ]
 }

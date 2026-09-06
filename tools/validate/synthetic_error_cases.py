@@ -177,6 +177,55 @@ def validate_preflight_error_path_case(base_params):
     return results, summary
 
 
+
+def validate_downloader_finmind_token_resolution_case(base_params):
+    from services.downloader import runtime
+
+    case_id = "DOWNLOADER_FINMIND_TOKEN_RESOLUTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        token_path = root / "doc" / "FINMIND_API_TOKEN.md"
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(
+            "# id:\nsynthetic-user\n\n# passwd:\nsynthetic-pass\n\n# API_TOKEN\nsynthetic-file-token\n",
+            encoding="utf-8",
+        )
+
+        file_token = runtime.resolve_finmind_api_token(project_root=root, environ={})
+        add_check(results, "synthetic_error_paths", case_id, "markdown_api_token_section_is_used_as_fallback", "synthetic-file-token", file_token)
+
+        env_token = runtime.resolve_finmind_api_token(
+            project_root=root,
+            environ={"FINMIND_API_TOKEN": "synthetic-env-token"},
+        )
+        add_check(results, "synthetic_error_paths", case_id, "environment_variable_has_precedence_over_private_markdown", "synthetic-env-token", env_token)
+
+        token_path.write_text("# id:\nsynthetic-user\n", encoding="utf-8")
+        missing_token = runtime.resolve_finmind_api_token(project_root=root, environ={})
+        add_check(results, "synthetic_error_paths", case_id, "missing_api_token_section_resolves_to_empty_without_reading_other_credentials", "", missing_token)
+
+    class _DummyLoader:
+        def __init__(self):
+            self.logged_token = None
+
+        def login_by_token(self, api_token):
+            self.logged_token = api_token
+
+    with patch.object(runtime, "dl", None), patch.object(
+        runtime, "get_finmind_dataloader_class", return_value=_DummyLoader
+    ), patch.object(runtime, "resolve_finmind_api_token", return_value="synthetic-runtime-token"):
+        loader = runtime.get_finmind_loader()
+    add_check(results, "synthetic_error_paths", case_id, "finmind_loader_uses_canonical_token_resolver_at_initialization", "synthetic-runtime-token", loader.logged_token)
+
+    source = (PROJECT_ROOT / "services" / "downloader" / "runtime.py").read_text(encoding="utf-8")
+    add_check(results, "synthetic_error_paths", case_id, "runtime_keeps_env_then_private_markdown_precedence_in_single_owner", True, 'FINMIND_API_TOKEN_ENV_VAR = "FINMIND_API_TOKEN"' in source and 'Path("doc") / "FINMIND_API_TOKEN.md"' in source and "token = resolve_finmind_api_token()" in source)
+
+    summary["finmind_token_resolution_cases"] = 1
+    return results, summary
+
 def validate_downloader_market_date_fallback_case(base_params):
     from services.downloader import universe
 
