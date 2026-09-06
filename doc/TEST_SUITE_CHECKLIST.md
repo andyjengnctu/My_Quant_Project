@@ -4,7 +4,7 @@
 
 唯一 machine-readable owner：`doc/TEST_SUITE_CHECKLIST_CONTRACT.json`。該 contract 持有 `B` definitions、`T` test bindings 與 append-only transitions；`B` current status、`T` DONE 索引與本檔 `B/T/G` 三個表格都由同一 resolver 派生。PARTIAL／TODO／未完成測試摘要仍由 formal reporter 即時派生，不維護第二份摘要表。
 
-範圍：納入長期規則與必要 formal contract；不納入暫時特例：`apps/portfolio_sim.py` 自動開瀏覽器、只使用還原價不考慮 raw。
+範圍：納入長期規則與必要 formal contract；不納入暫時特例：`apps/portfolio_sim.py` 自動開瀏覽器。
 
 狀態：`DONE` 已覆蓋；`PARTIAL` 仍有缺口；`TODO` 待補；`N/A` 不納入正式長期 test suite。
 

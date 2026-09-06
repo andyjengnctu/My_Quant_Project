@@ -80,7 +80,7 @@
 
 1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. `doc/ToDo.md` 是使用者自行維護的私人工作筆記，不是專案 research backlog、current status、決策依據或 GPT 待辦來源。除非使用者當輪明確要求讀取／整理 `doc/ToDo.md`，GPT 不得主動讀取、引用、依賴或用其內容推導下一步；formal／GPT 最嚴格檢查亦排除該檔。一般使用者註解同屬使用者自有備忘／說明；若其文字被正式介面直接讀取，仍視為正式輸出。
-3. 暫時只使用還原價，不考慮 raw；但任何還原處理都必須符合 D1 的 point-in-time legality，不得讓歷史決策日取得當時尚未知的未來公司行動或其他未來資訊。
+3. 模型與策略的價格 input 現階段只使用 FinMind 提供的 canonical 還原價；專案不得自行維護第二套台股還原價計算 engine。`TaiwanStockPrice` raw price 允許完整保存於 Market Data archive，僅作原始市場 evidence、稽核、資料修復／比對與未來另行授權研究用途，保存 raw 不代表目前模型／策略可直接消費 raw。任何使用 current-vintage 還原價的歷史 feature／target／candidate 語意都必須符合 D1；若 representation 對供應商因後續公司行動造成的 retrospective adjustment 不具 invariance，必須另行完成 PIT legality 設計與驗證後才能使用，不得以目前 FinMind 還原價直接回填形成未來函數。
 4. `doc/FINMIND_API_TOKEN.md` 為使用者本機私有憑證文件；其內容與是否被 `apps/package_zip.py` 收錄，暫時排除於 GPT 與 formal 最嚴格檢查及修正範圍之外。除非使用者另行要求，不得主動修改、移除、遮罩、加入 `.gitignore` 或調整打包器排除規則。
 5. 凡分析、修改或測試 `breakout_quality`，開始新的 scientific identity、設計或程式修改前必須依序讀取 `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`、`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md` 與 `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`。Registry 是 identity／namespace／current state 的唯一真理；Experiment Log 是已完成 evidence／result／decision 的唯一真理；Research Queue 只管理尚未完成的研究問題、優先順序、前置條件與停止條件。開始、完成、改變優先順序或結案時須同步更新對應文件；未取得結果不得預標成功／失敗，未開始實作的項目不得預占 scientific identity。
 6. `breakout_quality` architecture identity 只表示模型結構或輸入表示；training recipe、loss、optimizer、augmentation 等實驗差異由 experiment profile／research identity 管理。已淘汰的 historical architecture identity 不得直接復活為新的 current identity；若未來重新研究相同或近似結構，必須建立新的 research identity，並依 Registry 規則判定是否需要新的 architecture identity。

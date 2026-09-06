@@ -40,7 +40,7 @@ python apps/workbench.py
 ```
 
 - `apps/` 只作正式入口；模組責任與依賴方向以 `doc/ARCHITECTURE.md` 為準。
-- `apps/smart_downloader.py` 現為 **Trading data** 正式更新入口；寫入 `data/trading/tw_stock_data_vip/`，不得修改 Research 的 `data/tw_stock_data_vip/`。Research market-data snapshot 目前固定截至 `config/research.py` 所宣告的 cutoff。Trading 日K 使用 Asia/Taipei 14:00 safety cutoff：14:00 前即使資料來源已出現今天 provisional row，也只允許寫入上一個已完成 information date；單檔下載結果在落盤前會物理裁除所有晚於 allowed completed date 的 rows。任何已知 ticker download failure 都不會回報 Trading update READY，因此不得接著訓練 Params／Scanner。
+- `apps/smart_downloader.py` 現為 **Trading data** 正式更新入口；寫入 `data/trading/tw_stock_data_vip/`，不得修改 Research 的 `data/tw_stock_data_vip/`。Research market-data lifecycle 由 `config/market_data.py` 持有；目前 active `research_v1` 仍 frozen 到 `2026-03-02`，`config/research.py::RESEARCH_MARKET_DATA_CUTOFF`只是相容 alias；已授權的 `research_v2` 在 bootstrap/common-complete snapshot 尚未完成前不得變成 active。FinMind `TaiwanStockPriceAdj` 是目前 canonical 還原價 source，專案不自行重算台股還原價。Trading 日K 使用 Asia/Taipei 14:00 safety cutoff：14:00 前即使資料來源已出現今天 provisional row，也只允許寫入上一個已完成 information date；單檔下載結果在落盤前會物理裁除所有晚於 allowed completed date 的 rows。任何已知 ticker download failure 都不會回報 Trading update READY，因此不得接著訓練 Params／Scanner。
 
 # Workbench
 

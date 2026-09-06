@@ -2304,6 +2304,22 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "RESEARCH_ARTIFACT_PREPARATION",
             "RESEARCH_MARKET_DATA_CUTOFF",
         },
+        "config.market_data": {
+            "RESEARCH_DATA_GENERATION_V1",
+            "RESEARCH_DATA_GENERATION_V2",
+            "RESEARCH_DATA_GENERATIONS",
+            "ACTIVE_RESEARCH_DATA_GENERATION",
+            "TRADING_MARKET_DATA_LIFECYCLE",
+        },
+        "core.market_data_contract": {
+            "FINMIND_ADJUSTED_PRICE_DATASET",
+            "FINMIND_RAW_PRICE_ARCHIVE_DATASET",
+            "get_market_price_source_contract",
+            "get_active_research_data_generation",
+            "get_research_data_generation",
+            "get_trading_market_data_lifecycle",
+            "build_market_data_contract_snapshot",
+        },
         "core.research_policy": {
             "get_active_model_research_provider",
             "get_research_artifact_preparation_policy",
@@ -2435,6 +2451,80 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
     return results, summary
 
 
+
+
+def validate_market_data_governance_contract_case(_base_params):
+    """Market Data provider/price/lifecycle governance stays single-source and non-promoting."""
+
+    from config.market_data import (
+        ACTIVE_RESEARCH_DATA_GENERATION,
+        RESEARCH_DATA_GENERATIONS,
+        TRADING_MARKET_DATA_LIFECYCLE,
+    )
+    from config.research import RESEARCH_MARKET_DATA_CUTOFF
+    from core.market_data_contract import (
+        FINMIND_ADJUSTED_PRICE_DATASET,
+        FINMIND_RAW_PRICE_ARCHIVE_DATASET,
+        RESEARCH_STATUS_AUTHORIZED_NOT_READY,
+        build_market_data_contract_snapshot,
+        get_active_research_data_generation,
+        get_market_price_source_contract,
+        get_research_data_generation,
+        get_trading_market_data_lifecycle,
+    )
+
+    case_id = "META_MARKET_DATA_GOVERNANCE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    price = get_market_price_source_contract()
+    active = get_active_research_data_generation()
+    resolved_generations = {
+        generation_id: get_research_data_generation(generation_id)
+        for generation_id in RESEARCH_DATA_GENERATIONS
+    }
+    trading = get_trading_market_data_lifecycle()
+    snapshot = build_market_data_contract_snapshot()
+
+    add_check(results, "market_data", case_id, "finmind_adjusted_price_is_canonical_source", FINMIND_ADJUSTED_PRICE_DATASET, price.adjusted_dataset)
+    add_check(results, "market_data", case_id, "raw_price_archive_identity_is_distinct", True, price.raw_archive_dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET and price.raw_archive_dataset != price.adjusted_dataset)
+    add_check(results, "market_data", case_id, "raw_price_direct_consumption_remains_disabled", False, price.raw_direct_consumption_enabled)
+    add_check(results, "market_data", case_id, "project_adjusted_price_engine_remains_disabled", False, price.project_adjusted_price_engine_enabled)
+    add_check(results, "market_data", case_id, "retrospective_adjustment_requires_invariant_representation", True, price.retrospective_adjustment_invariance_required)
+
+    configured_active = RESEARCH_DATA_GENERATIONS[ACTIVE_RESEARCH_DATA_GENERATION]
+    add_check(results, "market_data", case_id, "active_research_generation_follows_config", ACTIVE_RESEARCH_DATA_GENERATION, active.generation_id)
+    add_check(results, "market_data", case_id, "active_research_cutoff_follows_config", str(configured_active.get("cutoff")), str(active.cutoff))
+    add_check(results, "market_data", case_id, "research_compatibility_cutoff_alias_matches_active_generation", str(active.cutoff), str(RESEARCH_MARKET_DATA_CUTOFF))
+    add_check(results, "market_data", case_id, "active_research_generation_is_not_not_ready", False, active.status == RESEARCH_STATUS_AUTHORIZED_NOT_READY)
+    add_check(results, "market_data", case_id, "all_declared_research_generations_resolve", set(RESEARCH_DATA_GENERATIONS), set(resolved_generations))
+
+    not_ready_cutoffs_are_unclaimed = all(
+        contract.cutoff is None
+        for contract in resolved_generations.values()
+        if contract.status == RESEARCH_STATUS_AUTHORIZED_NOT_READY
+    )
+    add_check(results, "market_data", case_id, "not_ready_research_generation_does_not_preclaim_cutoff", True, not_ready_cutoffs_are_unclaimed)
+
+    add_check(results, "market_data", case_id, "trading_lifecycle_mode_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("mode")), trading.mode)
+    add_check(results, "market_data", case_id, "trading_bootstrap_generation_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("bootstrap_source_generation")), trading.bootstrap_source_generation)
+    add_check(results, "market_data", case_id, "trading_bootstrap_generation_is_declared", True, trading.bootstrap_source_generation in resolved_generations)
+
+    downloader_runtime = importlib.import_module("services.downloader.runtime")
+    add_check(results, "market_data", case_id, "downloader_adjusted_price_identity_consumes_canonical_owner", FINMIND_ADJUSTED_PRICE_DATASET, downloader_runtime.FINMIND_PRICE_DATASET)
+    add_check(results, "market_data", case_id, "downloader_universe_volume_identity_consumes_canonical_owner", FINMIND_ADJUSTED_PRICE_DATASET, downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET)
+    runtime_source = (PROJECT_ROOT / "services/downloader/runtime.py").read_text(encoding="utf-8")
+    adjusted_literals = {f'"{FINMIND_ADJUSTED_PRICE_DATASET}"', f"'{FINMIND_ADJUSTED_PRICE_DATASET}'"}
+    add_check(results, "market_data", case_id, "downloader_runtime_does_not_redeclare_adjusted_dataset_literal", False, any(item in runtime_source for item in adjusted_literals))
+
+    add_check(results, "market_data", case_id, "market_data_snapshot_exposes_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, snapshot["active_research_generation"]["generation_id"])
+    add_check(results, "market_data", case_id, "market_data_snapshot_covers_all_declared_generations", set(RESEARCH_DATA_GENERATIONS), set(snapshot["research_generations"]))
+
+    summary["active_research_generation"] = active.generation_id
+    summary["active_research_cutoff"] = active.cutoff
+    summary["research_generation_count"] = len(resolved_generations)
+    summary["trading_mode"] = trading.mode
+    return results, summary
 
 def validate_runtime_domain_isolation_contract_case(_base_params):
     case_id = "META_RUNTIME_DOMAIN_ISOLATION"

@@ -93,6 +93,8 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "config/display_policy.py",
     "core/display_policy.py",
     "config/research.py",
+    "config/market_data.py",
+    "core/market_data_contract.py",
     "core/research_policy.py",
     "config/trading.py",
     "core/trading_policy.py",

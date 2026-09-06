@@ -16,6 +16,7 @@ from core.dataset_profiles import (
     normalize_dataset_profile_key,
 )
 from core.output_paths import normalize_output_category
+from core.market_data_contract import get_active_research_data_generation, get_trading_market_data_lifecycle
 
 RUNTIME_DOMAIN_RESEARCH = "research"
 RUNTIME_DOMAIN_TRADING = "trading"
@@ -101,6 +102,8 @@ def assert_runtime_write_path_is_not_research_dataset(
 def build_runtime_domain_contract_snapshot(project_root: str | os.PathLike[str]) -> dict[str, object]:
     research = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_RESEARCH)
     trading = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
+    research_generation = get_active_research_data_generation()
+    trading_lifecycle = get_trading_market_data_lifecycle()
     return {
         "research": {
             "data_dir": research.data_dir,
@@ -108,6 +111,8 @@ def build_runtime_domain_contract_snapshot(project_root: str | os.PathLike[str])
             "strategy_params_root": research.strategy_params_root,
             "outputs_root": research.outputs_root,
             "market_data_cutoff": str(RESEARCH_MARKET_DATA_CUTOFF),
+            "market_data_generation": research_generation.generation_id,
+            "market_data_universe_mode": research_generation.universe_mode,
         },
         "trading": {
             "data_dir": trading.data_dir,
@@ -115,6 +120,8 @@ def build_runtime_domain_contract_snapshot(project_root: str | os.PathLike[str])
             "strategy_params_root": trading.strategy_params_root,
             "outputs_root": trading.outputs_root,
             "state_root": trading.state_root,
+            "market_data_mode": trading_lifecycle.mode,
+            "market_data_bootstrap_source_generation": trading_lifecycle.bootstrap_source_generation,
         },
     }
 

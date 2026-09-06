@@ -5,13 +5,17 @@ and artifact-preparation settings are declared here; typed resolution belongs to
 ``core.research_policy``.
 """
 
+from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GENERATIONS
+
 ACTIVE_MODEL_ID = "breakout_quality"
 
 # Canonical single-seed identity for ordinary Research workflows.
 RESEARCH_SINGLE_SEED = 42
 
-# Research market-data snapshot is frozen at this information cutoff.
-RESEARCH_MARKET_DATA_CUTOFF = "2026-03-02"
+# Backward-compatible active Research cutoff alias. Market-data generation
+# identity/lifecycle is owned by config.market_data; V2 must not become active
+# until its bootstrap common-complete snapshot is frozen.
+RESEARCH_MARKET_DATA_CUTOFF = RESEARCH_DATA_GENERATIONS[ACTIVE_RESEARCH_DATA_GENERATION]["cutoff"]
 
 # Model-specific application providers. Add future models here without adding a
 # new executable under apps/.

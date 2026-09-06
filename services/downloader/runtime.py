@@ -22,6 +22,7 @@ from config.downloader import (
     DOWNLOADER_VERBOSE_UNIVERSE_FETCH_ERRORS as VERBOSE_UNIVERSE_FETCH_ERRORS,
 )
 from core.log_utils import append_issue_log, build_timestamped_log_path
+from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET
 from core.runtime_utils import get_taipei_now, get_taipei_file_mtime
 from core.runtime_domains import (
     RUNTIME_DOMAIN_TRADING,
@@ -90,8 +91,8 @@ def get_universe_list_file_path():
     return os.path.join(SAVE_DIR, "universe_cache_v3.json")
 
 
-FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
-FINMIND_UNIVERSE_VOLUME_DATASET = 'TaiwanStockPriceAdj'
+FINMIND_PRICE_DATASET = FINMIND_ADJUSTED_PRICE_DATASET
+FINMIND_UNIVERSE_VOLUME_DATASET = FINMIND_ADJUSTED_PRICE_DATASET
 FINMIND_UNIVERSE_MARKET_VALUE_DATASET = 'TaiwanStockMarketValue'
 OUTPUT_DIR = resolve_runtime_output_dir(BASE_DIR, domain=RUNTIME_DOMAIN, category='smart_downloader')
 
