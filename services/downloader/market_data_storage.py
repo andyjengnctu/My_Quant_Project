@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -32,6 +33,9 @@ from core.market_data_storage_contract import (
     resolve_market_data_request_parquet_path,
 )
 from core.market_data_storage_policy import MarketDataStoragePolicy, get_market_data_storage_policy
+
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -344,8 +348,8 @@ class MarketDataBootstrapStorageSink:
             if temp_path.exists():
                 try:
                     temp_path.unlink()
-                except OSError:
-                    pass
+                except OSError as exc:
+                    _LOG.warning("Market Data staging temp cleanup failed for %s: %s", temp_path, exc)
 
 
 __all__ = [
