@@ -88,16 +88,6 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         raise RuntimeError(
             "Trading Scanner 執行期間 inputs 已變更，禁止發布混合 lineage candidate snapshot: " + ",".join(changed)
         )
-    runtime_after = load_trading_scanner_runtime(project_root, verify_dataset_content=True)
-    stable_fields = (
-        "latest_data_date", "selected_params_sha256", "market_data_snapshot_sha256",
-        "dataset_content_sha256", "param_binding_sha256",
-    )
-    changed = [field for field in stable_fields if str(runtime_after.get(field) or "") != str(runtime.get(field) or "")]
-    if changed:
-        raise RuntimeError(
-            "Trading Scanner 執行期間 inputs 已變更，禁止發布混合 lineage candidate snapshot: " + ",".join(changed)
-        )
     raw_candidate_rows = [_json_safe(dict(row)) for row in list(result.get('candidate_rows') or [])]
     candidate_rows, stale_candidate_rows = partition_trading_candidate_rows_for_information_date(
         raw_candidate_rows,
@@ -132,9 +122,6 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         "latest_data_date": runtime["latest_data_date"],
         "param_latest_data_date": runtime["param_latest_data_date"],
         "param_member_count": runtime["member_count"],
-        "market_data_snapshot_sha256": runtime["market_data_snapshot_sha256"],
-        "dataset_content_sha256": runtime["dataset_content_sha256"],
-        "param_binding_sha256": runtime["param_binding_sha256"],
         "market_data_snapshot_sha256": runtime["market_data_snapshot_sha256"],
         "dataset_content_sha256": runtime["dataset_content_sha256"],
         "param_binding_sha256": runtime["param_binding_sha256"],

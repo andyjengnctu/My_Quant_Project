@@ -3,6 +3,8 @@ import requests
 from datetime import timedelta
 from io import StringIO
 
+from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+
 from core.console_report import project_relative_display_path
 from core.trading_market_clock import (
     latest_allowed_completed_daily_date,
@@ -49,20 +51,98 @@ def get_market_last_date():
     )
 
 
-def get_or_update_universe():
-    rt.ensure_runtime_dirs()
+UNIVERSE_CACHE_SCHEMA_VERSION = 2
+UNIVERSE_SCREENING_CONTRACT = "completed_daily_volume_close_x_known_shares_v1"
 
+
+def _universe_contract_identity() -> dict[str, object]:
+    payload = {
+        "schema_version": UNIVERSE_CACHE_SCHEMA_VERSION,
+        "screening_contract": UNIVERSE_SCREENING_CONTRACT,
+        "min_volume": int(rt.MIN_VOLUME),
+        "min_market_cap": int(rt.MIN_MARKET_CAP),
+    }
+    payload["contract_fingerprint"] = canonical_json_sha256(payload)
+    return payload
+
+
+def _load_reusable_universe_cache(path, *, now) -> list[str] | None:
+    cache_path = rt.os.fspath(path)
+    if not rt.os.path.exists(cache_path):
+        return None
+    file_mod_time = rt.get_taipei_file_mtime(cache_path)
+    if now - file_mod_time >= timedelta(days=rt.RESCAN_DAYS):
+        return None
+    try:
+        payload = load_json_strict(cache_path)
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    expected = _universe_contract_identity()
+    for field in ("schema_version", "screening_contract", "min_volume", "min_market_cap", "contract_fingerprint"):
+        if payload.get(field) != expected.get(field):
+            return None
+    tickers = [str(item).strip() for item in list(payload.get("qualified_tickers") or []) if str(item).strip()]
+    if not tickers:
+        return None
+    if str(payload.get("built_market_date") or "").strip() == "":
+        return None
+    core = {key: value for key, value in payload.items() if key != "cache_fingerprint"}
+    if str(payload.get("cache_fingerprint") or "") != canonical_json_sha256(core):
+        return None
+    return tickers
+
+
+def _publish_universe_cache(path, *, qualified_tickers: list[str], market_date: str) -> None:
+    payload = {
+        **_universe_contract_identity(),
+        "built_market_date": str(pd.Timestamp(market_date).date()),
+        "qualified_tickers": list(qualified_tickers),
+    }
+    payload["cache_fingerprint"] = canonical_json_sha256(payload)
+    atomic_write_json(path, payload)
+
+
+def _completed_daily_screening_inputs(ticker_obj, *, market_date: str, is_etf: bool) -> tuple[float, float]:
+    target = pd.Timestamp(market_date).tz_localize(None).normalize()
+    start = (target - pd.Timedelta(days=14)).date().isoformat()
+    end = (target + pd.Timedelta(days=1)).date().isoformat()
+    hist = ticker_obj.history(start=start, end=end, interval="1d", auto_adjust=False, actions=False)
+    if hist is None or hist.empty:
+        raise ValueError("yfinance completed daily history 為空")
+    frame = hist.copy()
+    idx = pd.to_datetime(frame.index, errors="coerce")
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    frame.index = idx.normalize()
+    frame = frame.loc[frame.index.notna() & (frame.index <= target)].sort_index()
+    if frame.empty:
+        raise ValueError(f"yfinance 在 completed market_date={target.date()} 以前無 daily row")
+    row = frame.iloc[-1]
+    completed_volume = float(pd.to_numeric(row.get("Volume"), errors="coerce"))
+    completed_close = float(pd.to_numeric(row.get("Close"), errors="coerce"))
+    if not pd.notna(completed_volume) or completed_volume < 0 or not pd.notna(completed_close) or completed_close <= 0:
+        raise ValueError("yfinance completed daily Volume/Close 不合法")
+    if is_etf:
+        return completed_volume, 0.0
+    info = ticker_obj.fast_info
+    shares = float(info.get("shares", 0) or 0)
+    if not pd.notna(shares) or shares <= 0:
+        raise ValueError("yfinance fast_info 缺少有效 shares，無法以 completed Close 計算市值")
+    return completed_volume, completed_close * shares
+
+
+def get_or_update_universe(*, market_date: str):
+    rt.ensure_runtime_dirs()
+    market_date_text = str(pd.Timestamp(market_date).date())
     list_file = rt.get_universe_list_file_path()
 
-    if rt.os.path.exists(list_file):
+    cached_tickers = _load_reusable_universe_cache(list_file, now=rt.get_taipei_now())
+    if cached_tickers:
         file_mod_time = rt.get_taipei_file_mtime(list_file)
-        if rt.get_taipei_now() - file_mod_time < timedelta(days=rt.RESCAN_DAYS):
-            with open(list_file, 'r') as f:
-                cached_tickers = [line.strip() for line in f if line.strip()]
-            if cached_tickers:
-                print(f"✅ 名單有效 (更新於: {file_mod_time.strftime('%Y-%m-%d')})，直接讀取。")
-                return cached_tickers
-            print("注意：universe 快取為空，重新海選。")
+        print(f"✅ 名單有效 (更新於: {file_mod_time.strftime('%Y-%m-%d')})，直接讀取。")
+        return cached_tickers
 
     print(f"🕵️‍♂️ 啟動全市場海選 (市值 > {rt.MIN_MARKET_CAP/1e8:.0f}億 且 成交量 > {rt.MIN_VOLUME/10000:.0f}萬)...")
 
@@ -131,12 +211,12 @@ def get_or_update_universe():
 
         print(f"\r🔍 快篩進度: [{i+1:>4}/{total_check} | {pct:>5.1f}%] {yf_t:<8} ", end="", flush=True)
         try:
-            info = yf.Ticker(yf_t).fast_info
-            last_volume = info.get('lastVolume', 0)
-            market_cap = info.get('marketCap', 0)
-
-            if last_volume >= rt.MIN_VOLUME:
-                if is_etf or market_cap >= rt.MIN_MARKET_CAP:
+            ticker_obj = yf.Ticker(yf_t)
+            completed_volume, completed_market_cap = _completed_daily_screening_inputs(
+                ticker_obj, market_date=market_date_text, is_etf=bool(is_etf)
+            )
+            if completed_volume >= rt.MIN_VOLUME:
+                if is_etf or completed_market_cap >= rt.MIN_MARKET_CAP:
                     qualified_tickers.append(sid)
 
         except rt.EXPECTED_SCREENING_EXCEPTIONS as e:
@@ -153,9 +233,8 @@ def get_or_update_universe():
             "不得把不完整篩選結果發布成新的 universe cache。"
         )
 
-    with open(list_file, 'w') as f:
-        for t in qualified_tickers:
-            f.write(f"{t}\n")
+    _publish_universe_cache(list_file, qualified_tickers=qualified_tickers, market_date=market_date_text)
 
     print(f"\n🎉 海選完畢！共 {len(qualified_tickers)} 檔入選。")
     return qualified_tickers
+

@@ -1,6 +1,7 @@
 import pandas as pd
 
 from core.console_report import project_relative_display_path
+from core.file_integrity import atomic_write_text
 from services.downloader import runtime as rt
 
 
@@ -77,7 +78,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
             if missing_cols:
                 raise KeyError(f"缺少必要欄位: {missing_cols}")
 
-            df[required_cols].to_csv(file_path)
+            atomic_write_text(file_path, df[required_cols].to_csv())
             count_success += 1
             rt.time.sleep(rt.FINMIND_DOWNLOAD_SLEEP_SEC)
 

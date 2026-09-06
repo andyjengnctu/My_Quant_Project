@@ -17,7 +17,7 @@ def run_trading_dataset_update(*, required_tickers=None) -> dict[str, object]:
     """
     print(f"🤖 Trading 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
     market_date = assert_completed_daily_information_date(get_market_last_date(), now=rt.get_taipei_now())
-    universe_tickers = [normalize_trading_ticker(item) for item in get_or_update_universe()]
+    universe_tickers = [normalize_trading_ticker(item) for item in get_or_update_universe(market_date=market_date)]
     required = sorted({normalize_trading_ticker(item) for item in list(required_tickers or [])})
     target_tickers = list(dict.fromkeys([*universe_tickers, *required]))
     if not target_tickers:

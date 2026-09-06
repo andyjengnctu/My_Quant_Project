@@ -60,7 +60,7 @@ def load_current_trading_proposed_order_plan(
     if not require_current:
         return payload
 
-    runtime = load_trading_scanner_runtime(root)
+    runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
     if str(payload.get("information_date") or "") != str(runtime["latest_data_date"]):
         raise RuntimeError("Trading 建議掛單資料日期已過期；請重新執行 3 Scanner 與 4 建議掛單")
     if str(payload.get("strategy_id") or "") != str(runtime["profile"].strategy_id):

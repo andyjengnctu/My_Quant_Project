@@ -8,6 +8,11 @@ from tkinter import messagebox, ttk
 
 from core.console_report import project_relative_display_path
 from core.trading_policy import get_trading_policy_snapshot
+from core.trading_order_state import (
+    TRADING_ACTIVE_ORDER_STATUSES,
+    TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
+    TRADING_ORDER_SIDE_BUY,
+)
 from services.trading.daily_workflow import (
     build_trading_daily_workflow_snapshot,
     run_trading_candidate_scan,
@@ -1089,7 +1094,7 @@ class TradingAccountPanel(ttk.Frame):
             return
         order_id = str(selected[0])
         row = self._order_rows.get(order_id) or {}
-        if str(row.get("status")) not in {"ORDERED", "PARTIAL"}:
+        if str(row.get("status")) not in TRADING_ACTIVE_ORDER_STATUSES:
             messagebox.showerror("Trading 成交", "只有 ORDERED / PARTIAL 掛單可確認成交。", parent=self)
             return
         try:
@@ -1115,7 +1120,7 @@ class TradingAccountPanel(ttk.Frame):
         try:
             if str(row.get("side") or "BUY") == "BUY":
                 fill_fn = confirm_trading_buy_order_fill
-            elif str(row.get("purpose") or "") == "INDICATOR_EXIT":
+            elif str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
                 fill_fn = confirm_trading_indicator_sell_order_fill
             else:
                 fill_fn = confirm_trading_protection_sell_order_fill
@@ -1167,7 +1172,7 @@ class TradingAccountPanel(ttk.Frame):
             return
         order_id = str(selected[0])
         row = self._order_rows.get(order_id) or {}
-        if str(row.get("status")) not in {"ORDERED", "PARTIAL"}:
+        if str(row.get("status")) not in TRADING_ACTIVE_ORDER_STATUSES:
             messagebox.showerror("Trading 掛單", "只有 ORDERED / PARTIAL 掛單可確認取消剩餘委託。", parent=self)
             return
         ticker = str(row.get("ticker") or "")

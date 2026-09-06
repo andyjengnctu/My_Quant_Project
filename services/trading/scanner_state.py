@@ -272,7 +272,7 @@ def load_trading_candidate_snapshot(
     if not require_current:
         return payload
 
-    runtime = load_trading_scanner_runtime(root)
+    runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
     if str(payload.get("strategy_id") or "") != str(runtime["profile"].strategy_id):
         raise RuntimeError("Trading candidate snapshot strategy 與目前設定不一致；請重新執行 Scanner")
     if str(payload.get("param_selector") or "") != str(runtime["profile"].param_selector):

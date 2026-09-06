@@ -38,7 +38,7 @@ SAVE_DIR = _DOMAIN_PATHS.data_dir
 
 # # (AI註: 單一真理來源 - universe 名單路徑必須即時依 SAVE_DIR 推導，避免目錄重導後仍寫回舊路徑)
 def get_universe_list_file_path():
-    return os.path.join(SAVE_DIR, "universe_list.txt")
+    return os.path.join(SAVE_DIR, "universe_cache_v2.json")
 
 
 FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'

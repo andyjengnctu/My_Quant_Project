@@ -796,7 +796,7 @@ def record_trading_sell_order_fill(
     to_status = TRADING_ORDER_STATUS_FILLED if remaining_qty == 0 else TRADING_ORDER_STATUS_PARTIAL
     record.update({"fills": fills, "filled_qty": filled_qty, "remaining_qty": remaining_qty, "status": to_status,
                    "filled_at": str(timestamp) if to_status == TRADING_ORDER_STATUS_FILLED else None})
-    oco_cancelled=[]
+    oco_peer_reconciliation_order_ids=[]
     if purpose in TRADING_PROTECTION_ORDER_PURPOSES and bool(record.get("broker_native_oco_confirmed")):
         group=str(record.get("broker_oco_group_id") or "")
         for peer_id, peer in updated["orders"].items():
@@ -805,16 +805,14 @@ def record_trading_sell_order_fill(
             if str(peer.get("purpose") or "") not in TRADING_PROTECTION_ORDER_PURPOSES: continue
             if str(peer.get("broker_oco_group_id") or "") != group: continue
             if str(peer.get("status") or "") in TRADING_ACTIVE_ORDER_STATUSES:
-                peer["status"] = TRADING_ORDER_STATUS_CANCELLED
-                peer["cancelled_at"] = str(timestamp)
-                peer["cancel_note"] = f"broker-native OCO peer fill: {oid}"
-                oco_cancelled.append(peer_id)
+                oco_peer_reconciliation_order_ids.append(peer_id)
     mutation_type = "confirm_indicator_sell_fill" if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT else "confirm_protection_sell_fill"
     return _append_event(updated, mutation_id=mutation_id, mutation_type=mutation_type, timestamp=timestamp, details={
         "order_id": oid, "ticker": record["ticker"], "purpose": purpose, "fill_id": fill_id_text, "fill_qty": qty,
         "fill_price_milli": fill_price_milli, "trade_date": trade_date_text, "net_sell_total_milli": net_sell,
         "allocated_cost_milli": allocated, "realized_pnl_milli": pnl, "filled_qty": filled_qty, "remaining_qty": remaining_qty,
-        "from_status": from_status, "to_status": to_status, "oco_cancelled_order_ids": oco_cancelled})
+        "from_status": from_status, "to_status": to_status,
+        "oco_peer_reconciliation_order_ids": oco_peer_reconciliation_order_ids})
 
 
 

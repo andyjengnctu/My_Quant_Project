@@ -306,7 +306,7 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
              patch.object(universe.requests, "get", side_effect=requests.RequestException("twse down")), \
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
             try:
-                universe.get_or_update_universe()
+                universe.get_or_update_universe(market_date="2026-04-03")
                 add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_rejected", True, False)
             except RuntimeError as exc:
                 message = str(exc)
@@ -333,7 +333,7 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
              patch.object(universe.pd, "read_html", return_value=[table]), \
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: partial_issue_sections.append((section, list(lines)))):
             try:
-                universe.get_or_update_universe()
+                universe.get_or_update_universe(market_date="2026-04-03")
                 partial_rejected = False
                 partial_message = ""
             except RuntimeError as exc:
@@ -379,7 +379,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))), \
              patch.object(universe.rt.time, "sleep", return_value=None):
             try:
-                universe.get_or_update_universe()
+                universe.get_or_update_universe(market_date="2026-04-03")
                 add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_rejected", True, False)
             except RuntimeError as exc:
                 message = str(exc)
@@ -388,14 +388,21 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
 
         class _GoodFastInfo:
             def get(self, key, default=0):
-                return {"lastVolume": 2_000_000, "marketCap": 1_000_000_000_000}.get(key, default)
+                return {"lastVolume": 2_000_000, "marketCap": 1_000_000_000_000, "shares": 20_000_000}.get(key, default)
 
         class _BrokenTicker:
+            def history(self, **kwargs):
+                raise requests.RequestException("screening transient failure")
             @property
             def fast_info(self):
                 raise requests.RequestException("screening transient failure")
 
         class _GoodTicker:
+            def history(self, **kwargs):
+                return pd.DataFrame(
+                    {"Close": [100.0], "Volume": [2_000_000.0]},
+                    index=pd.to_datetime(["2026-04-03"]),
+                )
             @property
             def fast_info(self):
                 return _GoodFastInfo()
@@ -420,7 +427,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: screening_issue_sections.append((section, list(lines)))), \
              patch.object(universe.rt.time, "sleep", return_value=None):
             try:
-                universe.get_or_update_universe()
+                universe.get_or_update_universe(market_date="2026-04-03")
                 partial_screen_rejected = False
                 partial_screen_message = ""
             except RuntimeError as exc:
@@ -431,6 +438,77 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
         add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_reports_incomplete_result", True, "不得把不完整篩選結果發布" in partial_screen_message)
         add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_never_publishes_cache", False, cache_path.exists())
         add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_is_logged", True, any(section == "快篩失敗" and "2330" in "\n".join(lines) and "screening transient failure" in "\n".join(lines) for section, lines in screening_issue_sections))
+
+        completed_table = pd.DataFrame({
+            "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電"],
+            "CFICode": ["CFICode", "skip", "ESVUFR"],
+        })
+
+        class _AsOfFastInfo:
+            def get(self, key, default=0):
+                return {"lastVolume": 99_000_000, "marketCap": 99_000_000_000_000, "shares": 1_000_000_000}.get(key, default)
+
+        class _AsOfTicker:
+            @property
+            def fast_info(self):
+                return _AsOfFastInfo()
+            def history(self, **kwargs):
+                return pd.DataFrame(
+                    {"Close": [100.0, 110.0], "Volume": [100.0, 99_000_000.0]},
+                    index=pd.to_datetime(["2026-04-03", "2026-04-06"]),
+                )
+
+        class _AsOfYF:
+            @staticmethod
+            def Ticker(symbol):
+                return _AsOfTicker()
+
+        cache_v2 = tmp_root / "universe_cache_v2.json"
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_v2)), \
+             patch.object(universe.requests, "get", return_value=_Response()), \
+             patch.object(universe.pd, "read_html", return_value=[completed_table]), \
+             patch.object(universe.rt, "get_yfinance_module", return_value=_AsOfYF()), \
+             patch.object(universe.rt, "MIN_VOLUME", 1_000), \
+             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
+             patch.object(universe.rt.time, "sleep", return_value=None):
+            completed_membership = universe.get_or_update_universe(market_date="2026-04-03")
+        add_check(results, "synthetic_error_paths", case_id, "universe_screening_uses_completed_volume_not_intraday_fast_info_volume", [], completed_membership)
+        add_check(results, "synthetic_error_paths", case_id, "universe_v2_cache_is_machine_readable_and_published", True, cache_v2.is_file() and cache_v2.read_text(encoding="utf-8").lstrip().startswith("{"))
+
+        class _CacheTicker(_AsOfTicker):
+            def history(self, **kwargs):
+                return pd.DataFrame(
+                    {"Close": [100.0], "Volume": [2_000.0]},
+                    index=pd.to_datetime(["2026-04-03"]),
+                )
+
+        class _CacheYF:
+            @staticmethod
+            def Ticker(symbol):
+                return _CacheTicker()
+
+        with patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_v2)), \
+             patch.object(universe.requests, "get", return_value=_Response()), \
+             patch.object(universe.pd, "read_html", return_value=[completed_table]), \
+             patch.object(universe.rt, "get_yfinance_module", return_value=_CacheYF()), \
+             patch.object(universe.rt, "MIN_VOLUME", 1_000), \
+             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
+             patch.object(universe.rt.time, "sleep", return_value=None):
+            cache_membership = universe.get_or_update_universe(market_date="2026-04-03")
+        add_check(results, "synthetic_error_paths", case_id, "completed_screening_can_publish_nonempty_v2_membership", ["2330"], cache_membership)
+
+        with patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()), \
+             patch.object(universe.rt, "MIN_VOLUME", 1_000), \
+             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
+            cache_reused = universe._load_reusable_universe_cache(cache_v2, now=universe.rt.get_taipei_now())
+        add_check(results, "synthetic_error_paths", case_id, "matching_universe_v2_contract_can_reuse_cache", ["2330"], cache_reused)
+
+        with patch.object(universe.rt, "MIN_VOLUME", 2_000), \
+             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
+             patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()):
+            stale_threshold_cache = universe._load_reusable_universe_cache(cache_v2, now=universe.rt.get_taipei_now())
+        add_check(results, "synthetic_error_paths", case_id, "universe_threshold_change_invalidates_cached_membership", None, stale_threshold_cache)
 
     summary["issue_section_count"] = len(issue_sections)
     return results, summary

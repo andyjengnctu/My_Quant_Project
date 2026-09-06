@@ -23,6 +23,7 @@ from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import MANAGEMENT_STATUS_ACTIVE, POSITION_SOURCE_STRATEGY_FILL
 from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.trading_order_state import (
+    TRADING_INDICATOR_ORDER_TYPE_MARKET,
     TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
     TRADING_ORDER_STATUS_FILLED,
     active_trading_indicator_exit_orders,
@@ -38,7 +39,7 @@ from services.trading.position_market_context import (
 INDICATOR_EXIT_PLAN_SCHEMA_VERSION = 1
 INDICATOR_EXIT_PLAN_STATUS = "PROPOSED_INDICATOR_EXIT"
 INDICATOR_EXIT_BROKER_STATUS = "NOT_SUBMITTED"
-INDICATOR_EXIT_ORDER_TYPE = "MARKET"
+INDICATOR_EXIT_ORDER_TYPE = TRADING_INDICATOR_ORDER_TYPE_MARKET
 INDICATOR_EXIT_EXECUTION_SEMANTICS = "COMPLETED_BAR_SIGNAL_NEXT_SESSION_MARKET_SELL"
 
 

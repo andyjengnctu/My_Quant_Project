@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from core.data_utils import discover_unique_csv_inputs
 from core.dataset_dates import resolve_latest_dataset_date
 from core.file_integrity import compute_file_sha256
 
@@ -15,14 +16,20 @@ def build_trading_dataset_fingerprint(data_dir: str | Path) -> dict[str, Any]:
     root = Path(data_dir).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Trading dataset directory 不存在: {root}")
-    members = sorted(path for path in root.rglob("*.csv") if path.is_file())
+    csv_inputs, duplicate_issue_lines = discover_unique_csv_inputs(root)
+    if duplicate_issue_lines:
+        raise RuntimeError(
+            "Trading dataset 存在同 ticker 重複 CSV，canonical consumer 與 dataset identity 不得分叉："
+            + " | ".join(duplicate_issue_lines)
+        )
+    members = [(str(ticker), Path(path)) for ticker, path in csv_inputs]
     if not members:
-        raise FileNotFoundError(f"Trading dataset 沒有 CSV: {root}")
+        raise FileNotFoundError(f"Trading dataset 沒有 canonical CSV: {root}")
 
     members_digest = hashlib.sha256()
     content_digest = hashlib.sha256()
     total_bytes = 0
-    for path in members:
+    for ticker, path in members:
         rel = path.relative_to(root).as_posix()
         size = int(path.stat().st_size)
         file_sha = compute_file_sha256(path)

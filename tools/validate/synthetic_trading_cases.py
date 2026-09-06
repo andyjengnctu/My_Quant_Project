@@ -1388,7 +1388,7 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
         confirm_trading_buy_order_fill,
         confirm_trading_protection_sell_order_fill,
     )
-    from services.trading.order_state import load_trading_order_state, resolve_trading_order_state_path
+    from services.trading.order_state import confirm_trading_order_cancellation, load_trading_order_state, resolve_trading_order_state_path
     from services.trading.protection_planning import build_trading_protection_plan
     from services.trading.protection_order_submission import (
         confirm_trading_protection_leg_submission,
@@ -1442,8 +1442,8 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
         add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_fill_reduces_real_held_qty", qty - first_qty, first["account"]["positions"]["2454"]["broker"]["qty"])
         add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_does_not_mark_sold_half_complete", False, first["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
         add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_cash_credit_uses_canonical_exact_ledger", cash_before + int(expected_first_ledger["net_sell_total_milli"]), first["account"]["cash_milli"])
-        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_peer_is_cancelled_on_first_actual_fill", "CANCELLED", peer["status"])
-        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_cancel_is_same_order_revision_mutation", [stop["order_id"]], first["oco_cancelled_order_ids"])
+        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_peer_remains_broker_truth_until_explicit_reconciliation", "ORDERED", peer["status"])
+        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_fill_reports_peer_that_requires_broker_reconciliation", [stop["order_id"]], first["oco_peer_reconciliation_order_ids"])
         add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_advances_account_once", int(bought["account_revision"]) + 1, first["account_revision"])
         add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_advances_orders_once", int(oco["revision"]) + 1, first["order_revision"])
 
@@ -1458,7 +1458,13 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
         add_check(results, "trading_protection_sell_fill", case_id, "final_tp_fill_zero_remaining", 0, final_record["remaining_qty"])
         add_check(results, "trading_protection_sell_fill", case_id, "completed_tp_marks_canonical_sold_half", True, second["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
         add_check(results, "trading_protection_sell_fill", case_id, "completed_tp_leaves_half_position", qty - int(tp["qty"]), second["account"]["positions"]["2454"]["broker"]["qty"])
-        validate_trading_order_state(second["orders"])
+        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_peer_still_not_inferred_cancelled_after_final_fill", "ORDERED", second["orders"]["orders"][stop["order_id"]]["status"])
+        reconciled_peer = confirm_trading_order_cancellation(
+            root, order_id=stop["order_id"], expected_revision=int(second["order_revision"]),
+            note="synthetic explicit broker OCO peer cancellation reconciliation",
+        )
+        add_check(results, "trading_protection_sell_fill", case_id, "explicit_broker_peer_cancellation_is_separate_order_mutation", "CANCELLED", reconciled_peer["orders"][stop["order_id"]]["status"])
+        validate_trading_order_state(reconciled_peer)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -2182,6 +2188,7 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
     from core.params_io import params_to_json_dict
     from core.price_utils import calc_half_take_profit_sell_qty
     from core.trading_order_state import (
+        TRADING_ORDER_PURPOSE_PROTECTION_STOP,
         TRADING_ORDER_PURPOSE_PROTECTION_TP,
         append_ordered_trading_proposal,
         build_empty_trading_order_state,
@@ -2338,11 +2345,21 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
             expected_order_revision=int(oco["revision"]),
             expected_account_revision=int(bought["account_revision"]),
         )
-        cancelled = confirm_trading_order_cancellation(
+        cancelled_tp = confirm_trading_order_cancellation(
             root,
             order_id=tp_order["order_id"],
             expected_revision=int(partial["order_revision"]),
             note="synthetic partial TP broker cancel",
+        )
+        stop_order = next(
+            row for row in cancelled_tp["orders"].values()
+            if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP
+        )
+        cancelled = confirm_trading_order_cancellation(
+            root,
+            order_id=stop_order["order_id"],
+            expected_revision=int(cancelled_tp["revision"]),
+            note="synthetic explicit broker OCO stop-peer cancellation",
         )
         retry_plan = build_trading_protection_plan(root)
         retry_row = retry_plan["positions"][0]
@@ -2814,6 +2831,25 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         add_check(results, "trading_data_lineage", case_id, "params_bind_exact_dataset_content_hash", first_market["dataset_fingerprint"]["csv_content_sha256"], binding["dataset_content_sha256"])
         add_check(results, "trading_data_lineage", case_id, "scanner_runtime_consumes_same_dataset_content_hash", binding["dataset_content_sha256"], runtime["dataset_content_sha256"])
 
+        from core.trading_dataset_identity import build_trading_dataset_fingerprint
+        canonical_fp = build_trading_dataset_fingerprint(data_dir)
+        nested_dir = data_dir / "ignored_nested"
+        nested_dir.mkdir()
+        (nested_dir / "diagnostic.csv").write_text("Date,Close\n2026-09-04,999\n", encoding="utf-8")
+        nested_fp = build_trading_dataset_fingerprint(data_dir)
+        add_check(results, "trading_data_lineage", case_id, "dataset_identity_hashes_only_canonical_consumed_top_level_csv_inputs", canonical_fp["csv_content_sha256"], nested_fp["csv_content_sha256"])
+        duplicate_path = data_dir / "TV_Data_Full_2330.csv"
+        duplicate_path.write_bytes(csv_path.read_bytes())
+        try:
+            build_trading_dataset_fingerprint(data_dir)
+        except RuntimeError:
+            duplicate_rejected = True
+        else:
+            duplicate_rejected = False
+        add_check(results, "trading_data_lineage", case_id, "duplicate_ticker_csv_is_fail_closed_in_dataset_identity", True, duplicate_rejected)
+        duplicate_path.unlink()
+        (nested_dir / "diagnostic.csv").unlink(); nested_dir.rmdir()
+
         metadata_only = publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
         add_check(results, "trading_data_lineage", case_id, "market_snapshot_operational_metadata_can_change_without_data_content_change", first_market["dataset_fingerprint"]["csv_content_sha256"], metadata_only["dataset_fingerprint"]["csv_content_sha256"])
         metadata_binding = load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
@@ -2879,7 +2915,54 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         add_check(results, "trading_data_lineage", case_id, "params_producer_refuses_publish_binding_when_dataset_changes_during_training", True, params_toctou_rejected)
 
         csv_path.write_bytes(original_bytes)
+        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_strategy_param_binding(root)
+        with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan):
+            daily_workflow.run_trading_candidate_scan(project_root=root)
+
+        from core.file_integrity import canonical_json_sha256, compute_file_sha256
+        from services.trading.proposed_order_state import (
+            PROPOSED_ORDER_SCHEMA_VERSION, PROPOSED_ORDER_STATUS,
+            load_current_trading_proposed_order_plan, resolve_trading_proposed_orders_json_path,
+        )
+        from services.trading.scanner_state import load_trading_candidate_snapshot, resolve_trading_candidate_snapshot_path
         account = initialize_trading_account_state(root, cash=500_000)
+        current_runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
+        proposed_payload = {
+            "schema_version": PROPOSED_ORDER_SCHEMA_VERSION,
+            "status": PROPOSED_ORDER_STATUS,
+            "runtime_domain": "trading",
+            "information_date": current_runtime["latest_data_date"],
+            "strategy_id": current_runtime["profile"].strategy_id,
+            "param_selector": current_runtime["profile"].param_selector,
+            "selected_params_sha256": current_runtime["selected_params_sha256"],
+            "candidate_snapshot_sha256": compute_file_sha256(resolve_trading_candidate_snapshot_path(root)),
+            "account_revision": int(account["revision"]),
+            "reserved_total": 0.0,
+            "orders": [],
+        }
+        proposed_payload["plan_fingerprint"] = canonical_json_sha256(proposed_payload)
+        atomic_write_json(resolve_trading_proposed_orders_json_path(root), proposed_payload)
+
+        drifted = base_frame.copy(); drifted.loc[1, "Close"] = 105.0; drifted.to_csv(csv_path, index=False)
+        try:
+            load_trading_candidate_snapshot(root, require_current=True)
+        except RuntimeError:
+            candidate_same_date_drift_rejected = True
+        else:
+            candidate_same_date_drift_rejected = False
+        add_check(results, "trading_data_lineage", case_id, "candidate_currentness_rehashes_actual_csv_content", True, candidate_same_date_drift_rejected)
+        try:
+            load_current_trading_proposed_order_plan(root, require_current=True)
+        except RuntimeError:
+            proposed_same_date_drift_rejected = True
+        else:
+            proposed_same_date_drift_rejected = False
+        add_check(results, "trading_data_lineage", case_id, "proposed_order_currentness_rehashes_actual_csv_content", True, proposed_same_date_drift_rejected)
+
+        csv_path.write_bytes(original_bytes)
+        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_strategy_param_binding(root)
         account = adopt_existing_trading_position(root, ticker="9999", qty=100, cost_basis_total=10_000, entry_date="2026-01-01", expected_revision=account["revision"])
         captured = {}
         def _capture_update(*, required_tickers=None):

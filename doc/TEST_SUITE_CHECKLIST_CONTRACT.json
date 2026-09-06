@@ -3964,7 +3964,7 @@
       "priority": "P1",
       "category": "GUI / Workbench Trading protection SELL fills",
       "item": "Explicit protection SELL fills reconcile broker order state and account exact accounting without market inference",
-      "gap": "Protection SELL實際成交只能由使用者輸入券商真正的成交股數、成交價與成交日觸發，不得由market high/low、trigger touch或shadow fill自動推定。只有ORDERED/PARTIAL protection SELL可成交，每次fill qty必須大於0且不超過remaining qty；TP LIMIT實際成交價不得低於原limit，STOP_MARKET允許gap成交。每次SELL fill必須重用來源entry order frozen params與canonical exact sell accounting／position sell seam，同步更新cash、cost basis、realized PnL與strategy position；TP只有該TP order全數成交後才可把canonical sold_half標記完成。Protection partial fills可跨交易日；未全數成交維持PARTIAL，全數成交轉FILLED。若該腿屬使用者先前明確確認的broker-native OCO，任何實際fill發生後，同一OCO group的其他active protection leg必須在同一order revision轉CANCELLED，避免剩餘SELL exposure超過實際持股。account.json與orders.json仍必須透過state/trading/fill_transaction.json可恢復transaction原子收斂；Workbench只做explicit actual-fill input與service委派，成交後機械刷新logical protection plan，不得自行重算帳務或推定券商成交。",
+      "gap": "Protection SELL實際成交只能由使用者輸入券商真正的成交股數、成交價與成交日觸發，不得由market high/low、trigger touch或shadow fill自動推定。只有ORDERED/PARTIAL protection SELL可成交，每次fill qty必須大於0且不超過remaining qty；TP LIMIT實際成交價不得低於原limit，STOP_MARKET允許gap成交。每次SELL fill必須重用來源entry order frozen params與canonical exact sell accounting／position sell seam，同步更新cash、cost basis、realized PnL與strategy position；TP只有canonical TP target真正完成時才可把sold_half標記完成。Protection partial fills可跨交易日；未全數成交維持PARTIAL，全數成交轉FILLED。若該腿屬使用者先前明確確認的broker-native OCO，任何fill只代表該腿的broker fill truth；系統不得自行推論peer已被券商取消或縮量。同OCO group仍active的peer必須回報為待broker reconciliation，只有使用者依實際券商狀態明確確認取消後才可轉CANCELLED，避免本地假取消後重送而造成重複SELL exposure。account.json與orders.json仍必須透過state/trading/fill_transaction.json可恢復transaction原子收斂；Workbench只做explicit actual-fill／cancel input與service委派，不得自行重算帳務或推定券商狀態。",
       "entry": "`core/trading_order_state.py`, `core/trading_account_state.py`, `core/trading_fill_transaction.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 357
@@ -4118,7 +4118,7 @@
       "priority": "P0",
       "category": "Trading market-data / Params / Scanner lineage SSOT",
       "item": "Trading Data, canonical Optimizer params and Scanner candidates share one dataset-content identity and fail closed on incomplete membership or TOCTOU drift",
-      "gap": "Trading market-data update不得只依動態universe：所有目前account持股（strategy/manual、qty>0）必須強制union進下載targets，避免持股掉出screening universe後停止更新。全市場universe重掃只有在TWSE/TPEX來源與每檔screening全部可靠完成時才可發布新cache；任何部分來源或screening error都依D2 fail-closed，不得發布不完整membership。成功Data update必須發布canonical market-data snapshot，其scientific data identity由dataset csv content SHA + latest data date決定；snapshot file SHA與required-position metadata只作audit lineage，不得誤使相同資料內容的Params失效。Trading strategy params仍只能由canonical Optimizer producer產生，Trading wrapper只能把selected params SHA綁定到dataset content/date，不得建立第二套training/search semantics。Scanner前後必須重驗dataset content、selected params SHA與param binding，任何同日期CSV修正、Params變動或scan期間input drift都不得發布candidate snapshot；candidate artifact必須持有相同content identity與binding lineage，Operations只有在market-data snapshot與Params binding current時才允許Scanner/allocation。",
+      "gap": "Trading market-data update不得只依動態universe：所有目前account持股（strategy/manual、qty>0）必須強制union進下載targets，避免持股掉出screening universe後停止更新。全市場universe重掃只能使用已確認market_date或更早的completed daily資料做membership：Volume必須取completed daily Volume，股票市值使用completed Close × 當下可得shares，不得使用盤中lastVolume／marketCap；TWSE/TPEX來源與每檔screening任一不完整都依D2 fail-closed，不得發布partial cache。universe cache必須是machine-readable、atomic publication並綁定screening contract與MIN_VOLUME/MIN_MARKET_CAP identity；TTL只決定何時重掃，設定／contract drift不得僅因檔案mtime新就REUSE。成功Data update必須原子發布canonical ticker CSV與market-data snapshot。Scientific dataset identity必須精確對齊Scanner/Optimizer真正消費的canonical top-level unique ticker CSV；未被consumer使用的nested CSV不得造成假stale，同ticker重複CSV則必須fail-closed，禁止identity與consumer選檔分叉。Trading strategy params仍只能由canonical Optimizer producer產生，Trading wrapper只能把selected params SHA綁定到dataset content/date，不得建立第二套training/search semantics。Scanner前後與candidate/proposed currentness都必須重新驗實際dataset content、selected params SHA與param binding；任何同日期CSV修正、Params變動或scan期間input drift都不得發布或沿用candidate/proposed artifact。Snapshot file SHA與required-position metadata只作audit lineage，不得誤使相同實際資料內容的Params失效。Operations只有在market-data snapshot與Params binding current時才允許Scanner/allocation。",
       "entry": "`core/trading_dataset_identity.py`, `services/trading/market_data_state.py`, `services/trading/strategy_param_state.py`, `services/downloader/application.py`, `services/downloader/universe.py`, `services/trading/daily_workflow.py`, `services/trading/strategy_param_training.py`, `services/trading/scanner_state.py`, `services/trading/operations_status.py`, `tools/validate/synthetic_trading_cases.py`, `tools/validate/synthetic_error_cases.py`",
       "initial_status": "NEW",
       "order": 371
@@ -7538,7 +7538,7 @@
     {
       "id": "T489",
       "b_id": "B369",
-      "description": "`validate_trading_protection_sell_fill_reconciliation_contract_case` 覆蓋explicit SELL actual-fill、PARTIAL→FILLED、跨日partial、TP limit/Stop gap語意、canonical exact-accounting、TP sold_half完成時點、broker-native OCO peer cancellation、no-market-inference與Workbench side-aware routing。",
+      "description": "`validate_trading_protection_sell_fill_reconciliation_contract_case` 覆蓋explicit SELL actual-fill、PARTIAL→FILLED、跨日partial、TP limit/Stop gap語意、canonical exact-accounting、TP sold_half完成時點、broker-native OCO fill不推論peer cancellation、peer待explicit broker reconciliation、明確取消為獨立order mutation、no-market-inference與Workbench side-aware routing。",
       "initial_status": "NEW",
       "order": 479
     },
@@ -7636,7 +7636,7 @@
     {
       "id": "T503",
       "b_id": "B383",
-      "description": "`validate_trading_market_data_lineage_contract_case` 覆蓋account持股強制加入Data targets、canonical dataset content fingerprint、market snapshot metadata與scientific identity分離、Params binding selected-SHA/content/date同源、同日期CSV變更失效、Params/Scanner執行中input TOCTOU fail-closed與candidate lineage；downloader universe部分來源／screening不完整的fail-closed另由既有synthetic error-path registry覆蓋，完整Trading regressions同步驗證無回歸。",
+      "description": "`validate_trading_market_data_lineage_contract_case` 覆蓋account持股強制加入Data targets、canonical consumed-input dataset fingerprint、nested CSV不影響identity、duplicate ticker CSV fail-closed、market snapshot metadata與scientific identity分離、Params binding selected-SHA/content/date同源、同日期CSV變更失效、candidate/proposed currentness實際重hash、Params/Scanner執行中input TOCTOU fail-closed與candidate lineage；downloader universe error-path另覆蓋partial source/screening fail-closed、completed-bar membership、v2 cache contract reuse與threshold drift invalidation。",
       "initial_status": "NEW",
       "order": 493
     }
@@ -25081,6 +25081,70 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_market_data_lineage_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B369",
+      "description": "完整Trading broker-truth audit發現native OCO fill曾自行推論peer cancellation；改為fill與peer cancel分層，peer只回報待explicit broker reconciliation後重新收斂DONE。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "`core/trading_order_state.py`, `services/trading/fill_reconciliation.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B369",
+      "description": "上述完整檢查修正與direct regression完成後收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "`core/trading_order_state.py`, `services/trading/fill_reconciliation.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T489",
+      "description": "更新protection SELL regression，驗OCO peer在partial/final fill後仍保留broker truth，只有明確cancel reconciliation才轉CANCELLED。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "`validate_trading_protection_sell_fill_reconciliation_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T489",
+      "description": "上述完整檢查修正與direct regression完成後收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "`validate_trading_protection_sell_fill_reconciliation_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B383",
+      "description": "完整Trading data-lineage audit補強completed-bar universe、v2 cache identity、atomic CSV、canonical consumed-input fingerprint與candidate/proposed實際content currentness。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "`core/trading_dataset_identity.py`, `services/downloader/universe.py`, `services/trading/scanner_state.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B383",
+      "description": "上述完整檢查修正與direct regression完成後收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "`core/trading_dataset_identity.py`, `services/downloader/universe.py`, `services/trading/scanner_state.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T503",
+      "description": "擴充market-data lineage與universe error-path regression，覆蓋duplicate input、completed-bar membership、cache contract與artifact currentness。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "`validate_trading_market_data_lineage_contract_case`, `validate_downloader_universe_screening_init_error_path_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T503",
+      "description": "上述完整檢查修正與direct regression完成後收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "`validate_trading_market_data_lineage_contract_case`, `validate_downloader_universe_screening_init_error_path_case`"
     }
   ]
 }

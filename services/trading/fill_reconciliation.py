@@ -389,7 +389,7 @@ def _confirm_trading_sell_order_fill(
         "status": str(final_record["status"]), "order_id": oid, "ticker": ticker, "fill_qty": fill_qty_int,
         "filled_qty": int(final_record.get("filled_qty") or 0), "remaining_qty": int(final_record.get("remaining_qty") or 0),
         "account_revision": int(final_account["revision"]), "order_revision": int(final_orders["revision"]),
-        "oco_cancelled_order_ids": list((final_orders["events"][-1].get("details") or {}).get("oco_cancelled_order_ids") or []),
+        "oco_peer_reconciliation_order_ids": list((final_orders["events"][-1].get("details") or {}).get("oco_peer_reconciliation_order_ids") or []),
         "account": final_account, "orders": final_orders,
     }
 
