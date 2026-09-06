@@ -42,16 +42,17 @@ class FinMindUsage:
 
 def _status_traits(http_status: int | None, api_status: int | str | None = None) -> tuple[bool, bool]:
     statuses: list[int] = []
-    if http_status is not None:
+    for raw_status in (http_status, api_status):
+        if raw_status is None:
+            continue
         try:
-            statuses.append(int(http_status))
+            statuses.append(int(raw_status))
         except (TypeError, ValueError):
-            pass
-    if api_status is not None:
-        try:
-            statuses.append(int(api_status))
-        except (TypeError, ValueError):
-            pass
+            # A provider may omit or return a non-numeric API status while the
+            # HTTP status still carries the actionable retry/quota semantics.
+            # Treat the non-numeric value as absent; this is normalization
+            # control-flow, not an operational exception fallback.
+            continue
     quota = 402 in statuses
     retryable = quota or any(status in {408, 425, 429} or status >= 500 for status in statuses)
     return retryable, quota
