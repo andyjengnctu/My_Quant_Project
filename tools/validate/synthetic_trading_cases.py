@@ -14,6 +14,12 @@ from core.exact_accounting import (
     money_to_milli,
 )
 from core.trading_account_state import validate_trading_account_state
+from core.trading_identity import normalize_trading_ticker
+from core.trading_state_paths import (
+    resolve_trading_account_state_path as resolve_core_trading_account_state_path,
+    resolve_trading_fill_transaction_path as resolve_core_trading_fill_transaction_path,
+    resolve_trading_order_state_path as resolve_core_trading_order_state_path,
+)
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
@@ -38,11 +44,22 @@ def validate_trading_account_state_contract_case(base_params):
     gitignore = (project_root / ".gitignore").read_text(encoding="utf-8")
     add_check(results, "trading_account", case_id, "trading_market_data_is_gitignored", True, "/data/trading/" in gitignore)
     add_check(results, "trading_account", case_id, "trading_operational_state_is_gitignored", True, "/state/trading/" in gitignore)
+    add_check(results, "trading_account", case_id, "trading_ticker_identity_uses_single_canonical_normalizer", "2330", normalize_trading_ticker(" 2330 "))
+    try:
+        normalize_trading_ticker("23 30")
+    except ValueError:
+        embedded_space_rejected = True
+    else:
+        embedded_space_rejected = False
+    add_check(results, "trading_account", case_id, "trading_ticker_identity_rejects_embedded_whitespace_everywhere", True, embedded_space_rejected)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         state_path = resolve_trading_account_state_path(root)
         add_check(results, "trading_account", case_id, "account_state_path_is_under_trading_state_root", str((root / "state" / "trading" / "account.json").resolve()), str(state_path.resolve()))
+        add_check(results, "trading_account", case_id, "account_service_path_reuses_core_state_path_owner", str(resolve_core_trading_account_state_path(root)), str(state_path))
+        add_check(results, "trading_account", case_id, "order_state_path_has_single_core_owner", str((root / "state" / "trading" / "orders.json").resolve()), str(resolve_core_trading_order_state_path(root).resolve()))
+        add_check(results, "trading_account", case_id, "fill_transaction_path_has_single_core_owner", str((root / "state" / "trading" / "fill_transaction.json").resolve()), str(resolve_core_trading_fill_transaction_path(root).resolve()))
 
         state = initialize_trading_account_state(root, cash=1_000_000)
         initial_cash_milli = money_to_milli(1_000_000)
@@ -2500,6 +2517,101 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
     add_check(results, "trading_stop_remainder", case_id, "indicator_submission_defensively_rejects_already_triggered_stop_lineage", True, "剩餘持股必須沿 STOP forced-exit obligation" in submit_source)
     add_check(results, "trading_stop_remainder", case_id, "prelive_audit_has_explicit_forced_stop_continuity_gate", True, "trading_stop_forced_exit_continuity" in audit_source)
     add_check(results, "trading_stop_remainder", case_id, "workbench_exposes_explicit_stop_remainder_market_submission", True, "確認 Stop 剩餘 MARKET 已送單" in panel_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+def validate_trading_ssot_identity_path_scale_contract_case(base_params):
+    """Trading identity, current-state paths, and milli scale have one canonical owner."""
+    case_id = "TRADING_SSOT_IDENTITY_PATH_SCALE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    import ast
+    import tempfile
+    from pathlib import Path
+
+    from core.event_hash_chain import compute_event_hash
+    from core.exit_priority import EXIT_SAME_BAR_PRIORITY_STOP_OVER_TP, resolve_stop_tp_hits
+    from core.trading_identity import normalize_trading_ticker
+    from core.trading_state_paths import (
+        resolve_trading_account_state_path as core_account_path,
+        resolve_trading_fill_transaction_path as core_fill_path,
+        resolve_trading_order_state_path as core_order_path,
+    )
+    from services.trading.account_state import resolve_trading_account_state_path as service_account_path
+    from services.trading.fill_reconciliation import resolve_trading_fill_transaction_path as service_fill_path
+    from services.trading.order_state import resolve_trading_order_state_path as service_order_path
+    from services.trading.scanner_state import partition_trading_candidate_rows_for_information_date
+
+    sample_event = {"revision": 1, "details": {"x": 2}, "event_hash": "must-not-self-hash"}
+    add_check(results, "trading_ssot", case_id, "account_and_order_event_chain_share_canonical_hash_primitive", compute_event_hash({"revision": 1, "details": {"x": 2}}), compute_event_hash(sample_event))
+    add_check(results, "trading_ssot", case_id, "same_bar_stop_tp_priority_has_single_identity", "STOP_OVER_TP", EXIT_SAME_BAR_PRIORITY_STOP_OVER_TP)
+    add_check(results, "trading_ssot", case_id, "same_bar_stop_dominates_tp_in_canonical_helper", (True, False), resolve_stop_tp_hits(stop_hit=True, tp_hit=True))
+    add_check(results, "trading_ssot", case_id, "ticker_identity_strips_outer_space_and_uppercases", "2330", normalize_trading_ticker(" 2330 "))
+    try:
+        normalize_trading_ticker("23 30")
+    except ValueError:
+        embedded_space_rejected = True
+    else:
+        embedded_space_rejected = False
+    add_check(results, "trading_ssot", case_id, "ticker_identity_rejects_embedded_whitespace", True, embedded_space_rejected)
+
+    try:
+        partition_trading_candidate_rows_for_information_date(
+            [{"ticker": "23 30", "trade_date": "2026-09-05", "execution_plan_seed": {"ticker": "23 30", "trade_date": "2026-09-05"}}],
+            information_date="2026-09-05",
+        )
+    except ValueError:
+        scanner_uses_identity_contract = True
+    else:
+        scanner_uses_identity_contract = False
+    add_check(results, "trading_ssot", case_id, "scanner_consumes_same_ticker_identity_contract", True, scanner_uses_identity_contract)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        add_check(results, "trading_ssot", case_id, "account_service_path_delegates_to_core_owner", core_account_path(root), service_account_path(root))
+        add_check(results, "trading_ssot", case_id, "order_service_path_delegates_to_core_owner", core_order_path(root), service_order_path(root))
+        add_check(results, "trading_ssot", case_id, "fill_journal_service_path_delegates_to_core_owner", core_fill_path(root), service_fill_path(root))
+        add_check(results, "trading_ssot", case_id, "account_current_truth_path_is_canonical", root / "state" / "trading" / "account.json", core_account_path(root))
+        add_check(results, "trading_ssot", case_id, "order_current_truth_path_is_canonical", root / "state" / "trading" / "orders.json", core_order_path(root))
+        add_check(results, "trading_ssot", case_id, "fill_journal_path_is_canonical", root / "state" / "trading" / "fill_transaction.json", core_fill_path(root))
+
+    project_root = Path(__file__).resolve().parents[2]
+    scale_modules = [
+        project_root / "core" / "position_step.py",
+        project_root / "core" / "backtest_core.py",
+        project_root / "services" / "trading" / "fill_reconciliation.py",
+    ]
+    raw_scale_sites = []
+    for path in scale_modules:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.BinOp, ast.AugAssign)):
+                continue
+            op = node.op
+            if not isinstance(op, (ast.Div, ast.Mult)):
+                continue
+            values = []
+            if isinstance(node, ast.BinOp):
+                values = [node.left, node.right]
+            elif isinstance(node, ast.AugAssign):
+                values = [node.value]
+            if any(isinstance(v, ast.Constant) and isinstance(v.value, (int, float)) and float(v.value) == 1000.0 for v in values):
+                raw_scale_sites.append(f"{path.relative_to(project_root)}:{getattr(node, 'lineno', '?')}")
+    add_check(results, "trading_ssot", case_id, "execution_consumers_do_not_rederive_milli_scale_with_raw_1000_arithmetic", [], raw_scale_sites)
+
+    order_planning_source = (project_root / "services" / "trading" / "order_planning.py").read_text(encoding="utf-8")
+    position_step_source = (project_root / "core" / "position_step.py").read_text(encoding="utf-8")
+    account_state_source = (project_root / "core" / "trading_account_state.py").read_text(encoding="utf-8")
+    order_state_source = (project_root / "core" / "trading_order_state.py").read_text(encoding="utf-8")
+    add_check(results, "trading_ssot", case_id, "order_planning_has_no_private_duplicate_order_state_path_resolver", False, "def _resolve_trading_order_state_path" in order_planning_source)
+    add_check(results, "trading_ssot", case_id, "account_and_order_state_do_not_duplicate_event_hash_payload_logic", False, "def _event_hash_payload" in account_state_source or "def _event_hash_payload" in order_state_source)
+    add_check(results, "trading_ssot", case_id, "price_state_display_uses_price_semantic_helper_not_money_alias", True, all(fragment in position_step_source for fragment in (
+        "milli_to_price(position['highest_high_since_entry_milli'])",
+        "milli_to_price(position['trailing_stop_milli'])",
+        "milli_to_price(position['sl_milli'])",
+    )))
 
     summary["checks"] = len(results)
     return results, summary

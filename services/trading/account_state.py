@@ -7,16 +7,19 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, load_json_strict
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.runtime_utils import get_taipei_now
-from core.trading_fill_transaction import TRADING_FILL_TRANSACTION_FILENAME
+from core.trading_state_paths import (
+    resolve_trading_account_state_path as _resolve_trading_account_state_path,
+    resolve_trading_fill_transaction_path,
+    resolve_trading_order_state_path,
+)
 from core.trading_order_state import (
-    TRADING_ORDER_STATE_FILENAME,
     active_trading_entry_orders,
     has_active_trading_orders,
     validate_trading_order_state,
 )
 from core.trading_account_state import (
+    TRADING_ACCOUNT_STATE_FILENAME,
     adopt_manual_trading_position,
     apply_confirmed_sell_fill,
     apply_confirmed_strategy_buy_fill,
@@ -29,7 +32,7 @@ from core.trading_account_state import (
     validate_trading_account_state,
 )
 
-ACCOUNT_STATE_FILENAME = "account.json"
+ACCOUNT_STATE_FILENAME = TRADING_ACCOUNT_STATE_FILENAME
 
 
 class TradingAccountRevisionConflict(RuntimeError):
@@ -37,10 +40,7 @@ class TradingAccountRevisionConflict(RuntimeError):
 
 
 def resolve_trading_account_state_path(project_root) -> Path:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    if paths.state_root is None:
-        raise RuntimeError("Trading runtime domain 缺少 state_root")
-    return Path(paths.state_root) / ACCOUNT_STATE_FILENAME
+    return _resolve_trading_account_state_path(project_root)
 
 
 def _timestamp() -> str:
@@ -60,13 +60,10 @@ def _read_state_with_sha(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def _read_order_guard_sha(project_root, *, allow_active_protection_orders: bool = False) -> str | None:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    fill_tx_path = Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
+    fill_tx_path = resolve_trading_fill_transaction_path(project_root)
     if fill_tx_path.is_file():
         raise RuntimeError("Trading 尚有未完成 fill transaction；請先由 Workbench 重新整理以完成 recovery")
-    if paths.state_root is None:
-        raise RuntimeError("Trading runtime domain 缺少 state_root")
-    order_path = Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
+    order_path = resolve_trading_order_state_path(project_root)
     if not order_path.is_file():
         return None
     raw = order_path.read_bytes()
@@ -82,8 +79,7 @@ def _read_order_guard_sha(project_root, *, allow_active_protection_orders: bool 
 
 
 def _assert_order_guard_unchanged(project_root, expected_sha: str | None) -> None:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    order_path = Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
+    order_path = resolve_trading_order_state_path(project_root)
     if expected_sha is None:
         if order_path.exists():
             raise TradingAccountRevisionConflict("Trading order state 在 account mutation 期間已建立")
@@ -96,8 +92,7 @@ def _assert_order_guard_unchanged(project_root, expected_sha: str | None) -> Non
 
 
 def load_trading_account_state(project_root, *, required: bool = True) -> dict[str, Any] | None:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    fill_tx_path = Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
+    fill_tx_path = resolve_trading_fill_transaction_path(project_root)
     if fill_tx_path.is_file():
         raise RuntimeError("Trading 尚有未完成 fill transaction；必須先完成 recovery 才能讀取 account state")
     path = resolve_trading_account_state_path(project_root)

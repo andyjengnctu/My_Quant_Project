@@ -4067,6 +4067,39 @@
       "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 366
+    },
+    {
+      "id": "B379",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Trading SSOT / identity, state path, accounting scale",
+      "item": "Trading identity, current-state physical paths and milli scale each have exactly one canonical owner",
+      "gap": "Trading ticker identity必須統一由`core/trading_identity.py`正規化，account/order/scanner/protection/Indicator/progress不得各自定義不同的strip/upper/whitespace contract。`state/trading/account.json`、`orders.json`與短生命週期`fill_transaction.json`的physical path必須只由`core/trading_state_paths.py`解析，service僅可保留相容wrapper，不得在order planning等consumer複製path assembly。price/money milli scale必須由`core/exact_accounting.py::milli_to_price/milli_to_money`等canonical helper轉換，Trading fill、position management與single-backtest consumer不得自行以`/1000`或`*1000`建立第二套scale口徑。此收斂不得改變既有fee/tax/PnL、state schema、artifact identity或execution semantics。",
+      "entry": "`core/trading_identity.py`, `core/trading_state_paths.py`, `core/exact_accounting.py`, `core/trading_account_state.py`, `core/trading_order_state.py`, `core/position_step.py`, `core/backtest_core.py`, `services/trading/account_state.py`, `services/trading/order_state.py`, `services/trading/order_planning.py`, `services/trading/fill_reconciliation.py`, `services/trading/scanner_state.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 367
+    },
+    {
+      "id": "B380",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Trading/Backtest execution semantic SSOT",
+      "item": "Same-bar Stop/TP priority is resolved by one canonical execution helper across entry-day, normal-bar and live protection planning",
+      "gap": "Stop與TP同一bar同時成立時，策略唯一口徑固定為STOP優先。entry-day pending-exit、一般bar position step與Trading protection plan不得各自重寫`if stop and tp`或自行保存另一份priority identity；必須共同使用`core/exit_priority.py::resolve_stop_tp_hits`與`EXIT_SAME_BAR_PRIORITY_STOP_OVER_TP`。此收斂只移除重複判斷，不改既有STOP_OVER_TP scientific/execution semantics。",
+      "entry": "`core/exit_priority.py`, `core/entry_plans.py`, `core/position_step.py`, `services/trading/protection_planning.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 368
+    },
+    {
+      "id": "B381",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Trading current-state integrity SSOT",
+      "item": "Account and order revisioned event chains use one canonical self-hash primitive",
+      "gap": "`state/trading/account.json`與`orders.json`雖有不同event schema/details normalization，但`event_hash`的計算規則完全相同：排除self-referential `event_hash`欄位後做canonical JSON SHA256。此primitive必須由`core/event_hash_chain.py::compute_event_hash`唯一持有，account/order validators不得各自保留第二份`_event_hash_payload`，避免未來hash-chain合法性分叉。",
+      "entry": "`core/event_hash_chain.py`, `core/trading_account_state.py`, `core/trading_order_state.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 369
     }
   ],
   "tests": [
@@ -7549,6 +7582,27 @@
       "description": "`validate_research_report_contract_freeze_case` 驗Standard SOP v9保持不變、comparison v14只含SOP 1～5、Generalization單一七欄pivot、comparison無Evidence Coverage、SOP→Model-specific Extension major separator、既有Extension capability/Robustness/Mode Evidence及approved fingerprint無回歸。",
       "initial_status": "NEW",
       "order": 488
+    },
+    {
+      "id": "T499",
+      "b_id": "B379",
+      "description": "`validate_trading_ssot_identity_path_scale_contract_case` 驗canonical ticker identity/embedded-whitespace rejection、Scanner同identity contract、account/order/fill service path與core owner完全一致、current truth固定解析到`state/trading/`，並鎖定執行consumer不得以raw 1000 arithmetic重建milli scale或在order planning複製orders path resolver。",
+      "initial_status": "NEW",
+      "order": 489
+    },
+    {
+      "id": "T500",
+      "b_id": "B380",
+      "description": "`validate_trading_ssot_identity_path_scale_contract_case` 驗same-bar priority identity固定為STOP_OVER_TP，且canonical resolver在Stop/TP同時命中時只保留Stop；Trading/Backtest consumers改為共用owner。",
+      "initial_status": "NEW",
+      "order": 490
+    },
+    {
+      "id": "T501",
+      "b_id": "B381",
+      "description": "`validate_trading_ssot_identity_path_scale_contract_case` 驗canonical event hash會忽略既有event_hash self-field，且account/order state不再各自定義`_event_hash_payload`。",
+      "initial_status": "NEW",
+      "order": 491
     }
   ],
   "transitions": [
@@ -24911,6 +24965,54 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_research_report_contract_freeze_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B379",
+      "description": "收斂Trading ticker identity、current-state physical paths與milli scale為單一canonical owner，並同步Architecture/CMD現行Trading語意。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/trading_identity.py`, `core/trading_state_paths.py`, `core/exact_accounting.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T499",
+      "description": "新增Trading SSOT identity/path/scale direct synthetic並納入正式synthetic registry／coverage contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_ssot_identity_path_scale_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B380",
+      "description": "收斂entry-day、normal-bar與Trading protection的STOP_OVER_TP重複判斷為單一execution semantic owner。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/exit_priority.py`, `core/entry_plans.py`, `core/position_step.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T500",
+      "description": "將STOP_OVER_TP canonical helper/identity驗證納入Trading SSOT direct synthetic。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_ssot_identity_path_scale_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B381",
+      "description": "收斂Trading account/order hash-chain self-hash為單一canonical primitive。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/event_hash_chain.py`, `core/trading_account_state.py`, `core/trading_order_state.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T501",
+      "description": "將account/order event-hash單一owner驗證納入Trading SSOT direct synthetic。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_ssot_identity_path_scale_contract_case`"
     }
   ]
 }

@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import compute_file_sha256
+from core.trading_identity import normalize_trading_ticker
 from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
 from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
@@ -35,11 +36,7 @@ from services.trading.protection_planning import (
 )
 
 
-def _normalize_ticker(value: object) -> str:
-    ticker = str(value or "").strip().upper()
-    if not ticker:
-        raise ValueError("Trading protection ticker 不可為空")
-    return ticker
+_normalize_ticker = normalize_trading_ticker
 
 
 def _find_position_plan(plan: dict[str, Any], ticker: str) -> dict[str, Any]:

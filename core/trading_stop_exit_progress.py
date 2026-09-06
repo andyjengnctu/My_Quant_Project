@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.file_integrity import canonical_json_sha256
+from core.trading_identity import normalize_trading_ticker
 from core.trading_order_state import (
     TRADING_ACTIVE_ORDER_STATUSES,
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
@@ -27,7 +28,7 @@ def build_trading_stop_exit_progress(
     """Return persistent STOP-trigger / forced-exit progress for one entry lineage."""
 
     validate_trading_order_state(order_state)
-    ticker_key = str(ticker or "").strip().upper()
+    ticker_key = normalize_trading_ticker(ticker)
     entry_id = str(entry_order_id or "").strip()
     if not ticker_key or not entry_id:
         raise ValueError("Trading STOP progress 缺少 ticker/entry_order_id")
@@ -45,7 +46,7 @@ def build_trading_stop_exit_progress(
             TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
         }:
             continue
-        if str(raw.get("ticker") or "").strip().upper() != ticker_key:
+        if normalize_trading_ticker(raw.get("ticker")) != ticker_key:
             continue
         if str(raw.get("entry_order_id") or "").strip() != entry_id:
             continue

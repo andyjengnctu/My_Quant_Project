@@ -7,8 +7,8 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from core.exact_accounting import milli_to_price
 from core.params_io import build_params_from_mapping
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.runtime_utils import get_taipei_now
 from core.trading_account_state import (
     apply_confirmed_strategy_buy_fill,
@@ -17,7 +17,6 @@ from core.trading_account_state import (
     validate_trading_account_state,
 )
 from core.trading_fill_transaction import (
-    TRADING_FILL_TRANSACTION_FILENAME,
     build_trading_fill_transaction_journal,
     validate_trading_fill_transaction_journal,
 )
@@ -33,8 +32,11 @@ from core.trading_order_state import (
     validate_trading_order_state,
 )
 from core.trading_tp_progress import build_trading_tp_half_progress
-from services.trading.account_state import resolve_trading_account_state_path
-from services.trading.order_state import resolve_trading_order_state_path
+from core.trading_state_paths import (
+    resolve_trading_account_state_path,
+    resolve_trading_fill_transaction_path as _resolve_trading_fill_transaction_path,
+    resolve_trading_order_state_path,
+)
 
 
 class TradingFillRevisionConflict(RuntimeError):
@@ -50,10 +52,7 @@ def _mutation_id() -> str:
 
 
 def resolve_trading_fill_transaction_path(project_root) -> Path:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    if paths.state_root is None:
-        raise RuntimeError("Trading runtime domain 缺少 state_root")
-    return Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
+    return _resolve_trading_fill_transaction_path(project_root)
 
 
 def _read_bytes_sha(path: Path) -> str:
@@ -169,12 +168,12 @@ def confirm_trading_buy_order_fill(
     account_mutation_id = _mutation_id()
     fill_id = _mutation_id()
     order_mutation_id = _mutation_id()
-    init_sl = int(record["init_sl_milli"]) / 1000.0
-    init_trail = int(record["init_trail_milli"]) / 1000.0
-    target_price = int(record["target_price_milli"]) / 1000.0
-    limit_price = int(record["limit_price_milli"]) / 1000.0
+    init_sl = milli_to_price(int(record["init_sl_milli"]))
+    init_trail = milli_to_price(int(record["init_trail_milli"]))
+    target_price = milli_to_price(int(record["target_price_milli"]))
+    limit_price = milli_to_price(int(record["limit_price_milli"]))
     entry_atr = record.get("entry_atr_milli")
-    entry_atr = None if entry_atr is None else int(entry_atr) / 1000.0
+    entry_atr = None if entry_atr is None else milli_to_price(int(entry_atr))
 
     existing = (account.get("positions") or {}).get(ticker)
     if existing is None:

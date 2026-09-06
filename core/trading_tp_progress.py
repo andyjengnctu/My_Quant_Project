@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.price_utils import calc_half_take_profit_sell_qty
+from core.trading_identity import normalize_trading_ticker
 from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
     validate_trading_order_state,
@@ -27,7 +28,7 @@ def build_trading_tp_half_progress(
     """Return immutable target and cumulative confirmed TP fill progress."""
 
     validate_trading_order_state(order_state)
-    ticker_key = str(ticker or "").strip().upper()
+    ticker_key = normalize_trading_ticker(ticker)
     entry_id = str(entry_order_id or "").strip()
     if not ticker_key or not entry_id:
         raise ValueError("Trading TP progress 缺少 ticker/entry_order_id")
@@ -41,7 +42,7 @@ def build_trading_tp_half_progress(
     for row in (order_state.get("orders") or {}).values():
         if str(row.get("purpose") or "") != TRADING_ORDER_PURPOSE_PROTECTION_TP:
             continue
-        if str(row.get("ticker") or "").strip().upper() != ticker_key:
+        if normalize_trading_ticker(row.get("ticker")) != ticker_key:
             continue
         if str(row.get("entry_order_id") or "").strip() != entry_id:
             continue

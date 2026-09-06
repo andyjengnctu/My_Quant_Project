@@ -7,6 +7,7 @@ import math
 from typing import Any
 
 from core.entry_plans import build_position_from_entry_fill
+from core.event_hash_chain import compute_event_hash
 from core.exact_accounting import (
     allocate_cost_basis_milli,
     build_buy_ledger_from_price,
@@ -20,10 +21,12 @@ from core.exact_accounting import (
     sync_position_display_fields,
 )
 from core.file_integrity import canonical_json_sha256
+from core.trading_identity import normalize_trading_ticker
 from core.position_step import execute_confirmed_position_sell_fill
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 
 TRADING_ACCOUNT_SCHEMA_VERSION = 1
+TRADING_ACCOUNT_STATE_FILENAME = "account.json"
 TRADING_RUNTIME_DOMAIN = RUNTIME_DOMAIN_TRADING
 POSITION_SOURCE_MANUAL_ADOPTED = "manual_adopted"
 POSITION_SOURCE_STRATEGY_FILL = "strategy_fill"
@@ -33,13 +36,7 @@ MANAGEMENT_STATUS_ACTIVE = "active"
 MANAGEMENT_STATUSES = (MANAGEMENT_STATUS_UNMANAGED, MANAGEMENT_STATUS_ACTIVE)
 
 
-def _normalize_ticker(value: object) -> str:
-    ticker = str(value or "").strip().upper()
-    if not ticker:
-        raise ValueError("ticker 必填")
-    if any(ch.isspace() for ch in ticker):
-        raise ValueError(f"ticker 不可包含空白: {ticker!r}")
-    return ticker
+_normalize_ticker = normalize_trading_ticker
 
 
 def _normalize_iso_date(value: object | None, *, field_name: str) -> str | None:
@@ -73,10 +70,6 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
-def _event_hash_payload(event: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in event.items() if key != "event_hash"}
-
-
 def _build_event(
     *,
     revision: int,
@@ -94,7 +87,7 @@ def _build_event(
         "prev_event_hash": prev_event_hash,
         "details": _json_safe(details),
     }
-    event["event_hash"] = canonical_json_sha256(_event_hash_payload(event))
+    event["event_hash"] = compute_event_hash(event)
     return event
 
 
@@ -850,7 +843,7 @@ def validate_trading_account_state(state: dict[str, Any]) -> None:
             raise ValueError("Trading account event revision 不連續")
         if event.get("prev_event_hash") != previous_hash:
             raise ValueError("Trading account event hash chain 斷裂")
-        actual_hash = canonical_json_sha256(_event_hash_payload(event))
+        actual_hash = compute_event_hash(event)
         if event.get("event_hash") != actual_hash:
             raise ValueError("Trading account event hash 不一致")
         previous_hash = actual_hash
@@ -896,6 +889,7 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "TRADING_ACCOUNT_SCHEMA_VERSION",
+    "TRADING_ACCOUNT_STATE_FILENAME",
     "POSITION_SOURCE_MANUAL_ADOPTED",
     "POSITION_SOURCE_STRATEGY_FILL",
     "MANAGEMENT_STATUS_UNMANAGED",

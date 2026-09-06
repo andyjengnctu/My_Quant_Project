@@ -3,6 +3,7 @@ import re
 import shutil
 import sys
 import unicodedata
+from core.param_access import get_param_value
 
 C_RED = '\033[91m'
 C_YELLOW = '\033[93m'
@@ -225,6 +226,4 @@ def _table_row(c1, c2, c3, c4, w1=16, w=16):
 
 
 def get_p(params, key, default=None):
-    if isinstance(params, dict):
-        return params.get(key, default)
-    return getattr(params, key, default)
+    return get_param_value(params, key, default)

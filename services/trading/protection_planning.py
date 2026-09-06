@@ -13,6 +13,7 @@ from typing import Any
 
 from core.console_report import project_relative_display_path
 from core.exact_accounting import milli_to_price
+from core.exit_priority import EXIT_SAME_BAR_PRIORITY_STOP_OVER_TP
 from core.file_integrity import (
     atomic_write_json,
     atomic_write_text,
@@ -49,7 +50,7 @@ PROTECTION_STOP_REMAINDER_ACTION = "STOP_REMAINDER_EXIT"
 PROTECTION_STOP_ORDER_TYPE = "STOP_MARKET"
 PROTECTION_TP_ORDER_TYPE = "LIMIT"
 PROTECTION_STOP_REMAINDER_ORDER_TYPE = "MARKET"
-PROTECTION_SAME_BAR_PRIORITY = "STOP_OVER_TP"
+PROTECTION_SAME_BAR_PRIORITY = EXIT_SAME_BAR_PRIORITY_STOP_OVER_TP
 
 
 def resolve_trading_protection_plan_dir(project_root: str | Path) -> Path:

@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import compute_file_sha256
+from core.trading_identity import normalize_trading_ticker
 from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
 from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
@@ -20,10 +21,7 @@ from services.trading.indicator_exit_planning import load_current_trading_indica
 from services.trading.order_state import mutate_trading_order_state
 
 
-def _normalize_ticker(value: object) -> str:
-    text=str(value or "").strip().upper()
-    if not text: raise ValueError("Trading ticker 不可為空")
-    return text
+_normalize_ticker = normalize_trading_ticker
 
 
 def _find_exit_plan(plan: dict[str, Any], signal_key: str) -> dict[str, Any]:

@@ -1,10 +1,8 @@
 from core.config import get_ev_calc_method
+from core.param_access import get_param_value
 
 
-def _get_param(params, key, default=None):
-    if isinstance(params, dict):
-        return params.get(key, default)
-    return getattr(params, key, default)
+_get_param = get_param_value
 
 
 def _history_threshold_payload_is_neutral(params) -> bool:

@@ -9,12 +9,14 @@ from uuid import uuid4
 from core.file_integrity import atomic_write_json, compute_file_sha256, load_json_strict
 from core.params_io import params_to_json_dict
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.runtime_utils import get_taipei_now
-from core.trading_fill_transaction import TRADING_FILL_TRANSACTION_FILENAME
+from core.trading_state_paths import (
+    resolve_trading_fill_transaction_path,
+    resolve_trading_order_state_path as _resolve_trading_order_state_path,
+)
 from core.trading_policy import resolve_trading_selected_strategy_param_path
+from core.trading_identity import normalize_trading_ticker
 from core.trading_order_state import (
-    TRADING_ORDER_STATE_FILENAME,
     active_trading_orders,
     active_trading_entry_orders,
     append_ordered_trading_proposal,
@@ -35,17 +37,11 @@ class TradingOrderRevisionConflict(RuntimeError):
 
 
 def resolve_trading_order_state_path(project_root) -> Path:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    if paths.state_root is None:
-        raise RuntimeError("Trading runtime domain 缺少 state_root")
-    return Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
+    return _resolve_trading_order_state_path(project_root)
 
 
 def _assert_no_fill_transaction(project_root) -> None:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    if paths.state_root is None:
-        raise RuntimeError("Trading runtime domain 缺少 state_root")
-    tx_path = Path(paths.state_root) / TRADING_FILL_TRANSACTION_FILENAME
+    tx_path = resolve_trading_fill_transaction_path(project_root)
     if tx_path.is_file():
         raise RuntimeError("Trading 尚有未完成 fill transaction；請先由 Workbench 重新整理以完成 recovery")
 
@@ -164,7 +160,7 @@ def confirm_trading_order_submission(
     matches = [
         row
         for row in list(plan.get("orders") or [])
-        if int(row.get("rank") or 0) == int(rank) and str(row.get("ticker") or "").strip().upper() == str(ticker or "").strip().upper()
+        if int(row.get("rank") or 0) == int(rank) and normalize_trading_ticker(row.get("ticker")) == normalize_trading_ticker(ticker)
     ]
     if len(matches) != 1:
         raise ValueError(f"無法唯一定位 Trading proposed order: rank={rank}, ticker={ticker}")

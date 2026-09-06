@@ -10,6 +10,7 @@ from core.file_integrity import compute_file_sha256, load_json_strict
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths, resolve_runtime_output_dir
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+from core.trading_identity import normalize_trading_ticker
 
 
 TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 1
@@ -47,14 +48,12 @@ def partition_trading_candidate_rows_for_information_date(
         if not isinstance(raw, dict):
             raise TypeError("Trading Scanner candidate row 必須是 object")
         row = dict(raw)
-        ticker = str(row.get("ticker") or "").strip().upper()
-        if not ticker:
-            raise ValueError("Trading Scanner candidate 缺少 ticker")
+        ticker = normalize_trading_ticker(row.get("ticker"))
         row_date = _normalize_candidate_date(row.get("trade_date"), field_name="trade_date")
         seed = row.get("execution_plan_seed")
         if not isinstance(seed, dict):
             raise ValueError(f"Trading Scanner candidate 缺少 canonical execution_plan_seed: {ticker}")
-        seed_ticker = str(seed.get("ticker") or "").strip().upper()
+        seed_ticker = normalize_trading_ticker(seed.get("ticker"))
         if seed_ticker != ticker:
             raise ValueError(f"Trading Scanner candidate ticker 與 execution_plan_seed 不一致: {ticker}/{seed_ticker or '-'}")
         seed_date = _normalize_candidate_date(seed.get("trade_date"), field_name="execution_plan_seed.trade_date")

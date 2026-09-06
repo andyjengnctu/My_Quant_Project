@@ -1,10 +1,12 @@
 import pandas as pd
 
+from core.exit_priority import resolve_stop_tp_hits
 from core.exact_accounting import (
     allocate_cost_basis_milli,
     build_sell_ledger_from_price,
     calc_average_price_from_total_milli,
     milli_to_money,
+    milli_to_price,
     price_to_milli,
     sync_position_display_fields,
 )
@@ -112,9 +114,9 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
 
 
 def _sync_trailing_stop_display_fields(position):
-    position['highest_high_since_entry'] = milli_to_money(position['highest_high_since_entry_milli'])
-    position['trailing_stop'] = milli_to_money(position['trailing_stop_milli'])
-    position['sl'] = milli_to_money(position['sl_milli'])
+    position['highest_high_since_entry'] = milli_to_price(position['highest_high_since_entry_milli'])
+    position['trailing_stop'] = milli_to_price(position['trailing_stop_milli'])
+    position['sl'] = milli_to_price(position['sl_milli'])
 
 
 def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_fields=True):
@@ -131,7 +133,7 @@ def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_field
     position['highest_high_since_entry_milli'] = highest_high_milli
 
     if made_new_high and not pd.isna(y_atr):
-        trail_reference = highest_high_milli / 1000.0
+        trail_reference = milli_to_price(highest_high_milli)
         candidate_trail = adjust_long_stop_price(
             trail_reference - (y_atr * params.atr_times_trail),
             ticker=position.get('ticker'),
@@ -285,8 +287,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
     half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
     is_tp_hit = price_to_milli(t_high) >= position['tp_half_milli'] and not position['sold_half'] and half_sell_qty > 0
 
-    if is_stop_hit and is_tp_hit:
-        is_tp_hit = False
+    is_stop_hit, is_tp_hit = resolve_stop_tp_hits(stop_hit=is_stop_hit, tp_hit=is_tp_hit)
 
     if is_tp_hit and not (pd.isna(t_volume) or t_volume <= 0):
         exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open), ticker=position.get('ticker'))
@@ -310,7 +311,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
     if is_stop_hit and position['qty'] > 0:
         sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
         if sell_block_reason is None:
-            stop_price = position['sl'] if sync_display_fields else milli_to_money(position['sl_milli'])
+            stop_price = position['sl'] if sync_display_fields else milli_to_price(position['sl_milli'])
             exec_price = adjust_long_sell_fill_price(min(stop_price, t_open), ticker=position.get('ticker'))
             leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
                 position,

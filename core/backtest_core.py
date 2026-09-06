@@ -328,7 +328,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         sizing_cap = None
 
         if isSetup_prev:
-            sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
+            sizing_cap = resolve_single_backtest_sizing_capital(params, milli_to_money(currentCapital_milli))
             signal_state = create_signal_tracking_state(
                 buy_limits[j - 1],
                 ATR_main[j - 1],
@@ -391,7 +391,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 missedBuyCount += 1
 
         elif active_extended_signal is not None and pos_start_of_current_bar == 0:
-            sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
+            sizing_cap = resolve_single_backtest_sizing_capital(params, milli_to_money(currentCapital_milli))
             should_try_extended_entry = collect_stats or _optimizer_limit_reachable_for_entry_day(
                 L[j], O[j], V[j], _optimizer_extended_entry_limit(active_extended_signal)
             )
@@ -434,7 +434,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
         if not buyTriggered and position['qty'] == 0 and active_extended_signal is not None:
             if sizing_cap is None:
-                sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
+                sizing_cap = resolve_single_backtest_sizing_capital(params, milli_to_money(currentCapital_milli))
             if should_clear_extended_signal(
                 active_extended_signal,
                 L[j],

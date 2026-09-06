@@ -4,8 +4,10 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from core.event_hash_chain import compute_event_hash
 from core.exact_accounting import milli_to_money, milli_to_price, price_to_milli
 from core.file_integrity import canonical_json_sha256
+from core.trading_identity import normalize_trading_ticker
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 
 TRADING_ORDER_STATE_SCHEMA_VERSION = 1
@@ -37,10 +39,6 @@ TRADING_PROTECTION_ORDER_TYPE_MARKET = "MARKET"
 TRADING_INDICATOR_ORDER_TYPE_MARKET = "MARKET"
 
 
-def _event_hash_payload(event: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in event.items() if key != "event_hash"}
-
-
 def _normalize_optional_text(value) -> str | None:
     if value is None:
         return None
@@ -48,11 +46,7 @@ def _normalize_optional_text(value) -> str | None:
     return text or None
 
 
-def _normalize_ticker(value) -> str:
-    text = str(value or "").strip().upper()
-    if not text:
-        raise ValueError("Trading order ticker 不可為空")
-    return text
+_normalize_ticker = normalize_trading_ticker
 
 
 def _append_event(
@@ -74,7 +68,7 @@ def _append_event(
         "details": deepcopy(details),
         "prev_event_hash": previous_hash,
     }
-    event["event_hash"] = canonical_json_sha256(_event_hash_payload(event))
+    event["event_hash"] = compute_event_hash(event)
     updated["revision"] = revision
     updated["updated_at"] = str(timestamp)
     updated["events"].append(event)
@@ -90,7 +84,7 @@ def build_empty_trading_order_state(*, timestamp: str, mutation_id: str) -> dict
         "details": {},
         "prev_event_hash": None,
     }
-    initial_event["event_hash"] = canonical_json_sha256(_event_hash_payload(initial_event))
+    initial_event["event_hash"] = compute_event_hash(initial_event)
     state = {
         "schema_version": TRADING_ORDER_STATE_SCHEMA_VERSION,
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
@@ -1049,7 +1043,7 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
             raise ValueError("Trading order event revision 不連續")
         if event.get("prev_event_hash") != previous_hash:
             raise ValueError("Trading order event hash chain 斷裂")
-        actual_hash = canonical_json_sha256(_event_hash_payload(event))
+        actual_hash = compute_event_hash(event)
         if event.get("event_hash") != actual_hash:
             raise ValueError("Trading order event hash 不一致")
         previous_hash = actual_hash

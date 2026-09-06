@@ -238,9 +238,12 @@ def resolve_strategy_param_state_dir(
     evaluation_mode: str = "trade",
     strategy_params_root: str | Path | None = None,
 ) -> Path:
-    normalize_strategy_param_family(family)
-    normalize_strategy_param_evaluation_mode(evaluation_mode)
-    return _canonical_dir(project_root, strategy_params_root=strategy_params_root)
+    return resolve_strategy_param_dir(
+        project_root,
+        family=family,
+        evaluation_mode=evaluation_mode,
+        strategy_params_root=strategy_params_root,
+    )
 
 
 def resolve_strategy_param_state_path(

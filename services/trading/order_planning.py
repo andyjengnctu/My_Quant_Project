@@ -36,12 +36,12 @@ from core.runtime_domains import (
     resolve_runtime_output_dir,
 )
 from core.trading_order_state import (
-    TRADING_ORDER_STATE_FILENAME,
     active_trading_entry_orders,
     TRADING_ORDER_SIDE_BUY,
     validate_trading_order_state,
 )
 from services.trading.account_state import load_trading_account_state
+from core.trading_state_paths import resolve_trading_order_state_path
 from services.trading.scanner_state import (
     load_trading_candidate_snapshot,
     load_trading_scanner_runtime,
@@ -65,15 +65,8 @@ def resolve_trading_proposed_orders_text_path(project_root: str | Path) -> Path:
     return resolve_trading_proposed_orders_dir(project_root) / "proposed_orders.txt"
 
 
-def _resolve_trading_order_state_path(project_root: str | Path) -> Path:
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    if paths.state_root is None:
-        raise RuntimeError("Trading runtime domain 缺少 state_root")
-    return Path(paths.state_root) / TRADING_ORDER_STATE_FILENAME
-
-
 def _assert_order_state_allows_new_allocation(project_root: str | Path, *, information_date: str) -> None:
-    order_state_path = _resolve_trading_order_state_path(project_root)
+    order_state_path = resolve_trading_order_state_path(project_root)
     if not order_state_path.is_file():
         return
     state = load_json_strict(order_state_path)

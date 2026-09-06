@@ -764,9 +764,7 @@ def _optimizer_dashboard_status_color(status_text: str) -> str:
 
 
 def _wrap_optimizer_dashboard_cell(text: str, color: str) -> str:
-    if not color:
-        return str(text)
-    return f"{color}{text}{C_RESET}"
+    return _colorize(text, color)
 
 
 def _render_optimizer_dashboard_cell(row: dict, key: str, metric_name: str) -> str:

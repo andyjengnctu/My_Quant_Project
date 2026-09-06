@@ -13,6 +13,7 @@ from core.exact_accounting import (
     rate_to_ppm,
     sync_position_display_fields,
 )
+from core.exit_priority import resolve_stop_tp_hits
 from core.order_lot_policy import (
     apply_board_lot_preferred_qty,
     calc_entry_notional_milli,
@@ -223,8 +224,7 @@ def _apply_entry_day_pending_exit(position, *, t_high, t_low, params):
     half_sell_qty = calc_half_take_profit_sell_qty(position["qty"], params.tp_percent)
     tp_hit = (not pd.isna(t_high)) and price_to_milli(t_high) >= int(position["tp_half_milli"])
 
-    if stop_hit and tp_hit:
-        tp_hit = False
+    stop_hit, tp_hit = resolve_stop_tp_hits(stop_hit=stop_hit, tp_hit=tp_hit)
 
     position["entry_day_stop_triggered"] = bool(stop_hit)
     position["entry_day_tp_triggered"] = bool(tp_hit)
