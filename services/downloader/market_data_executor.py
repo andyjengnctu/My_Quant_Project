@@ -98,6 +98,33 @@ class MarketDataBootstrapExecutor:
             return False
         return self._estimated_remaining() > self._effective_reserve(usage.api_request_limit)
 
+    def quota_progress_snapshot(self) -> dict[str, int | None]:
+        """Return the executor's best current quota estimate for UI progress only.
+
+        This is deliberately observational: it does not refresh provider usage and
+        therefore cannot change execution cadence or consume an extra usage request.
+        Local data attempts since the last live refresh are deducted so progress
+        output remains conservative between refreshes.
+        """
+
+        usage = self._quota.usage
+        if usage is None:
+            return {
+                "quota_limit": None,
+                "quota_remaining": None,
+                "quota_usable_remaining": None,
+                "quota_reserve": None,
+            }
+        limit = int(usage.api_request_limit)
+        remaining = max(0, self._estimated_remaining())
+        reserve = self._effective_reserve(limit)
+        return {
+            "quota_limit": limit,
+            "quota_remaining": remaining,
+            "quota_usable_remaining": max(0, remaining - reserve),
+            "quota_reserve": reserve,
+        }
+
     def _refresh_usage_with_transient_wait(self, workload_id: str) -> FinMindUsage:
         while True:
             try:

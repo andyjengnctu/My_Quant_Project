@@ -218,27 +218,30 @@ class _ProgressStorageSink:
         total: int,
         every: int,
         progress_fn: Callable[[dict[str, object]], None] | None,
+        progress_context_fn: Callable[[], dict[str, object]] | None = None,
     ):
         self._sink = sink
         self._done = int(initial_done)
         self._total = int(total)
         self._every = max(1, int(every))
         self._progress_fn = progress_fn
+        self._progress_context_fn = progress_context_fn
 
     def _record(self, request, *, recovered: bool) -> None:
         self._done += 1
         if self._progress_fn is None:
             return
         if self._done == self._total or self._done % self._every == 0:
-            self._progress_fn(
-                {
-                    "done": self._done,
-                    "total": self._total,
-                    "dataset": request.dataset,
-                    "data_id": request.data_id,
-                    "recovered": bool(recovered),
-                }
-            )
+            event: dict[str, object] = {
+                "done": self._done,
+                "total": self._total,
+                "dataset": request.dataset,
+                "data_id": request.data_id,
+                "recovered": bool(recovered),
+            }
+            if self._progress_context_fn is not None:
+                event.update(self._progress_context_fn())
+            self._progress_fn(event)
 
     def recover_committed(self, request):
         recover_fn = getattr(self._sink, "recover_committed", None)
@@ -306,19 +309,20 @@ def execute_market_data_v2_bootstrap(
     readiness_fn = getattr(storage, "validate_activation_readiness", None)
     if callable(readiness_fn):
         readiness_fn()
-    progress_sink = _ProgressStorageSink(
-        sink=storage,
-        initial_done=before.done,
-        total=manifest.total_requests,
-        every=resolved_policy.progress_every_committed_requests,
-        progress_fn=progress_fn,
-    )
     executor = MarketDataBootstrapExecutor(
         ledger=ledger,
         client=http,
         policy=resolved_policy,
         now_fn=now_fn,
         sleep_fn=sleep_fn,
+    )
+    progress_sink = _ProgressStorageSink(
+        sink=storage,
+        initial_done=before.done,
+        total=manifest.total_requests,
+        every=resolved_policy.progress_every_committed_requests,
+        progress_fn=progress_fn,
+        progress_context_fn=executor.quota_progress_snapshot,
     )
     summary = executor.run(manifest=manifest, sink=progress_sink)
 

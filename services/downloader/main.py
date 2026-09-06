@@ -1,6 +1,7 @@
 import sys
 import os
 import importlib
+import time as _monotonic_time
 from pathlib import Path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,6 +19,43 @@ from core.runtime_utils import (
 )
 
 _RUNTIME_EXPORT_NAMES = {"SAVE_DIR", "FINMIND_PRICE_DATASET", "dl", "time"}
+
+
+def _format_bootstrap_duration(seconds: float | None) -> str:
+    if seconds is None or seconds < 0 or seconds == float("inf"):
+        return "--:--:--"
+    total_seconds = int(round(seconds))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours < 100:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{hours}h{minutes:02d}m"
+
+
+def _estimate_bootstrap_eta_seconds(
+    *,
+    done: int,
+    initial_done: int,
+    total: int,
+    elapsed_seconds: float,
+    quota_limit: int | None,
+    quota_reserve: int | None,
+) -> float | None:
+    remaining = max(0, int(total) - int(done))
+    if remaining == 0:
+        return 0.0
+    process_done = max(0, int(done) - int(initial_done))
+    observed_rate = process_done / elapsed_seconds if process_done > 0 and elapsed_seconds > 0 else None
+    quota_rate = None
+    if quota_limit is not None and int(quota_limit) > 0:
+        safe_per_hour = max(1, int(quota_limit) - max(0, int(quota_reserve or 0)))
+        quota_rate = safe_per_hour / 3600.0
+    rates = [rate for rate in (observed_rate, quota_rate) if rate is not None and rate > 0]
+    if not rates:
+        return None
+    effective_rate = min(rates)
+    return remaining / effective_rate
+
 
 
 def _get_downloader_modules():
@@ -193,6 +231,9 @@ def _run_market_data_v2_bootstrap() -> int:
         print("已取消，未開始完整 bootstrap。")
         return 0
 
+    progress_started = _monotonic_time.monotonic()
+    initial_done = done
+
     def _progress(event: dict[str, object]) -> None:
         done_now = int(event.get("done") or 0)
         total = int(event.get("total") or 0)
@@ -200,7 +241,32 @@ def _run_market_data_v2_bootstrap() -> int:
         suffix = " REUSE" if event.get("recovered") else " DONE"
         data_id = event.get("data_id")
         target = str(event.get("dataset") or "") + (f"/{data_id}" if data_id else "")
-        print(f"[Bootstrap] {done_now}/{total} ({pct:.1f}%) | {target}{suffix}")
+        elapsed = max(0.0, _monotonic_time.monotonic() - progress_started)
+        quota_limit = event.get("quota_limit")
+        quota_reserve = event.get("quota_reserve")
+        eta = _estimate_bootstrap_eta_seconds(
+            done=done_now,
+            initial_done=initial_done,
+            total=total,
+            elapsed_seconds=elapsed,
+            quota_limit=int(quota_limit) if quota_limit is not None else None,
+            quota_reserve=int(quota_reserve) if quota_reserve is not None else None,
+        )
+        quota_remaining = event.get("quota_remaining")
+        quota_usable = event.get("quota_usable_remaining")
+        if quota_remaining is None or quota_limit is None:
+            quota_text = "quota=--"
+        else:
+            quota_text = f"quota≈{int(quota_remaining)}/{int(quota_limit)}"
+            if quota_usable is not None:
+                quota_text += f"(可用≈{int(quota_usable)})"
+        print(
+            f"[Bootstrap] {done_now}/{total} ({pct:.1f}%)"
+            f" | 已過 {_format_bootstrap_duration(elapsed)}"
+            f" | ETA≈{_format_bootstrap_duration(eta)}"
+            f" | {quota_text}"
+            f" | {target}{suffix}"
+        )
 
     try:
         result = execute_market_data_v2_bootstrap(

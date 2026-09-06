@@ -466,6 +466,21 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         )
         add_check(results, "market_data", case_id, "http_success_without_commit_does_not_mark_done", 0, commit_blocked.done)
         add_check(results, "market_data", case_id, "uncommitted_sink_blocks_workload", WORKLOAD_BLOCKED, commit_blocked.workload_status)
+        quota_snapshot = executor.quota_progress_snapshot()
+        add_check(results, "market_data", case_id, "progress_quota_snapshot_uses_live_limit", 100, quota_snapshot["quota_limit"])
+        add_check(results, "market_data", case_id, "progress_quota_snapshot_deducts_local_attempt", 99, quota_snapshot["quota_remaining"])
+        add_check(results, "market_data", case_id, "progress_quota_snapshot_applies_reserve", 98, quota_snapshot["quota_usable_remaining"])
+
+        from services.downloader.main import _estimate_bootstrap_eta_seconds, _format_bootstrap_duration
+        eta_seconds = _estimate_bootstrap_eta_seconds(
+            done=3900,
+            initial_done=0,
+            total=69360,
+            elapsed_seconds=15 * 60,
+            quota_limit=6000,
+            quota_reserve=50,
+        )
+        add_check(results, "market_data", case_id, "bootstrap_eta_is_capped_by_safe_quota_rate", "11:00:06", _format_bootstrap_duration(eta_seconds))
 
     class _PermanentClient:
         def __init__(self):
