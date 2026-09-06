@@ -21,13 +21,14 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
     validate_market_dataset_registry,
 )
+from core.market_data_instrument_universe import (
+    build_historical_stock_etf_universe,
+    historical_stock_etf_universe_contract_fingerprint,
+)
 from core.trading_market_clock import select_latest_completed_daily_date
 from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError
 
 PREFLIGHT_FULL_RANGE_START = BOOTSTRAP_FULL_RANGE_START
-CURRENT_MARKET_TYPES = {"twse", "tpex"}
-
-
 def _frame_dates(frame: pd.DataFrame) -> tuple[str, ...]:
     if "date" not in frame.columns or frame.empty:
         return ()
@@ -51,22 +52,7 @@ def _build_evidence(dataset: str, frame: pd.DataFrame, *, request_count: int) ->
 
 
 def _historical_instruments(stock_info: pd.DataFrame, delisting: pd.DataFrame) -> tuple[str, ...]:
-    ids: set[str] = set()
-    if not stock_info.empty:
-        missing = {"stock_id", "type"}.difference(stock_info.columns)
-        if missing:
-            raise ValueError(f"TaiwanStockInfo 缺少欄位: {sorted(missing)}")
-        market_type = stock_info["type"].astype(str).str.strip().str.lower()
-        valid = stock_info.loc[market_type.isin(CURRENT_MARKET_TYPES), "stock_id"]
-        ids.update(str(value).strip() for value in valid.tolist() if str(value).strip())
-    if not delisting.empty:
-        if "stock_id" not in delisting.columns:
-            raise ValueError("TaiwanStockDelisting 缺少 stock_id")
-        ids.update(str(value).strip() for value in delisting["stock_id"].tolist() if str(value).strip())
-    normalized = tuple(sorted(ids))
-    if not normalized:
-        raise ValueError("無法由 TaiwanStockInfo + TaiwanStockDelisting 建立 historical instrument universe")
-    return normalized
+    return build_historical_stock_etf_universe(stock_info, delisting)
 
 
 def _resolve_probe_stock(instruments: Iterable[str]) -> str:
@@ -272,8 +258,9 @@ def run_market_data_v2_preflight(
         )
 
     payload: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "READY" if plan is not None and not failures else "BLOCKED",
+        "historical_universe_contract_fingerprint": historical_stock_etf_universe_contract_fingerprint(),
         "generated_at": now.isoformat(),
         "as_of_date": as_of_date,
         "probe_stock_id": probe_stock,

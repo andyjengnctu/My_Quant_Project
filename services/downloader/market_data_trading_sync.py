@@ -119,6 +119,7 @@ def sync_market_data_v2_trading_archive(
         policy=get_market_data_execution_policy(),
         now_fn=now_fn,
         sleep_fn=sleep_fn,
+        blocking_waits=False,
     )
     summary = executor.run(manifest=manifest, sink=storage)
     workload_id = ledger.workload_id_for_manifest(manifest)

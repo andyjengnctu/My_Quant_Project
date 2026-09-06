@@ -21,6 +21,7 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
         get_market_dataset_specs,
         validate_market_dataset_registry,
     )
+    from core.market_data_instrument_universe import historical_stock_etf_universe_contract_fingerprint
     from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError
     from services.downloader.market_data_preflight import _historical_instruments
 
@@ -45,14 +46,21 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
 
     stock_info = pd.DataFrame(
         [
-            {"stock_id": "2330", "type": "twse"},
-            {"stock_id": "6488", "type": "tpex"},
-            {"stock_id": "7777", "type": "emerging"},
+            {"stock_id": "2330", "type": "twse", "industry_category": "半導體業"},
+            {"stock_id": "0050", "type": "twse", "industry_category": "ETF"},
+            {"stock_id": "6488", "type": "tpex", "industry_category": "半導體業"},
+            {"stock_id": "7777", "type": "emerging", "industry_category": "其他"},
+            {"stock_id": "TAIEX", "type": "twse", "industry_category": "大盤"},
+            {"stock_id": "TPEx", "type": "tpex", "industry_category": "Index"},
+            {"stock_id": "02001L", "type": "twse", "industry_category": "ETN"},
+            {"stock_id": "ALL", "type": "twse", "industry_category": "所有證券"},
         ]
     )
     delisting = pd.DataFrame([{"stock_id": "1204"}])
     instruments = _historical_instruments(stock_info, delisting)
-    add_check(results, "market_data", case_id, "historical_universe_keeps_twse_tpex_and_delisting", ("1204", "2330", "6488"), instruments)
+    add_check(results, "market_data", case_id, "historical_universe_keeps_stock_etf_and_delisting", ("0050", "1204", "2330", "6488"), instruments)
+    add_check(results, "market_data", case_id, "historical_universe_excludes_index_aggregate_and_etn_rows", True, all(value not in instruments for value in ("TAIEX", "TPEx", "02001L", "ALL")))
+    add_check(results, "market_data", case_id, "historical_universe_contract_has_stable_fingerprint", 64, len(historical_stock_etf_universe_contract_fingerprint()))
 
     evidence = {}
     for spec in specs:
@@ -752,6 +760,7 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
         get_market_dataset_specs,
     )
     from core.market_data_execution_policy import MarketDataExecutionPolicy
+    from core.market_data_instrument_universe import historical_stock_etf_universe_contract_fingerprint
     from core.market_data_storage_contract import MarketDataCommitError, MarketDataCommitReceipt
     from services.downloader.finmind_http import FinMindUsage
     from services.downloader.market_data_bootstrap_activation import (
@@ -825,8 +834,9 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
 
     def _payload(*, status="READY", manifest_fingerprint=None):
         payload = {
-            "schema_version": 2,
+            "schema_version": 3,
             "status": status,
+            "historical_universe_contract_fingerprint": historical_stock_etf_universe_contract_fingerprint(),
             "generated_at": "2026-09-06T23:00:00+08:00",
             "as_of_date": "2026-09-04",
             "historical_instrument_count": len(instruments),
@@ -873,6 +883,17 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
         else:
             drift_blocks = False
         add_check(results, "market_data", case_id, "manifest_fingerprint_drift_blocks_activation", True, drift_blocks)
+
+        stale_universe = _payload()
+        stale_universe["historical_universe_contract_fingerprint"] = "0" * 64
+        newer.write_text(json.dumps(stale_universe, ensure_ascii=False), encoding="utf-8")
+        try:
+            prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
+        except MarketDataBootstrapActivationError:
+            universe_drift_blocks = True
+        else:
+            universe_drift_blocks = False
+        add_check(results, "market_data", case_id, "historical_universe_contract_drift_blocks_activation", True, universe_drift_blocks)
 
         newer.write_text(json.dumps(_payload(), ensure_ascii=False), encoding="utf-8")
         activation = prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
@@ -988,6 +1009,8 @@ __all__ = [
     "validate_market_data_v2_resumable_executor_contract_case",
     "validate_market_data_v2_parquet_storage_contract_case",
     "validate_market_data_v2_bootstrap_activation_contract_case",
+    "validate_market_data_v2_provider_snapshot_completion_contract_case",
+    "validate_market_data_v2_trading_workbench_sidecar_contract_case",
 ]
 
 def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_params):
@@ -1200,6 +1223,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     from pathlib import Path
     from tempfile import TemporaryDirectory
 
+    from core.file_integrity import atomic_write_json, canonical_json_sha256
     from core.market_data_bootstrap_requests import build_registry_fingerprint
     from core.market_data_dataset_registry import (
         DAILY_PERIODIC_REPAIR,
@@ -1207,12 +1231,19 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         get_market_dataset_specs,
         validate_market_dataset_registry,
     )
+    from core.market_data_provider_snapshot import (
+        MARKET_DATA_PROVIDER_NAME,
+        MARKET_DATA_PROVIDER_SNAPSHOT_ROLE,
+        MARKET_DATA_PROVIDER_SNAPSHOT_SCHEMA_VERSION,
+    )
+    from core.market_data_storage_contract import resolve_market_data_provider_snapshot_path
     from core.market_data_trading_storage_contract import (
         resolve_trading_market_data_v2_root,
         resolve_trading_market_data_v2_state_path,
     )
     from core.market_data_trading_sync import build_trading_sync_request_manifest
     from core.market_data_trading_sync_policy import get_market_data_trading_sync_policy
+    from services.downloader.finmind_http import FinMindUsage
     from services.downloader.market_data_trading_sync import sync_market_data_v2_trading_archive
 
     case_id = "MARKET_DATA_V2_TRADING_WORKBENCH_SIDECAR"
@@ -1280,6 +1311,67 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         add_check(results, "market_data", case_id, "no_provider_snapshot_reports_not_bootstrapped", "NOT_BOOTSTRAPPED", no_provider["status"])
         add_check(results, "market_data", case_id, "no_provider_snapshot_consumes_zero_data_requests", 0, no_provider["request_count"])
         add_check(results, "market_data", case_id, "no_provider_snapshot_is_non_blocking", False, no_provider["execution_blocking"])
+
+        provider_identity = {
+            "schema_version": MARKET_DATA_PROVIDER_SNAPSHOT_SCHEMA_VERSION,
+            "provider": MARKET_DATA_PROVIDER_NAME,
+            "snapshot_role": MARKET_DATA_PROVIDER_SNAPSHOT_ROLE,
+            "status": "READY",
+            "as_of_date": "2026-09-04",
+            "registry_fingerprint": registry_fp,
+            "manifest_fingerprint": "b" * 64,
+            "historical_instrument_count": 3210,
+            "total_requests": 0,
+            "total_rows": 0,
+            "artifacts_fingerprint": "c" * 64,
+            "datasets": [],
+        }
+        provider_payload = {
+            **provider_identity,
+            "snapshot_fingerprint": canonical_json_sha256(provider_identity),
+            "finalized_at": "2026-09-07T00:00:00+00:00",
+        }
+        provider_path = resolve_market_data_provider_snapshot_path(root, "b" * 64)
+        atomic_write_json(provider_path, provider_payload)
+
+        class _QuotaFullClient:
+            data_request_count = 0
+            usage_request_count = 0
+
+            def get_usage(self):
+                self.usage_request_count += 1
+                return FinMindUsage(user_count=1590, api_request_limit=1600)
+
+            def get_data(self, **_kwargs):
+                self.data_request_count += 1
+                raise AssertionError("Trading V2 quota不足時不得等待後再發data request")
+
+        class _NoCommitSink:
+            def validate_activation_readiness(self):
+                return None
+
+            def recover_committed(self, _request):
+                return None
+
+            def __call__(self, _request, _frame):
+                raise AssertionError("Trading V2 quota不足時不得進storage commit")
+
+        quota_client = _QuotaFullClient()
+        sleep_calls = []
+        quota_deferred = sync_market_data_v2_trading_archive(
+            project_root=root,
+            target_date="2026-09-07",
+            token="synthetic-token",
+            output_dir=root / "outputs",
+            client=quota_client,
+            sink=_NoCommitSink(),
+            sleep_fn=lambda seconds: sleep_calls.append(float(seconds)),
+        )
+        add_check(results, "market_data", case_id, "quota_wait_returns_stale_without_sleeping_workbench", "STALE", quota_deferred["status"])
+        add_check(results, "market_data", case_id, "quota_wait_consumes_zero_data_requests", 0, quota_client.data_request_count)
+        add_check(results, "market_data", case_id, "quota_wait_does_not_sleep_in_workbench_sidecar", [], sleep_calls)
+        add_check(results, "market_data", case_id, "quota_wait_does_not_advance_done_jobs", 0, quota_deferred["done"])
+        add_check(results, "market_data", case_id, "quota_wait_is_reported_as_incomplete_sidecar", True, "WAIT_QUOTA" in str(quota_deferred.get("error") or ""))
 
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")

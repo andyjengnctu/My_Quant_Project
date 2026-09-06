@@ -45,6 +45,7 @@ class MarketDataBootstrapExecutor:
         now_fn: Callable[[], datetime] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
         owner_id: str | None = None,
+        blocking_waits: bool = True,
     ):
         self.ledger = ledger
         self.client = client
@@ -52,6 +53,7 @@ class MarketDataBootstrapExecutor:
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self.sleep_fn = sleep_fn or time.sleep
         self.owner_id = str(owner_id or f"executor-{uuid4().hex}")
+        self.blocking_waits = bool(blocking_waits)
         self._quota = _QuotaState()
 
     def _now(self) -> datetime:
@@ -107,20 +109,26 @@ class MarketDataBootstrapExecutor:
                 self._renew_lock(workload_id)
                 self.sleep_fn(self.policy.quota_poll_seconds)
 
-    def _ensure_quota_capacity(self, workload_id: str) -> None:
+    def _ensure_quota_capacity(self, workload_id: str) -> bool:
         should_refresh = (
             self._quota.usage is None
             or self._quota.local_data_attempts_since_refresh >= self.policy.quota_refresh_every_requests
             or not self._quota_has_capacity()
         )
         if should_refresh:
-            self._refresh_usage_with_transient_wait(workload_id)
+            if self.blocking_waits:
+                self._refresh_usage_with_transient_wait(workload_id)
+            else:
+                self._refresh_usage()
         while not self._quota_has_capacity():
             self.ledger.set_workload_status(workload_id, status=WORKLOAD_WAIT_QUOTA, now=self._now())
+            if not self.blocking_waits:
+                return False
             self._renew_lock(workload_id)
             self.sleep_fn(self.policy.quota_poll_seconds)
             self._refresh_usage_with_transient_wait(workload_id)
         self.ledger.set_workload_status(workload_id, status=WORKLOAD_RUNNING, now=self._now())
+        return True
 
     def _record_data_attempt(self, workload_id: str, request_id: str) -> None:
         self.ledger.record_http_attempt(workload_id, request_id, now=self._now())
@@ -176,7 +184,8 @@ class MarketDataBootstrapExecutor:
                 self.ledger.set_workload_status(workload_id, status=WORKLOAD_DONE, now=self._now())
                 return self.ledger.get_summary(workload_id)
 
-            self._ensure_quota_capacity(workload_id)
+            if not self._ensure_quota_capacity(workload_id):
+                return self.ledger.get_summary(workload_id)
             while True:
                 self._renew_lock(workload_id)
                 summary = self.ledger.get_summary(workload_id)
@@ -187,7 +196,8 @@ class MarketDataBootstrapExecutor:
                     self.ledger.set_workload_status(workload_id, status=WORKLOAD_DONE, now=self._now())
                     return self.ledger.get_summary(workload_id)
 
-                self._ensure_quota_capacity(workload_id)
+                if not self._ensure_quota_capacity(workload_id):
+                    return self.ledger.get_summary(workload_id)
                 now = self._now()
                 job = self.ledger.claim_next_job(
                     workload_id,
@@ -196,6 +206,8 @@ class MarketDataBootstrapExecutor:
                     lease_until=self._job_lease_until(now),
                 )
                 if job is None:
+                    if self.ledger.next_retry_at(workload_id) and not self.blocking_waits:
+                        return self.ledger.get_summary(workload_id)
                     if self._sleep_until_retry_ready(workload_id):
                         continue
                     # No runnable job while work remains implies an invalid/stale
@@ -248,7 +260,8 @@ class MarketDataBootstrapExecutor:
                         )
                         self._quota.usage = None
                         self._quota.local_data_attempts_since_refresh = 0
-                        self._ensure_quota_capacity(workload_id)
+                        if not self._ensure_quota_capacity(workload_id):
+                            return self.ledger.get_summary(workload_id)
                         continue
                     if exc.retryable:
                         next_failure_count = job.retryable_failure_count + 1

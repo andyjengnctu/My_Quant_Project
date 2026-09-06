@@ -20,6 +20,7 @@ from core.market_data_bootstrap_requests import (
 )
 from core.market_data_dataset_registry import get_market_dataset_specs, validate_market_dataset_registry
 from core.market_data_execution_policy import MarketDataExecutionPolicy, get_market_data_execution_policy
+from core.market_data_instrument_universe import historical_stock_etf_universe_contract_fingerprint
 from core.market_data_storage_contract import (
     resolve_market_data_bootstrap_archive_dir,
     resolve_market_data_bootstrap_ledger_path,
@@ -32,7 +33,7 @@ from services.downloader.market_data_storage import MarketDataBootstrapStorageSi
 
 PREFLIGHT_REPORT_GLOB = "market_data_v2_preflight_plan_*.json"
 BOOTSTRAP_STATUS_PREFIX = "market_data_v2_bootstrap_status_"
-SUPPORTED_PREFLIGHT_SCHEMA_VERSION = 2
+SUPPORTED_PREFLIGHT_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,15 @@ def prepare_market_data_v2_bootstrap_activation(*, output_dir) -> MarketDataBoot
         raise MarketDataBootstrapActivationError("READY Preflight 不得同時含 blocking probe failures")
     if payload.get("plan_error") not in (None, ""):
         raise MarketDataBootstrapActivationError("READY Preflight 不得同時含 plan_error")
+
+    current_universe_contract = historical_stock_etf_universe_contract_fingerprint()
+    preflight_universe_contract = str(
+        payload.get("historical_universe_contract_fingerprint") or ""
+    ).strip()
+    if preflight_universe_contract != current_universe_contract:
+        raise MarketDataBootstrapActivationError(
+            "Preflight historical universe contract 已 drift；請重新執行 Preflight。"
+        )
 
     plan = _require_dict(payload.get("plan"), field="preflight.plan")
     instruments_raw = _require_list(
