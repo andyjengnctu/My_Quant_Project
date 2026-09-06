@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from core.console_report import project_relative_display_path
 from core.trading_market_clock import assert_completed_daily_information_date
+from core.trading_identity import normalize_trading_ticker
 from services.downloader import runtime as rt
 from services.downloader.sync import smart_download_vip_data
 from services.downloader.universe import get_market_last_date, get_or_update_universe
 
 
-def run_trading_dataset_update() -> dict[str, object]:
+def run_trading_dataset_update(*, required_tickers=None) -> dict[str, object]:
     """Update the Trading dataset and return a structured summary.
 
     The underlying downloader/universe implementation remains the canonical producer;
@@ -16,7 +17,9 @@ def run_trading_dataset_update() -> dict[str, object]:
     """
     print(f"🤖 Trading 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
     market_date = assert_completed_daily_information_date(get_market_last_date(), now=rt.get_taipei_now())
-    target_tickers = get_or_update_universe()
+    universe_tickers = [normalize_trading_ticker(item) for item in get_or_update_universe()]
+    required = sorted({normalize_trading_ticker(item) for item in list(required_tickers or [])})
+    target_tickers = list(dict.fromkeys([*universe_tickers, *required]))
     if not target_tickers:
         raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
 
@@ -43,6 +46,10 @@ def run_trading_dataset_update() -> dict[str, object]:
         "runtime_domain": "trading",
         "market_date": str(market_date),
         "ticker_count": int(len(target_tickers)),
+        "universe_ticker_count": int(len(universe_tickers)),
+        "required_position_tickers": required,
+        "required_position_ticker_count": int(len(required)),
+        "required_position_tickers_added": sorted(set(required) - set(universe_tickers)),
         "data_dir": project_relative_display_path(rt.SAVE_DIR, project_root=rt.PROJECT_ROOT),
         "output_dir": project_relative_display_path(rt.OUTPUT_DIR, project_root=rt.PROJECT_ROOT),
         "issue_log_path": (

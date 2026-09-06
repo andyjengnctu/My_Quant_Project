@@ -2600,7 +2600,20 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
             "trade_train_window_months": int(kwargs["trade_train_window_months"]),
             "random_seed_ensemble": {},
         }
-    with patch.object(trading_training, "run_static_strategy_parameter_training", side_effect=_fake_canonical_runner):
+    synthetic_market = {
+        "market_date": "2099-01-01",
+        "dataset_fingerprint": {"csv_content_sha256": "a" * 64},
+    }
+    synthetic_selected_sha = "b" * 64
+    synthetic_binding = {
+        "selected_params_sha256": synthetic_selected_sha,
+        "binding_fingerprint": "c" * 64,
+    }
+    with patch.object(trading_training, "run_static_strategy_parameter_training", side_effect=_fake_canonical_runner), \
+         patch.object(trading_training, "load_trading_market_data_snapshot", return_value=synthetic_market), \
+         patch.object(trading_training, "get_trading_market_data_snapshot_sha256", return_value="d" * 64), \
+         patch.object(trading_training, "compute_file_sha256", return_value=synthetic_selected_sha), \
+         patch.object(trading_training, "publish_trading_strategy_param_binding", return_value=synthetic_binding):
         service_result = trading_training.run_trading_strategy_param_training(project_root=root, environ={})
     add_check(results, "trading_param", case_id, "trading_service_delegates_to_canonical_optimizer", str(plan["data_dir"]), str(captured_service_kwargs.get("selected_data_dir")))
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_output_root", str(plan["output_dir"]), str(captured_service_kwargs.get("output_dir")))

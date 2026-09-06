@@ -105,6 +105,12 @@ def get_or_update_universe():
         raise RuntimeError(
             "無法取得任何台股股票名單；請檢查網路、TWSE 來源格式或 requests/pandas 解析是否異常。"
         )
+    if universe_fetch_errors:
+        rt.append_downloader_issues("名單來源失敗", universe_fetch_errors)
+        raise RuntimeError(
+            "台股 universe 來源不完整，依 Trading 保守原則中止重掃；"
+            "不得把部分 TWSE/TPEX 名單發布成新的 universe cache。"
+        )
 
     qualified_tickers = []
     screening_errors = []
@@ -139,19 +145,17 @@ def get_or_update_universe():
 
     qualified_tickers = list(dict.fromkeys(qualified_tickers))
 
+    if screening_errors:
+        screening_log_lines = [f"{sid} ({yf_t}) -> {err}" for sid, yf_t, err in screening_errors]
+        rt.append_downloader_issues("快篩失敗", screening_log_lines)
+        raise RuntimeError(
+            f"台股 universe 快篩有 {len(screening_errors)} 檔無法可靠判定，依 Trading 保守原則中止重掃；"
+            "不得把不完整篩選結果發布成新的 universe cache。"
+        )
+
     with open(list_file, 'w') as f:
         for t in qualified_tickers:
             f.write(f"{t}\n")
 
     print(f"\n🎉 海選完畢！共 {len(qualified_tickers)} 檔入選。")
-
-    if universe_fetch_errors:
-        rt.append_downloader_issues("名單來源失敗", universe_fetch_errors)
-        print(f"注意：名單來源失敗 {len(universe_fetch_errors)} 筆，詳細已寫入: {project_relative_display_path(rt.get_downloader_issue_log_path(), project_root=rt.PROJECT_ROOT)}")
-
-    if screening_errors:
-        screening_log_lines = [f"{sid} ({yf_t}) -> {err}" for sid, yf_t, err in screening_errors]
-        rt.append_downloader_issues("快篩失敗", screening_log_lines)
-        print(f"注意：快篩失敗 {len(screening_errors)} 檔，詳細已寫入: {project_relative_display_path(rt.get_downloader_issue_log_path(), project_root=rt.PROJECT_ROOT)}")
-
     return qualified_tickers

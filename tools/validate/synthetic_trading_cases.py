@@ -37,6 +37,39 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 
+def _publish_synthetic_trading_input_lineage(root: Path, *, market_date: str, required_position_tickers=()):
+    """Publish canonical Trading data/param lineage for isolated synthetic fixtures."""
+    from services.trading.market_data_state import publish_trading_market_data_snapshot
+    from services.trading.strategy_param_state import publish_trading_strategy_param_binding
+    from services.trading.scanner_state import load_trading_scanner_runtime
+
+    publish_trading_market_data_snapshot(
+        root, market_date=market_date, required_position_tickers=list(required_position_tickers)
+    )
+    publish_trading_strategy_param_binding(root)
+    return load_trading_scanner_runtime(root, verify_dataset_content=True)
+
+
+def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
+    from services.trading.scanner_state import TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION, load_trading_scanner_runtime
+
+    runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
+    return {
+        "schema_version": TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
+        "runtime_domain": "trading",
+        "strategy_id": runtime["profile"].strategy_id,
+        "param_selector": runtime["profile"].param_selector,
+        "latest_data_date": runtime["latest_data_date"],
+        "param_latest_data_date": runtime["param_latest_data_date"],
+        "selected_params_sha256": runtime["selected_params_sha256"],
+        "market_data_snapshot_sha256": runtime["market_data_snapshot_sha256"],
+        "dataset_content_sha256": runtime["dataset_content_sha256"],
+        "param_binding_sha256": runtime["param_binding_sha256"],
+        "candidate_rows": list(candidate_rows),
+        "stale_candidate_rows_skipped": [],
+    }
+
+
 
 def validate_trading_account_state_contract_case(base_params):
     case_id = "TRADING_ACCOUNT_STATE"
@@ -290,6 +323,16 @@ def validate_trading_daily_workflow_contract_case(base_params):
     add_check(results, "trading_daily", case_id, "downloader_application_returns_trading_domain", "trading", downloader_result.get("runtime_domain"))
     add_check(results, "trading_daily", case_id, "downloader_application_returns_market_date", "2026-09-04", downloader_result.get("market_date"))
     add_check(results, "trading_daily", case_id, "downloader_application_returns_ticker_count", 2, downloader_result.get("ticker_count"))
+    captured_required_download = {}
+    def _capture_required_download(tickers, market_date):
+        captured_required_download["tickers"] = list(tickers)
+        return {"total": len(tickers), "count_success": len(tickers), "count_skipped_latest": 0, "last_date_check_error_count": 0, "download_error_count": 0, "issue_log_path": None}
+    with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
+         patch.object(downloader_application, "get_or_update_universe", return_value=["2330"]), \
+         patch.object(downloader_application, "smart_download_vip_data", side_effect=_capture_required_download):
+        required_result = downloader_application.run_trading_dataset_update(required_tickers=["9999", "2330"])
+    add_check(results, "trading_daily", case_id, "downloader_unions_required_account_ticker_outside_dynamic_universe", ["2330", "9999"], captured_required_download.get("tickers"))
+    add_check(results, "trading_daily", case_id, "downloader_reports_required_ticker_added_to_universe", ["9999"], required_result.get("required_position_tickers_added"))
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -324,11 +367,14 @@ def validate_trading_daily_workflow_contract_case(base_params):
             selected_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
         _write_param_payload("2026-09-04", 1)
+        _publish_synthetic_trading_input_lineage(root, market_date="2026-09-04")
         snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
         add_check(results, "trading_daily", case_id, "workflow_snapshot_reads_latest_trading_data", "2026-09-04", snapshot.get("latest_data_date"))
         add_check(results, "trading_daily", case_id, "workflow_snapshot_reads_param_latest_date", "2026-09-04", snapshot.get("param_latest_data_date"))
         add_check(results, "trading_daily", case_id, "workflow_snapshot_requires_single_member", 1, snapshot.get("param_member_count"))
         add_check(results, "trading_daily", case_id, "workflow_snapshot_ready_when_data_and_params_match", True, snapshot.get("params_ready_for_scan"))
+        add_check(results, "trading_daily", case_id, "workflow_snapshot_requires_canonical_market_data_snapshot", True, snapshot.get("market_data_ready"))
+        add_check(results, "trading_daily", case_id, "workflow_snapshot_exposes_dataset_content_identity", 64, len(str(snapshot.get("dataset_content_sha256") or "")))
         add_check(results, "trading_daily", case_id, "workflow_scanner_output_is_trading_scoped", "outputs/trading/scanner", snapshot.get("scanner_output_dir"))
 
         fake_scan = {
@@ -360,6 +406,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
         add_check(results, "trading_daily", case_id, "trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
         add_check(results, "trading_daily", case_id, "trading_scanner_persists_candidate_snapshot", True, (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").is_file())
         add_check(results, "trading_daily", case_id, "trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
+        add_check(results, "trading_daily", case_id, "trading_scanner_carries_market_data_snapshot_identity", 64, len(str(scan_result.get("market_data_snapshot_sha256") or "")))
+        add_check(results, "trading_daily", case_id, "trading_scanner_carries_param_binding_identity", 64, len(str(scan_result.get("param_binding_sha256") or "")))
 
         _write_param_payload("2026-09-03", 1)
         try:
@@ -451,6 +499,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
             entry_date="2026-01-01",
             expected_revision=state["revision"],
         )
+        _publish_synthetic_trading_input_lineage(root, market_date="2026-09-04", required_position_tickers=["2330"])
         starting_revision = int(state["revision"])
         starting_cash_milli = int(state["cash_milli"])
 
@@ -482,16 +531,10 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
                 "execution_plan_seed": {"ticker": "2603", "limit_price": 50.0, "init_sl": 47.0, "init_trail": 48.0, "target_price": 53.0, "entry_atr": 1.0, "trade_date": "2026-09-04"},
             },
         ]
-        candidate_snapshot_path.write_text(json.dumps({
-            "schema_version": 1,
-            "runtime_domain": "trading",
-            "strategy_id": profile.strategy_id,
-            "param_selector": profile.param_selector,
-            "latest_data_date": "2026-09-04",
-            "param_latest_data_date": "2026-09-04",
-            "selected_params_sha256": compute_file_sha256(selected_path),
-            "candidate_rows": candidate_rows,
-        }, ensure_ascii=False), encoding="utf-8")
+        candidate_snapshot_path.write_text(
+            json.dumps(_build_synthetic_candidate_snapshot_payload(root, candidate_rows=candidate_rows), ensure_ascii=False),
+            encoding="utf-8",
+        )
 
         plan = build_trading_proposed_order_plan(project_root=root)
         add_check(results, "trading_orders", case_id, "proposed_plan_does_not_mutate_account_revision", starting_revision, load_trading_account_state(root)["revision"])
@@ -578,6 +621,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
         ), ensure_ascii=False), encoding="utf-8")
 
         account = initialize_trading_account_state(root, cash=800_000)
+        _publish_synthetic_trading_input_lineage(root, market_date="2026-09-04")
         account_revision = int(account["revision"])
         account_cash_milli = int(account["cash_milli"])
 
@@ -609,16 +653,10 @@ def validate_trading_pending_order_state_contract_case(base_params):
                 },
             },
         ]
-        snapshot_path.write_text(json.dumps({
-            "schema_version": 1,
-            "runtime_domain": "trading",
-            "strategy_id": profile.strategy_id,
-            "param_selector": profile.param_selector,
-            "latest_data_date": "2026-09-04",
-            "param_latest_data_date": "2026-09-04",
-            "selected_params_sha256": compute_file_sha256(selected_path),
-            "candidate_rows": candidate_rows,
-        }, ensure_ascii=False), encoding="utf-8")
+        snapshot_path.write_text(
+            json.dumps(_build_synthetic_candidate_snapshot_payload(root, candidate_rows=candidate_rows), ensure_ascii=False),
+            encoding="utf-8",
+        )
 
         plan = build_trading_proposed_order_plan(project_root=root)
         order_path = resolve_trading_order_state_path(root)
@@ -810,25 +848,20 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
         ), ensure_ascii=False), encoding="utf-8")
         account = initialize_trading_account_state(root, cash=800_000)
+        _publish_synthetic_trading_input_lineage(root, market_date="2026-09-04")
         snapshot_path = resolve_trading_candidate_snapshot_path(root)
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        snapshot_path.write_text(json.dumps({
-            "schema_version": 1,
-            "runtime_domain": "trading",
-            "strategy_id": profile.strategy_id,
-            "param_selector": profile.param_selector,
-            "latest_data_date": "2026-09-04",
-            "param_latest_data_date": "2026-09-04",
-            "selected_params_sha256": compute_file_sha256(selected_path),
-            "candidate_rows": [{
+        snapshot_path.write_text(
+            json.dumps(_build_synthetic_candidate_snapshot_payload(root, candidate_rows=[{
                 "ticker": "2454", "trade_date": "2026-09-04", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
                 "execution_plan_seed": {
                     "ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0,
                     "target_price": 210.0, "entry_atr": 4.0, "trade_date": "2026-09-04",
                     "security_profile": {"family": "stock"},
                 },
-            }],
-        }, ensure_ascii=False), encoding="utf-8")
+            }]), ensure_ascii=False),
+            encoding="utf-8",
+        )
         plan = build_trading_proposed_order_plan(project_root=root)
         proposal = plan["orders"][0]
         ordered = confirm_trading_order_submission(
@@ -1517,25 +1550,20 @@ def validate_trading_position_rollforward_contract_case(base_params):
         ), ensure_ascii=False), encoding="utf-8")
 
         account = initialize_trading_account_state(root, cash=800_000)
+        _publish_synthetic_trading_input_lineage(root, market_date="2026-09-03")
         snapshot_path = resolve_trading_candidate_snapshot_path(root)
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        snapshot_path.write_text(json.dumps({
-            "schema_version": 1,
-            "runtime_domain": "trading",
-            "strategy_id": profile.strategy_id,
-            "param_selector": profile.param_selector,
-            "latest_data_date": "2026-09-03",
-            "param_latest_data_date": "2026-09-03",
-            "selected_params_sha256": compute_file_sha256(selected_path),
-            "candidate_rows": [{
+        snapshot_path.write_text(
+            json.dumps(_build_synthetic_candidate_snapshot_payload(root, candidate_rows=[{
                 "ticker": "2454", "trade_date": "2026-09-03", "kind": "buy", "sort_value": 2.0, "expected_value": 0.4,
                 "execution_plan_seed": {
                     "ticker": "2454", "limit_price": 200.0, "init_sl": 190.0, "init_trail": 192.0,
                     "target_price": 230.0, "entry_atr": 4.0, "trade_date": "2026-09-03",
                     "security_profile": {"family": "stock"},
                 },
-            }],
-        }, ensure_ascii=False), encoding="utf-8")
+            }]), ensure_ascii=False),
+            encoding="utf-8",
+        )
 
         plan = build_trading_proposed_order_plan(project_root=root)
         proposal = plan["orders"][0]
@@ -2737,3 +2765,132 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
 
     summary["checks"] = len(results)
     return results, summary
+
+def validate_trading_market_data_lineage_contract_case(base_params):
+    """Trading Data→Params→Scanner lineage is content-bound and fail-closed."""
+    case_id = "TRADING_MARKET_DATA_LINEAGE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.params_io import params_to_json_dict
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+    import services.trading.daily_workflow as daily_workflow
+    import services.trading.strategy_param_training as param_training
+    from services.trading.market_data_state import publish_trading_market_data_snapshot
+    from services.trading.scanner_state import load_trading_scanner_runtime
+    from services.trading.strategy_param_state import (
+        load_trading_strategy_param_binding,
+        publish_trading_strategy_param_binding,
+    )
+
+    profile = get_trading_strategy_profile()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True)
+        csv_path = data_dir / "2330.csv"
+        base_frame = pd.DataFrame({
+            "Date": ["2026-09-03", "2026-09-04"],
+            "Open": [100.0, 101.0], "High": [102.0, 103.0], "Low": [99.0, 100.0],
+            "Close": [101.0, 102.0], "Volume": [1000, 1100],
+        })
+        base_frame.to_csv(csv_path, index=False)
+        original_bytes = csv_path.read_bytes()
+
+        selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        ), ensure_ascii=False), encoding="utf-8")
+
+        first_market = publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=[])
+        binding = publish_trading_strategy_param_binding(root)
+        runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
+        add_check(results, "trading_data_lineage", case_id, "params_bind_exact_dataset_content_hash", first_market["dataset_fingerprint"]["csv_content_sha256"], binding["dataset_content_sha256"])
+        add_check(results, "trading_data_lineage", case_id, "scanner_runtime_consumes_same_dataset_content_hash", binding["dataset_content_sha256"], runtime["dataset_content_sha256"])
+
+        metadata_only = publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        add_check(results, "trading_data_lineage", case_id, "market_snapshot_operational_metadata_can_change_without_data_content_change", first_market["dataset_fingerprint"]["csv_content_sha256"], metadata_only["dataset_fingerprint"]["csv_content_sha256"])
+        metadata_binding = load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
+        add_check(results, "trading_data_lineage", case_id, "params_freshness_uses_content_identity_not_snapshot_metadata_sha", binding["binding_fingerprint"], metadata_binding["binding_fingerprint"])
+
+        changed_frame = base_frame.copy()
+        changed_frame.loc[1, "Close"] = 102.5
+        changed_frame.to_csv(csv_path, index=False)
+        try:
+            load_trading_scanner_runtime(root, verify_dataset_content=True)
+        except RuntimeError:
+            out_of_band_change_rejected = True
+        else:
+            out_of_band_change_rejected = False
+        add_check(results, "trading_data_lineage", case_id, "same_date_dataset_content_change_is_detected_even_when_latest_date_is_unchanged", True, out_of_band_change_rejected)
+
+        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        try:
+            load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
+        except RuntimeError:
+            old_params_rejected = True
+        else:
+            old_params_rejected = False
+        add_check(results, "trading_data_lineage", case_id, "canonical_data_update_invalidates_params_when_content_changes_same_date", True, old_params_rejected)
+
+        csv_path.write_bytes(original_bytes)
+        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_strategy_param_binding(root)
+        fake_scan = {
+            "count_scanned": 1, "elapsed_time": 0.01, "count_history_qualified": 1,
+            "count_skipped_insufficient": 0, "count_sanitized_candidates": 0, "max_workers": 1,
+            "pool_start_method": "spawn", "scanner_issue_log_path": None,
+            "candidate_rows": [{
+                "ticker": "2330", "trade_date": "2026-09-04", "kind": "buy", "sort_value": 1.0,
+                "expected_value": 0.2,
+                "execution_plan_seed": {"ticker": "2330", "trade_date": "2026-09-04", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0, "target_price": 106.0, "entry_atr": 2.0},
+            }],
+        }
+        def _scan_and_mutate(*_args, **_kwargs):
+            mutated = base_frame.copy(); mutated.loc[1, "Close"] = 103.0; mutated.to_csv(csv_path, index=False)
+            return fake_scan
+        with patch.object(daily_workflow, "run_daily_scanner", side_effect=_scan_and_mutate):
+            try:
+                daily_workflow.run_trading_candidate_scan(project_root=root)
+            except RuntimeError:
+                scan_toctou_rejected = True
+            else:
+                scan_toctou_rejected = False
+        add_check(results, "trading_data_lineage", case_id, "scanner_refuses_publish_when_dataset_changes_during_scan", True, scan_toctou_rejected)
+
+        csv_path.write_bytes(original_bytes)
+        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        def _optimizer_and_mutate(**_kwargs):
+            mutated = base_frame.copy(); mutated.loc[1, "Close"] = 104.0; mutated.to_csv(csv_path, index=False)
+            return {"selected_params_path": str(selected_path), "manifest_path": str(selected_path.parent / "manifest.json")}
+        with patch.object(param_training, "run_static_strategy_parameter_training", side_effect=_optimizer_and_mutate):
+            try:
+                param_training.run_trading_strategy_param_training(project_root=root, environ={})
+            except RuntimeError:
+                params_toctou_rejected = True
+            else:
+                params_toctou_rejected = False
+        add_check(results, "trading_data_lineage", case_id, "params_producer_refuses_publish_binding_when_dataset_changes_during_training", True, params_toctou_rejected)
+
+        csv_path.write_bytes(original_bytes)
+        account = initialize_trading_account_state(root, cash=500_000)
+        account = adopt_existing_trading_position(root, ticker="9999", qty=100, cost_basis_total=10_000, entry_date="2026-01-01", expected_revision=account["revision"])
+        captured = {}
+        def _capture_update(*, required_tickers=None):
+            captured["required"] = list(required_tickers or [])
+            return {"runtime_domain": "trading", "market_date": "2026-09-04", "status": "READY"}
+        with patch("services.downloader.runtime.SAVE_DIR", str(data_dir)), \
+             patch.object(daily_workflow, "run_trading_dataset_update", side_effect=_capture_update), \
+             patch.object(daily_workflow, "publish_trading_market_data_snapshot", return_value={"snapshot_fingerprint": "s", "dataset_fingerprint": {"csv_content_sha256": "c"}}):
+            daily_workflow.run_trading_market_data_update(project_root=root)
+        add_check(results, "trading_data_lineage", case_id, "daily_data_update_forces_all_current_account_positions_into_downloader_targets", ["9999"], captured.get("required"))
+
+    summary["checks"] = len(results)
+    return results, summary
+

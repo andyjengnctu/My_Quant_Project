@@ -313,6 +313,38 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
                 add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_reports_runtimeerror", True, "無法取得任何台股股票名單" in message)
                 add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_logs_issues", True, any(section == "名單來源失敗" and "twse down" in "\n".join(lines) for section, lines in issue_sections))
 
+        partial_issue_sections = []
+        table = pd.DataFrame({
+            "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電"],
+            "CFICode": ["CFICode", "skip", "ESVUFR"],
+        })
+
+        class _GoodResponse:
+            text = "<html></html>"
+            def raise_for_status(self):
+                return None
+
+        responses = [_GoodResponse(), requests.RequestException("tpex down")]
+        cache_path = tmp_root / "universe_list.txt"
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
+             patch.object(universe.requests, "get", side_effect=responses), \
+             patch.object(universe.pd, "read_html", return_value=[table]), \
+             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: partial_issue_sections.append((section, list(lines)))):
+            try:
+                universe.get_or_update_universe()
+                partial_rejected = False
+                partial_message = ""
+            except RuntimeError as exc:
+                partial_rejected = True
+                partial_message = str(exc)
+
+        add_check(results, "synthetic_error_paths", case_id, "partial_twse_tpex_source_failure_is_fail_closed", True, partial_rejected)
+        add_check(results, "synthetic_error_paths", case_id, "partial_source_failure_reports_incomplete_universe", True, "universe 來源不完整" in partial_message)
+        add_check(results, "synthetic_error_paths", case_id, "partial_source_failure_never_publishes_cache", False, cache_path.exists())
+        add_check(results, "synthetic_error_paths", case_id, "partial_source_failure_logs_failed_source", True, any(section == "名單來源失敗" and "tpex down" in "\n".join(lines) for section, lines in partial_issue_sections))
+
     summary["issue_section_count"] = len(issue_sections)
     return results, summary
 
@@ -353,6 +385,52 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
                 message = str(exc)
                 add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_reports_runtimeerror", True, "快篩初始化失敗" in message and "ModuleNotFoundError" in message)
                 add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_logs_issues", True, any(section == "快篩失敗" and "__INIT__ (yfinance) -> ModuleNotFoundError: no module named yfinance" in "\n".join(lines) for section, lines in issue_sections))
+
+        class _GoodFastInfo:
+            def get(self, key, default=0):
+                return {"lastVolume": 2_000_000, "marketCap": 1_000_000_000_000}.get(key, default)
+
+        class _BrokenTicker:
+            @property
+            def fast_info(self):
+                raise requests.RequestException("screening transient failure")
+
+        class _GoodTicker:
+            @property
+            def fast_info(self):
+                return _GoodFastInfo()
+
+        class _PartialScreenYF:
+            @staticmethod
+            def Ticker(symbol):
+                return _BrokenTicker() if symbol.startswith("2330") else _GoodTicker()
+
+        screening_issue_sections = []
+        cache_path = tmp_root / "universe_partial_screen.txt"
+        dual_table = pd.DataFrame({
+            "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電", "2317 鴻海"],
+            "CFICode": ["CFICode", "skip", "ESVUFR", "ESVUFR"],
+        })
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
+             patch.object(universe.requests, "get", return_value=_Response()), \
+             patch.object(universe.pd, "read_html", return_value=[dual_table]), \
+             patch.object(universe.rt, "get_yfinance_module", return_value=_PartialScreenYF()), \
+             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: screening_issue_sections.append((section, list(lines)))), \
+             patch.object(universe.rt.time, "sleep", return_value=None):
+            try:
+                universe.get_or_update_universe()
+                partial_screen_rejected = False
+                partial_screen_message = ""
+            except RuntimeError as exc:
+                partial_screen_rejected = True
+                partial_screen_message = str(exc)
+
+        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_is_fail_closed", True, partial_screen_rejected)
+        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_reports_incomplete_result", True, "不得把不完整篩選結果發布" in partial_screen_message)
+        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_never_publishes_cache", False, cache_path.exists())
+        add_check(results, "synthetic_error_paths", case_id, "per_ticker_screening_error_is_logged", True, any(section == "快篩失敗" and "2330" in "\n".join(lines) and "screening transient failure" in "\n".join(lines) for section, lines in screening_issue_sections))
 
     summary["issue_section_count"] = len(issue_sections)
     return results, summary

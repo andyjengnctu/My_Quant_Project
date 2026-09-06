@@ -180,12 +180,13 @@ def _workflow_action_availability(
     if fill_transaction_pending:
         return {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}
     latest_data_date = workflow.get("latest_data_date")
+    market_data_ready = bool(workflow.get("market_data_ready", bool(latest_data_date)))
     account_ready = bool(account.get("initialized")) and account.get("cash") is not None
     return {
         "data": True,
         "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0 and active_entry_count == 0 and forced_stop_exit_count == 0),
-        "params": bool(latest_data_date),
-        "scanner": bool(workflow.get("params_ready_for_scan")),
+        "params": bool(latest_data_date and market_data_ready),
+        "scanner": bool(market_data_ready and workflow.get("params_ready_for_scan")),
         "orders": bool(
             account_ready
             and candidate.get("fresh")
@@ -350,6 +351,8 @@ def derive_trading_operations_status(
         sell_coverage_blockers.append("STOP forced-exit 與其他 SELL order 衝突")
     open_position_sell_coverage_safe = not sell_coverage_blockers
 
+    market_data_ready = bool(workflow.get("market_data_ready", bool(workflow.get("latest_data_date"))))
+
     allocation_blockers: list[str] = []
     if fill_transaction_pending:
         allocation_blockers.append("存在未完成 fill transaction")
@@ -357,6 +360,8 @@ def derive_trading_operations_status(
         allocation_blockers.append("Trading component state 不可完整驗證")
     if not bool(account.get("initialized")) or account.get("cash") is None:
         allocation_blockers.append("Trading account/cash 尚未就緒")
+    if not market_data_ready:
+        allocation_blockers.append("Trading market-data snapshot 尚未就緒／與 dataset date 不一致")
     if active_entry_count:
         allocation_blockers.append("存在 active ENTRY BUY")
     if orphan_active_sell_order_ids:
@@ -386,6 +391,8 @@ def derive_trading_operations_status(
         entry_submission_blockers.append("Trading component state 不可完整驗證")
     if not bool(account.get("initialized")) or account.get("cash") is None:
         entry_submission_blockers.append("Trading account/cash 尚未就緒")
+    if not market_data_ready:
+        entry_submission_blockers.append("Trading market-data snapshot 尚未就緒／與 dataset date 不一致")
     if orphan_active_sell_order_ids:
         entry_submission_blockers.append("存在 orphan active SELL order")
     if forced_stop_exit_tickers:
@@ -554,11 +561,11 @@ def derive_trading_operations_status(
         next_code = NEXT_RECONCILE_ENTRY
         next_label = "確認 BUY 掛單成交或取消"
         next_detail = f"目前有 {active_entry_count} 筆 active ENTRY BUY；完成 reconciliation 前不得重新 allocation。"
-    elif not workflow.get("latest_data_date"):
+    elif not workflow.get("latest_data_date") or not market_data_ready:
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_DATA
         next_label = "1 更新 Trading 資料"
-        next_detail = "Trading dataset 尚無可用最新交易日。"
+        next_detail = "Trading market-data snapshot 尚未建立或與目前 dataset date 不一致；先由 canonical downloader 更新資料。"
     elif not bool(workflow.get("params_ready_for_scan")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_PARAMS
@@ -614,6 +621,9 @@ def derive_trading_operations_status(
         "next_action_detail": next_detail,
         "fill_transaction_pending": bool(fill_transaction_pending),
         "latest_data_date": workflow.get("latest_data_date"),
+        "market_data_ready": market_data_ready,
+        "market_data_snapshot_sha256": workflow.get("market_data_snapshot_sha256"),
+        "dataset_content_sha256": workflow.get("dataset_content_sha256"),
         "params_ready_for_scan": bool(workflow.get("params_ready_for_scan")),
         "account_initialized": bool(account.get("initialized")),
         "account_revision": account.get("revision"),
@@ -712,6 +722,7 @@ def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
         workflow = {
             "runtime_domain": RUNTIME_DOMAIN_TRADING,
             "latest_data_date": None,
+            "market_data_ready": False,
             "params_ready_for_scan": False,
             "param_selector": None,
         }
