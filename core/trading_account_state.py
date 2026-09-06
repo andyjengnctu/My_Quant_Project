@@ -21,7 +21,11 @@ from core.exact_accounting import (
     sync_position_display_fields,
 )
 from core.file_integrity import canonical_json_sha256
-from core.trading_identity import normalize_trading_ticker
+from core.trading_identity import (
+    normalize_trading_date,
+    normalize_trading_ticker,
+    require_trading_date_after,
+)
 from core.position_step import execute_confirmed_position_sell_fill
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 
@@ -39,18 +43,7 @@ MANAGEMENT_STATUSES = (MANAGEMENT_STATUS_UNMANAGED, MANAGEMENT_STATUS_ACTIVE)
 _normalize_ticker = normalize_trading_ticker
 
 
-def _normalize_iso_date(value: object | None, *, field_name: str) -> str | None:
-    if value is None or str(value).strip() == "":
-        return None
-    if isinstance(value, datetime):
-        return value.date().isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    text = str(value).strip()
-    try:
-        return date.fromisoformat(text).isoformat()
-    except ValueError as exc:
-        raise ValueError(f"{field_name} 必須是 YYYY-MM-DD: {value!r}") from exc
+_normalize_iso_date = normalize_trading_date
 
 
 def _json_safe(value: Any) -> Any:
@@ -698,8 +691,13 @@ def apply_confirmed_sell_fill(
     if qty > held_qty:
         raise ValueError(f"sell qty 超過持股：sell={qty}, held={held_qty}")
     entry_date = broker.get("entry_date")
-    if entry_date is not None and str(entry_date) == trade_date_text:
-        raise ValueError("禁止同日買入又賣出同一股票")
+    if entry_date is not None:
+        trade_date_text = require_trading_date_after(
+            trade_date_text,
+            after=entry_date,
+            field_name="sell trade_date",
+            after_field_name="entry_date",
+        )
 
     security_profile = None
     strategy_management = record.get("strategy_management") or {}

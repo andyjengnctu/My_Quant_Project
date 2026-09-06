@@ -21,8 +21,6 @@ from core.trading_order_state import (
 from core.trading_account_state import (
     TRADING_ACCOUNT_STATE_FILENAME,
     adopt_manual_trading_position,
-    apply_confirmed_sell_fill,
-    apply_confirmed_strategy_buy_fill,
     apply_trading_strategy_management_rollforward,
     build_empty_trading_account_state,
     build_trading_account_read_model,
@@ -236,75 +234,6 @@ def remove_existing_trading_position(
     )
 
 
-def confirm_trading_strategy_buy_fill(
-    project_root,
-    *,
-    ticker,
-    qty: int,
-    buy_price,
-    params,
-    trade_date,
-    expected_revision: int,
-    init_sl=None,
-    init_trail=None,
-    target_price=None,
-    limit_price=None,
-    entry_atr=None,
-    security_profile=None,
-    entry_type: str = "normal",
-):
-    return _mutate_account(
-        project_root,
-        expected_revision=expected_revision,
-        mutator=lambda state, timestamp, mutation_id: apply_confirmed_strategy_buy_fill(
-            state,
-            ticker=ticker,
-            qty=qty,
-            buy_price=buy_price,
-            params=params,
-            timestamp=timestamp,
-            mutation_id=mutation_id,
-            trade_date=trade_date,
-            init_sl=init_sl,
-            init_trail=init_trail,
-            target_price=target_price,
-            limit_price=limit_price,
-            entry_atr=entry_atr,
-            security_profile=security_profile,
-            entry_type=entry_type,
-        ),
-    )
-
-
-def confirm_trading_sell_fill(
-    project_root,
-    *,
-    ticker,
-    qty: int,
-    exec_price,
-    params,
-    trade_date,
-    expected_revision: int,
-    event: str = "MANUAL_CONFIRMED_SELL",
-):
-    return _mutate_account(
-        project_root,
-        expected_revision=expected_revision,
-        mutator=lambda state, timestamp, mutation_id: apply_confirmed_sell_fill(
-            state,
-            ticker=ticker,
-            qty=qty,
-            exec_price=exec_price,
-            params=params,
-            timestamp=timestamp,
-            mutation_id=mutation_id,
-            trade_date=trade_date,
-            event=event,
-        ),
-    )
-
-
-
 
 def rollforward_trading_strategy_management(
     project_root,
@@ -337,8 +266,6 @@ __all__ = [
     "adopt_existing_trading_position",
     "correct_existing_trading_position",
     "remove_existing_trading_position",
-    "confirm_trading_strategy_buy_fill",
-    "confirm_trading_sell_fill",
     "rollforward_trading_strategy_management",
     "get_trading_account_read_model",
 ]

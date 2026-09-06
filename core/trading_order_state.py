@@ -7,7 +7,12 @@ from typing import Any
 from core.event_hash_chain import compute_event_hash
 from core.exact_accounting import milli_to_money, milli_to_price, price_to_milli
 from core.file_integrity import canonical_json_sha256
-from core.trading_identity import normalize_trading_ticker
+from core.trading_identity import (
+    normalize_trading_date,
+    normalize_trading_ticker,
+    require_trading_date_after,
+    require_trading_date_not_before,
+)
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 
 TRADING_ORDER_STATE_SCHEMA_VERSION = 1
@@ -37,6 +42,33 @@ TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
 TRADING_PROTECTION_ORDER_TYPE_LIMIT = "LIMIT"
 TRADING_PROTECTION_ORDER_TYPE_MARKET = "MARKET"
 TRADING_INDICATOR_ORDER_TYPE_MARKET = "MARKET"
+
+
+TRADING_PROTECTION_ACTION_STOP_FULL = "STOP_FULL"
+TRADING_PROTECTION_ACTION_TP_HALF = "TP_HALF"
+TRADING_PROTECTION_ACTION_STOP_REMAINDER_EXIT = "STOP_REMAINDER_EXIT"
+TRADING_PROTECTION_ACTION_SPECS = {
+    TRADING_PROTECTION_ACTION_STOP_FULL: {
+        "purpose": TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+        "order_type": TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET,
+    },
+    TRADING_PROTECTION_ACTION_TP_HALF: {
+        "purpose": TRADING_ORDER_PURPOSE_PROTECTION_TP,
+        "order_type": TRADING_PROTECTION_ORDER_TYPE_LIMIT,
+    },
+    TRADING_PROTECTION_ACTION_STOP_REMAINDER_EXIT: {
+        "purpose": TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
+        "order_type": TRADING_PROTECTION_ORDER_TYPE_MARKET,
+    },
+}
+
+
+def get_trading_protection_action_spec(action: object) -> dict[str, str]:
+    action_key = str(action or "").strip()
+    spec = TRADING_PROTECTION_ACTION_SPECS.get(action_key)
+    if spec is None:
+        raise ValueError(f"Trading protection action 不合法: {action_key or '-'}")
+    return dict(spec)
 
 
 def _normalize_optional_text(value) -> str | None:
@@ -277,17 +309,9 @@ def _build_ordered_protection_record(
         raise ValueError("Trading protection plan 缺少 fingerprint")
     ticker = _normalize_ticker(position_plan.get("ticker"))
     action = str(leg.get("action") or "").strip()
-    if action == "STOP_FULL":
-        purpose = TRADING_ORDER_PURPOSE_PROTECTION_STOP
-        expected_type = TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET
-    elif action == "TP_HALF":
-        purpose = TRADING_ORDER_PURPOSE_PROTECTION_TP
-        expected_type = TRADING_PROTECTION_ORDER_TYPE_LIMIT
-    elif action == "STOP_REMAINDER_EXIT":
-        purpose = TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
-        expected_type = TRADING_PROTECTION_ORDER_TYPE_MARKET
-    else:
-        raise ValueError(f"Trading protection action 不合法: {action}")
+    action_spec = get_trading_protection_action_spec(action)
+    purpose = action_spec["purpose"]
+    expected_type = action_spec["order_type"]
     order_type = str(leg.get("order_type") or "").strip()
     if order_type != expected_type:
         raise ValueError(f"Trading protection order_type 與 action 不一致: {action}/{order_type}")
@@ -653,9 +677,12 @@ def record_trading_buy_order_fill(
         raise ValueError("Trading fill_price 必須 > 0")
     if fill_price_milli > int(record["limit_price_milli"]):
         raise ValueError("Trading BUY 實際成交價不可高於原始買入限價")
-    trade_date_text = str(trade_date or "").strip()
-    if not trade_date_text:
-        raise ValueError("Trading fill trade_date 必填")
+    trade_date_text = require_trading_date_after(
+        trade_date,
+        after=record.get("information_date"),
+        field_name="BUY fill trade_date",
+        after_field_name="information_date",
+    )
     fills = list(record.get("fills") or [])
     if fills and any(str(row.get("trade_date") or "") != trade_date_text for row in fills):
         raise ValueError("同一 Trading order 的多次 partial fill 必須發生於同一交易日")
@@ -735,11 +762,26 @@ def record_trading_sell_order_fill(
         raise ValueError("Trading SELL fill_price 必須 > 0")
     if purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP and fill_price_milli < int(record.get("limit_price_milli") or 0):
         raise ValueError("Trading TP 實際成交價不可低於原始賣出限價")
-    trade_date_text = str(trade_date or "").strip()
-    if not trade_date_text:
-        raise ValueError("Trading SELL fill trade_date 必填")
-    if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT and trade_date_text <= str(record.get("information_date") or ""):
-        raise ValueError("Trading Indicator SELL 成交日必須晚於 signal information date")
+    trade_date_text = require_trading_date_after(
+        trade_date,
+        after=record.get("entry_trade_date"),
+        field_name="SELL fill trade_date",
+        after_field_name="entry_trade_date",
+    )
+    if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
+        trade_date_text = require_trading_date_after(
+            trade_date_text,
+            after=record.get("information_date"),
+            field_name="Indicator SELL fill trade_date",
+            after_field_name="signal information_date",
+        )
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER:
+        trade_date_text = require_trading_date_not_before(
+            trade_date_text,
+            earliest=record.get("stop_trigger_trade_date"),
+            field_name="STOP remainder fill trade_date",
+            earliest_field_name="STOP trigger trade_date",
+        )
     fill_id_text = str(fill_id or "").strip()
     fills = list(record.get("fills") or [])
     if not fill_id_text or any(str(x.get("fill_id") or "") == fill_id_text for x in fills):
@@ -915,9 +957,11 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
             fill_qty = int(fill.get("qty") or 0)
             if fill_qty <= 0 or int(fill.get("fill_price_milli") or 0) <= 0:
                 raise ValueError("Trading order fill qty/price 不合法")
-            trade_date = str(fill.get("trade_date") or "")
-            if not trade_date or not str(fill.get("confirmed_at") or ""):
-                raise ValueError("Trading order fill 缺少 trade_date/confirmed_at")
+            trade_date = normalize_trading_date(
+                fill.get("trade_date"), field_name="fill.trade_date", allow_none=False
+            )
+            if not str(fill.get("confirmed_at") or ""):
+                raise ValueError("Trading order fill 缺少 confirmed_at")
             fill_trade_dates.add(trade_date)
             filled_qty += fill_qty
         declared_filled = int(record.get("filled_qty", 0) or 0)
@@ -946,6 +990,13 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
                     raise ValueError("Trading order frozen_params hash 不一致")
             if len(fill_trade_dates) > 1:
                 raise ValueError("同一 Trading order 的 partial fills 不得跨交易日")
+            for trade_date in fill_trade_dates:
+                require_trading_date_after(
+                    trade_date,
+                    after=record.get("information_date"),
+                    field_name="BUY fill trade_date",
+                    after_field_name="information_date",
+                )
             for fill in fills:
                 if int(fill.get("net_buy_total_milli") or 0) <= 0:
                     raise ValueError("Trading BUY fill net_buy_total_milli 不合法")
@@ -961,12 +1012,23 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
             if purpose not in TRADING_SELL_ORDER_PURPOSES:
                 raise ValueError("Trading SELL order purpose 不合法")
             for fill in fills:
+                require_trading_date_after(
+                    fill.get("trade_date"),
+                    after=record.get("entry_trade_date"),
+                    field_name="SELL fill trade_date",
+                    after_field_name="entry_trade_date",
+                )
                 if int(fill.get("net_sell_total_milli") or 0) <= 0 or int(fill.get("allocated_cost_milli") or 0) < 0:
                     raise ValueError("Trading SELL fill exact-accounting payload 不合法")
                 if int(fill.get("realized_pnl_milli") or 0) != int(fill.get("net_sell_total_milli") or 0) - int(fill.get("allocated_cost_milli") or 0):
                     raise ValueError("Trading SELL fill PnL reconciliation 不一致")
-                if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT and str(fill.get("trade_date") or "") <= str(record.get("information_date") or ""):
-                    raise ValueError("Trading Indicator SELL fill 不得發生於 signal information date 當日或之前")
+                if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
+                    require_trading_date_after(
+                        fill.get("trade_date"),
+                        after=record.get("information_date"),
+                        field_name="Indicator SELL fill trade_date",
+                        after_field_name="signal information_date",
+                    )
             if int(record.get("reserved_cost_milli") or 0) != 0:
                 raise ValueError("Trading SELL 不得保留 BUY reserved cost")
             position_qty = int(record.get("position_qty_at_submission") or 0)
@@ -998,8 +1060,12 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
                     if int(record.get("stop_forced_exit_attempt") or 0) <= 0 or qty != position_qty:
                         raise ValueError("Trading STOP remainder forced exit attempt/qty 不合法")
                     for fill in fills:
-                        if str(fill.get("trade_date") or "") < str(record.get("stop_trigger_trade_date") or ""):
-                            raise ValueError("Trading STOP remainder fill 不得早於原 STOP trigger trade date")
+                        require_trading_date_not_before(
+                            fill.get("trade_date"),
+                            earliest=record.get("stop_trigger_trade_date"),
+                            field_name="STOP remainder fill trade_date",
+                            earliest_field_name="STOP trigger trade_date",
+                        )
                 oco_confirmed = bool(record.get("broker_native_oco_confirmed"))
                 oco_group = _normalize_optional_text(record.get("broker_oco_group_id"))
                 if oco_confirmed != bool(oco_group):
@@ -1132,6 +1198,11 @@ __all__ = [
     "TRADING_PROTECTION_ORDER_TYPE_LIMIT",
     "TRADING_PROTECTION_ORDER_TYPE_MARKET",
     "TRADING_INDICATOR_ORDER_TYPE_MARKET",
+    "TRADING_PROTECTION_ACTION_STOP_FULL",
+    "TRADING_PROTECTION_ACTION_TP_HALF",
+    "TRADING_PROTECTION_ACTION_STOP_REMAINDER_EXIT",
+    "TRADING_PROTECTION_ACTION_SPECS",
+    "get_trading_protection_action_spec",
     "build_empty_trading_order_state",
     "build_trading_proposal_key",
     "build_trading_protection_key",

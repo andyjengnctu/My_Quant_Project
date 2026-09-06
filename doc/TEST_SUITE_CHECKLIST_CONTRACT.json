@@ -4100,6 +4100,17 @@
       "entry": "`core/event_hash_chain.py`, `core/trading_account_state.py`, `core/trading_order_state.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 369
+    },
+    {
+      "id": "B382",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading operational safety SSOT / chronology / mutation boundary",
+      "item": "Allocation and broker submission consume one Operations safety contract while Trading fills share one canonical chronology",
+      "gap": "Trading更新後的Step 4 allocation與Step 5 ENTRY broker submission不得各自維護局部安全條件：缺active Stop、Indicator plan stale/missing、component read error、forced STOP exit、active/pending order或其他Operations blocker時，next_action、workflow_action_availability、proposed-order producer與實際ORDERED mutation必須消費同一canonical Operations decision。proposed-order的schema/path/load/read-model需由獨立state contract持有，避免Operations反向依賴allocation producer形成cycle；allocation計算完成到persist前必須再次驗account revision、selected params hash、candidate snapshot hash與Operations safety，ENTRY submission亦須在真正persist ORDERED前再次驗Operations/account/proposed artifact，封鎖TOCTOU stale plan。BUY fill必須嚴格晚於completed-bar information_date；SELL fill必須嚴格晚於entry_trade_date，Indicator SELL另須晚於signal information_date；日期解析與比較只由Trading identity/date owner提供。STOP triggered與entry-lineage判定須共用canonical STOP progress helper；Pre-live Audit只能消費Operations sell-coverage結果，不得重算第二套。runtime account service不得提供可繞過broker order+recoverable fill transaction的direct buy/sell fill mutation入口。",
+      "entry": "`core/trading_identity.py`, `core/trading_stop_exit_progress.py`, `core/trading_order_state.py`, `core/trading_account_state.py`, `services/trading/proposed_order_state.py`, `services/trading/order_planning.py`, `services/trading/entry_order_submission.py`, `services/trading/order_state.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/trading/fill_reconciliation.py`, `services/trading/account_state.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 370
     }
   ],
   "tests": [
@@ -7603,6 +7614,13 @@
       "description": "`validate_trading_ssot_identity_path_scale_contract_case` 驗canonical event hash會忽略既有event_hash self-field，且account/order state不再各自定義`_event_hash_payload`。",
       "initial_status": "NEW",
       "order": 491
+    },
+    {
+      "id": "T502",
+      "b_id": "B382",
+      "description": "`validate_trading_operational_safety_ssot_contract_case` 覆蓋canonical Trading date/chronology、Operations單一allocation/submission guard、proposed artifact state/producer分層、ENTRY submission persist前二次safety/hash guard、direct account fill bypass移除、STOP progress owner共用、Pre-live consume-only與Workbench專用submission service；既有Trading lifecycle regressions同步驗證無回歸。",
+      "initial_status": "NEW",
+      "order": 492
     }
   ],
   "transitions": [
@@ -25013,6 +25031,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_trading_ssot_identity_path_scale_contract_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B382",
+      "description": "收斂Trading allocation/submission/chronology/mutation safety為單一Operations與date contract，封鎖service bypass及TOCTOU stale-plan送單。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`services/trading/proposed_order_state.py`, `services/trading/entry_order_submission.py`, `services/trading/operations_status.py`, `core/trading_identity.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T502",
+      "description": "將Trading operational-safety SSOT、chronology與broker-submission TOCTOU regression納入既有Trading direct synthetic contracts。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_trading_ssot_identity_path_scale_contract_case`, `validate_trading_pending_order_state_contract_case`"
     }
   ]
 }

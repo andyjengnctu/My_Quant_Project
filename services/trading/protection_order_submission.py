@@ -18,6 +18,7 @@ from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
     TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
     TRADING_ORDER_PURPOSE_PROTECTION_TP,
+    get_trading_protection_action_spec,
     active_trading_indicator_exit_orders,
     active_trading_protection_orders,
     append_ordered_trading_protection_leg,
@@ -125,17 +126,7 @@ def confirm_trading_protection_leg_submission(
     position_plan = _find_position_plan(plan, ticker)
     leg = _find_leg(position_plan, action)
     _account, held_qty = _load_position_truth(root, position_plan)
-    purpose = (
-        TRADING_ORDER_PURPOSE_PROTECTION_STOP
-        if action == PROTECTION_STOP_ACTION
-        else TRADING_ORDER_PURPOSE_PROTECTION_TP
-        if action == PROTECTION_TP_ACTION
-        else TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
-        if action == PROTECTION_STOP_REMAINDER_ACTION
-        else None
-    )
-    if purpose is None:
-        raise ValueError(f"Trading protection action 不合法: {action}")
+    purpose = get_trading_protection_action_spec(action)["purpose"]
     source_guard = _build_source_guard(root)
 
     def mutate(state, timestamp, mutation_id):

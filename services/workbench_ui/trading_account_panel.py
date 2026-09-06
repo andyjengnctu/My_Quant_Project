@@ -33,6 +33,7 @@ from services.trading.protection_order_submission import (
     confirm_trading_protection_leg_submission,
     confirm_trading_protection_oco_submission,
 )
+from services.trading.entry_order_submission import confirm_trading_order_submission
 from services.trading.fill_reconciliation import (
     TradingFillRevisionConflict,
     confirm_trading_buy_order_fill,
@@ -43,7 +44,6 @@ from services.trading.fill_reconciliation import (
 from services.trading.order_state import (
     TradingOrderRevisionConflict,
     confirm_trading_order_cancellation,
-    confirm_trading_order_submission,
     get_trading_order_read_model,
     resolve_trading_order_state_path,
 )
@@ -832,6 +832,9 @@ class TradingAccountPanel(ttk.Frame):
         availability = dict(self._operations_snapshot.get("workflow_action_availability") or {})
         for action, button in self._workflow_action_buttons.items():
             button.configure(state="normal" if bool(availability.get(action)) else "disabled")
+        self._confirm_ordered_button.configure(
+            state="normal" if bool(self._operations_snapshot.get("entry_submission_allowed")) else "disabled"
+        )
 
     def _set_workflow_buttons_state(self, state: str):
         for button in self._workflow_buttons:

@@ -20,6 +20,7 @@ from core.trading_fill_transaction import (
     build_trading_fill_transaction_journal,
     validate_trading_fill_transaction_journal,
 )
+from core.trading_identity import normalize_trading_date, require_trading_date_after
 from core.trading_order_state import (
     TRADING_ACTIVE_ORDER_STATUSES,
     record_trading_buy_order_fill,
@@ -157,6 +158,12 @@ def confirm_trading_buy_order_fill(
         raise ValueError(f"Trading order 不存在: {order_id_text}")
     if str(record.get("status") or "") not in TRADING_ACTIVE_ORDER_STATUSES:
         raise ValueError(f"Trading order 目前不可確認成交: {record.get('status')}")
+    buy_trade_date = require_trading_date_after(
+        trade_date,
+        after=record.get("information_date"),
+        field_name="BUY fill trade_date",
+        after_field_name="information_date",
+    )
     frozen_params = record.get("frozen_params")
     if not isinstance(frozen_params, dict):
         raise RuntimeError("Trading ORDERED 缺少 frozen_params；禁止用目前新 params 回填舊掛單")
@@ -185,7 +192,7 @@ def confirm_trading_buy_order_fill(
             params=params,
             timestamp=timestamp,
             mutation_id=account_mutation_id,
-            trade_date=trade_date,
+            trade_date=buy_trade_date,
             init_sl=init_sl,
             init_trail=init_trail,
             target_price=target_price,
@@ -205,7 +212,7 @@ def confirm_trading_buy_order_fill(
             params=params,
             timestamp=timestamp,
             mutation_id=account_mutation_id,
-            trade_date=trade_date,
+            trade_date=buy_trade_date,
             init_sl=init_sl,
             init_trail=init_trail,
             target_price=target_price,
@@ -225,7 +232,7 @@ def confirm_trading_buy_order_fill(
         fill_id=fill_id,
         fill_qty=fill_qty_int,
         fill_price=fill_price,
-        trade_date=str(trade_date),
+        trade_date=buy_trade_date,
         net_buy_total_milli=net_buy_total_milli,
         timestamp=timestamp,
         mutation_id=order_mutation_id,
@@ -318,6 +325,12 @@ def _confirm_trading_sell_order_fill(
     entry_order_id = str(record.get("entry_order_id") or "")
     if str((position.get("broker") or {}).get("entry_order_id") or "") != entry_order_id:
         raise RuntimeError("Trading SELL entry-order lineage 與 account position 不一致")
+    sell_trade_date = require_trading_date_after(
+        trade_date,
+        after=(position.get("broker") or {}).get("entry_date"),
+        field_name="SELL fill trade_date",
+        after_field_name="entry_date",
+    )
     entry_order = (orders.get("orders") or {}).get(entry_order_id)
     frozen_params = None if not isinstance(entry_order, dict) else entry_order.get("frozen_params")
     if not isinstance(frozen_params, dict):
@@ -347,13 +360,13 @@ def _confirm_trading_sell_order_fill(
     timestamp = _timestamp()
     account_target = apply_confirmed_sell_fill(
         account, ticker=ticker, qty=fill_qty_int, exec_price=fill_price, params=params,
-        timestamp=timestamp, mutation_id=_mutation_id(), trade_date=trade_date, event=event,
+        timestamp=timestamp, mutation_id=_mutation_id(), trade_date=sell_trade_date, event=event,
         mark_tp_half_complete=tp_half_complete,
     )
     details = account_target["events"][-1].get("details") or {}
     order_target = record_trading_sell_order_fill(
         orders, order_id=oid, fill_id=_mutation_id(), fill_qty=fill_qty_int, fill_price=fill_price,
-        trade_date=str(trade_date), net_sell_total_milli=int(details.get("net_sell_total_milli") or 0),
+        trade_date=sell_trade_date, net_sell_total_milli=int(details.get("net_sell_total_milli") or 0),
         allocated_cost_milli=int(details.get("allocated_cost_milli") or 0), realized_pnl_milli=int(details.get("realized_pnl_milli") or 0),
         timestamp=timestamp, mutation_id=_mutation_id(),
     )

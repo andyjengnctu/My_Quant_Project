@@ -158,12 +158,8 @@ def build_trading_operational_audit(project_root: str | Path) -> dict[str, Any]:
     if not indicator_plan_ready:
         blockers.append("Trading strategy positions 缺少 fresh Indicator SELL plan")
 
-    stale_protection = list(operations.get("stale_active_protection_order_ids") or [])
-    missing_stop = list(operations.get("missing_stop_tickers") or [])
-    indicator_conflict = list(operations.get("indicator_protection_conflict_tickers") or [])
-    indicator_due = list(operations.get("indicator_exit_due_tickers") or [])
-    active_indicator = set(str(x) for x in operations.get("active_indicator_exit_tickers") or [])
-    unsubmitted_indicator = sorted(set(str(x) for x in indicator_due) - active_indicator)
+    sell_coverage_safe = bool(operations.get("open_position_sell_coverage_safe"))
+    sell_coverage_blockers = [str(x) for x in list(operations.get("open_position_sell_coverage_blockers") or []) if str(x)]
     forced_stop_due = list(operations.get("forced_stop_exit_tickers") or [])
     forced_stop_unsubmitted = list(operations.get("forced_stop_unsubmitted_tickers") or [])
     forced_stop_conflict = list(operations.get("forced_stop_conflict_tickers") or [])
@@ -172,17 +168,14 @@ def build_trading_operational_audit(project_root: str | Path) -> dict[str, Any]:
         "status": "PASS" if not forced_stop_unsubmitted and not forced_stop_conflict else "FAIL",
         "detail": f"due={forced_stop_due}, unsubmitted={forced_stop_unsubmitted}, conflict={forced_stop_conflict}",
     })
-    broker_sell_safe = (
-        not stale_protection
-        and not missing_stop
-        and not indicator_conflict
-        and not unsubmitted_indicator
-        and not forced_stop_unsubmitted
-        and not forced_stop_conflict
-    )
-    checks.append({"id":"trading_open_position_sell_coverage","status":"PASS" if broker_sell_safe else "FAIL","detail":f"stale={len(stale_protection)}, missing_stop={missing_stop}, indicator_conflict={indicator_conflict}, unsubmitted_indicator={unsubmitted_indicator}, forced_stop_unsubmitted={forced_stop_unsubmitted}, forced_stop_conflict={forced_stop_conflict}"})
-    if not broker_sell_safe:
-        blockers.append("Trading open positions 尚未具備安全且互斥的實際 SELL coverage")
+    checks.append({
+        "id": "trading_open_position_sell_coverage",
+        "status": "PASS" if sell_coverage_safe else "FAIL",
+        "detail": "; ".join(sell_coverage_blockers) or "Operations canonical sell coverage is safe",
+    })
+    if not sell_coverage_safe:
+        blockers.append("Trading open positions 尚未具備安全且互斥的實際 SELL coverage: " + "；".join(sell_coverage_blockers))
+
 
     if str(operations.get("overall_status") or "") == "BLOCKED":
         for item in list(operations.get("blockers") or []):

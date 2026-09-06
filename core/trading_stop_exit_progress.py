@@ -19,6 +19,32 @@ from core.trading_order_state import (
 )
 
 
+
+def is_trading_stop_exit_triggered_from_order_rows(
+    order_rows: list[dict[str, Any]],
+    *,
+    ticker: object,
+    entry_order_id: object,
+) -> bool:
+    """Return whether the current entry lineage has any confirmed original STOP fill.
+
+    This lightweight read-model helper shares the same lineage/purpose rule as
+    :func:`build_trading_stop_exit_progress` without requiring the full
+    persistent order-state envelope.
+    """
+
+    ticker_key = normalize_trading_ticker(ticker)
+    entry_id = str(entry_order_id or "").strip()
+    if not entry_id:
+        raise ValueError("Trading STOP progress 缺少 entry_order_id")
+    return any(
+        str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_STOP
+        and normalize_trading_ticker(row.get("ticker")) == ticker_key
+        and str(row.get("entry_order_id") or "").strip() == entry_id
+        and int(row.get("filled_qty") or 0) > 0
+        for row in list(order_rows or [])
+    )
+
 def build_trading_stop_exit_progress(
     order_state: dict[str, Any],
     *,
@@ -117,4 +143,4 @@ def build_trading_stop_exit_progress(
     }
 
 
-__all__ = ["build_trading_stop_exit_progress"]
+__all__ = ["build_trading_stop_exit_progress", "is_trading_stop_exit_triggered_from_order_rows"]

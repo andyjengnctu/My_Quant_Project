@@ -22,6 +22,7 @@ from core.trading_order_state import (
     TRADING_ORDER_SIDE_BUY,
     TRADING_ORDER_SIDE_SELL,
 )
+from core.trading_stop_exit_progress import is_trading_stop_exit_triggered_from_order_rows
 from services.trading.account_state import (
     get_trading_account_read_model,
     load_trading_account_state,
@@ -31,7 +32,7 @@ from services.trading.daily_workflow import (
     get_trading_candidate_snapshot_read_model,
 )
 from services.trading.fill_reconciliation import resolve_trading_fill_transaction_path
-from services.trading.order_planning import get_trading_proposed_order_plan_read_model
+from services.trading.proposed_order_state import get_trading_proposed_order_plan_read_model
 from services.trading.indicator_exit_planning import get_trading_indicator_exit_plan_read_model
 from services.trading.order_state import get_trading_order_read_model
 from services.trading.position_rollforward import build_trading_position_rollforward_snapshot
@@ -61,6 +62,7 @@ NEXT_CANCEL_PROTECTION_FOR_INDICATOR = "CANCEL_PROTECTION_FOR_INDICATOR_EXIT"
 NEXT_SUBMIT_INDICATOR_EXIT = "SUBMIT_INDICATOR_EXIT"
 NEXT_RECONCILE_INDICATOR_EXIT = "RECONCILE_INDICATOR_EXIT"
 NEXT_RECONCILE_ENTRY = "RECONCILE_ENTRY_ORDER"
+NEXT_RECONCILE_ORPHAN_SELL = "RECONCILE_ORPHAN_SELL_ORDER"
 NEXT_UPDATE_DATA = "UPDATE_DATA"
 NEXT_UPDATE_PARAMS = "UPDATE_PARAMS"
 NEXT_RUN_SCANNER = "RUN_SCANNER"
@@ -237,8 +239,8 @@ def derive_trading_operations_status(
     order_rows = [dict(row) for row in list(orders.get("orders") or [])]
     active_rows = [row for row in order_rows if str(row.get("status") or "") in TRADING_ACTIVE_ORDER_STATUSES]
     active_entry_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_BUY]
-    active_protection_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL and str(row.get("purpose") or "") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER, TRADING_ORDER_PURPOSE_PROTECTION_TP}]
-    active_indicator_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL and str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT]
+    active_sell_rows = [row for row in active_rows if str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL]
+
     def _matches_current_strategy_lineage(row: dict[str, Any]) -> bool:
         ticker = str(row.get("ticker") or "")
         return bool(
@@ -247,26 +249,40 @@ def derive_trading_operations_status(
             and str(row.get("entry_order_id") or "") == strategy_lineage_by_ticker[ticker]
         )
 
+    current_active_sell_rows = [row for row in active_sell_rows if _matches_current_strategy_lineage(row)]
+    orphan_active_sell_rows = [row for row in active_sell_rows if not _matches_current_strategy_lineage(row)]
+    active_protection_rows = [
+        row for row in current_active_sell_rows
+        if str(row.get("purpose") or "") in {
+            TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+            TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
+            TRADING_ORDER_PURPOSE_PROTECTION_TP,
+        }
+    ]
+    active_indicator_rows = [
+        row for row in current_active_sell_rows
+        if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT
+    ]
+
+    stop_triggered_by_ticker = {
+        ticker: is_trading_stop_exit_triggered_from_order_rows(
+            order_rows, ticker=ticker, entry_order_id=entry_order_id
+        )
+        for ticker, entry_order_id in strategy_lineage_by_ticker.items()
+    }
     active_stop_tickers = sorted({
         str(row.get("ticker") or "")
         for row in active_protection_rows
         if str(row.get("purpose") or "") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER}
-        and _matches_current_strategy_lineage(row)
     })
-    stop_triggered_tickers = sorted({
-        str(row.get("ticker") or "")
-        for row in order_rows
-        if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_STOP
-        and int(row.get("filled_qty") or 0) > 0
-        and _matches_current_strategy_lineage(row)
-    })
-    forced_stop_exit_tickers = stop_triggered_tickers
+    forced_stop_exit_tickers = sorted(
+        ticker for ticker, triggered in stop_triggered_by_ticker.items() if triggered
+    )
     active_stop_exit_tickers = sorted(set(forced_stop_exit_tickers) & set(active_stop_tickers))
     active_tp_tickers = sorted({
         str(row.get("ticker") or "")
         for row in active_protection_rows
         if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_TP
-        and _matches_current_strategy_lineage(row)
     })
     missing_stop_tickers = sorted(set(strategy_tickers) - set(active_stop_tickers))
 
@@ -283,7 +299,11 @@ def derive_trading_operations_status(
     active_protection_count = len(active_protection_rows)
     protection_fresh = bool(protection.get("exists") and protection.get("fresh"))
     indicator_plan_fresh = bool(indicator_exit.get("exists") and indicator_exit.get("fresh"))
-    indicator_due_tickers = sorted({str(row.get("ticker") or "") for row in list(indicator_exit.get("exits") or []) if str(row.get("ticker") or "")}) if indicator_plan_fresh else []
+    indicator_due_rows = [
+        dict(row) for row in list(indicator_exit.get("exits") or [])
+        if _matches_current_strategy_lineage(dict(row))
+    ] if indicator_plan_fresh else []
+    indicator_due_tickers = sorted({str(row.get("ticker") or "") for row in indicator_due_rows if str(row.get("ticker") or "")})
     active_indicator_tickers = sorted({
         str(row.get("ticker") or "")
         for row in active_indicator_rows
@@ -301,6 +321,8 @@ def derive_trading_operations_status(
         if bool(row.get("stop_forced_exit")) and str(row.get("ticker") or "")
     })
     active_indicator_count = len(active_indicator_rows)
+    orphan_active_sell_order_ids = sorted(str(row.get("order_id") or "") for row in orphan_active_sell_rows if str(row.get("order_id") or ""))
+    orphan_active_sell_tickers = sorted({str(row.get("ticker") or "") for row in orphan_active_sell_rows if str(row.get("ticker") or "")})
     same_session_sell_locked = bool(
         latest_data_date and any(
             str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL
@@ -312,6 +334,72 @@ def derive_trading_operations_status(
     stale_active_protection_order_ids = [str(x) for x in list(protection.get("stale_active_protection_order_ids") or []) if str(x)]
     stale_active_protection_tickers = sorted(str(x) for x in list(protection.get("stale_active_protection_tickers") or []))
     missing_stop_tickers = sorted(set(missing_stop_tickers) - set(indicator_due_tickers) - set(active_indicator_tickers) - set(forced_stop_exit_tickers))
+
+    sell_coverage_blockers: list[str] = []
+    if orphan_active_sell_order_ids:
+        sell_coverage_blockers.append("存在不屬於目前 strategy entry lineage 的 active SELL order")
+    if stale_active_protection_order_ids:
+        sell_coverage_blockers.append("active protection 與目前 position plan 不一致")
+    if missing_stop_tickers:
+        sell_coverage_blockers.append("strategy position 缺少 active Stop")
+    if indicator_protection_conflict_tickers:
+        sell_coverage_blockers.append("Indicator SELL 與 protection SELL 衝突")
+    if forced_stop_unsubmitted_tickers:
+        sell_coverage_blockers.append("STOP forced-exit 尚未有 active broker exit order")
+    if forced_stop_conflict_tickers:
+        sell_coverage_blockers.append("STOP forced-exit 與其他 SELL order 衝突")
+    open_position_sell_coverage_safe = not sell_coverage_blockers
+
+    allocation_blockers: list[str] = []
+    if fill_transaction_pending:
+        allocation_blockers.append("存在未完成 fill transaction")
+    if errors:
+        allocation_blockers.append("Trading component state 不可完整驗證")
+    if not bool(account.get("initialized")) or account.get("cash") is None:
+        allocation_blockers.append("Trading account/cash 尚未就緒")
+    if active_entry_count:
+        allocation_blockers.append("存在 active ENTRY BUY")
+    if orphan_active_sell_order_ids:
+        allocation_blockers.append("存在 orphan active SELL order")
+    if forced_stop_exit_tickers:
+        allocation_blockers.append("存在 STOP forced-exit obligation")
+    if rollforward_due_tickers:
+        allocation_blockers.append("strategy position 尚未完成日終推進")
+    if strategy_tickers and not indicator_plan_fresh:
+        allocation_blockers.append("Indicator SELL plan 尚未 fresh")
+    if active_indicator_count or indicator_due_tickers or indicator_protection_conflict_tickers:
+        allocation_blockers.append("Indicator SELL lifecycle 尚未完成")
+    if stale_active_protection_order_ids or missing_stop_tickers:
+        allocation_blockers.append("open position protection 尚未安全完成")
+    if same_day_entry_locked or same_session_sell_locked:
+        allocation_blockers.append("本交易 session allocation 已鎖定")
+
+    # ENTRY submission is a different lifecycle step from creating a new
+    # allocation.  Existing same-plan ENTRY orders and the information-date
+    # allocation lock must not prevent submitting the remaining orders that
+    # were already frozen in the same PROPOSED plan.  All open-position exit
+    # safety, component integrity, and plan freshness requirements still apply.
+    entry_submission_blockers: list[str] = []
+    if fill_transaction_pending:
+        entry_submission_blockers.append("存在未完成 fill transaction")
+    if errors:
+        entry_submission_blockers.append("Trading component state 不可完整驗證")
+    if not bool(account.get("initialized")) or account.get("cash") is None:
+        entry_submission_blockers.append("Trading account/cash 尚未就緒")
+    if orphan_active_sell_order_ids:
+        entry_submission_blockers.append("存在 orphan active SELL order")
+    if forced_stop_exit_tickers:
+        entry_submission_blockers.append("存在 STOP forced-exit obligation")
+    if rollforward_due_tickers:
+        entry_submission_blockers.append("strategy position 尚未完成日終推進")
+    if strategy_tickers and not indicator_plan_fresh:
+        entry_submission_blockers.append("Indicator SELL plan 尚未 fresh")
+    if active_indicator_count or indicator_due_tickers or indicator_protection_conflict_tickers:
+        entry_submission_blockers.append("Indicator SELL lifecycle 尚未完成")
+    if stale_active_protection_order_ids or missing_stop_tickers:
+        entry_submission_blockers.append("open position protection 尚未安全完成")
+    if not bool(proposed.get("fresh")) or int(proposed.get("order_count") or 0) <= 0:
+        entry_submission_blockers.append("目前沒有可送出的 fresh PROPOSED BUY")
 
     availability = _workflow_action_availability(
         fill_transaction_pending=bool(fill_transaction_pending),
@@ -331,6 +419,9 @@ def derive_trading_operations_status(
         availability = {key: False for key in availability}
     if "position_rollforward" in errors:
         availability["rollforward"] = False
+        availability["orders"] = False
+        availability["all"] = False
+    if allocation_blockers:
         availability["orders"] = False
         availability["all"] = False
 
@@ -375,6 +466,11 @@ def derive_trading_operations_status(
         next_code = NEXT_SET_CASH
         next_label = "設定 Trading 現金"
         next_detail = "Account 已建立但 cash 尚未設定，不能建立實際建議掛單。"
+    elif orphan_active_sell_order_ids:
+        overall = OPERATIONS_STATUS_ACTION_REQUIRED
+        next_code = NEXT_RECONCILE_ORPHAN_SELL
+        next_label = "確認舊 lineage SELL 成交或取消"
+        next_detail = "存在不屬於目前 strategy entry lineage 的 active SELL order；必須先依實際券商狀態 reconcile: " + ",".join(orphan_active_sell_order_ids)
     elif forced_stop_conflict_tickers:
         overall = OPERATIONS_STATUS_ACTION_REQUIRED
         next_code = NEXT_CANCEL_SELL_FOR_STOP_REMAINDER
@@ -530,6 +626,8 @@ def derive_trading_operations_status(
         "active_protection_order_count": active_protection_count,
         "active_indicator_exit_order_count": active_indicator_count,
         "active_indicator_exit_tickers": active_indicator_tickers,
+        "orphan_active_sell_order_ids": orphan_active_sell_order_ids,
+        "orphan_active_sell_tickers": orphan_active_sell_tickers,
         "indicator_exit_due_count": len(indicator_due_tickers),
         "indicator_exit_due_tickers": indicator_due_tickers,
         "indicator_protection_conflict_tickers": indicator_protection_conflict_tickers,
@@ -554,6 +652,12 @@ def derive_trading_operations_status(
         "protection_plan_fresh": protection_fresh,
         "indicator_exit_plan_fresh": indicator_plan_fresh,
         "workflow_action_availability": availability,
+        "allocation_allowed": bool(availability.get("orders")),
+        "allocation_blockers": allocation_blockers,
+        "entry_submission_allowed": not entry_submission_blockers,
+        "entry_submission_blockers": entry_submission_blockers,
+        "open_position_sell_coverage_safe": open_position_sell_coverage_safe,
+        "open_position_sell_coverage_blockers": sell_coverage_blockers,
         "warnings": warnings,
         "blockers": blockers,
         "component_errors": errors,
@@ -568,6 +672,29 @@ def derive_trading_operations_status(
             "position_rollforward": position_rollforward,
         },
     }
+
+
+def assert_trading_new_allocation_allowed(status: dict[str, Any]) -> None:
+    """Fail closed unless canonical Operations Status permits Step-4 allocation."""
+
+    if bool((status.get("workflow_action_availability") or {}).get("orders")):
+        return
+    reasons = [str(item) for item in list(status.get("allocation_blockers") or []) if str(item)]
+    if not reasons:
+        reasons = [str(status.get("next_action_detail") or status.get("next_action_label") or "Trading state 尚未允許 allocation")]
+    raise RuntimeError("Trading 目前禁止建立新的盤前建議掛單：" + "；".join(reasons))
+
+
+def assert_trading_proposed_submission_allowed(status: dict[str, Any]) -> None:
+    """Fail closed unless a previously frozen PROPOSED BUY may be submitted."""
+
+    if bool(status.get("entry_submission_allowed")):
+        return
+    reasons = [str(item) for item in list(status.get("entry_submission_blockers") or []) if str(item)]
+    if not reasons:
+        reasons = [str(status.get("next_action_detail") or status.get("next_action_label") or "Trading state 尚未允許 ENTRY submission")]
+    raise RuntimeError("Trading 目前禁止確認新的 ENTRY BUY 送單：" + "；".join(reasons))
+
 
 
 def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
@@ -671,11 +798,16 @@ __all__ = [
     "NEXT_REPLACE_PROTECTION",
     "NEXT_REFRESH_PROTECTION",
     "NEXT_SUBMIT_PROTECTION_STOP",
+    "NEXT_REFRESH_STOP_REMAINDER",
+    "NEXT_SUBMIT_STOP_REMAINDER",
+    "NEXT_RECONCILE_STOP_REMAINDER",
+    "NEXT_CANCEL_SELL_FOR_STOP_REMAINDER",
     "NEXT_REFRESH_INDICATOR_EXIT",
     "NEXT_CANCEL_PROTECTION_FOR_INDICATOR",
     "NEXT_SUBMIT_INDICATOR_EXIT",
     "NEXT_RECONCILE_INDICATOR_EXIT",
     "NEXT_RECONCILE_ENTRY",
+    "NEXT_RECONCILE_ORPHAN_SELL",
     "NEXT_UPDATE_DATA",
     "NEXT_UPDATE_PARAMS",
     "NEXT_RUN_SCANNER",
@@ -686,5 +818,7 @@ __all__ = [
     "NEXT_MONITOR",
     "NEXT_READY",
     "derive_trading_operations_status",
+    "assert_trading_new_allocation_allowed",
+    "assert_trading_proposed_submission_allowed",
     "build_trading_operations_status",
 ]

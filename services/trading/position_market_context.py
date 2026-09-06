@@ -9,14 +9,9 @@ import pandas as pd
 from core.data_utils import discover_unique_csv_map, get_required_min_rows, sanitize_ohlcv_dataframe
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
+from core.trading_identity import normalize_trading_date
 from services.trading.account_state import load_trading_account_state
 from services.trading.order_state import load_trading_order_state
-
-
-def normalize_trading_date(value: object | None) -> str | None:
-    if value is None or str(value).strip() == "":
-        return None
-    return pd.Timestamp(value).normalize().strftime("%Y-%m-%d")
 
 
 def load_trading_position_market_frame(*, file_path: str, ticker: str, params, allowed_date: str) -> pd.DataFrame:
