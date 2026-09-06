@@ -41,7 +41,7 @@ MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY = {
 
 MARKET_DATA_V2_EXECUTION_POLICY = {
     "quota_reserve_requests": 50,
-    "quota_resume_headroom_requests": 500,
+    "quota_resume_headroom_requests": 1000,
     "quota_refresh_every_requests": 25,
     "quota_poll_seconds": 30.0,
     "max_retryable_attempts": 4,

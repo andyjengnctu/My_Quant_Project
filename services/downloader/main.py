@@ -247,6 +247,26 @@ def _run_market_data_v2_bootstrap() -> int:
     initial_done = done
     from core.market_data_execution_policy import get_market_data_execution_policy
     progress_sample_floor = max(1, int(get_market_data_execution_policy().progress_every_committed_requests))
+    wait_line_open = False
+    wait_line_width = 0
+
+    def _close_wait_line() -> None:
+        nonlocal wait_line_open, wait_line_width
+        if not wait_line_open:
+            return
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        wait_line_open = False
+        wait_line_width = 0
+
+    def _write_wait_line(text: str) -> None:
+        nonlocal wait_line_open, wait_line_width
+        rendered = str(text)
+        padding = " " * max(0, wait_line_width - len(rendered))
+        sys.stdout.write("\r" + rendered + padding)
+        sys.stdout.flush()
+        wait_line_open = True
+        wait_line_width = max(wait_line_width, len(rendered))
 
     def _event_eta(event: dict[str, object], *, done_now: int, total: int, elapsed: float) -> float | None:
         quota_limit = event.get("quota_limit")
@@ -264,6 +284,7 @@ def _run_market_data_v2_bootstrap() -> int:
         )
 
     def _progress(event: dict[str, object]) -> None:
+        _close_wait_line()
         done_now = int(event.get("done") or 0)
         total = int(event.get("total") or 0)
         pct = 100.0 * done_now / total if total > 0 else 0.0
@@ -300,30 +321,29 @@ def _run_market_data_v2_bootstrap() -> int:
         quota_used = event.get("quota_user_count")
         quota_limit = event.get("quota_limit")
         resume_used_max = event.get("quota_resume_used_max")
-        resume_headroom = event.get("quota_resume_headroom")
         needed_drop = event.get("quota_needed_drop")
         if quota_used is not None and quota_limit is not None:
-            quota_text = f"quota={int(quota_used)}/{int(quota_limit)}"
+            quota_text = f"Q{int(quota_used)}/{int(quota_limit)}"
             if resume_used_max is not None:
-                quota_text += f" | 恢復≤{int(resume_used_max)}"
-            if resume_headroom is not None:
-                quota_text += f"(安全可用≥{int(resume_headroom)})"
+                quota_text += f"→{int(resume_used_max)}"
             if needed_drop is not None and int(needed_drop) > 0:
-                quota_text += f"(需回落≥{int(needed_drop)})"
+                quota_text += f" 差{int(needed_drop)}"
         else:
-            quota_text = "quota=查詢暫時失敗"
+            quota_text = "Q查詢失敗"
         reason = str(event.get("reason") or "quota_capacity")
         error = event.get("error")
-        extra = f" | {reason}" if reason != "quota_capacity" else ""
+        extra = ""
+        if reason != "quota_capacity":
+            extra += f" | {reason}"
         if error:
             extra += f" | {error}"
-        print(
-            f"[Bootstrap WAIT_QUOTA] {done_now}/{total} ({pct:.1f}%)"
-            f" | 已過 {_format_bootstrap_duration(elapsed)}"
-            f" | 本輪等待 {_format_bootstrap_duration(waited)}"
-            f" | ETA≈{_format_bootstrap_duration(eta)}"
+        _write_wait_line(
+            f"[WAIT] {done_now}/{total} {pct:.1f}%"
+            f" | 過{_format_bootstrap_duration(elapsed)}"
+            f" 等{_format_bootstrap_duration(waited)}"
+            f" | ETA{_format_bootstrap_duration(eta)}"
             f" | {quota_text}"
-            f" | {int(round(poll_seconds))}s 後重查{extra}"
+            f" | {int(round(poll_seconds))}s{extra}"
         )
 
     try:
@@ -339,12 +359,15 @@ def _run_market_data_v2_bootstrap() -> int:
             quota_wait_fn=_quota_wait,
         )
     except KeyboardInterrupt:
-        print("\n⚠ Bootstrap 已由使用者中斷；已完成的 request/Parquet/ledger 會保留，下次選 [3] 可續傳。")
+        _close_wait_line()
+        print("⚠ Bootstrap 已由使用者中斷；已完成的 request/Parquet/ledger 會保留，下次選 [3] 可續傳。")
         return 130
     except (MarketDataBootstrapActivationError, FinMindHttpError, RuntimeError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
+        _close_wait_line()
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
+    _close_wait_line()
     print("=" * 88)
     print(" Market Data V2｜Bootstrap 執行結果")
     print("=" * 88)
