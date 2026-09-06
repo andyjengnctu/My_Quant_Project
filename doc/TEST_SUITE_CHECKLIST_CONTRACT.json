@@ -4144,6 +4144,17 @@
       "entry": "`services/downloader/universe.py`, `services/downloader/runtime.py`, `config/downloader.py`, `tools/validate/synthetic_error_cases.py`",
       "initial_status": "NEW",
       "order": 373
+    },
+    {
+      "id": "B386",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data governance / provider and lifecycle SSOT",
+      "item": "Market Data provider, price-source and Research/Trading lifecycle semantics remain single-source and non-promoting",
+      "gap": "Market Data穩定語意必須由`core/market_data_contract.py`與`config/market_data.py`單一持有：FinMind `TaiwanStockPriceAdj`維持目前模型/策略canonical還原價source，`TaiwanStockPrice` raw只允許archive/audit等非現行price-input用途，專案不得自行建立第二套還原價engine；使用current-vintage adjusted history仍須遵守PIT legality/invariance要求。Research active generation/cutoff必須由declarative generation config解析，NOT_READY generation不得預占cutoff或自動promotion；`config/research.py::RESEARCH_MARKET_DATA_CUTOFF`只可作active generation compatibility alias。Trading lifecycle mode/bootstrap generation亦須由同一contract解析。Downloader的adjusted-price與universe-volume dataset identity必須消費canonical owner，不得在runtime重複硬編dataset literal。",
+      "entry": "`config/market_data.py`, `config/research.py`, `core/market_data_contract.py`, `services/downloader/runtime.py`, `tools/validate/synthetic_meta_cases.py`",
+      "initial_status": "NEW",
+      "order": 374
     }
   ],
   "tests": [
@@ -7675,6 +7686,13 @@
       "description": "`validate_downloader_universe_screening_init_error_path_case` 覆蓋FinMind bulk loader/dataset fail-closed、兩個request皆省略data_id且使用同一market_date、YFinance screening不可被呼叫、exact-date membership、ETF volume-only、非交易/停牌listed symbol保守排除、高成交量股票缺market_value時禁止發布cache、duplicate stock_id拒絕、v3 cache identity/reuse與threshold invalidation。",
       "initial_status": "NEW",
       "order": 495
+    },
+    {
+      "id": "T506",
+      "b_id": "B386",
+      "description": "`validate_market_data_governance_contract_case` 覆蓋canonical adjusted/raw dataset identity、raw direct-consumption禁止、自建adjusted-price engine禁止、retrospective-adjustment invariance要求、Research generation/cutoff/NOT_READY非promotion、Trading lifecycle/bootstrap generation，以及downloader dataset identity必須消費canonical owner且不得重複硬編。",
+      "initial_status": "NEW",
+      "order": 496
     }
   ],
   "transitions": [
@@ -25213,6 +25231,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_downloader_universe_screening_init_error_path_case`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "B386",
+      "description": "將已落地Market Data provider/price-source/Research-Trading lifecycle SSOT正式納入Checklist governance。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_contract.py`, `config/market_data.py`"
+    },
+    {
+      "date": "2026-09-06",
+      "id": "T506",
+      "description": "將既有Market Data governance validator補入正式DONE測試摘要，修復registry/checklist治理缺口。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_governance_contract_case`"
     }
   ]
 }
