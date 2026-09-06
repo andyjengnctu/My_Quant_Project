@@ -257,6 +257,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
 
     policy = MarketDataExecutionPolicy(
         quota_reserve_requests=1,
+        quota_resume_headroom_requests=1,
         quota_refresh_every_requests=99,
         quota_poll_seconds=2.0,
         max_retryable_attempts=3,
@@ -375,9 +376,38 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         add_check(results, "market_data", case_id, "quota_wait_heartbeat_does_not_add_usage_refresh", 4, quota_client.usage_request_count)
         last_wait = quota_wait_events[-1]
         add_check(results, "market_data", case_id, "quota_wait_heartbeat_uses_live_limit", 4, last_wait.get("quota_limit"))
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_safe_release_threshold", 2, last_wait.get("quota_safe_used_max"))
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_stop_threshold", 2, last_wait.get("quota_safe_used_max"))
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_resume_headroom", 1, last_wait.get("quota_resume_headroom"))
+        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_resume_threshold", 2, last_wait.get("quota_resume_used_max"))
         add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_required_drop", 2, last_wait.get("quota_needed_drop"))
         add_check(results, "market_data", case_id, "quota_wait_heartbeat_accumulates_wait_time", True, float(last_wait.get("waited_seconds") or 0.0) >= policy.quota_poll_seconds)
+
+        sponsor_policy = MarketDataExecutionPolicy(
+            quota_reserve_requests=50,
+            quota_resume_headroom_requests=500,
+            quota_refresh_every_requests=25,
+            quota_poll_seconds=30.0,
+            max_retryable_attempts=4,
+            retry_backoff_seconds=(5.0, 30.0, 120.0),
+            job_lease_seconds=300.0,
+            executor_lock_seconds=300.0,
+            progress_every_committed_requests=100,
+        )
+        with TemporaryDirectory() as sponsor_td:
+            sponsor_ledger = MarketDataJobLedger(Path(sponsor_td) / "sponsor_hysteresis.sqlite3")
+            sponsor_executor = MarketDataBootstrapExecutor(
+                ledger=sponsor_ledger,
+                client=_SuccessClient() if "_SuccessClient" in locals() else quota_client,
+                policy=sponsor_policy,
+                now_fn=clock.now,
+                sleep_fn=clock.sleep,
+                owner_id="sponsor-hysteresis-worker",
+            )
+            sponsor_executor._quota.usage = FinMindUsage(user_count=5968, api_request_limit=6000)
+            add_check(results, "market_data", case_id, "quota_hysteresis_stop_threshold_still_uses_reserve", False, sponsor_executor._quota_has_capacity())
+            add_check(results, "market_data", case_id, "quota_hysteresis_waits_until_500_safe_headroom", False, sponsor_executor._quota_has_resume_capacity())
+            sponsor_executor._quota.usage = FinMindUsage(user_count=5450, api_request_limit=6000)
+            add_check(results, "market_data", case_id, "quota_hysteresis_resumes_at_500_safe_headroom", True, sponsor_executor._quota_has_resume_capacity())
 
         from services.downloader.main import _estimate_bootstrap_eta_seconds
 
@@ -762,6 +792,7 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
 
     execution_policy = MarketDataExecutionPolicy(
         quota_reserve_requests=1,
+        quota_resume_headroom_requests=1,
         quota_refresh_every_requests=99,
         quota_poll_seconds=1.0,
         max_retryable_attempts=2,
@@ -988,6 +1019,7 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
 
         policy = MarketDataExecutionPolicy(
             quota_reserve_requests=1,
+            quota_resume_headroom_requests=1,
             quota_refresh_every_requests=9999,
             quota_poll_seconds=1.0,
             max_retryable_attempts=2,

@@ -299,12 +299,15 @@ def _run_market_data_v2_bootstrap() -> int:
         poll_seconds = max(0.0, float(event.get("poll_seconds") or 0.0))
         quota_used = event.get("quota_user_count")
         quota_limit = event.get("quota_limit")
-        safe_used_max = event.get("quota_safe_used_max")
+        resume_used_max = event.get("quota_resume_used_max")
+        resume_headroom = event.get("quota_resume_headroom")
         needed_drop = event.get("quota_needed_drop")
         if quota_used is not None and quota_limit is not None:
             quota_text = f"quota={int(quota_used)}/{int(quota_limit)}"
-            if safe_used_max is not None:
-                quota_text += f" | 放行≤{int(safe_used_max)}"
+            if resume_used_max is not None:
+                quota_text += f" | 恢復≤{int(resume_used_max)}"
+            if resume_headroom is not None:
+                quota_text += f"(安全可用≥{int(resume_headroom)})"
             if needed_drop is not None and int(needed_drop) > 0:
                 quota_text += f"(需回落≥{int(needed_drop)})"
         else:

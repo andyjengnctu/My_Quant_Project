@@ -131,7 +131,9 @@ class MarketDataBootstrapExecutor:
             limit = int(usage.api_request_limit)
             reserve = self._effective_reserve(limit)
             effective_used = int(usage.user_count) + int(self._quota.local_data_attempts_since_refresh)
-            safe_used_max = max(0, limit - reserve - 1)
+            stop_used_max = max(0, limit - reserve - 1)
+            resume_headroom = self._effective_resume_headroom(limit)
+            resume_used_max = max(0, limit - reserve - resume_headroom)
             remaining = int(limit - effective_used)
             event.update(
                 {
@@ -140,14 +142,23 @@ class MarketDataBootstrapExecutor:
                     "quota_remaining": remaining,
                     "quota_usable_remaining": max(0, remaining - reserve),
                     "quota_reserve": reserve,
-                    "quota_safe_used_max": safe_used_max,
-                    "quota_needed_drop": max(0, effective_used - safe_used_max),
+                    "quota_safe_used_max": stop_used_max,
+                    "quota_resume_headroom": resume_headroom,
+                    "quota_resume_used_max": resume_used_max,
+                    "quota_needed_drop": max(0, effective_used - resume_used_max),
                 }
             )
         observer(event)
 
     def _effective_reserve(self, limit: int) -> int:
         return min(self.policy.quota_reserve_requests, max(0, int(limit) - 1))
+
+    def _effective_resume_headroom(self, limit: int) -> int:
+        reserve = self._effective_reserve(limit)
+        return min(
+            self.policy.quota_resume_headroom_requests,
+            max(1, int(limit) - reserve),
+        )
 
     def _estimated_remaining(self) -> int:
         usage = self._quota.usage
@@ -160,6 +171,16 @@ class MarketDataBootstrapExecutor:
         if usage is None:
             return False
         return self._estimated_remaining() > self._effective_reserve(usage.api_request_limit)
+
+    def _quota_has_resume_capacity(self) -> bool:
+        usage = self._quota.usage
+        if usage is None:
+            return False
+        limit = int(usage.api_request_limit)
+        reserve = self._effective_reserve(limit)
+        headroom = self._effective_resume_headroom(limit)
+        usable = self._estimated_remaining() - reserve
+        return usable >= headroom
 
     def quota_progress_snapshot(self) -> dict[str, int | None]:
         """Return the executor's best current quota estimate for UI progress only.
@@ -218,16 +239,17 @@ class MarketDataBootstrapExecutor:
                 self._refresh_usage_with_transient_wait(workload_id)
             else:
                 self._refresh_usage()
-        while not self._quota_has_capacity():
+        if not self._quota_has_capacity():
             self._begin_quota_wait()
             self.ledger.set_workload_status(workload_id, status=WORKLOAD_WAIT_QUOTA, now=self._now())
             if not self.blocking_waits:
                 self._emit_quota_wait(workload_id, reason="quota_capacity")
                 return False
-            self._renew_lock(workload_id)
-            self._emit_quota_wait(workload_id, reason="quota_capacity")
-            self.sleep_fn(self.policy.quota_poll_seconds)
-            self._refresh_usage_with_transient_wait(workload_id)
+            while not self._quota_has_resume_capacity():
+                self._renew_lock(workload_id)
+                self._emit_quota_wait(workload_id, reason="quota_capacity")
+                self.sleep_fn(self.policy.quota_poll_seconds)
+                self._refresh_usage_with_transient_wait(workload_id)
         self._end_quota_wait()
         self.ledger.set_workload_status(workload_id, status=WORKLOAD_RUNNING, now=self._now())
         return True

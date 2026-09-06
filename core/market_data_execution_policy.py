@@ -10,6 +10,7 @@ from config.market_data import MARKET_DATA_V2_EXECUTION_POLICY
 @dataclass(frozen=True)
 class MarketDataExecutionPolicy:
     quota_reserve_requests: int
+    quota_resume_headroom_requests: int
     quota_refresh_every_requests: int
     quota_poll_seconds: float
     max_retryable_attempts: int
@@ -35,6 +36,7 @@ def get_market_data_execution_policy() -> MarketDataExecutionPolicy:
     raw = _require_mapping(MARKET_DATA_V2_EXECUTION_POLICY)
     try:
         quota_reserve_requests = int(raw["quota_reserve_requests"])
+        quota_resume_headroom_requests = int(raw["quota_resume_headroom_requests"])
         quota_refresh_every_requests = int(raw["quota_refresh_every_requests"])
         quota_poll_seconds = float(raw["quota_poll_seconds"])
         max_retryable_attempts = int(raw["max_retryable_attempts"])
@@ -47,6 +49,8 @@ def get_market_data_execution_policy() -> MarketDataExecutionPolicy:
 
     if quota_reserve_requests < 0:
         raise ValueError("quota_reserve_requests 不得 < 0")
+    if quota_resume_headroom_requests <= 0:
+        raise ValueError("quota_resume_headroom_requests 必須 > 0")
     if quota_refresh_every_requests <= 0:
         raise ValueError("quota_refresh_every_requests 必須 > 0")
     if quota_poll_seconds <= 0:
@@ -66,6 +70,7 @@ def get_market_data_execution_policy() -> MarketDataExecutionPolicy:
 
     return MarketDataExecutionPolicy(
         quota_reserve_requests=quota_reserve_requests,
+        quota_resume_headroom_requests=quota_resume_headroom_requests,
         quota_refresh_every_requests=quota_refresh_every_requests,
         quota_poll_seconds=quota_poll_seconds,
         max_retryable_attempts=max_retryable_attempts,
