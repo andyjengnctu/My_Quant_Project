@@ -317,11 +317,11 @@ def validate_downloader_main_error_path_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    downloader_application = importlib.import_module("services.downloader.application")
+    market_data_update = importlib.import_module("services.trading.market_data_update")
     stderr = io.StringIO()
     with patch.object(
-        downloader_application,
-        "run_trading_dataset_update",
+        market_data_update,
+        "run_trading_market_data_update",
         side_effect=RuntimeError(
             "VIP 資料庫更新失敗：成功 0 檔、已最新跳過 0 檔、最後日期檢查失敗 1 檔、下載失敗 2 檔；"
             "詳細請見 outputs/smart_downloader/downloader_issues_20260402.log"
