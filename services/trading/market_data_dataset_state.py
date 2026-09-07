@@ -1,7 +1,7 @@
 """Persistent dataset-level operational state for Trading Market Data V2."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -15,9 +15,13 @@ from core.market_data_due_planner import (
 from core.market_data_freshness_contract import (
     EXPECTED_DATE_NONE,
     EXPECTED_DATE_PERIOD_DUE,
+    FRESHNESS_STATUS_BLOCKED,
+    FRESHNESS_STATUS_ERROR,
     FRESHNESS_STATUS_NOT_APPLICABLE,
     FRESHNESS_STATUS_READY,
+    FRESHNESS_STATUS_STALE,
     FRESHNESS_STATUS_WAIT_PUBLISH,
+    FRESHNESS_STATUS_WAIT_QUOTA,
     ROW_EXPECTATION_OPTIONAL,
     get_market_data_freshness_contracts,
 )
@@ -45,6 +49,10 @@ def _empty_dataset_row() -> dict[str, object]:
         "next_check_at": None,
         "schema_status": VALIDATION_STATUS_UNKNOWN,
         "coverage_status": VALIDATION_STATUS_NOT_EVALUATED,
+        "publication_retry_count": 0,
+        "quota_defer_count": 0,
+        "error_retry_count": 0,
+        "last_attempt_result": None,
         "last_error": None,
     }
 
@@ -144,6 +152,8 @@ def record_market_data_sync_success(
         if dataset not in attempted:
             continue
         row = dict(datasets[dataset])
+        prior_attempt_target = str(row.get("last_attempt_target_date") or "")
+        prior_publication_retry_count = int(row.get("publication_retry_count") or 0)
         evidence = observed.get(dataset) if isinstance(observed.get(dataset), Mapping) else {}
         row_count = int(evidence.get("row_count") or 0)
         observed_max = str(evidence.get("observed_max_date") or "").strip() or None
@@ -176,14 +186,20 @@ def record_market_data_sync_success(
         else:
             ready = bool(observed_max and observed_max >= str(target_date))
 
+        row["last_attempt_result"] = "SUCCESS"
+        row["quota_defer_count"] = 0
+        row["error_retry_count"] = 0
         if ready:
             row["status"] = FRESHNESS_STATUS_READY
             row["last_ready_at"] = finished_at.isoformat()
             row["last_ready_target_date"] = str(target_date)
             row["next_check_at"] = None
+            row["publication_retry_count"] = 0
             row["last_error"] = None
         else:
+            prior_count = prior_publication_retry_count if prior_attempt_target == str(target_date) else 0
             row["status"] = FRESHNESS_STATUS_WAIT_PUBLISH
+            row["publication_retry_count"] = prior_count + 1
             row["next_check_at"] = None
             row["last_error"] = "sync requests completed but target-date freshness evidence is not yet present"
         datasets[dataset] = row
@@ -198,6 +214,107 @@ def record_market_data_sync_success(
     )
 
 
+
+def schedule_market_data_auto_update_outcomes(
+    project_root,
+    *,
+    target_date: str,
+    now: datetime,
+    publication_retry_minutes: tuple[int, ...],
+    max_publication_retries: int,
+    quota_defer_minutes: int,
+    error_defer_minutes: int,
+    wait_publish_datasets: Iterable[str] = (),
+    wait_quota_datasets: Iterable[str] = (),
+    error_datasets: Iterable[str] = (),
+    blocked_datasets: Iterable[str] = (),
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    """Persist auto-updater retry/defer outcomes without making provider calls."""
+
+    state = load_market_data_dataset_state(project_root, required=False)
+    if state is None:
+        state = build_initial_market_data_dataset_state(updated_at=now)
+    datasets = {key: dict(value) for key, value in dict(state["datasets"]).items()}
+    known = set(datasets)
+    groups = {
+        "wait_publish": {str(item) for item in wait_publish_datasets},
+        "wait_quota": {str(item) for item in wait_quota_datasets},
+        "error": {str(item) for item in error_datasets},
+        "blocked": {str(item) for item in blocked_datasets},
+    }
+    unknown = set().union(*groups.values()) - known
+    if unknown:
+        raise ValueError(f"auto update outcome 含未知 dataset: {sorted(unknown)}")
+    overlaps: dict[str, set[str]] = {}
+    names = tuple(groups)
+    for index, left in enumerate(names):
+        for right in names[index + 1 :]:
+            common = groups[left] & groups[right]
+            if common:
+                overlaps[f"{left}/{right}"] = common
+    if overlaps:
+        raise ValueError(f"auto update outcome dataset 重複分類: {overlaps}")
+    if max_publication_retries < 1 or len(publication_retry_minutes) < max_publication_retries:
+        raise ValueError("publication retry policy 不合法")
+
+    for dataset in groups["wait_publish"]:
+        row = dict(datasets[dataset])
+        count = int(row.get("publication_retry_count") or 0)
+        row["last_attempt_at"] = now.isoformat()
+        row["last_attempt_target_date"] = str(target_date)
+        row["last_attempt_result"] = "WAIT_PUBLISH"
+        if count > max_publication_retries:
+            row["status"] = FRESHNESS_STATUS_STALE
+            row["next_check_at"] = None
+            row["last_error"] = f"publication retry exhausted: {max_publication_retries} retries after initial attempt"
+        else:
+            delay = int(publication_retry_minutes[min(max(count - 1, 0), len(publication_retry_minutes) - 1)])
+            row["status"] = FRESHNESS_STATUS_WAIT_PUBLISH
+            row["next_check_at"] = (now + timedelta(minutes=delay)).isoformat()
+            row["last_error"] = "provider target-date freshness evidence not yet present"
+        datasets[dataset] = row
+
+    for dataset in groups["wait_quota"]:
+        row = dict(datasets[dataset])
+        row["status"] = FRESHNESS_STATUS_WAIT_QUOTA
+        row["last_attempt_at"] = now.isoformat()
+        row["last_attempt_target_date"] = str(target_date)
+        row["last_attempt_result"] = "WAIT_QUOTA"
+        row["quota_defer_count"] = int(row.get("quota_defer_count") or 0) + 1
+        row["next_check_at"] = (now + timedelta(minutes=int(quota_defer_minutes))).isoformat()
+        row["last_error"] = "provider quota insufficient; deferred by one-shot updater"
+        datasets[dataset] = row
+
+    for dataset in groups["error"]:
+        row = dict(datasets[dataset])
+        row["status"] = FRESHNESS_STATUS_ERROR
+        row["last_attempt_at"] = now.isoformat()
+        row["last_attempt_target_date"] = str(target_date)
+        row["last_attempt_result"] = "ERROR"
+        row["error_retry_count"] = int(row.get("error_retry_count") or 0) + 1
+        row["next_check_at"] = (now + timedelta(minutes=int(error_defer_minutes))).isoformat()
+        row["last_error"] = str(error_message or "automatic updater error")
+        datasets[dataset] = row
+
+    for dataset in groups["blocked"]:
+        row = dict(datasets[dataset])
+        row["status"] = FRESHNESS_STATUS_BLOCKED
+        row["last_attempt_at"] = now.isoformat()
+        row["last_attempt_target_date"] = str(target_date)
+        row["last_attempt_result"] = "BLOCKED"
+        row["next_check_at"] = None
+        row["last_error"] = str(error_message or "automatic updater blocked")
+        datasets[dataset] = row
+
+    return publish_market_data_dataset_state(
+        project_root,
+        {
+            **{key: value for key, value in state.items() if key not in {"state_fingerprint", "datasets", "updated_at"}},
+            "updated_at": now.isoformat(),
+            "datasets": datasets,
+        },
+    )
 
 
 def refresh_market_data_due_state(
@@ -285,6 +402,7 @@ __all__ = [
     "load_market_data_dataset_state",
     "publish_market_data_dataset_state",
     "record_market_data_sync_success",
+    "schedule_market_data_auto_update_outcomes",
     "refresh_market_data_due_state",
     "build_market_data_due_plan",
     "build_market_data_dataset_state_read_model",

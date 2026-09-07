@@ -1,0 +1,293 @@
+"""One-shot automatic updater for Trading Market Data V2 due datasets.
+
+The worker is intentionally scheduler-friendly: it performs a local due-plan first
+and does not resolve a FinMind token/client when no dataset is due.  Windows Task
+Scheduler may therefore wake it frequently without consuming provider quota.
+"""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+import json
+import os
+from pathlib import Path
+from typing import Callable
+from uuid import uuid4
+
+from core.market_data_auto_update_policy import get_market_data_auto_update_policy
+from core.market_data_freshness_contract import (
+    FRESHNESS_STATUS_READY,
+    FRESHNESS_STATUS_WAIT_PUBLISH,
+)
+from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_auto_update_lock_path
+from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError
+from services.downloader.market_data_ledger import WORKLOAD_BLOCKED, WORKLOAD_WAIT_QUOTA
+from services.downloader.market_data_trading_sync import sync_market_data_v2_due_datasets
+from services.trading.market_data_dataset_state import (
+    build_market_data_due_plan,
+    load_market_data_dataset_state,
+    refresh_market_data_due_state,
+    schedule_market_data_auto_update_outcomes,
+)
+from services.trading.market_data_state import load_trading_market_data_snapshot
+from services.trading.market_data_v2_state import publish_trading_market_data_v2_auto_rollup
+
+AUTO_UPDATE_STATUS_NO_TARGET = "NO_TARGET"
+AUTO_UPDATE_STATUS_NO_DUE = "NO_DUE"
+AUTO_UPDATE_STATUS_DISABLED = "DISABLED"
+AUTO_UPDATE_STATUS_BUSY = "BUSY"
+AUTO_UPDATE_STATUS_UPDATED = "UPDATED"
+AUTO_UPDATE_STATUS_DEFERRED = "DEFERRED"
+AUTO_UPDATE_STATUS_BLOCKED = "BLOCKED"
+
+
+def _local_now(now_fn: Callable[[], datetime] | None) -> datetime:
+    value = now_fn() if now_fn is not None else datetime.now().astimezone()
+    if value.tzinfo is None:
+        return value.astimezone()
+    return value
+
+
+def _resolve_target_date(project_root: Path, explicit: str | None) -> str | None:
+    if explicit:
+        return str(explicit)
+    snapshot = load_trading_market_data_snapshot(project_root, required=False, verify_dataset_content=False)
+    if snapshot is None:
+        return None
+    return str(snapshot.get("market_date") or "") or None
+
+
+def _next_check_at(plan) -> str | None:
+    values = [str(item.next_check_at) for item in plan.decisions if item.next_check_at]
+    return min(values) if values else None
+
+
+@contextmanager
+def _auto_update_lock(project_root: Path, *, now: datetime, lease_minutes: int):
+    path = resolve_trading_market_data_v2_auto_update_lock_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    owner = f"auto-{uuid4().hex}"
+    payload = {"owner": owner, "acquired_at": now.isoformat(), "lease_until": (now + timedelta(minutes=lease_minutes)).isoformat()}
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                lease_until = datetime.fromisoformat(str(existing.get("lease_until") or ""))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                lease_until = now - timedelta(seconds=1)
+            if lease_until.tzinfo is None:
+                lease_until = lease_until.replace(tzinfo=now.tzinfo)
+            if lease_until > now:
+                yield False
+                return
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            break
+    try:
+        yield True
+    finally:
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            current = {}
+        if str(current.get("owner") or "") == owner:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def run_trading_market_data_auto_update(
+    *,
+    project_root: str | Path,
+    target_date: str | None = None,
+    token: str | None = None,
+    client: FinMindHttpClient | None = None,
+    sink=None,
+    now_fn: Callable[[], datetime] | None = None,
+    sleep_fn: Callable[[float], None] | None = None,
+) -> dict[str, object]:
+    """Run exactly one scheduler-safe auto-update iteration."""
+
+    root = Path(project_root).resolve()
+    policy = get_market_data_auto_update_policy()
+    now = _local_now(now_fn)
+    if not policy.enabled:
+        return {"status": AUTO_UPDATE_STATUS_DISABLED, "provider_requests_required": False, "data_requests": 0, "usage_requests": 0}
+
+    resolved_target = _resolve_target_date(root, target_date)
+    if not resolved_target:
+        return {"status": AUTO_UPDATE_STATUS_NO_TARGET, "provider_requests_required": False, "data_requests": 0, "usage_requests": 0, "next_check_at": None}
+
+    with _auto_update_lock(root, now=now, lease_minutes=policy.worker_lock_minutes) as acquired:
+        if not acquired:
+            return {"status": AUTO_UPDATE_STATUS_BUSY, "target_date": resolved_target, "provider_requests_required": False, "data_requests": 0, "usage_requests": 0}
+
+        plan, _state = refresh_market_data_due_state(root, target_date=resolved_target, now=now)
+        due = tuple(plan.due_datasets)
+        if not due:
+            return {
+                "status": AUTO_UPDATE_STATUS_NO_DUE,
+                "target_date": resolved_target,
+                "provider_requests_required": False,
+                "due_dataset_count": 0,
+                "due_datasets": (),
+                "data_requests": 0,
+                "usage_requests": 0,
+                "next_check_at": _next_check_at(plan),
+            }
+
+        if client is None:
+            if token is None:
+                from services.downloader import runtime as downloader_runtime
+
+                token = downloader_runtime.resolve_finmind_api_token(project_root=root)
+            client = FinMindHttpClient(token=str(token or ""))
+
+        try:
+            batch = sync_market_data_v2_due_datasets(
+                project_root=root,
+                target_date=resolved_target,
+                token=str(token or ""),
+                due_datasets=due,
+                client=client,
+                sink=sink,
+                now_fn=now_fn,
+                sleep_fn=sleep_fn,
+            )
+        except (FinMindHttpError, OSError, ValueError, RuntimeError, ImportError) as exc:
+            schedule_market_data_auto_update_outcomes(
+                root,
+                target_date=resolved_target,
+                now=now,
+                publication_retry_minutes=policy.publication_retry_minutes,
+                max_publication_retries=policy.max_publication_retries,
+                quota_defer_minutes=policy.quota_defer_minutes,
+                error_defer_minutes=policy.error_defer_minutes,
+                error_datasets=due,
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+            post = build_market_data_due_plan(root, target_date=resolved_target, now=now)
+            publish_trading_market_data_v2_auto_rollup(root, target_date=resolved_target, updated_at=now, batch_result=None)
+            return {
+                "status": AUTO_UPDATE_STATUS_DEFERRED,
+                "target_date": resolved_target,
+                "provider_requests_required": True,
+                "due_dataset_count": len(due),
+                "due_datasets": due,
+                "data_requests": int(getattr(client, "data_request_count", 0)),
+                "usage_requests": int(getattr(client, "usage_request_count", 0)),
+                "error": f"{type(exc).__name__}: {exc}",
+                "next_check_at": _next_check_at(post),
+            }
+
+        completed = set(batch.get("completed_datasets") or ())
+        incomplete = set(batch.get("incomplete_datasets") or ())
+        current_state = load_market_data_dataset_state(root, required=True)
+        rows = dict(current_state["datasets"])
+        wait_publish = {
+            dataset
+            for dataset in completed
+            if str(dict(rows.get(dataset) or {}).get("status") or "") == FRESHNESS_STATUS_WAIT_PUBLISH
+        }
+        if wait_publish:
+            schedule_market_data_auto_update_outcomes(
+                root,
+                target_date=resolved_target,
+                now=now,
+                publication_retry_minutes=policy.publication_retry_minutes,
+                max_publication_retries=policy.max_publication_retries,
+                quota_defer_minutes=policy.quota_defer_minutes,
+                error_defer_minutes=policy.error_defer_minutes,
+                wait_publish_datasets=wait_publish,
+            )
+
+        workload_status = str(batch.get("status") or "")
+        if incomplete:
+            if workload_status == WORKLOAD_WAIT_QUOTA:
+                schedule_market_data_auto_update_outcomes(
+                    root,
+                    target_date=resolved_target,
+                    now=now,
+                    publication_retry_minutes=policy.publication_retry_minutes,
+                    max_publication_retries=policy.max_publication_retries,
+                    quota_defer_minutes=policy.quota_defer_minutes,
+                    error_defer_minutes=policy.error_defer_minutes,
+                    wait_quota_datasets=incomplete,
+                )
+            elif workload_status in {WORKLOAD_BLOCKED, "NOT_BOOTSTRAPPED"} or int(batch.get("blocked") or 0) > 0:
+                schedule_market_data_auto_update_outcomes(
+                    root,
+                    target_date=resolved_target,
+                    now=now,
+                    publication_retry_minutes=policy.publication_retry_minutes,
+                    max_publication_retries=policy.max_publication_retries,
+                    quota_defer_minutes=policy.quota_defer_minutes,
+                    error_defer_minutes=policy.error_defer_minutes,
+                    blocked_datasets=incomplete,
+                    error_message="automatic due batch blocked",
+                )
+            else:
+                schedule_market_data_auto_update_outcomes(
+                    root,
+                    target_date=resolved_target,
+                    now=now,
+                    publication_retry_minutes=policy.publication_retry_minutes,
+                    max_publication_retries=policy.max_publication_retries,
+                    quota_defer_minutes=policy.quota_defer_minutes,
+                    error_defer_minutes=policy.error_defer_minutes,
+                    error_datasets=incomplete,
+                    error_message=f"automatic due batch incomplete: {workload_status}",
+                )
+
+        final_state = load_market_data_dataset_state(root, required=True)
+        final_rows = dict(final_state["datasets"])
+        ready_count = sum(
+            str(dict(row or {}).get("last_ready_target_date") or "") >= resolved_target
+            for row in final_rows.values()
+        )
+        rollup = publish_trading_market_data_v2_auto_rollup(root, target_date=resolved_target, updated_at=now, batch_result=batch)
+        post_plan = build_market_data_due_plan(root, target_date=resolved_target, now=now)
+        overall = AUTO_UPDATE_STATUS_UPDATED if ready_count == len(final_rows) else AUTO_UPDATE_STATUS_DEFERRED
+        if any(str(dict(final_rows.get(name) or {}).get("status") or "") == "BLOCKED" for name in due):
+            overall = AUTO_UPDATE_STATUS_BLOCKED
+        return {
+            "status": overall,
+            "target_date": resolved_target,
+            "provider_requests_required": True,
+            "due_dataset_count": len(due),
+            "due_datasets": due,
+            "completed_datasets": tuple(sorted(completed)),
+            "incomplete_datasets": tuple(sorted(incomplete)),
+            "ready_dataset_count": int(ready_count),
+            "dataset_count": len(final_rows),
+            "request_count": int(batch.get("request_count") or 0),
+            "done": int(batch.get("done") or 0),
+            "data_requests": int(batch.get("process_data_requests") or 0),
+            "usage_requests": int(batch.get("process_usage_requests") or 0),
+            "next_check_at": _next_check_at(post_plan),
+            "archive_status": None if rollup is None else rollup.get("status"),
+            "batch_fingerprint": batch.get("batch_fingerprint"),
+        }
+
+
+__all__ = [
+    "AUTO_UPDATE_STATUS_NO_TARGET",
+    "AUTO_UPDATE_STATUS_NO_DUE",
+    "AUTO_UPDATE_STATUS_DISABLED",
+    "AUTO_UPDATE_STATUS_BUSY",
+    "AUTO_UPDATE_STATUS_UPDATED",
+    "AUTO_UPDATE_STATUS_DEFERRED",
+    "AUTO_UPDATE_STATUS_BLOCKED",
+    "run_trading_market_data_auto_update",
+]

@@ -14,9 +14,11 @@ from zoneinfo import ZoneInfo
 
 from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
 from core.market_data_freshness_contract import (
+    FRESHNESS_STATUS_BLOCKED,
     FRESHNESS_STATUS_DUE,
     FRESHNESS_STATUS_ERROR,
     FRESHNESS_STATUS_READY,
+    FRESHNESS_STATUS_STALE,
     FRESHNESS_STATUS_WAIT_PUBLISH,
     FRESHNESS_STATUS_WAIT_QUOTA,
     MarketDataFreshnessContract,
@@ -144,9 +146,27 @@ def plan_market_data_due_datasets(
         persisted_next = str(item.get("next_check_at") or "").strip()
         persisted_status = str(item.get("status") or "").strip()
         attempt_target = str(item.get("last_attempt_target_date") or "").strip()
+        if attempt_target == target_text and persisted_status in {FRESHNESS_STATUS_STALE, FRESHNESS_STATUS_BLOCKED}:
+            decisions.append(
+                MarketDataDueDecision(
+                    dataset=contract.dataset,
+                    status=persisted_status,
+                    due=False,
+                    expected_publish_at=expected_publish.isoformat(),
+                    latest_expected_date=latest_expected,
+                    next_check_at=None,
+                    reason="persisted_terminal_status",
+                )
+            )
+            continue
+
         if (
             attempt_target == target_text
-            and persisted_status in {FRESHNESS_STATUS_WAIT_QUOTA, FRESHNESS_STATUS_ERROR}
+            and persisted_status in {
+                FRESHNESS_STATUS_WAIT_PUBLISH,
+                FRESHNESS_STATUS_WAIT_QUOTA,
+                FRESHNESS_STATUS_ERROR,
+            }
             and persisted_next
         ):
             try:

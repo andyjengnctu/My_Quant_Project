@@ -1385,6 +1385,18 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     add_check(results, "market_data", case_id, "trading_manifest_covers_every_included_dataset", {spec.dataset for spec in specs}, {request.dataset for request in manifest_a.requests})
     add_check(results, "market_data", case_id, "trading_manifest_never_expands_to_historical_stock_universe", True, all(request.data_id is None or request.data_id in next(spec for spec in specs if spec.dataset == request.dataset).fixed_data_ids for request in manifest_a.requests))
     add_check(results, "market_data", case_id, "trading_policy_is_non_blocking_for_current_execution", False, policy.execution_fail_closed)
+    selective_manifest = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"TaiwanStockPrice", "TaiwanStockPER"},
+        previous_ready_dates_by_dataset={"TaiwanStockPrice": "2026-09-04", "TaiwanStockPER": "2026-09-04"},
+    )
+    add_check(results, "market_data", case_id, "selective_due_manifest_keeps_full_registry_identity", manifest_a.registry_fingerprint, selective_manifest.registry_fingerprint)
+    add_check(results, "market_data", case_id, "selective_due_manifest_only_contains_due_datasets", {"TaiwanStockPrice", "TaiwanStockPER"}, {request.dataset for request in selective_manifest.requests})
+    add_check(results, "market_data", case_id, "selective_due_manifest_is_smaller_than_full_daily_manifest", True, 0 < selective_manifest.total_requests < manifest_a.total_requests)
 
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -1518,6 +1530,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         load_market_data_dataset_state,
         record_market_data_sync_success,
         refresh_market_data_due_state,
+        schedule_market_data_auto_update_outcomes,
     )
 
     with TemporaryDirectory() as state_temp_dir:
@@ -1638,6 +1651,156 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         )
         add_check(results, "market_data", case_id, "required_daily_missing_target_evidence_waits_publish", "WAIT_PUBLISH", stale_state["datasets"]["TaiwanStockPrice"]["status"])
         add_check(results, "market_data", case_id, "required_daily_missing_target_does_not_advance_ready_target", None, stale_state["datasets"]["TaiwanStockPrice"]["last_ready_target_date"])
+        from core.market_data_auto_update_policy import get_market_data_auto_update_policy
+        auto_policy = get_market_data_auto_update_policy()
+        retry_state = schedule_market_data_auto_update_outcomes(
+            Path(stale_temp_dir),
+            target_date="2026-09-07",
+            now=state_now,
+            publication_retry_minutes=auto_policy.publication_retry_minutes,
+            max_publication_retries=auto_policy.max_publication_retries,
+            quota_defer_minutes=auto_policy.quota_defer_minutes,
+            error_defer_minutes=auto_policy.error_defer_minutes,
+            wait_publish_datasets={"TaiwanStockPrice"},
+        )
+        add_check(results, "market_data", case_id, "publication_retry_uses_first_backoff_after_first_stale_attempt", "2026-09-08T02:15:00+08:00", retry_state["datasets"]["TaiwanStockPrice"]["next_check_at"])
+        before_retry = plan_market_data_due_datasets(
+            target_date="2026-09-07",
+            now=datetime(2026, 9, 8, 2, 10, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=retry_state,
+            contracts=(by_dataset["TaiwanStockPrice"],),
+        )
+        after_retry = plan_market_data_due_datasets(
+            target_date="2026-09-07",
+            now=datetime(2026, 9, 8, 2, 16, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=retry_state,
+            contracts=(by_dataset["TaiwanStockPrice"],),
+        )
+        add_check(results, "market_data", case_id, "publication_retry_backoff_suppresses_early_provider_call", (), before_retry.due_datasets)
+        add_check(results, "market_data", case_id, "publication_retry_becomes_due_after_next_check", ("TaiwanStockPrice",), after_retry.due_datasets)
+
+    from services.trading.market_data_auto_update import run_trading_market_data_auto_update
+    with TemporaryDirectory() as auto_no_due_dir:
+        auto_root = Path(auto_no_due_dir)
+        record_market_data_sync_success(
+            auto_root,
+            target_date="2026-09-07",
+            finished_at=state_now,
+            observations=observations,
+        )
+        class _AutoNoCallClient:
+            data_request_count = 0
+            usage_request_count = 0
+            def __getattr__(self, name):
+                raise AssertionError(f"NO_DUE 不得呼叫 provider: {name}")
+        auto_no_due = run_trading_market_data_auto_update(
+            project_root=auto_root,
+            target_date="2026-09-07",
+            client=_AutoNoCallClient(),
+            now_fn=lambda: datetime(2026, 9, 8, 2, 5, tzinfo=ZoneInfo("Asia/Taipei")),
+        )
+        add_check(results, "market_data", case_id, "auto_updater_no_due_consumes_zero_data_requests", 0, auto_no_due["data_requests"])
+        add_check(results, "market_data", case_id, "auto_updater_no_due_consumes_zero_usage_requests", 0, auto_no_due["usage_requests"])
+        add_check(results, "market_data", case_id, "auto_updater_no_due_reports_provider_not_required", False, auto_no_due["provider_requests_required"])
+
+    with TemporaryDirectory() as auto_quota_dir:
+        auto_root = Path(auto_quota_dir)
+        provider_path = resolve_market_data_provider_snapshot_path(auto_root, "b" * 64)
+        atomic_write_json(provider_path, provider_payload)
+        quota_client = _QuotaFullClient()
+        auto_sleep_calls = []
+        auto_quota = run_trading_market_data_auto_update(
+            project_root=auto_root,
+            target_date="2026-09-07",
+            client=quota_client,
+            sink=_NoCommitSink(),
+            now_fn=lambda: datetime(2026, 9, 8, 2, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            sleep_fn=lambda seconds: auto_sleep_calls.append(float(seconds)),
+        )
+        quota_state = load_market_data_dataset_state(auto_root, required=True)
+        add_check(results, "market_data", case_id, "auto_updater_quota_defer_uses_one_usage_probe", 1, quota_client.usage_request_count)
+        add_check(results, "market_data", case_id, "auto_updater_quota_defer_consumes_zero_data_requests", 0, quota_client.data_request_count)
+        add_check(results, "market_data", case_id, "auto_updater_quota_defer_never_sleeps_scheduler_worker", [], auto_sleep_calls)
+        add_check(results, "market_data", case_id, "auto_updater_quota_defer_persists_wait_quota", "WAIT_QUOTA", quota_state["datasets"]["TaiwanStockPrice"]["status"])
+        add_check(results, "market_data", case_id, "auto_updater_quota_defer_schedules_next_check", "2026-09-08T02:15:00+08:00", quota_state["datasets"]["TaiwanStockPrice"]["next_check_at"])
+
+    with TemporaryDirectory() as auto_success_dir:
+        auto_root = Path(auto_success_dir)
+        provider_path = resolve_market_data_provider_snapshot_path(auto_root, "b" * 64)
+        atomic_write_json(provider_path, provider_payload)
+        ready_state = record_market_data_sync_success(
+            auto_root,
+            target_date="2026-09-07",
+            finished_at=state_now,
+            observations=observations,
+        )
+        from services.trading.market_data_dataset_state import publish_market_data_dataset_state
+        reset_datasets = {key: dict(value) for key, value in ready_state["datasets"].items()}
+        reset_row = reset_datasets["TaiwanStockTradingDate"]
+        reset_row.update({
+            "status": "NOT_APPLICABLE",
+            "last_attempt_at": None,
+            "last_attempt_target_date": None,
+            "last_success_at": None,
+            "last_success_target_date": None,
+            "last_ready_at": None,
+            "last_ready_target_date": None,
+            "latest_data_date": None,
+            "next_check_at": None,
+        })
+        publish_market_data_dataset_state(
+            auto_root,
+            {
+                **{key: value for key, value in ready_state.items() if key not in {"state_fingerprint", "datasets", "updated_at"}},
+                "updated_at": state_now.isoformat(),
+                "datasets": reset_datasets,
+            },
+        )
+        from services.downloader.market_data_executor import MarketDataCommitReceipt
+        class _AutoSuccessClient:
+            def __init__(self):
+                self.data_request_count = 0
+                self.usage_request_count = 0
+            def get_usage(self):
+                self.usage_request_count += 1
+                return FinMindUsage(user_count=0, api_request_limit=1600)
+            def get_data(self, **_kwargs):
+                self.data_request_count += 1
+                return pd.DataFrame({"date": ["2026-09-07"]})
+        class _AutoSuccessSink:
+            def __init__(self):
+                self.calls = 0
+            def validate_activation_readiness(self):
+                return None
+            def recover_committed(self, _request):
+                return None
+            def __call__(self, _request, frame):
+                self.calls += 1
+                return MarketDataCommitReceipt(committed=True, row_count=len(frame), content_sha256="d" * 64)
+            def dataset_observations(self):
+                return {
+                    "TaiwanStockTradingDate": {
+                        "request_count": self.calls,
+                        "nonempty_request_count": self.calls,
+                        "row_count": self.calls,
+                        "observed_min_date": "2026-09-07",
+                        "observed_max_date": "2026-09-07",
+                    }
+                }
+        success_client = _AutoSuccessClient()
+        success_result = run_trading_market_data_auto_update(
+            project_root=auto_root,
+            target_date="2026-09-07",
+            client=success_client,
+            sink=_AutoSuccessSink(),
+            now_fn=lambda: datetime(2026, 9, 7, 18, 20, tzinfo=ZoneInfo("Asia/Taipei")),
+        )
+        success_state = load_market_data_dataset_state(auto_root, required=True)
+        add_check(results, "market_data", case_id, "auto_updater_executes_only_single_due_dataset", ("TaiwanStockTradingDate",), success_result["due_datasets"])
+        add_check(results, "market_data", case_id, "auto_updater_single_due_dataset_uses_one_data_request", 1, success_client.data_request_count)
+        add_check(results, "market_data", case_id, "auto_updater_single_due_dataset_uses_one_usage_request", 1, success_client.usage_request_count)
+        add_check(results, "market_data", case_id, "auto_updater_success_advances_dataset_ready", "READY", success_state["datasets"]["TaiwanStockTradingDate"]["status"])
+        add_check(results, "market_data", case_id, "auto_updater_all_ready_rolls_archive_synced", "SYNCED", success_result["archive_status"])
 
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")

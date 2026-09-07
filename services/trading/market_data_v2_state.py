@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+
+from core.console_report import project_relative_display_path
 from typing import Any
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
@@ -141,6 +143,65 @@ def publish_trading_market_data_v2_failure(
     return publish_trading_market_data_v2_state(project_root, payload)
 
 
+def publish_trading_market_data_v2_auto_rollup(
+    project_root,
+    *,
+    target_date: str,
+    updated_at: datetime,
+    batch_result: dict[str, object] | None = None,
+) -> dict[str, Any] | None:
+    """Roll dataset-level auto-update truth into the aggregate Trading V2 state."""
+
+    previous = load_trading_market_data_v2_state(project_root, required=False)
+    if previous is not None and previous.get("base_provider_snapshot_fingerprint"):
+        provider = find_ready_provider_snapshot_by_fingerprint(
+            project_root, str(previous["base_provider_snapshot_fingerprint"])
+        )
+        if provider is None:
+            raise RuntimeError("Trading V2 auto rollup 已 pin 的 Provider Snapshot 不存在或不合法")
+    else:
+        provider = find_latest_ready_provider_snapshot(project_root)
+    if provider is None:
+        return None
+    provider_path, provider_payload = provider
+    from services.trading.market_data_dataset_state import load_market_data_dataset_state
+
+    dataset_state = load_market_data_dataset_state(project_root, required=False)
+    rows = dict((dataset_state or {}).get("datasets") or {})
+    ready = [
+        dataset
+        for dataset, raw in rows.items()
+        if str(dict(raw or {}).get("last_ready_target_date") or "") >= str(target_date)
+    ]
+    total = len(rows)
+    all_ready = bool(total and len(ready) == total)
+    base = {
+        key: value
+        for key, value in dict(previous or {}).items()
+        if key not in {"schema_version", "state_fingerprint", "status", "last_error", "updated_at"}
+    }
+    result = dict(batch_result or {})
+    payload = {
+        **base,
+        "status": TRADING_V2_ARCHIVE_STATUS_SYNCED if all_ready else TRADING_V2_ARCHIVE_STATUS_STALE,
+        "base_provider_snapshot_fingerprint": provider_payload.get("snapshot_fingerprint"),
+        "base_provider_manifest_fingerprint": provider_payload.get("manifest_fingerprint"),
+        "base_provider_snapshot_path": project_relative_display_path(provider_path, project_root=Path(project_root).resolve()),
+        "base_as_of_date": provider_payload.get("as_of_date"),
+        "last_attempt_target_date": str(target_date),
+        "latest_sync_target_date": str(target_date) if all_ready else base.get("latest_sync_target_date"),
+        "latest_auto_batch_fingerprint": result.get("batch_fingerprint"),
+        "latest_auto_request_count": int(result.get("request_count") or 0),
+        "latest_auto_data_requests": int(result.get("process_data_requests") or 0),
+        "latest_auto_usage_requests": int(result.get("process_usage_requests") or 0),
+        "ready_dataset_count": len(ready),
+        "pending_dataset_count": max(0, total - len(ready)),
+        "last_error": None if all_ready else "dataset-level auto update 尚有未 READY dataset",
+        "updated_at": updated_at.isoformat(),
+    }
+    return publish_trading_market_data_v2_state(project_root, payload)
+
+
 def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
     provider = find_latest_ready_provider_snapshot(project_root)
     state = load_trading_market_data_v2_state(project_root, required=False)
@@ -209,5 +270,6 @@ __all__ = [
     "load_trading_market_data_v2_state",
     "publish_trading_market_data_v2_state",
     "publish_trading_market_data_v2_failure",
+    "publish_trading_market_data_v2_auto_rollup",
     "build_trading_market_data_v2_read_model",
 ]

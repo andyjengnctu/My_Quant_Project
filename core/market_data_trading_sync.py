@@ -141,11 +141,27 @@ def build_trading_sync_request_manifest(
     target_date: str,
     previous_sync_date: str | None,
     policy: MarketDataTradingSyncPolicy,
+    selected_datasets: Iterable[str] | None = None,
+    previous_ready_dates_by_dataset: Mapping[str, str | None] | None = None,
 ) -> TradingSyncRequestManifest:
     included = tuple(spec for spec in specs if spec.included)
     if not included:
         raise ValueError("Trading Market Data V2 沒有 included dataset")
     validate_market_data_freshness_contracts(specs=included)
+    included_names = {spec.dataset for spec in included}
+    if selected_datasets is None:
+        selected_names = included_names
+    else:
+        selected_names = {str(item) for item in selected_datasets}
+        unknown = selected_names - included_names
+        if unknown:
+            raise ValueError(f"Trading V2 selected_datasets 含未知 dataset: {sorted(unknown)}")
+        if not selected_names:
+            raise ValueError("Trading V2 selected_datasets 不可為空")
+    previous_by_dataset = dict(previous_ready_dates_by_dataset or {})
+    unknown_previous = set(previous_by_dataset) - included_names
+    if unknown_previous:
+        raise ValueError(f"Trading V2 previous_ready_dates_by_dataset 含未知 dataset: {sorted(unknown_previous)}")
     target_text = _iso(target_date, field="target_date")
     target = date.fromisoformat(target_text)
     base_as_of = _iso(provider_snapshot.get("as_of_date"), field="provider_snapshot.as_of_date")
@@ -168,11 +184,21 @@ def build_trading_sync_request_manifest(
         raise ValueError("Trading V2 current dataset registry 與 provider snapshot registry 已 drift；禁止自動 sync")
 
     requests: list[BootstrapHttpRequest] = []
-    incremental_start = (date.fromisoformat(previous_text or base_as_of) + timedelta(days=1))
     recent_start = target - timedelta(days=policy.recent_repair_calendar_days - 1)
     event_start = target - timedelta(days=policy.event_repair_calendar_days - 1)
 
     for spec in included:
+        if spec.dataset not in selected_names:
+            continue
+        dataset_previous = previous_text
+        if previous_by_dataset:
+            raw_previous = previous_by_dataset.get(spec.dataset)
+            dataset_previous = _iso(raw_previous, field=f"previous_ready_dates_by_dataset[{spec.dataset}]") if raw_previous else None
+            if dataset_previous is not None and (dataset_previous < base_as_of or dataset_previous > target_text):
+                raise ValueError(
+                    f"{spec.dataset} previous ready date 必須落在 provider snapshot 與 target_date 之間"
+                )
+        incremental_start = date.fromisoformat(dataset_previous or base_as_of) + timedelta(days=1)
         if spec.daily_mode == DAILY_STATIC_REFRESH:
             requests.append(BootstrapHttpRequest(spec.dataset, TRADING_SYNC_QUERY_STATIC, None, None, None))
         elif spec.daily_mode == DAILY_INCREMENTAL:

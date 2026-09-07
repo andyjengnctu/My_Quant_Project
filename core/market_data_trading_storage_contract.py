@@ -11,6 +11,7 @@ from core.market_data_trading_sync import TradingSyncRequestManifest
 TRADING_MARKET_DATA_V2_RELATIVE_ROOT = Path("data") / "trading" / "market_data_v2"
 TRADING_MARKET_DATA_V2_STATE_RELATIVE_PATH = Path("state") / "trading" / "market_data_v2" / "archive_state.json"
 TRADING_MARKET_DATA_V2_DATASET_STATE_RELATIVE_PATH = Path("state") / "trading" / "market_data_v2" / "dataset_state.json"
+TRADING_MARKET_DATA_V2_AUTO_UPDATE_LOCK_RELATIVE_PATH = Path("state") / "trading" / "market_data_v2" / "auto_update.lock"
 TRADING_MARKET_DATA_V2_LEDGER_RELATIVE_ROOT = Path("state") / "trading" / "market_data_v2" / "ledgers"
 TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME = "batch_manifest.json"
 TRADING_MARKET_DATA_V2_SCHEMA_VERSION = 1
@@ -42,6 +43,10 @@ def resolve_trading_market_data_v2_state_path(project_root) -> Path:
 
 def resolve_trading_market_data_v2_dataset_state_path(project_root) -> Path:
     return Path(project_root).resolve() / TRADING_MARKET_DATA_V2_DATASET_STATE_RELATIVE_PATH
+
+
+def resolve_trading_market_data_v2_auto_update_lock_path(project_root) -> Path:
+    return Path(project_root).resolve() / TRADING_MARKET_DATA_V2_AUTO_UPDATE_LOCK_RELATIVE_PATH
 
 
 def resolve_trading_market_data_v2_batch_dir(project_root, batch_fingerprint: str) -> Path:
@@ -113,11 +118,13 @@ __all__ = [
     "TRADING_MARKET_DATA_V2_RELATIVE_ROOT",
     "TRADING_MARKET_DATA_V2_STATE_RELATIVE_PATH",
     "TRADING_MARKET_DATA_V2_DATASET_STATE_RELATIVE_PATH",
+    "TRADING_MARKET_DATA_V2_AUTO_UPDATE_LOCK_RELATIVE_PATH",
     "TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME",
     "TRADING_MARKET_DATA_V2_SCHEMA_VERSION",
     "resolve_trading_market_data_v2_root",
     "resolve_trading_market_data_v2_state_path",
     "resolve_trading_market_data_v2_dataset_state_path",
+    "resolve_trading_market_data_v2_auto_update_lock_path",
     "resolve_trading_market_data_v2_batch_dir",
     "resolve_trading_market_data_v2_dataset_dir",
     "resolve_trading_market_data_v2_request_path",

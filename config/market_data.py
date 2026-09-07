@@ -81,6 +81,20 @@ MARKET_DATA_V2_TRADING_SYNC_POLICY = {
     "event_repair_calendar_days": 30,
 }
 
+
+# One-shot Trading Market Data V2 automatic updater policy.  Scheduler wake-ups
+# are local-only; provider calls are allowed only when the due planner returns
+# at least one dataset.
+MARKET_DATA_V2_AUTO_UPDATE_POLICY = {
+    "enabled": True,
+    "scheduler_wake_minutes": 15,
+    "publication_retry_minutes": (15, 30, 60),
+    "max_publication_retries": 3,
+    "quota_defer_minutes": 15,
+    "error_defer_minutes": 60,
+    "worker_lock_minutes": 30,
+}
+
 # Dataset publication/freshness scheduling is Trading-operations metadata only.
 # It does not participate in the neutral Provider Snapshot / Research scientific
 # identity.  Dataset-specific overrides below are provider-documented publication
@@ -134,5 +148,6 @@ __all__ = [
     "MARKET_DATA_V2_EXECUTION_POLICY",
     "MARKET_DATA_V2_STORAGE_POLICY",
     "MARKET_DATA_V2_TRADING_SYNC_POLICY",
+    "MARKET_DATA_V2_AUTO_UPDATE_POLICY",
     "MARKET_DATA_V2_PUBLICATION_POLICY",
 ]

@@ -13,6 +13,12 @@ def smart_downloader_main(*args, **kwargs):
     return _main(*args, **kwargs)
 
 
+def market_data_auto_update_main(*args, **kwargs):
+    from .market_data_auto_update import main as _main
+
+    return _main(*args, **kwargs)
+
+
 def test_suite_main(*args, **kwargs):
     from .test_suite import main as _main
 
@@ -46,6 +52,7 @@ __all__ = [
     "print_yearly_return_report",
     "run_portfolio_simulation",
     "smart_downloader_main",
+    "market_data_auto_update_main",
     "test_suite_main",
     "vip_scanner_main",
     "process_single_stock",
