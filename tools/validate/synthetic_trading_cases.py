@@ -2794,6 +2794,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
     import services.trading.daily_workflow as daily_workflow
+    import services.trading.market_data_update as market_data_update
     import services.trading.strategy_param_training as param_training
     from services.trading.market_data_state import publish_trading_market_data_snapshot
     from services.trading.scanner_state import load_trading_scanner_runtime
@@ -2969,9 +2970,9 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             captured["required"] = list(required_tickers or [])
             return {"runtime_domain": "trading", "market_date": "2026-09-04", "status": "READY"}
         with patch("services.downloader.runtime.SAVE_DIR", str(data_dir)), \
-             patch.object(daily_workflow, "run_trading_dataset_update", side_effect=_capture_update), \
-             patch.object(daily_workflow, "publish_trading_market_data_snapshot", return_value={"snapshot_fingerprint": "s", "dataset_fingerprint": {"csv_content_sha256": "c"}}):
-            daily_workflow.run_trading_market_data_update(project_root=root)
+             patch.object(market_data_update, "run_trading_dataset_update", side_effect=_capture_update), \
+             patch.object(market_data_update, "publish_trading_market_data_snapshot", return_value={"snapshot_fingerprint": "s", "dataset_fingerprint": {"csv_content_sha256": "c"}}):
+            market_data_update.run_trading_market_data_update(project_root=root)
         add_check(results, "trading_data_lineage", case_id, "daily_data_update_forces_all_current_account_positions_into_downloader_targets", ["9999"], captured.get("required"))
 
     summary["checks"] = len(results)

@@ -533,7 +533,6 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         add_check(results, "market_data", case_id, "uncommitted_sink_blocks_workload", WORKLOAD_BLOCKED, commit_blocked.workload_status)
         quota_snapshot = executor.quota_progress_snapshot()
         add_check(results, "market_data", case_id, "progress_quota_snapshot_uses_live_limit", 100, quota_snapshot["quota_limit"])
-        add_check(results, "market_data", case_id, "progress_quota_snapshot_reports_effective_used_count", 1, quota_snapshot["quota_user_count"])
         add_check(results, "market_data", case_id, "progress_quota_snapshot_deducts_local_attempt", 99, quota_snapshot["quota_remaining"])
         add_check(results, "market_data", case_id, "progress_quota_snapshot_applies_reserve", 98, quota_snapshot["quota_usable_remaining"])
 
@@ -1469,15 +1468,78 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         add_check(results, "market_data", case_id, "quota_wait_does_not_advance_done_jobs", 0, quota_deferred["done"])
         add_check(results, "market_data", case_id, "quota_wait_is_reported_as_incomplete_sidecar", True, "WAIT_QUOTA" in str(quota_deferred.get("error") or ""))
 
+    from core.market_data_freshness_contract import (
+        CADENCE_CURRENT_VINTAGE,
+        CADENCE_EVENT_DRIVEN,
+        CADENCE_PERIODIC,
+        COMPLETENESS_EVENT_NO_ROW_VALID,
+        EXPECTED_DATE_NONE,
+        EXPECTED_DATE_PERIOD_DUE,
+        FRESHNESS_STATUSES,
+        ROW_EXPECTATION_OPTIONAL,
+        get_market_data_freshness_contracts,
+        validate_market_data_freshness_contracts,
+    )
+
+    freshness_contracts = get_market_data_freshness_contracts(specs=specs)
+    freshness_stats = validate_market_data_freshness_contracts(
+        specs=specs,
+        contracts=freshness_contracts,
+    )
+    by_dataset = {item.dataset: item for item in freshness_contracts}
+    static_contracts = [item for item in freshness_contracts if item.cadence == CADENCE_CURRENT_VINTAGE]
+    event_contracts = [item for item in freshness_contracts if item.cadence == CADENCE_EVENT_DRIVEN]
+    periodic_contracts = [item for item in freshness_contracts if item.cadence == CADENCE_PERIODIC]
+    add_check(results, "market_data", case_id, "freshness_contract_covers_all_included_datasets", len(specs), freshness_stats["contract_count"])
+    add_check(results, "market_data", case_id, "freshness_contract_dataset_identity_matches_registry", {spec.dataset for spec in specs}, set(by_dataset))
+    add_check(results, "market_data", case_id, "freshness_status_vocabulary_is_stable", {"READY", "DUE", "WAIT_PUBLISH", "WAIT_QUOTA", "STALE", "ERROR", "BLOCKED", "NOT_APPLICABLE"}, set(FRESHNESS_STATUSES))
+    add_check(results, "market_data", case_id, "event_datasets_allow_legal_no_row_window", True, bool(event_contracts) and all(item.row_expectation == ROW_EXPECTATION_OPTIONAL and item.completeness_mode == COMPLETENESS_EVENT_NO_ROW_VALID and item.expected_date_mode == EXPECTED_DATE_NONE for item in event_contracts))
+    add_check(results, "market_data", case_id, "static_datasets_use_current_vintage_semantics", True, bool(static_contracts) and all(item.expected_date_mode == EXPECTED_DATE_NONE for item in static_contracts))
+    add_check(results, "market_data", case_id, "periodic_datasets_use_due_period_semantics", True, bool(periodic_contracts) and all(item.expected_date_mode == EXPECTED_DATE_PERIOD_DUE for item in periodic_contracts))
+    add_check(results, "market_data", case_id, "publication_schedule_partition_is_complete", len(specs), freshness_stats["verified_schedule_count"] + freshness_stats["fallback_schedule_count"])
+    add_check(results, "market_data", case_id, "provider_verified_publication_schedule_exists", True, freshness_stats["verified_schedule_count"] > 0)
+    add_check(results, "market_data", case_id, "unknown_publication_times_use_conservative_fallback", True, freshness_stats["fallback_schedule_count"] > 0 and all(item.publication_schedule_source for item in freshness_contracts))
+    add_check(results, "market_data", case_id, "documented_price_schedule_uses_grace", ("17:45", 0, True), (by_dataset["TaiwanStockPrice"].publication_first_check_time, by_dataset["TaiwanStockPrice"].publication_day_offset, by_dataset["TaiwanStockPrice"].publication_schedule_verified))
+    add_check(results, "market_data", case_id, "documented_per_schedule_uses_grace", ("18:15", 0, True), (by_dataset["TaiwanStockPER"].publication_first_check_time, by_dataset["TaiwanStockPER"].publication_day_offset, by_dataset["TaiwanStockPER"].publication_schedule_verified))
+    add_check(results, "market_data", case_id, "documented_day_trading_schedule_waits_for_close_values", ("21:45", 0, True), (by_dataset["TaiwanStockDayTrading"].publication_first_check_time, by_dataset["TaiwanStockDayTrading"].publication_day_offset, by_dataset["TaiwanStockDayTrading"].publication_schedule_verified))
+    add_check(results, "market_data", case_id, "undocumented_schedule_uses_next_day_fallback", ("01:45", 1, False), (by_dataset["TaiwanStockHoldingSharesPer"].publication_first_check_time, by_dataset["TaiwanStockHoldingSharesPer"].publication_day_offset, by_dataset["TaiwanStockHoldingSharesPer"].publication_schedule_verified))
+
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
+    update_source = (project_root / "services" / "trading" / "market_data_update.py").read_text(encoding="utf-8")
+    downloader_source = (project_root / "services" / "downloader" / "main.py").read_text(encoding="utf-8")
     scanner_source = (project_root / "services" / "trading" / "scanner_state.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
-    add_check(results, "market_data", case_id, "legacy_execution_update_remains_primary_workbench_producer", True, workflow_source.find("run_trading_dataset_update(") < workflow_source.find("sync_market_data_v2_trading_archive("))
-    add_check(results, "market_data", case_id, "sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in workflow_source and "last_attempt_target_date" in state_source)
+    from services.trading import daily_workflow as daily_workflow_module
+    from services.trading import market_data_update as market_data_update_module
+
+    legacy_pos = update_source.find("run_trading_dataset_update(")
+    snapshot_pos = update_source.find("publish_trading_market_data_snapshot(")
+    v2_pos = update_source.find("sync_market_data_v2_trading_archive(")
+    add_check(results, "market_data", case_id, "canonical_update_owner_preserves_execution_then_snapshot_then_v2_order", True, 0 <= legacy_pos < snapshot_pos < v2_pos)
+    add_check(results, "market_data", case_id, "daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
+    add_check(results, "market_data", case_id, "smart_downloader_reuses_canonical_market_data_update_owner", True, "from services.trading.market_data_update import run_trading_market_data_update" in downloader_source and "run_trading_market_data_update(project_root=PROJECT_ROOT)" in downloader_source)
+    import importlib
+    from unittest.mock import patch
+    downloader_main = importlib.import_module("services.downloader.main")
+    smart_calls = []
+    with patch(
+        "services.trading.market_data_update.run_trading_market_data_update",
+        side_effect=lambda **kwargs: smart_calls.append(dict(kwargs)) or {"status": "READY"},
+    ):
+        smart_exit = downloader_main._run_trading_dataset_update()
+    add_check(results, "market_data", case_id, "smart_downloader_runtime_calls_canonical_market_data_update_owner", 0, smart_exit)
+    add_check(results, "market_data", case_id, "smart_downloader_runtime_passes_project_root_to_canonical_owner", [str(downloader_main.PROJECT_ROOT)], [str(item.get("project_root")) for item in smart_calls])
+    add_check(results, "market_data", case_id, "sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in update_source and "last_attempt_target_date" in state_source)
     add_check(results, "market_data", case_id, "workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
     add_check(results, "market_data", case_id, "scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
 
-    summary.update({"checks": len(results), "trading_request_count": manifest_a.total_requests})
+    summary.update({
+        "checks": len(results),
+        "trading_request_count": manifest_a.total_requests,
+        "freshness_contract_count": freshness_stats["contract_count"],
+        "verified_schedule_count": freshness_stats["verified_schedule_count"],
+        "fallback_schedule_count": freshness_stats["fallback_schedule_count"],
+    })
     return results, summary

@@ -8,6 +8,7 @@ from typing import Any
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.market_data_bootstrap_requests import build_registry_fingerprint
 from core.market_data_dataset_registry import get_market_dataset_specs
+from core.market_data_freshness_contract import build_market_data_freshness_contract_summary
 from core.market_data_provider_snapshot import provider_snapshot_identity_from_payload
 from core.market_data_storage_contract import MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT, MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME
 from core.market_data_trading_storage_contract import (
@@ -143,11 +144,15 @@ def publish_trading_market_data_v2_failure(
 def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
     provider = find_latest_ready_provider_snapshot(project_root)
     state = load_trading_market_data_v2_state(project_root, required=False)
+    freshness_contract = build_market_data_freshness_contract_summary()
     if provider is None:
         return {
             "status": TRADING_V2_ARCHIVE_STATUS_NOT_BOOTSTRAPPED,
             "provider_ready": False,
             "latest_sync_target_date": None,
+            "dataset_contract_count": freshness_contract["contract_count"],
+            "verified_schedule_count": freshness_contract["verified_schedule_count"],
+            "fallback_schedule_count": freshness_contract["fallback_schedule_count"],
             "error": None,
         }
     _provider_path, provider_payload = provider
@@ -158,6 +163,9 @@ def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
             "provider_as_of_date": provider_payload.get("as_of_date"),
             "provider_snapshot_fingerprint": provider_payload.get("snapshot_fingerprint"),
             "latest_sync_target_date": None,
+            "dataset_contract_count": freshness_contract["contract_count"],
+            "verified_schedule_count": freshness_contract["verified_schedule_count"],
+            "fallback_schedule_count": freshness_contract["fallback_schedule_count"],
             "error": "Provider Snapshot READY，但 Trading V2 archive 尚未建立 sync state",
         }
     return {
@@ -169,6 +177,9 @@ def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
         "latest_batch_fingerprint": state.get("latest_batch_fingerprint"),
         "latest_request_count": state.get("latest_request_count"),
         "latest_row_count": state.get("latest_row_count"),
+        "dataset_contract_count": freshness_contract["contract_count"],
+        "verified_schedule_count": freshness_contract["verified_schedule_count"],
+        "fallback_schedule_count": freshness_contract["fallback_schedule_count"],
         "error": state.get("last_error"),
     }
 

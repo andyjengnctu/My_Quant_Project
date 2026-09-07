@@ -81,6 +81,48 @@ MARKET_DATA_V2_TRADING_SYNC_POLICY = {
     "event_repair_calendar_days": 30,
 }
 
+# Dataset publication/freshness scheduling is Trading-operations metadata only.
+# It does not participate in the neutral Provider Snapshot / Research scientific
+# identity.  Dataset-specific overrides below are provider-documented publication
+# times with a small observation grace; datasets without a verified time use the
+# conservative next-day fallback until later evidence replaces it.
+MARKET_DATA_V2_PUBLICATION_POLICY = {
+    "timezone": "Asia/Taipei",
+    "conservative_fallback": {
+        "first_check_time": "01:45",
+        "day_offset": 1,
+        "source": "conservative_next_day_fallback",
+    },
+    "dataset_overrides": {
+        "TaiwanStockInfo": {"first_check_time": "01:45", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockTradingDate": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockPrice": {"first_check_time": "17:45", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockPriceAdj": {"first_check_time": "17:45", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockPER": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockDayTrading": {"first_check_time": "21:45", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockPriceLimit": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockTotalReturnIndex": {"first_check_time": "17:05", "day_offset": 0, "source": "provider_documentation:technical"},
+        "TaiwanStockInstitutionalInvestorsBuySellWide": {"first_check_time": "20:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanStockTotalInstitutionalInvestors": {"first_check_time": "15:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanStockMarginPurchaseShortSale": {"first_check_time": "21:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanStockTotalMarginPurchaseShortSale": {"first_check_time": "21:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanStockShareholding": {"first_check_time": "21:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanStockSecuritiesLending": {"first_check_time": "15:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanDailyShortSaleBalances": {"first_check_time": "21:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanTotalExchangeMarginMaintenance": {"first_check_time": "21:15", "day_offset": 0, "source": "provider_documentation:chip"},
+        "TaiwanStockDelisting": {"first_check_time": "23:45", "day_offset": 0, "source": "provider_documentation:fundamental"},
+        "TaiwanStockDispositionSecuritiesPeriod": {"first_check_time": "23:15", "day_offset": 0, "source": "provider_documentation:chip_window_end"},
+        "TaiwanStockDayTradingBorrowingFeeRate": {"first_check_time": "22:15", "day_offset": 0, "source": "provider_documentation:chip_window_end"},
+        "TaiwanStockSplitPrice": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:fundamental"},
+        "TaiwanStockMarketValue": {"first_check_time": "23:45", "day_offset": 0, "source": "provider_documentation:fundamental"},
+        "TaiwanStockMarketValueWeight": {"first_check_time": "23:55", "day_offset": 0, "source": "provider_documentation:fundamental"},
+        "TaiwanFuturesDaily": {"first_check_time": "16:45", "day_offset": 0, "source": "provider_documentation:derivatives"},
+        "TaiwanFuturesInstitutionalInvestors": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:derivatives"},
+        "TaiwanOptionInstitutionalInvestors": {"first_check_time": "16:15", "day_offset": 0, "source": "provider_documentation:derivatives"},
+        "TaiwanOptionVix": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:derivatives"},
+    },
+}
+
 __all__ = [
     "RESEARCH_DATA_GENERATION_V1",
     "RESEARCH_DATA_GENERATION_V2",
@@ -92,4 +134,5 @@ __all__ = [
     "MARKET_DATA_V2_EXECUTION_POLICY",
     "MARKET_DATA_V2_STORAGE_POLICY",
     "MARKET_DATA_V2_TRADING_SYNC_POLICY",
+    "MARKET_DATA_V2_PUBLICATION_POLICY",
 ]

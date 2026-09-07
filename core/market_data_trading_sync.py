@@ -20,6 +20,7 @@ from core.market_data_dataset_registry import (
     TRADING_QUERY_RECENT_DATES,
     MarketDatasetSpec,
 )
+from core.market_data_freshness_contract import validate_market_data_freshness_contracts
 from core.market_data_trading_sync_policy import MarketDataTradingSyncPolicy
 
 TRADING_SYNC_QUERY_STATIC = "trading_static_refresh"
@@ -144,6 +145,7 @@ def build_trading_sync_request_manifest(
     included = tuple(spec for spec in specs if spec.included)
     if not included:
         raise ValueError("Trading Market Data V2 沒有 included dataset")
+    validate_market_data_freshness_contracts(specs=included)
     target_text = _iso(target_date, field="target_date")
     target = date.fromisoformat(target_text)
     base_as_of = _iso(provider_snapshot.get("as_of_date"), field="provider_snapshot.as_of_date")
