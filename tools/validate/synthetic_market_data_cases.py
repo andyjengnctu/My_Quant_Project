@@ -1347,6 +1347,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
 
     registry = validate_market_dataset_registry()
     specs = get_market_dataset_specs(included_only=True)
+    from services.downloader.market_data_trading_storage import MarketDataTradingStorageSink
+    observed_bounds = MarketDataTradingStorageSink._frame_date_bounds(
+        pd.DataFrame({"date": ["2026-09-05", "2026-09-07", "bad"]})
+    )
+    add_check(results, "market_data", case_id, "trading_storage_observes_actual_frame_date_bounds", ("2026-09-05", "2026-09-07"), observed_bounds)
     periodic = tuple(spec for spec in specs if spec.daily_mode == DAILY_PERIODIC_REPAIR)
     add_check(results, "market_data", case_id, "registry_remains_valid_after_trading_query_contract", True, registry["included"] > 0)
     add_check(results, "market_data", case_id, "periodic_datasets_have_explicit_query_policy", True, all(spec.trading_query_mode != TRADING_QUERY_AUTO for spec in periodic))
@@ -1503,6 +1508,136 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     add_check(results, "market_data", case_id, "documented_per_schedule_uses_grace", ("18:15", 0, True), (by_dataset["TaiwanStockPER"].publication_first_check_time, by_dataset["TaiwanStockPER"].publication_day_offset, by_dataset["TaiwanStockPER"].publication_schedule_verified))
     add_check(results, "market_data", case_id, "documented_day_trading_schedule_waits_for_close_values", ("21:45", 0, True), (by_dataset["TaiwanStockDayTrading"].publication_first_check_time, by_dataset["TaiwanStockDayTrading"].publication_day_offset, by_dataset["TaiwanStockDayTrading"].publication_schedule_verified))
     add_check(results, "market_data", case_id, "undocumented_schedule_uses_next_day_fallback", ("01:45", 1, False), (by_dataset["TaiwanStockHoldingSharesPer"].publication_first_check_time, by_dataset["TaiwanStockHoldingSharesPer"].publication_day_offset, by_dataset["TaiwanStockHoldingSharesPer"].publication_schedule_verified))
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from core.market_data_due_planner import plan_market_data_due_datasets
+    from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_dataset_state_path
+    from services.trading.market_data_dataset_state import (
+        build_market_data_dataset_state_read_model,
+        load_market_data_dataset_state,
+        record_market_data_sync_success,
+        refresh_market_data_due_state,
+    )
+
+    with TemporaryDirectory() as state_temp_dir:
+        state_root = Path(state_temp_dir)
+        state_path = resolve_trading_market_data_v2_dataset_state_path(state_root)
+        state_now = datetime(2026, 9, 8, 2, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        observations = {}
+        for contract in freshness_contracts:
+            if contract.cadence == CADENCE_EVENT_DRIVEN:
+                observations[contract.dataset] = {
+                    "row_count": 0,
+                    "observed_min_date": None,
+                    "observed_max_date": None,
+                }
+            elif contract.cadence == CADENCE_PERIODIC:
+                observations[contract.dataset] = {
+                    "row_count": 1,
+                    "observed_min_date": "2026-06-30",
+                    "observed_max_date": "2026-06-30",
+                }
+            elif contract.cadence == CADENCE_CURRENT_VINTAGE:
+                observations[contract.dataset] = {
+                    "row_count": 1,
+                    "observed_min_date": None,
+                    "observed_max_date": None,
+                }
+            else:
+                observations[contract.dataset] = {
+                    "row_count": 1,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+        dataset_state = record_market_data_sync_success(
+            state_root,
+            target_date="2026-09-07",
+            finished_at=state_now,
+            observations=observations,
+        )
+        add_check(results, "market_data", case_id, "dataset_state_is_persisted_under_trading_state_domain", True, str(state_path).replace("\\", "/").endswith("state/trading/market_data_v2/dataset_state.json") and state_path.is_file())
+        add_check(results, "market_data", case_id, "dataset_state_covers_all_freshness_contracts", len(freshness_contracts), len(dataset_state["datasets"]))
+        add_check(results, "market_data", case_id, "periodic_refresh_can_be_ready_with_older_real_data_date", "READY", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["status"])
+        add_check(results, "market_data", case_id, "periodic_state_preserves_actual_latest_data_date", "2026-06-30", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["latest_data_date"])
+        add_check(results, "market_data", case_id, "event_no_row_window_can_be_ready", "READY", dataset_state["datasets"]["TaiwanStockDelisting"]["status"])
+        same_target_plan = plan_market_data_due_datasets(
+            target_date="2026-09-07",
+            now=datetime(2026, 9, 8, 2, 1, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=dataset_state,
+            contracts=freshness_contracts,
+        )
+        add_check(results, "market_data", case_id, "fully_ready_same_target_has_zero_due_datasets", (), same_target_plan.due_datasets)
+        add_check(results, "market_data", case_id, "fully_ready_same_target_requires_zero_provider_requests", False, same_target_plan.provider_requests_required)
+        price_contract = (by_dataset["TaiwanStockPrice"],)
+        before_price = plan_market_data_due_datasets(
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 8, 17, 30, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=dataset_state,
+            contracts=price_contract,
+        )
+        after_price = plan_market_data_due_datasets(
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 8, 17, 50, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=dataset_state,
+            contracts=price_contract,
+        )
+        add_check(results, "market_data", case_id, "due_planner_waits_until_dataset_publication_window", (), before_price.due_datasets)
+        add_check(results, "market_data", case_id, "due_planner_releases_dataset_after_publication_window", ("TaiwanStockPrice",), after_price.due_datasets)
+        read_model = build_market_data_dataset_state_read_model(state_root)
+        add_check(results, "market_data", case_id, "dataset_state_read_model_joins_dynamic_state_with_contract", (True, len(freshness_contracts)), (read_model["state_ready"], read_model["dataset_count"]))
+        loaded_state = load_market_data_dataset_state(state_root, required=True)
+        add_check(results, "market_data", case_id, "dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
+        projected_plan, projected_state = refresh_market_data_due_state(
+            state_root,
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 8, 17, 30, tzinfo=ZoneInfo("Asia/Taipei")),
+        )
+        price_projection = projected_state["datasets"]["TaiwanStockPrice"]
+        add_check(results, "market_data", case_id, "local_due_projection_persists_wait_publish_status", "WAIT_PUBLISH", price_projection["status"])
+        add_check(results, "market_data", case_id, "local_due_projection_persists_next_check_at", "2026-09-08T17:45:00+08:00", price_projection["next_check_at"])
+        add_check(results, "market_data", case_id, "local_due_projection_needs_no_provider_before_publication", False, "TaiwanStockPrice" in projected_plan.due_datasets)
+        tampered_state = dict(projected_state)
+        tampered_datasets = {key: dict(value) for key, value in projected_state["datasets"].items()}
+        tampered_datasets["TaiwanStockPrice"]["status"] = "ERROR"
+        tampered_state["datasets"] = tampered_datasets
+        atomic_write_json(state_path, tampered_state)
+        try:
+            load_market_data_dataset_state(state_root, required=True)
+        except ValueError:
+            tamper_blocked = True
+        else:
+            tamper_blocked = False
+        add_check(results, "market_data", case_id, "dataset_state_fingerprint_blocks_manual_tamper", True, tamper_blocked)
+
+    with TemporaryDirectory() as partial_temp_dir:
+        partial_state = record_market_data_sync_success(
+            Path(partial_temp_dir),
+            target_date="2026-09-07",
+            finished_at=state_now,
+            observations={
+                "TaiwanStockPrice": {
+                    "row_count": 1,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+            },
+            attempted_datasets={"TaiwanStockPrice"},
+        )
+        add_check(results, "market_data", case_id, "partial_batch_only_advances_attempted_dataset", "READY", partial_state["datasets"]["TaiwanStockPrice"]["status"])
+        add_check(results, "market_data", case_id, "partial_batch_does_not_advance_unattempted_dataset", "NOT_APPLICABLE", partial_state["datasets"]["TaiwanStockPER"]["status"])
+
+    missing_obs = {dataset: dict(values) for dataset, values in observations.items()}
+    missing_obs["TaiwanStockPrice"] = {"row_count": 1, "observed_min_date": "2026-09-06", "observed_max_date": "2026-09-06"}
+    with TemporaryDirectory() as stale_temp_dir:
+        stale_state = record_market_data_sync_success(
+            Path(stale_temp_dir),
+            target_date="2026-09-07",
+            finished_at=state_now,
+            observations=missing_obs,
+        )
+        add_check(results, "market_data", case_id, "required_daily_missing_target_evidence_waits_publish", "WAIT_PUBLISH", stale_state["datasets"]["TaiwanStockPrice"]["status"])
+        add_check(results, "market_data", case_id, "required_daily_missing_target_does_not_advance_ready_target", None, stale_state["datasets"]["TaiwanStockPrice"]["last_ready_target_date"])
 
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")

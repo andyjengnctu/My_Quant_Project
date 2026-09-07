@@ -145,6 +145,13 @@ def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
     provider = find_latest_ready_provider_snapshot(project_root)
     state = load_trading_market_data_v2_state(project_root, required=False)
     freshness_contract = build_market_data_freshness_contract_summary()
+    from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
+
+    dataset_state_model = build_market_data_dataset_state_read_model(project_root)
+    dataset_status_counts: dict[str, int] = {}
+    for row in dataset_state_model.get("datasets") or []:
+        status = str(row.get("status") or "")
+        dataset_status_counts[status] = dataset_status_counts.get(status, 0) + 1
     if provider is None:
         return {
             "status": TRADING_V2_ARCHIVE_STATUS_NOT_BOOTSTRAPPED,
@@ -153,6 +160,9 @@ def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
             "dataset_contract_count": freshness_contract["contract_count"],
             "verified_schedule_count": freshness_contract["verified_schedule_count"],
             "fallback_schedule_count": freshness_contract["fallback_schedule_count"],
+            "dataset_state_ready": dataset_state_model.get("state_ready"),
+            "dataset_state_updated_at": dataset_state_model.get("updated_at"),
+            "dataset_status_counts": dataset_status_counts,
             "error": None,
         }
     _provider_path, provider_payload = provider
@@ -166,6 +176,9 @@ def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
             "dataset_contract_count": freshness_contract["contract_count"],
             "verified_schedule_count": freshness_contract["verified_schedule_count"],
             "fallback_schedule_count": freshness_contract["fallback_schedule_count"],
+            "dataset_state_ready": dataset_state_model.get("state_ready"),
+            "dataset_state_updated_at": dataset_state_model.get("updated_at"),
+            "dataset_status_counts": dataset_status_counts,
             "error": "Provider Snapshot READY，但 Trading V2 archive 尚未建立 sync state",
         }
     return {
@@ -180,6 +193,9 @@ def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
         "dataset_contract_count": freshness_contract["contract_count"],
         "verified_schedule_count": freshness_contract["verified_schedule_count"],
         "fallback_schedule_count": freshness_contract["fallback_schedule_count"],
+        "dataset_state_ready": dataset_state_model.get("state_ready"),
+        "dataset_state_updated_at": dataset_state_model.get("updated_at"),
+        "dataset_status_counts": dataset_status_counts,
         "error": state.get("last_error"),
     }
 

@@ -53,6 +53,7 @@ class MarketDataTradingStorageSink:
         self.batch_dir = resolve_trading_market_data_v2_batch_dir(self.project_root, manifest.manifest_fingerprint)
         self.batch_dir.mkdir(parents=True, exist_ok=True)
         self._requests = {request.request_id: request for request in manifest.requests}
+        self._dataset_observations: dict[str, dict[str, object]] = {}
         if len(self._requests) != manifest.total_requests:
             raise ValueError("Trading V2 storage manifest request identity 重複")
         self._ensure_batch_manifest()
@@ -76,6 +77,48 @@ class MarketDataTradingStorageSink:
         canonical = self._requests.get(request.request_id)
         if canonical is None or canonical != request:
             raise MarketDataCommitError("Trading V2 storage 收到不屬於目前 sync manifest 的 request")
+
+
+    @staticmethod
+    def _frame_date_bounds(frame: pd.DataFrame) -> tuple[str | None, str | None]:
+        if frame.empty or "date" not in frame.columns:
+            return None, None
+        values = pd.to_datetime(frame["date"], errors="coerce").dropna()
+        if values.empty:
+            return None, None
+        return values.min().date().isoformat(), values.max().date().isoformat()
+
+    def _record_observation(
+        self,
+        *,
+        dataset: str,
+        row_count: int,
+        observed_min_date: str | None,
+        observed_max_date: str | None,
+    ) -> None:
+        row = self._dataset_observations.setdefault(
+            dataset,
+            {
+                "request_count": 0,
+                "nonempty_request_count": 0,
+                "row_count": 0,
+                "observed_min_date": None,
+                "observed_max_date": None,
+            },
+        )
+        row["request_count"] = int(row["request_count"]) + 1
+        row["row_count"] = int(row["row_count"]) + int(row_count)
+        if int(row_count) > 0:
+            row["nonempty_request_count"] = int(row["nonempty_request_count"]) + 1
+        if observed_min_date:
+            current = str(row.get("observed_min_date") or "").strip()
+            row["observed_min_date"] = observed_min_date if not current else min(current, observed_min_date)
+        if observed_max_date:
+            current = str(row.get("observed_max_date") or "").strip()
+            row["observed_max_date"] = observed_max_date if not current else max(current, observed_max_date)
+
+    def dataset_observations(self) -> dict[str, dict[str, object]]:
+        return {dataset: dict(values) for dataset, values in self._dataset_observations.items()}
 
     def _schema_owner_path(self, dataset: str) -> Path:
         root = resolve_trading_market_data_v2_root(self.project_root) / "schemas"
@@ -165,6 +208,12 @@ class MarketDataTradingStorageSink:
             )
         if int(metadata.get("row_count", -1)) != inspection.row_count:
             raise MarketDataCommitError("既有 Trading V2 Parquet row_count metadata 與實體不一致")
+        self._record_observation(
+            dataset=request.dataset,
+            row_count=inspection.row_count,
+            observed_min_date=str(metadata.get("observed_min_date") or "").strip() or None,
+            observed_max_date=str(metadata.get("observed_max_date") or "").strip() or None,
+        )
         return MarketDataCommitReceipt(
             committed=True,
             row_count=inspection.row_count,
@@ -182,16 +231,19 @@ class MarketDataTradingStorageSink:
                 )
             return existing
         schema = self._ensure_schema(request, frame)
+        observed_min_date, observed_max_date = self._frame_date_bounds(frame)
         metadata = build_trading_request_metadata(
             manifest=self.manifest,
             request=request,
             row_count=len(frame),
             schema_payload=schema,
+            observed_min_date=observed_min_date,
+            observed_max_date=observed_max_date,
         )
         path = resolve_trading_market_data_v2_request_path(
             self.project_root, self.manifest.manifest_fingerprint, request
         )
-        return commit_market_data_parquet_frame(
+        receipt = commit_market_data_parquet_frame(
             frame=frame,
             final_path=path,
             expected_metadata=metadata,
@@ -199,6 +251,13 @@ class MarketDataTradingStorageSink:
             codec=self.codec,
             disk_usage_fn=self.disk_usage_fn,
         )
+        self._record_observation(
+            dataset=request.dataset,
+            row_count=len(frame),
+            observed_min_date=observed_min_date,
+            observed_max_date=observed_max_date,
+        )
+        return receipt
 
 
 __all__ = ["MarketDataTradingStorageSink"]

@@ -98,4 +98,22 @@ def run_trading_market_data_update(*, project_root: str | Path) -> dict[str, Any
     }
 
 
-__all__ = ["run_trading_market_data_update"]
+def plan_trading_market_data_due_update(
+    *,
+    project_root: str | Path,
+    target_date: str,
+    now,
+):
+    """Build the local-only dataset due plan; this function performs no provider calls."""
+
+    from services.trading.market_data_dataset_state import refresh_market_data_due_state
+
+    plan, _state = refresh_market_data_due_state(
+        Path(project_root).resolve(),
+        target_date=str(target_date),
+        now=now,
+    )
+    return plan
+
+
+__all__ = ["run_trading_market_data_update", "plan_trading_market_data_due_update"]

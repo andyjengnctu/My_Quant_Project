@@ -126,8 +126,20 @@ def sync_market_data_v2_trading_archive(
     committed = ledger.list_committed_artifacts(workload_id) if summary.done else ()
     row_count = sum(int(item.row_count) for item in committed)
     finished_at = now_fn() if now_fn is not None else datetime.now().astimezone()
+    dataset_state = None
 
     if summary.workload_status == WORKLOAD_DONE and summary.done == manifest.total_requests:
+        from services.trading.market_data_dataset_state import record_market_data_sync_success
+
+        observation_reader = getattr(storage, "dataset_observations", None)
+        observations = observation_reader() if callable(observation_reader) else {}
+        dataset_state = record_market_data_sync_success(
+            root,
+            target_date=manifest.as_of_date,
+            finished_at=finished_at,
+            observations=observations,
+            attempted_datasets={request.dataset for request in manifest.requests},
+        )
         batch_artifact_fingerprint = canonical_json_sha256(
             [
                 {
@@ -194,6 +206,7 @@ def sync_market_data_v2_trading_archive(
         "process_usage_requests": int(http.usage_request_count),
         "error": error,
         "state_fingerprint": state.get("state_fingerprint"),
+        "dataset_state_fingerprint": dataset_state.get("state_fingerprint") if dataset_state else None,
         "ledger_path": project_relative_display_path(ledger_path, project_root=root),
     }
     out_dir = Path(output_dir)
