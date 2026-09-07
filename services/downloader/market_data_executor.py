@@ -203,8 +203,10 @@ class MarketDataBootstrapExecutor:
         limit = int(usage.api_request_limit)
         remaining = max(0, self._estimated_remaining())
         reserve = self._effective_reserve(limit)
+        effective_used = max(0, limit - remaining)
         return {
             "quota_limit": limit,
+            "quota_user_count": effective_used,
             "quota_remaining": remaining,
             "quota_usable_remaining": max(0, remaining - reserve),
             "quota_reserve": reserve,

@@ -533,6 +533,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         add_check(results, "market_data", case_id, "uncommitted_sink_blocks_workload", WORKLOAD_BLOCKED, commit_blocked.workload_status)
         quota_snapshot = executor.quota_progress_snapshot()
         add_check(results, "market_data", case_id, "progress_quota_snapshot_uses_live_limit", 100, quota_snapshot["quota_limit"])
+        add_check(results, "market_data", case_id, "progress_quota_snapshot_reports_effective_used_count", 1, quota_snapshot["quota_user_count"])
         add_check(results, "market_data", case_id, "progress_quota_snapshot_deducts_local_attempt", 99, quota_snapshot["quota_remaining"])
         add_check(results, "market_data", case_id, "progress_quota_snapshot_applies_reserve", 98, quota_snapshot["quota_usable_remaining"])
 

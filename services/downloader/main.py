@@ -294,17 +294,17 @@ def _run_market_data_v2_bootstrap() -> int:
         elapsed = max(0.0, _monotonic_time.monotonic() - progress_started)
         quota_limit = event.get("quota_limit")
         eta = _event_eta(event, done_now=done_now, total=total, elapsed=elapsed)
-        quota_remaining = event.get("quota_remaining")
-        quota_usable = event.get("quota_usable_remaining")
-        if quota_remaining is None or quota_limit is None:
+        quota_used = event.get("quota_user_count")
+        quota_wait_seconds = max(0.0, float(event.get("quota_wait_seconds") or 0.0))
+        active_seconds = max(0.0, elapsed - quota_wait_seconds)
+        if quota_used is None or quota_limit is None:
             quota_text = "quota=--"
         else:
-            quota_text = f"quota≈{int(quota_remaining)}/{int(quota_limit)}"
-            if quota_usable is not None:
-                quota_text += f"(可用≈{int(quota_usable)})"
+            quota_text = f"quota={int(quota_used)}/{int(quota_limit)}"
         print(
             f"[Bootstrap] {done_now}/{total} ({pct:.1f}%)"
             f" | 已過 {_format_bootstrap_duration(elapsed)}"
+            f" (下載:{_format_bootstrap_duration(active_seconds)} 等待:{_format_bootstrap_duration(quota_wait_seconds)})"
             f" | ETA≈{_format_bootstrap_duration(eta)}"
             f" | {quota_text}"
             f" | {target}{suffix}"
@@ -316,6 +316,7 @@ def _run_market_data_v2_bootstrap() -> int:
         pct = 100.0 * done_now / total if total > 0 else 0.0
         elapsed = max(0.0, _monotonic_time.monotonic() - progress_started)
         waited = max(0.0, float(event.get("waited_seconds") or 0.0))
+        active_seconds = max(0.0, elapsed - waited)
         eta = _event_eta(event, done_now=done_now, total=total, elapsed=elapsed)
         poll_seconds = max(0.0, float(event.get("poll_seconds") or 0.0))
         quota_used = event.get("quota_user_count")
@@ -323,13 +324,13 @@ def _run_market_data_v2_bootstrap() -> int:
         resume_used_max = event.get("quota_resume_used_max")
         needed_drop = event.get("quota_needed_drop")
         if quota_used is not None and quota_limit is not None:
-            quota_text = f"Q{int(quota_used)}/{int(quota_limit)}"
+            quota_text = f"quota={int(quota_used)}/{int(quota_limit)}"
             if resume_used_max is not None:
                 quota_text += f"→{int(resume_used_max)}"
             if needed_drop is not None and int(needed_drop) > 0:
                 quota_text += f" 差{int(needed_drop)}"
         else:
-            quota_text = "Q查詢失敗"
+            quota_text = "quota=查詢失敗"
         reason = str(event.get("reason") or "quota_capacity")
         error = event.get("error")
         extra = ""
@@ -339,8 +340,8 @@ def _run_market_data_v2_bootstrap() -> int:
             extra += f" | {error}"
         _write_wait_line(
             f"[WAIT] {done_now}/{total} {pct:.1f}%"
-            f" | 過{_format_bootstrap_duration(elapsed)}"
-            f" 等{_format_bootstrap_duration(waited)}"
+            f" | 已過{_format_bootstrap_duration(elapsed)}"
+            f"(下載:{_format_bootstrap_duration(active_seconds)} 等待:{_format_bootstrap_duration(waited)})"
             f" | ETA{_format_bootstrap_duration(eta)}"
             f" | {quota_text}"
             f" | {int(round(poll_seconds))}s{extra}"
