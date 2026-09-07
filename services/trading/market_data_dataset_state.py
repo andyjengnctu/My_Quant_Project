@@ -363,30 +363,30 @@ def build_market_data_due_plan(
 def build_market_data_dataset_state_read_model(project_root) -> dict[str, object]:
     state = load_market_data_dataset_state(project_root, required=False)
     contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
-    if state is None:
-        return {
-            "state_ready": False,
-            "dataset_count": len(contracts),
-            "datasets": [],
-        }
     rows = []
     for dataset in sorted(contracts):
         contract = contracts[dataset]
-        dynamic = dict(state["datasets"][dataset])
+        dynamic = _empty_dataset_row() if state is None else dict(state["datasets"][dataset])
         rows.append(
             {
                 "dataset": dataset,
                 "category": contract.category,
                 "cadence": contract.cadence,
+                "expected_date_mode": contract.expected_date_mode,
+                "row_expectation": contract.row_expectation,
+                "completeness_mode": contract.completeness_mode,
+                "schema_validation_required": contract.schema_validation_required,
                 "publication_first_check_time": contract.publication_first_check_time,
                 "publication_day_offset": contract.publication_day_offset,
+                "publication_schedule_source": contract.publication_schedule_source,
                 "publication_schedule_verified": contract.publication_schedule_verified,
+                "primary_key_hint": contract.primary_key_hint,
                 **dynamic,
             }
         )
     return {
-        "state_ready": True,
-        "updated_at": state.get("updated_at"),
+        "state_ready": state is not None,
+        "updated_at": None if state is None else state.get("updated_at"),
         "dataset_count": len(rows),
         "datasets": rows,
     }

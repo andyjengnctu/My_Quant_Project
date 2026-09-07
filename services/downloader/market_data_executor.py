@@ -201,9 +201,9 @@ class MarketDataBootstrapExecutor:
                 "quota_wait_seconds": self._quota_wait_seconds(),
             }
         limit = int(usage.api_request_limit)
-        remaining = max(0, self._estimated_remaining())
+        effective_used = max(0, int(usage.user_count) + int(self._quota.local_data_attempts_since_refresh))
+        remaining = max(0, limit - effective_used)
         reserve = self._effective_reserve(limit)
-        effective_used = max(0, limit - remaining)
         return {
             "quota_limit": limit,
             "quota_user_count": effective_used,

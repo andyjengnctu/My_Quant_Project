@@ -3135,7 +3135,7 @@ def validate_gui_workbench_contract_case(base_params):
         "output_contract",
         case_id,
         "gui_workbench_panel_ids",
-        ["single_stock_backtest_inspector", "portfolio_backtest_inspector", "trading_account"],
+        ["single_stock_backtest_inspector", "portfolio_backtest_inspector", "trading_account", "market_data_ops"],
         panel_ids,
     )
     if panel_specs:
@@ -3160,9 +3160,16 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_trading_panel_backend", "services.trading.account_state.get_trading_account_read_model", trading_panel_spec.get("backend_runner"))
         add_check(results, "output_contract", case_id, "gui_workbench_trading_panel_has_no_artifact_outputs", [], trading_panel_spec.get("artifact_keys"))
 
+    if len(panel_specs) > 3:
+        data_ops_panel_spec = panel_specs[3]
+        add_check(results, "output_contract", case_id, "gui_workbench_data_ops_tab_label", "資料中心", data_ops_panel_spec.get("tab_label"))
+        add_check(results, "output_contract", case_id, "gui_workbench_data_ops_backend", "services.trading.market_data_ops.build_market_data_ops_read_model", data_ops_panel_spec.get("backend_runner"))
+        add_check(results, "output_contract", case_id, "gui_workbench_data_ops_has_no_artifact_outputs", [], data_ops_panel_spec.get("artifact_keys"))
+
     inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     portfolio_inspector_source = build_project_absolute_path("services", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
     trading_account_panel_source = build_project_absolute_path("services", "workbench_ui", "trading_account_panel.py").read_text(encoding="utf-8")
+    data_ops_panel_source = build_project_absolute_path("services", "workbench_ui", "data_ops_panel.py").read_text(encoding="utf-8")
     portfolio_runner_source = build_project_absolute_path("services", "portfolio_replay.py").read_text(encoding="utf-8")
     workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
     meta_quality_coverage_source = build_project_absolute_path("tools", "local_regression", "meta_quality_coverage.py").read_text(encoding="utf-8")
@@ -3176,9 +3183,14 @@ def validate_gui_workbench_contract_case(base_params):
         True,
         "from services.workbench_ui.single_stock_inspector import" not in workbench_source
         and "from services.workbench_ui.portfolio_backtest_inspector import" not in workbench_source
-        and "from services.workbench_ui.trading_account_panel import" not in workbench_source,
+        and "from services.workbench_ui.trading_account_panel import" not in workbench_source
+        and "from services.workbench_ui.data_ops_panel import" not in workbench_source,
     )
     add_check(results, "output_contract", case_id, "gui_trading_account_panel_uses_account_service_not_raw_json", True, "services.trading.account_state" in trading_account_panel_source and "atomic_write_json" not in trading_account_panel_source and "load_json_strict" not in trading_account_panel_source)
+    add_check(results, "output_contract", case_id, "gui_data_ops_panel_consumes_canonical_read_model", True, "build_market_data_ops_read_model" in data_ops_panel_source)
+    add_check(results, "output_contract", case_id, "gui_data_ops_panel_uses_canonical_due_worker", True, "run_trading_market_data_auto_update" in data_ops_panel_source)
+    add_check(results, "output_contract", case_id, "gui_data_ops_panel_uses_canonical_full_update", True, "run_trading_market_data_update" in data_ops_panel_source)
+    add_check(results, "output_contract", case_id, "gui_data_ops_panel_does_not_write_raw_state", True, "atomic_write_json" not in data_ops_panel_source and "load_json_strict" not in data_ops_panel_source)
     add_check(results, "output_contract", case_id, "gui_headless_coverage_omits_runtime_ui_files", True, "HEADLESS_COVERAGE_OMIT_PATTERNS" in meta_quality_coverage_source and "services\" / \"workbench_ui\" / \"*.py\"" in meta_quality_coverage_source)
     add_check(results, "output_contract", case_id, "gui_validate_coverage_omits_runtime_ui_files", True, "HEADLESS_COVERAGE_OMIT_PATTERNS" in validate_main_source and "workbench_ui" in validate_main_source and "omit=HEADLESS_COVERAGE_OMIT_PATTERNS" in validate_main_source)
     add_check(results, "output_contract", case_id, "coverage_omits_torch_generated_remote_module_sources", True, 'PROJECT_ROOT / "_remote_module_*"' in meta_quality_coverage_source and 'os.path.join(PROJECT_ROOT, "_remote_module_*")' in validate_main_source)

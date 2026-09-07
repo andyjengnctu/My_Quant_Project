@@ -109,6 +109,19 @@ PANEL_SPECS = (
         "jump_to_trade_enabled": False,
         "panel_factory_path": "services.workbench_ui.trading_account_panel:TradingAccountPanel",
     },
+    {
+        "panel_id": "market_data_ops",
+        "tab_label": "資料中心",
+        "backend_runner": "services.trading.market_data_ops.build_market_data_ops_read_model",
+        "artifact_keys": (),
+        "inline_chart_backend": "",
+        "default_show_volume": False,
+        "scanner_dropdown_enabled": False,
+        "console_tab_enabled": False,
+        "jump_to_latest_enabled": False,
+        "jump_to_trade_enabled": False,
+        "panel_factory_path": "services.workbench_ui.data_ops_panel:MarketDataOpsPanel",
+    },
 )
 
 

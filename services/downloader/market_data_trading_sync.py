@@ -122,6 +122,7 @@ def sync_market_data_v2_trading_archive(
         blocking_waits=False,
     )
     summary = executor.run(manifest=manifest, sink=storage)
+    quota_snapshot = executor.quota_progress_snapshot()
     workload_id = ledger.workload_id_for_manifest(manifest)
     committed = ledger.list_committed_artifacts(workload_id) if summary.done else ()
     row_count = sum(int(item.row_count) for item in committed)
@@ -163,6 +164,11 @@ def sync_market_data_v2_trading_archive(
                 "latest_batch_artifact_fingerprint": batch_artifact_fingerprint,
                 "latest_request_count": manifest.total_requests,
                 "latest_row_count": row_count,
+                "latest_quota_user_count": quota_snapshot.get("quota_user_count"),
+                "latest_quota_limit": quota_snapshot.get("quota_limit"),
+                "latest_quota_remaining": quota_snapshot.get("quota_remaining"),
+                "latest_quota_usable_remaining": quota_snapshot.get("quota_usable_remaining"),
+                "latest_quota_observed_at": finished_at.isoformat() if quota_snapshot.get("quota_limit") is not None else None,
                 "last_error": None,
                 "updated_at": finished_at.isoformat(),
             },
@@ -184,6 +190,11 @@ def sync_market_data_v2_trading_archive(
                 "base_provider_manifest_fingerprint": manifest.base_provider_manifest_fingerprint,
                 "base_provider_snapshot_path": project_relative_display_path(provider_path, project_root=root),
                 "base_as_of_date": manifest.base_as_of_date,
+                "latest_quota_user_count": quota_snapshot.get("quota_user_count"),
+                "latest_quota_limit": quota_snapshot.get("quota_limit"),
+                "latest_quota_remaining": quota_snapshot.get("quota_remaining"),
+                "latest_quota_usable_remaining": quota_snapshot.get("quota_usable_remaining"),
+                "latest_quota_observed_at": finished_at.isoformat() if quota_snapshot.get("quota_limit") is not None else base_state.get("latest_quota_observed_at"),
                 "last_error": error,
                 "updated_at": finished_at.isoformat(),
             },
@@ -204,6 +215,10 @@ def sync_market_data_v2_trading_archive(
         "http_attempts": summary.http_attempts,
         "process_data_requests": int(http.data_request_count),
         "process_usage_requests": int(http.usage_request_count),
+        "quota_user_count": quota_snapshot.get("quota_user_count"),
+        "quota_limit": quota_snapshot.get("quota_limit"),
+        "quota_remaining": quota_snapshot.get("quota_remaining"),
+        "quota_usable_remaining": quota_snapshot.get("quota_usable_remaining"),
         "error": error,
         "state_fingerprint": state.get("state_fingerprint"),
         "dataset_state_fingerprint": dataset_state.get("state_fingerprint") if dataset_state else None,
@@ -306,6 +321,7 @@ def sync_market_data_v2_due_datasets(
         blocking_waits=False,
     )
     summary = executor.run(manifest=manifest, sink=storage)
+    quota_snapshot = executor.quota_progress_snapshot()
     workload_id = ledger.workload_id_for_manifest(manifest)
     committed = ledger.list_committed_artifacts(workload_id)
     committed_ids = {item.request_id for item in committed}
@@ -345,6 +361,10 @@ def sync_market_data_v2_due_datasets(
         "incomplete_datasets": incomplete,
         "process_data_requests": int(http.data_request_count),
         "process_usage_requests": int(http.usage_request_count),
+        "quota_user_count": quota_snapshot.get("quota_user_count"),
+        "quota_limit": quota_snapshot.get("quota_limit"),
+        "quota_remaining": quota_snapshot.get("quota_remaining"),
+        "quota_usable_remaining": quota_snapshot.get("quota_usable_remaining"),
         "dataset_state_fingerprint": dataset_state.get("state_fingerprint") if dataset_state else None,
         "ledger_path": project_relative_display_path(ledger_path, project_root=root),
     }

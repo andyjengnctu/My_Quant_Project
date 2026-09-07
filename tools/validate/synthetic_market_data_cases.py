@@ -533,6 +533,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         add_check(results, "market_data", case_id, "uncommitted_sink_blocks_workload", WORKLOAD_BLOCKED, commit_blocked.workload_status)
         quota_snapshot = executor.quota_progress_snapshot()
         add_check(results, "market_data", case_id, "progress_quota_snapshot_uses_live_limit", 100, quota_snapshot["quota_limit"])
+        add_check(results, "market_data", case_id, "progress_quota_snapshot_reports_effective_used", 1, quota_snapshot["quota_user_count"])
         add_check(results, "market_data", case_id, "progress_quota_snapshot_deducts_local_attempt", 99, quota_snapshot["quota_remaining"])
         add_check(results, "market_data", case_id, "progress_quota_snapshot_applies_reserve", 98, quota_snapshot["quota_usable_remaining"])
 
@@ -1484,6 +1485,12 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         add_check(results, "market_data", case_id, "quota_wait_does_not_sleep_in_workbench_sidecar", [], sleep_calls)
         add_check(results, "market_data", case_id, "quota_wait_does_not_advance_done_jobs", 0, quota_deferred["done"])
         add_check(results, "market_data", case_id, "quota_wait_is_reported_as_incomplete_sidecar", True, "WAIT_QUOTA" in str(quota_deferred.get("error") or ""))
+        add_check(results, "market_data", case_id, "trading_sync_exposes_last_observed_quota_used", 1590, quota_deferred.get("quota_user_count"))
+        add_check(results, "market_data", case_id, "trading_sync_exposes_last_observed_quota_limit", 1600, quota_deferred.get("quota_limit"))
+        from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
+        quota_read_model = build_trading_market_data_v2_read_model(root)
+        add_check(results, "market_data", case_id, "trading_v2_state_persists_last_observed_quota_used", 1590, quota_read_model.get("quota_user_count"))
+        add_check(results, "market_data", case_id, "trading_v2_state_persists_last_observed_quota_limit", 1600, quota_read_model.get("quota_limit"))
 
     from core.market_data_freshness_contract import (
         CADENCE_CURRENT_VINTAGE,
@@ -1599,6 +1606,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         add_check(results, "market_data", case_id, "due_planner_releases_dataset_after_publication_window", ("TaiwanStockPrice",), after_price.due_datasets)
         read_model = build_market_data_dataset_state_read_model(state_root)
         add_check(results, "market_data", case_id, "dataset_state_read_model_joins_dynamic_state_with_contract", (True, len(freshness_contracts)), (read_model["state_ready"], read_model["dataset_count"]))
+        price_read_row = next(row for row in read_model["datasets"] if row["dataset"] == "TaiwanStockPrice")
+        add_check(results, "market_data", case_id, "dataset_read_model_exposes_publication_source", True, bool(price_read_row.get("publication_schedule_source")))
+        add_check(results, "market_data", case_id, "dataset_read_model_exposes_completeness_semantics", by_dataset["TaiwanStockPrice"].completeness_mode, price_read_row.get("completeness_mode"))
+        add_check(results, "market_data", case_id, "dataset_read_model_exposes_primary_key_hint", by_dataset["TaiwanStockPrice"].primary_key_hint, price_read_row.get("primary_key_hint"))
+        from services.trading.market_data_ops import build_market_data_ops_read_model
+        ops_model = build_market_data_ops_read_model(state_root, now=state_now)
+        add_check(results, "market_data", case_id, "data_ops_local_refresh_uses_zero_provider_calls", 0, ops_model.get("provider_calls"))
+        add_check(results, "market_data", case_id, "data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
         loaded_state = load_market_data_dataset_state(state_root, required=True)
         add_check(results, "market_data", case_id, "dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
         projected_plan, projected_state = refresh_market_data_due_state(
