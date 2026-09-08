@@ -139,12 +139,18 @@ def build_walk_forward_policy_effective_snapshot(policy: Mapping[str, object]) -
 
 
 def build_optimizer_effective_policy_snapshot(policy: Mapping[str, object]) -> dict:
-    return {
+    snapshot = {
         "walk_forward_policy": build_walk_forward_policy_effective_snapshot(policy),
         "training_score_policy": build_training_score_policy_snapshot(),
         "display_policy": build_display_policy_snapshot(),
         "policy_schema_version": 2,
     }
+    # Preserve exact legacy V1/reduced fingerprints.  Only a promoted Research V2
+    # full dataset adds generation lineage to the optimizer scientific identity.
+    generation_identity = policy.get("research_dataset_generation_identity")
+    if isinstance(generation_identity, Mapping) and generation_identity:
+        snapshot["research_dataset_generation_identity"] = dict(generation_identity)
+    return snapshot
 
 
 def build_optimizer_effective_policy_fingerprint(policy: Mapping[str, object]) -> dict:

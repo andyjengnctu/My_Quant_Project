@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_generation_namespace
 from core.breakout_quality_registry import (
     BASELINE_EXPERIMENT_PROFILE,
     normalize_breakout_quality_experiment_profile,
@@ -22,6 +23,31 @@ from filters.breakout_quality.contract import (
     FILTER_FAMILY,
 )
 from filters.breakout_quality.models.spec import normalize_model_architecture
+
+
+RESEARCH_GENERATIONS_DIRNAME = "research_generations"
+
+
+def _research_generation_namespace(project_root: str | os.PathLike[str]) -> str | None:
+    return get_dataset_generation_namespace(project_root, DATASET_PROFILE_FULL)
+
+
+def _generation_scoped_dir(
+    base_dir: Path, project_root: str | os.PathLike[str]
+) -> Path:
+    namespace = _research_generation_namespace(project_root)
+    if namespace is None:
+        return base_dir
+    return base_dir / RESEARCH_GENERATIONS_DIRNAME / namespace
+
+
+def _resolve_unscoped_filter_model_architecture_dir(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+) -> Path:
+    architecture = resolve_model_architecture(model_architecture)
+    return resolve_filter_model_family_dir(project_root, filter_id) / architecture
 
 
 @dataclass(frozen=True)
@@ -71,7 +97,10 @@ def resolve_filter_model_architecture_dir(
     model_architecture: str | None = None,
 ) -> Path:
     architecture = resolve_model_architecture(model_architecture)
-    return resolve_filter_model_family_dir(project_root, filter_id) / architecture
+    family_dir = _generation_scoped_dir(
+        resolve_filter_model_family_dir(project_root, filter_id), project_root
+    )
+    return family_dir / architecture
 
 
 def resolve_filter_model_dir(
@@ -162,9 +191,11 @@ def resolve_existing_filter_artifact_paths(
     )
     if canonical.manifest_path.is_file():
         return canonical
+    if _research_generation_namespace(project_root) is not None:
+        return canonical
     if canonical.experiment_profile != BASELINE_EXPERIMENT_PROFILE:
         return canonical
-    legacy_dir = resolve_filter_model_architecture_dir(
+    legacy_dir = _resolve_unscoped_filter_model_architecture_dir(
         project_root,
         filter_id,
         canonical.model_architecture,
@@ -199,12 +230,23 @@ def ensure_filter_model_dir(
 def resolve_filter_output_dir(
     project_root: str | os.PathLike[str], filter_id: str | None = None
 ) -> Path:
-    """Return the shared dataset output directory; it is model/experiment independent."""
+    """Return the dataset-generation-scoped Breakout Quality output directory."""
 
     base_dir = Path(build_output_dir(project_root, "filters")) / FILTER_FAMILY
     if filter_id is None or str(filter_id).strip() == "":
         return base_dir
-    return base_dir / normalize_filter_id(filter_id)
+    filter_dir = base_dir / normalize_filter_id(filter_id)
+    return _generation_scoped_dir(filter_dir, project_root)
+
+
+def _resolve_unscoped_filter_model_architecture_output_dir(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+) -> Path:
+    architecture = resolve_model_architecture(model_architecture)
+    base_dir = Path(build_output_dir(project_root, "filters")) / FILTER_FAMILY
+    return base_dir / normalize_filter_id(filter_id) / architecture
 
 
 def resolve_filter_model_architecture_output_dir(
@@ -273,10 +315,12 @@ def resolve_existing_filter_research_score_path(
         model_architecture,
         experiment_profile,
     )
-    if canonical.is_file() or resolve_experiment_profile(experiment_profile) != BASELINE_EXPERIMENT_PROFILE:
+    if canonical.is_file() or _research_generation_namespace(project_root) is not None:
+        return canonical
+    if resolve_experiment_profile(experiment_profile) != BASELINE_EXPERIMENT_PROFILE:
         return canonical
     legacy = (
-        resolve_filter_model_architecture_output_dir(
+        _resolve_unscoped_filter_model_architecture_output_dir(
             project_root,
             filter_id,
             model_architecture,
@@ -298,10 +342,12 @@ def resolve_existing_filter_research_manifest_path(
         model_architecture,
         experiment_profile,
     )
-    if canonical.is_file() or resolve_experiment_profile(experiment_profile) != BASELINE_EXPERIMENT_PROFILE:
+    if canonical.is_file() or _research_generation_namespace(project_root) is not None:
+        return canonical
+    if resolve_experiment_profile(experiment_profile) != BASELINE_EXPERIMENT_PROFILE:
         return canonical
     legacy = (
-        resolve_filter_model_architecture_output_dir(
+        _resolve_unscoped_filter_model_architecture_output_dir(
             project_root,
             filter_id,
             model_architecture,

@@ -41,6 +41,7 @@ from filters.breakout_quality.artifacts import (
     load_runtime_artifact_contract,
 )
 from core.console_report import project_relative_display_path
+from core.dataset_profiles import build_dataset_generation_identity, get_dataset_generation_namespace
 from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_param_artifacts import (
     compute_strategy_param_scientific_sha256,
@@ -1204,6 +1205,9 @@ def collect_preparation_status(
 
     plan = StrategyPreparationPlan.from_actions(actions)
     overall_status = plan.overall_status
+    dataset_generation_identity = None
+    if get_dataset_generation_namespace(root, settings.dataset) is not None:
+        dataset_generation_identity = build_dataset_generation_identity(root, settings.dataset)
     return {
         "comparison_ready": overall_status == "READY",
         "overall_status": overall_status,
@@ -1213,6 +1217,7 @@ def collect_preparation_status(
         "expected_r_calibrations": expected_r_rows,
         "expected_excess_r_calibrations": expected_excess_r_rows,
         "artifact_identities": artifact_identities,
+        "research_dataset_generation_identity": dataset_generation_identity,
         "resolved_parameter_paths": resolved_parameter_paths,
         "resolved_arm_parameter_paths": resolved_arm_parameter_paths,
         "resolved_arm_parameter_identities": resolved_arm_parameter_identities,

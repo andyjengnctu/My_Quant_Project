@@ -40,6 +40,7 @@ from core.market_data_research_storage_contract import (
     resolve_research_v2_freeze_candidate_manifest_path,
     resolve_research_v2_adjusted_price_proof_manifest_path,
     resolve_research_v2_materialization_manifest_path,
+    resolve_research_v2_compatibility_dataset_dir,
     resolve_research_v2_promotion_manifest_path,
 )
 
@@ -194,6 +195,7 @@ def _validate_materialization_manifest_active(
     materialization_fingerprint: str,
     expected_manifest_sha256: str,
     expected_inventory_sha256: str,
+    verify_file_content: bool = True,
 ) -> Path:
     manifest_path = resolve_research_v2_materialization_manifest_path(project_root, materialization_fingerprint)
     if not manifest_path.is_file():
@@ -210,11 +212,18 @@ def _validate_materialization_manifest_active(
         raise ValueError("Research V2 materialization 尚未 READY")
     if str(payload.get("dataset_inventory_sha256") or "") != expected_inventory_sha256:
         raise ValueError("Research V2 materialization inventory identity drift")
-    return validate_research_v2_materialization_file_integrity(
-        project_root,
-        materialization_fingerprint=materialization_fingerprint,
-        payload=payload,
+    if verify_file_content:
+        return validate_research_v2_materialization_file_integrity(
+            project_root,
+            materialization_fingerprint=materialization_fingerprint,
+            payload=payload,
+        )
+    dataset_dir = resolve_research_v2_compatibility_dataset_dir(
+        project_root, materialization_fingerprint
     )
+    if not dataset_dir.is_dir():
+        raise FileNotFoundError("active Research V2 compatibility dataset directory 不存在")
+    return dataset_dir
 
 
 def load_research_v2_promotion_artifact(
@@ -222,6 +231,7 @@ def load_research_v2_promotion_artifact(
     *,
     promotion_fingerprint: str,
     expected_manifest_sha256: str | None = None,
+    verify_materialization_file_content: bool = True,
 ) -> ActiveResearchV2Promotion:
     """Validate one immutable published promotion independent of active pointer."""
 
@@ -292,6 +302,7 @@ def load_research_v2_promotion_artifact(
         expected_inventory_sha256=_require_hex64(
             payload.get("materialized_dataset_inventory_sha256"), field="materialized_dataset_inventory_sha256"
         ),
+        verify_file_content=bool(verify_materialization_file_content),
     )
     return ActiveResearchV2Promotion(
         promotion_fingerprint=promotion_fp,
@@ -307,6 +318,7 @@ def load_active_research_v2_promotion(
     project_root,
     *,
     required: bool = False,
+    verify_materialization_file_content: bool = True,
 ) -> ActiveResearchV2Promotion | None:
     root = Path(project_root).resolve()
     pointer_path = resolve_active_research_generation_path(root)
@@ -333,6 +345,7 @@ def load_active_research_v2_promotion(
         root,
         promotion_fingerprint=promotion_fp,
         expected_manifest_sha256=manifest_sha,
+        verify_materialization_file_content=bool(verify_materialization_file_content),
     )
 
 

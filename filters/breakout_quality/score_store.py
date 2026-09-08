@@ -31,7 +31,7 @@ def resolve_score_table_path(
     if not path.is_file():
         raise FileNotFoundError(
             f"找不到 breakout quality 正式 score table: {path}。"
-            "正式 runtime 只接受 models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/scores.csv 單一路徑。"
+            "正式 runtime 只接受 models/filters/breakout_quality/<filter_id>/[research_generations/<generation>/]<model_architecture>/<experiment_profile>/scores.csv 單一路徑。"
         )
     return path.resolve()
 

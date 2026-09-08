@@ -11996,3 +11996,13 @@ Decision：`ENGINEERING_COMPATIBILITY_FIX_ONLY / PANDAS_COW_WRITABLE_RANK_OWNER 
 - **Attribution / stopping**：BV不加future-horizon trajectory、aux loss、600-bar、temperature、hidden gate、window-count sweep、remove-detach或其他input architecture。Seed42 Forward first，primary reference=AO。只有Raw Safety Daily/Global/Pair、Pred-HS purity/P45-P55及Breakout共同material改善且Conditional-MFE不material退化才允許後續；否則直接關閉adaptive-input family。
 
 Decision：`MR13BV_IMPLEMENTED_RESULT_PENDING / ADAPTIVE_30_60_120_300BAR_PAST_CONTEXT / AO_40BAR_TARGET_AND_LOSS_EXACT / SAFETY_ONLY_ZERO_INIT_RESIDUAL / SHORT_VIEW_STOP_GRADIENT / CONDITIONAL_MFE_300BAR_ONLY / AO_RETAINED_IN_COMPARE / FORWARD_GATE_FIRST`。
+
+
+## 2026-09-09 — Audit Repair 4 / Research generation downstream identity isolation（engineering-only）
+
+- **Scope**：Rounds 1–16 independent audit確認 physical `full` dataset routing已能切換Research V1/V2，但Optimizer Study、Strategy Compare pair cache與Breakout Quality physical artifacts仍可能只以`full`作identity，造成跨generation續訓／REUSE或V2 rebuild覆寫V1 historical evidence。
+- **Fix**：新增canonical dataset-generation identity owner於`core/dataset_profiles.py`。V1/reduced保留既有fingerprint與physical paths；只有validated promoted V2才由promotion/materialization/source-projection/revision-proof lineage建立generation namespace。Optimizer effective-policy/Study DB、Strategy Compare status/run/pair-cache、Breakout Quality models/outputs共用此identity。
+- **Breakout Quality semantics**：不建立新MR/ARCH/PROFILE、不改target/loss/model topology/seed/split/PIT/metrics或current research decision。V1既有MR artifacts留在原路徑；promoted V2使用`research_generations/<generation>/`獨立namespace，且不得read-only fallback至V1。
+- **Research status**：`MR-13BV`仍為`IMPLEMENTED / RESULT_PENDING`；本工程修補不構成模型結果、promotion或重訓授權。
+
+Decision：`ENGINEERING_ONLY / DOWNSTREAM_DATASET_GENERATION_IDENTITY_CLOSED / V1_EVIDENCE_PRESERVED / V2_NAMESPACE_ISOLATED / MR13BV_RESULT_PENDING_UNCHANGED`。

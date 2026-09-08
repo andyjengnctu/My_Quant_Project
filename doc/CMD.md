@@ -517,3 +517,8 @@ python apps/research.py market-data verify
 - Freeze candidate自schema v3起為self-contained immutable evidence：source candidate manifest與daily-universe SQLite會複製到`freeze_candidates/<freeze_fingerprint>/`並以persisted SHA驗證；後續materialize/promote/active read不再讀mutable candidate slot。
 - Promotion directory採stage→atomic directory publish→active pointer順序。若published promotion存在但pointer缺失，`status`/normal Research routing會fail-fast，不再靜默回`research_v1`；再次對**同一freeze fingerprint**執行明確`promote`可在deep validation後恢復pointer。hidden stage-only crash residue不視為promotion truth。
 - Active full Research routing本身會驗compatibility CSV的exact file set與逐檔content SHA；`verify`仍可做同一canonical deep integrity檢查，但不再是唯一能發現materialization tamper的入口。
+
+
+### Research generation downstream identity（Audit Repair 4）
+
+Research V2 promotion完成後，`full` 不再只是可重用artifact的完整資料 identity。`core/dataset_profiles.py` 會提供 canonical dataset-generation identity：V1/reduced沿用既有 identity/path；promoted V2才產生 generation namespace。Optimizer Study DB/effective policy、Strategy Compare run/pair cache、Breakout Quality model/output paths都必須消費此 identity，因此不得跨 V1/V2 或不同 V2 materialization REUSE／覆寫。Breakout Quality scientific identity（例如目前 `MR-13BV`）不因本工程修補改名或改狀態；V2只增加 `research_generations/<generation_namespace>/` physical isolation。

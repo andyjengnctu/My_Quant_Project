@@ -4342,6 +4342,17 @@
       "entry": "`core/runtime_domains.py`, `core/market_data_research_storage_contract.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py`",
       "initial_status": "NEW",
       "order": 391
+    },
+    {
+      "id": "B404",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data Rounds 1–16 audit Repair 4 / downstream Research generation identity",
+      "item": "Research consumers bind artifact reuse and physical namespaces to the effective dataset generation while preserving legacy V1 identity and historical evidence",
+      "gap": "Independent Rounds 1–16 audit reproduced cross-generation identity collisions: Optimizer Study/effective policy and Strategy Compare pair cache treated V1 and promoted V2 as the same `full` dataset, while Breakout Quality would rebuild promoted-V2 artifacts into the existing V1 model/output namespace. Repair must derive one canonical dataset-generation lineage, preserve exact V1/reduced fingerprints and paths, isolate promoted-V2 Study/cache/model/output identities, and prevent V2 Breakout Quality fallback from reading or overwriting V1 historical evidence.",
+      "entry": "`core/dataset_profiles.py`, `core/walk_forward_policy.py`, `services/optimizer/application.py`, `services/research/strategy_compare_preparation_status.py`, `services/research/strategy_compare_reuse.py`, `services/research/strategy_comparison.py`, `filters/breakout_quality/paths.py`",
+      "initial_status": "NEW",
+      "order": 392
     }
   ],
   "tests": [
@@ -7999,6 +8010,13 @@
       "b_id": "B403",
       "initial_status": "NEW",
       "order": 513
+    },
+    {
+      "id": "T524",
+      "b_id": "B404",
+      "description": "`validate_market_data_rounds_1_16_repair4_downstream_generation_identity_contract_case` 泛化驗證V1/reduced legacy identity/path不漂移、promoted V2 dataset-generation lineage改變Optimizer policy/Study DB與Strategy Compare pair cache identity，且Breakout Quality V2 model/output使用獨立generation namespace並禁止fallback覆寫V1 evidence。",
+      "initial_status": "NEW",
+      "order": 514
     }
   ],
   "transitions": [
@@ -25889,6 +25907,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case`"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "B404",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "修正Rounds 1–16完整Audit確認的Optimizer、Strategy Compare與Breakout Quality跨Research generation artifact identity/reuse碰撞。",
+      "note": "Repair Round 4 downstream Research generation identity closure"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "T524",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增Rounds 1–16 Audit Repair 4泛化downstream generation identity contract synthetic並納入正式DONE測試摘要。",
+      "note": "`validate_market_data_rounds_1_16_repair4_downstream_generation_identity_contract_case`"
     }
   ]
 }

@@ -1639,6 +1639,12 @@ def run_strategy_comparison(
         "requested_config_fingerprint": requested_fingerprint,
         "settings": settings.as_dict(),
         "artifact_identities": status["artifact_identities"],
+        **(
+            {"research_dataset_generation_identity": dict(status["research_dataset_generation_identity"])}
+            if isinstance(status.get("research_dataset_generation_identity"), dict)
+            and status.get("research_dataset_generation_identity")
+            else {}
+        ),
         "comparison_period": comparison_period,
         "comparison_period_source": status.get("comparison_period_source"),
         "requested_preparation_plan": requested_plan.as_dict(),

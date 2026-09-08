@@ -4225,3 +4225,170 @@ def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_
     summary.update({"checks": len(results), "repair_round": 3})
     return results, summary
 
+
+
+def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_contract_case(_base_params):
+    """Repair-4 generic downstream identity invariants across Optimizer, Compare and BQ."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from config.market_data import RESEARCH_DATA_GENERATION_V2, RESEARCH_REQUIRED_CUTOFF
+    from core.dataset_profiles import (
+        build_dataset_generation_identity,
+        get_dataset_generation_namespace,
+    )
+    from core.market_data_contract import ResearchDataGenerationContract
+    from core.walk_forward_policy import (
+        build_optimizer_effective_policy_fingerprint,
+        build_optimizer_runtime_policy,
+        load_walk_forward_policy,
+    )
+    from filters.breakout_quality.paths import (
+        resolve_existing_filter_artifact_paths,
+        resolve_filter_model_dir,
+        resolve_filter_output_dir,
+    )
+    from services.optimizer.application import _build_optimizer_study_db_file_path
+    from services.research.strategy_compare_reuse import _pair_cache_fingerprint_from_payload
+
+    case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR4"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    active = ResearchDataGenerationContract(
+        generation_id=RESEARCH_DATA_GENERATION_V2,
+        status="active_frozen",
+        lifecycle="immutable",
+        cutoff_mode="fixed",
+        cutoff=RESEARCH_REQUIRED_CUTOFF,
+        required_cutoff=RESEARCH_REQUIRED_CUTOFF,
+        universe_mode="daily_pit_eligibility",
+    )
+
+    def promoted(materialization_char: str):
+        materialization_fp = materialization_char * 64
+        promotion_fp = ("a" if materialization_char != "a" else "b") * 64
+        payload = {
+            "required_source_projection_fingerprint": "c" * 64,
+            "adjusted_price_revision_proof_fingerprint": "d" * 64,
+        }
+        return SimpleNamespace(
+            promotion_fingerprint=promotion_fp,
+            materialization_fingerprint=materialization_fp,
+            frozen_cutoff=RESEARCH_REQUIRED_CUTOFF,
+            payload=payload,
+        )
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        with patch(
+            "core.market_data_research_promotion.get_effective_research_data_generation",
+            return_value=active,
+        ), patch(
+            "core.market_data_research_promotion.load_active_research_v2_promotion",
+            return_value=promoted("1"),
+        ):
+            identity_a = build_dataset_generation_identity(root, "full")
+            namespace_a = get_dataset_generation_namespace(root, "full")
+
+        with patch(
+            "core.market_data_research_promotion.get_effective_research_data_generation",
+            return_value=active,
+        ), patch(
+            "core.market_data_research_promotion.load_active_research_v2_promotion",
+            return_value=promoted("2"),
+        ):
+            identity_b = build_dataset_generation_identity(root, "full")
+            namespace_b = get_dataset_generation_namespace(root, "full")
+
+        add_check(results, "market_data", case_id, "canonical_v2_generation_identity_changes_with_materialized_truth", False, identity_a["identity_fingerprint"] == identity_b["identity_fingerprint"])
+        add_check(results, "market_data", case_id, "canonical_v2_generation_namespace_changes_with_materialized_truth", False, namespace_a == namespace_b)
+        add_check(results, "market_data", case_id, "canonical_generation_namespace_uses_complete_sha_identity", 64, len(str(namespace_a).split("research_v2_", 1)[1]))
+
+        base_policy = load_walk_forward_policy(Path(__file__).resolve().parents[2])
+        runtime_policy = build_optimizer_runtime_policy(
+            base_policy, "study", latest_data_date=RESEARCH_REQUIRED_CUTOFF, study_scope="full"
+        )
+        legacy_fp = build_optimizer_effective_policy_fingerprint(runtime_policy)["fingerprint_sha256"]
+        runtime_a = dict(runtime_policy)
+        runtime_a["research_dataset_generation_identity"] = identity_a
+        runtime_b = dict(runtime_policy)
+        runtime_b["research_dataset_generation_identity"] = identity_b
+        fp_a = build_optimizer_effective_policy_fingerprint(runtime_a)["fingerprint_sha256"]
+        fp_b = build_optimizer_effective_policy_fingerprint(runtime_b)["fingerprint_sha256"]
+        add_check(results, "market_data", case_id, "optimizer_v2_policy_identity_differs_from_legacy_v1", False, fp_a == legacy_fp)
+        add_check(results, "market_data", case_id, "optimizer_different_v2_generations_cannot_share_policy_fingerprint", False, fp_a == fp_b)
+
+        legacy_db = _build_optimizer_study_db_file_path(
+            output_dir=str(root / "outputs" / "ml_optimizer"), dataset_profile_key="full", study_scope="full"
+        )
+        v2_db = _build_optimizer_study_db_file_path(
+            output_dir=str(root / "outputs" / "ml_optimizer"),
+            dataset_profile_key="full",
+            study_scope="full",
+            dataset_generation_namespace=namespace_a,
+        )
+        add_check(results, "market_data", case_id, "optimizer_v1_study_db_path_remains_legacy_compatible", "optimizer_study_full_full.db", Path(legacy_db).name)
+        add_check(results, "market_data", case_id, "optimizer_v2_study_db_is_generation_scoped", True, namespace_a in Path(v2_db).name)
+
+        settings_payload = {
+            "dataset": "full",
+            "param_policy": "base-finalist-best",
+            "max_positions": 10,
+            "rotation": "off",
+            "parameter_sources": {
+                "p": {
+                    "path_template": "x",
+                    "identity_manifest_path": None,
+                    "trained_with_dl_id": None,
+                }
+            },
+            "dl_sources": {},
+        }
+        off_arm = {
+            "arm_id": "off", "param_source": "p", "param_policy": "base-finalist-best",
+            "rule_policy": "all_off", "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
+        }
+        on_arm = dict(off_arm, arm_id="on")
+        common = dict(
+            settings_payload=settings_payload,
+            artifact_identities={},
+            comparison_period={"start": "2021-01-01", "end": RESEARCH_REQUIRED_CUTOFF},
+            off_arm_payload=off_arm,
+            on_arm_payload=on_arm,
+            engine_schema_version=1,
+            parameter_evaluation_sha256="e" * 64,
+        )
+        compare_legacy = _pair_cache_fingerprint_from_payload(**common)
+        compare_a = _pair_cache_fingerprint_from_payload(**common, dataset_generation_identity=identity_a)
+        compare_b = _pair_cache_fingerprint_from_payload(**common, dataset_generation_identity=identity_b)
+        add_check(results, "market_data", case_id, "strategy_compare_v2_pair_cache_cannot_reuse_legacy_v1_identity", False, compare_a == compare_legacy)
+        add_check(results, "market_data", case_id, "strategy_compare_different_v2_generations_cannot_share_pair_cache", False, compare_a == compare_b)
+
+        legacy_model = resolve_filter_model_dir(root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling")
+        legacy_output = resolve_filter_output_dir(root, "breakout_quality_v1")
+        add_check(results, "market_data", case_id, "breakout_quality_v1_model_path_remains_legacy_namespace", False, "research_generations" in legacy_model.parts)
+        add_check(results, "market_data", case_id, "breakout_quality_v1_output_path_remains_legacy_namespace", False, "research_generations" in legacy_output.parts)
+
+        with patch("filters.breakout_quality.paths._research_generation_namespace", return_value=namespace_a):
+            v2_model_a = resolve_filter_model_dir(root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling")
+            v2_output_a = resolve_filter_output_dir(root, "breakout_quality_v1")
+            legacy_manifest = legacy_model / "manifest.json"
+            legacy_manifest.parent.mkdir(parents=True, exist_ok=True)
+            legacy_manifest.write_text("{}", encoding="utf-8")
+            existing_v2 = resolve_existing_filter_artifact_paths(
+                root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling"
+            )
+        with patch("filters.breakout_quality.paths._research_generation_namespace", return_value=namespace_b):
+            v2_model_b = resolve_filter_model_dir(root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling")
+
+        add_check(results, "market_data", case_id, "breakout_quality_v2_model_artifact_is_generation_scoped", True, namespace_a in v2_model_a.parts)
+        add_check(results, "market_data", case_id, "breakout_quality_v2_dataset_output_is_generation_scoped", True, namespace_a in v2_output_a.parts)
+        add_check(results, "market_data", case_id, "breakout_quality_different_v2_generations_have_distinct_paths", False, v2_model_a == v2_model_b)
+        add_check(results, "market_data", case_id, "breakout_quality_v2_never_falls_back_to_v1_artifact_path", v2_model_a, existing_v2.model_dir)
+
+    summary.update({"checks": len(results), "repair_round": 4})
+    return results, summary

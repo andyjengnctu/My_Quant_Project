@@ -10,6 +10,7 @@ DEFAULT_DATASET_ENV_VAR = "V16_DATASET_PROFILE"
 VALIDATE_DATASET_ENV_VAR = "V16_VALIDATE_DATASET"
 UNIX_DATASET_ROOT_DIR = "/data"
 PROJECT_DATA_DIRNAME = "data"
+DATASET_GENERATION_IDENTITY_SCHEMA_VERSION = 1
 
 DATASET_PROFILE_SPECS: Dict[str, Dict[str, str]] = {
     DATASET_PROFILE_REDUCED: {
@@ -96,6 +97,88 @@ def get_dataset_dir(project_root, profile_key):
         if promoted is not None:
             return str(promoted)
     return get_unpromoted_dataset_dir(project_root, normalized_key)
+
+
+
+def build_dataset_generation_identity(project_root, profile_key=DEFAULT_DATASET_PROFILE):
+    """Return the canonical dataset-generation identity for downstream Research artifacts.
+
+    Legacy V1/reduced profiles intentionally keep their historical physical namespaces.
+    A promoted Research V2 full profile carries immutable promotion/materialization lineage
+    so downstream caches and artifacts can no longer treat every ``full`` dataset as the
+    same scientific source.
+    """
+
+    from core.file_integrity import canonical_json_sha256
+
+    profile = normalize_dataset_profile_key(profile_key)
+    if profile != DATASET_PROFILE_FULL:
+        identity = {
+            "schema_version": DATASET_GENERATION_IDENTITY_SCHEMA_VERSION,
+            "dataset_profile": profile,
+            "generation_id": f"profile:{profile}",
+            "frozen_cutoff": None,
+        }
+    else:
+        from config.market_data import RESEARCH_DATA_GENERATION_V2
+        from core.market_data_contract import get_active_research_data_generation
+        from core.market_data_research_promotion import load_active_research_v2_promotion
+
+        # Artifact namespace/fingerprint resolution needs validated publication lineage,
+        # but not a repeated full CSV re-hash.  Normal data routing still performs the
+        # Repair-3 content-integrity validation before any materialized bytes are read.
+        promoted = load_active_research_v2_promotion(
+            project_root,
+            required=False,
+            verify_materialization_file_content=False,
+        )
+        if promoted is None:
+            active = get_active_research_data_generation()
+            identity = {
+                "schema_version": DATASET_GENERATION_IDENTITY_SCHEMA_VERSION,
+                "dataset_profile": profile,
+                "generation_id": str(active.generation_id),
+                "frozen_cutoff": None if active.cutoff is None else str(active.cutoff),
+            }
+        else:
+            payload = dict(promoted.payload or {})
+            identity = {
+                "schema_version": DATASET_GENERATION_IDENTITY_SCHEMA_VERSION,
+                "dataset_profile": profile,
+                "generation_id": RESEARCH_DATA_GENERATION_V2,
+                "frozen_cutoff": str(promoted.frozen_cutoff),
+                "promotion_fingerprint": str(promoted.promotion_fingerprint),
+                "materialization_fingerprint": str(promoted.materialization_fingerprint),
+                "required_source_projection_fingerprint": str(
+                    payload.get("required_source_projection_fingerprint") or ""
+                ),
+                "adjusted_price_revision_proof_fingerprint": str(
+                    payload.get("adjusted_price_revision_proof_fingerprint") or ""
+                ),
+            }
+
+    fingerprint_payload = dict(identity)
+    identity["identity_fingerprint"] = canonical_json_sha256(fingerprint_payload)
+    return identity
+
+
+def get_dataset_generation_namespace(project_root, profile_key=DEFAULT_DATASET_PROFILE):
+    """Return a physical namespace only when the current dataset truth needs isolation.
+
+    V1 and reduced keep legacy paths for historical compatibility.  Promoted V2 uses
+    the complete canonical generation-identity fingerprint so different V2 truths can
+    never overwrite each other.
+    """
+
+    from config.market_data import RESEARCH_DATA_GENERATION_V2
+
+    identity = build_dataset_generation_identity(project_root, profile_key)
+    if (
+        identity.get("dataset_profile") == DATASET_PROFILE_FULL
+        and identity.get("generation_id") == RESEARCH_DATA_GENERATION_V2
+    ):
+        return f"research_v2_{identity['identity_fingerprint']}"
+    return None
 
 
 def get_dataset_profile_label(profile_key):

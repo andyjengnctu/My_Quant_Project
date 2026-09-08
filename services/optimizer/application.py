@@ -22,6 +22,8 @@ from core.dataset_profiles import (
     resolve_dataset_profile_from_cli_env,
     build_missing_dataset_dir_message,
     build_empty_dataset_dir_message,
+    build_dataset_generation_identity,
+    get_dataset_generation_namespace,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import (
@@ -2863,13 +2865,16 @@ def _is_study_full_runtime_mode(model_mode: str, walk_forward_policy: dict) -> b
     )
 
 
-def _build_optimizer_study_db_file_path(*, output_dir: str, dataset_profile_key: str, study_scope: str) -> str:
+def _build_optimizer_study_db_file_path(
+    *, output_dir: str, dataset_profile_key: str, study_scope: str, dataset_generation_namespace: str | None = None
+) -> str:
     safe_dataset = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
     safe_scope = normalize_optimizer_study_scope(study_scope)
-    return os.path.join(output_dir, "study_db", f"optimizer_study_{safe_dataset}_{safe_scope}.db")
+    suffix = "" if not str(dataset_generation_namespace or "").strip() else f"__{dataset_generation_namespace}"
+    return os.path.join(output_dir, "study_db", f"optimizer_study_{safe_dataset}_{safe_scope}{suffix}.db")
 
 
-def _resolve_optimizer_db_file_for_mode(*, output_dir: str, dataset_profile_key: str, selected_model_mode: str, selected_study_scope: str, session_ts: str, timing_mode: bool) -> str:
+def _resolve_optimizer_db_file_for_mode(*, output_dir: str, dataset_profile_key: str, selected_model_mode: str, selected_study_scope: str, session_ts: str, timing_mode: bool, dataset_generation_namespace: str | None = None) -> str:
     from services.optimizer.benchmark import build_timing_db_file_path
 
     if bool(timing_mode):
@@ -2879,6 +2884,7 @@ def _resolve_optimizer_db_file_for_mode(*, output_dir: str, dataset_profile_key:
             output_dir=output_dir,
             dataset_profile_key=dataset_profile_key,
             study_scope=selected_study_scope,
+            dataset_generation_namespace=dataset_generation_namespace,
         )
     if bool(OPTIMIZER_PERSIST_STUDY_DB):
         return build_timing_db_file_path(output_dir=output_dir, dataset_profile_key=dataset_profile_key, session_ts=session_ts)
@@ -3067,8 +3073,14 @@ def main(argv=None, environ=None):
         except ValueError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
+    dataset_generation_namespace = get_dataset_generation_namespace(PROJECT_ROOT, dataset_profile_key)
+    optimizer_policy_base = dict(loaded_policy)
+    if dataset_generation_namespace is not None:
+        optimizer_policy_base["research_dataset_generation_identity"] = build_dataset_generation_identity(
+            PROJECT_ROOT, dataset_profile_key
+        )
     walk_forward_policy = build_optimizer_runtime_policy(
-        loaded_policy,
+        optimizer_policy_base,
         selected_model_mode,
         latest_data_date=latest_data_date,
         study_scope=selected_study_scope,
@@ -3093,6 +3105,7 @@ def main(argv=None, environ=None):
         selected_study_scope=selected_study_scope,
         session_ts=session.session_ts,
         timing_mode=timing_mode,
+        dataset_generation_namespace=dataset_generation_namespace,
     )
     db_name = f"sqlite:///{db_file}" if db_file else None
     ensure_runtime_dirs()
@@ -3144,7 +3157,7 @@ def main(argv=None, environ=None):
                 print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
                 return 1
         walk_forward_policy = build_optimizer_runtime_policy(
-            loaded_policy,
+            optimizer_policy_base,
             selected_model_mode,
             latest_data_date=latest_data_date,
             study_scope=selected_study_scope,
@@ -3167,6 +3180,7 @@ def main(argv=None, environ=None):
             selected_study_scope=selected_study_scope,
             session_ts=session.session_ts,
             timing_mode=timing_mode,
+            dataset_generation_namespace=dataset_generation_namespace,
         )
         db_name = f"sqlite:///{db_file}" if db_file else None
 
@@ -3185,7 +3199,7 @@ def main(argv=None, environ=None):
             environ=environ,
             project_root=PROJECT_ROOT,
             output_dir=OUTPUT_DIR,
-            base_policy=loaded_policy,
+            base_policy=optimizer_policy_base,
             selected_data_dir=selected_data_dir,
             dataset_label=dataset_label,
             load_all_raw_data=load_all_raw_data,

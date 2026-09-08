@@ -194,6 +194,7 @@ def _pair_cache_fingerprint_from_payload(
     on_arm_payload: dict[str, Any],
     engine_schema_version: int,
     parameter_evaluation_sha256: str | None = None,
+    dataset_generation_identity: dict[str, Any] | None = None,
 ) -> str:
     param_source = str(on_arm_payload.get("param_source") or "")
     dl_id = str(on_arm_payload.get("dl_id") or "")
@@ -329,6 +330,8 @@ def _pair_cache_fingerprint_from_payload(
         "on_arm": _replay_arm_contract(on_arm_payload),
         "artifact_identities": selected_artifacts,
     }
+    if isinstance(dataset_generation_identity, dict) and dataset_generation_identity:
+        payload["research_dataset_generation_identity"] = dict(dataset_generation_identity)
     raw = json.dumps(
         payload,
         ensure_ascii=False,
@@ -363,6 +366,9 @@ def _current_pair_cache_fingerprint(
         engine_schema_version=STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
         parameter_evaluation_sha256=_arm_parameter_evaluation_sha256(
             status, on_arm.arm_id
+        ),
+        dataset_generation_identity=(
+            dict(status.get("research_dataset_generation_identity") or {}) or None
         ),
     )
 
@@ -619,6 +625,9 @@ def _find_reusable_pair_with_archived_source(
                 on_arm_payload=stored_on,
                 engine_schema_version=STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
                 parameter_evaluation_sha256=stored_param_sha,
+                dataset_generation_identity=(
+                    dict(run_payload.get("research_dataset_generation_identity") or {}) or None
+                ),
             )
         except (TypeError, ValueError):
             continue
@@ -892,6 +901,9 @@ def _find_reusable_pair(
                 ),
                 parameter_evaluation_sha256=str(
                     metadata.get("params_file_sha256") or ""
+                ),
+                dataset_generation_identity=(
+                    dict(run_payload.get("research_dataset_generation_identity") or {}) or None
                 ),
             )
         except (TypeError, ValueError):

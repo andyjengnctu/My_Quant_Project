@@ -105,7 +105,7 @@ def parse_args(argv=None):
         default=None,
         help=(
             "研究 score table；省略時讀 "
-            "outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/research_scores.csv；"
+            "outputs/filters/breakout_quality/<filter_id>/[research_generations/<generation>/]<model_architecture>/<experiment_profile>/research_scores.csv；"
             "自訂路徑需在同目錄提供 research_scores_manifest.json"
         ),
     )
