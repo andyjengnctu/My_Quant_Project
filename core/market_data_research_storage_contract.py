@@ -1,0 +1,46 @@
+"""Filesystem contract for frozen-candidate Research Market Data V2 artifacts."""
+from __future__ import annotations
+
+from pathlib import Path
+import re
+
+RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT = Path("data") / "research" / "market_data_v2"
+RESEARCH_MARKET_DATA_V2_CANDIDATES_DIRNAME = "candidates"
+RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME = "research_v2_candidate_manifest.json"
+RESEARCH_V2_DAILY_UNIVERSE_FILENAME = "daily_universe.sqlite3"
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _require_fingerprint(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not _HEX64_RE.fullmatch(text):
+        raise ValueError("Research V2 provider snapshot fingerprint 不合法")
+    return text
+
+
+def resolve_research_v2_candidate_dir(project_root, provider_snapshot_fingerprint: str) -> Path:
+    return (
+        Path(project_root).resolve()
+        / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT
+        / RESEARCH_MARKET_DATA_V2_CANDIDATES_DIRNAME
+        / _require_fingerprint(provider_snapshot_fingerprint)
+    )
+
+
+def resolve_research_v2_candidate_manifest_path(project_root, provider_snapshot_fingerprint: str) -> Path:
+    return resolve_research_v2_candidate_dir(project_root, provider_snapshot_fingerprint) / RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME
+
+
+def resolve_research_v2_daily_universe_path(project_root, provider_snapshot_fingerprint: str) -> Path:
+    return resolve_research_v2_candidate_dir(project_root, provider_snapshot_fingerprint) / RESEARCH_V2_DAILY_UNIVERSE_FILENAME
+
+
+__all__ = [
+    "RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT",
+    "RESEARCH_MARKET_DATA_V2_CANDIDATES_DIRNAME",
+    "RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME",
+    "RESEARCH_V2_DAILY_UNIVERSE_FILENAME",
+    "resolve_research_v2_candidate_dir",
+    "resolve_research_v2_candidate_manifest_path",
+    "resolve_research_v2_daily_universe_path",
+]

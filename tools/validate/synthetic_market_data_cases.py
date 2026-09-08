@@ -1107,6 +1107,7 @@ __all__ = [
     "validate_market_data_v2_bootstrap_activation_contract_case",
     "validate_market_data_v2_provider_snapshot_completion_contract_case",
     "validate_market_data_v2_trading_workbench_sidecar_contract_case",
+    "validate_market_data_v2_research_candidate_contract_case",
 ]
 
 def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_params):
@@ -2400,4 +2401,204 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         "verified_schedule_count": freshness_stats["verified_schedule_count"],
         "fallback_schedule_count": freshness_stats["fallback_schedule_count"],
     })
+    return results, summary
+
+
+def validate_market_data_v2_research_candidate_contract_case(_base_params):
+    """Round-9 Research V2 stays pinned, PIT-audited and explicitly NOT_READY."""
+
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    import sqlite3
+    from tempfile import TemporaryDirectory
+
+    from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GENERATION_V1
+    from core.file_integrity import atomic_write_json, compute_file_sha256, load_json_strict
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest, build_registry_fingerprint
+    from core.market_data_dataset_registry import (
+        BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE,
+        BOOTSTRAP_SINGLE_FULL_RANGE,
+        BOOTSTRAP_SINGLE_NO_DATES,
+        get_market_dataset_specs,
+    )
+    from core.market_data_provider_snapshot import ProviderArtifactEvidence, build_provider_snapshot_payload
+    from core.market_data_research_storage_contract import (
+        resolve_research_v2_candidate_manifest_path,
+        resolve_research_v2_daily_universe_path,
+    )
+    from core.market_data_research_v2 import (
+        RESEARCH_V2_CANDIDATE_STATUS_NOT_READY,
+        RESEARCH_V2_DATASET_STATUS_CURRENT_VINTAGE_BLOCKED,
+        validate_research_v2_candidate_contract,
+    )
+    from core.market_data_storage_contract import (
+        resolve_market_data_provider_snapshot_path,
+        resolve_market_data_request_parquet_path,
+    )
+    from services.downloader.market_data_ledger import MarketDataJobLedger
+    from services.research.market_data_v2 import (
+        ResearchV2ProviderView,
+        build_research_v2_candidate,
+        load_research_v2_candidate,
+    )
+    from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
+
+    case_id = "MARKET_DATA_V2_RESEARCH_CANDIDATE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    stats = validate_research_v2_candidate_contract()
+    add_check(results, "market_data", case_id, "research_v2_registry_assesses_all_51_datasets", 51, stats["dataset_count"])
+    add_check(results, "market_data", case_id, "research_v2_exact_candidate_count_is_registry_driven", 4, stats["exact_candidate_count"])
+    add_check(results, "market_data", case_id, "research_v2_review_required_datasets_remain_unpromoted", 46, stats["review_required_count"])
+    add_check(results, "market_data", case_id, "research_v2_current_vintage_adjusted_price_is_blocked", 1, stats["current_vintage_blocked_count"])
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        manifest_fingerprint = "7" * 64
+        registry_fingerprint = build_registry_fingerprint(get_market_dataset_specs(included_only=True))
+        requests = (
+            BootstrapHttpRequest("TaiwanStockTradingDate", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
+            BootstrapHttpRequest("TaiwanStockDelisting", BOOTSTRAP_SINGLE_FULL_RANGE, None, "1900-01-01", "2026-09-03"),
+            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
+            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", "2026-09-03"),
+            BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
+            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
+            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", "2026-09-03"),
+        )
+        manifest = BootstrapRequestManifest(
+            as_of_date="2026-09-03",
+            full_range_start="1900-01-01",
+            registry_fingerprint=registry_fingerprint,
+            manifest_fingerprint=manifest_fingerprint,
+            historical_instrument_count=2,
+            requests=requests,
+        )
+        frame_by_request = {
+            requests[0].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"]}),
+            requests[1].request_id: pd.DataFrame(columns=["date", "stock_id"]),
+            requests[2].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["0050"] * 3}),
+            requests[3].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["2330"] * 3}),
+            requests[4].request_id: pd.DataFrame({"date": ["2026-09-01"], "stock_id": ["0050"], "close": [100.0]}),
+            requests[5].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02"], "stock_id": ["0050", "0050"]}),
+            requests[6].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["2330"] * 3}),
+        }
+
+        ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
+        ledger = MarketDataJobLedger(ledger_path)
+        workload_id = ledger.seed_manifest(manifest, now=datetime(2026, 9, 4, tzinfo=timezone.utc))
+        evidence = []
+        now = datetime(2026, 9, 4, tzinfo=timezone.utc)
+        while True:
+            job = ledger.claim_next_job(
+                workload_id,
+                owner_id="synthetic",
+                now=now,
+                lease_until=now + timedelta(minutes=5),
+            )
+            if job is None:
+                break
+            request = job.to_request()
+            path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((request.request_id + "\n").encode("utf-8"))
+            digest = compute_file_sha256(path)
+            frame = frame_by_request[request.request_id]
+            ledger.mark_done(
+                workload_id,
+                request.request_id,
+                row_count=len(frame),
+                content_sha256=digest,
+                now=now,
+            )
+            evidence.append(
+                ProviderArtifactEvidence(
+                    request_id=request.request_id,
+                    dataset=request.dataset,
+                    row_count=len(frame),
+                    content_sha256=digest,
+                )
+            )
+            now += timedelta(seconds=1)
+        ledger.set_workload_status(workload_id, status="DONE", now=now)
+        provider_payload = build_provider_snapshot_payload(
+            manifest=manifest,
+            artifacts=evidence,
+            finalized_at="2026-09-04T00:00:00+00:00",
+        )
+        provider_path = resolve_market_data_provider_snapshot_path(root, manifest_fingerprint)
+        atomic_write_json(provider_path, provider_payload)
+
+        def frame_reader(path, columns):
+            frame = frame_by_request[path.stem].copy()
+            if columns:
+                missing = [column for column in columns if column not in frame.columns]
+                if missing:
+                    raise ValueError(f"synthetic frame missing columns: {missing}")
+                frame = frame.loc[:, list(columns)]
+            return frame
+
+        archive = load_ready_provider_snapshot_archive(root)
+        add_check(results, "market_data", case_id, "research_provider_view_reuses_neutral_ready_snapshot", provider_payload["snapshot_fingerprint"], archive.snapshot_fingerprint)
+        view = ResearchV2ProviderView(project_root=root, archive=archive, frame_reader=frame_reader)
+        adjusted_blocked = False
+        try:
+            next(view.iter_dataset_frames("TaiwanStockPriceAdj", columns=("date", "stock_id")))
+        except RuntimeError:
+            adjusted_blocked = True
+        add_check(results, "market_data", case_id, "current_vintage_adjusted_price_cannot_enter_exact_pit_audit", True, adjusted_blocked)
+
+        candidate = build_research_v2_candidate(
+            root,
+            frame_reader=frame_reader,
+            now=datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc),
+        )
+        add_check(results, "market_data", case_id, "research_v2_candidate_never_promotes_itself", RESEARCH_V2_CANDIDATE_STATUS_NOT_READY, candidate["status"])
+        add_check(results, "market_data", case_id, "research_v2_candidate_has_no_frozen_cutoff", None, candidate["frozen_cutoff"])
+        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
+        add_check(results, "market_data", case_id, "research_v2_candidate_build_consumes_zero_provider_calls", 0, candidate["provider_calls"])
+        add_check(results, "market_data", case_id, "exact_candidate_ceiling_retreats_before_incomplete_latest_day", "2026-09-02", candidate["exact_candidate_ceiling_date"])
+        add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based", 6, candidate["daily_universe_row_count"])
+        blockers = {str(item.get("code")) for item in candidate["blockers"]}
+        add_check(results, "market_data", case_id, "research_v2_candidate_blocks_unapproved_dataset_scope", True, "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_blocks_current_vintage_adjusted_price", True, "ADJUSTED_PRICE_CURRENT_VINTAGE_PIT_REVIEW_REQUIRED" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
+
+        universe_path = resolve_research_v2_daily_universe_path(root, provider_payload["snapshot_fingerprint"])
+        manifest_path = resolve_research_v2_candidate_manifest_path(root, provider_payload["snapshot_fingerprint"])
+        add_check(results, "market_data", case_id, "research_v2_daily_universe_is_research_domain_artifact", True, universe_path.is_file() and "data/research/market_data_v2" in universe_path.as_posix())
+        add_check(results, "market_data", case_id, "research_v2_candidate_manifest_is_persisted", True, manifest_path.is_file())
+        conn = sqlite3.connect(universe_path)
+        try:
+            universe_rows = int(conn.execute("SELECT COUNT(*) FROM daily_universe").fetchone()[0])
+            last_coverage = conn.execute("SELECT date, missing_price_limit_count, exact_complete FROM exact_coverage ORDER BY date DESC LIMIT 1").fetchone()
+        finally:
+            conn.close()
+        add_check(results, "market_data", case_id, "research_v2_daily_universe_sqlite_preserves_membership_rows", 6, universe_rows)
+        add_check(results, "market_data", case_id, "research_v2_exact_coverage_records_latest_missing_member", ("2026-09-03", 1, 0), tuple(last_coverage))
+
+        loaded = load_research_v2_candidate(root, required=True)
+        add_check(results, "market_data", case_id, "research_v2_candidate_fingerprint_roundtrips", candidate["candidate_fingerprint"], loaded["candidate_fingerprint"])
+        original_universe_bytes = universe_path.read_bytes()
+        universe_path.write_bytes(original_universe_bytes + b"\n")
+        tamper_blocked = False
+        try:
+            load_research_v2_candidate(root, required=True)
+        except ValueError as exc:
+            tamper_blocked = "SHA256 drift" in str(exc)
+        add_check(results, "market_data", case_id, "research_v2_candidate_rejects_daily_universe_file_tamper", True, tamper_blocked)
+        universe_path.write_bytes(original_universe_bytes)
+        persisted = load_json_strict(manifest_path)
+        add_check(results, "market_data", case_id, "research_v2_candidate_paths_are_project_relative", False, str(persisted["provider_snapshot_path"]).startswith(str(root)))
+
+        service_source = (Path(__file__).resolve().parents[2] / "services" / "research" / "market_data_v2.py").read_text(encoding="utf-8")
+        add_check(results, "market_data", case_id, "research_v2_builder_never_reads_trading_v2_overlay", False, "data/trading/market_data_v2" in service_source or "services.trading.market_data_v2_state" in service_source)
+
+    summary.update(
+        {
+            "checks": len(results),
+            "dataset_count": stats["dataset_count"],
+            "exact_candidate_count": stats["exact_candidate_count"],
+            "review_required_count": stats["review_required_count"],
+        }
+    )
     return results, summary

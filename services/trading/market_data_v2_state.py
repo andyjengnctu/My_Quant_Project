@@ -8,11 +8,11 @@ from core.console_report import project_relative_display_path
 from typing import Any
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
-from core.market_data_bootstrap_requests import build_registry_fingerprint
-from core.market_data_dataset_registry import get_market_dataset_specs
 from core.market_data_freshness_contract import build_market_data_freshness_contract_summary
-from core.market_data_provider_snapshot import provider_snapshot_identity_from_payload
-from core.market_data_storage_contract import MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT, MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME
+from services.market_data.provider_snapshot_repository import (
+    find_latest_ready_provider_snapshot,
+    find_ready_provider_snapshot_by_fingerprint,
+)
 from core.market_data_trading_storage_contract import (
     TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
     resolve_trading_market_data_v2_state_path,
@@ -22,63 +22,6 @@ TRADING_V2_ARCHIVE_STATUS_SYNCED = "SYNCED"
 TRADING_V2_ARCHIVE_STATUS_NOT_BOOTSTRAPPED = "NOT_BOOTSTRAPPED"
 TRADING_V2_ARCHIVE_STATUS_STALE = "STALE"
 
-
-def _validate_provider_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(payload, dict) or str(payload.get("status") or "") != "READY":
-        raise ValueError("Market Data V2 provider snapshot 尚未 READY")
-    identity = provider_snapshot_identity_from_payload(payload)
-    if str(payload.get("snapshot_fingerprint") or "") != canonical_json_sha256(identity):
-        raise ValueError("Market Data V2 provider snapshot fingerprint 不一致")
-    current_registry = build_registry_fingerprint(get_market_dataset_specs(included_only=True))
-    if str(payload.get("registry_fingerprint") or "") != current_registry:
-        raise ValueError("Market Data V2 provider snapshot registry 與 current registry 已 drift")
-    return payload
-
-
-def find_latest_ready_provider_snapshot(project_root) -> tuple[Path, dict[str, Any]] | None:
-    root = Path(project_root).resolve()
-    base = root / MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT
-    candidates: list[tuple[str, str, Path, dict[str, Any]]] = []
-    if not base.is_dir():
-        return None
-    for path in base.glob(f"*/{MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME}"):
-        try:
-            payload = _validate_provider_snapshot(load_json_strict(path))
-        except (OSError, ValueError, TypeError):
-            continue
-        candidates.append(
-            (
-                str(payload.get("as_of_date") or ""),
-                str(payload.get("finalized_at") or ""),
-                path,
-                payload,
-            )
-        )
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (item[0], item[1], str(item[2])))
-    _as_of, _finalized, path, payload = candidates[-1]
-    return path, payload
-
-
-
-
-def find_ready_provider_snapshot_by_fingerprint(project_root, snapshot_fingerprint: str) -> tuple[Path, dict[str, Any]] | None:
-    wanted = str(snapshot_fingerprint or "").strip()
-    if len(wanted) != 64:
-        raise ValueError("provider snapshot fingerprint 不合法")
-    root = Path(project_root).resolve()
-    base = root / MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT
-    if not base.is_dir():
-        return None
-    for path in base.glob(f"*/{MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME}"):
-        try:
-            payload = _validate_provider_snapshot(load_json_strict(path))
-        except (OSError, ValueError, TypeError):
-            continue
-        if str(payload.get("snapshot_fingerprint") or "") == wanted:
-            return path, payload
-    return None
 
 
 def load_trading_market_data_v2_state(project_root, *, required: bool = False) -> dict[str, Any] | None:
