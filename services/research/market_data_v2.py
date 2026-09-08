@@ -57,6 +57,7 @@ from core.market_data_research_v2 import (
     ResearchV2ExactCoverageSummary,
     summarize_exact_candidate_coverage_table,
     validate_research_v2_candidate_contract,
+    validate_research_v2_required_cutoff,
 )
 from core.market_data_storage_contract import resolve_market_data_request_parquet_path
 from services.market_data.provider_snapshot_repository import (
@@ -290,9 +291,10 @@ def _build_review_date_audits(
     view: ResearchV2ProviderView,
     *,
     trading_dates: set[str],
+    research_cutoff: str,
 ) -> tuple[tuple[ResearchV2DatasetDateAudit, ...], ResearchV2MechanicalCommonCompleteSummary]:
     contracts = build_research_v2_pit_review_contracts()
-    as_of = view.archive.as_of_date
+    as_of = str(research_cutoff)
     audits: list[ResearchV2DatasetDateAudit] = []
     observed_by_dataset: dict[str, set[str]] = {}
 
@@ -402,6 +404,7 @@ def _build_exact_candidate_sqlite(
     view: ResearchV2ProviderView,
     *,
     output_path: Path,
+    research_cutoff: str,
 ) -> tuple[dict[str, object], pd.DataFrame]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=".daily_universe.", suffix=".sqlite3.tmp", dir=str(output_path.parent))
@@ -411,13 +414,14 @@ def _build_exact_candidate_sqlite(
         conn = _connect_universe_db(temp_path)
         try:
             _init_universe_db(conn)
-            as_of = view.archive.as_of_date
+            cutoff = str(research_cutoff)
+            provider_as_of = view.archive.as_of_date
             trading_rows: set[str] = set()
             for frame in view.iter_dataset_frames(RESEARCH_V2_TRADING_CALENDAR_DATASET, columns=("date",)):
                 if "date" not in frame.columns:
                     raise ValueError("TaiwanStockTradingDate 缺少 date")
                 dates = pd.to_datetime(frame["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-                trading_rows.update(str(value) for value in dates.dropna().tolist() if str(value) <= as_of)
+                trading_rows.update(str(value) for value in dates.dropna().tolist() if str(value) <= cutoff)
             if not trading_rows:
                 raise ValueError("Research V2 trading calendar evidence 不可為空")
             conn.executemany("INSERT OR IGNORE INTO trading_dates(date) VALUES (?)", ((value,) for value in sorted(trading_rows)))
@@ -427,7 +431,7 @@ def _build_exact_candidate_sqlite(
                 RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET,
                 columns=("date", "stock_id"),
             ):
-                rows = [row for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET) if row[0] <= as_of and row[1] in historical_pool and row[0] in trading_rows]
+                rows = [row for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET) if row[0] <= cutoff and row[1] in historical_pool and row[0] in trading_rows]
                 if rows:
                     conn.executemany("INSERT OR IGNORE INTO daily_universe(date, stock_id) VALUES (?, ?)", rows)
 
@@ -435,7 +439,7 @@ def _build_exact_candidate_sqlite(
                 RESEARCH_V2_DAILY_COVERAGE_DATASET,
                 columns=("date", "stock_id"),
             ):
-                rows = [row for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_DAILY_COVERAGE_DATASET) if row[0] <= as_of and row[1] in historical_pool and row[0] in trading_rows]
+                rows = [row for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_DAILY_COVERAGE_DATASET) if row[0] <= cutoff and row[1] in historical_pool and row[0] in trading_rows]
                 if rows:
                     conn.executemany("INSERT OR IGNORE INTO price_limit_evidence(date, stock_id) VALUES (?, ?)", rows)
 
@@ -447,7 +451,12 @@ def _build_exact_candidate_sqlite(
                 RESEARCH_V2_EVENT_EVIDENCE_DATASET,
                 columns=("date", "stock_id"),
             ):
-                delisting_rows += len(_normalize_date_stock(frame, dataset=RESEARCH_V2_EVENT_EVIDENCE_DATASET)) if len(frame) else 0
+                if len(frame):
+                    delisting_rows += sum(
+                        1
+                        for date_value, _stock_id in _normalize_date_stock(frame, dataset=RESEARCH_V2_EVENT_EVIDENCE_DATASET)
+                        if date_value <= cutoff
+                    )
 
             conn.execute(
                 """
@@ -489,18 +498,20 @@ def _build_exact_candidate_sqlite(
             coverage["exact_complete"] = coverage["exact_complete"].astype(bool)
             summary = summarize_exact_candidate_coverage_table(
                 coverage,
-                provider_as_of_date=as_of,
+                provider_as_of_date=provider_as_of,
                 daily_universe_row_count=universe_count,
             )
             date_audits, mechanical_summary = _build_review_date_audits(
                 conn,
                 view,
                 trading_dates=trading_rows,
+                research_cutoff=cutoff,
             )
             metadata = {
                 "provider_snapshot_fingerprint": view.archive.snapshot_fingerprint,
                 "provider_manifest_fingerprint": view.archive.manifest_fingerprint,
-                "provider_as_of_date": as_of,
+                "provider_as_of_date": provider_as_of,
+                "research_required_cutoff": cutoff,
                 "historical_instrument_count": len(historical_pool),
                 "daily_universe_row_count": universe_count,
                 "daily_universe_fingerprint": universe_fingerprint,
@@ -534,6 +545,7 @@ def _build_candidate_blockers(
     contract_stats: dict[str, object],
     coverage_summary: dict[str, object],
     *,
+    required_cutoff: str,
     pit_review_stats: dict[str, object],
     mechanical_summary: dict[str, object],
 ) -> list[dict[str, object]]:
@@ -585,6 +597,24 @@ def _build_candidate_blockers(
                 "reason": "自動 date-presence audit 沒有找到共同連續 trading-date tail。",
             }
         )
+    if str(coverage_summary.get("latest_exact_complete_date") or "") != str(required_cutoff):
+        blockers.append(
+            {
+                "code": "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY",
+                "required_cutoff": str(required_cutoff),
+                "latest_exact_complete_date": coverage_summary.get("latest_exact_complete_date"),
+                "reason": "Research V2 exact-candidate evidence 尚未完整覆蓋固定 Research cutoff。",
+            }
+        )
+    if str(mechanical_summary.get("common_complete_ceiling_date") or "") != str(required_cutoff):
+        blockers.append(
+            {
+                "code": "RESEARCH_REQUIRED_CUTOFF_MECHANICAL_COVERAGE_NOT_READY",
+                "required_cutoff": str(required_cutoff),
+                "mechanical_common_complete_ceiling_date": mechanical_summary.get("common_complete_ceiling_date"),
+                "reason": "Research V2 mechanical date-presence evidence 尚未完整覆蓋固定 Research cutoff。",
+            }
+        )
     return blockers
 
 
@@ -600,6 +630,7 @@ def build_research_v2_candidate(
     generation = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
     if generation.status != RESEARCH_STATUS_AUTHORIZED_NOT_READY or generation.cutoff is not None:
         raise RuntimeError("Research V2 candidate builder 只允許 authorized_not_ready / cutoff=None 狀態")
+    required_cutoff = generation.required_cutoff
     if ACTIVE_RESEARCH_DATA_GENERATION != RESEARCH_DATA_GENERATION_V1:
         raise RuntimeError("Research V2 candidate build 不得在本輪自行切換 ACTIVE Research generation")
 
@@ -607,6 +638,10 @@ def build_research_v2_candidate(
     pit_review_contracts = build_research_v2_pit_review_contracts()
     pit_review_stats = validate_research_v2_pit_review_contracts(pit_review_contracts)
     archive = load_ready_provider_snapshot_archive(root, snapshot_fingerprint=snapshot_fingerprint)
+    required_cutoff = validate_research_v2_required_cutoff(
+        provider_as_of_date=archive.as_of_date,
+        required_cutoff=required_cutoff,
+    )
     view = ResearchV2ProviderView(
         project_root=root,
         archive=archive,
@@ -615,7 +650,11 @@ def build_research_v2_candidate(
     )
     candidate_dir = resolve_research_v2_candidate_dir(root, archive.snapshot_fingerprint)
     universe_path = resolve_research_v2_daily_universe_path(root, archive.snapshot_fingerprint)
-    derived, _coverage_table = _build_exact_candidate_sqlite(view, output_path=universe_path)
+    derived, _coverage_table = _build_exact_candidate_sqlite(
+        view,
+        output_path=universe_path,
+        research_cutoff=required_cutoff,
+    )
     del _coverage_table
     coverage_summary = dict(derived["coverage_summary"])
     mechanical_summary = dict(derived["mechanical_common_complete"])
@@ -625,6 +664,7 @@ def build_research_v2_candidate(
         provider_snapshot_fingerprint=archive.snapshot_fingerprint,
         provider_manifest_fingerprint=archive.manifest_fingerprint,
         provider_as_of_date=archive.as_of_date,
+        required_cutoff=required_cutoff,
         historical_instrument_count=int(derived["historical_instrument_count"]),
         daily_universe_fingerprint=str(derived["daily_universe_fingerprint"]),
         coverage_summary=ResearchV2ExactCoverageSummary(**coverage_summary),
@@ -657,6 +697,7 @@ def build_research_v2_candidate(
         "blockers": _build_candidate_blockers(
             contract_stats,
             coverage_summary,
+            required_cutoff=required_cutoff,
             pit_review_stats=pit_review_stats,
             mechanical_summary=mechanical_summary,
         ),
@@ -708,6 +749,13 @@ def load_research_v2_candidate(
         raise ValueError("Research V2 candidate provider manifest fingerprint drift")
     if str(payload.get("provider_as_of_date") or "") != archive.as_of_date:
         raise ValueError("Research V2 candidate provider as_of_date drift")
+    generation = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
+    expected_required_cutoff = validate_research_v2_required_cutoff(
+        provider_as_of_date=archive.as_of_date,
+        required_cutoff=generation.required_cutoff,
+    )
+    if str(payload.get("required_cutoff") or "") != expected_required_cutoff:
+        raise ValueError("Research V2 candidate required cutoff drift")
     expected_assessments = [asdict(row) for row in build_research_v2_dataset_assessments()]
     if str(payload.get("dataset_assessment_fingerprint") or "") != research_v2_dataset_assessment_fingerprint():
         raise ValueError("Research V2 candidate dataset assessment contract drift")

@@ -7,13 +7,15 @@ Research/Trading lifecycle states.
 
 RESEARCH_DATA_GENERATION_V1 = "research_v1"
 RESEARCH_DATA_GENERATION_V2 = "research_v2"
+RESEARCH_REQUIRED_CUTOFF = "2026-03-02"
 
 RESEARCH_DATA_GENERATIONS = {
     RESEARCH_DATA_GENERATION_V1: {
         "status": "active_frozen",
         "lifecycle": "immutable",
         "cutoff_mode": "fixed",
-        "cutoff": "2026-03-02",
+        "cutoff": RESEARCH_REQUIRED_CUTOFF,
+        "required_cutoff": RESEARCH_REQUIRED_CUTOFF,
         "universe_mode": "static_20260302_screen_pool",
     },
     RESEARCH_DATA_GENERATION_V2: {
@@ -21,6 +23,9 @@ RESEARCH_DATA_GENERATIONS = {
         "lifecycle": "freeze_after_bootstrap",
         "cutoff_mode": "bootstrap_common_complete_manifest",
         "cutoff": None,
+        # Research and Trading share a neutral provider archive, but Research V2
+        # must never extend its scientific horizon beyond the fixed Research date.
+        "required_cutoff": RESEARCH_REQUIRED_CUTOFF,
         "universe_mode": "daily_pit_eligibility",
     },
 }
@@ -150,6 +155,7 @@ MARKET_DATA_V2_PUBLICATION_POLICY = {
 __all__ = [
     "RESEARCH_DATA_GENERATION_V1",
     "RESEARCH_DATA_GENERATION_V2",
+    "RESEARCH_REQUIRED_CUTOFF",
     "RESEARCH_DATA_GENERATIONS",
     "ACTIVE_RESEARCH_DATA_GENERATION",
     "TRADING_MARKET_DATA_LIFECYCLE",

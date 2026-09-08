@@ -4243,6 +4243,17 @@
       "entry": "`core/market_data_research_pit_contract.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 382
+    },
+    {
+      "id": "B395",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Research fixed-horizon / Trading archive isolation",
+      "item": "Research V2 evidence is capped at the configured required Research cutoff even when the neutral Provider Snapshot contains later Trading-era rows",
+      "gap": "Research與Trading可共用同一immutable neutral Provider Snapshot，但Research V2 scientific horizon不得隨Trading日更向後漂移。Research generation contract必須明確持有required_cutoff；authorized_not_ready階段的cutoff仍維持null。Provider Snapshot as-of必須至少覆蓋required_cutoff，calendar、daily PIT universe、PriceLimit exact completeness、event evidence與review-required date-presence audit只能納入required_cutoff以前資料；post-cutoff archive rows不得進入Research scientific evidence或延伸其時間窗。Candidate identity必須包含required_cutoff；exact與mechanical completeness若尚未完整覆蓋required_cutoff只能保持BLOCKED，不得自動採用較早common-complete日期作frozen cutoff。Dataset scope、publication/revision PIT legality、TaiwanStockPriceAdj retrospective invariance與promotion決策仍維持既有未授權狀態。",
+      "entry": "`config/market_data.py`, `core/market_data_contract.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 383
     }
   ],
   "tests": [
@@ -7826,7 +7837,7 @@
     },
     {
       "id": "T513",
-      "description": "`validate_market_data_v2_research_candidate_contract_case` 覆蓋51-dataset PIT assessment、neutral Provider Snapshot pinning、current-vintage adjusted-price fail-closed、raw-price presence historical universe、PriceLimit exact completeness ceiling、event no-row legality、零provider call candidate build、NOT_READY/no frozen cutoff/no promotion、project-relative Research artifacts、candidate/SQLite SHA tamper fail-closed與禁止讀Trading V2 overlay。",
+      "description": "`validate_market_data_v2_research_candidate_contract_case` 覆蓋51-dataset PIT assessment、neutral Provider Snapshot pinning、current-vintage adjusted-price fail-closed、raw-price presence historical universe、PriceLimit exact completeness ceiling、event no-row legality、零provider call candidate build、固定Research required-cutoff截斷post-cutoff archive rows、NOT_READY/no frozen cutoff/no promotion、project-relative Research artifacts、candidate/SQLite SHA tamper fail-closed與禁止讀Trading V2 overlay。",
       "b_id": "B393",
       "initial_status": "NEW",
       "order": 503
@@ -7837,6 +7848,13 @@
       "description": "`validate_market_data_v2_research_pit_review_contract_case` 覆蓋51-dataset cadence-driven PIT review classification、零scientific auto-authorization、current-vintage hard block、daily date-presence eligibility、mechanical common-tail intersection/retreat與缺dataset audit時cutoff清空。",
       "initial_status": "NEW",
       "order": 504
+    },
+    {
+      "id": "T515",
+      "b_id": "B395",
+      "description": "`validate_market_data_v2_research_required_cutoff_isolation_contract_case` 覆蓋Research V1/V2 required-cutoff一致性、Provider Snapshot可晚於但不得早於Research horizon、candidate identity納入required_cutoff、review date-presence排除post-cutoff rows與mechanical common-complete不得越過Research cutoff。",
+      "initial_status": "NEW",
+      "order": 505
     }
   ],
   "transitions": [
@@ -25519,6 +25537,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_research_pit_review_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B395",
+      "description": "新增Research V2固定Research horizon與Trading日更neutral archive隔離治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`config/market_data.py`, `services/research/market_data_v2.py`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T515",
+      "description": "新增Research V2 required-cutoff isolation dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_research_required_cutoff_isolation_contract_case`"
     }
   ]
 }

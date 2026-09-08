@@ -23,7 +23,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
 )
 
-RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 2
+RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 3
 RESEARCH_V2_CANDIDATE_STATUS_NOT_READY = "CANDIDATE_NOT_READY"
 RESEARCH_V2_DATASET_STATUS_EXACT_CANDIDATE = "EXACT_CANDIDATE"
 RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
@@ -51,6 +51,7 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "provider_snapshot_fingerprint",
     "provider_manifest_fingerprint",
     "provider_as_of_date",
+    "required_cutoff",
     "historical_instrument_count",
     "daily_universe_source_dataset",
     "daily_universe_fingerprint",
@@ -165,6 +166,17 @@ def validate_research_v2_candidate_contract() -> dict[str, int | str]:
         "archive_only_count": len(archive),
         "assessment_fingerprint": research_v2_dataset_assessment_fingerprint(rows),
     }
+
+
+def validate_research_v2_required_cutoff(*, provider_as_of_date: str, required_cutoff: str) -> str:
+    provider_date = pd.Timestamp(str(provider_as_of_date)).date()
+    cutoff_date = pd.Timestamp(str(required_cutoff)).date()
+    if provider_date < cutoff_date:
+        raise ValueError(
+            "Research V2 Provider Snapshot as-of 早於 required cutoff: "
+            f"provider_as_of={provider_date.isoformat()} required_cutoff={cutoff_date.isoformat()}"
+        )
+    return cutoff_date.isoformat()
 
 
 def _normalize_date_series(values) -> pd.Series:
@@ -323,6 +335,7 @@ def build_research_v2_candidate_identity_payload(
     provider_snapshot_fingerprint: str,
     provider_manifest_fingerprint: str,
     provider_as_of_date: str,
+    required_cutoff: str,
     historical_instrument_count: int,
     daily_universe_fingerprint: str,
     coverage_summary: ResearchV2ExactCoverageSummary,
@@ -341,6 +354,7 @@ def build_research_v2_candidate_identity_payload(
         "provider_snapshot_fingerprint": str(provider_snapshot_fingerprint),
         "provider_manifest_fingerprint": str(provider_manifest_fingerprint),
         "provider_as_of_date": str(provider_as_of_date),
+        "required_cutoff": str(required_cutoff),
         "historical_instrument_count": int(historical_instrument_count),
         "daily_universe_source_dataset": RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET,
         "daily_universe_fingerprint": str(daily_universe_fingerprint),
@@ -381,6 +395,7 @@ __all__ = [
     "build_research_v2_dataset_assessments",
     "research_v2_dataset_assessment_fingerprint",
     "validate_research_v2_candidate_contract",
+    "validate_research_v2_required_cutoff",
     "build_daily_pit_universe",
     "summarize_exact_candidate_coverage_table",
     "build_exact_candidate_daily_coverage",

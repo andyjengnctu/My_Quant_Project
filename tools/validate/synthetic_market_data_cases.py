@@ -190,7 +190,7 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
 def validate_market_data_v2_resumable_executor_contract_case(_base_params):
     """Round-2 request identity, ledger resume, quota wait and retry semantics."""
 
-    from datetime import datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta, timezone
     from pathlib import Path
     from tempfile import TemporaryDirectory
 
@@ -1108,6 +1108,8 @@ __all__ = [
     "validate_market_data_v2_provider_snapshot_completion_contract_case",
     "validate_market_data_v2_trading_workbench_sidecar_contract_case",
     "validate_market_data_v2_research_candidate_contract_case",
+    "validate_market_data_v2_research_pit_review_contract_case",
+    "validate_market_data_v2_research_required_cutoff_isolation_contract_case",
 ]
 
 def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_params):
@@ -2407,13 +2409,12 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
 def validate_market_data_v2_research_candidate_contract_case(_base_params):
     """Round-9 Research V2 stays pinned, PIT-audited and explicitly NOT_READY."""
 
-    from datetime import datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta, timezone
     from pathlib import Path
     import sqlite3
-    from pathlib import Path
     from tempfile import TemporaryDirectory
 
-    from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GENERATION_V1
+    from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GENERATION_V1, RESEARCH_REQUIRED_CUTOFF
     from core.file_integrity import atomic_write_json, compute_file_sha256, load_json_strict
     from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest, build_registry_fingerprint
     from core.market_data_dataset_registry import (
@@ -2455,20 +2456,25 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
 
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
+        research_cutoff_date = date.fromisoformat(RESEARCH_REQUIRED_CUTOFF)
+        before_cutoff = (research_cutoff_date - timedelta(days=1)).isoformat()
+        research_cutoff = research_cutoff_date.isoformat()
+        after_cutoff = (research_cutoff_date + timedelta(days=1)).isoformat()
+        provider_as_of = (research_cutoff_date + timedelta(days=190)).isoformat()
         manifest_fingerprint = "7" * 64
         registry_fingerprint = build_registry_fingerprint(get_market_dataset_specs(included_only=True))
         requests = (
             BootstrapHttpRequest("TaiwanStockTradingDate", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
-            BootstrapHttpRequest("TaiwanStockDelisting", BOOTSTRAP_SINGLE_FULL_RANGE, None, "1900-01-01", "2026-09-03"),
-            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
-            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", "2026-09-03"),
-            BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
-            BootstrapHttpRequest("TaiwanStockPER", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
-            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
-            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", "2026-09-03"),
+            BootstrapHttpRequest("TaiwanStockDelisting", BOOTSTRAP_SINGLE_FULL_RANGE, None, "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPER", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
         )
         manifest = BootstrapRequestManifest(
-            as_of_date="2026-09-03",
+            as_of_date=provider_as_of,
             full_range_start="1900-01-01",
             registry_fingerprint=registry_fingerprint,
             manifest_fingerprint=manifest_fingerprint,
@@ -2476,14 +2482,14 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             requests=requests,
         )
         frame_by_request = {
-            requests[0].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"]}),
+            requests[0].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff]}),
             requests[1].request_id: pd.DataFrame(columns=["date", "stock_id"]),
-            requests[2].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["0050"] * 3}),
-            requests[3].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["2330"] * 3}),
-            requests[4].request_id: pd.DataFrame({"date": ["2026-09-01"], "stock_id": ["0050"], "close": [100.0]}),
-            requests[5].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["0050"] * 3, "PER": [20.0, 21.0, 22.0]}),
-            requests[6].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02"], "stock_id": ["0050", "0050"]}),
-            requests[7].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["2330"] * 3}),
+            requests[2].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3}),
+            requests[3].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3}),
+            requests[4].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"], "close": [100.0]}),
+            requests[5].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3, "PER": [20.0, 21.0, 22.0]}),
+            requests[6].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"]}),
+            requests[7].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3}),
         }
 
         ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
@@ -2574,13 +2580,15 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         add_check(results, "market_data", case_id, "research_v2_candidate_has_no_research_common_complete_cutoff", None, candidate["research_common_complete_cutoff"])
         add_check(results, "market_data", case_id, "research_v2_candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
         add_check(results, "market_data", case_id, "research_v2_candidate_build_consumes_zero_provider_calls", 0, candidate["provider_calls"])
-        add_check(results, "market_data", case_id, "exact_candidate_ceiling_retreats_before_incomplete_latest_day", "2026-09-02", candidate["exact_candidate_ceiling_date"])
-        add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based", 6, candidate["daily_universe_row_count"])
+        add_check(results, "market_data", case_id, "research_v2_candidate_records_fixed_required_cutoff", research_cutoff, candidate["required_cutoff"])
+        add_check(results, "market_data", case_id, "exact_candidate_ceiling_retreats_before_incomplete_required_cutoff", before_cutoff, candidate["exact_candidate_ceiling_date"])
+        add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based_and_cutoff_capped", 4, candidate["daily_universe_row_count"])
         blockers = {str(item.get("code")) for item in candidate["blockers"]}
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_unapproved_dataset_scope", True, "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_current_vintage_adjusted_price", True, "ADJUSTED_PRICE_CURRENT_VINTAGE_PIT_REVIEW_REQUIRED" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_reports_incomplete_mechanical_date_audit", True, "MECHANICAL_DATE_AUDIT_INCOMPLETE" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_blocks_incomplete_required_cutoff_exact_coverage", True, "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
 
         universe_path = resolve_research_v2_daily_universe_path(root, provider_payload["snapshot_fingerprint"])
@@ -2590,11 +2598,13 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         conn = sqlite3.connect(universe_path)
         try:
             universe_rows = int(conn.execute("SELECT COUNT(*) FROM daily_universe").fetchone()[0])
+            max_universe_date = conn.execute("SELECT MAX(date) FROM daily_universe").fetchone()[0]
             last_coverage = conn.execute("SELECT date, missing_price_limit_count, exact_complete FROM exact_coverage ORDER BY date DESC LIMIT 1").fetchone()
         finally:
             conn.close()
-        add_check(results, "market_data", case_id, "research_v2_daily_universe_sqlite_preserves_membership_rows", 6, universe_rows)
-        add_check(results, "market_data", case_id, "research_v2_exact_coverage_records_latest_missing_member", ("2026-09-03", 1, 0), tuple(last_coverage))
+        add_check(results, "market_data", case_id, "research_v2_daily_universe_sqlite_preserves_cutoff_membership_rows", 4, universe_rows)
+        add_check(results, "market_data", case_id, "research_v2_daily_universe_excludes_provider_rows_after_research_cutoff", research_cutoff, max_universe_date)
+        add_check(results, "market_data", case_id, "research_v2_exact_coverage_records_required_cutoff_missing_member", (research_cutoff, 1, 0), tuple(last_coverage))
 
         loaded = load_research_v2_candidate(root, required=True)
         add_check(results, "market_data", case_id, "research_v2_candidate_fingerprint_roundtrips", candidate["candidate_fingerprint"], loaded["candidate_fingerprint"])
@@ -2773,6 +2783,7 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
                 conn,
                 _SyntheticReviewView(),
                 trading_dates={"2026-09-01", "2026-09-02", "2026-09-03"},
+                research_cutoff="2026-09-03",
             )
             persisted_audits = int(conn.execute("SELECT COUNT(*) FROM dataset_date_audit").fetchone()[0])
             persisted_common_dates = int(conn.execute("SELECT COUNT(*) FROM mechanical_common_complete").fetchone()[0])
@@ -2789,4 +2800,91 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
         "automatic_date_audit_count": stats["automatic_date_audit_count"],
         "mode_counts": stats["mode_counts"],
     })
+    return results, summary
+
+
+def validate_market_data_v2_research_required_cutoff_isolation_contract_case(_base_params):
+    """Round-11 pins Research V2 scientific evidence to the fixed Research horizon."""
+
+    import sqlite3
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    import pandas as pd
+
+    from config.market_data import RESEARCH_DATA_GENERATION_V1, RESEARCH_DATA_GENERATION_V2, RESEARCH_REQUIRED_CUTOFF
+    from core.market_data_contract import get_research_data_generation
+    from core.market_data_research_v2 import (
+        RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS,
+        RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
+        validate_research_v2_required_cutoff,
+    )
+    from services.research.market_data_v2 import _build_review_date_audits, _init_universe_db
+
+    case_id = "MARKET_DATA_V2_RESEARCH_REQUIRED_CUTOFF_ISOLATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    v1 = get_research_data_generation(RESEARCH_DATA_GENERATION_V1)
+    v2 = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
+    add_check(results, "market_data", case_id, "research_v1_cutoff_uses_required_cutoff_ssot", RESEARCH_REQUIRED_CUTOFF, v1.cutoff)
+    add_check(results, "market_data", case_id, "research_v1_required_cutoff_uses_ssot", RESEARCH_REQUIRED_CUTOFF, v1.required_cutoff)
+    add_check(results, "market_data", case_id, "research_v2_required_cutoff_uses_same_ssot", RESEARCH_REQUIRED_CUTOFF, v2.required_cutoff)
+    add_check(results, "market_data", case_id, "research_v2_remains_unfrozen_before_promotion", None, v2.cutoff)
+    add_check(results, "market_data", case_id, "research_v2_candidate_schema_bumped_for_cutoff_identity", 3, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION)
+    add_check(results, "market_data", case_id, "required_cutoff_participates_in_candidate_identity", True, "required_cutoff" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    add_check(
+        results,
+        "market_data",
+        case_id,
+        "provider_snapshot_may_extend_beyond_research_horizon",
+        "2030-01-15",
+        validate_research_v2_required_cutoff(provider_as_of_date="2030-02-01", required_cutoff="2030-01-15"),
+    )
+    provider_too_early_blocked = False
+    try:
+        validate_research_v2_required_cutoff(provider_as_of_date="2030-01-14", required_cutoff="2030-01-15")
+    except ValueError:
+        provider_too_early_blocked = True
+    add_check(results, "market_data", case_id, "provider_snapshot_before_required_cutoff_fails_closed", True, provider_too_early_blocked)
+
+    class _SyntheticArchive:
+        as_of_date = "2030-02-01"
+
+    class _SyntheticReviewView:
+        archive = _SyntheticArchive()
+
+        @staticmethod
+        def dataset_artifacts(_dataset):
+            return (object(),)
+
+        @staticmethod
+        def iter_dataset_contract_audit_frames(_dataset, *, columns=None):
+            del columns
+            yield pd.DataFrame({"date": ["2030-01-15", "2030-01-16"]})
+
+    with TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "round11_cutoff.sqlite3"
+        conn = sqlite3.connect(db_path)
+        try:
+            _init_universe_db(conn)
+            conn.execute("INSERT INTO trading_dates(date) VALUES (?)", ("2030-01-15",))
+            conn.execute(
+                "INSERT INTO exact_coverage(date, universe_count, price_limit_count, missing_price_limit_count, extra_price_limit_count, exact_complete) VALUES (?, ?, ?, ?, ?, ?)",
+                ("2030-01-15", 1, 1, 0, 0, 1),
+            )
+            audits, mechanical = _build_review_date_audits(
+                conn,
+                _SyntheticReviewView(),
+                trading_dates={"2030-01-15"},
+                research_cutoff="2030-01-15",
+            )
+            max_presence_date = conn.execute("SELECT MAX(date) FROM dataset_date_presence").fetchone()[0]
+        finally:
+            conn.close()
+    add_check(results, "market_data", case_id, "review_date_presence_excludes_provider_rows_after_research_cutoff", "2030-01-15", max_presence_date)
+    add_check(results, "market_data", case_id, "mechanical_common_complete_cannot_extend_past_research_cutoff", "2030-01-15", mechanical.common_complete_ceiling_date)
+    add_check(results, "market_data", case_id, "round11_review_audit_still_covers_full_registry", 51, len(audits))
+
+    summary.update({"checks": len(results), "required_cutoff": v2.required_cutoff})
     return results, summary

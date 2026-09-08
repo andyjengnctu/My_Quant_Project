@@ -51,6 +51,7 @@ class ResearchDataGenerationContract:
     lifecycle: str
     cutoff_mode: str
     cutoff: str | None
+    required_cutoff: str
     universe_mode: str
 
 
@@ -105,9 +106,13 @@ def get_research_data_generation(generation_id: str) -> ResearchDataGenerationCo
     cutoff_mode = _require_nonempty_text(raw.get("cutoff_mode"), field=f"{resolved_id}.cutoff_mode")
     universe_mode = _require_nonempty_text(raw.get("universe_mode"), field=f"{resolved_id}.universe_mode")
     cutoff_raw = raw.get("cutoff")
+    required_cutoff_raw = raw.get("required_cutoff", cutoff_raw)
+    required_cutoff = _validate_iso_date(required_cutoff_raw, field=f"{resolved_id}.required_cutoff")
 
     if cutoff_mode == RESEARCH_CUTOFF_MODE_FIXED:
         cutoff = _validate_iso_date(cutoff_raw, field=f"{resolved_id}.cutoff")
+        if cutoff != required_cutoff:
+            raise ValueError(f"{resolved_id} fixed cutoff 必須等於 required_cutoff")
     elif cutoff_mode == RESEARCH_CUTOFF_MODE_BOOTSTRAP_COMMON_COMPLETE_MANIFEST:
         if status == RESEARCH_STATUS_AUTHORIZED_NOT_READY:
             if cutoff_raw is not None:
@@ -115,6 +120,8 @@ def get_research_data_generation(generation_id: str) -> ResearchDataGenerationCo
             cutoff = None
         else:
             cutoff = _validate_iso_date(cutoff_raw, field=f"{resolved_id}.cutoff")
+            if cutoff != required_cutoff:
+                raise ValueError(f"{resolved_id} READY frozen cutoff 必須等於 required_cutoff")
     else:
         raise ValueError(f"不支援的 Research cutoff_mode: {cutoff_mode}")
 
@@ -131,6 +138,7 @@ def get_research_data_generation(generation_id: str) -> ResearchDataGenerationCo
         lifecycle=lifecycle,
         cutoff_mode=cutoff_mode,
         cutoff=cutoff,
+        required_cutoff=required_cutoff,
         universe_mode=universe_mode,
     )
 
