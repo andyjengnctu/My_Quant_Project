@@ -4232,6 +4232,17 @@
       "entry": "`core/market_data_research_v2.py`, `core/market_data_research_storage_contract.py`, `services/market_data/provider_snapshot_repository.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 381
+    },
+    {
+      "id": "B394",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Research PIT review / mechanical common-complete contract",
+      "item": "Review-required datasets are classified into non-authorizing audit modes and mechanical date completeness remains separate from scientific PIT authorization",
+      "gap": "Research V2對review_required datasets必須依canonical registry/freshness cadence解析成trading-daily date-presence、calendar-daily date-presence、event information-time、periodic publication/revision、static current-vintage等audit mode；分類只允許immutable archive evidence audit，不得因此授權model input。current-vintage TaiwanStockPriceAdj仍為hard block，contract-audit reader不得成為繞過PIT gate的後門。Trading-daily review datasets可只讀date欄建立date-presence evidence，與Round-9 exact Price/PriceLimit/universe coverage交集後計算mechanical common-complete contiguous tail；該tail只代表archive completeness candidate，不得寫入research_common_complete_cutoff、frozen_cutoff或自動promotion。缺artifact/dated row時mechanical audit必須fail-closed，event/periodic/static datasets不得用effective/period/current-vintage date假裝decision-time可知。",
+      "entry": "`core/market_data_research_pit_contract.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 382
     }
   ],
   "tests": [
@@ -7819,6 +7830,13 @@
       "b_id": "B393",
       "initial_status": "NEW",
       "order": 503
+    },
+    {
+      "id": "T514",
+      "b_id": "B394",
+      "description": "`validate_market_data_v2_research_pit_review_contract_case` 覆蓋51-dataset cadence-driven PIT review classification、零scientific auto-authorization、current-vintage hard block、daily date-presence eligibility、mechanical common-tail intersection/retreat與缺dataset audit時cutoff清空。",
+      "initial_status": "NEW",
+      "order": 504
     }
   ],
   "transitions": [
@@ -25485,6 +25503,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_research_candidate_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B394",
+      "description": "新增Research V2 review-required分類、mechanical date-presence common-complete與scientific cutoff分離治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_research_pit_contract.py`, `services/research/market_data_v2.py`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T514",
+      "description": "新增Research V2 PIT review/mechanical common-tail dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_research_pit_review_contract_case`"
     }
   ]
 }

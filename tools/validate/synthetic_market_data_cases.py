@@ -2410,6 +2410,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
     import sqlite3
+    from pathlib import Path
     from tempfile import TemporaryDirectory
 
     from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GENERATION_V1
@@ -2462,6 +2463,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
             BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", "2026-09-03"),
             BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
+            BootstrapHttpRequest("TaiwanStockPER", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
             BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", "2026-09-03"),
             BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", "2026-09-03"),
         )
@@ -2479,8 +2481,9 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             requests[2].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["0050"] * 3}),
             requests[3].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["2330"] * 3}),
             requests[4].request_id: pd.DataFrame({"date": ["2026-09-01"], "stock_id": ["0050"], "close": [100.0]}),
-            requests[5].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02"], "stock_id": ["0050", "0050"]}),
-            requests[6].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["2330"] * 3}),
+            requests[5].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["0050"] * 3, "PER": [20.0, 21.0, 22.0]}),
+            requests[6].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02"], "stock_id": ["0050", "0050"]}),
+            requests[7].request_id: pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "stock_id": ["2330"] * 3}),
         }
 
         ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
@@ -2546,6 +2549,20 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         except RuntimeError:
             adjusted_blocked = True
         add_check(results, "market_data", case_id, "current_vintage_adjusted_price_cannot_enter_exact_pit_audit", True, adjusted_blocked)
+        adjusted_contract_audit_blocked = False
+        try:
+            next(view.iter_dataset_contract_audit_frames("TaiwanStockPriceAdj", columns=("date",)))
+        except RuntimeError:
+            adjusted_contract_audit_blocked = True
+        add_check(results, "market_data", case_id, "current_vintage_adjusted_price_cannot_enter_review_contract_audit", True, adjusted_contract_audit_blocked)
+        per_exact_blocked = False
+        try:
+            next(view.iter_dataset_frames("TaiwanStockPER", columns=("date",)))
+        except RuntimeError:
+            per_exact_blocked = True
+        add_check(results, "market_data", case_id, "review_required_per_cannot_enter_exact_pit_reader", True, per_exact_blocked)
+        per_audit_frame = next(view.iter_dataset_contract_audit_frames("TaiwanStockPER", columns=("date",)))
+        add_check(results, "market_data", case_id, "review_required_per_can_enter_contract_audit_reader_only", 3, len(per_audit_frame))
 
         candidate = build_research_v2_candidate(
             root,
@@ -2554,6 +2571,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         )
         add_check(results, "market_data", case_id, "research_v2_candidate_never_promotes_itself", RESEARCH_V2_CANDIDATE_STATUS_NOT_READY, candidate["status"])
         add_check(results, "market_data", case_id, "research_v2_candidate_has_no_frozen_cutoff", None, candidate["frozen_cutoff"])
+        add_check(results, "market_data", case_id, "research_v2_candidate_has_no_research_common_complete_cutoff", None, candidate["research_common_complete_cutoff"])
         add_check(results, "market_data", case_id, "research_v2_candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
         add_check(results, "market_data", case_id, "research_v2_candidate_build_consumes_zero_provider_calls", 0, candidate["provider_calls"])
         add_check(results, "market_data", case_id, "exact_candidate_ceiling_retreats_before_incomplete_latest_day", "2026-09-02", candidate["exact_candidate_ceiling_date"])
@@ -2561,6 +2579,8 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         blockers = {str(item.get("code")) for item in candidate["blockers"]}
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_unapproved_dataset_scope", True, "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_current_vintage_adjusted_price", True, "ADJUSTED_PRICE_CURRENT_VINTAGE_PIT_REVIEW_REQUIRED" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_reports_incomplete_mechanical_date_audit", True, "MECHANICAL_DATE_AUDIT_INCOMPLETE" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
 
         universe_path = resolve_research_v2_daily_universe_path(root, provider_payload["snapshot_fingerprint"])
@@ -2601,4 +2621,172 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             "review_required_count": stats["review_required_count"],
         }
     )
+    return results, summary
+
+
+def validate_market_data_v2_research_pit_review_contract_case(_base_params):
+    """Round-10 PIT review classification and mechanical common-tail contract."""
+
+    from core.market_data_dataset_registry import (
+        PIT_CURRENT_VINTAGE,
+        PIT_EXACT_CANDIDATE,
+        PIT_REVIEW_REQUIRED,
+        get_market_dataset_specs,
+    )
+    from core.market_data_freshness_contract import (
+        CADENCE_CALENDAR_DAILY,
+        CADENCE_CURRENT_VINTAGE,
+        CADENCE_EVENT_DRIVEN,
+        CADENCE_PERIODIC,
+        CADENCE_TRADING_DAILY,
+        get_market_data_freshness_contracts,
+    )
+    from core.market_data_research_pit_contract import (
+        AUDIT_MODE_CALENDAR_DAILY_DATE_PRESENCE,
+        AUDIT_MODE_CURRENT_VINTAGE_BLOCKED,
+        AUDIT_MODE_EVENT_INFORMATION_TIME,
+        AUDIT_MODE_EXACT_CANDIDATE,
+        AUDIT_MODE_PERIODIC_PUBLICATION,
+        AUDIT_MODE_STATIC_CURRENT_VINTAGE,
+        AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE,
+        DATE_AUDIT_STATUS_NO_ARTIFACTS,
+        DATE_AUDIT_STATUS_READY,
+        PIT_REVIEW_STATUS_CURRENT_VINTAGE_BLOCKED,
+        ResearchV2DatasetDateAudit,
+        build_research_v2_pit_review_contracts,
+        research_v2_pit_review_contract_fingerprint,
+        summarize_mechanical_common_complete_tail,
+        validate_research_v2_pit_review_contracts,
+    )
+
+    case_id = "MARKET_DATA_V2_RESEARCH_PIT_REVIEW"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    specs = tuple(get_market_dataset_specs(included_only=True))
+    freshness = {row.dataset: row for row in get_market_data_freshness_contracts()}
+    contracts = build_research_v2_pit_review_contracts()
+    contract_by_dataset = {row.dataset: row for row in contracts}
+    stats = validate_research_v2_pit_review_contracts(contracts)
+
+    add_check(results, "market_data", case_id, "pit_review_contract_covers_every_included_dataset", len(specs), len(contracts))
+    add_check(results, "market_data", case_id, "pit_review_contract_dataset_identity_is_unique", len(contracts), len(contract_by_dataset))
+    add_check(results, "market_data", case_id, "pit_review_never_auto_authorizes_model_input", 0, sum(row.scientific_input_authorized for row in contracts))
+    add_check(results, "market_data", case_id, "pit_review_contract_fingerprint_is_deterministic", research_v2_pit_review_contract_fingerprint(contracts), research_v2_pit_review_contract_fingerprint())
+
+    expected_modes = {}
+    for spec in specs:
+        cadence = freshness[spec.dataset].cadence
+        if spec.pit_class == PIT_CURRENT_VINTAGE:
+            expected = AUDIT_MODE_CURRENT_VINTAGE_BLOCKED
+        elif spec.pit_class == PIT_EXACT_CANDIDATE:
+            expected = AUDIT_MODE_EXACT_CANDIDATE
+        elif spec.pit_class == PIT_REVIEW_REQUIRED and cadence == CADENCE_TRADING_DAILY:
+            expected = AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE
+        elif spec.pit_class == PIT_REVIEW_REQUIRED and cadence == CADENCE_CALENDAR_DAILY:
+            expected = AUDIT_MODE_CALENDAR_DAILY_DATE_PRESENCE
+        elif spec.pit_class == PIT_REVIEW_REQUIRED and cadence == CADENCE_EVENT_DRIVEN:
+            expected = AUDIT_MODE_EVENT_INFORMATION_TIME
+        elif spec.pit_class == PIT_REVIEW_REQUIRED and cadence == CADENCE_PERIODIC:
+            expected = AUDIT_MODE_PERIODIC_PUBLICATION
+        elif spec.pit_class == PIT_REVIEW_REQUIRED and cadence == CADENCE_CURRENT_VINTAGE:
+            expected = AUDIT_MODE_STATIC_CURRENT_VINTAGE
+        else:
+            expected = "UNEXPECTED"
+        expected_modes[spec.dataset] = expected
+    actual_modes = {row.dataset: row.audit_mode for row in contracts}
+    add_check(results, "market_data", case_id, "pit_review_classification_is_registry_and_cadence_driven", expected_modes, actual_modes)
+
+    adjusted = contract_by_dataset["TaiwanStockPriceAdj"]
+    add_check(results, "market_data", case_id, "adjusted_price_remains_current_vintage_hard_block", PIT_REVIEW_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.review_status)
+    review_daily_expected = sum(
+        spec.pit_class == PIT_REVIEW_REQUIRED and freshness[spec.dataset].cadence in {CADENCE_TRADING_DAILY, CADENCE_CALENDAR_DAILY}
+        for spec in specs
+    )
+    add_check(results, "market_data", case_id, "only_review_daily_classes_get_automatic_date_presence_audit", review_daily_expected, stats["automatic_date_audit_count"])
+
+    audits = (
+        ResearchV2DatasetDateAudit("A", AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE, DATE_AUDIT_STATUS_READY, 3, "2026-09-01", "2026-09-03", "synthetic"),
+        ResearchV2DatasetDateAudit("B", AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE, DATE_AUDIT_STATUS_READY, 2, "2026-09-01", "2026-09-02", "synthetic"),
+    )
+    mechanical = summarize_mechanical_common_complete_tail(
+        trading_dates=("2026-09-01", "2026-09-02", "2026-09-03"),
+        exact_complete_dates=("2026-09-01", "2026-09-02", "2026-09-03"),
+        dataset_audits=audits,
+        observed_dates_by_dataset={
+            "A": ("2026-09-01", "2026-09-02", "2026-09-03"),
+            "B": ("2026-09-01", "2026-09-02"),
+        },
+        participating_datasets=("A", "B"),
+    )
+    add_check(results, "market_data", case_id, "mechanical_common_tail_retreats_to_latest_shared_date", "2026-09-02", mechanical.common_complete_ceiling_date)
+    add_check(results, "market_data", case_id, "mechanical_common_tail_keeps_contiguous_start", "2026-09-01", mechanical.common_complete_tail_start)
+    add_check(results, "market_data", case_id, "mechanical_common_tail_reports_two_shared_dates", 2, mechanical.common_complete_tail_date_count)
+    add_check(results, "market_data", case_id, "mechanical_common_tail_is_complete_only_when_all_participants_audited", True, mechanical.audit_complete)
+
+    incomplete = summarize_mechanical_common_complete_tail(
+        trading_dates=("2026-09-01", "2026-09-02"),
+        exact_complete_dates=("2026-09-01", "2026-09-02"),
+        dataset_audits=(
+            ResearchV2DatasetDateAudit("A", AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE, DATE_AUDIT_STATUS_READY, 2, "2026-09-01", "2026-09-02", "synthetic"),
+            ResearchV2DatasetDateAudit("B", AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE, DATE_AUDIT_STATUS_NO_ARTIFACTS, 0, None, None, "synthetic"),
+        ),
+        observed_dates_by_dataset={"A": ("2026-09-01", "2026-09-02"), "B": ()},
+        participating_datasets=("A", "B"),
+    )
+    add_check(results, "market_data", case_id, "missing_dataset_audit_clears_mechanical_ceiling", None, incomplete.common_complete_ceiling_date)
+    add_check(results, "market_data", case_id, "missing_dataset_audit_marks_mechanical_audit_incomplete", False, incomplete.audit_complete)
+
+    import sqlite3
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    import pandas as pd
+    from services.research.market_data_v2 import _build_review_date_audits, _init_universe_db
+
+    class _SyntheticArchive:
+        as_of_date = "2026-09-03"
+
+    class _SyntheticReviewView:
+        archive = _SyntheticArchive()
+
+        @staticmethod
+        def dataset_artifacts(_dataset):
+            return (object(),)
+
+        @staticmethod
+        def iter_dataset_contract_audit_frames(_dataset, *, columns=None):
+            del columns
+            yield pd.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"]})
+
+    with TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "review.sqlite3"
+        conn = sqlite3.connect(db_path)
+        try:
+            _init_universe_db(conn)
+            for date_value in ("2026-09-01", "2026-09-02", "2026-09-03"):
+                conn.execute("INSERT INTO trading_dates(date) VALUES (?)", (date_value,))
+                conn.execute(
+                    "INSERT INTO exact_coverage(date, universe_count, price_limit_count, missing_price_limit_count, extra_price_limit_count, exact_complete) VALUES (?, ?, ?, ?, ?, ?)",
+                    (date_value, 1, 1, 0, 0, 1),
+                )
+            service_audits, service_summary = _build_review_date_audits(
+                conn,
+                _SyntheticReviewView(),
+                trading_dates={"2026-09-01", "2026-09-02", "2026-09-03"},
+            )
+            persisted_audits = int(conn.execute("SELECT COUNT(*) FROM dataset_date_audit").fetchone()[0])
+            persisted_common_dates = int(conn.execute("SELECT COUNT(*) FROM mechanical_common_complete").fetchone()[0])
+        finally:
+            conn.close()
+    add_check(results, "market_data", case_id, "service_persists_one_review_audit_row_per_dataset", len(contracts), persisted_audits)
+    add_check(results, "market_data", case_id, "service_success_path_audits_all_contract_rows", len(contracts), len(service_audits))
+    add_check(results, "market_data", case_id, "service_success_path_establishes_mechanical_ceiling", "2026-09-03", service_summary.common_complete_ceiling_date)
+    add_check(results, "market_data", case_id, "service_success_path_persists_common_complete_dates", 3, persisted_common_dates)
+
+    summary.update({
+        "checks": len(results),
+        "dataset_count": stats["dataset_count"],
+        "automatic_date_audit_count": stats["automatic_date_audit_count"],
+        "mode_counts": stats["mode_counts"],
+    })
     return results, summary

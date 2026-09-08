@@ -103,6 +103,7 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "core/market_data_storage_contract.py",
     "core/market_data_provider_snapshot.py",
     "core/market_data_research_v2.py",
+    "core/market_data_research_pit_contract.py",
     "core/market_data_research_storage_contract.py",
     "services/market_data/provider_snapshot_repository.py",
     "services/research/market_data_v2.py",

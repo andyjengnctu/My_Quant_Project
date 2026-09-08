@@ -23,7 +23,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
 )
 
-RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 1
+RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 2
 RESEARCH_V2_CANDIDATE_STATUS_NOT_READY = "CANDIDATE_NOT_READY"
 RESEARCH_V2_DATASET_STATUS_EXACT_CANDIDATE = "EXACT_CANDIDATE"
 RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
@@ -60,6 +60,13 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "latest_complete_tail_date_count",
     "exact_coverage_fingerprint",
     "dataset_assessment_fingerprint",
+    "pit_review_contract_fingerprint",
+    "dataset_date_audit_fingerprint",
+    "mechanical_common_complete_start_date",
+    "mechanical_common_complete_ceiling_date",
+    "mechanical_common_complete_tail_date_count",
+    "mechanical_common_complete_fingerprint",
+    "research_common_complete_cutoff",
     "frozen_cutoff",
     "active_research_generation_changed",
 )
@@ -320,6 +327,12 @@ def build_research_v2_candidate_identity_payload(
     daily_universe_fingerprint: str,
     coverage_summary: ResearchV2ExactCoverageSummary,
     assessment_fingerprint: str,
+    pit_review_contract_fingerprint: str,
+    dataset_date_audit_fingerprint: str,
+    mechanical_common_complete_start_date: str | None,
+    mechanical_common_complete_ceiling_date: str | None,
+    mechanical_common_complete_tail_date_count: int,
+    mechanical_common_complete_fingerprint: str,
 ) -> dict[str, object]:
     return {
         "schema_version": RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
@@ -337,6 +350,13 @@ def build_research_v2_candidate_identity_payload(
         "latest_complete_tail_date_count": int(coverage_summary.latest_complete_tail_date_count),
         "exact_coverage_fingerprint": coverage_summary.coverage_fingerprint,
         "dataset_assessment_fingerprint": str(assessment_fingerprint),
+        "pit_review_contract_fingerprint": str(pit_review_contract_fingerprint),
+        "dataset_date_audit_fingerprint": str(dataset_date_audit_fingerprint),
+        "mechanical_common_complete_start_date": mechanical_common_complete_start_date,
+        "mechanical_common_complete_ceiling_date": mechanical_common_complete_ceiling_date,
+        "mechanical_common_complete_tail_date_count": int(mechanical_common_complete_tail_date_count),
+        "mechanical_common_complete_fingerprint": str(mechanical_common_complete_fingerprint),
+        "research_common_complete_cutoff": None,
         "frozen_cutoff": None,
         "active_research_generation_changed": False,
     }
