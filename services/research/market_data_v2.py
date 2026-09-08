@@ -33,6 +33,9 @@ from core.market_data_instrument_universe import (
     historical_market_state_guard_fingerprint,
     is_historical_market_state_eligible,
 )
+from core.market_data_adjusted_price_revision_proof import (
+    ADJUSTED_PRICE_REVISION_STATUS_READY,
+)
 from core.market_data_adjusted_price_invariance import (
     PROVIDER_PRICE_FIELDS,
     PROVIDER_VOLUME_FIELD,
@@ -99,6 +102,10 @@ from core.market_data_storage_contract import resolve_market_data_request_parque
 from services.market_data.provider_snapshot_repository import (
     ReadyProviderSnapshotArchive,
     load_ready_provider_snapshot_archive,
+)
+from services.research.adjusted_price_revision_proof import (
+    build_adjusted_price_revision_proof,
+    load_adjusted_price_revision_proof,
 )
 
 
@@ -197,11 +204,15 @@ class ResearchV2ProviderView:
         dataset: str,
         *,
         columns: tuple[str, ...] | None = None,
+        data_id: str | None = None,
     ) -> Iterator[pd.DataFrame]:
         name = str(dataset or "").strip()
         if name not in self._assessment_by_dataset:
             raise ValueError(f"Research V2 未登記 dataset: {name}")
+        wanted_data_id = None if data_id is None else str(data_id).strip()
         for artifact in self.dataset_artifacts(name):
+            if wanted_data_id is not None and str(artifact.data_id or "").strip() != wanted_data_id:
+                continue
             request = artifact.to_request()
             path = resolve_market_data_request_parquet_path(
                 self.project_root,
@@ -263,6 +274,7 @@ class ResearchV2ProviderView:
         dataset: str,
         *,
         columns: tuple[str, ...],
+        data_id: str | None = None,
     ) -> Iterator[pd.DataFrame]:
         """Read only fields explicitly authorized by the Round-14 foundation scope.
 
@@ -283,7 +295,7 @@ class ResearchV2ProviderView:
             raise RuntimeError(
                 f"Research V2 dataset scope reader 欄位未授權: {name} -> {disallowed}"
             )
-        yield from self._iter_verified_frames(name, columns=requested)
+        yield from self._iter_verified_frames(name, columns=requested, data_id=data_id)
 
 
 
@@ -314,9 +326,19 @@ def _init_universe_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE raw_volume_field_evidence (
             date TEXT NOT NULL,
             stock_id TEXT NOT NULL,
+            volume_value TEXT NOT NULL,
             PRIMARY KEY(date, stock_id)
         ) WITHOUT ROWID;
         CREATE TABLE adjusted_price_operand_evidence (
+            date TEXT NOT NULL,
+            stock_id TEXT NOT NULL,
+            open_value TEXT NOT NULL,
+            high_value TEXT NOT NULL,
+            low_value TEXT NOT NULL,
+            close_value TEXT NOT NULL,
+            PRIMARY KEY(date, stock_id)
+        ) WITHOUT ROWID;
+        CREATE TABLE delisting_event_evidence (
             date TEXT NOT NULL,
             stock_id TEXT NOT NULL,
             PRIMARY KEY(date, stock_id)
@@ -381,12 +403,12 @@ def _normalize_date_stock(frame: pd.DataFrame, *, dataset: str) -> list[tuple[st
     return [(str(row.date), str(row.stock_id)) for row in local.itertuples(index=False)]
 
 
-def _normalize_required_field_evidence(
+def _normalize_required_field_values(
     frame: pd.DataFrame,
     *,
     dataset: str,
     value_fields: tuple[str, ...],
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, ...]]:
     required = {"date", "stock_id", *value_fields}
     missing = required.difference(frame.columns)
     if missing:
@@ -397,9 +419,31 @@ def _normalize_required_field_evidence(
     valid = local["date"].notna() & local["stock_id"].ne("")
     for field in value_fields:
         numeric = pd.to_numeric(local[field], errors="coerce").replace([float("inf"), float("-inf")], pd.NA)
+        local[field] = numeric
         valid &= numeric.notna()
-    local = local.loc[valid, ["date", "stock_id"]].drop_duplicates(["date", "stock_id"])
-    return [(str(row.date), str(row.stock_id)) for row in local.itertuples(index=False)]
+    local = local.loc[valid, ["date", "stock_id", *value_fields]]
+    rows: dict[tuple[str, str], tuple[str, ...]] = {}
+    for row in local.itertuples(index=False, name=None):
+        key = (str(row[0]), str(row[1]))
+        values = tuple(format(float(value), ".17g") for value in row[2:])
+        normalized = (*key, *values)
+        prior = rows.get(key)
+        if prior is not None and prior != normalized:
+            raise ValueError(f"{dataset} required field evidence duplicate conflict: {key}")
+        rows[key] = normalized
+    return list(rows.values())
+
+
+def _normalize_required_field_evidence(
+    frame: pd.DataFrame,
+    *,
+    dataset: str,
+    value_fields: tuple[str, ...],
+) -> list[tuple[str, str]]:
+    return [
+        (row[0], row[1])
+        for row in _normalize_required_field_values(frame, dataset=dataset, value_fields=value_fields)
+    ]
 
 
 def _normalize_date_values(frame: pd.DataFrame, *, dataset: str, as_of_date: str) -> tuple[str, ...]:
@@ -591,7 +635,7 @@ def _build_exact_candidate_sqlite(
                     conn.executemany("INSERT OR IGNORE INTO daily_universe(date, stock_id) VALUES (?, ?)", rows)
                 volume_rows = [
                     row
-                    for row in _normalize_required_field_evidence(
+                    for row in _normalize_required_field_values(
                         frame,
                         dataset=RESEARCH_V2_RAW_VOLUME_DATASET,
                         value_fields=(PROVIDER_VOLUME_FIELD,),
@@ -600,7 +644,7 @@ def _build_exact_candidate_sqlite(
                 ]
                 if volume_rows:
                     conn.executemany(
-                        "INSERT OR IGNORE INTO raw_volume_field_evidence(date, stock_id) VALUES (?, ?)",
+                        "INSERT OR REPLACE INTO raw_volume_field_evidence(date, stock_id, volume_value) VALUES (?, ?, ?)",
                         volume_rows,
                     )
 
@@ -622,7 +666,7 @@ def _build_exact_candidate_sqlite(
             ):
                 adjusted_rows = [
                     row
-                    for row in _normalize_required_field_evidence(
+                    for row in _normalize_required_field_values(
                         frame,
                         dataset=RESEARCH_V2_ADJUSTED_PRICE_DATASET,
                         value_fields=tuple(PROVIDER_PRICE_FIELDS),
@@ -631,7 +675,7 @@ def _build_exact_candidate_sqlite(
                 ]
                 if adjusted_rows:
                     conn.executemany(
-                        "INSERT OR IGNORE INTO adjusted_price_operand_evidence(date, stock_id) VALUES (?, ?)",
+                        "INSERT OR REPLACE INTO adjusted_price_operand_evidence(date, stock_id, open_value, high_value, low_value, close_value) VALUES (?, ?, ?, ?, ?, ?)",
                         adjusted_rows,
                     )
 
@@ -643,11 +687,16 @@ def _build_exact_candidate_sqlite(
                 RESEARCH_V2_EVENT_EVIDENCE_DATASET,
                 columns=("date", "stock_id"),
             ):
-                if len(frame):
-                    delisting_rows += sum(
-                        1
-                        for date_value, _stock_id in _normalize_date_stock(frame, dataset=RESEARCH_V2_EVENT_EVIDENCE_DATASET)
-                        if date_value <= cutoff
+                rows = [
+                    row
+                    for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_EVENT_EVIDENCE_DATASET)
+                    if row[0] <= cutoff
+                ]
+                delisting_rows += len(rows)
+                if rows:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO delisting_event_evidence(date, stock_id) VALUES (?, ?)",
+                        rows,
                     )
 
             conn.execute(
@@ -728,6 +777,34 @@ def _build_exact_candidate_sqlite(
                 conn,
                 "SELECT date, stock_id FROM daily_universe ORDER BY date, stock_id",
             )
+            _trading_count, trading_source_fingerprint = _stream_logical_fingerprint(
+                conn, "SELECT date FROM trading_dates ORDER BY date"
+            )
+            _volume_count, raw_volume_source_fingerprint = _stream_logical_fingerprint(
+                conn, "SELECT date, stock_id, volume_value FROM raw_volume_field_evidence ORDER BY date, stock_id"
+            )
+            _limit_count, price_limit_source_fingerprint = _stream_logical_fingerprint(
+                conn, "SELECT date, stock_id FROM price_limit_evidence ORDER BY date, stock_id"
+            )
+            _adjusted_count, adjusted_price_source_fingerprint = _stream_logical_fingerprint(
+                conn, "SELECT date, stock_id, open_value, high_value, low_value, close_value FROM adjusted_price_operand_evidence ORDER BY date, stock_id"
+            )
+            _delisting_count, delisting_source_fingerprint = _stream_logical_fingerprint(
+                conn, "SELECT date, stock_id FROM delisting_event_evidence ORDER BY date, stock_id"
+            )
+            required_source_projection = {
+                "schema_version": 1,
+                "contract_id": "research_v2_required_source_projection_v1",
+                "required_cutoff": cutoff,
+                "trading_calendar_fingerprint": trading_source_fingerprint,
+                "daily_universe_fingerprint": universe_fingerprint,
+                "historical_market_state_guard_fingerprint": market_state_guard_fingerprint,
+                "raw_volume_source_fingerprint": raw_volume_source_fingerprint,
+                "price_limit_presence_fingerprint": price_limit_source_fingerprint,
+                "adjusted_price_source_fingerprint": adjusted_price_source_fingerprint,
+                "delisting_event_fingerprint": delisting_source_fingerprint,
+            }
+            required_source_projection_fingerprint = canonical_json_sha256(required_source_projection)
             coverage = pd.read_sql_query(
                 "SELECT date, universe_count, price_limit_count, missing_price_limit_count, extra_price_limit_count, exact_complete FROM exact_coverage ORDER BY date",
                 conn,
@@ -792,6 +869,8 @@ def _build_exact_candidate_sqlite(
                 "historical_market_state_guard_dataset": RESEARCH_V2_MARKET_STATE_GUARD_DATASET,
                 "historical_market_state_guard_fingerprint": market_state_guard_fingerprint,
                 "historical_market_state_transition_count": len(transition_excluded_through),
+                "required_source_projection": required_source_projection,
+                "required_source_projection_fingerprint": required_source_projection_fingerprint,
                 "daily_universe_row_count": universe_count,
                 "daily_universe_fingerprint": universe_fingerprint,
                 "exact_coverage_fingerprint": summary.coverage_fingerprint,
@@ -814,6 +893,7 @@ def _build_exact_candidate_sqlite(
             conn.execute("DROP TABLE price_limit_evidence")
             conn.execute("DROP TABLE raw_volume_field_evidence")
             conn.execute("DROP TABLE adjusted_price_operand_evidence")
+            conn.execute("DROP TABLE delisting_event_evidence")
             conn.commit()
         finally:
             conn.close()
@@ -836,10 +916,25 @@ def _build_candidate_blockers(
     required_cutoff: str,
     scope_stats: dict[str, object],
     required_common_complete_summary: dict[str, object] | None = None,
+    adjusted_price_revision_proof: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     # Archive-wide diagnostic review is intentionally excluded from foundation
     # readiness.  Round 15 gates only the Round-14 authorized required scope.
     blockers: list[dict[str, object]] = []
+    proof_status = str((adjusted_price_revision_proof or {}).get("status") or "")
+    if proof_status != ADJUSTED_PRICE_REVISION_STATUS_READY:
+        blockers.append(
+            {
+                "code": "ADJUSTED_PRICE_POST_CUTOFF_REVISION_PROOF_NOT_READY",
+                "proof_status": proof_status or None,
+                "proof_fingerprint": (adjusted_price_revision_proof or {}).get("proof_fingerprint"),
+                "reason": (
+                    "FinMind 2026-09-01 TaiwanStockPriceAdj full-history rebuild is outside the Round-13 "
+                    "corporate-action scalar proof; current-vintage OHLC cannot freeze until frozen-V1/current "
+                    "required stock-days prove one positive scalar per instrument."
+                ),
+            }
+        )
     if required_common_complete_summary is None:
         blockers.append(
             {
@@ -937,6 +1032,19 @@ def build_research_v2_candidate(
     )
     del _coverage_table
     coverage_summary = dict(derived["coverage_summary"])
+    adjusted_price_revision_proof_build = build_adjusted_price_revision_proof(
+        root,
+        provider_view=view,
+        daily_universe_path=universe_path,
+        required_cutoff=required_cutoff,
+        now=now,
+    )
+    adjusted_price_revision_proof = load_adjusted_price_revision_proof(
+        root,
+        proof_fingerprint=str(adjusted_price_revision_proof_build["proof_fingerprint"]),
+        required=True,
+    )
+    assert adjusted_price_revision_proof is not None
     required_common_complete_payload = dict(derived["required_common_complete"])
     required_common_complete_summary = ResearchV2RequiredCommonCompleteSummary(
         **{
@@ -948,17 +1056,16 @@ def build_research_v2_candidate(
     assessment_rows = build_research_v2_dataset_assessments()
     assessment_fingerprint = research_v2_dataset_assessment_fingerprint(assessment_rows)
     identity = build_research_v2_candidate_identity_payload(
-        provider_snapshot_fingerprint=archive.snapshot_fingerprint,
-        provider_manifest_fingerprint=archive.manifest_fingerprint,
-        provider_as_of_date=archive.as_of_date,
         required_cutoff=required_cutoff,
-        historical_instrument_count=int(derived["historical_instrument_count"]),
+        required_source_projection_fingerprint=str(derived["required_source_projection_fingerprint"]),
         historical_market_state_guard_fingerprint=str(derived["historical_market_state_guard_fingerprint"]),
         daily_universe_fingerprint=str(derived["daily_universe_fingerprint"]),
         coverage_summary=ResearchV2ExactCoverageSummary(**coverage_summary),
         adjusted_price_representation_contract_fingerprint=str(
             adjusted_price_representation_stats["contract_fingerprint"]
         ),
+        adjusted_price_revision_proof_fingerprint=str(adjusted_price_revision_proof["proof_fingerprint"]),
+        adjusted_price_revision_proof_status=str(adjusted_price_revision_proof["status"]),
         research_scope_contract_fingerprint=str(research_scope_stats["contract_fingerprint"]),
         required_dataset_scope=research_scope_stats["required_dataset_scope"],
         required_common_complete_summary=required_common_complete_summary,
@@ -968,6 +1075,12 @@ def build_research_v2_candidate(
     payload = {
         **identity,
         "candidate_fingerprint": candidate_fingerprint,
+        "provider_snapshot_fingerprint": archive.snapshot_fingerprint,
+        "provider_manifest_fingerprint": archive.manifest_fingerprint,
+        "provider_as_of_date": archive.as_of_date,
+        "historical_instrument_count": int(derived["historical_instrument_count"]),
+        "required_source_projection": dict(derived["required_source_projection"]),
+        "adjusted_price_revision_proof": adjusted_price_revision_proof,
         "built_at": built_at,
         "provider_snapshot_path": project_relative_display_path(archive.path, project_root=root),
         "daily_universe_path": project_relative_display_path(universe_path, project_root=root),
@@ -1002,10 +1115,20 @@ def build_research_v2_candidate(
             required_cutoff=required_cutoff,
             scope_stats=research_scope_stats,
             required_common_complete_summary=required_common_complete_payload,
+            adjusted_price_revision_proof=adjusted_price_revision_proof,
         ),
         "promotion_authorized": False,
         "active_research_generation": active_generation.generation_id,
     }
+    archive_diagnostics = {
+        "dataset_assessments": payload["dataset_assessments"],
+        "dataset_assessment_counts": payload["dataset_assessment_counts"],
+        "pit_review_contracts": payload["pit_review_contracts"],
+        "pit_review_contract_counts": payload["pit_review_contract_counts"],
+        "research_scope_contracts": payload["research_scope_contracts"],
+        "research_scope_contract_counts": payload["research_scope_contract_counts"],
+    }
+    payload["archive_diagnostics_fingerprint"] = canonical_json_sha256(archive_diagnostics)
     manifest_path = resolve_research_v2_candidate_manifest_path(root, archive.snapshot_fingerprint)
     atomic_write_json(manifest_path, payload)
     return {
@@ -1063,32 +1186,40 @@ def load_research_v2_candidate(
     )
     if str(payload.get("required_cutoff") or "") != expected_required_cutoff:
         raise ValueError("Research V2 candidate required cutoff drift")
-    expected_assessments = [asdict(row) for row in build_research_v2_dataset_assessments()]
-    if str(payload.get("dataset_assessment_fingerprint") or "") != research_v2_dataset_assessment_fingerprint():
-        raise ValueError("Research V2 candidate dataset assessment contract drift")
-    if payload.get("dataset_assessments") != expected_assessments:
-        raise ValueError("Research V2 candidate persisted dataset assessments drift")
-    expected_pit_reviews = research_v2_pit_review_contract_payloads()
-    if str(payload.get("pit_review_contract_fingerprint") or "") != research_v2_pit_review_contract_fingerprint():
-        raise ValueError("Research V2 candidate PIT review contract drift")
-    if payload.get("pit_review_contracts") != expected_pit_reviews:
-        raise ValueError("Research V2 candidate persisted PIT review contracts drift")
+    projection = payload.get("required_source_projection")
+    if not isinstance(projection, dict):
+        raise ValueError("Research V2 candidate required source projection 缺失")
+    if canonical_json_sha256(projection) != str(payload.get("required_source_projection_fingerprint") or ""):
+        raise ValueError("Research V2 candidate required source projection fingerprint drift")
+    proof_fp = str(payload.get("adjusted_price_revision_proof_fingerprint") or "").strip().lower()
+    if len(proof_fp) != 64:
+        raise ValueError("Research V2 candidate adjusted-price revision proof fingerprint invalid")
+    proof = load_adjusted_price_revision_proof(root, proof_fingerprint=proof_fp, required=True)
+    if str(proof.get("status") or "") != str(payload.get("adjusted_price_revision_proof_status") or ""):
+        raise ValueError("Research V2 candidate adjusted-price revision proof status drift")
+    if payload.get("adjusted_price_revision_proof") != proof:
+        raise ValueError("Research V2 candidate persisted adjusted-price revision proof drift")
+    archive_diagnostics = {
+        "dataset_assessments": payload.get("dataset_assessments"),
+        "dataset_assessment_counts": payload.get("dataset_assessment_counts"),
+        "pit_review_contracts": payload.get("pit_review_contracts"),
+        "pit_review_contract_counts": payload.get("pit_review_contract_counts"),
+        "research_scope_contracts": payload.get("research_scope_contracts"),
+        "research_scope_contract_counts": payload.get("research_scope_contract_counts"),
+    }
+    if str(payload.get("archive_diagnostics_fingerprint") or "") != canonical_json_sha256(archive_diagnostics):
+        raise ValueError("Research V2 candidate supplemental archive diagnostics fingerprint drift")
     expected_adjusted_price_representation = adjusted_price_representation_contract_payload()
     expected_adjusted_price_representation_fingerprint = adjusted_price_representation_contract_fingerprint()
     if str(payload.get("adjusted_price_representation_contract_fingerprint") or "") != expected_adjusted_price_representation_fingerprint:
         raise ValueError("Research V2 candidate adjusted-price representation fingerprint drift")
     if payload.get("adjusted_price_representation_contract") != expected_adjusted_price_representation:
         raise ValueError("Research V2 candidate persisted adjusted-price representation contract drift")
-    expected_scope_contracts = research_v2_dataset_scope_contract_payloads()
     expected_scope_stats = validate_research_v2_dataset_scope_contracts()
     if str(payload.get("research_scope_contract_fingerprint") or "") != str(expected_scope_stats["contract_fingerprint"]):
-        raise ValueError("Research V2 candidate research scope contract fingerprint drift")
+        raise ValueError("Research V2 candidate required research scope contract fingerprint drift")
     if payload.get("required_dataset_scope") != expected_scope_stats["required_dataset_scope"]:
         raise ValueError("Research V2 candidate required dataset scope drift")
-    if payload.get("research_scope_contracts") != expected_scope_contracts:
-        raise ValueError("Research V2 candidate persisted research scope contracts drift")
-    if payload.get("research_scope_contract_counts") != expected_scope_stats:
-        raise ValueError("Research V2 candidate persisted research scope counts drift")
     date_audits = payload.get("dataset_date_audits")
     if not isinstance(date_audits, list):
         raise ValueError("Research V2 candidate dataset_date_audits 必須是 list")
@@ -1174,16 +1305,15 @@ def build_research_v2_freeze_candidate(
         }
     )
     identity = build_research_v2_freeze_candidate_identity_payload(
-        provider_snapshot_fingerprint=str(candidate["provider_snapshot_fingerprint"]),
-        provider_manifest_fingerprint=str(candidate["provider_manifest_fingerprint"]),
-        provider_as_of_date=str(candidate["provider_as_of_date"]),
         required_cutoff=str(candidate["required_cutoff"]),
         candidate_fingerprint=str(candidate["candidate_fingerprint"]),
+        required_source_projection_fingerprint=str(candidate["required_source_projection_fingerprint"]),
         daily_universe_file_sha256=str(candidate["daily_universe_file_sha256"]),
         research_scope_contract_fingerprint=str(candidate["research_scope_contract_fingerprint"]),
         adjusted_price_representation_contract_fingerprint=str(
             candidate["adjusted_price_representation_contract_fingerprint"]
         ),
+        adjusted_price_revision_proof_fingerprint=str(candidate["adjusted_price_revision_proof_fingerprint"]),
         required_common_complete_summary=required_common_summary,
     )
     freeze_fingerprint = canonical_json_sha256(identity)
@@ -1192,6 +1322,9 @@ def build_research_v2_freeze_candidate(
     payload = {
         **identity,
         "freeze_candidate_fingerprint": freeze_fingerprint,
+        "provider_snapshot_fingerprint": str(candidate["provider_snapshot_fingerprint"]),
+        "provider_manifest_fingerprint": str(candidate["provider_manifest_fingerprint"]),
+        "provider_as_of_date": str(candidate["provider_as_of_date"]),
         "built_at": built_at,
         "candidate_manifest_path": project_relative_display_path(
             resolve_research_v2_candidate_manifest_path(root, str(candidate["provider_snapshot_fingerprint"])),
@@ -1267,6 +1400,12 @@ def load_research_v2_freeze_candidate(
     )
     if str(payload.get("candidate_fingerprint") or "") != str(candidate.get("candidate_fingerprint") or ""):
         raise ValueError("Research V2 freeze candidate source candidate fingerprint drift")
+    if str(payload.get("required_source_projection_fingerprint") or "") != str(candidate.get("required_source_projection_fingerprint") or ""):
+        raise ValueError("Research V2 freeze candidate required source projection drift")
+    if str(payload.get("adjusted_price_revision_proof_fingerprint") or "") != str(candidate.get("adjusted_price_revision_proof_fingerprint") or ""):
+        raise ValueError("Research V2 freeze candidate adjusted-price revision proof drift")
+    if str(candidate.get("adjusted_price_revision_proof_status") or "") != ADJUSTED_PRICE_REVISION_STATUS_READY:
+        raise ValueError("Research V2 freeze candidate requires READY adjusted-price revision proof")
     if str(payload.get("daily_universe_file_sha256") or "") != str(candidate.get("daily_universe_file_sha256") or ""):
         raise ValueError("Research V2 freeze candidate daily universe artifact drift")
     if str(payload.get("research_scope_contract_fingerprint") or "") != str(candidate.get("research_scope_contract_fingerprint") or ""):

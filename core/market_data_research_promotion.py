@@ -21,6 +21,12 @@ from core.market_data_contract import (
     get_research_data_generation,
 )
 from core.market_data_adjusted_price_invariance import adjusted_price_representation_contract_fingerprint
+from core.market_data_adjusted_price_revision_proof import (
+    ADJUSTED_PRICE_REVISION_PROOF_IDENTITY_FIELDS,
+    ADJUSTED_PRICE_REVISION_STATUS_READY,
+    adjusted_price_revision_proof_fingerprint,
+    validate_adjusted_price_revision_proof_payload,
+)
 from core.market_data_research_materialization import (
     RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY,
     materialization_identity_from_payload,
@@ -30,11 +36,12 @@ from core.market_data_research_storage_contract import (
     resolve_active_research_generation_path,
     resolve_research_v2_compatibility_dataset_dir,
     resolve_research_v2_freeze_candidate_manifest_path,
+    resolve_research_v2_adjusted_price_proof_manifest_path,
     resolve_research_v2_materialization_manifest_path,
     resolve_research_v2_promotion_manifest_path,
 )
 
-RESEARCH_V2_PROMOTION_SCHEMA_VERSION = 1
+RESEARCH_V2_PROMOTION_SCHEMA_VERSION = 2
 RESEARCH_V2_PROMOTION_STATUS_ACTIVE = "ACTIVE_FROZEN"
 RESEARCH_ACTIVE_POINTER_SCHEMA_VERSION = 1
 
@@ -45,12 +52,13 @@ RESEARCH_V2_PROMOTION_IDENTITY_FIELDS = (
     "prior_generation_id",
     "freeze_candidate_fingerprint",
     "freeze_candidate_manifest_sha256",
-    "provider_snapshot_fingerprint",
     "candidate_fingerprint",
+    "required_source_projection_fingerprint",
     "required_cutoff",
     "frozen_cutoff",
     "research_scope_contract_fingerprint",
     "adjusted_price_representation_contract_fingerprint",
+    "adjusted_price_revision_proof_fingerprint",
     "required_common_complete_fingerprint",
     "materialization_fingerprint",
     "materialization_manifest_sha256",
@@ -124,16 +132,20 @@ def build_research_v2_promotion_identity_payload(
         "freeze_candidate_manifest_sha256": _require_hex64(
             freeze_candidate_manifest_sha256, field="freeze_candidate_manifest_sha256"
         ),
-        "provider_snapshot_fingerprint": _require_hex64(
-            freeze_candidate.get("provider_snapshot_fingerprint"), field="provider_snapshot_fingerprint"
-        ),
         "candidate_fingerprint": _require_hex64(
             freeze_candidate.get("candidate_fingerprint"), field="candidate_fingerprint"
+        ),
+        "required_source_projection_fingerprint": _require_hex64(
+            freeze_candidate.get("required_source_projection_fingerprint"), field="required_source_projection_fingerprint"
         ),
         "required_cutoff": required_cutoff,
         "frozen_cutoff": frozen_cutoff,
         "research_scope_contract_fingerprint": scope_fp,
         "adjusted_price_representation_contract_fingerprint": adjusted_fp,
+        "adjusted_price_revision_proof_fingerprint": _require_hex64(
+            freeze_candidate.get("adjusted_price_revision_proof_fingerprint"),
+            field="adjusted_price_revision_proof_fingerprint",
+        ),
         "required_common_complete_fingerprint": _require_hex64(
             freeze_candidate.get("required_common_complete_fingerprint"), field="required_common_complete_fingerprint"
         ),
@@ -224,6 +236,21 @@ def load_active_research_v2_promotion(
         raise ValueError("active Research V2 scope contract drift")
     if str(payload.get("adjusted_price_representation_contract_fingerprint") or "") != adjusted_price_representation_contract_fingerprint():
         raise ValueError("active Research V2 adjusted-price contract drift")
+    proof_fp = _require_hex64(
+        payload.get("adjusted_price_revision_proof_fingerprint"), field="adjusted_price_revision_proof_fingerprint"
+    )
+    proof_path = resolve_research_v2_adjusted_price_proof_manifest_path(root, proof_fp)
+    if not proof_path.is_file():
+        raise FileNotFoundError("active Research V2 adjusted-price revision proof 不存在")
+    proof_payload = load_json_strict(proof_path)
+    if not isinstance(proof_payload, dict):
+        raise ValueError("active Research V2 adjusted-price revision proof 必須是 object")
+    proof_identity = {key: proof_payload.get(key) for key in ADJUSTED_PRICE_REVISION_PROOF_IDENTITY_FIELDS}
+    if adjusted_price_revision_proof_fingerprint(proof_identity) != proof_fp:
+        raise ValueError("active Research V2 adjusted-price revision proof fingerprint drift")
+    validate_adjusted_price_revision_proof_payload(proof_identity)
+    if str(proof_identity.get("status") or "") != ADJUSTED_PRICE_REVISION_STATUS_READY:
+        raise ValueError("active Research V2 adjusted-price revision proof 尚未 READY")
     freeze_fp = _require_hex64(payload.get("freeze_candidate_fingerprint"), field="freeze_candidate_fingerprint")
     freeze_manifest_path = resolve_research_v2_freeze_candidate_manifest_path(root, freeze_fp)
     if not freeze_manifest_path.is_file():

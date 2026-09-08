@@ -4320,6 +4320,17 @@
       "entry": "`services/downloader/universe.py`, `core/trading_market_clock.py`, `core/market_data_instrument_universe.py`, `services/research/market_data_v2.py`, `core/market_data_research_v2.py`, `core/market_data_contract.py`",
       "initial_status": "NEW",
       "order": 389
+    },
+    {
+      "id": "B402",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data Rounds 1–16 audit Repair 2 / Research PIT source projection and PriceAdj revision legality",
+      "item": "Research V2 foundation identity consumes only required PIT evidence and post-cutoff adjusted-price provider rebuild must be proven equivalent to frozen V1 before freeze/promotion",
+      "gap": "Independent Rounds 1–16 audit found that the 2026-09-01 FinMind TaiwanStockPriceAdj full-history rebuild was outside the Round-13 corporate-action scalar proof, active direct reads could expose rows after frozen_cutoff, and optional archive registry/snapshot provenance still contaminated foundation identity. Repair must add a frozen-V1/current-PriceAdj revision-equivalence proof, enforce cutoff inside the active read seam, separate full Provider Snapshot provenance from required-source scientific projection identity, and validate persisted optional diagnostics by their own hash rather than current optional registry state.",
+      "entry": "`core/market_data_adjusted_price_revision_proof.py`, `services/research/adjusted_price_revision_proof.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py`, `services/market_data/provider_snapshot_repository.py`, `core/market_data_research_v2.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`",
+      "initial_status": "NEW",
+      "order": 390
     }
   ],
   "tests": [
@@ -7963,6 +7974,13 @@
       "b_id": "B401",
       "initial_status": "NEW",
       "order": 511
+    },
+    {
+      "id": "T522",
+      "description": "`validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_case` 泛化驗證post-cutoff PriceAdj只有逐股票單一正比例歷史重述才可取得revision proof、非共同重算fail-closed、historical Provider Snapshot以自身persisted identity可重載，以及candidate→freeze→materialization→promotion只以required-source projection/revision proof作foundation identity。",
+      "b_id": "B402",
+      "initial_status": "NEW",
+      "order": 512
     }
   ],
   "transitions": [
@@ -25821,6 +25839,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_rounds_1_16_repair1_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B402",
+      "description": "修正Rounds 1–16完整Audit確認的PriceAdj post-cutoff historical-rebuild proof、active cutoff、required-source projection與optional archive identity污染根因。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Repair Round 2 Research PIT / source projection closure"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T522",
+      "description": "新增Rounds 1–16 Audit Repair 2泛化contract synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_case`"
     }
   ]
 }

@@ -104,7 +104,21 @@ class ActiveResearchV2ReadView:
         *,
         columns: tuple[str, ...],
     ) -> Iterator[pd.DataFrame]:
-        yield from self.provider_view.iter_dataset_scope_frames(dataset, columns=columns)
+        """Read authorized active rows while enforcing the immutable frozen horizon.
+
+        The cutoff is owned by the active generation.  Consumers may request a
+        projection that omits ``date``; the service still reads date internally
+        to prevent post-cutoff Provider Snapshot rows from escaping this seam.
+        """
+        requested = tuple(str(column) for column in columns)
+        read_columns = requested if "date" in requested else ("date", *requested)
+        for frame in self.provider_view.iter_dataset_scope_frames(dataset, columns=read_columns):
+            if "date" not in frame.columns:
+                raise ValueError(f"Research V2 active scope frame 缺 date: {dataset}")
+            dates = pd.to_datetime(frame["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            mask = dates.notna() & dates.le(self.frozen_cutoff)
+            filtered = frame.loc[mask, list(read_columns)].copy()
+            yield filtered.loc[:, list(requested)]
 
 
 def _emit(progress_callback: ProgressCallback | None, text: str) -> None:
@@ -431,6 +445,9 @@ def build_research_v2_compatibility_materialization(
         payload = {
             **identity,
             "materialization_fingerprint": materialization_fp,
+            "provider_snapshot_fingerprint": str(freeze["provider_snapshot_fingerprint"]),
+            "provider_manifest_fingerprint": str(freeze["provider_manifest_fingerprint"]),
+            "provider_as_of_date": str(freeze["provider_as_of_date"]),
             "status": RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY,
             "created_at": created_at,
             "dataset_inventory_sha256": dataset_inventory_sha256,
@@ -559,6 +576,9 @@ def promote_research_v2(
     payload = {
         **identity,
         "promotion_fingerprint": promotion_fp,
+        "provider_snapshot_fingerprint": str(freeze["provider_snapshot_fingerprint"]),
+        "provider_manifest_fingerprint": str(freeze["provider_manifest_fingerprint"]),
+        "provider_as_of_date": str(freeze["provider_as_of_date"]),
         "promoted_at": promoted_at,
         "freeze_candidate_manifest_path": project_relative_display_path(freeze_manifest_path, project_root=root),
         "materialization_manifest_path": project_relative_display_path(materialization_manifest_path, project_root=root),

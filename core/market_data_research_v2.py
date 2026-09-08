@@ -26,7 +26,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
 )
 
-RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 8
+RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 9
 RESEARCH_V2_CANDIDATE_STATUS_NOT_READY = "CANDIDATE_NOT_READY"
 RESEARCH_V2_DATASET_STATUS_EXACT_CANDIDATE = "EXACT_CANDIDATE"
 RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
@@ -52,11 +52,8 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "schema_version",
     "generation_id",
     "status",
-    "provider_snapshot_fingerprint",
-    "provider_manifest_fingerprint",
-    "provider_as_of_date",
     "required_cutoff",
-    "historical_instrument_count",
+    "required_source_projection_fingerprint",
     "historical_market_state_guard_dataset",
     "historical_market_state_guard_fingerprint",
     "daily_universe_source_dataset",
@@ -67,6 +64,8 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "latest_complete_tail_date_count",
     "exact_coverage_fingerprint",
     "adjusted_price_representation_contract_fingerprint",
+    "adjusted_price_revision_proof_fingerprint",
+    "adjusted_price_revision_proof_status",
     "research_scope_contract_fingerprint",
     "required_dataset_scope",
     "required_common_complete_start_date",
@@ -349,15 +348,14 @@ def build_exact_candidate_daily_coverage(
 
 def build_research_v2_candidate_identity_payload(
     *,
-    provider_snapshot_fingerprint: str,
-    provider_manifest_fingerprint: str,
-    provider_as_of_date: str,
     required_cutoff: str,
-    historical_instrument_count: int,
+    required_source_projection_fingerprint: str,
     historical_market_state_guard_fingerprint: str,
     daily_universe_fingerprint: str,
     coverage_summary: ResearchV2ExactCoverageSummary,
     adjusted_price_representation_contract_fingerprint: str,
+    adjusted_price_revision_proof_fingerprint: str,
+    adjusted_price_revision_proof_status: str,
     research_scope_contract_fingerprint: str,
     required_dataset_scope: Iterable[str],
     required_common_complete_summary: ResearchV2RequiredCommonCompleteSummary,
@@ -366,11 +364,8 @@ def build_research_v2_candidate_identity_payload(
         "schema_version": RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
         "generation_id": "research_v2",
         "status": RESEARCH_V2_CANDIDATE_STATUS_NOT_READY,
-        "provider_snapshot_fingerprint": str(provider_snapshot_fingerprint),
-        "provider_manifest_fingerprint": str(provider_manifest_fingerprint),
-        "provider_as_of_date": str(provider_as_of_date),
         "required_cutoff": str(required_cutoff),
-        "historical_instrument_count": int(historical_instrument_count),
+        "required_source_projection_fingerprint": str(required_source_projection_fingerprint),
         "historical_market_state_guard_dataset": RESEARCH_V2_MARKET_STATE_GUARD_DATASET,
         "historical_market_state_guard_fingerprint": str(historical_market_state_guard_fingerprint),
         "daily_universe_source_dataset": RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET,
@@ -381,6 +376,8 @@ def build_research_v2_candidate_identity_payload(
         "latest_complete_tail_date_count": int(coverage_summary.latest_complete_tail_date_count),
         "exact_coverage_fingerprint": coverage_summary.coverage_fingerprint,
         "adjusted_price_representation_contract_fingerprint": str(adjusted_price_representation_contract_fingerprint),
+        "adjusted_price_revision_proof_fingerprint": str(adjusted_price_revision_proof_fingerprint),
+        "adjusted_price_revision_proof_status": str(adjusted_price_revision_proof_status),
         "research_scope_contract_fingerprint": str(research_scope_contract_fingerprint),
         "required_dataset_scope": [str(value) for value in required_dataset_scope],
         "required_common_complete_start_date": required_common_complete_summary.common_complete_tail_start,

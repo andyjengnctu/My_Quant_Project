@@ -17,7 +17,7 @@ from core.market_data_research_scope import (
     RESEARCH_V2_RAW_VOLUME_DATASET,
 )
 
-RESEARCH_V2_COMPAT_MATERIALIZATION_SCHEMA_VERSION = 1
+RESEARCH_V2_COMPAT_MATERIALIZATION_SCHEMA_VERSION = 2
 RESEARCH_V2_COMPAT_MATERIALIZATION_CONTRACT_ID = "research_v2_legacy_ohlcv_compatibility_v1"
 RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY = "MATERIALIZATION_READY"
 RESEARCH_V2_COMPAT_OUTPUT_COLUMNS = ("Date", "Open", "High", "Low", "Close", "Volume")
@@ -34,13 +34,14 @@ RESEARCH_V2_COMPAT_MATERIALIZATION_IDENTITY_FIELDS = (
     "contract_id",
     "generation_id",
     "freeze_candidate_fingerprint",
-    "provider_snapshot_fingerprint",
     "candidate_fingerprint",
+    "required_source_projection_fingerprint",
     "daily_universe_file_sha256",
     "required_cutoff",
     "frozen_cutoff",
     "research_scope_contract_fingerprint",
     "adjusted_price_representation_contract_fingerprint",
+    "adjusted_price_revision_proof_fingerprint",
     "required_common_complete_fingerprint",
     "price_dataset",
     "volume_dataset",
@@ -82,11 +83,11 @@ def build_research_v2_compatibility_materialization_identity_payload(
         "freeze_candidate_fingerprint": _require_hex64(
             freeze_candidate.get("freeze_candidate_fingerprint"), field="freeze_candidate_fingerprint"
         ),
-        "provider_snapshot_fingerprint": _require_hex64(
-            freeze_candidate.get("provider_snapshot_fingerprint"), field="provider_snapshot_fingerprint"
-        ),
         "candidate_fingerprint": _require_hex64(
             freeze_candidate.get("candidate_fingerprint"), field="candidate_fingerprint"
+        ),
+        "required_source_projection_fingerprint": _require_hex64(
+            freeze_candidate.get("required_source_projection_fingerprint"), field="required_source_projection_fingerprint"
         ),
         "daily_universe_file_sha256": _require_hex64(
             freeze_candidate.get("daily_universe_file_sha256"), field="daily_universe_file_sha256"
@@ -99,6 +100,10 @@ def build_research_v2_compatibility_materialization_identity_payload(
         "adjusted_price_representation_contract_fingerprint": _require_hex64(
             freeze_candidate.get("adjusted_price_representation_contract_fingerprint"),
             field="adjusted_price_representation_contract_fingerprint",
+        ),
+        "adjusted_price_revision_proof_fingerprint": _require_hex64(
+            freeze_candidate.get("adjusted_price_revision_proof_fingerprint"),
+            field="adjusted_price_revision_proof_fingerprint",
         ),
         "required_common_complete_fingerprint": _require_hex64(
             freeze_candidate.get("required_common_complete_fingerprint"), field="required_common_complete_fingerprint"

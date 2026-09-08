@@ -18,21 +18,20 @@ from core.market_data_research_scope import (
 
 RESEARCH_V2_REQUIRED_COMMON_COMPLETE_SCHEMA_VERSION = 1
 RESEARCH_V2_REQUIRED_COMMON_COMPLETE_CONTRACT_ID = "research_v2_required_scope_common_complete_v1"
-RESEARCH_V2_FREEZE_CANDIDATE_SCHEMA_VERSION = 1
+RESEARCH_V2_FREEZE_CANDIDATE_SCHEMA_VERSION = 2
 RESEARCH_V2_FREEZE_CANDIDATE_STATUS_READY = "FREEZE_CANDIDATE_READY"
 
 RESEARCH_V2_FREEZE_CANDIDATE_IDENTITY_FIELDS = (
     "schema_version",
     "generation_id",
     "status",
-    "provider_snapshot_fingerprint",
-    "provider_manifest_fingerprint",
-    "provider_as_of_date",
     "required_cutoff",
     "candidate_fingerprint",
+    "required_source_projection_fingerprint",
     "daily_universe_file_sha256",
     "research_scope_contract_fingerprint",
     "adjusted_price_representation_contract_fingerprint",
+    "adjusted_price_revision_proof_fingerprint",
     "required_dataset_scope",
     "common_complete_dataset_scope",
     "required_common_complete_start_date",
@@ -152,14 +151,13 @@ def required_common_complete_summary_payload(
 
 def build_research_v2_freeze_candidate_identity_payload(
     *,
-    provider_snapshot_fingerprint: str,
-    provider_manifest_fingerprint: str,
-    provider_as_of_date: str,
     required_cutoff: str,
     candidate_fingerprint: str,
+    required_source_projection_fingerprint: str,
     daily_universe_file_sha256: str,
     research_scope_contract_fingerprint: str,
     adjusted_price_representation_contract_fingerprint: str,
+    adjusted_price_revision_proof_fingerprint: str,
     required_common_complete_summary: ResearchV2RequiredCommonCompleteSummary,
 ) -> dict[str, object]:
     summary = required_common_complete_summary
@@ -171,14 +169,13 @@ def build_research_v2_freeze_candidate_identity_payload(
         "schema_version": RESEARCH_V2_FREEZE_CANDIDATE_SCHEMA_VERSION,
         "generation_id": "research_v2",
         "status": RESEARCH_V2_FREEZE_CANDIDATE_STATUS_READY,
-        "provider_snapshot_fingerprint": str(provider_snapshot_fingerprint),
-        "provider_manifest_fingerprint": str(provider_manifest_fingerprint),
-        "provider_as_of_date": str(provider_as_of_date),
         "required_cutoff": str(required_cutoff),
         "candidate_fingerprint": str(candidate_fingerprint),
+        "required_source_projection_fingerprint": str(required_source_projection_fingerprint),
         "daily_universe_file_sha256": str(daily_universe_file_sha256),
         "research_scope_contract_fingerprint": str(research_scope_contract_fingerprint),
         "adjusted_price_representation_contract_fingerprint": str(adjusted_price_representation_contract_fingerprint),
+        "adjusted_price_revision_proof_fingerprint": str(adjusted_price_revision_proof_fingerprint),
         "required_dataset_scope": list(RESEARCH_V2_REQUIRED_DATASETS),
         "common_complete_dataset_scope": list(RESEARCH_V2_COMMON_COMPLETE_DATASETS),
         "required_common_complete_start_date": summary.common_complete_tail_start,

@@ -9,10 +9,12 @@ RESEARCH_MARKET_DATA_V2_CANDIDATES_DIRNAME = "candidates"
 RESEARCH_MARKET_DATA_V2_FREEZE_CANDIDATES_DIRNAME = "freeze_candidates"
 RESEARCH_MARKET_DATA_V2_MATERIALIZATIONS_DIRNAME = "materializations"
 RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME = "promotions"
+RESEARCH_MARKET_DATA_V2_ADJUSTED_PRICE_PROOFS_DIRNAME = "adjusted_price_revision_proofs"
 RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME = "research_v2_candidate_manifest.json"
 RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME = "research_v2_freeze_candidate_manifest.json"
 RESEARCH_V2_MATERIALIZATION_MANIFEST_FILENAME = "research_v2_materialization_manifest.json"
 RESEARCH_V2_PROMOTION_MANIFEST_FILENAME = "research_v2_promotion_manifest.json"
+RESEARCH_V2_ADJUSTED_PRICE_PROOF_MANIFEST_FILENAME = "adjusted_price_revision_proof_manifest.json"
 RESEARCH_ACTIVE_GENERATION_FILENAME = "active_research_generation.json"
 RESEARCH_V2_COMPATIBILITY_DATASET_DIRNAME = "tw_stock_data_vip"
 RESEARCH_V2_DAILY_UNIVERSE_FILENAME = "daily_universe.sqlite3"
@@ -98,6 +100,22 @@ def resolve_research_v2_promotion_manifest_path(project_root, promotion_fingerpr
     )
 
 
+
+def resolve_research_v2_adjusted_price_proof_dir(project_root, proof_fingerprint: str) -> Path:
+    return (
+        Path(project_root).resolve()
+        / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT
+        / RESEARCH_MARKET_DATA_V2_ADJUSTED_PRICE_PROOFS_DIRNAME
+        / _require_fingerprint(proof_fingerprint)
+    )
+
+
+def resolve_research_v2_adjusted_price_proof_manifest_path(project_root, proof_fingerprint: str) -> Path:
+    return (
+        resolve_research_v2_adjusted_price_proof_dir(project_root, proof_fingerprint)
+        / RESEARCH_V2_ADJUSTED_PRICE_PROOF_MANIFEST_FILENAME
+    )
+
 def resolve_active_research_generation_path(project_root) -> Path:
     return Path(project_root).resolve() / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT / RESEARCH_ACTIVE_GENERATION_FILENAME
 
@@ -108,10 +126,12 @@ __all__ = [
     "RESEARCH_MARKET_DATA_V2_FREEZE_CANDIDATES_DIRNAME",
     "RESEARCH_MARKET_DATA_V2_MATERIALIZATIONS_DIRNAME",
     "RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME",
+    "RESEARCH_MARKET_DATA_V2_ADJUSTED_PRICE_PROOFS_DIRNAME",
     "RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME",
     "RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME",
     "RESEARCH_V2_MATERIALIZATION_MANIFEST_FILENAME",
     "RESEARCH_V2_PROMOTION_MANIFEST_FILENAME",
+    "RESEARCH_V2_ADJUSTED_PRICE_PROOF_MANIFEST_FILENAME",
     "RESEARCH_ACTIVE_GENERATION_FILENAME",
     "RESEARCH_V2_COMPATIBILITY_DATASET_DIRNAME",
     "RESEARCH_V2_DAILY_UNIVERSE_FILENAME",
@@ -125,5 +145,7 @@ __all__ = [
     "resolve_research_v2_compatibility_dataset_dir",
     "resolve_research_v2_promotion_dir",
     "resolve_research_v2_promotion_manifest_path",
+    "resolve_research_v2_adjusted_price_proof_dir",
+    "resolve_research_v2_adjusted_price_proof_manifest_path",
     "resolve_active_research_generation_path",
 ]

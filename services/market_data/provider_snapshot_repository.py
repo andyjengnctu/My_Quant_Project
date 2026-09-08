@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.file_integrity import canonical_json_sha256, load_json_strict
-from core.market_data_bootstrap_requests import BootstrapRequestManifest, build_registry_fingerprint
-from core.market_data_dataset_registry import get_market_dataset_specs
+from core.market_data_bootstrap_requests import BootstrapRequestManifest
 from core.market_data_provider_snapshot import (
     ProviderArtifactEvidence,
     build_provider_snapshot_identity_payload,
@@ -57,9 +56,6 @@ def validate_provider_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any
     identity = provider_snapshot_identity_from_payload(payload)
     if str(payload.get("snapshot_fingerprint") or "") != canonical_json_sha256(identity):
         raise ValueError("Market Data V2 provider snapshot fingerprint 不一致")
-    current_registry = build_registry_fingerprint(get_market_dataset_specs(included_only=True))
-    if str(payload.get("registry_fingerprint") or "") != current_registry:
-        raise ValueError("Market Data V2 provider snapshot registry 與 current registry 已 drift")
     return payload
 
 

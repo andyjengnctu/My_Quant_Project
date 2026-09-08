@@ -71,6 +71,20 @@ def get_dataset_root_dir(project_root, profile_key=DEFAULT_DATASET_PROFILE):
     return project_data_root
 
 
+def get_unpromoted_dataset_dir(project_root, profile_key):
+    """Resolve the physical legacy dataset path without active-generation routing.
+
+    Lifecycle/proof code uses this only when it must reference the persisted
+    Research V1 bytes explicitly.  Normal consumers must continue using
+    ``get_dataset_dir`` so active Research routing remains centralized.
+    """
+    normalized_key = normalize_dataset_profile_key(profile_key)
+    return os.path.join(
+        get_dataset_root_dir(project_root, normalized_key),
+        DATASET_PROFILE_SPECS[normalized_key]["dir_name"],
+    )
+
+
 def get_dataset_dir(project_root, profile_key):
     normalized_key = normalize_dataset_profile_key(profile_key)
     if normalized_key == DATASET_PROFILE_FULL:
@@ -81,7 +95,7 @@ def get_dataset_dir(project_root, profile_key):
         promoted = resolve_promoted_research_full_dataset_dir(project_root)
         if promoted is not None:
             return str(promoted)
-    return os.path.join(get_dataset_root_dir(project_root, normalized_key), DATASET_PROFILE_SPECS[normalized_key]["dir_name"])
+    return get_unpromoted_dataset_dir(project_root, normalized_key)
 
 
 def get_dataset_profile_label(profile_key):
