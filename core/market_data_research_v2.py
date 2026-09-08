@@ -1,10 +1,11 @@
 """Research V2 market-data candidate contracts and PIT/completeness primitives.
 
-This layer deliberately stops short of Research V2 promotion.  Provider-facing
-``pit_class`` values are treated as review inputs, not as blanket scientific
-approval.  Only exact-candidate datasets may participate in the automatic
-candidate audit; review-required/current-vintage datasets remain explicit
-blockers until a later authorized Research decision resolves them.
+This layer deliberately stops short of Research V2 promotion. Provider-facing
+``pit_class`` values are review inputs, not blanket scientific approval. The
+archive-wide exact/date-presence audits remain diagnostics; the narrower
+Research V2 required dataset/field scope is authorized separately by
+``core.market_data_research_scope`` and is what later common-complete/freeze
+logic must consume.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
 )
 
-RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 5
+RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 6
 RESEARCH_V2_CANDIDATE_STATUS_NOT_READY = "CANDIDATE_NOT_READY"
 RESEARCH_V2_DATASET_STATUS_EXACT_CANDIDATE = "EXACT_CANDIDATE"
 RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
@@ -60,14 +61,9 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "latest_complete_tail_start",
     "latest_complete_tail_date_count",
     "exact_coverage_fingerprint",
-    "dataset_assessment_fingerprint",
-    "pit_review_contract_fingerprint",
     "adjusted_price_representation_contract_fingerprint",
-    "dataset_date_audit_fingerprint",
-    "mechanical_common_complete_start_date",
-    "mechanical_common_complete_ceiling_date",
-    "mechanical_common_complete_tail_date_count",
-    "mechanical_common_complete_fingerprint",
+    "research_scope_contract_fingerprint",
+    "required_dataset_scope",
     "research_common_complete_cutoff",
     "frozen_cutoff",
     "active_research_generation_changed",
@@ -340,14 +336,9 @@ def build_research_v2_candidate_identity_payload(
     historical_instrument_count: int,
     daily_universe_fingerprint: str,
     coverage_summary: ResearchV2ExactCoverageSummary,
-    assessment_fingerprint: str,
-    pit_review_contract_fingerprint: str,
     adjusted_price_representation_contract_fingerprint: str,
-    dataset_date_audit_fingerprint: str,
-    mechanical_common_complete_start_date: str | None,
-    mechanical_common_complete_ceiling_date: str | None,
-    mechanical_common_complete_tail_date_count: int,
-    mechanical_common_complete_fingerprint: str,
+    research_scope_contract_fingerprint: str,
+    required_dataset_scope: Iterable[str],
 ) -> dict[str, object]:
     return {
         "schema_version": RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
@@ -365,14 +356,9 @@ def build_research_v2_candidate_identity_payload(
         "latest_complete_tail_start": coverage_summary.latest_complete_tail_start,
         "latest_complete_tail_date_count": int(coverage_summary.latest_complete_tail_date_count),
         "exact_coverage_fingerprint": coverage_summary.coverage_fingerprint,
-        "dataset_assessment_fingerprint": str(assessment_fingerprint),
-        "pit_review_contract_fingerprint": str(pit_review_contract_fingerprint),
         "adjusted_price_representation_contract_fingerprint": str(adjusted_price_representation_contract_fingerprint),
-        "dataset_date_audit_fingerprint": str(dataset_date_audit_fingerprint),
-        "mechanical_common_complete_start_date": mechanical_common_complete_start_date,
-        "mechanical_common_complete_ceiling_date": mechanical_common_complete_ceiling_date,
-        "mechanical_common_complete_tail_date_count": int(mechanical_common_complete_tail_date_count),
-        "mechanical_common_complete_fingerprint": str(mechanical_common_complete_fingerprint),
+        "research_scope_contract_fingerprint": str(research_scope_contract_fingerprint),
+        "required_dataset_scope": [str(value) for value in required_dataset_scope],
         "research_common_complete_cutoff": None,
         "frozen_cutoff": None,
         "active_research_generation_changed": False,

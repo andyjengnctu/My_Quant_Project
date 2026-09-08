@@ -30,6 +30,11 @@ from core.market_data_adjusted_price_invariance import (
     get_adjusted_price_representation_contract,
     validate_adjusted_price_representation_contract,
 )
+from core.market_data_research_scope import (
+    build_research_v2_dataset_scope_contracts,
+    research_v2_dataset_scope_contract_payloads,
+    validate_research_v2_dataset_scope_contracts,
+)
 from core.market_data_research_storage_contract import (
     resolve_research_v2_candidate_dir,
     resolve_research_v2_candidate_manifest_path,
@@ -51,7 +56,6 @@ from core.market_data_research_pit_contract import (
     validate_research_v2_pit_review_contracts,
 )
 from core.market_data_research_v2 import (
-    RESEARCH_V2_ADJUSTED_PRICE_DATASET,
     RESEARCH_V2_CANDIDATE_STATUS_NOT_READY,
     RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS,
     RESEARCH_V2_DAILY_COVERAGE_DATASET,
@@ -412,6 +416,7 @@ def _build_exact_candidate_sqlite(
     *,
     output_path: Path,
     research_cutoff: str,
+    research_scope_contract_fingerprint: str,
 ) -> tuple[dict[str, object], pd.DataFrame]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=".daily_universe.", suffix=".sqlite3.tmp", dir=str(output_path.parent))
@@ -525,6 +530,7 @@ def _build_exact_candidate_sqlite(
                 "exact_coverage_fingerprint": summary.coverage_fingerprint,
                 "delisting_event_row_count": int(delisting_rows),
                 "pit_review_contract_fingerprint": research_v2_pit_review_contract_fingerprint(),
+                "research_scope_contract_fingerprint": str(research_scope_contract_fingerprint),
                 "mechanical_common_complete_fingerprint": mechanical_summary.coverage_fingerprint,
                 "mechanical_common_complete_ceiling_date": mechanical_summary.common_complete_ceiling_date,
             }
@@ -549,76 +555,37 @@ def _build_exact_candidate_sqlite(
 
 
 def _build_candidate_blockers(
-    contract_stats: dict[str, object],
     coverage_summary: dict[str, object],
     *,
     required_cutoff: str,
-    pit_review_stats: dict[str, object],
-    mechanical_summary: dict[str, object],
+    scope_stats: dict[str, object],
 ) -> list[dict[str, object]]:
+    # Round 14 separates archive-wide diagnostic review from the explicitly
+    # selected Research V2 foundation scope.  Optional/not-selected datasets
+    # may retain blocked PIT-review states without blocking the foundation.
     blockers: list[dict[str, object]] = [
         {
-            "code": "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED",
-            "reason": "Research V2 尚未宣告未來模型真正 required dataset set；不得把 51 個 archive dataset 自動當成 Research inputs。",
-        },
-        {
-            "code": "ADJUSTED_PRICE_RAW_LEVEL_DIRECT_USE_BLOCKED",
-            "dataset": RESEARCH_V2_ADJUSTED_PRICE_DATASET,
-            "representation_proof_status": pit_review_stats.get("adjusted_price_representation_proof_status"),
-            "representation_contract_fingerprint": pit_review_stats.get("adjusted_price_representation_contract_fingerprint"),
+            "code": "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED",
+            "required_dataset_scope": list(scope_stats.get("required_dataset_scope") or []),
+            "common_complete_dataset_scope": list(scope_stats.get("common_complete_dataset_scope") or []),
             "reason": (
-                "Round 13 已證明文件化 corporate-action backward prefix restatement 下的 canonical scale-free "
-                "price representations；raw/absolute adjusted-price levels 仍不可直接作 scientific input，且真正 "
-                "dataset/field scope 必須留到後續明確 authorization。"
+                "Round 14 已完成 required dataset scope / field-level authorization；"
+                "Round 15 尚未依該 required scope 計算並授權 true research_common_complete_cutoff，故必須維持 null。"
             ),
         },
-        {
-            "code": "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED",
-            "reason": "mechanical completeness ceiling 只代表 archive date-presence evidence；required dataset scope 與 dataset-specific PIT legality 完成前 research_common_complete_cutoff 必須維持 null。",
-        },
     ]
-    review_count = int(contract_stats.get("review_required_count") or 0)
-    if review_count:
+    if not bool(scope_stats.get("required_scope_authorization_complete")):
         blockers.append(
             {
-                "code": "DATASET_SPECIFIC_PIT_REVIEW_REQUIRED",
-                "dataset_count": review_count,
-                "audit_mode_counts": dict(pit_review_stats.get("mode_counts") or {}),
-                "pit_legality_status_counts": dict(pit_review_stats.get("pit_legality_status_counts") or {}),
-                "event_information_time_anchor_ready_count": int(
-                    pit_review_stats.get("event_information_time_anchor_ready_count") or 0
-                ),
-                "historical_publication_vintage_blocked_count": int(
-                    pit_review_stats.get("historical_publication_vintage_blocked_count") or 0
-                ),
-                "reason": (
-                    "review_required datasets 已有 canonical audit/legality matrix；event rows 最多只取得 conservative "
-                    "information-time anchor，periodic/static 缺 historical publication/as-of vintage 時維持 BLOCKED，"
-                    "且任何 dataset 都尚未因此取得 model-input authorization。"
-                ),
+                "code": "REQUIRED_SCOPE_AUTHORIZATION_INCOMPLETE",
+                "reason": "至少一個 Research V2 required dataset/field/representation 尚未取得明確 scientific authorization。",
             }
         )
     if not coverage_summary.get("latest_exact_complete_date"):
         blockers.append(
             {
                 "code": "EXACT_CANDIDATE_COMMON_COMPLETE_NOT_ESTABLISHED",
-                "reason": "exact-candidate daily universe / coverage 尚未得到任何完整交易日。",
-            }
-        )
-    if not bool(mechanical_summary.get("audit_complete")):
-        blockers.append(
-            {
-                "code": "MECHANICAL_DATE_AUDIT_INCOMPLETE",
-                "participating_dataset_count": int(mechanical_summary.get("participating_dataset_count") or 0),
-                "successful_dataset_count": int(mechanical_summary.get("successful_dataset_count") or 0),
-                "reason": "至少一個 trading-daily review dataset 尚未取得可解析 date-presence evidence。",
-            }
-        )
-    elif not mechanical_summary.get("common_complete_ceiling_date"):
-        blockers.append(
-            {
-                "code": "MECHANICAL_COMMON_COMPLETE_TAIL_NOT_ESTABLISHED",
-                "reason": "自動 date-presence audit 沒有找到共同連續 trading-date tail。",
+                "reason": "required exact-candidate daily universe / coverage 尚未得到任何完整交易日。",
             }
         )
     if str(coverage_summary.get("latest_exact_complete_date") or "") != str(required_cutoff):
@@ -627,18 +594,12 @@ def _build_candidate_blockers(
                 "code": "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY",
                 "required_cutoff": str(required_cutoff),
                 "latest_exact_complete_date": coverage_summary.get("latest_exact_complete_date"),
-                "reason": "Research V2 exact-candidate evidence 尚未完整覆蓋固定 Research cutoff。",
+                "reason": "Research V2 required exact-candidate evidence 尚未完整覆蓋固定 Research cutoff。",
             }
         )
-    if str(mechanical_summary.get("common_complete_ceiling_date") or "") != str(required_cutoff):
-        blockers.append(
-            {
-                "code": "RESEARCH_REQUIRED_CUTOFF_MECHANICAL_COVERAGE_NOT_READY",
-                "required_cutoff": str(required_cutoff),
-                "mechanical_common_complete_ceiling_date": mechanical_summary.get("common_complete_ceiling_date"),
-                "reason": "Research V2 mechanical date-presence evidence 尚未完整覆蓋固定 Research cutoff。",
-            }
-        )
+    # Archive-wide mechanical audit remains a diagnostic artifact.  It is not
+    # a Round-14 readiness gate because its dataset set intentionally includes
+    # optional/not-selected archive datasets.
     return blockers
 
 
@@ -663,6 +624,8 @@ def build_research_v2_candidate(
     pit_review_stats = validate_research_v2_pit_review_contracts(pit_review_contracts)
     adjusted_price_representation = get_adjusted_price_representation_contract()
     adjusted_price_representation_stats = validate_adjusted_price_representation_contract(adjusted_price_representation)
+    research_scope_contracts = build_research_v2_dataset_scope_contracts()
+    research_scope_stats = validate_research_v2_dataset_scope_contracts(research_scope_contracts)
     archive = load_ready_provider_snapshot_archive(root, snapshot_fingerprint=snapshot_fingerprint)
     required_cutoff = validate_research_v2_required_cutoff(
         provider_as_of_date=archive.as_of_date,
@@ -680,6 +643,7 @@ def build_research_v2_candidate(
         view,
         output_path=universe_path,
         research_cutoff=required_cutoff,
+        research_scope_contract_fingerprint=str(research_scope_stats["contract_fingerprint"]),
     )
     del _coverage_table
     coverage_summary = dict(derived["coverage_summary"])
@@ -694,16 +658,11 @@ def build_research_v2_candidate(
         historical_instrument_count=int(derived["historical_instrument_count"]),
         daily_universe_fingerprint=str(derived["daily_universe_fingerprint"]),
         coverage_summary=ResearchV2ExactCoverageSummary(**coverage_summary),
-        assessment_fingerprint=assessment_fingerprint,
-        pit_review_contract_fingerprint=str(pit_review_stats["contract_fingerprint"]),
         adjusted_price_representation_contract_fingerprint=str(
             adjusted_price_representation_stats["contract_fingerprint"]
         ),
-        dataset_date_audit_fingerprint=canonical_json_sha256(derived["date_audits"]),
-        mechanical_common_complete_start_date=mechanical_summary.get("common_complete_tail_start"),
-        mechanical_common_complete_ceiling_date=mechanical_summary.get("common_complete_ceiling_date"),
-        mechanical_common_complete_tail_date_count=int(mechanical_summary.get("common_complete_tail_date_count") or 0),
-        mechanical_common_complete_fingerprint=str(mechanical_summary.get("coverage_fingerprint") or ""),
+        research_scope_contract_fingerprint=str(research_scope_stats["contract_fingerprint"]),
+        required_dataset_scope=research_scope_stats["required_dataset_scope"],
     )
     candidate_fingerprint = canonical_json_sha256(identity)
     built_at = (now or datetime.now().astimezone()).astimezone().isoformat()
@@ -717,21 +676,28 @@ def build_research_v2_candidate(
         "daily_universe_row_count": int(derived["daily_universe_row_count"]),
         "daily_universe_date_count": int(coverage_summary.get("daily_universe_date_count") or 0),
         "exact_coverage": coverage_summary,
+        "dataset_assessment_fingerprint": assessment_fingerprint,
         "dataset_assessments": [asdict(row) for row in assessment_rows],
         "dataset_assessment_counts": contract_stats,
+        "pit_review_contract_fingerprint": str(pit_review_stats["contract_fingerprint"]),
         "pit_review_contracts": research_v2_pit_review_contract_payloads(pit_review_contracts),
         "pit_review_contract_counts": pit_review_stats,
         "adjusted_price_representation_contract": adjusted_price_representation_contract_payload(
             adjusted_price_representation
         ),
+        "research_scope_contracts": research_v2_dataset_scope_contract_payloads(research_scope_contracts),
+        "research_scope_contract_counts": research_scope_stats,
+        "dataset_date_audit_fingerprint": canonical_json_sha256(derived["date_audits"]),
         "dataset_date_audits": list(derived["date_audits"]),
+        "mechanical_common_complete_start_date": mechanical_summary.get("common_complete_tail_start"),
+        "mechanical_common_complete_ceiling_date": mechanical_summary.get("common_complete_ceiling_date"),
+        "mechanical_common_complete_tail_date_count": int(mechanical_summary.get("common_complete_tail_date_count") or 0),
+        "mechanical_common_complete_fingerprint": str(mechanical_summary.get("coverage_fingerprint") or ""),
         "mechanical_common_complete": mechanical_summary,
         "blockers": _build_candidate_blockers(
-            contract_stats,
             coverage_summary,
             required_cutoff=required_cutoff,
-            pit_review_stats=pit_review_stats,
-            mechanical_summary=mechanical_summary,
+            scope_stats=research_scope_stats,
         ),
         "promotion_authorized": False,
         "active_research_generation": ACTIVE_RESEARCH_DATA_GENERATION,
@@ -804,6 +770,16 @@ def load_research_v2_candidate(
         raise ValueError("Research V2 candidate adjusted-price representation fingerprint drift")
     if payload.get("adjusted_price_representation_contract") != expected_adjusted_price_representation:
         raise ValueError("Research V2 candidate persisted adjusted-price representation contract drift")
+    expected_scope_contracts = research_v2_dataset_scope_contract_payloads()
+    expected_scope_stats = validate_research_v2_dataset_scope_contracts()
+    if str(payload.get("research_scope_contract_fingerprint") or "") != str(expected_scope_stats["contract_fingerprint"]):
+        raise ValueError("Research V2 candidate research scope contract fingerprint drift")
+    if payload.get("required_dataset_scope") != expected_scope_stats["required_dataset_scope"]:
+        raise ValueError("Research V2 candidate required dataset scope drift")
+    if payload.get("research_scope_contracts") != expected_scope_contracts:
+        raise ValueError("Research V2 candidate persisted research scope contracts drift")
+    if payload.get("research_scope_contract_counts") != expected_scope_stats:
+        raise ValueError("Research V2 candidate persisted research scope counts drift")
     date_audits = payload.get("dataset_date_audits")
     if not isinstance(date_audits, list):
         raise ValueError("Research V2 candidate dataset_date_audits 必須是 list")

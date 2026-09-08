@@ -1134,7 +1134,10 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
         label_from_cached_path,
         normalize_ohlcv_array_window,
     )
-    from services.research.market_data_v2 import _build_candidate_blockers
+    from core.market_data_research_scope import (
+        RESEARCH_V2_ADJUSTED_PRICE_DATASET as SCOPE_ADJUSTED_PRICE_DATASET,
+        build_research_v2_dataset_scope_contracts,
+    )
 
     case_id = "MARKET_DATA_V2_ADJUSTED_PRICE_REPRESENTATION_INVARIANCE"
     results = []
@@ -1224,18 +1227,23 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
     add_check(results, "market_data", case_id, "pit_review_exposes_proven_representation_status", ADJUSTED_PRICE_PROOF_STATUS, pit_stats["adjusted_price_representation_proof_status"])
     add_check(results, "market_data", case_id, "candidate_identity_pins_adjusted_price_representation_proof", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 5 and "adjusted_price_representation_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
 
-    blockers = _build_candidate_blockers(
-        {"review_required_count": pit_stats["review_required_count"]},
-        {"latest_exact_complete_date": "2030-01-15"},
-        required_cutoff="2030-01-15",
-        pit_review_stats=pit_stats,
-        mechanical_summary={"audit_complete": True, "common_complete_ceiling_date": "2030-01-15"},
+    scope_adjusted = next(
+        row for row in build_research_v2_dataset_scope_contracts()
+        if row.dataset == SCOPE_ADJUSTED_PRICE_DATASET
     )
-    blocker_codes = {str(row.get("code")) for row in blockers}
-    raw_blocker = next(row for row in blockers if row.get("code") == "ADJUSTED_PRICE_RAW_LEVEL_DIRECT_USE_BLOCKED")
-    add_check(results, "market_data", case_id, "round13_replaces_blanket_adjusted_price_review_blocker_with_raw_level_guard", False, "ADJUSTED_PRICE_CURRENT_VINTAGE_PIT_REVIEW_REQUIRED" in blocker_codes)
-    add_check(results, "market_data", case_id, "round13_raw_level_guard_reports_proof_ready", ADJUSTED_PRICE_PROOF_STATUS, raw_blocker["representation_proof_status"])
-    add_check(results, "market_data", case_id, "round13_candidate_still_waits_for_explicit_dataset_scope", True, "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" in blocker_codes)
+    scope_direct_fields = {
+        field
+        for rule in scope_adjusted.field_authorizations
+        if rule.direct_scientific_use_authorized
+        for field in rule.fields
+    }
+    invariant_ids = {
+        rule.representation_id for rule in contract.rules
+        if rule.status == PRICE_REPRESENTATION_STATUS_INVARIANT
+    }
+    add_check(results, "market_data", case_id, "round13_proof_owner_remains_separate_from_later_scope_authorization", False, bool(stats["scientific_input_authorized"]))
+    add_check(results, "market_data", case_id, "round14_scope_never_authorizes_raw_adjusted_price_fields_directly", set(), scope_direct_fields)
+    add_check(results, "market_data", case_id, "round14_scope_uses_exactly_round13_invariant_representations", invariant_ids, set(scope_adjusted.authorized_representation_ids))
 
     summary.update({
         "checks": len(results),
@@ -1257,6 +1265,7 @@ __all__ = [
     "validate_market_data_v2_research_required_cutoff_isolation_contract_case",
     "validate_market_data_v2_research_non_daily_pit_legality_contract_case",
     "validate_market_data_v2_adjusted_price_representation_invariance_contract_case",
+    "validate_market_data_v2_research_scope_field_authorization_contract_case",
 ]
 
 def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_params):
@@ -2731,10 +2740,11 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         add_check(results, "market_data", case_id, "exact_candidate_ceiling_retreats_before_incomplete_required_cutoff", before_cutoff, candidate["exact_candidate_ceiling_date"])
         add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based_and_cutoff_capped", 4, candidate["daily_universe_row_count"])
         blockers = {str(item.get("code")) for item in candidate["blockers"]}
-        add_check(results, "market_data", case_id, "research_v2_candidate_blocks_unapproved_dataset_scope", True, "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" in blockers)
-        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_raw_adjusted_price_levels_fail_closed", True, "ADJUSTED_PRICE_RAW_LEVEL_DIRECT_USE_BLOCKED" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_pins_authorized_required_dataset_scope", True, bool(candidate.get("research_scope_contract_fingerprint")) and bool(candidate.get("required_dataset_scope")))
+        adjusted_scope = next(row for row in candidate["research_scope_contracts"] if row["dataset"] == "TaiwanStockPriceAdj")
+        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_raw_adjusted_price_levels_fail_closed_in_scope_contract", False, any(rule["direct_scientific_use_authorized"] for rule in adjusted_scope["field_authorizations"]))
         add_check(results, "market_data", case_id, "research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blockers)
-        add_check(results, "market_data", case_id, "research_v2_candidate_reports_incomplete_mechanical_date_audit", True, "MECHANICAL_DATE_AUDIT_INCOMPLETE" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_archive_wide_mechanical_audit_diagnostic_only", False, any(code.startswith("MECHANICAL_") for code in blockers))
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_incomplete_required_cutoff_exact_coverage", True, "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
 
@@ -3060,7 +3070,10 @@ def validate_market_data_v2_research_non_daily_pit_legality_contract_case(_base_
         RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
         RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS,
     )
-    from services.research.market_data_v2 import _build_candidate_blockers
+    from core.market_data_research_scope import (
+        SCOPE_STATUS_OPTIONAL_NOT_SELECTED,
+        build_research_v2_dataset_scope_contracts,
+    )
 
     case_id = "MARKET_DATA_V2_RESEARCH_NON_DAILY_PIT_LEGALITY"
     results = []
@@ -3105,25 +3118,130 @@ def validate_market_data_v2_research_non_daily_pit_legality_contract_case(_base_
     adjusted = by_dataset["TaiwanStockPriceAdj"]
     add_check(results, "market_data", case_id, "adjusted_price_retains_separate_current_vintage_hard_block", PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.pit_legality_status)
     add_check(results, "market_data", case_id, "round12_never_auto_authorizes_any_model_input", 0, sum(row.scientific_input_authorized for row in contracts))
-    add_check(results, "market_data", case_id, "pit_legality_evidence_participates_in_candidate_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 4 and "pit_review_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    add_check(results, "market_data", case_id, "round14_demotes_archive_wide_pit_matrix_from_foundation_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 6 and "pit_review_contract_fingerprint" not in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS and "research_scope_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
     add_check(results, "market_data", case_id, "pit_contract_fingerprint_is_deterministic_after_legality_extension", research_v2_pit_review_contract_fingerprint(contracts), research_v2_pit_review_contract_fingerprint())
 
-    blockers = _build_candidate_blockers(
-        {"review_required_count": stats["review_required_count"]},
-        {"latest_exact_complete_date": "2030-01-15"},
-        required_cutoff="2030-01-15",
-        pit_review_stats=stats,
-        mechanical_summary={"audit_complete": True, "common_complete_ceiling_date": "2030-01-15"},
-    )
-    pit_blocker = next(row for row in blockers if row.get("code") == "DATASET_SPECIFIC_PIT_REVIEW_REQUIRED")
-    add_check(results, "market_data", case_id, "candidate_blocker_reports_event_anchor_progress", len(events), pit_blocker["event_information_time_anchor_ready_count"])
-    add_check(results, "market_data", case_id, "candidate_blocker_reports_remaining_non_daily_vintage_blocks", len(blocked_vintage), pit_blocker["historical_publication_vintage_blocked_count"])
-    add_check(results, "market_data", case_id, "candidate_still_not_promoted_by_round12", True, any(row.get("code") == "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" for row in blockers))
+    scope_rows = build_research_v2_dataset_scope_contracts()
+    scope_by_dataset = {row.dataset: row for row in scope_rows}
+    optional_events = [row for row in events if not scope_by_dataset[row.dataset].required_for_generation]
+    optional_blocked = [row for row in blocked_vintage if not scope_by_dataset[row.dataset].required_for_generation]
+    add_check(results, "market_data", case_id, "round12_event_anchor_evidence_remains_available_after_scope_selection", len(events), stats["event_information_time_anchor_ready_count"])
+    add_check(results, "market_data", case_id, "round12_historical_vintage_blocks_remain_preserved_after_scope_selection", len(blocked_vintage), stats["historical_publication_vintage_blocked_count"])
+    add_check(results, "market_data", case_id, "round14_optional_non_daily_review_datasets_are_not_auto_selected", True, all(scope_by_dataset[row.dataset].scope_status == SCOPE_STATUS_OPTIONAL_NOT_SELECTED for row in optional_events + optional_blocked))
 
     summary.update({
         "checks": len(results),
         "non_daily_policy_count": stats["non_daily_policy_count"],
         "event_anchor_ready_count": stats["event_information_time_anchor_ready_count"],
         "historical_vintage_blocked_count": stats["historical_publication_vintage_blocked_count"],
+    })
+    return results, summary
+
+
+
+def validate_market_data_v2_research_scope_field_authorization_contract_case(_base_params):
+    """Round-14 freezes the narrow foundation scope and fail-closed field authorization."""
+
+    from core.market_data_adjusted_price_invariance import (
+        PRICE_REPRESENTATION_STATUS_BLOCKED,
+        PRICE_REPRESENTATION_STATUS_DEFERRED,
+        PRICE_REPRESENTATION_STATUS_INVARIANT,
+        PROVIDER_PRICE_FIELDS,
+        PROVIDER_VOLUME_FIELD,
+        get_adjusted_price_representation_contract,
+    )
+    from core.market_data_dataset_registry import get_market_dataset_specs
+    from core.market_data_research_pit_contract import validate_research_v2_pit_review_contracts
+    from core.market_data_research_scope import (
+        FIELD_USE_DIRECT_INPUT,
+        FIELD_USE_TRANSFORM_SOURCE_ONLY,
+        RESEARCH_V2_ADJUSTED_PRICE_DATASET,
+        RESEARCH_V2_COMMON_COMPLETE_DATASETS,
+        RESEARCH_V2_RAW_VOLUME_DATASET,
+        RESEARCH_V2_REQUIRED_DATASETS,
+        RESEARCH_V2_SCOPE_SCHEMA_VERSION,
+        SCOPE_STATUS_OPTIONAL_NOT_SELECTED,
+        build_research_v2_dataset_scope_contracts,
+        research_v2_dataset_scope_contract_fingerprint,
+        research_v2_dataset_scope_contract_payloads,
+        validate_research_v2_dataset_scope_contracts,
+    )
+    from core.market_data_research_v2 import (
+        RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS,
+        RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
+    )
+    from services.research.market_data_v2 import _build_candidate_blockers
+
+    case_id = "MARKET_DATA_V2_RESEARCH_SCOPE_FIELD_AUTHORIZATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    rows = build_research_v2_dataset_scope_contracts()
+    stats = validate_research_v2_dataset_scope_contracts(rows)
+    by_dataset = {row.dataset: row for row in rows}
+    registry_count = len(tuple(get_market_dataset_specs(included_only=True)))
+    add_check(results, "market_data", case_id, "round14_scope_contract_is_versioned", True, RESEARCH_V2_SCOPE_SCHEMA_VERSION >= 1)
+    add_check(results, "market_data", case_id, "scope_covers_current_included_registry", registry_count, stats["dataset_count"])
+    add_check(results, "market_data", case_id, "required_dataset_scope_is_explicit", set(RESEARCH_V2_REQUIRED_DATASETS), {row.dataset for row in rows if row.required_for_generation})
+    add_check(results, "market_data", case_id, "optional_count_is_registry_driven", registry_count - len(RESEARCH_V2_REQUIRED_DATASETS), stats["optional_not_selected_count"])
+    add_check(results, "market_data", case_id, "common_complete_scope_is_explicit", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), {row.dataset for row in rows if row.contributes_to_common_complete})
+    add_check(results, "market_data", case_id, "delisting_event_is_not_daily_common_complete_denominator", False, by_dataset["TaiwanStockDelisting"].contributes_to_common_complete)
+    add_check(results, "market_data", case_id, "required_scope_authorization_is_complete", True, stats["required_scope_authorization_complete"])
+    add_check(results, "market_data", case_id, "scope_fingerprint_is_deterministic", research_v2_dataset_scope_contract_fingerprint(rows), research_v2_dataset_scope_contract_fingerprint())
+    from dataclasses import replace
+    optional_index = next(index for index, row in enumerate(rows) if not row.required_for_generation)
+    optional_mutated = list(rows)
+    optional_mutated[optional_index] = replace(optional_mutated[optional_index], pit_contract_status="SYNTHETIC_OPTIONAL_DIAGNOSTIC_CHANGE")
+    add_check(results, "market_data", case_id, "optional_pit_diagnostic_does_not_pollute_foundation_fingerprint", research_v2_dataset_scope_contract_fingerprint(rows), research_v2_dataset_scope_contract_fingerprint(optional_mutated))
+    add_check(results, "market_data", case_id, "scope_payload_normalizes_tuple_fields_to_json_lists", True, isinstance(research_v2_dataset_scope_contract_payloads(rows)[0]["evidence_fields"], list))
+
+    raw = by_dataset[RESEARCH_V2_RAW_VOLUME_DATASET]
+    raw_direct = [rule for rule in raw.field_authorizations if rule.direct_scientific_use_authorized]
+    raw_direct_fields = {field for rule in raw_direct for field in rule.fields}
+    add_check(results, "market_data", case_id, "raw_daily_price_authorizes_only_share_volume_directly", {PROVIDER_VOLUME_FIELD}, raw_direct_fields)
+    add_check(results, "market_data", case_id, "raw_daily_volume_has_next_session_availability", "next_taiwan_trading_session_after_market_date", raw_direct[0].availability_rule)
+    add_check(results, "market_data", case_id, "raw_ohlc_remains_prohibited_as_model_price_input", set(), set(PROVIDER_PRICE_FIELDS).intersection(raw_direct_fields))
+    add_check(results, "market_data", case_id, "raw_volume_rule_is_direct_input", FIELD_USE_DIRECT_INPUT, raw_direct[0].use_mode)
+
+    adjusted = by_dataset[RESEARCH_V2_ADJUSTED_PRICE_DATASET]
+    adjusted_rules = list(adjusted.field_authorizations)
+    adjusted_direct_fields = {field for rule in adjusted_rules if rule.direct_scientific_use_authorized for field in rule.fields}
+    adjusted_transform_fields = {field for rule in adjusted_rules if rule.use_mode == FIELD_USE_TRANSFORM_SOURCE_ONLY for field in rule.fields}
+    representation = get_adjusted_price_representation_contract()
+    invariant_ids = {rule.representation_id for rule in representation.rules if rule.status == PRICE_REPRESENTATION_STATUS_INVARIANT}
+    blocked_ids = {rule.representation_id for rule in representation.rules if rule.status == PRICE_REPRESENTATION_STATUS_BLOCKED}
+    deferred_ids = {rule.representation_id for rule in representation.rules if rule.status == PRICE_REPRESENTATION_STATUS_DEFERRED}
+    add_check(results, "market_data", case_id, "adjusted_price_ohlc_are_transform_source_only", set(PROVIDER_PRICE_FIELDS), adjusted_transform_fields)
+    add_check(results, "market_data", case_id, "adjusted_price_has_no_direct_raw_fields", set(), adjusted_direct_fields)
+    add_check(results, "market_data", case_id, "adjusted_price_volume_is_not_authorized", False, any(PROVIDER_VOLUME_FIELD in rule.fields for rule in adjusted_rules))
+    add_check(results, "market_data", case_id, "adjusted_price_authorizes_exact_round13_invariant_representation_set", invariant_ids, set(adjusted.authorized_representation_ids))
+    add_check(results, "market_data", case_id, "blocked_absolute_representation_is_not_authorized", set(), blocked_ids.intersection(adjusted.authorized_representation_ids))
+    add_check(results, "market_data", case_id, "deferred_adjusted_volume_representation_is_not_authorized", set(), deferred_ids.intersection(adjusted.authorized_representation_ids))
+
+    optional_dividend = by_dataset["TaiwanStockDividend"]
+    optional_revenue = by_dataset["TaiwanStockMonthRevenue"]
+    add_check(results, "market_data", case_id, "event_archive_dataset_is_optional_until_experiment_selects_it", SCOPE_STATUS_OPTIONAL_NOT_SELECTED, optional_dividend.scope_status)
+    add_check(results, "market_data", case_id, "periodic_archive_dataset_is_optional_until_experiment_selects_it", SCOPE_STATUS_OPTIONAL_NOT_SELECTED, optional_revenue.scope_status)
+    add_check(results, "market_data", case_id, "optional_datasets_receive_no_implicit_fields", True, not optional_dividend.evidence_fields and not optional_dividend.field_authorizations and not optional_revenue.evidence_fields and not optional_revenue.field_authorizations)
+
+    add_check(results, "market_data", case_id, "candidate_schema_pins_scope_contract", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 6 and "research_scope_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    add_check(results, "market_data", case_id, "candidate_schema_pins_required_dataset_list", True, "required_dataset_scope" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    pit_stats = validate_research_v2_pit_review_contracts()
+    blockers = _build_candidate_blockers(
+        {"latest_exact_complete_date": "2030-01-15"},
+        required_cutoff="2030-01-15",
+        scope_stats=stats,
+    )
+    blocker_codes = {str(row.get("code")) for row in blockers}
+    add_check(results, "market_data", case_id, "archive_wide_pit_review_no_longer_blocks_unselected_datasets", False, "DATASET_SPECIFIC_PIT_REVIEW_REQUIRED" in blocker_codes)
+    add_check(results, "market_data", case_id, "archive_wide_mechanical_diagnostic_no_longer_blocks_foundation", False, any(code.startswith("MECHANICAL_") for code in blocker_codes))
+    add_check(results, "market_data", case_id, "scope_authorization_blocker_is_cleared", False, "REQUIRED_SCOPE_AUTHORIZATION_INCOMPLETE" in blocker_codes)
+    add_check(results, "market_data", case_id, "round15_common_complete_gate_remains", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blocker_codes)
+
+    summary.update({
+        "checks": len(results),
+        "required_dataset_count": stats["required_dataset_count"],
+        "optional_not_selected_count": stats["optional_not_selected_count"],
+        "contract_fingerprint": stats["contract_fingerprint"],
     })
     return results, summary
