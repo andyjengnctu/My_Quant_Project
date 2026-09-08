@@ -409,7 +409,14 @@ Current strategy-parameter artifacts intentionally maintain two hashes. `compute
 
 ### Workbench Market Data Data Ops Ownership
 
-`services/trading/market_data_ops.py` 是 Workbench Data Ops 的 local-first read-model owner：只組合 `market_data_snapshot`、`market_data_v2` aggregate state、51-dataset operational state、canonical due planner、market-date discovery state 與 auto-update policy，不呼叫 FinMind、不寫 state。`services/workbench_ui/data_ops_panel.py` 只 render Overview / Dataset Status / Schedule / Activity，並透過既有 `run_trading_market_data_auto_update()` / `run_trading_market_data_update()` 執行 action；不得自行建立 request manifest、publication/freshness 判斷或 raw JSON state mutation。Live quota 不因 UI refresh 額外查詢；Trading sync executor 在真正 provider interaction 後將最後 observed `quota_user_count / quota_limit` 持久化至 aggregate V2 state，Data Ops 只顯示該 evidence 與 observation timestamp。Windows Task Scheduler registration 仍為外部 deployment concern，本輪 UI 不宣稱其已安裝。
+`services/trading/market_data_ops.py` 是 Workbench Data Ops 的 local-first read-model owner：只組合 `market_data_snapshot`、`market_data_v2` aggregate state、51-dataset operational state、canonical due planner、market-date discovery state、auto-update policy 與本機 Windows scheduler status，不呼叫 FinMind、不寫 Market Data state。`services/workbench_ui/data_ops_panel.py` 只 render Overview / Dataset Status / Schedule / Activity，並透過既有 `run_trading_market_data_auto_update()` / `run_trading_market_data_update()` 執行資料 action；OS scheduler 安裝／啟停／移除則只委派 `services/trading/market_data_scheduler.py`，不得直接執行 PowerShell、建立 request manifest、publication/freshness 判斷或 raw JSON state mutation。Live quota 不因 UI refresh 額外查詢；Trading sync executor 在真正 provider interaction 後將最後 observed `quota_user_count / quota_limit` 持久化至 aggregate V2 state，Data Ops 只顯示該 evidence 與 observation timestamp。
+
+
+### Trading Market Data Windows Scheduler Deployment Ownership（Round 7）
+
+`services/trading/market_data_scheduler.py` 是 Windows Task Scheduler registration 的唯一 owner。它只把 `apps/market_data_auto_update.py` 註冊為 current-user、least-privilege 的 one-shot action；task definition 使用 config-driven wake interval、登入 trigger、`StartWhenAvailable`、`MultipleInstances=IgnoreNew` 與 execution time limit。Task Scheduler 不持有 dataset identity、publication time、market-date discovery、retry、quota 或 request planning；這些規則仍全部由既有 canonical policy/service owner 決定。Workbench Data Ops 只透過 scheduler service 進行 install/update、enable/disable、remove 與 status query；local refresh 可呼叫 Windows ScheduledTasks 查詢，但 provider calls 仍必須為 0。
+
+Scheduler action 由 hidden PowerShell launcher 啟動目前 Workbench Python interpreter 對應的 `apps/market_data_auto_update.py --project-root <root>`；registration status 會比對 action、working directory、wake interval 與 logon trigger，任何 drift 顯示 `DRIFTED_*`，不得把錯誤 task 視為正常 AUTO ON。因 principal 使用目前 Windows 使用者的 `Interactive` logon context，正式語意是「Windows 登入後自動」；不宣稱在使用者尚未登入時可使用 FinMind 網路 context。排程 task 持久存在於 Windows；登入時立即喚醒一次，之後依 wake interval 重複喚醒。Worker 自身 lease lock 與 Task Scheduler `IgnoreNew` 同時防止重疊執行。
 
 ### Trading Market Data V2 Automatic Update Ownership
 

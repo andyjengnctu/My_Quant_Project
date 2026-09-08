@@ -8,6 +8,11 @@ from tkinter import messagebox, ttk
 
 from services.trading.market_data_auto_update import run_trading_market_data_auto_update
 from services.trading.market_data_ops import build_market_data_ops_read_model
+from services.trading.market_data_scheduler import (
+    install_or_update_market_data_scheduler,
+    remove_market_data_scheduler,
+    set_market_data_scheduler_enabled,
+)
 from services.trading.market_data_update import run_trading_market_data_update
 from services.workbench_ui.workbench import (
     WORKBENCH_BUTTON_STYLE,
@@ -68,6 +73,12 @@ class MarketDataOpsPanel(ttk.Frame):
         self._due_button.pack(side="left", padx=(0, 6))
         self._full_button = ttk.Button(controls, text="完整更新 Trading 資料", command=lambda: self._start_action("full"), style=WORKBENCH_BUTTON_STYLE)
         self._full_button.pack(side="left", padx=(0, 10))
+        self._scheduler_install_button = ttk.Button(controls, text="安裝 / 更新 Auto Sync", command=lambda: self._confirm_scheduler_action("scheduler_install"), style=WORKBENCH_BUTTON_STYLE)
+        self._scheduler_install_button.pack(side="left", padx=(0, 6))
+        self._scheduler_toggle_button = ttk.Button(controls, text="停用 Auto Sync", command=lambda: self._confirm_scheduler_action("scheduler_toggle"), style=WORKBENCH_BUTTON_STYLE)
+        self._scheduler_toggle_button.pack(side="left", padx=(0, 6))
+        self._scheduler_remove_button = ttk.Button(controls, text="移除 Auto Sync", command=lambda: self._confirm_scheduler_action("scheduler_remove"), style=WORKBENCH_BUTTON_STYLE)
+        self._scheduler_remove_button.pack(side="left", padx=(0, 10))
         ttk.Label(controls, textvariable=self._status_var, style=WORKBENCH_LABEL_STYLE).pack(side="left", fill="x", expand=True)
 
         kpi = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
@@ -180,8 +191,14 @@ class MarketDataOpsPanel(ttk.Frame):
         self._kpi_vars["next"].set(_fmt_datetime(snapshot.get("next_check_at")))
         quota_used, quota_limit = snapshot.get("quota_user_count"), snapshot.get("quota_limit")
         self._kpi_vars["quota"].set("-" if quota_limit is None else f"{quota_used}/{quota_limit}\n{_fmt_datetime(snapshot.get('quota_observed_at'))}")
-        auto_text = "ON" if snapshot.get("auto_worker_enabled") else "OFF"
-        self._kpi_vars["auto"].set(f"{auto_text} | wake {snapshot.get('scheduler_wake_minutes') or '-'}m\nTask Scheduler: 尚未由程式管理")
+        auto_text = "ON" if snapshot.get("auto_sync_active") else "OFF"
+        scheduler_status = str(snapshot.get("scheduler_registration_status") or "-")
+        scheduler_next = _fmt_datetime(snapshot.get("scheduler_next_run_at"))
+        self._kpi_vars["auto"].set(
+            f"Auto Sync {auto_text} | wake {snapshot.get('scheduler_wake_minutes') or '-'}m\n"
+            f"Task: {scheduler_status} | next {scheduler_next}"
+        )
+        self._render_scheduler_controls(snapshot)
 
         total = int(snapshot.get("dataset_count") or 0)
         ready = int(snapshot.get("ready_count") or 0)
@@ -217,6 +234,20 @@ class MarketDataOpsPanel(ttk.Frame):
                 schedule, row.get("schema_status") or "-", row.get("coverage_status") or "-", _retry_text(row),
             ))
 
+        scheduler_next = snapshot.get("scheduler_next_run_at")
+        scheduler_source = f"{snapshot.get('scheduler_app_path') or 'apps/market_data_auto_update.py'} | {snapshot.get('scheduler_wake_minutes') or '-'}m"
+        drift = tuple(snapshot.get("scheduler_drift_reasons") or ())
+        if drift:
+            scheduler_source += " | drift=" + ",".join(str(item) for item in drift)
+        if snapshot.get("scheduler_error"):
+            scheduler_source += " | error=" + str(snapshot.get("scheduler_error"))[:180]
+        self._schedule_tree.insert("", "end", values=(
+            _fmt_datetime(scheduler_next),
+            "Windows Auto Sync Worker",
+            snapshot.get("scheduler_registration_status") or "-",
+            _fmt_datetime(scheduler_next),
+            scheduler_source,
+        ))
         discovery_next = snapshot.get("market_date_discovery_next_check_at")
         if discovery_next:
             self._schedule_tree.insert("", "end", values=(
@@ -257,17 +288,51 @@ class MarketDataOpsPanel(ttk.Frame):
             f"error={row.get('last_error') or '-'}"
         )
 
+    def _render_scheduler_controls(self, snapshot: dict[str, object]):
+        if self._action_thread is not None and self._action_thread.is_alive():
+            return
+        supported = bool(snapshot.get("scheduler_supported"))
+        installed = bool(snapshot.get("scheduler_installed"))
+        enabled = bool(snapshot.get("scheduler_enabled"))
+        self._scheduler_install_button.configure(state="normal" if supported else "disabled")
+        self._scheduler_remove_button.configure(state="normal" if supported and installed else "disabled")
+        self._scheduler_toggle_button.configure(
+            text="停用 Auto Sync" if enabled else "啟用 Auto Sync",
+            state="normal" if supported and installed else "disabled",
+        )
+
     def _set_action_state(self, state: str):
         self._due_button.configure(state=state)
         self._full_button.configure(state=state)
+        self._scheduler_install_button.configure(state=state)
+        self._scheduler_toggle_button.configure(state=state)
+        self._scheduler_remove_button.configure(state=state)
+
+    def _confirm_scheduler_action(self, action: str):
+        if action == "scheduler_install":
+            prompt = f"建立或更新 Windows Task Scheduler Auto Sync？\n\n每 {self._snapshot.get('scheduler_wake_minutes') or 15} 分鐘喚醒一次，並在登入 Windows 時立即喚醒；沒有 due data 時不使用 FinMind quota。"
+        elif action == "scheduler_remove":
+            prompt = "移除 Windows Task Scheduler 的 Market Data Auto Sync？\n\n這只移除 OS 排程，不會刪除 Market Data、state 或 Provider Snapshot。"
+        else:
+            enabled = bool(self._snapshot.get("scheduler_enabled"))
+            prompt = "停用 Auto Sync 排程？" if enabled else "啟用 Auto Sync 排程？"
+        if not messagebox.askyesno("Market Data Auto Sync", prompt, parent=self):
+            return
+        self._start_action(action)
 
     def _start_action(self, action: str):
         if self._action_thread is not None and self._action_thread.is_alive():
             self._status_var.set("Market Data operation 執行中。")
             return
         self._set_action_state("disabled")
-        label = "Due 檢查" if action == "due" else "完整 Trading 更新"
-        self._status_var.set(f"執行中：{label}")
+        labels = {
+            "due": "Due 檢查",
+            "full": "完整 Trading 更新",
+            "scheduler_install": "安裝 / 更新 Auto Sync",
+            "scheduler_toggle": "切換 Auto Sync",
+            "scheduler_remove": "移除 Auto Sync",
+        }
+        self._status_var.set(f"執行中：{labels.get(action, action)}")
         self._action_thread = threading.Thread(target=self._run_action, args=(action,), name=f"workbench-data-ops-{action}", daemon=True)
         self._action_thread.start()
 
@@ -275,8 +340,19 @@ class MarketDataOpsPanel(ttk.Frame):
         try:
             if action == "due":
                 result = run_trading_market_data_auto_update(project_root=WORKBENCH_PROJECT_ROOT)
-            else:
+            elif action == "full":
                 result = run_trading_market_data_update(project_root=WORKBENCH_PROJECT_ROOT)
+            elif action == "scheduler_install":
+                result = install_or_update_market_data_scheduler(WORKBENCH_PROJECT_ROOT)
+            elif action == "scheduler_toggle":
+                result = set_market_data_scheduler_enabled(
+                    WORKBENCH_PROJECT_ROOT,
+                    enabled=not bool(self._snapshot.get("scheduler_enabled")),
+                )
+            elif action == "scheduler_remove":
+                result = remove_market_data_scheduler(WORKBENCH_PROJECT_ROOT)
+            else:
+                raise ValueError(f"未知 Market Data Ops action: {action}")
         except Exception as exc:
             self.after(0, self._finish_action_error, exc)
             return

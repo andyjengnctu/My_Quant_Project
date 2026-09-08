@@ -1853,6 +1853,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         from services.trading.market_data_ops import build_market_data_ops_read_model
         ops_model = build_market_data_ops_read_model(state_root, now=state_now)
         add_check(results, "market_data", case_id, "data_ops_local_refresh_uses_zero_provider_calls", 0, ops_model.get("provider_calls"))
+        add_check(results, "market_data", case_id, "data_ops_local_read_model_exposes_scheduler_status", True, bool(ops_model.get("scheduler_registration_status")))
         add_check(results, "market_data", case_id, "data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
         loaded_state = load_market_data_dataset_state(state_root, required=True)
         add_check(results, "market_data", case_id, "dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
@@ -2191,6 +2192,89 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         add_check(results, "market_data", case_id, "auto_updater_single_due_dataset_uses_one_usage_request", 1, success_client.usage_request_count)
         add_check(results, "market_data", case_id, "auto_updater_success_advances_dataset_ready", "READY", success_state["datasets"]["TaiwanStockTradingDate"]["status"])
         add_check(results, "market_data", case_id, "auto_updater_all_ready_rolls_archive_synced", "SYNCED", success_result["archive_status"])
+
+    from services.trading.market_data_scheduler import (
+        SCHEDULER_STATUS_DRIFTED_ENABLED,
+        SCHEDULER_STATUS_INSTALLED_DISABLED,
+        SCHEDULER_STATUS_INSTALLED_ENABLED,
+        SCHEDULER_STATUS_NOT_INSTALLED,
+        SCHEDULER_STATUS_UNSUPPORTED,
+        build_market_data_scheduler_spec,
+        get_market_data_scheduler_status,
+        install_or_update_market_data_scheduler,
+        remove_market_data_scheduler,
+        set_market_data_scheduler_enabled,
+    )
+    scheduler_spec = build_market_data_scheduler_spec(Path.cwd())
+    add_check(results, "market_data", case_id, "scheduler_spec_targets_canonical_one_shot_app", "apps/market_data_auto_update.py", scheduler_spec["app_path"])
+    add_check(results, "market_data", case_id, "scheduler_spec_uses_hidden_powershell_launcher", "powershell.exe", scheduler_spec["execute"])
+    unsupported_scheduler = get_market_data_scheduler_status(Path.cwd(), platform_name="posix")
+    add_check(results, "market_data", case_id, "scheduler_non_windows_status_is_local_unsupported", SCHEDULER_STATUS_UNSUPPORTED, unsupported_scheduler["status"])
+
+    fake_task = {"installed": False}
+    def _fake_scheduler_runner(script, env):
+        if "Register-ScheduledTask" in script:
+            fake_task.clear()
+            fake_task.update({
+                "installed": True,
+                "state": "Ready",
+                "enabled": True,
+                "execute": env["MQP_TASK_EXECUTE"],
+                "arguments": env["MQP_TASK_ARGUMENTS"],
+                "working_directory": env["MQP_WORKING_DIRECTORY"],
+                "interval_minutes": int(env["MQP_WAKE_MINUTES"]),
+                "logon_trigger": True,
+                "next_run_at": "2026-09-08T08:15:00+08:00",
+                "last_run_at": None,
+                "last_task_result": 0,
+                "missed_runs": 0,
+            })
+            return 0, "", ""
+        if "Disable-ScheduledTask" in script:
+            fake_task["enabled"] = False
+            fake_task["state"] = "Disabled"
+            return 0, "", ""
+        if "Enable-ScheduledTask" in script:
+            fake_task["enabled"] = True
+            fake_task["state"] = "Ready"
+            return 0, "", ""
+        if "Unregister-ScheduledTask" in script:
+            fake_task.clear()
+            fake_task["installed"] = False
+            return 0, "", ""
+        if "ConvertTo-Json" in script:
+            import json as _json
+            return 0, _json.dumps(fake_task), ""
+        raise AssertionError("unexpected scheduler PowerShell script")
+
+    scheduler_missing = get_market_data_scheduler_status(
+        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+    )
+    add_check(results, "market_data", case_id, "scheduler_status_reports_not_installed_without_mutation", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_missing["status"])
+    scheduler_installed = install_or_update_market_data_scheduler(
+        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+    )
+    add_check(results, "market_data", case_id, "scheduler_install_registers_enabled_canonical_task", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_installed["status"])
+    add_check(results, "market_data", case_id, "scheduler_install_has_logon_trigger", True, scheduler_installed["logon_trigger"])
+    add_check(results, "market_data", case_id, "scheduler_install_uses_configured_wake_interval", scheduler_spec["wake_minutes"], scheduler_installed["wake_minutes"])
+    fake_task["interval_minutes"] = int(scheduler_spec["wake_minutes"]) + 1
+    scheduler_drifted = get_market_data_scheduler_status(
+        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+    )
+    add_check(results, "market_data", case_id, "scheduler_status_detects_registration_drift", SCHEDULER_STATUS_DRIFTED_ENABLED, scheduler_drifted["status"])
+    fake_task["interval_minutes"] = int(scheduler_spec["wake_minutes"])
+    scheduler_disabled = set_market_data_scheduler_enabled(
+        Path.cwd(), enabled=False, runner=_fake_scheduler_runner, platform_name="nt"
+    )
+    add_check(results, "market_data", case_id, "scheduler_can_be_disabled_without_deleting_task", SCHEDULER_STATUS_INSTALLED_DISABLED, scheduler_disabled["status"])
+    scheduler_reenabled = set_market_data_scheduler_enabled(
+        Path.cwd(), enabled=True, runner=_fake_scheduler_runner, platform_name="nt"
+    )
+    add_check(results, "market_data", case_id, "scheduler_can_be_reenabled", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_reenabled["status"])
+    scheduler_removed = remove_market_data_scheduler(
+        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+    )
+    add_check(results, "market_data", case_id, "scheduler_remove_only_removes_os_registration", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_removed["status"])
 
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")

@@ -11,6 +11,9 @@ from config.market_data import MARKET_DATA_V2_AUTO_UPDATE_POLICY
 class MarketDataAutoUpdatePolicy:
     enabled: bool
     scheduler_wake_minutes: int
+    scheduler_task_name: str
+    scheduler_initial_delay_minutes: int
+    scheduler_execution_time_limit_minutes: int
     publication_retry_minutes: tuple[int, ...]
     max_publication_retries: int
     quota_defer_minutes: int
@@ -65,14 +68,22 @@ def get_market_data_auto_update_policy() -> MarketDataAutoUpdatePolicy:
     if discovery_max_retries < 1 or discovery_max_retries > len(discovery_retry):
         raise ValueError("market_date_discovery_max_retries 必須落在 market_date_discovery_retry_minutes 範圍內")
     wake = int(raw.get("scheduler_wake_minutes") or 0)
+    task_name = str(raw.get("scheduler_task_name") or "").strip()
+    initial_delay = int(raw.get("scheduler_initial_delay_minutes") or 0)
+    execution_limit = int(raw.get("scheduler_execution_time_limit_minutes") or 0)
     quota = int(raw.get("quota_defer_minutes") or 0)
     error = int(raw.get("error_defer_minutes") or 0)
     worker_lock = int(raw.get("worker_lock_minutes") or 0)
-    if wake < 1 or quota < 1 or error < 1 or worker_lock < 1:
-        raise ValueError("auto update wake/defer/lock minutes 必須 >= 1")
+    if not task_name:
+        raise ValueError("scheduler_task_name 不得為空")
+    if wake < 1 or initial_delay < 1 or execution_limit < 1 or quota < 1 or error < 1 or worker_lock < 1:
+        raise ValueError("auto update wake/defer/lock/scheduler minutes 必須 >= 1")
     return MarketDataAutoUpdatePolicy(
         enabled=bool(raw.get("enabled")),
         scheduler_wake_minutes=wake,
+        scheduler_task_name=task_name,
+        scheduler_initial_delay_minutes=initial_delay,
+        scheduler_execution_time_limit_minutes=execution_limit,
         publication_retry_minutes=retry_raw,
         max_publication_retries=max_retries,
         quota_defer_minutes=quota,

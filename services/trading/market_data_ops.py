@@ -20,6 +20,7 @@ from services.trading.market_data_market_date_discovery import (
     default_next_market_date_probe_at,
     load_market_date_discovery_state,
 )
+from services.trading.market_data_scheduler import get_market_data_scheduler_status
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -58,6 +59,7 @@ def build_market_data_ops_read_model(
     dataset_state = build_market_data_dataset_state_read_model(root)
     v2 = build_trading_market_data_v2_read_model(root)
     auto_policy = get_market_data_auto_update_policy()
+    scheduler = get_market_data_scheduler_status(root)
 
     dynamic_rows = {str(row.get("dataset")): dict(row) for row in dataset_state.get("datasets") or []}
     decisions = {}
@@ -151,6 +153,9 @@ def build_market_data_ops_read_model(
         except (TypeError, ValueError, ZeroDivisionError):
             quota_percent = None
 
+    scheduler_status = str(scheduler.get("status") or "")
+    auto_sync_active = bool(auto_policy.enabled and scheduler_status == "INSTALLED_ENABLED")
+
     return {
         "generated_at": local_now.isoformat(),
         "provider_calls": 0,
@@ -173,8 +178,21 @@ def build_market_data_ops_read_model(
         "market_date_discovery_last_probe_at": discovery_last_probe_at,
         "market_date_discovery_last_result": discovery_last_result,
         "auto_worker_enabled": bool(auto_policy.enabled),
+        "auto_sync_active": auto_sync_active,
         "scheduler_wake_minutes": int(auto_policy.scheduler_wake_minutes),
-        "scheduler_registration_status": "EXTERNAL_NOT_MANAGED",
+        "scheduler_registration_status": scheduler.get("status"),
+        "scheduler_supported": bool(scheduler.get("supported")),
+        "scheduler_installed": bool(scheduler.get("installed")),
+        "scheduler_enabled": bool(scheduler.get("enabled")),
+        "scheduler_state": scheduler.get("state"),
+        "scheduler_task_name": scheduler.get("task_name"),
+        "scheduler_next_run_at": scheduler.get("next_run_at"),
+        "scheduler_last_run_at": scheduler.get("last_run_at"),
+        "scheduler_last_task_result": scheduler.get("last_task_result"),
+        "scheduler_missed_runs": scheduler.get("missed_runs"),
+        "scheduler_drift_reasons": scheduler.get("drift_reasons") or (),
+        "scheduler_error": scheduler.get("error"),
+        "scheduler_app_path": scheduler.get("app_path") or "apps/market_data_auto_update.py",
         "quota_user_count": quota_used,
         "quota_limit": quota_limit,
         "quota_percent": quota_percent,

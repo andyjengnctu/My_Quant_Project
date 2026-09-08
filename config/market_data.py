@@ -88,6 +88,9 @@ MARKET_DATA_V2_TRADING_SYNC_POLICY = {
 MARKET_DATA_V2_AUTO_UPDATE_POLICY = {
     "enabled": True,
     "scheduler_wake_minutes": 15,
+    "scheduler_task_name": "My_Quant_Project Market Data Auto Update",
+    "scheduler_initial_delay_minutes": 1,
+    "scheduler_execution_time_limit_minutes": 60,
     "publication_retry_minutes": (15, 30, 60),
     "max_publication_retries": 3,
     "quota_defer_minutes": 15,
