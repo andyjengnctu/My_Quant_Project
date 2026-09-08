@@ -4265,6 +4265,17 @@
       "entry": "`core/market_data_research_pit_contract.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 384
+    },
+    {
+      "id": "B397",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Research adjusted-price retrospective representation invariance",
+      "item": "Research V2 narrows TaiwanStockPriceAdj current-vintage risk to mechanically proven scale-free representations while raw levels and unrelated fields remain fail-closed",
+      "gap": "TaiwanStockPriceAdj為current-vintage backward-adjusted source，不得因目前整張表可讀就直接視為historical PIT-legal。Round 13必須以單一canonical representation contract區分provider文件化corporate-action restatement與任意historical correction：只對「最新交易日為基準、事件日還原價等於原始價、調整反映在事件日前歷史」形成的positive-scalar historical-prefix restatement證明representation invariance，不得把任意provider歷史校正/algorithm rebuild宣稱為invariant。可證明的price primitive至少包含pre-decision ordering/rolling extrema、anchor-relative OHLC、同prefix price ratios、以及label maturity後anchor-relative future High/Low path與ratio/barrier/hit-order；raw/absolute adjusted-price level必須維持禁止direct scientific use，Trading_Volume與其他非price field不因price-scale proof自動合法。proof status、field scope、rules、maturity rule、vendor-correction limitation與contract fingerprint必須進PIT contract及Research V2 candidate identity/manifest。Round 13不得授權dataset/field scientific scope、不得設定research_common_complete_cutoff/frozen_cutoff、不得promotion或改active research_v1。",
+      "entry": "`core/market_data_adjusted_price_invariance.py`, `core/market_data_research_pit_contract.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 385
     }
   ],
   "tests": [
@@ -7873,6 +7884,13 @@
       "description": "`validate_market_data_v2_research_non_daily_pit_legality_contract_case` 覆蓋21個non-daily review dataset canonical PIT policy、9個event conservative information-time anchor、8 periodic + 4 static historical publication/as-of vintage fail-closed、Dividend AnnouncementDate/Time與Disposition announcement-date next-session規則、MonthRevenue historical create_time gap、TaiwanStockPriceAdj獨立hard block、零scientific auto-authorization，以及candidate blocker/identity保存legality evidence。",
       "initial_status": "NEW",
       "order": 506
+    },
+    {
+      "id": "T517",
+      "b_id": "B397",
+      "description": "`validate_market_data_v2_adjusted_price_representation_invariance_contract_case` 覆蓋FinMind corporate-action prefix-restatement proof scope、provider correction非invariance聲明、raw absolute level BLOCKED、volume deferred、pre-decision candidate membership/anchor-relative OHLC/benchmark independent scale/context ratio/matured target與hit-order scale invariance、PIT proof binding、candidate identity fingerprint與仍未授權dataset scope。",
+      "initial_status": "NEW",
+      "order": 507
     }
   ],
   "transitions": [
@@ -25587,6 +25605,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_research_non_daily_pit_legality_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B397",
+      "description": "新增TaiwanStockPriceAdj representation-level retrospective invariance contract並保留raw-level/非price field fail-closed。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_adjusted_price_invariance.py`, `core/market_data_research_pit_contract.py`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T517",
+      "description": "新增adjusted-price representation invariance dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_adjusted_price_representation_invariance_contract_case`"
     }
   ]
 }

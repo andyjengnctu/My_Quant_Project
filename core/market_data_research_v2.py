@@ -23,7 +23,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
 )
 
-RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 4
+RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 5
 RESEARCH_V2_CANDIDATE_STATUS_NOT_READY = "CANDIDATE_NOT_READY"
 RESEARCH_V2_DATASET_STATUS_EXACT_CANDIDATE = "EXACT_CANDIDATE"
 RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
@@ -62,6 +62,7 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "exact_coverage_fingerprint",
     "dataset_assessment_fingerprint",
     "pit_review_contract_fingerprint",
+    "adjusted_price_representation_contract_fingerprint",
     "dataset_date_audit_fingerprint",
     "mechanical_common_complete_start_date",
     "mechanical_common_complete_ceiling_date",
@@ -341,6 +342,7 @@ def build_research_v2_candidate_identity_payload(
     coverage_summary: ResearchV2ExactCoverageSummary,
     assessment_fingerprint: str,
     pit_review_contract_fingerprint: str,
+    adjusted_price_representation_contract_fingerprint: str,
     dataset_date_audit_fingerprint: str,
     mechanical_common_complete_start_date: str | None,
     mechanical_common_complete_ceiling_date: str | None,
@@ -365,6 +367,7 @@ def build_research_v2_candidate_identity_payload(
         "exact_coverage_fingerprint": coverage_summary.coverage_fingerprint,
         "dataset_assessment_fingerprint": str(assessment_fingerprint),
         "pit_review_contract_fingerprint": str(pit_review_contract_fingerprint),
+        "adjusted_price_representation_contract_fingerprint": str(adjusted_price_representation_contract_fingerprint),
         "dataset_date_audit_fingerprint": str(dataset_date_audit_fingerprint),
         "mechanical_common_complete_start_date": mechanical_common_complete_start_date,
         "mechanical_common_complete_ceiling_date": mechanical_common_complete_ceiling_date,

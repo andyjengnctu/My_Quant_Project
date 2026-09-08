@@ -11,6 +11,12 @@ from dataclasses import asdict, dataclass
 from typing import Iterable, Mapping
 
 from core.file_integrity import canonical_json_sha256
+from core.market_data_adjusted_price_invariance import (
+    ADJUSTED_PRICE_PROOF_STATUS,
+    adjusted_price_representation_contract_fingerprint,
+    get_adjusted_price_representation_contract,
+    validate_adjusted_price_representation_contract,
+)
 from core.market_data_dataset_registry import (
     PIT_CURRENT_VINTAGE,
     PIT_EXACT_CANDIDATE,
@@ -28,7 +34,7 @@ from core.market_data_freshness_contract import (
     get_market_data_freshness_contracts,
 )
 
-RESEARCH_PIT_REVIEW_SCHEMA_VERSION = 2
+RESEARCH_PIT_REVIEW_SCHEMA_VERSION = 3
 
 AUDIT_MODE_EXACT_CANDIDATE = "exact_candidate"
 AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE = "trading_daily_date_presence_review"
@@ -245,6 +251,10 @@ class ResearchV2PitReviewContract:
     revision_rule: str
     evidence_source: str
     field_scope_required: bool
+    representation_contract_id: str | None
+    representation_contract_fingerprint: str | None
+    representation_invariance_status: str
+    raw_absolute_price_levels_authorized: bool
     scientific_input_authorized: bool
     reason: str
 
@@ -278,6 +288,10 @@ def _base_contract_kwargs(*, spec: MarketDatasetSpec, freshness: MarketDataFresh
         "dataset": spec.dataset,
         "pit_class": spec.pit_class,
         "cadence": freshness.cadence,
+        "representation_contract_id": None,
+        "representation_contract_fingerprint": None,
+        "representation_invariance_status": "NOT_APPLICABLE",
+        "raw_absolute_price_levels_authorized": False,
         "scientific_input_authorized": False,
     }
 
@@ -291,6 +305,16 @@ def _resolve_contract(
 
     base = _base_contract_kwargs(spec=spec, freshness=freshness)
     if spec.pit_class == PIT_CURRENT_VINTAGE:
+        representation = get_adjusted_price_representation_contract()
+        representation_stats = validate_adjusted_price_representation_contract(representation)
+        base.update(
+            {
+                "representation_contract_id": representation.contract_id,
+                "representation_contract_fingerprint": str(representation_stats["contract_fingerprint"]),
+                "representation_invariance_status": representation.proof_status,
+                "raw_absolute_price_levels_authorized": bool(representation.raw_absolute_price_levels_authorized),
+            }
+        )
         return ResearchV2PitReviewContract(
             **base,
             audit_mode=AUDIT_MODE_CURRENT_VINTAGE_BLOCKED,
@@ -299,12 +323,24 @@ def _resolve_contract(
             contributes_mechanical_trading_daily_ceiling=False,
             pit_legality_status=PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED,
             information_time_anchor_ready=False,
-            information_time_rule="blocked_current_vintage_without_retrospective_representation_invariance",
+            information_time_rule=(
+                "raw_absolute_price_levels_blocked; only representations explicitly proven invariant under documented "
+                "corporate_action_prefix_restatement may be considered by a later field/scope authorization"
+            ),
             information_time_columns=(),
-            revision_rule="blocked_current_vintage_representation",
-            evidence_source="research_contract:current_vintage_representation_requires_retrospective_proof",
+            revision_rule=(
+                "documented_corporate_action_restatement_invariance_proven_for_scoped_relative_price_representations; "
+                "arbitrary_provider_historical_corrections_not_claimed_invariant_and_require_pinned_snapshot_identity"
+            ),
+            evidence_source=(
+                "research_contract:" + representation.contract_id + ":"
+                + adjusted_price_representation_contract_fingerprint(representation)
+            ),
             field_scope_required=True,
-            reason="current-vintage representation requires retrospective invariance/PIT proof before Research use",
+            reason=(
+                "raw current-vintage adjusted price levels remain fail-closed; Round 13 proves only the canonical "
+                "scale-free price representations, while dataset/field scientific scope stays unauthorized"
+            ),
         )
 
     if spec.pit_class == PIT_EXACT_CANDIDATE:
@@ -454,6 +490,18 @@ def validate_research_v2_pit_review_contracts(
     if any(row.scientific_input_authorized for row in rows):
         raise ValueError("Research V2 PIT review contract 不得自行授權任何 Research model input")
 
+    current_vintage_rows = [row for row in rows if row.pit_class == PIT_CURRENT_VINTAGE]
+    if len(current_vintage_rows) != 1:
+        raise ValueError("Research V2 adjusted-price current-vintage contract 必須唯一")
+    adjusted = current_vintage_rows[0]
+    expected_adjusted_fingerprint = adjusted_price_representation_contract_fingerprint()
+    if (
+        adjusted.representation_invariance_status != ADJUSTED_PRICE_PROOF_STATUS
+        or adjusted.representation_contract_fingerprint != expected_adjusted_fingerprint
+        or adjusted.raw_absolute_price_levels_authorized
+    ):
+        raise ValueError("Research V2 adjusted-price representation proof binding drift")
+
     freshness_by_dataset = {row.dataset: row for row in get_market_data_freshness_contracts()}
     expected_non_daily = {
         row.dataset
@@ -511,6 +559,9 @@ def validate_research_v2_pit_review_contracts(
         "non_daily_policy_count": len(non_daily_rows),
         "event_information_time_anchor_ready_count": len(event_rows),
         "historical_publication_vintage_blocked_count": len(blocked_vintage_rows),
+        "adjusted_price_representation_proof_status": adjusted.representation_invariance_status,
+        "adjusted_price_representation_contract_fingerprint": adjusted.representation_contract_fingerprint,
+        "adjusted_price_raw_absolute_price_levels_authorized": bool(adjusted.raw_absolute_price_levels_authorized),
         "contract_fingerprint": research_v2_pit_review_contract_fingerprint(rows),
     }
 

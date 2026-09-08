@@ -1100,6 +1100,151 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
     return results, summary
 
 
+def validate_market_data_v2_adjusted_price_representation_invariance_contract_case(_base_params):
+    """Round-13 proves scoped price-representation invariance without authorizing raw levels or dataset scope."""
+
+    import numpy as np
+    import pandas as pd
+
+    from core.market_data_adjusted_price_invariance import (
+        ADJUSTED_PRICE_PROOF_STATUS,
+        ADJUSTED_PRICE_REPRESENTATION_SCHEMA_VERSION,
+        ADJUSTED_PRICE_VENDOR_CORRECTION_STATUS,
+        PRICE_REPRESENTATION_STATUS_BLOCKED,
+        PRICE_REPRESENTATION_STATUS_DEFERRED,
+        PRICE_REPRESENTATION_STATUS_INVARIANT,
+        adjusted_price_representation_contract_fingerprint,
+        adjusted_price_representation_contract_payload,
+        get_adjusted_price_representation_contract,
+        validate_adjusted_price_representation_contract,
+    )
+    from core.market_data_research_pit_contract import (
+        PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED,
+        build_research_v2_pit_review_contracts,
+        validate_research_v2_pit_review_contracts,
+    )
+    from core.market_data_research_v2 import (
+        RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS,
+        RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
+    )
+    from filters.breakout_quality.contract import BreakoutQualityLabelPolicy
+    from filters.breakout_quality.features import (
+        build_breakout_quality_context,
+        build_candidate_event_positions,
+        label_from_cached_path,
+        normalize_ohlcv_array_window,
+    )
+    from services.research.market_data_v2 import _build_candidate_blockers
+
+    case_id = "MARKET_DATA_V2_ADJUSTED_PRICE_REPRESENTATION_INVARIANCE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    contract = get_adjusted_price_representation_contract()
+    stats = validate_adjusted_price_representation_contract(contract)
+    payload = adjusted_price_representation_contract_payload(contract)
+    rules = {row.representation_id: row for row in contract.rules}
+
+    add_check(results, "market_data", case_id, "round13_adjusted_price_representation_contract_is_versioned", True, ADJUSTED_PRICE_REPRESENTATION_SCHEMA_VERSION >= 1)
+    add_check(results, "market_data", case_id, "round13_corporate_action_restatement_proof_is_explicit", ADJUSTED_PRICE_PROOF_STATUS, contract.proof_status)
+    add_check(results, "market_data", case_id, "round13_arbitrary_vendor_corrections_are_not_claimed_invariant", ADJUSTED_PRICE_VENDOR_CORRECTION_STATUS, contract.vendor_correction_status)
+    add_check(results, "market_data", case_id, "round13_representation_fingerprint_is_deterministic", adjusted_price_representation_contract_fingerprint(contract), adjusted_price_representation_contract_fingerprint())
+    add_check(results, "market_data", case_id, "round13_raw_absolute_price_levels_remain_blocked", PRICE_REPRESENTATION_STATUS_BLOCKED, rules["absolute_adjusted_price_level_v1"].status)
+    add_check(results, "market_data", case_id, "round13_volume_field_is_outside_price_restatement_proof", PRICE_REPRESENTATION_STATUS_DEFERRED, rules["adjusted_dataset_volume_field_v1"].status)
+    add_check(results, "market_data", case_id, "round13_relative_price_primitives_are_proven_invariant", True, all(rules[key].status == PRICE_REPRESENTATION_STATUS_INVARIANT for key in ("predecision_price_order_relations_v1", "anchor_relative_ohlc_v1", "relative_price_context_v1", "matured_anchor_relative_future_path_v1")))
+    add_check(results, "market_data", case_id, "round13_never_authorizes_dataset_scope", False, bool(stats["scientific_input_authorized"]))
+    add_check(results, "market_data", case_id, "round13_payload_keeps_proof_and_vendor_revision_scope_separate", True, payload["proof_status"] == ADJUSTED_PRICE_PROOF_STATUS and payload["vendor_correction_status"] == ADJUSTED_PRICE_VENDOR_CORRECTION_STATUS)
+
+    dates = pd.date_range("2026-01-01", periods=8, freq="D")
+    base = pd.DataFrame(
+        {
+            "Open": [10.0, 10.5, 11.0, 11.0, 11.5, 12.0, 13.0, 13.0],
+            "High": [10.5, 11.0, 11.5, 11.2, 12.0, 12.2, 13.5, 13.2],
+            "Low": [9.8, 10.2, 10.8, 10.7, 11.2, 11.8, 12.5, 12.7],
+            "Close": [10.2, 10.8, 11.2, 11.0, 11.8, 12.1, 13.2, 13.0],
+            "Volume": [100, 110, 120, 130, 140, 150, 160, 170],
+        },
+        index=dates,
+    )
+    scale = 0.25
+    restated = base.copy()
+    restated.loc[:, ["Open", "High", "Low", "Close"]] *= scale
+    base_events = build_candidate_event_positions(base, (3,))
+    restated_events = build_candidate_event_positions(restated, (3,))
+    event_signature = [(int(row["pos"]), int(row["high_len"])) for row in base_events]
+    restated_signature = [(int(row["pos"]), int(row["high_len"])) for row in restated_events]
+    add_check(results, "market_data", case_id, "predecision_candidate_membership_is_scale_invariant", event_signature, restated_signature)
+
+    event = base_events[0]
+    event_pos = int(event["pos"])
+    feature_window = base.iloc[event_pos - 3:event_pos + 1][["Open", "High", "Low", "Close", "Volume"]].to_numpy(dtype=np.float64)
+    restated_window = restated.iloc[event_pos - 3:event_pos + 1][["Open", "High", "Low", "Close", "Volume"]].to_numpy(dtype=np.float64)
+    normalized = normalize_ohlcv_array_window(feature_window, float(base["Close"].iloc[event_pos]))
+    normalized_restated = normalize_ohlcv_array_window(restated_window, float(restated["Close"].iloc[event_pos]))
+    add_check(results, "market_data", case_id, "anchor_relative_ohlcv_feature_is_scale_invariant", True, bool(np.allclose(normalized, normalized_restated, rtol=0.0, atol=1e-7)))
+
+    benchmark_scale = 0.4
+    benchmark = feature_window.copy()
+    benchmark[:, :4] *= 2.0
+    benchmark_restated = benchmark.copy()
+    benchmark_restated[:, :4] *= benchmark_scale
+    benchmark_norm = normalize_ohlcv_array_window(benchmark, float(benchmark[-1, 3]))
+    benchmark_norm_restated = normalize_ohlcv_array_window(benchmark_restated, float(benchmark_restated[-1, 3]))
+    add_check(results, "market_data", case_id, "benchmark_price_representation_allows_independent_positive_scale", True, bool(np.allclose(benchmark_norm, benchmark_norm_restated, rtol=0.0, atol=1e-7)))
+
+    policy = BreakoutQualityLabelPolicy(
+        feature_window_bars=4,
+        label_horizon_bars=3,
+        label_path_cache_bars=3,
+        high_len_values=(3, 4),
+        min_mfe_return=0.05,
+        min_reward_risk_ratio=2.0,
+        max_adverse_return=-0.10,
+    )
+    context = build_breakout_quality_context(base, event_pos=event_pos, high_len=int(event["high_len"]), breakout_level=float(event["breakout_level"]), policy=policy)
+    restated_context = build_breakout_quality_context(restated, event_pos=event_pos, high_len=int(restated_events[0]["high_len"]), breakout_level=float(restated_events[0]["breakout_level"]), policy=policy)
+    add_check(results, "market_data", case_id, "relative_price_context_is_scale_invariant", True, bool(np.allclose(context, restated_context, rtol=0.0, atol=1e-7)))
+
+    anchor = 100.0
+    highs = np.asarray([106.0, 108.0, 109.0], dtype=np.float64)
+    lows = np.asarray([99.0, 98.0, 97.0], dtype=np.float64)
+    label = label_from_cached_path(highs, lows, anchor_price=anchor, available_bars=3, policy=policy)
+    later_restatement_scale = 0.37
+    label_restated = label_from_cached_path(highs * later_restatement_scale, lows * later_restatement_scale, anchor_price=anchor * later_restatement_scale, available_bars=3, policy=policy)
+    label_signature = (label.label, label.reason, label.max_upside_return, label.max_downside_return, label.decision_mfe_return, label.decision_mae_return, label.decision_reward_risk_ratio, label.first_hit_bar)
+    restated_label_signature = (label_restated.label, label_restated.reason, label_restated.max_upside_return, label_restated.max_downside_return, label_restated.decision_mfe_return, label_restated.decision_mae_return, label_restated.decision_reward_risk_ratio, label_restated.first_hit_bar)
+    add_check(results, "market_data", case_id, "matured_ratio_target_and_hit_order_are_scale_invariant", True, bool(np.allclose(np.asarray(label_signature[2:7], dtype=float), np.asarray(restated_label_signature[2:7], dtype=float), equal_nan=True, rtol=0.0, atol=1e-12) and label_signature[:2] == restated_label_signature[:2] and label_signature[7] == restated_label_signature[7]))
+    add_check(results, "market_data", case_id, "raw_absolute_anchor_level_is_not_invariant", True, anchor != anchor * later_restatement_scale)
+
+    pit_contracts = build_research_v2_pit_review_contracts()
+    pit_stats = validate_research_v2_pit_review_contracts(pit_contracts)
+    adjusted = next(row for row in pit_contracts if row.dataset == "TaiwanStockPriceAdj")
+    add_check(results, "market_data", case_id, "pit_review_binds_adjusted_price_representation_proof_identity", adjusted_price_representation_contract_fingerprint(), adjusted.representation_contract_fingerprint)
+    add_check(results, "market_data", case_id, "pit_review_keeps_raw_current_vintage_level_fail_closed", PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.pit_legality_status)
+    add_check(results, "market_data", case_id, "pit_review_exposes_proven_representation_status", ADJUSTED_PRICE_PROOF_STATUS, pit_stats["adjusted_price_representation_proof_status"])
+    add_check(results, "market_data", case_id, "candidate_identity_pins_adjusted_price_representation_proof", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 5 and "adjusted_price_representation_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+
+    blockers = _build_candidate_blockers(
+        {"review_required_count": pit_stats["review_required_count"]},
+        {"latest_exact_complete_date": "2030-01-15"},
+        required_cutoff="2030-01-15",
+        pit_review_stats=pit_stats,
+        mechanical_summary={"audit_complete": True, "common_complete_ceiling_date": "2030-01-15"},
+    )
+    blocker_codes = {str(row.get("code")) for row in blockers}
+    raw_blocker = next(row for row in blockers if row.get("code") == "ADJUSTED_PRICE_RAW_LEVEL_DIRECT_USE_BLOCKED")
+    add_check(results, "market_data", case_id, "round13_replaces_blanket_adjusted_price_review_blocker_with_raw_level_guard", False, "ADJUSTED_PRICE_CURRENT_VINTAGE_PIT_REVIEW_REQUIRED" in blocker_codes)
+    add_check(results, "market_data", case_id, "round13_raw_level_guard_reports_proof_ready", ADJUSTED_PRICE_PROOF_STATUS, raw_blocker["representation_proof_status"])
+    add_check(results, "market_data", case_id, "round13_candidate_still_waits_for_explicit_dataset_scope", True, "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" in blocker_codes)
+
+    summary.update({
+        "checks": len(results),
+        "proof_status": contract.proof_status,
+        "contract_fingerprint": stats["contract_fingerprint"],
+    })
+    return results, summary
+
+
 __all__ = [
     "validate_market_data_v2_preflight_planner_contract_case",
     "validate_market_data_v2_resumable_executor_contract_case",
@@ -1111,6 +1256,7 @@ __all__ = [
     "validate_market_data_v2_research_pit_review_contract_case",
     "validate_market_data_v2_research_required_cutoff_isolation_contract_case",
     "validate_market_data_v2_research_non_daily_pit_legality_contract_case",
+    "validate_market_data_v2_adjusted_price_representation_invariance_contract_case",
 ]
 
 def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_params):
@@ -2586,7 +2732,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based_and_cutoff_capped", 4, candidate["daily_universe_row_count"])
         blockers = {str(item.get("code")) for item in candidate["blockers"]}
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_unapproved_dataset_scope", True, "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" in blockers)
-        add_check(results, "market_data", case_id, "research_v2_candidate_blocks_current_vintage_adjusted_price", True, "ADJUSTED_PRICE_CURRENT_VINTAGE_PIT_REVIEW_REQUIRED" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_raw_adjusted_price_levels_fail_closed", True, "ADJUSTED_PRICE_RAW_LEVEL_DIRECT_USE_BLOCKED" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_reports_incomplete_mechanical_date_audit", True, "MECHANICAL_DATE_AUDIT_INCOMPLETE" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_incomplete_required_cutoff_exact_coverage", True, "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY" in blockers)

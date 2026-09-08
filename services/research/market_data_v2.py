@@ -24,6 +24,12 @@ from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GE
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_replace_with_retry, atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.market_data_contract import RESEARCH_STATUS_AUTHORIZED_NOT_READY, get_research_data_generation
+from core.market_data_adjusted_price_invariance import (
+    adjusted_price_representation_contract_fingerprint,
+    adjusted_price_representation_contract_payload,
+    get_adjusted_price_representation_contract,
+    validate_adjusted_price_representation_contract,
+)
 from core.market_data_research_storage_contract import (
     resolve_research_v2_candidate_dir,
     resolve_research_v2_candidate_manifest_path,
@@ -556,9 +562,15 @@ def _build_candidate_blockers(
             "reason": "Research V2 尚未宣告未來模型真正 required dataset set；不得把 51 個 archive dataset 自動當成 Research inputs。",
         },
         {
-            "code": "ADJUSTED_PRICE_CURRENT_VINTAGE_PIT_REVIEW_REQUIRED",
+            "code": "ADJUSTED_PRICE_RAW_LEVEL_DIRECT_USE_BLOCKED",
             "dataset": RESEARCH_V2_ADJUSTED_PRICE_DATASET,
-            "reason": "canonical adjusted price 是 current-vintage；retrospective feature/target 必須先證明 PIT legality / representation invariance。",
+            "representation_proof_status": pit_review_stats.get("adjusted_price_representation_proof_status"),
+            "representation_contract_fingerprint": pit_review_stats.get("adjusted_price_representation_contract_fingerprint"),
+            "reason": (
+                "Round 13 已證明文件化 corporate-action backward prefix restatement 下的 canonical scale-free "
+                "price representations；raw/absolute adjusted-price levels 仍不可直接作 scientific input，且真正 "
+                "dataset/field scope 必須留到後續明確 authorization。"
+            ),
         },
         {
             "code": "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED",
@@ -649,6 +661,8 @@ def build_research_v2_candidate(
     contract_stats = validate_research_v2_candidate_contract()
     pit_review_contracts = build_research_v2_pit_review_contracts()
     pit_review_stats = validate_research_v2_pit_review_contracts(pit_review_contracts)
+    adjusted_price_representation = get_adjusted_price_representation_contract()
+    adjusted_price_representation_stats = validate_adjusted_price_representation_contract(adjusted_price_representation)
     archive = load_ready_provider_snapshot_archive(root, snapshot_fingerprint=snapshot_fingerprint)
     required_cutoff = validate_research_v2_required_cutoff(
         provider_as_of_date=archive.as_of_date,
@@ -682,6 +696,9 @@ def build_research_v2_candidate(
         coverage_summary=ResearchV2ExactCoverageSummary(**coverage_summary),
         assessment_fingerprint=assessment_fingerprint,
         pit_review_contract_fingerprint=str(pit_review_stats["contract_fingerprint"]),
+        adjusted_price_representation_contract_fingerprint=str(
+            adjusted_price_representation_stats["contract_fingerprint"]
+        ),
         dataset_date_audit_fingerprint=canonical_json_sha256(derived["date_audits"]),
         mechanical_common_complete_start_date=mechanical_summary.get("common_complete_tail_start"),
         mechanical_common_complete_ceiling_date=mechanical_summary.get("common_complete_ceiling_date"),
@@ -704,6 +721,9 @@ def build_research_v2_candidate(
         "dataset_assessment_counts": contract_stats,
         "pit_review_contracts": research_v2_pit_review_contract_payloads(pit_review_contracts),
         "pit_review_contract_counts": pit_review_stats,
+        "adjusted_price_representation_contract": adjusted_price_representation_contract_payload(
+            adjusted_price_representation
+        ),
         "dataset_date_audits": list(derived["date_audits"]),
         "mechanical_common_complete": mechanical_summary,
         "blockers": _build_candidate_blockers(
@@ -778,6 +798,12 @@ def load_research_v2_candidate(
         raise ValueError("Research V2 candidate PIT review contract drift")
     if payload.get("pit_review_contracts") != expected_pit_reviews:
         raise ValueError("Research V2 candidate persisted PIT review contracts drift")
+    expected_adjusted_price_representation = adjusted_price_representation_contract_payload()
+    expected_adjusted_price_representation_fingerprint = adjusted_price_representation_contract_fingerprint()
+    if str(payload.get("adjusted_price_representation_contract_fingerprint") or "") != expected_adjusted_price_representation_fingerprint:
+        raise ValueError("Research V2 candidate adjusted-price representation fingerprint drift")
+    if payload.get("adjusted_price_representation_contract") != expected_adjusted_price_representation:
+        raise ValueError("Research V2 candidate persisted adjusted-price representation contract drift")
     date_audits = payload.get("dataset_date_audits")
     if not isinstance(date_audits, list):
         raise ValueError("Research V2 candidate dataset_date_audits 必須是 list")
