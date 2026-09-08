@@ -2276,11 +2276,88 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     )
     add_check(results, "market_data", case_id, "scheduler_remove_only_removes_os_registration", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_removed["status"])
 
+    from core.trading_data_dependencies import (
+        TradingDataDependencySpec,
+        get_trading_data_dependency_spec,
+        validate_trading_data_dependency_registry,
+    )
+    from services.trading import data_readiness as trading_data_readiness
+    from services.trading.market_data_dataset_state import (
+        VALIDATION_STATUS_NOT_EVALUATED,
+        VALIDATION_STATUS_READY,
+    )
+    dependency_stats = validate_trading_data_dependency_registry()
+    current_dependency = get_trading_data_dependency_spec("full_rule_based_no_dl")
+    add_check(results, "market_data", case_id, "trading_dependency_registry_has_current_strategy", 1, dependency_stats["strategy_count"])
+    add_check(results, "market_data", case_id, "current_rule_based_strategy_requires_execution_data", True, current_dependency.execution_market_data_required)
+    add_check(results, "market_data", case_id, "current_rule_based_strategy_requires_no_v2_dataset", (), current_dependency.required_v2_datasets)
+    current_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
+        strategy_id="full_rule_based_no_dl",
+        target_date="2026-09-07",
+        execution_market_data_ready=True,
+        dataset_state=None,
+    )
+    add_check(results, "market_data", case_id, "current_rule_based_strategy_is_not_blocked_by_optional_v2_state", True, current_ready["ready"])
+    current_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
+        strategy_id="full_rule_based_no_dl",
+        target_date="2026-09-07",
+        execution_market_data_ready=False,
+        execution_market_data_reason="execution missing",
+        dataset_state=None,
+    )
+    add_check(results, "market_data", case_id, "current_rule_based_strategy_fails_closed_without_execution_data", False, current_blocked["ready"])
+
+    future_dependency = TradingDataDependencySpec(
+        strategy_id="synthetic_v2_strategy",
+        execution_market_data_required=True,
+        required_v2_datasets=("TaiwanStockPER",),
+    )
+    synthetic_v2_state = {
+        "datasets": {
+            "TaiwanStockPER": {
+                "status": "READY",
+                "last_ready_target_date": "2026-09-07",
+                "last_attempt_target_date": "2026-09-07",
+                "latest_data_date": "2026-09-07",
+                "schema_status": VALIDATION_STATUS_READY,
+                "coverage_status": VALIDATION_STATUS_NOT_EVALUATED,
+            }
+        }
+    }
+    from unittest.mock import patch as _patch
+    with _patch.object(trading_data_readiness, "get_trading_data_dependency_spec", return_value=future_dependency):
+        future_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
+            strategy_id="synthetic_v2_strategy",
+            target_date="2026-09-07",
+            execution_market_data_ready=True,
+            dataset_state=synthetic_v2_state,
+        )
+        add_check(results, "market_data", case_id, "future_v2_dependency_fails_closed_when_completeness_not_evaluated", False, future_blocked["ready"])
+        synthetic_v2_state["datasets"]["TaiwanStockPER"]["coverage_status"] = VALIDATION_STATUS_READY
+        future_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
+            strategy_id="synthetic_v2_strategy",
+            target_date="2026-09-07",
+            execution_market_data_ready=True,
+            dataset_state=synthetic_v2_state,
+        )
+        add_check(results, "market_data", case_id, "future_v2_dependency_ready_only_after_fresh_schema_coverage_evidence", True, future_ready["ready"])
+        synthetic_v2_state["datasets"]["TaiwanStockPER"]["status"] = "ERROR"
+        future_error = trading_data_readiness.build_trading_data_readiness_from_evidence(
+            strategy_id="synthetic_v2_strategy",
+            target_date="2026-09-07",
+            execution_market_data_ready=True,
+            dataset_state=synthetic_v2_state,
+        )
+        add_check(results, "market_data", case_id, "future_v2_dependency_fails_closed_on_same_target_error", False, future_error["ready"])
+
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
     update_source = (project_root / "services" / "trading" / "market_data_update.py").read_text(encoding="utf-8")
     downloader_source = (project_root / "services" / "downloader" / "main.py").read_text(encoding="utf-8")
     scanner_source = (project_root / "services" / "trading" / "scanner_state.py").read_text(encoding="utf-8")
+    readiness_source = (project_root / "services" / "trading" / "data_readiness.py").read_text(encoding="utf-8")
+    operations_source = (project_root / "services" / "trading" / "operations_status.py").read_text(encoding="utf-8")
+    data_ops_source = (project_root / "services" / "trading" / "market_data_ops.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
     from services.trading import daily_workflow as daily_workflow_module
@@ -2311,6 +2388,10 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     add_check(results, "market_data", case_id, "sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in update_source and "last_attempt_target_date" in state_source)
     add_check(results, "market_data", case_id, "workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
     add_check(results, "market_data", case_id, "scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
+    add_check(results, "market_data", case_id, "scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_execution_evidence" in scanner_source)
+    add_check(results, "market_data", case_id, "operations_status_uses_strategy_data_readiness_not_aggregate_v2_synced", True, "trading_data_ready" in operations_source and "overall_v2_ready" not in operations_source)
+    add_check(results, "market_data", case_id, "data_ops_reads_canonical_trading_data_readiness_without_provider_call", True, "build_trading_data_readiness" in data_ops_source and '"provider_calls": 0' in data_ops_source)
+    add_check(results, "market_data", case_id, "readiness_gate_requires_schema_and_coverage_for_v2_dependencies", True, "schema_status" in readiness_source and "coverage_status" in readiness_source and "VALIDATION_STATUS_NOT_EVALUATED" not in readiness_source)
 
     summary.update({
         "checks": len(results),

@@ -13,6 +13,7 @@ from typing import Any
 from core.market_data_auto_update_policy import get_market_data_auto_update_policy
 from core.market_data_due_planner import plan_market_data_due_datasets
 from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
+from services.trading.data_readiness import build_trading_data_readiness
 from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
 from services.trading.market_data_state import load_trading_market_data_snapshot
 from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
@@ -56,6 +57,7 @@ def build_market_data_ops_read_model(
     local_now = now or datetime.now().astimezone()
     trading_snapshot = load_trading_market_data_snapshot(root, required=False)
     target_date = None if trading_snapshot is None else str(trading_snapshot.get("market_date") or "") or None
+    trading_readiness = build_trading_data_readiness(root, verify_execution_dataset_content=False)
     dataset_state = build_market_data_dataset_state_read_model(root)
     v2 = build_trading_market_data_v2_read_model(root)
     auto_policy = get_market_data_auto_update_policy()
@@ -161,6 +163,17 @@ def build_market_data_ops_read_model(
         "provider_calls": 0,
         "trading_target_date": target_date,
         "trading_snapshot_ready": trading_snapshot is not None,
+        "trading_strategy_id": trading_readiness.get("strategy_id"),
+        "trading_ready": bool(trading_readiness.get("ready")),
+        "trading_readiness_status": trading_readiness.get("status"),
+        "trading_dependency_fingerprint": trading_readiness.get("dependency_fingerprint"),
+        "trading_execution_data_required": bool(trading_readiness.get("execution_market_data_required")),
+        "trading_execution_data_ready": bool(trading_readiness.get("execution_market_data_ready")),
+        "trading_required_v2_count": int(trading_readiness.get("required_v2_dataset_count") or 0),
+        "trading_ready_v2_count": int(trading_readiness.get("ready_v2_dataset_count") or 0),
+        "trading_blocking_v2_count": int(trading_readiness.get("blocking_v2_dataset_count") or 0),
+        "trading_required_v2_datasets": list(trading_readiness.get("required_v2_datasets") or []),
+        "trading_blocking_dependencies": list(trading_readiness.get("blocking_dependencies") or []),
         "v2_status": v2.get("status"),
         "v2_latest_sync_target_date": v2.get("latest_sync_target_date"),
         "provider_ready": bool(v2.get("provider_ready")),
@@ -205,7 +218,7 @@ def build_market_data_ops_read_model(
         "latest_request_count": v2.get("latest_request_count"),
         "latest_row_count": v2.get("latest_row_count"),
         "overall_v2_ready": bool(target_date and len(rows) and ready_count == len(rows)),
-        "execution_data_ready": trading_snapshot is not None,
+        "execution_data_ready": bool(trading_readiness.get("execution_market_data_ready")),
         "datasets": rows,
         "recent_activity": recent_activity,
     }

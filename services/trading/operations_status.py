@@ -180,13 +180,15 @@ def _workflow_action_availability(
     if fill_transaction_pending:
         return {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}
     latest_data_date = workflow.get("latest_data_date")
-    market_data_ready = bool(workflow.get("market_data_ready", bool(latest_data_date)))
+    trading_data_ready = bool(
+        workflow.get("trading_data_ready", workflow.get("market_data_ready", bool(latest_data_date)))
+    )
     account_ready = bool(account.get("initialized")) and account.get("cash") is not None
     return {
         "data": True,
         "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0 and active_entry_count == 0 and forced_stop_exit_count == 0),
-        "params": bool(latest_data_date and market_data_ready),
-        "scanner": bool(market_data_ready and workflow.get("params_ready_for_scan")),
+        "params": bool(latest_data_date and trading_data_ready),
+        "scanner": bool(trading_data_ready and workflow.get("params_ready_for_scan")),
         "orders": bool(
             account_ready
             and candidate.get("fresh")
@@ -352,6 +354,8 @@ def derive_trading_operations_status(
     open_position_sell_coverage_safe = not sell_coverage_blockers
 
     market_data_ready = bool(workflow.get("market_data_ready", bool(workflow.get("latest_data_date"))))
+    trading_data_ready = bool(workflow.get("trading_data_ready", market_data_ready))
+    trading_data_blockers = [str(item) for item in list(workflow.get("trading_data_blockers") or []) if str(item)]
 
     allocation_blockers: list[str] = []
     if fill_transaction_pending:
@@ -360,8 +364,11 @@ def derive_trading_operations_status(
         allocation_blockers.append("Trading component state 不可完整驗證")
     if not bool(account.get("initialized")) or account.get("cash") is None:
         allocation_blockers.append("Trading account/cash 尚未就緒")
-    if not market_data_ready:
-        allocation_blockers.append("Trading market-data snapshot 尚未就緒／與 dataset date 不一致")
+    if not trading_data_ready:
+        allocation_blockers.append(
+            "Trading data readiness 尚未就緒"
+            + (("：" + "；".join(trading_data_blockers)) if trading_data_blockers else "")
+        )
     if active_entry_count:
         allocation_blockers.append("存在 active ENTRY BUY")
     if orphan_active_sell_order_ids:
@@ -391,8 +398,11 @@ def derive_trading_operations_status(
         entry_submission_blockers.append("Trading component state 不可完整驗證")
     if not bool(account.get("initialized")) or account.get("cash") is None:
         entry_submission_blockers.append("Trading account/cash 尚未就緒")
-    if not market_data_ready:
-        entry_submission_blockers.append("Trading market-data snapshot 尚未就緒／與 dataset date 不一致")
+    if not trading_data_ready:
+        entry_submission_blockers.append(
+            "Trading data readiness 尚未就緒"
+            + (("：" + "；".join(trading_data_blockers)) if trading_data_blockers else "")
+        )
     if orphan_active_sell_order_ids:
         entry_submission_blockers.append("存在 orphan active SELL order")
     if forced_stop_exit_tickers:
@@ -568,11 +578,14 @@ def derive_trading_operations_status(
         next_code = NEXT_RECONCILE_ENTRY
         next_label = "確認 BUY 掛單成交或取消"
         next_detail = f"目前有 {active_entry_count} 筆 active ENTRY BUY；完成 reconciliation 前不得重新 allocation。"
-    elif not workflow.get("latest_data_date") or not market_data_ready:
+    elif not workflow.get("latest_data_date") or not trading_data_ready:
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_DATA
         next_label = "1 更新 Trading 資料"
-        next_detail = "Trading market-data snapshot 尚未建立或與目前 dataset date 不一致；先由 canonical downloader 更新資料。"
+        next_detail = (
+            "Trading data dependency readiness 尚未就緒；"
+            + ("；".join(trading_data_blockers) if trading_data_blockers else "先由 canonical data workflow 更新／驗證資料。")
+        )
     elif not bool(workflow.get("params_ready_for_scan")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_PARAMS
@@ -629,6 +642,12 @@ def derive_trading_operations_status(
         "fill_transaction_pending": bool(fill_transaction_pending),
         "latest_data_date": workflow.get("latest_data_date"),
         "market_data_ready": market_data_ready,
+        "trading_data_ready": trading_data_ready,
+        "trading_data_readiness_status": workflow.get("trading_data_readiness_status"),
+        "trading_data_dependency_fingerprint": workflow.get("trading_data_dependency_fingerprint"),
+        "trading_data_required_v2_count": workflow.get("trading_data_required_v2_count"),
+        "trading_data_ready_v2_count": workflow.get("trading_data_ready_v2_count"),
+        "trading_data_blockers": trading_data_blockers,
         "market_data_snapshot_sha256": workflow.get("market_data_snapshot_sha256"),
         "dataset_content_sha256": workflow.get("dataset_content_sha256"),
         "market_data_v2_archive_status": workflow.get("market_data_v2_archive_status"),
@@ -733,6 +752,8 @@ def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
             "runtime_domain": RUNTIME_DOMAIN_TRADING,
             "latest_data_date": None,
             "market_data_ready": False,
+            "trading_data_ready": False,
+            "trading_data_blockers": ["Trading workflow state 無法讀取"],
             "params_ready_for_scan": False,
             "param_selector": None,
         }

@@ -11,6 +11,10 @@ from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths, resolve_runtime_output_dir
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
+from services.trading.data_readiness import (
+    assert_trading_data_readiness,
+    build_trading_data_readiness_for_execution_evidence,
+)
 from services.trading.market_data_state import (
     get_trading_market_data_snapshot_sha256,
     load_trading_market_data_snapshot,
@@ -102,6 +106,13 @@ def load_trading_scanner_runtime(
     latest_data_date = str(market_snapshot["market_date"])
     if resolve_latest_dataset_date(data_dir) != latest_data_date:
         raise RuntimeError("Trading dataset latest date 與 canonical market-data snapshot 不一致；請重新更新 Trading 資料")
+    data_readiness = build_trading_data_readiness_for_execution_evidence(
+        root,
+        strategy_id=profile.strategy_id,
+        target_date=latest_data_date,
+        execution_market_data_ready=True,
+    )
+    assert_trading_data_readiness(data_readiness)
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     if not selected_path.is_file():
         raise FileNotFoundError(
@@ -150,6 +161,8 @@ def load_trading_scanner_runtime(
         "dataset_content_sha256": str(market_snapshot["dataset_fingerprint"]["csv_content_sha256"]),
         "param_binding_sha256": get_trading_strategy_param_binding_sha256(root),
         "param_binding_fingerprint": str(param_binding["binding_fingerprint"]),
+        "trading_data_readiness": data_readiness,
+        "trading_data_dependency_fingerprint": data_readiness["dependency_fingerprint"],
     }
 
 
@@ -191,8 +204,16 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             )
         except (OSError, ValueError, RuntimeError) as exc:
             param_error = f"{type(exc).__name__}: {exc}"
+    data_readiness = build_trading_data_readiness_for_execution_evidence(
+        root,
+        strategy_id=profile.strategy_id,
+        target_date=latest_data_date,
+        execution_market_data_ready=market_ready,
+        execution_market_data_reason=market_error or (None if market_ready else "Trading market-data snapshot 尚未就緒／與 dataset date 不一致"),
+    )
+    trading_data_ready = bool(data_readiness.get("ready"))
     params_ready = bool(
-        market_ready
+        trading_data_ready
         and latest_data_date
         and selected_path.is_file()
         and not param_error
@@ -218,6 +239,12 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "raw_latest_data_date": raw_latest_data_date,
         "market_data_ready": market_ready,
         "market_data_error": market_error or None,
+        "trading_data_ready": trading_data_ready,
+        "trading_data_readiness_status": data_readiness.get("status"),
+        "trading_data_dependency_fingerprint": data_readiness.get("dependency_fingerprint"),
+        "trading_data_required_v2_count": data_readiness.get("required_v2_dataset_count"),
+        "trading_data_ready_v2_count": data_readiness.get("ready_v2_dataset_count"),
+        "trading_data_blockers": list(data_readiness.get("blocking_dependencies") or []),
         "market_data_snapshot_sha256": (
             get_trading_market_data_snapshot_sha256(root) if market_snapshot is not None and not market_error else None
         ),

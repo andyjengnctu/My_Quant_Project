@@ -24,6 +24,7 @@ from core.strategy_param_artifacts import (
     resolve_strategy_param_artifact_path,
 )
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+from core.trading_data_dependencies import get_trading_data_dependency_spec
 
 
 SUPPORTED_TRADING_STRATEGY_IDS = ("full_rule_based_no_dl",)
@@ -48,6 +49,8 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
     strategy_id = str(TRADING_ACTIVE_STRATEGY_ID).strip()
     if strategy_id not in SUPPORTED_TRADING_STRATEGY_IDS:
         raise ValueError(f"不支援的Trading strategy: {strategy_id!r}")
+    # Every executable strategy must have exactly one canonical data dependency contract.
+    get_trading_data_dependency_spec(strategy_id)
 
     dataset_profile = normalize_dataset_profile_key(TRADING_DATASET_PROFILE)
     if dataset_profile not in DATASET_PROFILE_SPECS:
@@ -131,6 +134,7 @@ def build_trading_strategy_param_training_plan(project_root) -> dict[str, object
 
 def get_trading_policy_snapshot() -> dict[str, object]:
     profile = get_trading_strategy_profile()
+    dependency = get_trading_data_dependency_spec(profile.strategy_id)
     return {
         "strategy_id": profile.strategy_id,
         "dataset_profile": profile.dataset_profile,
@@ -143,6 +147,8 @@ def get_trading_policy_snapshot() -> dict[str, object]:
         "optimizer_train_window_months": profile.optimizer_train_window_months,
         "dl_filter_enabled": profile.dl_filter_enabled,
         "dl_ranking_enabled": profile.dl_ranking_enabled,
+        "data_dependency_fingerprint": dependency.fingerprint,
+        "required_v2_datasets": list(dependency.required_v2_datasets),
     }
 
 

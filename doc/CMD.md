@@ -46,7 +46,7 @@ python apps/workbench.py
 # Workbench
 
 - `apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口；同一 Workbench 亦承接實際 Trading 操作與 Market Data 資料中心。
-- 主頁籤為「單股回測檢視／投組回測檢視／實際交易／資料中心」；「資料中心」只消費 `services/trading/market_data_ops.py` local-first read model，集中顯示 Trading target、V2 readiness、51-dataset freshness/schema/coverage、publication schedule、next check、最近活動、最後一次實際觀察到的 provider quota，以及 Windows Auto Sync task 的實際 installed/enabled/drift/next-run 狀態；按「刷新狀態」不得呼叫 FinMind。資料 action 仍只有「立即檢查 Due」與「完整更新 Trading 資料」，分別委派 canonical one-shot updater 與 canonical full update，不提供逐 dataset 手動下載第二條路徑；OS scheduler control 另提供「安裝/更新 Auto Sync／啟用或停用／移除」，全部委派 `services/trading/market_data_scheduler.py`，Workbench 不直接拼 PowerShell/schtasks。
+- 主頁籤為「單股回測檢視／投組回測檢視／實際交易／資料中心」；「資料中心」只消費 `services/trading/market_data_ops.py` local-first read model，集中顯示 active Trading strategy 的 canonical data readiness、dependency fingerprint、required/ready V2 count、Trading target、V2 archive 51-dataset freshness/schema/coverage、publication schedule、next check、最近活動、最後一次實際觀察到的 provider quota，以及 Windows Auto Sync task 的實際 installed/enabled/drift/next-run 狀態；按「刷新狀態」不得呼叫 FinMind。資料 action 仍只有「立即檢查 Due」與「完整更新 Trading 資料」，分別委派 canonical one-shot updater 與 canonical full update，不提供逐 dataset 手動下載第二條路徑；OS scheduler control 另提供「安裝/更新 Auto Sync／啟用或停用／移除」，全部委派 `services/trading/market_data_scheduler.py`，Workbench 不直接拼 PowerShell/schtasks。
 - 實際交易頁頂部「Trading 操作總覽」只消費 canonical Operations Status，實際交易頁頂部「Trading 操作總覽」只消費 canonical Operations Status，整合 Data/Params、account、ENTRY/SELL broker orders、Scanner/Proposed/Protection/Indicator freshness、fill transaction、STOP forced-exit 與同session資金鎖定，顯示唯一下一步並控制 workflow availability；UI不重算交易規則。頁面另提供 read-only「實盤就緒檢查」，輸出`outputs/trading/operational_audit/prelive_audit.json/.md`；目前required-live implementation capability已齊備，但只有當當下account/cash、completed-bar roll-forward、Indicator plan、protection/forced-exit coverage、broker reconciliation與physical/PIT checks都無blocker時才會`LIVE_READY`，否則必須`LIVE_BLOCKED`。使用者可分步操作「1 更新資料／2 更新 Params／3 Scanner 候選」，而「每日流程 1→2→3」的canonical內部順序其實是 **Data → position roll-forward → Indicator SELL plan → Params → Scanner**。Scanner只接受selected params與Trading data同一latest date且單一runtime member；每檔candidate自身trade_date與execution-plan seed date亦必須等於該information date，舊訊號只會被skip。完成Scanner後「4 建議掛單」以canonical account cash/positions、mark-to-market sizing equity、max positions、position sizing與reserved-capital語意產生proposal；只有active ENTRY BUY會阻擋隔日新allocation，長期SELL不會被錯當ENTRY blocker，但同information date已有BUY送單即鎖住重新allocation。實際BUY/SELL submission、fill與cancel都必須由使用者依券商真實狀態確認；market high/low不會自動推定成交。TP_HALF的總target固定由原始confirmed entry qty決定，partial fill取消重送時只送「原target − 已確認TP fills」；STOP一旦有任何confirmed fill，該entry lineage就進persistent forced-exit，原STOP仍PARTIAL時只reconcile，若剩餘明確取消則以「確認 Stop 剩餘 MARKET 已送單」對當下全部剩餘持股退出，不會恢復等待二次觸價的Stop或重新產生TP。Indicator SELL同樣是persistent completed-bar obligation，但STOP forced-exit優先。所有account/order/journal current state實體路徑由canonical path owner解析、ticker由canonical identity owner正規化、cash/fee/tax/PnL與milli scale只走exact-accounting SSOT；禁止手動編輯state JSON。
 - 單股 Workbench 上方控制列提供股票代號輸入、常用股票下拉、候選股掃描與歷史績效股掃描。
 - K 線檢視中，交易明細與 Console 為獨立分頁。
@@ -432,8 +432,33 @@ Round 3完成後，current `ensure_strategy_parameter_artifact()`不再掃描、
 
 Workbench「實際交易」頁對`ORDERED/PARTIAL` Stop/TP、Indicator SELL與STOP remainder MARKET都只接受使用者輸入的券商實際成交股數、成交價與成交日；不得由行情觸發自動推定。成交透過同一canonical exact-accounting / position-sell seam同步account/order state；native OCO任一腿實際成交後，另一active腿同步記錄為券商互斥取消。STOP partial-fill/cancel後的剩餘MARKET retry仍維持原STOP accounting lineage，Indicator SELL不得覆蓋已觸發STOP的退出義務。
 
-- Workbench 的「更新 Trading 資料」與 Smart Downloader `[1]` 現已收斂到同一 `services/trading/market_data_update.py` canonical service；兩個入口的正式順序與結果一致：先維持既有 `data/trading/tw_stock_data_vip/` + canonical Trading market-data snapshot，成功後才嘗試 Market Data V2 Trading archive sidecar。重複由另一入口執行時仍消費同一 producer/state/ledger，已最新 legacy ticker 依既有 producer skip、V2 unfinished job 依同一 ledger resume，不建立第二份資料真理。Provider Snapshot 尚未 READY 時 V2 顯示 `NOT_BOOTSTRAPPED` 且不耗用額外 FinMind data request；READY 後 sidecar 以 `data/trading/market_data_v2/` / `state/trading/market_data_v2/` 獨立 overlay 做 quota-aware resumable daily sync。Workbench sidecar不跨quota window或retry backoff sleep：當額度不足／retry尚未到期時立即回 `STALE`，unfinished jobs留在ledger，下次「更新 Trading 資料」再resume；只有 Smart Downloader完整Bootstrap `[3]` 會持續等待quota並自動下載到底。V2 `SYNCED/STALE/NOT_BOOTSTRAPPED` 狀態會顯示在 Workbench/Operations Status，但在目前 `full_rule_based_no_dl` 下不改變既有 Trading Data、Params、Scanner 或掛單 READY。未來 DL-based Trading 必須由 active strategy 明確宣告需要的 V2 datasets 後，才可把相應 archive freshness 納入 fail-closed dependency。
+- Workbench 的「更新 Trading 資料」與 Smart Downloader `[1]` 現已收斂到同一 `services/trading/market_data_update.py` canonical service；兩個入口的正式順序與結果一致：先維持既有 `data/trading/tw_stock_data_vip/` + canonical Trading market-data snapshot，成功後才嘗試 Market Data V2 Trading archive sidecar。重複由另一入口執行時仍消費同一 producer/state/ledger，已最新 legacy ticker 依既有 producer skip、V2 unfinished job 依同一 ledger resume，不建立第二份資料真理。Provider Snapshot 尚未 READY 時 V2 顯示 `NOT_BOOTSTRAPPED` 且不耗用額外 FinMind data request；READY 後 sidecar 以 `data/trading/market_data_v2/` / `state/trading/market_data_v2/` 獨立 overlay 做 quota-aware resumable daily sync。Workbench sidecar不跨quota window或retry backoff sleep：當額度不足／retry尚未到期時立即回 `STALE`，unfinished jobs留在ledger，下次「更新 Trading 資料」再resume；只有 Smart Downloader完整Bootstrap `[3]` 會持續等待quota並自動下載到底。V2 `SYNCED/STALE/NOT_BOOTSTRAPPED` 狀態會顯示在 Workbench/Data Ops，但不再被任何 consumer直接當成 execution readiness。Round 8 的 `core/trading_data_dependencies.py` 明確宣告目前 `full_rule_based_no_dl` 只要求 canonical execution market-data、required V2 為 0，所以 optional V2 狀態不改變既有 Params/Scanner/掛單 READY；未來 DL-based Trading 必須先登記精確 required V2 datasets，並由 `services/trading/data_readiness.py` 對 freshness + schema + coverage fail-closed。
 - Market Data V2 的 51 個 included datasets 由 `core/market_data_freshness_contract.py` 各自解析 canonical operational contract，至少固定 cadence、expected-date semantics、row expectation、completeness mode、schema validation requirement 與 publication first-check policy；Trading sync manifest 建立前會驗證 contract 必須完整覆蓋 current included registry。Publication timing 由 `config/market_data.py::MARKET_DATA_V2_PUBLICATION_POLICY` 單一持有：有 provider documentation evidence 的 dataset 使用具 grace 的 verified override，尚無明確 provider 時間者使用隔日 01:45 conservative fallback。Round 3 起動態 state 持久化於 `state/trading/market_data_v2/dataset_state.json`，包含 last attempt/success/ready、實際 latest data date、latest expected date、expected publish、next check、status、schema/coverage status 與 last error；其中 cadence/publication 規則不複製進 state，而由 contract 即時 join。`core/market_data_due_planner.py` / `services/trading/market_data_update.py::plan_trading_market_data_due_update()` 只讀本機 state/contract 計算 due，沒有 due dataset 時不得建立 provider request；成功 Trading V2 sync 會從實際 Parquet frame date evidence 更新 state，periodic 資料不會因其 row date早於 Trading target而誤判未發布。Round 4 Automatic updater 與 Round 5 Data Ops UI 已消費同一 state/contract truth；aggregate `SYNCED` 仍不得取代 dataset-level publication completeness。
+
+### Trading Data Readiness Gate（Round 8）
+
+Trading execution 資料是否可用不得用「51/51 V2 READY」或 aggregate `SYNCED` 猜測。正式判斷固定為：
+
+```text
+active Trading strategy/model
+        ↓
+core/trading_data_dependencies.py
+        ↓
+required execution data + required V2 datasets
+        ↓
+services/trading/data_readiness.py
+        ↓
+READY / BLOCKED
+```
+
+目前 active `full_rule_based_no_dl`：
+
+```text
+execution legacy adjusted-price Trading snapshot = REQUIRED
+required V2 datasets                         = 0
+```
+
+所以 V2 某些 optional dataset `WAIT_PUBLISH/STALE` 不會誤擋現行 rule-based Trading。Scanner、Operations Status 與 Data Ops 都消費同一 readiness gate；未登記 dependency 的 executable strategy直接不合法。未來若新增 DL Trading，必須在同一 dependency registry列出實際 required V2 datasets；該 target 的 required dataset只有在 freshness target、schema與coverage都已驗證時才能 READY，`coverage=NOT_EVALUATED`、`ERROR/STALE/BLOCKED` 或缺 state都 fail closed。Data Ops 的「Trading Ready」KPI會顯示 active strategy與 `required V2 ready/total`，刷新仍為 0 provider request。
 
 ### Trading Market Data V2 Automatic Updater（Round 4）
 

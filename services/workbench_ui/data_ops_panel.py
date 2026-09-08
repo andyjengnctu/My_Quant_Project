@@ -84,7 +84,7 @@ class MarketDataOpsPanel(ttk.Frame):
         kpi = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
         kpi.pack(fill="x", pady=(0, 6))
         labels = (
-            ("Trading Data", "trading"),
+            ("Trading Ready", "trading"),
             ("V2 Archive", "v2"),
             ("Datasets", "datasets"),
             ("Next Check", "next"),
@@ -99,7 +99,7 @@ class MarketDataOpsPanel(ttk.Frame):
 
         meters = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
         meters.pack(fill="x", pady=(0, 6))
-        readiness_box = ttk.LabelFrame(meters, text="V2 Readiness", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
+        readiness_box = ttk.LabelFrame(meters, text="V2 Archive Readiness", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
         readiness_box.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self._readiness_progress = ttk.Progressbar(readiness_box, maximum=100.0, mode="determinate")
         self._readiness_progress.pack(fill="x")
@@ -181,11 +181,19 @@ class MarketDataOpsPanel(ttk.Frame):
             return
         self._snapshot = snapshot
         self._render(snapshot)
-        self._status_var.set(f"本地狀態已刷新（provider calls={snapshot.get('provider_calls', 0)}）")
+        blockers = [str(item) for item in list(snapshot.get("trading_blocking_dependencies") or []) if str(item)]
+        suffix = "" if not blockers else " | Trading BLOCKED: " + "；".join(blockers[:2])
+        self._status_var.set(f"本地狀態已刷新（provider calls={snapshot.get('provider_calls', 0)}）{suffix}")
 
     def _render(self, snapshot: dict[str, object]):
         target = snapshot.get("trading_target_date") or "-"
-        self._kpi_vars["trading"].set(f"{'READY' if snapshot.get('execution_data_ready') else 'NOT READY'}\n{target}")
+        strategy_id = snapshot.get("trading_strategy_id") or "-"
+        required_v2 = int(snapshot.get("trading_required_v2_count") or 0)
+        ready_v2 = int(snapshot.get("trading_ready_v2_count") or 0)
+        self._kpi_vars["trading"].set(
+            f"{'READY' if snapshot.get('trading_ready') else 'BLOCKED'} | {target}\n"
+            f"{strategy_id} | required V2 {ready_v2}/{required_v2}"
+        )
         self._kpi_vars["v2"].set(f"{snapshot.get('v2_status') or '-'}\n{snapshot.get('v2_latest_sync_target_date') or '-'}")
         self._kpi_vars["datasets"].set(f"{int(snapshot.get('ready_count') or 0)}/{int(snapshot.get('dataset_count') or 0)} READY\nDue {int(snapshot.get('due_count') or 0)}")
         self._kpi_vars["next"].set(_fmt_datetime(snapshot.get("next_check_at")))
