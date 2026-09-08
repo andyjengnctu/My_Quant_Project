@@ -1399,6 +1399,246 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     add_check(results, "market_data", case_id, "selective_due_manifest_only_contains_due_datasets", {"TaiwanStockPrice", "TaiwanStockPER"}, {request.dataset for request in selective_manifest.requests})
     add_check(results, "market_data", case_id, "selective_due_manifest_is_smaller_than_full_daily_manifest", True, 0 < selective_manifest.total_requests < manifest_a.total_requests)
 
+    # Round 6 canonical provider fetch geometry.  Full-history current-vintage
+    # PriceAdj semantics stay intact while one process-local cache is shared by
+    # the execution CSV producer and the V2 sidecar.
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from unittest.mock import patch
+    from services.downloader.finmind_http import FinMindUsage
+    from services.downloader.finmind_shared_client import SharedFinMindRequestClient
+    from services.downloader.trading_price_refresh import (
+        build_price_history_ranges,
+        probe_latest_adjusted_price_market_date,
+        refresh_trading_adjusted_price_dataset,
+    )
+
+    full_price_ranges = build_price_history_ranges(
+        start_date="1990-01-01",
+        end_date="2026-09-07",
+        chunk_months=6,
+    )
+    add_check(results, "market_data", case_id, "canonical_price_history_uses_74_six_month_ranges", 74, len(full_price_ranges))
+    add_check(results, "market_data", case_id, "canonical_price_dedup_normal_day_design_is_about_409_data_calls", 409, len(full_price_ranges) + manifest_a.total_requests - 7)
+
+    class _SharedBaseClient:
+        def __init__(self):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+            self.calls = []
+        def get_usage(self):
+            self.usage_request_count += 1
+            return FinMindUsage(user_count=0, api_request_limit=6000)
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            self.calls.append(dict(kwargs))
+            return pd.DataFrame({"date": ["2026-09-07"], "stock_id": ["2330"], "open": [1.0]})
+
+    shared_base = _SharedBaseClient()
+    shared = SharedFinMindRequestClient(shared_base)
+    first = shared.get_data(dataset="Synthetic", start_date="2026-09-07", end_date="2026-09-07")
+    second = shared.get_data(dataset="Synthetic", start_date="2026-09-07", end_date="2026-09-07")
+    add_check(results, "market_data", case_id, "shared_finmind_identical_request_hits_provider_once", 1, shared_base.data_request_count)
+    add_check(results, "market_data", case_id, "shared_finmind_identical_request_returns_same_payload", True, first.equals(second))
+    seeded_base = _SharedBaseClient()
+    seeded = SharedFinMindRequestClient(seeded_base)
+    seeded.seed_data(dataset="SyntheticSeed", start_date="2026-09-07", end_date="2026-09-07", frame=first)
+    seeded_result = seeded.get_data(dataset="SyntheticSeed", start_date="2026-09-07", end_date="2026-09-07")
+    add_check(results, "market_data", case_id, "shared_finmind_seeded_exact_request_consumes_zero_provider_calls", 0, seeded_base.data_request_count)
+    add_check(results, "market_data", case_id, "shared_finmind_seeded_exact_request_preserves_provider_payload", True, first.equals(seeded_result))
+
+    from datetime import timezone
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
+    from core.market_data_execution_policy import get_market_data_execution_policy
+    from core.market_data_storage_contract import MarketDataCommitReceipt
+    from services.downloader.market_data_executor import MarketDataBootstrapExecutor
+    from services.downloader.market_data_ledger import MarketDataJobLedger
+    with TemporaryDirectory() as cache_executor_temp:
+        executor_base = _SharedBaseClient()
+        executor_shared = SharedFinMindRequestClient(executor_base)
+        cached_request = BootstrapHttpRequest(
+            "SyntheticExecutorCache", "synthetic", None, "2026-09-07", "2026-09-07"
+        )
+        executor_shared.seed_data(
+            dataset=cached_request.dataset,
+            start_date=cached_request.start_date,
+            end_date=cached_request.end_date,
+            frame=pd.DataFrame({"date": ["2026-09-07"], "value": [1]}),
+        )
+        cached_manifest = BootstrapRequestManifest(
+            as_of_date="2026-09-07",
+            full_range_start="2026-09-07",
+            registry_fingerprint="1" * 64,
+            manifest_fingerprint="2" * 64,
+            historical_instrument_count=0,
+            requests=(cached_request,),
+        )
+        cached_ledger = MarketDataJobLedger(Path(cache_executor_temp) / "ledger.sqlite3", workload_namespace="synthetic_cache")
+        cached_executor = MarketDataBootstrapExecutor(
+            ledger=cached_ledger,
+            client=executor_shared,
+            policy=get_market_data_execution_policy(),
+            now_fn=lambda: datetime(2026, 9, 7, 10, 0, tzinfo=timezone.utc),
+            sleep_fn=lambda _seconds: None,
+            blocking_waits=False,
+        )
+        cached_summary = cached_executor.run(
+            manifest=cached_manifest,
+            sink=lambda _request, frame: MarketDataCommitReceipt(
+                committed=True, row_count=len(frame), content_sha256="e" * 64
+            ),
+        )
+    add_check(results, "market_data", case_id, "executor_cache_hit_consumes_zero_provider_data_calls", 0, executor_base.data_request_count)
+    add_check(results, "market_data", case_id, "executor_cache_hit_does_not_increment_http_attempts", 0, cached_summary.http_attempts)
+    add_check(results, "market_data", case_id, "executor_cache_hit_still_commits_logical_job", 1, cached_summary.done)
+
+    class _BulkPriceBaseClient:
+        def __init__(self, *, omit_current=()):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+            self.calls = []
+            self.omit_current = set(omit_current)
+        def get_usage(self):
+            self.usage_request_count += 1
+            return FinMindUsage(user_count=0, api_request_limit=6000)
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            self.calls.append(dict(kwargs))
+            start = kwargs.get("start_date")
+            end = kwargs.get("end_date")
+            if kwargs.get("dataset") != "TaiwanStockPriceAdj" or kwargs.get("data_id") is not None:
+                raise AssertionError(f"unexpected synthetic bulk request: {kwargs}")
+            if start == "2026-07-01" and end == "2026-09-07":
+                dates = ["2026-07-01", "2026-09-07"]
+            elif start == "2026-01-01" and end == "2026-06-30":
+                dates = ["2026-01-02", "2026-06-30"]
+            else:
+                raise AssertionError(f"unexpected synthetic date range: {start}~{end}")
+            rows = []
+            for d in dates:
+                for sid, base in (("2330", 100.0), ("2317", 80.0)):
+                    if d == "2026-09-07" and sid in self.omit_current:
+                        continue
+                    rows.append({
+                        "date": d, "stock_id": sid, "open": base, "max": base + 2,
+                        "min": base - 1, "close": base + 1, "Trading_Volume": 1000,
+                    })
+            return pd.DataFrame(rows)
+
+    with TemporaryDirectory() as bulk_temp_dir:
+        from services.downloader import runtime as downloader_runtime
+        bulk_base = _BulkPriceBaseClient()
+        bulk_shared = SharedFinMindRequestClient(bulk_base)
+        with patch.object(downloader_runtime, "SAVE_DIR", str(Path(bulk_temp_dir) / "prices")), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(bulk_temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
+            probe = probe_latest_adjusted_price_market_date(
+                client=bulk_shared,
+                now=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            )
+            bulk_summary = refresh_trading_adjusted_price_dataset(
+                ["2330", "2317"],
+                "2026-09-07",
+                client=bulk_shared,
+                probe=probe,
+                universe_tickers=["2330", "2317"],
+                verbose=False,
+            )
+            csv_2330 = pd.read_csv(Path(downloader_runtime.SAVE_DIR) / "2330.csv", index_col=0)
+            calls_before_exact = bulk_base.data_request_count
+            exact_cached = bulk_shared.get_data(
+                dataset="TaiwanStockPriceAdj",
+                start_date="2026-09-07",
+                end_date="2026-09-07",
+            )
+        add_check(results, "market_data", case_id, "bulk_price_probe_and_history_use_two_provider_data_calls", 2, bulk_base.data_request_count)
+        add_check(results, "market_data", case_id, "bulk_price_refresh_uses_one_quota_capacity_probe", 1, bulk_base.usage_request_count)
+        add_check(results, "market_data", case_id, "bulk_price_refresh_preserves_full_current_vintage_history", 4, len(csv_2330))
+        add_check(results, "market_data", case_id, "bulk_price_refresh_reports_current_vintage_strategy", "full_market_range_current_vintage", bulk_summary.get("price_fetch_strategy"))
+        add_check(results, "market_data", case_id, "bulk_price_target_exact_request_reuses_same_response", calls_before_exact, bulk_base.data_request_count)
+        add_check(results, "market_data", case_id, "bulk_price_target_exact_cache_contains_full_market_rows", {"2317", "2330"}, set(exact_cached["stock_id"].astype(str)))
+        add_check(results, "market_data", case_id, "bulk_price_historical_raw_chunk_is_not_retained_in_shared_cache", False, bulk_shared.has_cached_data(dataset="TaiwanStockPriceAdj", start_date="2026-01-01", end_date="2026-06-30"))
+        add_check(results, "market_data", case_id, "bulk_price_reports_uncached_historical_fetch", 1, bulk_shared.snapshot().get("uncached_fetches"))
+
+    with TemporaryDirectory() as suspended_temp_dir:
+        from services.downloader import runtime as downloader_runtime
+        suspended_base = _BulkPriceBaseClient(omit_current={"2317"})
+        suspended_shared = SharedFinMindRequestClient(suspended_base)
+        with patch.object(downloader_runtime, "SAVE_DIR", str(Path(suspended_temp_dir) / "prices")), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(suspended_temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
+            suspended_probe = probe_latest_adjusted_price_market_date(
+                client=suspended_shared,
+                now=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            )
+            suspended_summary = refresh_trading_adjusted_price_dataset(
+                ["2330", "2317"],
+                "2026-09-07",
+                client=suspended_shared,
+                probe=suspended_probe,
+                universe_tickers=["2330", "2317"],
+                verbose=False,
+            )
+            suspended_2317 = pd.read_csv(Path(downloader_runtime.SAVE_DIR) / "2317.csv", index_col=0)
+        add_check(results, "market_data", case_id, "bulk_price_preserves_legacy_suspended_ticker_semantic", "2026-07-01", str(pd.Timestamp(suspended_2317.index[-1]).date()))
+        add_check(results, "market_data", case_id, "bulk_price_reports_cached_universe_missing_target_row", 1, suspended_summary.get("current_universe_missing_price_row_count"))
+
+    with TemporaryDirectory() as truncated_temp_dir:
+        from services.downloader import runtime as downloader_runtime
+        from services.downloader.trading_price_refresh import TradingBulkPriceUnsupported
+        truncated_price_dir = Path(truncated_temp_dir) / "prices"
+        truncated_price_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {"Open": [90.0], "High": [91.0], "Low": [89.0], "Close": [90.5], "Volume": [100]},
+            index=[pd.Timestamp("2026-03-01")],
+        ).to_csv(truncated_price_dir / "2330.csv")
+        truncated_original_bytes = (truncated_price_dir / "2330.csv").read_bytes()
+        truncated_base = _BulkPriceBaseClient()
+        truncated_shared = SharedFinMindRequestClient(truncated_base)
+        with patch.object(downloader_runtime, "SAVE_DIR", str(truncated_price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(truncated_temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
+            truncated_probe = probe_latest_adjusted_price_market_date(
+                client=truncated_shared,
+                now=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            )
+            try:
+                refresh_trading_adjusted_price_dataset(
+                    ["2330", "2317"],
+                    "2026-09-07",
+                    client=truncated_shared,
+                    probe=truncated_probe,
+                    universe_tickers=["2330", "2317"],
+                    verbose=False,
+                )
+            except TradingBulkPriceUnsupported:
+                truncated_rejected = True
+            else:
+                truncated_rejected = False
+        add_check(results, "market_data", case_id, "bulk_price_rejects_history_that_drops_existing_legacy_dates", True, truncated_rejected)
+        add_check(results, "market_data", case_id, "bulk_price_coverage_failure_publishes_no_partial_csv", truncated_original_bytes, (truncated_price_dir / "2330.csv").read_bytes())
+
+    # Repair windows are minimum re-query horizons.  A long scheduler outage
+    # must not leave a silent hole between the Provider Snapshot and the recent
+    # seven-day repair window.
+    long_gap_provider = {**provider, "as_of_date": "2026-07-31"}
+    long_gap_manifest = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=long_gap_provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"TaiwanStockPriceAdj"},
+        previous_ready_dates_by_dataset={"TaiwanStockPriceAdj": "2026-08-01"},
+    )
+    long_gap_dates = tuple(request.start_date for request in long_gap_manifest.requests)
+    add_check(results, "market_data", case_id, "recent_repair_long_gap_starts_after_last_ready_date", "2026-08-02", min(long_gap_dates))
+    add_check(results, "market_data", case_id, "recent_repair_long_gap_remains_contiguous_through_target", "2026-09-07", max(long_gap_dates))
+    add_check(results, "market_data", case_id, "recent_repair_long_gap_has_no_silent_calendar_hole", 37, len(long_gap_manifest.requests))
+
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         trading_root = resolve_trading_market_data_v2_root(root)
@@ -1718,6 +1958,141 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         add_check(results, "market_data", case_id, "auto_updater_no_due_consumes_zero_usage_requests", 0, auto_no_due["usage_requests"])
         add_check(results, "market_data", case_id, "auto_updater_no_due_reports_provider_not_required", False, auto_no_due["provider_requests_required"])
 
+    from unittest.mock import patch
+
+    # Default scheduler mode must discover a newer execution target without
+    # turning every 15-minute wake-up into a provider request.  Explicit
+    # --target-date remains the deterministic test/recovery override above.
+    from core.market_data_auto_update_policy import get_market_data_auto_update_policy
+    from services.trading.market_data_market_date_discovery import (
+        DISCOVERY_RESULT_NO_NEW_DATE,
+        load_market_date_discovery_state,
+        plan_market_date_discovery,
+        record_market_date_probe_result,
+    )
+    discovery_policy = get_market_data_auto_update_policy()
+    with TemporaryDirectory() as discovery_dir:
+        discovery_root = Path(discovery_dir)
+        before_window = plan_market_date_discovery(
+            discovery_root,
+            current_market_date="2026-09-07",
+            now=datetime(2026, 9, 8, 4, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            policy=discovery_policy,
+        )
+        add_check(results, "market_data", case_id, "market_date_discovery_before_price_publication_is_local_only_not_due", False, before_window["due"])
+        add_check(results, "market_data", case_id, "market_date_discovery_first_probe_is_price_publication_window", "2026-09-08T17:45:00+08:00", before_window["next_probe_at"])
+        due_window = plan_market_date_discovery(
+            discovery_root,
+            current_market_date="2026-09-07",
+            now=datetime(2026, 9, 8, 17, 46, tzinfo=ZoneInfo("Asia/Taipei")),
+            policy=discovery_policy,
+        )
+        add_check(results, "market_data", case_id, "market_date_discovery_becomes_due_after_price_publication_window", True, due_window["due"])
+        deferred = record_market_date_probe_result(
+            discovery_root,
+            current_market_date="2026-09-07",
+            observed_market_date="2026-09-07",
+            now=datetime(2026, 9, 8, 17, 46, tzinfo=ZoneInfo("Asia/Taipei")),
+            policy=discovery_policy,
+            result=DISCOVERY_RESULT_NO_NEW_DATE,
+        )
+        add_check(results, "market_data", case_id, "market_date_discovery_no_new_date_uses_bounded_first_retry", "2026-09-08T18:01:00+08:00", deferred["next_probe_at"])
+        add_check(results, "market_data", case_id, "market_date_discovery_state_is_persisted_and_fingerprinted", "NO_NEW_DATE", load_market_date_discovery_state(discovery_root, required=True)["last_probe_result"])
+
+    with TemporaryDirectory() as scheduler_local_dir:
+        scheduler_root = Path(scheduler_local_dir)
+        record_market_data_sync_success(
+            scheduler_root,
+            target_date="2026-09-07",
+            finished_at=state_now,
+            observations=observations,
+        )
+        class _SchedulerNoCallClient:
+            data_request_count = 0
+            usage_request_count = 0
+            def __getattr__(self, name):
+                raise AssertionError(f"discovery 尚未 due 時不得呼叫 provider: {name}")
+        with patch(
+            "services.trading.market_data_auto_update.load_trading_market_data_snapshot",
+            return_value={"market_date": "2026-09-07"},
+        ):
+            scheduler_local = run_trading_market_data_auto_update(
+                project_root=scheduler_root,
+                client=_SchedulerNoCallClient(),
+                now_fn=lambda: datetime(2026, 9, 8, 4, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            )
+        add_check(results, "market_data", case_id, "default_auto_worker_pre_discovery_window_consumes_zero_data_requests", 0, scheduler_local["data_requests"])
+        add_check(results, "market_data", case_id, "default_auto_worker_pre_discovery_window_consumes_zero_usage_requests", 0, scheduler_local["usage_requests"])
+        add_check(results, "market_data", case_id, "default_auto_worker_exposes_next_market_date_probe", "2026-09-08T17:45:00+08:00", scheduler_local["market_date_discovery_next_check_at"])
+
+    with TemporaryDirectory() as discovery_new_day_dir:
+        discovery_root = Path(discovery_new_day_dir)
+        # Pre-seed dataset state at the new target so this regression isolates
+        # market-date discovery + canonical execution refresh from V2 due work.
+        record_market_data_sync_success(
+            discovery_root,
+            target_date="2026-09-08",
+            finished_at=state_now,
+            observations={
+                dataset: {
+                    **dict(values),
+                    "observed_min_date": (
+                        "2026-09-08"
+                        if by_dataset[dataset].expected_date_mode not in {"none", "period_due"}
+                        else values.get("observed_min_date")
+                    ),
+                    "observed_max_date": (
+                        "2026-09-08"
+                        if by_dataset[dataset].expected_date_mode not in {"none", "period_due"}
+                        else values.get("observed_max_date")
+                    ),
+                }
+                for dataset, values in observations.items()
+            },
+        )
+        class _DiscoveryBaseClient:
+            def __init__(self):
+                self.data_request_count = 0
+                self.usage_request_count = 0
+        discovery_base = _DiscoveryBaseClient()
+        canonical_calls = []
+        def _fake_probe(*, client, now):
+            client.base_client.data_request_count += 1
+            from services.downloader.trading_price_refresh import PriceRange, TradingPriceProbe
+            return TradingPriceProbe(
+                candidate_date="2026-09-08",
+                market_date="2026-09-08",
+                current_range=PriceRange("2026-07-01", "2026-09-08"),
+                current_frame=pd.DataFrame(),
+            )
+        def _fake_canonical(**kwargs):
+            canonical_calls.append(dict(kwargs))
+            return {"market_date": "2026-09-08"}
+        with (
+            patch(
+                "services.trading.market_data_auto_update.load_trading_market_data_snapshot",
+                return_value={"market_date": "2026-09-07"},
+            ),
+            patch(
+                "services.trading.market_data_auto_update.probe_latest_adjusted_price_market_date",
+                side_effect=_fake_probe,
+            ),
+            patch(
+                "services.trading.market_data_update.run_trading_market_data_update",
+                side_effect=_fake_canonical,
+            ),
+        ):
+            discovery_new_day = run_trading_market_data_auto_update(
+                project_root=discovery_root,
+                client=discovery_base,
+                now_fn=lambda: datetime(2026, 9, 8, 17, 46, tzinfo=ZoneInfo("Asia/Taipei")),
+            )
+        add_check(results, "market_data", case_id, "default_auto_worker_discovers_new_completed_trading_day", "2026-09-08", discovery_new_day["target_date"])
+        add_check(results, "market_data", case_id, "default_auto_worker_new_day_probe_costs_one_data_request_in_isolation", 1, discovery_new_day["data_requests"])
+        add_check(results, "market_data", case_id, "default_auto_worker_new_day_runs_execution_update", True, discovery_new_day["execution_data_updated"])
+        add_check(results, "market_data", case_id, "market_date_discovery_reuses_shared_client_for_canonical_execution_update", True, len(canonical_calls) == 1 and canonical_calls[0].get("provider_client") is not None)
+        add_check(results, "market_data", case_id, "market_date_discovery_defers_full_v2_to_publication_due_planner", False, canonical_calls[0].get("sync_v2_archive"))
+
     with TemporaryDirectory() as auto_quota_dir:
         auto_root = Path(auto_quota_dir)
         provider_path = resolve_market_data_provider_snapshot_path(auto_root, "b" * 64)
@@ -1831,6 +2206,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     snapshot_pos = update_source.find("publish_trading_market_data_snapshot(")
     v2_pos = update_source.find("sync_market_data_v2_trading_archive(")
     add_check(results, "market_data", case_id, "canonical_update_owner_preserves_execution_then_snapshot_then_v2_order", True, 0 <= legacy_pos < snapshot_pos < v2_pos)
+    executor_source = (project_root / "services" / "downloader" / "market_data_executor.py").read_text(encoding="utf-8")
+    price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
+    add_check(results, "market_data", case_id, "canonical_update_shares_one_provider_client_across_legacy_and_v2", True, "provider_client=shared_client" in update_source and "client=shared_client" in update_source and "SharedFinMindRequestClient" in update_source)
+    add_check(results, "market_data", case_id, "executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
+    add_check(results, "market_data", case_id, "canonical_price_refresh_never_calculates_adjustment_locally", True, "TaiwanStockPriceAdj" in price_refresh_source and "adjusted-price calculator" in price_refresh_source and "full_market_range_current_vintage" in price_refresh_source)
     add_check(results, "market_data", case_id, "daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
     add_check(results, "market_data", case_id, "smart_downloader_reuses_canonical_market_data_update_owner", True, "from services.trading.market_data_update import run_trading_market_data_update" in downloader_source and "run_trading_market_data_update(project_root=PROJECT_ROOT)" in downloader_source)
     import importlib

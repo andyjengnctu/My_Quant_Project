@@ -21,6 +21,8 @@ from core.market_data_freshness_contract import (
 )
 from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_auto_update_lock_path
 from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError
+from services.downloader.finmind_shared_client import SharedFinMindRequestClient
+from services.downloader.trading_price_refresh import probe_latest_adjusted_price_market_date
 from services.downloader.market_data_ledger import WORKLOAD_BLOCKED, WORKLOAD_WAIT_QUOTA
 from services.downloader.market_data_trading_sync import sync_market_data_v2_due_datasets
 from services.trading.market_data_dataset_state import (
@@ -31,6 +33,14 @@ from services.trading.market_data_dataset_state import (
 )
 from services.trading.market_data_state import load_trading_market_data_snapshot
 from services.trading.market_data_v2_state import publish_trading_market_data_v2_auto_rollup
+from services.trading.market_data_market_date_discovery import (
+    DISCOVERY_RESULT_ERROR,
+    DISCOVERY_RESULT_NEW_DATE,
+    DISCOVERY_RESULT_NO_NEW_DATE,
+    DISCOVERY_RESULT_WAIT_QUOTA,
+    plan_market_date_discovery,
+    record_market_date_probe_result,
+)
 
 AUTO_UPDATE_STATUS_NO_TARGET = "NO_TARGET"
 AUTO_UPDATE_STATUS_NO_DUE = "NO_DUE"
@@ -39,6 +49,7 @@ AUTO_UPDATE_STATUS_BUSY = "BUSY"
 AUTO_UPDATE_STATUS_UPDATED = "UPDATED"
 AUTO_UPDATE_STATUS_DEFERRED = "DEFERRED"
 AUTO_UPDATE_STATUS_BLOCKED = "BLOCKED"
+AUTO_UPDATE_STATUS_EXECUTION_UPDATED = "EXECUTION_UPDATED"
 
 
 def _local_now(now_fn: Callable[[], datetime] | None) -> datetime:
@@ -60,6 +71,106 @@ def _resolve_target_date(project_root: Path, explicit: str | None) -> str | None
 def _next_check_at(plan) -> str | None:
     values = [str(item.next_check_at) for item in plan.decisions if item.next_check_at]
     return min(values) if values else None
+
+
+def _prepare_provider_client(*, root: Path, token: str | None, client):
+    if isinstance(client, SharedFinMindRequestClient):
+        return token, client
+    if client is not None:
+        return token, SharedFinMindRequestClient(client)
+    if token is None:
+        from services.downloader import runtime as downloader_runtime
+
+        token = downloader_runtime.resolve_finmind_api_token(project_root=root)
+    return token, SharedFinMindRequestClient(FinMindHttpClient(token=str(token or "")))
+
+
+def _client_counts(client) -> tuple[int, int]:
+    return (
+        int(getattr(client, "data_request_count", 0)) if client is not None else 0,
+        int(getattr(client, "usage_request_count", 0)) if client is not None else 0,
+    )
+
+
+def _discover_new_market_date_if_due(
+    *,
+    root: Path,
+    current_target: str,
+    now: datetime,
+    policy,
+    token: str | None,
+    client,
+):
+    discovery = plan_market_date_discovery(
+        root,
+        current_market_date=current_target,
+        now=now,
+        policy=policy,
+    )
+    if not discovery["due"]:
+        return current_target, token, client, False, discovery["next_probe_at"], None
+
+    token, client = _prepare_provider_client(root=root, token=token, client=client)
+    try:
+        probe = probe_latest_adjusted_price_market_date(client=client, now=now)
+    except FinMindHttpError as exc:
+        result = DISCOVERY_RESULT_WAIT_QUOTA if exc.quota_exhausted else DISCOVERY_RESULT_ERROR
+        state = record_market_date_probe_result(
+            root,
+            current_market_date=current_target,
+            observed_market_date=None,
+            now=now,
+            policy=policy,
+            result=result,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return current_target, token, client, False, state["next_probe_at"], f"{type(exc).__name__}: {exc}"
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        state = record_market_date_probe_result(
+            root,
+            current_market_date=current_target,
+            observed_market_date=None,
+            now=now,
+            policy=policy,
+            result=DISCOVERY_RESULT_ERROR,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return current_target, token, client, False, state["next_probe_at"], f"{type(exc).__name__}: {exc}"
+
+    observed = str(probe.market_date)
+    if observed <= str(current_target):
+        state = record_market_date_probe_result(
+            root,
+            current_market_date=current_target,
+            observed_market_date=observed,
+            now=now,
+            policy=policy,
+            result=DISCOVERY_RESULT_NO_NEW_DATE,
+        )
+        return current_target, token, client, False, state["next_probe_at"], None
+
+    from services.trading.market_data_update import run_trading_market_data_update
+
+    execution = run_trading_market_data_update(
+        project_root=root,
+        provider_client=client,
+        sync_v2_archive=False,
+    )
+    updated_target = str(execution.get("market_date") or "")
+    if updated_target != observed:
+        raise RuntimeError(
+            "market-date discovery 與 canonical execution update target 不一致: "
+            f"probe={observed}, update={updated_target}"
+        )
+    state = record_market_date_probe_result(
+        root,
+        current_market_date=updated_target,
+        observed_market_date=observed,
+        now=now,
+        policy=policy,
+        result=DISCOVERY_RESULT_NEW_DATE,
+    )
+    return updated_target, token, client, True, state["next_probe_at"], None
 
 
 @contextmanager
@@ -133,18 +244,59 @@ def run_trading_market_data_auto_update(
         if not acquired:
             return {"status": AUTO_UPDATE_STATUS_BUSY, "target_date": resolved_target, "provider_requests_required": False, "data_requests": 0, "usage_requests": 0}
 
+        discovery_next_check = None
+        execution_updated = False
+        discovery_error = None
+        data_before, usage_before = _client_counts(client)
+        if target_date is None:
+            (
+                resolved_target,
+                token,
+                client,
+                execution_updated,
+                discovery_next_check,
+                discovery_error,
+            ) = _discover_new_market_date_if_due(
+                root=root,
+                current_target=resolved_target,
+                now=now,
+                policy=policy,
+                token=token,
+                client=client,
+            )
+            if discovery_error is not None:
+                data_after, usage_after = _client_counts(client)
+                return {
+                    "status": AUTO_UPDATE_STATUS_DEFERRED,
+                    "target_date": resolved_target,
+                    "provider_requests_required": True,
+                    "due_dataset_count": 0,
+                    "due_datasets": (),
+                    "data_requests": data_after - data_before,
+                    "usage_requests": usage_after - usage_before,
+                    "market_date_discovery_error": discovery_error,
+                    "market_date_discovery_next_check_at": discovery_next_check,
+                    "next_check_at": discovery_next_check,
+                }
+
         plan, _state = refresh_market_data_due_state(root, target_date=resolved_target, now=now)
         due = tuple(plan.due_datasets)
         if not due:
+            data_after, usage_after = _client_counts(client)
+            local_next = _next_check_at(plan)
+            candidates = [value for value in (local_next, discovery_next_check) if value]
+            next_check = min(candidates) if candidates else None
             return {
-                "status": AUTO_UPDATE_STATUS_NO_DUE,
+                "status": AUTO_UPDATE_STATUS_EXECUTION_UPDATED if execution_updated else AUTO_UPDATE_STATUS_NO_DUE,
                 "target_date": resolved_target,
-                "provider_requests_required": False,
+                "provider_requests_required": bool(data_after > data_before or usage_after > usage_before),
                 "due_dataset_count": 0,
                 "due_datasets": (),
-                "data_requests": 0,
-                "usage_requests": 0,
-                "next_check_at": _next_check_at(plan),
+                "data_requests": data_after - data_before,
+                "usage_requests": usage_after - usage_before,
+                "market_date_discovery_next_check_at": discovery_next_check,
+                "execution_data_updated": execution_updated,
+                "next_check_at": next_check,
             }
 
         if client is None:
@@ -154,6 +306,7 @@ def run_trading_market_data_auto_update(
                 token = downloader_runtime.resolve_finmind_api_token(project_root=root)
             client = FinMindHttpClient(token=str(token or ""))
 
+        batch_data_before, batch_usage_before = _client_counts(client)
         try:
             batch = sync_market_data_v2_due_datasets(
                 project_root=root,
@@ -185,8 +338,8 @@ def run_trading_market_data_auto_update(
                 "provider_requests_required": True,
                 "due_dataset_count": len(due),
                 "due_datasets": due,
-                "data_requests": int(getattr(client, "data_request_count", 0)),
-                "usage_requests": int(getattr(client, "usage_request_count", 0)),
+                "data_requests": _client_counts(client)[0] - data_before,
+                "usage_requests": _client_counts(client)[1] - usage_before,
                 "error": f"{type(exc).__name__}: {exc}",
                 "next_check_at": _next_check_at(post),
             }
@@ -273,9 +426,16 @@ def run_trading_market_data_auto_update(
             "dataset_count": len(final_rows),
             "request_count": int(batch.get("request_count") or 0),
             "done": int(batch.get("done") or 0),
-            "data_requests": int(batch.get("process_data_requests") or 0),
-            "usage_requests": int(batch.get("process_usage_requests") or 0),
-            "next_check_at": _next_check_at(post_plan),
+            "data_requests": _client_counts(client)[0] - data_before,
+            "usage_requests": _client_counts(client)[1] - usage_before,
+            "batch_data_requests": _client_counts(client)[0] - batch_data_before,
+            "batch_usage_requests": _client_counts(client)[1] - batch_usage_before,
+            "market_date_discovery_next_check_at": discovery_next_check,
+            "execution_data_updated": execution_updated,
+            "next_check_at": min(
+                [value for value in (_next_check_at(post_plan), discovery_next_check) if value],
+                default=None,
+            ),
             "archive_status": None if rollup is None else rollup.get("status"),
             "batch_fingerprint": batch.get("batch_fingerprint"),
         }
@@ -289,5 +449,6 @@ __all__ = [
     "AUTO_UPDATE_STATUS_UPDATED",
     "AUTO_UPDATE_STATUS_DEFERRED",
     "AUTO_UPDATE_STATUS_BLOCKED",
+    "AUTO_UPDATE_STATUS_EXECUTION_UPDATED",
     "run_trading_market_data_auto_update",
 ]

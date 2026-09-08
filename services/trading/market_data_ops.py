@@ -16,6 +16,10 @@ from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
 from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
 from services.trading.market_data_state import load_trading_market_data_snapshot
 from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
+from services.trading.market_data_market_date_discovery import (
+    default_next_market_date_probe_at,
+    load_market_date_discovery_state,
+)
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -106,7 +110,23 @@ def build_market_data_ops_read_model(
         and target_date is not None
     )
     due_count = sum(bool(row.get("due")) for row in rows)
-    next_check_at = _earliest_iso(row.get("next_check_at") for row in rows)
+    dataset_next_check_at = _earliest_iso(row.get("next_check_at") for row in rows)
+    discovery_state = load_market_date_discovery_state(root, required=False)
+    discovery_next_check_at = None
+    discovery_last_result = None
+    discovery_last_probe_at = None
+    if target_date:
+        if discovery_state is not None and str(discovery_state.get("current_market_date") or "") == target_date:
+            discovery_next_check_at = discovery_state.get("next_probe_at")
+            discovery_last_result = discovery_state.get("last_probe_result")
+            discovery_last_probe_at = discovery_state.get("last_probe_at")
+        else:
+            discovery_next_check_at = default_next_market_date_probe_at(
+                now=local_now,
+                current_market_date=target_date,
+                policy=auto_policy,
+            ).isoformat()
+    next_check_at = _earliest_iso((dataset_next_check_at, discovery_next_check_at))
     recent_activity = sorted(
         (
             {
@@ -148,6 +168,10 @@ def build_market_data_ops_read_model(
         "due_count": due_count,
         "status_counts": status_counts,
         "next_check_at": next_check_at,
+        "dataset_next_check_at": dataset_next_check_at,
+        "market_date_discovery_next_check_at": discovery_next_check_at,
+        "market_date_discovery_last_probe_at": discovery_last_probe_at,
+        "market_date_discovery_last_result": discovery_last_result,
         "auto_worker_enabled": bool(auto_policy.enabled),
         "scheduler_wake_minutes": int(auto_policy.scheduler_wake_minutes),
         "scheduler_registration_status": "EXTERNAL_NOT_MANAGED",

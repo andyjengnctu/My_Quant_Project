@@ -113,6 +113,8 @@ def sync_market_data_v2_trading_archive(
     if callable(readiness):
         readiness()
     http = client or FinMindHttpClient(token=token)
+    data_request_count_before = int(getattr(http, "data_request_count", 0))
+    usage_request_count_before = int(getattr(http, "usage_request_count", 0))
     executor = MarketDataBootstrapExecutor(
         ledger=ledger,
         client=http,
@@ -213,8 +215,8 @@ def sync_market_data_v2_trading_archive(
         "done": summary.done,
         "row_count": row_count,
         "http_attempts": summary.http_attempts,
-        "process_data_requests": int(http.data_request_count),
-        "process_usage_requests": int(http.usage_request_count),
+        "process_data_requests": int(getattr(http, "data_request_count", 0)) - data_request_count_before,
+        "process_usage_requests": int(getattr(http, "usage_request_count", 0)) - usage_request_count_before,
         "quota_user_count": quota_snapshot.get("quota_user_count"),
         "quota_limit": quota_snapshot.get("quota_limit"),
         "quota_remaining": quota_snapshot.get("quota_remaining"),
@@ -312,6 +314,8 @@ def sync_market_data_v2_due_datasets(
     if callable(readiness):
         readiness()
     http = client or FinMindHttpClient(token=token)
+    data_request_count_before = int(getattr(http, "data_request_count", 0))
+    usage_request_count_before = int(getattr(http, "usage_request_count", 0))
     executor = MarketDataBootstrapExecutor(
         ledger=ledger,
         client=http,
@@ -359,8 +363,8 @@ def sync_market_data_v2_due_datasets(
         "row_count": sum(int(item.row_count) for item in committed),
         "completed_datasets": completed,
         "incomplete_datasets": incomplete,
-        "process_data_requests": int(http.data_request_count),
-        "process_usage_requests": int(http.usage_request_count),
+        "process_data_requests": int(getattr(http, "data_request_count", 0)) - data_request_count_before,
+        "process_usage_requests": int(getattr(http, "usage_request_count", 0)) - usage_request_count_before,
         "quota_user_count": quota_snapshot.get("quota_user_count"),
         "quota_limit": quota_snapshot.get("quota_limit"),
         "quota_remaining": quota_snapshot.get("quota_remaining"),

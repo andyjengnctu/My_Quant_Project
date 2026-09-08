@@ -93,6 +93,13 @@ MARKET_DATA_V2_AUTO_UPDATE_POLICY = {
     "quota_defer_minutes": 15,
     "error_defer_minutes": 60,
     "worker_lock_minutes": 30,
+    # Latest completed Trading day discovery is deliberately sparse.  The
+    # scheduler may wake every 15 minutes, but this probe is only due after
+    # the provider-documented Price publication window.  Weekends are skipped
+    # locally; exchange holidays cost at most the bounded retry probes below.
+    "market_date_discovery_first_check_time": "17:45",
+    "market_date_discovery_retry_minutes": (15, 30, 60),
+    "market_date_discovery_max_retries": 3,
 }
 
 # Dataset publication/freshness scheduling is Trading-operations metadata only.

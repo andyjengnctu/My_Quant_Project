@@ -7,23 +7,90 @@ from core.trading_identity import normalize_trading_ticker
 from services.downloader import runtime as rt
 from services.downloader.sync import smart_download_vip_data
 from services.downloader.universe import get_market_last_date, get_or_update_universe
+from services.downloader.finmind_http import FinMindHttpError
+from services.downloader.trading_price_refresh import (
+    TradingBulkPriceUnsupported,
+    probe_latest_adjusted_price_market_date,
+    refresh_trading_adjusted_price_dataset,
+)
 
 
-def run_trading_dataset_update(*, required_tickers=None) -> dict[str, object]:
-    """Update the Trading dataset and return a structured summary.
+def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -> dict[str, object]:
+    """Update the execution-critical Trading dataset and return a structured summary.
 
-    The underlying downloader/universe implementation remains the canonical producer;
-    this service only turns the existing CLI workflow into a reusable Workbench seam.
+    With ``provider_client`` the canonical path deduplicates FinMind requests and
+    refreshes current-vintage adjusted history through the lowest-request exact
+    strategy.  The legacy no-client seam is retained for isolated compatibility
+    tests and emergency fallback only.
     """
     print(f"🤖 Trading 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
-    market_date = assert_completed_daily_information_date(get_market_last_date(), now=rt.get_taipei_now())
-    universe_tickers = [normalize_trading_ticker(item) for item in get_or_update_universe(market_date=market_date)]
+    probe = None
+    if provider_client is None:
+        market_date = assert_completed_daily_information_date(get_market_last_date(), now=rt.get_taipei_now())
+    else:
+        try:
+            probe = probe_latest_adjusted_price_market_date(client=provider_client, now=rt.get_taipei_now())
+        except TradingBulkPriceUnsupported as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            rt.append_downloader_issues("Canonical PriceAdj bulk probe fallback", [reason])
+            probe = None
+        except FinMindHttpError as exc:
+            if exc.quota_exhausted:
+                raise
+            reason = f"{type(exc).__name__}: {exc}"
+            rt.append_downloader_issues("Canonical PriceAdj bulk probe fallback", [reason])
+            probe = None
+        if probe is None:
+            market_date = assert_completed_daily_information_date(
+                get_market_last_date(client=provider_client), now=rt.get_taipei_now()
+            )
+        else:
+            market_date = assert_completed_daily_information_date(probe.market_date, now=rt.get_taipei_now())
+            print(f"📅 台股最新完整交易日 (FinMind PriceAdj bulk) 為: {market_date}")
+
+    universe_tickers = [
+        normalize_trading_ticker(item)
+        for item in get_or_update_universe(market_date=market_date, client=provider_client)
+    ]
     required = sorted({normalize_trading_ticker(item) for item in list(required_tickers or [])})
     target_tickers = list(dict.fromkeys([*universe_tickers, *required]))
     if not target_tickers:
         raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
 
-    summary = dict(smart_download_vip_data(target_tickers, market_date))
+    if provider_client is None:
+        summary = dict(smart_download_vip_data(target_tickers, market_date))
+    else:
+        try:
+            if probe is None:
+                raise TradingBulkPriceUnsupported("full-market range probe unavailable")
+            summary = dict(
+                refresh_trading_adjusted_price_dataset(
+                    target_tickers,
+                    market_date,
+                    client=provider_client,
+                    probe=probe,
+                    universe_tickers=universe_tickers,
+                )
+            )
+        except TradingBulkPriceUnsupported as exc:
+            # Capability fallback preserves the legacy exact current-vintage
+            # semantics; do not silently publish partial bulk history.
+            reason = f"{type(exc).__name__}: {exc}"
+            rt.append_downloader_issues("Canonical PriceAdj bulk fallback", [reason])
+            summary = dict(
+                smart_download_vip_data(
+                    target_tickers,
+                    market_date,
+                    client=provider_client,
+                )
+            )
+            summary.update(
+                {
+                    "price_fetch_strategy": "per_ticker_fallback_after_bulk_capability_check",
+                    "bulk_fallback_reason": reason,
+                }
+            )
+
     if (
         int(summary.get("count_success") or 0) == 0
         and int(summary.get("count_skipped_latest") or 0) == 0

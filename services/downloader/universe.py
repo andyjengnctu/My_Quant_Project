@@ -13,12 +13,15 @@ from core.trading_market_clock import (
 from services.downloader import runtime as rt
 
 
-def get_market_last_date():
+def get_market_last_date(*, client=None):
     print("🕵️‍♂️ 正在確認最新交易日...")
     try:
         search_start = (rt.get_taipei_now() - timedelta(days=15)).strftime("%Y-%m-%d")
-        loader = rt.get_finmind_loader()
-        df = loader.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start)
+        if client is None:
+            loader = rt.get_finmind_loader()
+            df = loader.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start)
+        else:
+            df = client.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start)
         if df is not None and not df.empty:
             df.columns = [c.lower() for c in df.columns]
             actual_date = select_latest_completed_daily_date(df['date'].tolist(), now=rt.get_taipei_now())
@@ -151,20 +154,32 @@ def _normalize_finmind_bulk_screening_frame(
     return normalized[["stock_id", value_column]].copy()
 
 
-def _load_finmind_bulk_screening_data(*, market_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple[pd.DataFrame, pd.DataFrame]:
     target_date = str(pd.Timestamp(market_date).date())
     try:
-        loader = rt.get_finmind_loader()
-        price_raw = loader.get_data(
-            dataset=rt.FINMIND_UNIVERSE_VOLUME_DATASET,
-            start_date=target_date,
-            timeout=rt.REQUEST_TIMEOUT_SEC,
-        )
-        market_value_raw = loader.get_data(
-            dataset=rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET,
-            start_date=target_date,
-            timeout=rt.REQUEST_TIMEOUT_SEC,
-        )
+        if client is None:
+            loader = rt.get_finmind_loader()
+            price_raw = loader.get_data(
+                dataset=rt.FINMIND_UNIVERSE_VOLUME_DATASET,
+                start_date=target_date,
+                timeout=rt.REQUEST_TIMEOUT_SEC,
+            )
+            market_value_raw = loader.get_data(
+                dataset=rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET,
+                start_date=target_date,
+                timeout=rt.REQUEST_TIMEOUT_SEC,
+            )
+        else:
+            price_raw = client.get_data(
+                dataset=rt.FINMIND_UNIVERSE_VOLUME_DATASET,
+                start_date=target_date,
+                end_date=target_date,
+            )
+            market_value_raw = client.get_data(
+                dataset=rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET,
+                start_date=target_date,
+                end_date=target_date,
+            )
         price = _normalize_finmind_bulk_screening_frame(
             price_raw,
             dataset=rt.FINMIND_UNIVERSE_VOLUME_DATASET,
@@ -254,7 +269,7 @@ def _screen_finmind_bulk_universe(
     return qualified, stats
 
 
-def get_or_update_universe(*, market_date: str):
+def get_or_update_universe(*, market_date: str, client=None):
     rt.ensure_runtime_dirs()
     market_date_text = str(pd.Timestamp(market_date).date())
     list_file = rt.get_universe_list_file_path()
@@ -317,7 +332,7 @@ def get_or_update_universe(*, market_date: str):
         f"⏳ FinMind Backer bulk 快篩 {total_check} 檔純股與 ETF："
         f"全市場成交量 + 全市場市值，共 2 個 dataset requests..."
     )
-    price, market_value = _load_finmind_bulk_screening_data(market_date=market_date_text)
+    price, market_value = _load_finmind_bulk_screening_data(market_date=market_date_text, client=client)
     try:
         qualified_tickers, stats = _screen_finmind_bulk_universe(
             tickers_info, price=price, market_value=market_value

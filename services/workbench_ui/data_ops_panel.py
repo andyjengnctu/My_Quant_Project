@@ -217,11 +217,27 @@ class MarketDataOpsPanel(ttk.Frame):
                 schedule, row.get("schema_status") or "-", row.get("coverage_status") or "-", _retry_text(row),
             ))
 
+        discovery_next = snapshot.get("market_date_discovery_next_check_at")
+        if discovery_next:
+            self._schedule_tree.insert("", "end", values=(
+                _fmt_datetime(discovery_next),
+                "Trading Market Date Discovery",
+                "PROBE",
+                _fmt_datetime(discovery_next),
+                "TaiwanStockPriceAdj canonical completed-day probe",
+            ))
         schedule_rows = sorted(datasets, key=lambda row: (str(row.get("next_check_at") or "9999"), str(row.get("dataset") or "")))
         for row in schedule_rows:
             self._schedule_tree.insert("", "end", values=(
                 _fmt_datetime(row.get("next_check_at")), row.get("dataset"), row.get("projected_status") or row.get("status"),
                 _fmt_datetime(row.get("expected_publish_at")), row.get("publication_schedule_source") or "-",
+            ))
+        if snapshot.get("market_date_discovery_last_probe_at"):
+            self._activity_tree.insert("", "end", values=(
+                _fmt_datetime(snapshot.get("market_date_discovery_last_probe_at")),
+                "Trading Market Date Discovery",
+                snapshot.get("market_date_discovery_last_result") or "-",
+                "",
             ))
         for row in snapshot.get("recent_activity") or []:
             self._activity_tree.insert("", "end", values=(

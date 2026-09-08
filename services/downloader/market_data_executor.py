@@ -373,7 +373,19 @@ class MarketDataBootstrapExecutor:
                         )
                         continue
 
-                self._record_data_attempt(workload_id, job.request_id)
+                will_issue = True
+                cache_probe = getattr(self.client, "will_issue_data_request", None)
+                if callable(cache_probe):
+                    will_issue = bool(
+                        cache_probe(
+                            dataset=request.dataset,
+                            data_id=request.data_id,
+                            start_date=request.start_date,
+                            end_date=request.end_date,
+                        )
+                    )
+                if will_issue:
+                    self._record_data_attempt(workload_id, job.request_id)
                 try:
                     frame = self._fetch(request)
                 except FinMindHttpError as exc:

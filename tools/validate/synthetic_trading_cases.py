@@ -2966,8 +2966,9 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         publish_trading_strategy_param_binding(root)
         account = adopt_existing_trading_position(root, ticker="9999", qty=100, cost_basis_total=10_000, entry_date="2026-01-01", expected_revision=account["revision"])
         captured = {}
-        def _capture_update(*, required_tickers=None):
+        def _capture_update(*, required_tickers=None, provider_client=None):
             captured["required"] = list(required_tickers or [])
+            captured["provider_client_supplied"] = provider_client is not None
             return {"runtime_domain": "trading", "market_date": "2026-09-04", "status": "READY"}
         with patch("services.downloader.runtime.SAVE_DIR", str(data_dir)), \
              patch.object(market_data_update, "run_trading_dataset_update", side_effect=_capture_update), \

@@ -12,13 +12,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run one scheduler-safe Trading Market Data V2 automatic update iteration."
+        description="Run one scheduler-safe Trading market-data automatic update iteration, including sparse new-market-date discovery."
     )
     parser.add_argument("--project-root", default=str(PROJECT_ROOT))
     parser.add_argument(
         "--target-date",
         default=None,
-        help="Optional YYYY-MM-DD override. Default uses the current canonical Trading market-data snapshot date.",
+        help="Optional YYYY-MM-DD override for deterministic recovery/testing. Default can sparsely discover a newer completed Trading day, then runs the canonical due planner.",
     )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON result.")
     args = parser.parse_args(None if argv is None else list(argv)[1:])

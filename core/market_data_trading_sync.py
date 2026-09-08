@@ -208,15 +208,21 @@ def build_trading_sync_request_manifest(
                 else:
                     requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_INCREMENTAL, incremental_start.isoformat(), target_text))
         elif spec.daily_mode == DAILY_RECENT_REPAIR:
+            # A repair window is the minimum re-query horizon, not a license to
+            # skip dates when this dataset has been offline longer than the
+            # configured window.  Extend back to the first not-yet-ready date
+            # so the Trading overlay stays contiguous after long downtime.
+            repair_start = min(recent_start, incremental_start)
             if spec.full_market_exact_date_expected:
-                requests.extend(_exact_date_requests(spec, TRADING_SYNC_QUERY_RECENT, _calendar_dates(recent_start, target)))
+                requests.extend(_exact_date_requests(spec, TRADING_SYNC_QUERY_RECENT, _calendar_dates(repair_start, target)))
             else:
-                requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_RECENT, recent_start.isoformat(), target_text))
+                requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_RECENT, repair_start.isoformat(), target_text))
         elif spec.daily_mode == DAILY_EVENT_REPAIR:
+            repair_start = min(event_start, incremental_start)
             if spec.full_market_exact_date_expected:
-                requests.extend(_exact_date_requests(spec, TRADING_SYNC_QUERY_EVENT, _calendar_dates(event_start, target)))
+                requests.extend(_exact_date_requests(spec, TRADING_SYNC_QUERY_EVENT, _calendar_dates(repair_start, target)))
             else:
-                requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_EVENT, event_start.isoformat(), target_text))
+                requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_EVENT, repair_start.isoformat(), target_text))
         elif spec.daily_mode == DAILY_PERIODIC_REPAIR:
             requests.extend(_periodic_requests(spec, target=target))
         else:

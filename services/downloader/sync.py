@@ -5,7 +5,7 @@ from core.file_integrity import atomic_write_text
 from services.downloader import runtime as rt
 
 
-def smart_download_vip_data(tickers, market_last_date, verbose=True):
+def smart_download_vip_data(tickers, market_last_date, verbose=True, client=None):
     rt.ensure_runtime_dirs()
     total = len(tickers)
 
@@ -50,8 +50,11 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
             flush=True
         )
         try:
-            loader = rt.get_finmind_loader()
-            df = loader.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id=sid, start_date="1990-01-01")
+            if client is None:
+                loader = rt.get_finmind_loader()
+                df = loader.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id=sid, start_date=rt.PRICE_HISTORY_START_DATE)
+            else:
+                df = client.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id=sid, start_date=rt.PRICE_HISTORY_START_DATE)
             if df is None or df.empty:
                 raise ValueError("FinMind 回傳空資料")
 
