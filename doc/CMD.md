@@ -510,3 +510,10 @@ python apps/research.py market-data verify
 - Candidate schema v9 新增 `required_source_projection_fingerprint` 與 `adjusted_price_revision_proof_fingerprint/status`。Foundation scientific identity 只涵蓋 fixed cutoff 前真正被 required scope 消費的 calendar、daily universe、market-state guard、raw volume、PriceLimit presence、PriceAdj OHLC 與 delisting evidence；完整 51-dataset Provider Snapshot fingerprint / manifest / as-of 僅保留 provenance，不再決定 candidate/freeze/materialization/promotion scientific fingerprint。
 - Historical Provider Snapshot 以自身 persisted identity/fingerprint + ledger/archive integrity 驗證；current optional registry 日後改版不得讓舊 immutable snapshot 單純因 registry fingerprint 不同而失去可讀性。Candidate 的 archive-wide assessments/PIT/scope matrix同樣只作 supplemental diagnostics並以自身 hash 驗證，current scientific compatibility只比對 required-scope contract。
 - Active Research V2 `iter_dataset_scope_frames()` 在 canonical read seam 內強制 `date <= frozen_cutoff`；即使 consumer 沒有要求輸出 `date` 欄，也必須內部取 date 做 cutoff filter 後再移除，不得把 post-cutoff Provider Snapshot rows交給 Research consumer。
+
+### Market Data Rounds 1–16 Audit Repair 3（2026-09-09）
+
+- Trading downloader write guard永久保護legacy `data/tw_stock_data_vip/`、reduced fixture與整個`data/research/market_data_v2/`；promotion只改Research read routing，不得使任何舊Research generation重新可寫。
+- Freeze candidate自schema v3起為self-contained immutable evidence：source candidate manifest與daily-universe SQLite會複製到`freeze_candidates/<freeze_fingerprint>/`並以persisted SHA驗證；後續materialize/promote/active read不再讀mutable candidate slot。
+- Promotion directory採stage→atomic directory publish→active pointer順序。若published promotion存在但pointer缺失，`status`/normal Research routing會fail-fast，不再靜默回`research_v1`；再次對**同一freeze fingerprint**執行明確`promote`可在deep validation後恢復pointer。hidden stage-only crash residue不視為promotion truth。
+- Active full Research routing本身會驗compatibility CSV的exact file set與逐檔content SHA；`verify`仍可做同一canonical deep integrity檢查，但不再是唯一能發現materialization tamper的入口。

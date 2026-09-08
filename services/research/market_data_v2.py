@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import tempfile
 from typing import Callable, Iterator
@@ -64,7 +65,10 @@ from core.market_data_research_storage_contract import (
     resolve_research_v2_candidate_dir,
     resolve_research_v2_candidate_manifest_path,
     resolve_research_v2_daily_universe_path,
+    resolve_research_v2_freeze_candidate_dir,
     resolve_research_v2_freeze_candidate_manifest_path,
+    resolve_research_v2_frozen_daily_universe_path,
+    resolve_research_v2_frozen_source_candidate_manifest_path,
 )
 from core.market_data_research_pit_contract import (
     AUDIT_MODE_EXACT_CANDIDATE,
@@ -1273,7 +1277,13 @@ def build_research_v2_freeze_candidate(
     hash_fn: HashFn | None = None,
     now: datetime | None = None,
 ) -> dict[str, object]:
-    """Build or REUSE one immutable, promotion-not-authorized freeze candidate."""
+    """Build or REUSE one self-contained immutable freeze candidate.
+
+    Freeze publication snapshots the source candidate manifest plus its derived
+    daily-universe SQLite into the fingerprint-addressed freeze namespace.
+    Later freeze/materialization/promotion validation therefore never depends on
+    the mutable per-snapshot candidate slot remaining unchanged.
+    """
     root = Path(project_root).resolve()
     candidate = load_research_v2_candidate(
         root,
@@ -1295,6 +1305,18 @@ def build_research_v2_freeze_candidate(
         codes = [str(row.get("code") or "") for row in blockers if isinstance(row, dict)]
         raise RuntimeError(f"Research V2 freeze candidate 尚未 READY: blockers={codes}")
 
+    snapshot_fp = str(candidate["provider_snapshot_fingerprint"])
+    candidate_manifest_path = resolve_research_v2_candidate_manifest_path(root, snapshot_fp)
+    if not candidate_manifest_path.is_file():
+        raise FileNotFoundError("Research V2 source candidate manifest 不存在")
+    candidate_manifest_sha = compute_file_sha256(candidate_manifest_path)
+    candidate_universe_path = resolve_research_v2_daily_universe_path(root, snapshot_fp)
+    if not candidate_universe_path.is_file():
+        raise FileNotFoundError("Research V2 source candidate daily universe 不存在")
+    candidate_universe_sha = compute_file_sha256(candidate_universe_path)
+    if candidate_universe_sha != str(candidate["daily_universe_file_sha256"]):
+        raise ValueError("Research V2 source candidate daily universe physical hash drift")
+
     required_common_payload = candidate.get("required_common_complete")
     if not isinstance(required_common_payload, dict):
         raise ValueError("Research V2 candidate required_common_complete 缺失")
@@ -1308,7 +1330,7 @@ def build_research_v2_freeze_candidate(
         required_cutoff=str(candidate["required_cutoff"]),
         candidate_fingerprint=str(candidate["candidate_fingerprint"]),
         required_source_projection_fingerprint=str(candidate["required_source_projection_fingerprint"]),
-        daily_universe_file_sha256=str(candidate["daily_universe_file_sha256"]),
+        daily_universe_file_sha256=candidate_universe_sha,
         research_scope_contract_fingerprint=str(candidate["research_scope_contract_fingerprint"]),
         adjusted_price_representation_contract_fingerprint=str(
             candidate["adjusted_price_representation_contract_fingerprint"]
@@ -1317,46 +1339,75 @@ def build_research_v2_freeze_candidate(
         required_common_complete_summary=required_common_summary,
     )
     freeze_fingerprint = canonical_json_sha256(identity)
+    freeze_dir = resolve_research_v2_freeze_candidate_dir(root, freeze_fingerprint)
     manifest_path = resolve_research_v2_freeze_candidate_manifest_path(root, freeze_fingerprint)
     built_at = (now or datetime.now().astimezone()).astimezone().isoformat()
     payload = {
         **identity,
         "freeze_candidate_fingerprint": freeze_fingerprint,
-        "provider_snapshot_fingerprint": str(candidate["provider_snapshot_fingerprint"]),
+        "candidate_manifest_sha256": candidate_manifest_sha,
+        "provider_snapshot_fingerprint": snapshot_fp,
         "provider_manifest_fingerprint": str(candidate["provider_manifest_fingerprint"]),
         "provider_as_of_date": str(candidate["provider_as_of_date"]),
         "built_at": built_at,
-        "candidate_manifest_path": project_relative_display_path(
-            resolve_research_v2_candidate_manifest_path(root, str(candidate["provider_snapshot_fingerprint"])),
+        "candidate_manifest_path": project_relative_display_path(candidate_manifest_path, project_root=root),
+        "frozen_candidate_manifest_path": project_relative_display_path(
+            resolve_research_v2_frozen_source_candidate_manifest_path(root, freeze_fingerprint),
+            project_root=root,
+        ),
+        "frozen_daily_universe_path": project_relative_display_path(
+            resolve_research_v2_frozen_daily_universe_path(root, freeze_fingerprint),
             project_root=root,
         ),
         "required_common_complete": required_common_payload,
         "provider_calls": 0,
     }
     if manifest_path.is_file():
-        existing = load_json_strict(manifest_path)
-        if not isinstance(existing, dict):
-            raise ValueError("Research V2 freeze candidate manifest 必須是 object")
-        existing_identity = {key: existing.get(key) for key in RESEARCH_V2_FREEZE_CANDIDATE_IDENTITY_FIELDS}
-        if existing_identity != identity or str(existing.get("freeze_candidate_fingerprint") or "") != freeze_fingerprint:
-            raise ValueError("Research V2 immutable freeze candidate path 發生 identity collision/drift")
-        loaded = load_research_v2_freeze_candidate(root, freeze_candidate_fingerprint=freeze_fingerprint, required=True)
+        loaded = load_research_v2_freeze_candidate(
+            root, freeze_candidate_fingerprint=freeze_fingerprint, required=True
+        )
         return {
             **loaded,
             "manifest_path": project_relative_display_path(manifest_path, project_root=root),
             "provider_calls": 0,
             "reused": True,
         }
+    if freeze_dir.exists():
+        raise ValueError("Research V2 freeze immutable path 已存在但 manifest 缺失")
 
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(manifest_path, payload)
-    loaded = load_research_v2_freeze_candidate(root, freeze_candidate_fingerprint=freeze_fingerprint, required=True)
-    return {
-        **loaded,
-        "manifest_path": project_relative_display_path(manifest_path, project_root=root),
-        "provider_calls": 0,
-        "reused": False,
-    }
+    parent = freeze_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    stage_dir = Path(tempfile.mkdtemp(prefix=f".{freeze_fingerprint}.", suffix=".tmp", dir=str(parent)))
+    try:
+        shutil.copyfile(candidate_manifest_path, stage_dir / "source_candidate_manifest.json")
+        shutil.copyfile(candidate_universe_path, stage_dir / "daily_universe.sqlite3")
+        atomic_write_json(stage_dir / manifest_path.name, payload)
+        try:
+            os.replace(stage_dir, freeze_dir)
+        except FileExistsError:
+            if stage_dir.exists():
+                shutil.rmtree(stage_dir, ignore_errors=True)
+            loaded = load_research_v2_freeze_candidate(
+                root, freeze_candidate_fingerprint=freeze_fingerprint, required=True
+            )
+            return {
+                **loaded,
+                "manifest_path": project_relative_display_path(manifest_path, project_root=root),
+                "provider_calls": 0,
+                "reused": True,
+            }
+        loaded = load_research_v2_freeze_candidate(
+            root, freeze_candidate_fingerprint=freeze_fingerprint, required=True
+        )
+        return {
+            **loaded,
+            "manifest_path": project_relative_display_path(manifest_path, project_root=root),
+            "provider_calls": 0,
+            "reused": False,
+        }
+    finally:
+        if stage_dir.exists():
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 def load_research_v2_freeze_candidate(
@@ -1388,27 +1439,44 @@ def load_research_v2_freeze_candidate(
         raise ValueError("Research V2 freeze candidate common-complete cutoff 未覆蓋 required cutoff")
     if payload.get("frozen_cutoff") != payload.get("required_cutoff"):
         raise ValueError("Research V2 freeze candidate frozen cutoff 必須等於 fixed required cutoff")
-    if set(payload.get("required_dataset_scope") or []) != set(validate_research_v2_dataset_scope_contracts()["required_dataset_scope"]):
+    if set(payload.get("required_dataset_scope") or []) != set(
+        validate_research_v2_dataset_scope_contracts()["required_dataset_scope"]
+    ):
         raise ValueError("Research V2 freeze candidate required dataset scope drift")
     if set(payload.get("common_complete_dataset_scope") or []) != set(RESEARCH_V2_COMMON_COMPLETE_DATASETS):
         raise ValueError("Research V2 freeze candidate common-complete dataset scope drift")
 
-    candidate = load_research_v2_candidate(
-        root,
-        snapshot_fingerprint=str(payload.get("provider_snapshot_fingerprint") or ""),
-        required=True,
-    )
-    if str(payload.get("candidate_fingerprint") or "") != str(candidate.get("candidate_fingerprint") or ""):
-        raise ValueError("Research V2 freeze candidate source candidate fingerprint drift")
-    if str(payload.get("required_source_projection_fingerprint") or "") != str(candidate.get("required_source_projection_fingerprint") or ""):
+    frozen_candidate_path = resolve_research_v2_frozen_source_candidate_manifest_path(root, actual_fingerprint)
+    if not frozen_candidate_path.is_file():
+        raise FileNotFoundError("Research V2 freeze source candidate snapshot 不存在")
+    if compute_file_sha256(frozen_candidate_path) != str(payload.get("candidate_manifest_sha256") or ""):
+        raise ValueError("Research V2 freeze source candidate manifest SHA256 drift")
+    candidate = load_json_strict(frozen_candidate_path)
+    if not isinstance(candidate, dict):
+        raise ValueError("Research V2 frozen source candidate manifest 必須是 object")
+    candidate_identity = {key: candidate.get(key) for key in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS}
+    if canonical_json_sha256(candidate_identity) != str(payload.get("candidate_fingerprint") or ""):
+        raise ValueError("Research V2 freeze source candidate fingerprint drift")
+    if str(payload.get("required_source_projection_fingerprint") or "") != str(
+        candidate.get("required_source_projection_fingerprint") or ""
+    ):
         raise ValueError("Research V2 freeze candidate required source projection drift")
-    if str(payload.get("adjusted_price_revision_proof_fingerprint") or "") != str(candidate.get("adjusted_price_revision_proof_fingerprint") or ""):
+    if str(payload.get("adjusted_price_revision_proof_fingerprint") or "") != str(
+        candidate.get("adjusted_price_revision_proof_fingerprint") or ""
+    ):
         raise ValueError("Research V2 freeze candidate adjusted-price revision proof drift")
     if str(candidate.get("adjusted_price_revision_proof_status") or "") != ADJUSTED_PRICE_REVISION_STATUS_READY:
         raise ValueError("Research V2 freeze candidate requires READY adjusted-price revision proof")
     if str(payload.get("daily_universe_file_sha256") or "") != str(candidate.get("daily_universe_file_sha256") or ""):
         raise ValueError("Research V2 freeze candidate daily universe artifact drift")
-    if str(payload.get("research_scope_contract_fingerprint") or "") != str(candidate.get("research_scope_contract_fingerprint") or ""):
+    frozen_universe_path = resolve_research_v2_frozen_daily_universe_path(root, actual_fingerprint)
+    if not frozen_universe_path.is_file():
+        raise FileNotFoundError("Research V2 frozen daily universe 不存在")
+    if compute_file_sha256(frozen_universe_path) != str(payload.get("daily_universe_file_sha256") or ""):
+        raise ValueError("Research V2 frozen daily universe SHA256 drift")
+    if str(payload.get("research_scope_contract_fingerprint") or "") != str(
+        candidate.get("research_scope_contract_fingerprint") or ""
+    ):
         raise ValueError("Research V2 freeze candidate scope contract drift")
     if str(payload.get("adjusted_price_representation_contract_fingerprint") or "") != str(
         candidate.get("adjusted_price_representation_contract_fingerprint") or ""
@@ -1421,7 +1489,9 @@ def load_research_v2_freeze_candidate(
     required_common = payload.get("required_common_complete")
     if not isinstance(required_common, dict):
         raise ValueError("Research V2 freeze candidate required_common_complete 必須是 object")
-    if str(required_common.get("coverage_fingerprint") or "") != str(payload.get("required_common_complete_fingerprint") or ""):
+    if str(required_common.get("coverage_fingerprint") or "") != str(
+        payload.get("required_common_complete_fingerprint") or ""
+    ):
         raise ValueError("Research V2 freeze candidate common-complete evidence drift")
     return payload
 

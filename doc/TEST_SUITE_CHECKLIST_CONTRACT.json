@@ -4331,6 +4331,17 @@
       "entry": "`core/market_data_adjusted_price_revision_proof.py`, `services/research/adjusted_price_revision_proof.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py`, `services/market_data/provider_snapshot_repository.py`, `core/market_data_research_v2.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`",
       "initial_status": "NEW",
       "order": 390
+    },
+    {
+      "id": "B403",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data Rounds 1–16 audit Repair 3 / lifecycle integrity and durable activation",
+      "item": "Research generation freeze, materialization and explicit promotion remain immutable, content-verified, crash-recoverable and permanently protected from Trading writes across active-generation changes",
+      "gap": "Independent Rounds 1–16 audit reproduced five lifecycle/integrity defects: Research V2 promotion caused the legacy V1 dataset root to leave the Trading write-protection set; deleting the active pointer silently rolled effective Research back to V1 despite a published promotion; normal active routing validated only the materialization manifest rather than CSV content bytes; freeze candidates depended on a mutable per-snapshot candidate/daily-universe physical slot; and promotion mkdir-before-manifest publication left an unrecoverable crash window. Repair must protect all legacy/V2 Research roots independent of active routing, make pointer loss fail-closed with explicit same-promotion recovery, content-verify normal active routing, snapshot candidate evidence into the freeze fingerprint namespace, and publish promotion directories through sibling staging plus atomic rename.",
+      "entry": "`core/runtime_domains.py`, `core/market_data_research_storage_contract.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py`",
+      "initial_status": "NEW",
+      "order": 391
     }
   ],
   "tests": [
@@ -7981,6 +7992,13 @@
       "b_id": "B402",
       "initial_status": "NEW",
       "order": 512
+    },
+    {
+      "id": "T523",
+      "description": "`validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case` 泛化驗證legacy/V2 Research roots永久write-protect、hidden stage不構成published truth、published promotion缺pointer必須fail-closed，以及active materialization以content SHA拒絕same-size byte tamper；T519/T520另覆蓋freeze self-contained evidence與explicit pointer recovery。",
+      "b_id": "B403",
+      "initial_status": "NEW",
+      "order": 513
     }
   ],
   "transitions": [
@@ -25855,6 +25873,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_case`"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "B403",
+      "description": "修正Rounds 1–16完整Audit確認的Research write-protection、durable active pointer、active content integrity、freeze physical immutability與promotion crash-recovery根因。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Repair Round 3 lifecycle / integrity closure"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "T523",
+      "description": "新增Rounds 1–16 Audit Repair 3泛化lifecycle/integrity contract synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case`"
     }
   ]
 }

@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from config.research import RESEARCH_MARKET_DATA_CUTOFF
 from core.dataset_profiles import (
     DATASET_PROFILE_FULL,
     DATASET_PROFILE_SPECS,
     get_dataset_dir,
+    get_unpromoted_dataset_dir,
     normalize_dataset_profile_key,
 )
 from core.output_paths import normalize_output_category
 from core.market_data_contract import get_trading_market_data_lifecycle
+from core.market_data_research_storage_contract import RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT
 from core.market_data_research_promotion import get_effective_research_data_generation
 
 RUNTIME_DOMAIN_RESEARCH = "research"
@@ -85,10 +88,19 @@ def assert_runtime_write_path_is_not_research_dataset(
 ) -> None:
     root = os.path.abspath(os.fspath(project_root))
     candidate = os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path))))
+    # Research immutability is independent of whichever generation is currently
+    # active.  Always protect every legacy Research dataset root plus the entire
+    # fingerprint-addressed Research V2 namespace; promotion must never make an
+    # older Research truth writable by the Trading downloader.
     protected = {
-        os.path.normcase(os.path.realpath(os.path.abspath(get_dataset_dir(root, profile))))
+        os.path.normcase(os.path.realpath(os.path.abspath(get_unpromoted_dataset_dir(root, profile))))
         for profile in DATASET_PROFILE_SPECS
     }
+    protected.add(
+        os.path.normcase(
+            os.path.realpath(os.path.abspath(os.fspath(Path(root) / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT)))
+        )
+    )
     for protected_root in protected:
         try:
             inside_research = os.path.commonpath([candidate, protected_root]) == protected_root

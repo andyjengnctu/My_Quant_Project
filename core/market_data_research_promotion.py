@@ -30,11 +30,13 @@ from core.market_data_adjusted_price_revision_proof import (
 from core.market_data_research_materialization import (
     RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY,
     materialization_identity_from_payload,
+    validate_research_v2_materialization_file_integrity,
 )
 from core.market_data_research_scope import research_v2_dataset_scope_contract_fingerprint
 from core.market_data_research_storage_contract import (
+    RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME,
+    RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT,
     resolve_active_research_generation_path,
-    resolve_research_v2_compatibility_dataset_dir,
     resolve_research_v2_freeze_candidate_manifest_path,
     resolve_research_v2_adjusted_price_proof_manifest_path,
     resolve_research_v2_materialization_manifest_path,
@@ -163,7 +165,30 @@ def build_research_v2_promotion_identity_payload(
     }
 
 
-def _validate_materialization_manifest_shallow(
+def discover_published_research_v2_promotion_fingerprints(project_root) -> tuple[str, ...]:
+    """Return fingerprint-addressed final promotion directories.
+
+    Hidden sibling stage directories are intentionally ignored.  Any final
+    fingerprint directory is production-state evidence; if the active pointer is
+    missing while such evidence exists, consumers must fail closed rather than
+    silently reinterpret the project as never promoted.
+    """
+
+    root = Path(project_root).resolve()
+    base = root / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT / RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME
+    if not base.is_dir():
+        return ()
+    rows: list[str] = []
+    for child in base.iterdir():
+        if not child.is_dir():
+            continue
+        name = child.name.strip().lower()
+        if len(name) == 64 and all(ch in "0123456789abcdef" for ch in name):
+            rows.append(name)
+    return tuple(sorted(set(rows)))
+
+
+def _validate_materialization_manifest_active(
     project_root: Path,
     *,
     materialization_fingerprint: str,
@@ -185,36 +210,30 @@ def _validate_materialization_manifest_shallow(
         raise ValueError("Research V2 materialization 尚未 READY")
     if str(payload.get("dataset_inventory_sha256") or "") != expected_inventory_sha256:
         raise ValueError("Research V2 materialization inventory identity drift")
-    dataset_dir = resolve_research_v2_compatibility_dataset_dir(project_root, materialization_fingerprint)
-    if not dataset_dir.is_dir():
-        raise FileNotFoundError("active Research V2 compatibility dataset directory 不存在")
-    return dataset_dir
+    return validate_research_v2_materialization_file_integrity(
+        project_root,
+        materialization_fingerprint=materialization_fingerprint,
+        payload=payload,
+    )
 
 
-def load_active_research_v2_promotion(
+def load_research_v2_promotion_artifact(
     project_root,
     *,
-    required: bool = False,
-) -> ActiveResearchV2Promotion | None:
+    promotion_fingerprint: str,
+    expected_manifest_sha256: str | None = None,
+) -> ActiveResearchV2Promotion:
+    """Validate one immutable published promotion independent of active pointer."""
+
     root = Path(project_root).resolve()
-    pointer_path = resolve_active_research_generation_path(root)
-    if not pointer_path.is_file():
-        if required:
-            raise FileNotFoundError("active Research generation pointer 尚未建立")
-        return None
-    pointer = load_json_strict(pointer_path)
-    if not isinstance(pointer, dict):
-        raise ValueError("active Research generation pointer 必須是 object")
-    if int(pointer.get("schema_version") or 0) != RESEARCH_ACTIVE_POINTER_SCHEMA_VERSION:
-        raise ValueError("active Research generation pointer schema 不相容")
-    if str(pointer.get("generation_id") or "") != RESEARCH_DATA_GENERATION_V2:
-        raise ValueError("active Research generation pointer generation_id 不合法")
-    promotion_fp = _require_hex64(pointer.get("promotion_fingerprint"), field="promotion_fingerprint")
-    manifest_sha = _require_hex64(pointer.get("promotion_manifest_sha256"), field="promotion_manifest_sha256")
+    promotion_fp = _require_hex64(promotion_fingerprint, field="promotion_fingerprint")
     manifest_path = resolve_research_v2_promotion_manifest_path(root, promotion_fp)
     if not manifest_path.is_file():
-        raise FileNotFoundError("active Research V2 promotion manifest 不存在")
-    if compute_file_sha256(manifest_path) != manifest_sha:
+        raise FileNotFoundError("Research V2 promotion manifest 不存在")
+    manifest_sha = compute_file_sha256(manifest_path)
+    if expected_manifest_sha256 is not None and manifest_sha != _require_hex64(
+        expected_manifest_sha256, field="promotion_manifest_sha256"
+    ):
         raise ValueError("active Research V2 promotion manifest SHA256 drift")
     payload = load_json_strict(manifest_path)
     if not isinstance(payload, dict):
@@ -236,6 +255,7 @@ def load_active_research_v2_promotion(
         raise ValueError("active Research V2 scope contract drift")
     if str(payload.get("adjusted_price_representation_contract_fingerprint") or "") != adjusted_price_representation_contract_fingerprint():
         raise ValueError("active Research V2 adjusted-price contract drift")
+
     proof_fp = _require_hex64(
         payload.get("adjusted_price_revision_proof_fingerprint"), field="adjusted_price_revision_proof_fingerprint"
     )
@@ -251,6 +271,7 @@ def load_active_research_v2_promotion(
     validate_adjusted_price_revision_proof_payload(proof_identity)
     if str(proof_identity.get("status") or "") != ADJUSTED_PRICE_REVISION_STATUS_READY:
         raise ValueError("active Research V2 adjusted-price revision proof 尚未 READY")
+
     freeze_fp = _require_hex64(payload.get("freeze_candidate_fingerprint"), field="freeze_candidate_fingerprint")
     freeze_manifest_path = resolve_research_v2_freeze_candidate_manifest_path(root, freeze_fp)
     if not freeze_manifest_path.is_file():
@@ -260,8 +281,9 @@ def load_active_research_v2_promotion(
     )
     if compute_file_sha256(freeze_manifest_path) != expected_freeze_sha:
         raise ValueError("active Research V2 freeze candidate manifest SHA256 drift")
+
     materialization_fp = _require_hex64(payload.get("materialization_fingerprint"), field="materialization_fingerprint")
-    dataset_dir = _validate_materialization_manifest_shallow(
+    dataset_dir = _validate_materialization_manifest_active(
         root,
         materialization_fingerprint=materialization_fp,
         expected_manifest_sha256=_require_hex64(
@@ -278,6 +300,39 @@ def load_active_research_v2_promotion(
         frozen_cutoff=str(payload["frozen_cutoff"]),
         full_dataset_dir=dataset_dir,
         payload=dict(payload),
+    )
+
+
+def load_active_research_v2_promotion(
+    project_root,
+    *,
+    required: bool = False,
+) -> ActiveResearchV2Promotion | None:
+    root = Path(project_root).resolve()
+    pointer_path = resolve_active_research_generation_path(root)
+    if not pointer_path.is_file():
+        published = discover_published_research_v2_promotion_fingerprints(root)
+        if published:
+            raise RuntimeError(
+                "Research V2 published promotion state exists but active pointer is missing; "
+                "explicit promotion recovery is required"
+            )
+        if required:
+            raise FileNotFoundError("active Research generation pointer 尚未建立")
+        return None
+    pointer = load_json_strict(pointer_path)
+    if not isinstance(pointer, dict):
+        raise ValueError("active Research generation pointer 必須是 object")
+    if int(pointer.get("schema_version") or 0) != RESEARCH_ACTIVE_POINTER_SCHEMA_VERSION:
+        raise ValueError("active Research generation pointer schema 不相容")
+    if str(pointer.get("generation_id") or "") != RESEARCH_DATA_GENERATION_V2:
+        raise ValueError("active Research generation pointer generation_id 不合法")
+    promotion_fp = _require_hex64(pointer.get("promotion_fingerprint"), field="promotion_fingerprint")
+    manifest_sha = _require_hex64(pointer.get("promotion_manifest_sha256"), field="promotion_manifest_sha256")
+    return load_research_v2_promotion_artifact(
+        root,
+        promotion_fingerprint=promotion_fp,
+        expected_manifest_sha256=manifest_sha,
     )
 
 
@@ -327,6 +382,8 @@ __all__ = [
     "ActiveResearchV2Promotion",
     "promotion_identity_from_payload",
     "build_research_v2_promotion_identity_payload",
+    "discover_published_research_v2_promotion_fingerprints",
+    "load_research_v2_promotion_artifact",
     "load_active_research_v2_promotion",
     "get_effective_research_data_generation",
     "build_effective_market_data_contract_snapshot",

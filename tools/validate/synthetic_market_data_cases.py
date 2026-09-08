@@ -3320,6 +3320,8 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
         resolve_research_v2_candidate_manifest_path,
         resolve_research_v2_daily_universe_path,
         resolve_research_v2_freeze_candidate_manifest_path,
+        resolve_research_v2_frozen_daily_universe_path,
+        resolve_research_v2_frozen_source_candidate_manifest_path,
     )
     from core.market_data_storage_contract import (
         resolve_market_data_provider_snapshot_path,
@@ -3582,6 +3584,22 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
             required=True,
         )
         add_check(results, "market_data", case_id, "freeze_candidate_loader_roundtrips_identity", freeze["freeze_candidate_fingerprint"], loaded_freeze["freeze_candidate_fingerprint"])
+        frozen_universe = resolve_research_v2_frozen_daily_universe_path(root, freeze["freeze_candidate_fingerprint"])
+        frozen_candidate_manifest = resolve_research_v2_frozen_source_candidate_manifest_path(root, freeze["freeze_candidate_fingerprint"])
+        add_check(results, "market_data", case_id, "freeze_candidate_owns_fingerprint_addressed_daily_universe_copy", True, frozen_universe.is_file() and compute_file_sha256(frozen_universe) == freeze["daily_universe_file_sha256"])
+        add_check(results, "market_data", case_id, "freeze_candidate_owns_fingerprint_addressed_source_manifest_copy", True, frozen_candidate_manifest.is_file() and compute_file_sha256(frozen_candidate_manifest) == freeze["candidate_manifest_sha256"])
+        original_universe_bytes = universe_path.read_bytes()
+        original_candidate_manifest_bytes = candidate_manifest_path.read_bytes()
+        universe_path.write_bytes(original_universe_bytes + b"candidate-slot-drift")
+        candidate_manifest_path.write_bytes(original_candidate_manifest_bytes + b"\n")
+        frozen_after_source_drift = load_research_v2_freeze_candidate(
+            root,
+            freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
+            required=True,
+        )
+        add_check(results, "market_data", case_id, "freeze_loader_is_independent_of_mutable_candidate_physical_slot", freeze["freeze_candidate_fingerprint"], frozen_after_source_drift["freeze_candidate_fingerprint"])
+        universe_path.write_bytes(original_universe_bytes)
+        candidate_manifest_path.write_bytes(original_candidate_manifest_bytes)
 
         v2_generation = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
         add_check(results, "market_data", case_id, "round15_does_not_change_configured_v2_status", RESEARCH_STATUS_AUTHORIZED_NOT_READY, v2_generation.status)
@@ -3621,7 +3639,10 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
     from core.market_data_provider_snapshot import ProviderArtifactEvidence, build_provider_snapshot_payload
     from core.market_data_research_storage_contract import resolve_active_research_generation_path, resolve_research_v2_promotion_manifest_path
     from core.market_data_storage_contract import resolve_market_data_provider_snapshot_path, resolve_market_data_request_parquet_path
-    from core.runtime_domains import build_runtime_domain_contract_snapshot
+    from core.runtime_domains import (
+        assert_runtime_write_path_is_not_research_dataset,
+        build_runtime_domain_contract_snapshot,
+    )
     from services.downloader.market_data_ledger import MarketDataJobLedger
     from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
     from services.research.market_data_generation import (
@@ -3794,6 +3815,18 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
         add_check(results, "market_data", case_id, "runtime_domain_reports_research_v2", RESEARCH_DATA_GENERATION_V2, runtime["research"]["market_data_generation"])
         add_check(results, "market_data", case_id, "runtime_domain_routes_research_data_dir_to_materialization", promoted_dir, Path(runtime["research"]["data_dir"]).resolve())
         add_check(results, "market_data", case_id, "runtime_domain_keeps_trading_root_separate", True, Path(runtime["trading"]["data_dir"]).resolve() != promoted_dir)
+        legacy_write_blocked = False
+        promoted_write_blocked = False
+        try:
+            assert_runtime_write_path_is_not_research_dataset(root, legacy_dir / "0050.csv")
+        except RuntimeError:
+            legacy_write_blocked = True
+        try:
+            assert_runtime_write_path_is_not_research_dataset(root, promoted_dir / "0050.csv")
+        except RuntimeError:
+            promoted_write_blocked = True
+        add_check(results, "market_data", case_id, "promotion_keeps_legacy_v1_research_root_write_protected", True, legacy_write_blocked)
+        add_check(results, "market_data", case_id, "promotion_keeps_v2_materialization_root_write_protected", True, promoted_write_blocked)
 
         from filters.breakout_quality.source_inventory import build_source_data_inventory
         source_inventory = build_source_data_inventory(root, "full")
@@ -3838,6 +3871,23 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
         add_check(results, "market_data", case_id, "same_promotion_identity_reuses_existing_activation", True, reused["reused"])
         add_check(results, "market_data", case_id, "same_promotion_identity_keeps_same_fingerprint", promoted["promotion_fingerprint"], reused["promotion_fingerprint"])
 
+        resolve_active_research_generation_path(root).unlink()
+        pointer_loss_fail_closed = False
+        try:
+            get_effective_research_data_generation(root)
+        except RuntimeError:
+            pointer_loss_fail_closed = True
+        add_check(results, "market_data", case_id, "published_promotion_with_missing_pointer_fails_closed_instead_of_silent_v1_rollback", True, pointer_loss_fail_closed)
+        recovered = promote_research_v2(
+            root,
+            freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
+            explicit_authorization=True,
+            frame_reader=frame_reader,
+            now=datetime(2026, 9, 8, 8, 20, tzinfo=timezone.utc),
+        )
+        add_check(results, "market_data", case_id, "explicit_same_freeze_promotion_recovers_missing_active_pointer", True, recovered.get("recovered_pointer"))
+        add_check(results, "market_data", case_id, "pointer_recovery_restores_v2_without_new_scientific_identity", promoted["promotion_fingerprint"], recovered["promotion_fingerprint"])
+
         candidate_after_promotion_blocked = False
         try:
             build_research_v2_candidate(root, frame_reader=frame_reader)
@@ -3853,6 +3903,12 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
         add_check(results, "market_data", case_id, "deep_materialization_validation_roundtrips_inventory", materialization["dataset_inventory_sha256"], deep["dataset_inventory_sha256"])
         original = csv_path.read_bytes()
         csv_path.write_bytes(original + b"\n")
+        active_routing_tamper_blocked = False
+        try:
+            get_dataset_dir(root, "full")
+        except ValueError:
+            active_routing_tamper_blocked = True
+        add_check(results, "market_data", case_id, "normal_active_routing_detects_materialized_csv_tamper", True, active_routing_tamper_blocked)
         tamper_blocked = False
         try:
             validate_research_v2_compatibility_materialization(
@@ -3863,6 +3919,8 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
         except ValueError:
             tamper_blocked = True
         add_check(results, "market_data", case_id, "deep_validation_detects_materialized_csv_tamper", True, tamper_blocked)
+        csv_path.write_bytes(original)
+        add_check(results, "market_data", case_id, "active_routing_recovers_after_exact_materialized_bytes_are_restored", promoted_dir, Path(get_dataset_dir(root, "full")).resolve())
 
     summary.update({"checks": len(results), "promotion_is_explicit": True, "active_generation": RESEARCH_DATA_GENERATION_V2})
     return results, summary
@@ -4069,3 +4127,101 @@ def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
 
     summary.update({"checks": len(results), "repair_contract": "market_date_and_historical_market_state_v1"})
     return results, summary
+
+def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_base_params):
+    """Repair-3 generic lifecycle invariants: durable activation, immutable roots and content integrity."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from config.market_data import RESEARCH_DATA_GENERATION_V1
+    from core.file_integrity import canonical_json_sha256, compute_file_sha256
+    from core.market_data_research_materialization import validate_research_v2_materialization_file_integrity
+    from core.market_data_research_promotion import (
+        discover_published_research_v2_promotion_fingerprints,
+        get_effective_research_data_generation,
+    )
+    from core.market_data_research_storage_contract import (
+        RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME,
+        RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT,
+        resolve_research_v2_compatibility_dataset_dir,
+    )
+    from core.runtime_domains import assert_runtime_write_path_is_not_research_dataset
+
+    case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR3"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        legacy_full = root / "data" / "tw_stock_data_vip"
+        legacy_reduced = root / "data" / "tw_stock_data_vip_reduced"
+        v2_root = root / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT
+        trading_root = root / "data" / "trading" / "tw_stock_data_vip"
+        for path in (legacy_full, legacy_reduced, v2_root, trading_root):
+            path.mkdir(parents=True, exist_ok=True)
+
+        blocked = []
+        for path in (legacy_full / "x.csv", legacy_reduced / "x.csv", v2_root / "x.bin"):
+            try:
+                assert_runtime_write_path_is_not_research_dataset(root, path)
+            except RuntimeError:
+                blocked.append(path)
+        add_check(results, "market_data", case_id, "write_guard_protects_all_legacy_and_v2_research_roots_independent_of_active_generation", 3, len(blocked))
+        trading_allowed = True
+        try:
+            assert_runtime_write_path_is_not_research_dataset(root, trading_root / "x.csv")
+        except RuntimeError:
+            trading_allowed = False
+        add_check(results, "market_data", case_id, "write_guard_still_allows_trading_namespace", True, trading_allowed)
+
+        promotions_root = root / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT / RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME
+        promotions_root.mkdir(parents=True, exist_ok=True)
+        (promotions_root / ".staged-crash.tmp").mkdir()
+        add_check(results, "market_data", case_id, "hidden_stage_directory_is_not_published_promotion_truth", (), discover_published_research_v2_promotion_fingerprints(root))
+        add_check(results, "market_data", case_id, "stage_only_state_preserves_never_promoted_v1_fallback", RESEARCH_DATA_GENERATION_V1, get_effective_research_data_generation(root).generation_id)
+
+        published_fp = "a" * 64
+        (promotions_root / published_fp).mkdir()
+        add_check(results, "market_data", case_id, "final_fingerprint_directory_is_durable_promotion_state_evidence", (published_fp,), discover_published_research_v2_promotion_fingerprints(root))
+        missing_pointer_blocked = False
+        try:
+            get_effective_research_data_generation(root)
+        except RuntimeError:
+            missing_pointer_blocked = True
+        add_check(results, "market_data", case_id, "published_promotion_without_pointer_fails_closed", True, missing_pointer_blocked)
+        (promotions_root / published_fp).rmdir()
+
+        materialization_fp = "b" * 64
+        dataset_dir = resolve_research_v2_compatibility_dataset_dir(root, materialization_fp)
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = dataset_dir / "0050.csv"
+        original = b"Date,Close\n2026-03-02,100\n"
+        csv_path.write_bytes(original)
+        files = [{
+            "ticker": "0050",
+            "relative_path": "0050.csv",
+            "row_count": 1,
+            "size_bytes": len(original),
+            "content_sha256": compute_file_sha256(csv_path),
+        }]
+        payload = {"files": files, "dataset_inventory_sha256": canonical_json_sha256(files)}
+        validated_dir = validate_research_v2_materialization_file_integrity(
+            root, materialization_fingerprint=materialization_fp, payload=payload
+        )
+        add_check(results, "market_data", case_id, "content_addressed_materialization_integrity_accepts_exact_bytes", dataset_dir, validated_dir)
+        tampered = original.replace(b",100\n", b",999\n")
+        add_check(results, "market_data", case_id, "same_length_tamper_fixture_preserves_size", len(original), len(tampered))
+        csv_path.write_bytes(tampered)
+        content_tamper_blocked = False
+        try:
+            validate_research_v2_materialization_file_integrity(
+                root, materialization_fingerprint=materialization_fp, payload=payload
+            )
+        except ValueError:
+            content_tamper_blocked = True
+        add_check(results, "market_data", case_id, "content_addressed_integrity_rejects_same_size_byte_tamper", True, content_tamper_blocked)
+
+    summary.update({"checks": len(results), "repair_round": 3})
+    return results, summary
+

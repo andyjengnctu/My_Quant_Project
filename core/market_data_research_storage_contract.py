@@ -12,6 +12,8 @@ RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME = "promotions"
 RESEARCH_MARKET_DATA_V2_ADJUSTED_PRICE_PROOFS_DIRNAME = "adjusted_price_revision_proofs"
 RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME = "research_v2_candidate_manifest.json"
 RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME = "research_v2_freeze_candidate_manifest.json"
+RESEARCH_V2_FROZEN_SOURCE_CANDIDATE_MANIFEST_FILENAME = "source_candidate_manifest.json"
+RESEARCH_V2_FROZEN_DAILY_UNIVERSE_FILENAME = "daily_universe.sqlite3"
 RESEARCH_V2_MATERIALIZATION_MANIFEST_FILENAME = "research_v2_materialization_manifest.json"
 RESEARCH_V2_PROMOTION_MANIFEST_FILENAME = "research_v2_promotion_manifest.json"
 RESEARCH_V2_ADJUSTED_PRICE_PROOF_MANIFEST_FILENAME = "adjusted_price_revision_proof_manifest.json"
@@ -58,6 +60,20 @@ def resolve_research_v2_freeze_candidate_manifest_path(project_root, freeze_cand
     return (
         resolve_research_v2_freeze_candidate_dir(project_root, freeze_candidate_fingerprint)
         / RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME
+    )
+
+
+def resolve_research_v2_frozen_source_candidate_manifest_path(project_root, freeze_candidate_fingerprint: str) -> Path:
+    return (
+        resolve_research_v2_freeze_candidate_dir(project_root, freeze_candidate_fingerprint)
+        / RESEARCH_V2_FROZEN_SOURCE_CANDIDATE_MANIFEST_FILENAME
+    )
+
+
+def resolve_research_v2_frozen_daily_universe_path(project_root, freeze_candidate_fingerprint: str) -> Path:
+    return (
+        resolve_research_v2_freeze_candidate_dir(project_root, freeze_candidate_fingerprint)
+        / RESEARCH_V2_FROZEN_DAILY_UNIVERSE_FILENAME
     )
 
 
@@ -129,6 +145,8 @@ __all__ = [
     "RESEARCH_MARKET_DATA_V2_ADJUSTED_PRICE_PROOFS_DIRNAME",
     "RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME",
     "RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME",
+    "RESEARCH_V2_FROZEN_SOURCE_CANDIDATE_MANIFEST_FILENAME",
+    "RESEARCH_V2_FROZEN_DAILY_UNIVERSE_FILENAME",
     "RESEARCH_V2_MATERIALIZATION_MANIFEST_FILENAME",
     "RESEARCH_V2_PROMOTION_MANIFEST_FILENAME",
     "RESEARCH_V2_ADJUSTED_PRICE_PROOF_MANIFEST_FILENAME",
@@ -140,6 +158,8 @@ __all__ = [
     "resolve_research_v2_daily_universe_path",
     "resolve_research_v2_freeze_candidate_dir",
     "resolve_research_v2_freeze_candidate_manifest_path",
+    "resolve_research_v2_frozen_source_candidate_manifest_path",
+    "resolve_research_v2_frozen_daily_universe_path",
     "resolve_research_v2_materialization_dir",
     "resolve_research_v2_materialization_manifest_path",
     "resolve_research_v2_compatibility_dataset_dir",

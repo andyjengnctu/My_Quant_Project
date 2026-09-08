@@ -35,12 +35,15 @@ from core.market_data_research_materialization import (
     build_research_v2_compatibility_materialization_identity_payload,
     deterministic_compatibility_file_mtime_ns,
     materialization_identity_from_payload,
+    validate_research_v2_materialization_file_integrity,
 )
 from core.market_data_research_promotion import (
     RESEARCH_ACTIVE_POINTER_SCHEMA_VERSION,
     build_research_v2_promotion_identity_payload,
+    discover_published_research_v2_promotion_fingerprints,
     get_effective_research_data_generation,
     load_active_research_v2_promotion,
+    load_research_v2_promotion_artifact,
     promotion_identity_from_payload,
 )
 from core.market_data_research_scope import RESEARCH_V2_ADJUSTED_PRICE_DATASET, RESEARCH_V2_RAW_VOLUME_DATASET
@@ -49,8 +52,8 @@ from core.market_data_research_storage_contract import (
     RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT,
     resolve_active_research_generation_path,
     resolve_research_v2_compatibility_dataset_dir,
-    resolve_research_v2_daily_universe_path,
     resolve_research_v2_freeze_candidate_manifest_path,
+    resolve_research_v2_frozen_daily_universe_path,
     resolve_research_v2_materialization_dir,
     resolve_research_v2_materialization_manifest_path,
     resolve_research_v2_promotion_dir,
@@ -216,9 +219,9 @@ def _build_materialization_files(
         frame_reader=frame_reader,
         hash_fn=hash_fn,
     )
-    universe_path = resolve_research_v2_daily_universe_path(
+    universe_path = resolve_research_v2_frozen_daily_universe_path(
         project_root,
-        str(freeze_candidate["provider_snapshot_fingerprint"]),
+        str(freeze_candidate["freeze_candidate_fingerprint"]),
     )
     if not universe_path.is_file():
         raise FileNotFoundError("Research V2 promotion daily_universe.sqlite3 不存在")
@@ -381,21 +384,11 @@ def validate_research_v2_compatibility_materialization(
     if canonical_json_sha256(files) != str(payload.get("dataset_inventory_sha256") or ""):
         raise ValueError("Research V2 compatibility materialization inventory fingerprint drift")
     if deep:
-        expected_paths = {str(row.get("relative_path") or "") for row in files if isinstance(row, dict)}
-        actual_paths = {path.relative_to(dataset_dir).as_posix() for path in dataset_dir.glob("*.csv") if path.is_file()}
-        if expected_paths != actual_paths:
-            raise ValueError("Research V2 compatibility materialization CSV file set drift")
-        for row in files:
-            if not isinstance(row, dict):
-                raise ValueError("Research V2 compatibility materialization file evidence row 不合法")
-            rel = str(row.get("relative_path") or "")
-            path = dataset_dir / rel
-            if not path.is_file():
-                raise FileNotFoundError(f"Research V2 compatibility CSV 不存在: {rel}")
-            if int(path.stat().st_size) != int(row.get("size_bytes") or -1):
-                raise ValueError(f"Research V2 compatibility CSV size drift: {rel}")
-            if compute_file_sha256(path) != str(row.get("content_sha256") or ""):
-                raise ValueError(f"Research V2 compatibility CSV SHA256 drift: {rel}")
+        validate_research_v2_materialization_file_integrity(
+            root,
+            materialization_fingerprint=wanted,
+            payload=payload,
+        )
     return dict(payload)
 
 
@@ -522,11 +515,14 @@ def promote_research_v2(
     if not explicit_authorization:
         raise PermissionError("Research V2 promotion 需要明確使用者 promotion action")
     root = Path(project_root).resolve()
-    existing = load_active_research_v2_promotion(root, required=False)
-    if existing is not None:
-        if existing.freeze_candidate_fingerprint != str(freeze_candidate_fingerprint).strip().lower():
+    requested_freeze_fp = str(freeze_candidate_fingerprint).strip().lower()
+    pointer_path = resolve_active_research_generation_path(root)
+
+    if pointer_path.is_file():
+        existing = load_active_research_v2_promotion(root, required=True)
+        if existing.freeze_candidate_fingerprint != requested_freeze_fp:
             raise RuntimeError(
-                "Research V2 已由不同 freeze candidate ACTIVE；不得以同一 Round-16 seam 隱性 repromotion"
+                "Research V2 已由不同 freeze candidate ACTIVE；不得以同一 promotion seam 隱性 repromotion"
             )
         materialization = validate_research_v2_compatibility_materialization(
             root,
@@ -538,26 +534,80 @@ def promote_research_v2(
             "promotion_fingerprint": existing.promotion_fingerprint,
             "materialization": materialization,
             "reused": True,
+            "recovered_pointer": False,
             "provider_calls": 0,
         }
 
-    prior = get_effective_research_data_generation(root)
-    if prior.generation_id != RESEARCH_DATA_GENERATION_V1:
-        raise RuntimeError(f"Research V2 promotion prior generation 不合法: {prior.generation_id}")
+    published = discover_published_research_v2_promotion_fingerprints(root)
+    complete_published = tuple(
+        fp for fp in published if resolve_research_v2_promotion_manifest_path(root, fp).is_file()
+    )
+    orphan_published = tuple(fp for fp in published if fp not in set(complete_published))
+    if complete_published:
+        if len(complete_published) != 1 or orphan_published:
+            raise RuntimeError(
+                "Research V2 active pointer 缺失且存在多個/混合 published promotion states；不得自動選擇"
+            )
+        recovered = load_research_v2_promotion_artifact(
+            root, promotion_fingerprint=complete_published[0]
+        )
+        if recovered.freeze_candidate_fingerprint != requested_freeze_fp:
+            raise RuntimeError(
+                "Research V2 active pointer 缺失；已發布 promotion 與本次 freeze candidate 不同，拒絕隱性 rollback/repromotion"
+            )
+        manifest_path = resolve_research_v2_promotion_manifest_path(root, recovered.promotion_fingerprint)
+        recovered_at = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+        pointer_payload = {
+            "schema_version": RESEARCH_ACTIVE_POINTER_SCHEMA_VERSION,
+            "generation_id": RESEARCH_DATA_GENERATION_V2,
+            "promotion_fingerprint": recovered.promotion_fingerprint,
+            "promotion_manifest_sha256": compute_file_sha256(manifest_path),
+            "activated_at": recovered_at,
+        }
+        atomic_write_json(pointer_path, pointer_payload)
+        active = load_active_research_v2_promotion(root, required=True)
+        materialization = validate_research_v2_compatibility_materialization(
+            root,
+            materialization_fingerprint=active.materialization_fingerprint,
+            deep=True,
+        )
+        return {
+            **active.payload,
+            "promotion_fingerprint": active.promotion_fingerprint,
+            "materialization": materialization,
+            "reused": True,
+            "recovered_pointer": True,
+            "provider_calls": 0,
+        }
+    if len(orphan_published) > 1:
+        raise RuntimeError("Research V2 存在多個 incomplete promotion directories；需人工稽核")
+
+    if not orphan_published:
+        prior = get_effective_research_data_generation(root)
+        if prior.generation_id != RESEARCH_DATA_GENERATION_V1:
+            raise RuntimeError(f"Research V2 promotion prior generation 不合法: {prior.generation_id}")
+        prior_generation_id = prior.generation_id
+    else:
+        # A final fingerprint directory without a manifest can only be a legacy
+        # crash residue from the old mkdir-then-write publication sequence.  It
+        # is not a completed promotion truth, so V1 remains the only legal prior
+        # generation; we recover it only if it matches the identity built below.
+        prior_generation_id = RESEARCH_DATA_GENERATION_V1
+
     freeze = load_research_v2_freeze_candidate(
         root,
-        freeze_candidate_fingerprint=freeze_candidate_fingerprint,
+        freeze_candidate_fingerprint=requested_freeze_fp,
         required=True,
     )
     materialization = build_research_v2_compatibility_materialization(
         root,
-        freeze_candidate_fingerprint=freeze_candidate_fingerprint,
+        freeze_candidate_fingerprint=requested_freeze_fp,
         frame_reader=frame_reader,
         hash_fn=hash_fn,
         now=now,
         progress_callback=progress_callback,
     )
-    freeze_manifest_path = resolve_research_v2_freeze_candidate_manifest_path(root, freeze_candidate_fingerprint)
+    freeze_manifest_path = resolve_research_v2_freeze_candidate_manifest_path(root, requested_freeze_fp)
     materialization_manifest_path = resolve_research_v2_materialization_manifest_path(
         root,
         str(materialization["materialization_fingerprint"]),
@@ -567,11 +617,23 @@ def promote_research_v2(
         freeze_candidate_manifest_sha256=compute_file_sha256(freeze_manifest_path),
         materialization=materialization,
         materialization_manifest_sha256=compute_file_sha256(materialization_manifest_path),
-        prior_generation_id=prior.generation_id,
+        prior_generation_id=prior_generation_id,
     )
     promotion_fp = canonical_json_sha256(identity)
     promotion_dir = resolve_research_v2_promotion_dir(root, promotion_fp)
     promotion_manifest_path = resolve_research_v2_promotion_manifest_path(root, promotion_fp)
+
+    if orphan_published:
+        orphan_fp = orphan_published[0]
+        if orphan_fp != promotion_fp:
+            raise RuntimeError(
+                "Research V2 incomplete promotion directory identity 與本次明確 promotion 不符；拒絕自動清除"
+            )
+        orphan_dir = resolve_research_v2_promotion_dir(root, orphan_fp)
+        if any(orphan_dir.iterdir()):
+            raise RuntimeError("Research V2 incomplete promotion directory 非空；需人工稽核")
+        orphan_dir.rmdir()
+
     promoted_at = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
     payload = {
         **identity,
@@ -588,15 +650,43 @@ def promote_research_v2(
         ),
         "provider_calls": 0,
     }
+
+    promotion_dir.parent.mkdir(parents=True, exist_ok=True)
     if promotion_manifest_path.is_file():
-        existing_payload = load_json_strict(promotion_manifest_path)
-        if not isinstance(existing_payload, dict):
-            raise ValueError("Research V2 promotion manifest 必須是 object")
-        if promotion_identity_from_payload(existing_payload) != identity:
+        published_artifact = load_research_v2_promotion_artifact(
+            root, promotion_fingerprint=promotion_fp
+        )
+        if promotion_identity_from_payload(published_artifact.payload) != identity:
             raise ValueError("Research V2 immutable promotion path identity collision/drift")
+        reused_publication = True
     else:
-        promotion_dir.mkdir(parents=True, exist_ok=False)
-        atomic_write_json(promotion_manifest_path, payload)
+        if promotion_dir.exists():
+            raise ValueError("Research V2 promotion immutable path 已存在但 manifest 缺失")
+        for stale_stage in promotion_dir.parent.glob(f".{promotion_fp}.*.tmp"):
+            if stale_stage.is_dir():
+                shutil.rmtree(stale_stage, ignore_errors=True)
+        stage_dir = Path(
+            tempfile.mkdtemp(prefix=f".{promotion_fp}.", suffix=".tmp", dir=str(promotion_dir.parent))
+        )
+        try:
+            atomic_write_json(stage_dir / promotion_manifest_path.name, payload)
+            try:
+                os.replace(stage_dir, promotion_dir)
+            except FileExistsError:
+                if stage_dir.exists():
+                    shutil.rmtree(stage_dir, ignore_errors=True)
+                published_artifact = load_research_v2_promotion_artifact(
+                    root, promotion_fingerprint=promotion_fp
+                )
+                if promotion_identity_from_payload(published_artifact.payload) != identity:
+                    raise ValueError("Research V2 immutable promotion path identity collision/drift")
+                reused_publication = True
+            else:
+                reused_publication = False
+        finally:
+            if stage_dir.exists():
+                shutil.rmtree(stage_dir, ignore_errors=True)
+
     promotion_manifest_sha = compute_file_sha256(promotion_manifest_path)
     pointer_payload = {
         "schema_version": RESEARCH_ACTIVE_POINTER_SCHEMA_VERSION,
@@ -605,14 +695,15 @@ def promote_research_v2(
         "promotion_manifest_sha256": promotion_manifest_sha,
         "activated_at": promoted_at,
     }
-    atomic_write_json(resolve_active_research_generation_path(root), pointer_payload)
+    atomic_write_json(pointer_path, pointer_payload)
     active = load_active_research_v2_promotion(root, required=True)
     if active.promotion_fingerprint != promotion_fp:
         raise RuntimeError("Research V2 active pointer publication verification failed")
     return {
-        **payload,
+        **active.payload,
         "materialization": materialization,
-        "reused": False,
+        "reused": reused_publication,
+        "recovered_pointer": False,
         "provider_calls": 0,
     }
 
@@ -630,9 +721,9 @@ def load_active_research_v2_read_view(
         freeze_candidate_fingerprint=active.freeze_candidate_fingerprint,
         required=True,
     )
-    universe_path = resolve_research_v2_daily_universe_path(
+    universe_path = resolve_research_v2_frozen_daily_universe_path(
         root,
-        str(freeze["provider_snapshot_fingerprint"]),
+        str(freeze["freeze_candidate_fingerprint"]),
     )
     if compute_file_sha256(universe_path) != str(freeze["daily_universe_file_sha256"]):
         raise ValueError("active Research V2 daily universe SHA256 drift")
