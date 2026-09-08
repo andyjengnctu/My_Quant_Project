@@ -26,6 +26,8 @@ FINMIND_RAW_PRICE_ARCHIVE_DATASET = "TaiwanStockPrice"
 RAW_PRICE_DIRECT_CONSUMPTION_ENABLED = False
 PROJECT_ADJUSTED_PRICE_ENGINE_ENABLED = False
 ADJUSTED_PRICE_RETROSPECTIVE_INVARIANCE_REQUIRED = True
+RESEARCH_DAILY_BAR_CLOCK = "finmind_adjusted_price_row_calendar"
+ADJUSTED_PRICE_NO_PRICE_DAY_POLICY = "preserve_provider_carry_forward_row_if_canonical_ohlc_is_valid"
 
 RESEARCH_CUTOFF_MODE_FIXED = "fixed"
 RESEARCH_CUTOFF_MODE_BOOTSTRAP_COMMON_COMPLETE_MANIFEST = "bootstrap_common_complete_manifest"
@@ -42,6 +44,8 @@ class MarketPriceSourceContract:
     raw_direct_consumption_enabled: bool
     project_adjusted_price_engine_enabled: bool
     retrospective_adjustment_invariance_required: bool
+    research_daily_bar_clock: str
+    adjusted_price_no_price_day_policy: str
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,8 @@ def get_market_price_source_contract() -> MarketPriceSourceContract:
         raw_direct_consumption_enabled=RAW_PRICE_DIRECT_CONSUMPTION_ENABLED,
         project_adjusted_price_engine_enabled=PROJECT_ADJUSTED_PRICE_ENGINE_ENABLED,
         retrospective_adjustment_invariance_required=ADJUSTED_PRICE_RETROSPECTIVE_INVARIANCE_REQUIRED,
+        research_daily_bar_clock=RESEARCH_DAILY_BAR_CLOCK,
+        adjusted_price_no_price_day_policy=ADJUSTED_PRICE_NO_PRICE_DAY_POLICY,
     )
 
 
@@ -199,6 +205,8 @@ __all__ = [
     "RAW_PRICE_DIRECT_CONSUMPTION_ENABLED",
     "PROJECT_ADJUSTED_PRICE_ENGINE_ENABLED",
     "ADJUSTED_PRICE_RETROSPECTIVE_INVARIANCE_REQUIRED",
+    "RESEARCH_DAILY_BAR_CLOCK",
+    "ADJUSTED_PRICE_NO_PRICE_DAY_POLICY",
     "RESEARCH_CUTOFF_MODE_FIXED",
     "RESEARCH_CUTOFF_MODE_BOOTSTRAP_COMMON_COMPLETE_MANIFEST",
     "RESEARCH_STATUS_ACTIVE_FROZEN",

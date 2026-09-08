@@ -14,9 +14,14 @@ Required foundation semantics:
   representations; raw/absolute adjusted levels and Trading_Volume are not
   directly authorized here.
 
-Every other archived dataset stays optional/not-selected.  Its PIT review state
-is preserved for future experiment-specific authorization, but it cannot block
-Research V2 foundation freeze merely because it exists in the archive.
+Every other archived dataset stays optional/not-selected for direct field/model
+input authorization.  That designation does not prevent a separate universe/PIT
+guard from consuming neutral metadata evidence (for example TaiwanStockInfo
+market-transition rows) when sample membership itself must be historically legal.
+Such guard evidence is pinned by the candidate identity, not promoted into the
+foundation field-input matrix.  Optional field PIT review state is preserved for
+future experiment-specific authorization and cannot block Research V2 foundation
+freeze merely because the dataset exists in the archive.
 """
 from __future__ import annotations
 

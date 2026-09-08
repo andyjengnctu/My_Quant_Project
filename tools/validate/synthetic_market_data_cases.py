@@ -2587,6 +2587,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
     from core.market_data_research_v2 import (
         RESEARCH_V2_CANDIDATE_STATUS_NOT_READY,
         RESEARCH_V2_DATASET_STATUS_CURRENT_VINTAGE_BLOCKED,
+        build_daily_pit_universe,
         validate_research_v2_candidate_contract,
     )
     from core.market_data_storage_contract import (
@@ -2617,10 +2618,27 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         research_cutoff = research_cutoff_date.isoformat()
         after_cutoff = (research_cutoff_date + timedelta(days=1)).isoformat()
         provider_as_of = (research_cutoff_date + timedelta(days=190)).isoformat()
+        primitive_universe = build_daily_pit_universe(
+            pd.DataFrame({
+                "date": [before_cutoff, research_cutoff],
+                "stock_id": ["2330", "2330"],
+            }),
+            historical_instruments=("2330",),
+            transition_excluded_through={"2330": before_cutoff},
+            trading_dates=(before_cutoff, research_cutoff),
+            provider_as_of_date=research_cutoff,
+        )
+        add_check(
+            results, "market_data", case_id,
+            "canonical_daily_pit_universe_primitive_requires_date_specific_market_state",
+            [(research_cutoff, "2330")],
+            list(primitive_universe[["date", "stock_id"]].itertuples(index=False, name=None)),
+        )
         manifest_fingerprint = "7" * 64
         registry_fingerprint = build_registry_fingerprint(get_market_dataset_specs(included_only=True))
         requests = (
             BootstrapHttpRequest("TaiwanStockTradingDate", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
+            BootstrapHttpRequest("TaiwanStockInfo", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
             BootstrapHttpRequest("TaiwanStockDelisting", BOOTSTRAP_SINGLE_FULL_RANGE, None, "1900-01-01", provider_as_of),
             BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
             BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
@@ -2639,13 +2657,18 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         )
         frame_by_request = {
             requests[0].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff]}),
-            requests[1].request_id: pd.DataFrame(columns=["date", "stock_id"]),
-            requests[2].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3, "Trading_Volume": [1000.0, 1100.0, 1200.0]}),
-            requests[3].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3, "Trading_Volume": [2000.0, 2100.0, 2200.0]}),
-            requests[4].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"], "open": [99.0], "max": [101.0], "min": [98.0], "close": [100.0]}),
-            requests[5].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3, "PER": [20.0, 21.0, 22.0]}),
-            requests[6].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"]}),
-            requests[7].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3}),
+            requests[1].request_id: pd.DataFrame([
+                {"date": provider_as_of, "stock_id": "0050", "type": "twse", "industry_category": "ETF"},
+                {"date": before_cutoff, "stock_id": "2330", "type": "emerging", "industry_category": "半導體業"},
+                {"date": provider_as_of, "stock_id": "2330", "type": "twse", "industry_category": "半導體業"},
+            ]),
+            requests[2].request_id: pd.DataFrame(columns=["date", "stock_id"]),
+            requests[3].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3, "Trading_Volume": [1000.0, 1100.0, 1200.0]}),
+            requests[4].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3, "Trading_Volume": [2000.0, 2100.0, 2200.0]}),
+            requests[5].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"], "open": [99.0], "max": [101.0], "min": [98.0], "close": [100.0]}),
+            requests[6].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3, "PER": [20.0, 21.0, 22.0]}),
+            requests[7].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"]}),
+            requests[8].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3}),
         }
 
         ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
@@ -2738,7 +2761,9 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         add_check(results, "market_data", case_id, "research_v2_candidate_build_consumes_zero_provider_calls", 0, candidate["provider_calls"])
         add_check(results, "market_data", case_id, "research_v2_candidate_records_fixed_required_cutoff", research_cutoff, candidate["required_cutoff"])
         add_check(results, "market_data", case_id, "exact_candidate_ceiling_retreats_before_incomplete_required_cutoff", before_cutoff, candidate["exact_candidate_ceiling_date"])
-        add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based_and_cutoff_capped", 4, candidate["daily_universe_row_count"])
+        add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based_market_state_guarded_and_cutoff_capped", 3, candidate["daily_universe_row_count"])
+        add_check(results, "market_data", case_id, "research_v2_candidate_pins_market_state_guard_identity", 64, len(str(candidate.get("historical_market_state_guard_fingerprint") or "")))
+        add_check(results, "market_data", case_id, "research_v2_transition_guard_detects_one_future_board_transition", 1, int(candidate.get("historical_market_state_transition_count") or 0))
         blockers = {str(item.get("code")) for item in candidate["blockers"]}
         add_check(results, "market_data", case_id, "research_v2_candidate_pins_authorized_required_dataset_scope", True, bool(candidate.get("research_scope_contract_fingerprint")) and bool(candidate.get("required_dataset_scope")))
         adjusted_scope = next(row for row in candidate["research_scope_contracts"] if row["dataset"] == "TaiwanStockPriceAdj")
@@ -2756,11 +2781,21 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         try:
             universe_rows = int(conn.execute("SELECT COUNT(*) FROM daily_universe").fetchone()[0])
             max_universe_date = conn.execute("SELECT MAX(date) FROM daily_universe").fetchone()[0]
+            pre_transition_2330_count = int(conn.execute(
+                "SELECT COUNT(*) FROM daily_universe WHERE date = ? AND stock_id = ?",
+                (before_cutoff, "2330"),
+            ).fetchone()[0])
+            post_transition_2330_count = int(conn.execute(
+                "SELECT COUNT(*) FROM daily_universe WHERE date = ? AND stock_id = ?",
+                (research_cutoff, "2330"),
+            ).fetchone()[0])
             last_coverage = conn.execute("SELECT date, missing_price_limit_count, exact_complete FROM exact_coverage ORDER BY date DESC LIMIT 1").fetchone()
         finally:
             conn.close()
-        add_check(results, "market_data", case_id, "research_v2_daily_universe_sqlite_preserves_cutoff_membership_rows", 4, universe_rows)
+        add_check(results, "market_data", case_id, "research_v2_daily_universe_sqlite_preserves_only_date_eligible_membership_rows", 3, universe_rows)
         add_check(results, "market_data", case_id, "research_v2_daily_universe_excludes_provider_rows_after_research_cutoff", research_cutoff, max_universe_date)
+        add_check(results, "market_data", case_id, "future_twse_transition_does_not_authorize_prior_emerging_row", 0, pre_transition_2330_count)
+        add_check(results, "market_data", case_id, "twse_transition_allows_rows_strictly_after_final_emerging_date", 1, post_transition_2330_count)
         add_check(results, "market_data", case_id, "research_v2_exact_coverage_records_required_cutoff_missing_member", (research_cutoff, 1, 0), tuple(last_coverage))
 
         loaded = load_research_v2_candidate(root, required=True)
@@ -3355,6 +3390,7 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
             BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
             BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
             BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockInfo", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
         )
         manifest = BootstrapRequestManifest(
             as_of_date=provider_as_of,
@@ -3387,6 +3423,10 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
                 "min": [499.0, 500.0, 501.0],
                 "close": [501.0, 502.0, 503.0],
             }),
+            requests[8].request_id: pd.DataFrame([
+                {"date": provider_as_of, "stock_id": "0050", "type": "twse", "industry_category": "ETF"},
+                {"date": provider_as_of, "stock_id": "2330", "type": "twse", "industry_category": "半導體業"},
+            ]),
         }
 
         ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
@@ -3594,6 +3634,7 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
             BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
             BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
             BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockInfo", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
         )
         manifest = BootstrapRequestManifest(
             as_of_date=provider_as_of,
@@ -3620,6 +3661,9 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
                 "min": [99.0, 100.0, 101.0],
                 "close": [101.0, 102.0, 103.0],
             }),
+            requests[5].request_id: pd.DataFrame([
+                {"date": provider_as_of, "stock_id": "0050", "type": "twse", "industry_category": "ETF"},
+            ]),
         }
         ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
         ledger = MarketDataJobLedger(ledger_path)
@@ -3775,4 +3819,98 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
         add_check(results, "market_data", case_id, "deep_validation_detects_materialized_csv_tamper", True, tamper_blocked)
 
     summary.update({"checks": len(results), "promotion_is_explicit": True, "active_generation": RESEARCH_DATA_GENERATION_V2})
+    return results, summary
+
+
+def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
+    """Audit Repair 1 keeps date identity and historical eligibility fail closed."""
+
+    from datetime import timedelta
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from core.market_data_contract import (
+        ADJUSTED_PRICE_NO_PRICE_DAY_POLICY,
+        RESEARCH_DAILY_BAR_CLOCK,
+        get_market_price_source_contract,
+    )
+    from core.market_data_instrument_universe import (
+        build_historical_market_state_guard,
+        historical_market_state_guard_fingerprint,
+        is_historical_market_state_eligible,
+    )
+    from core.trading_market_clock import trading_daily_bar_complete_time
+    from services.downloader import runtime as downloader_runtime
+    from services.downloader.universe import _load_reusable_universe_cache, _publish_universe_cache
+
+    case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR1"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    with TemporaryDirectory() as tmp:
+        cache_path = Path(tmp) / "universe_cache_v3.json"
+        _publish_universe_cache(cache_path, qualified_tickers=["2330"], market_date="2026-09-01")
+        now = downloader_runtime.get_taipei_now()
+        stale = _load_reusable_universe_cache(cache_path, now=now, market_date="2026-09-08")
+        same_date = _load_reusable_universe_cache(cache_path, now=now, market_date="2026-09-01")
+        add_check(results, "market_data", case_id, "cache_reuse_is_bound_to_requested_market_date", None, stale)
+        add_check(results, "market_data", case_id, "same_market_date_cache_remains_reusable", ["2330"], same_date)
+
+    from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET
+    from core.market_data_dataset_registry import get_market_dataset_spec
+    from core.market_data_freshness_contract import build_market_data_freshness_contract
+
+    publish_time = trading_daily_bar_complete_time()
+    freshness = build_market_data_freshness_contract(get_market_dataset_spec(FINMIND_ADJUSTED_PRICE_DATASET))
+    expected_publish_time = tuple(
+        int(part) for part in str(freshness.publication_first_check_time).split(":", 1)
+    )
+    add_check(results, "market_data", case_id, "daily_completion_uses_provider_verified_publication_policy", expected_publish_time, publish_time)
+
+    stock_info = pd.DataFrame(
+        [
+            {"stock_id": "9999", "type": "emerging", "industry_category": "其他", "date": "2025-01-02"},
+            {"stock_id": "9999", "type": "twse", "industry_category": "其他", "date": "2026-09-08"},
+            {"stock_id": "2330", "type": "twse", "industry_category": "半導體業", "date": "2026-09-08"},
+            {"stock_id": "8888", "type": "emerging", "industry_category": "其他", "date": "2024-06-30"},
+        ]
+    )
+    guard = build_historical_market_state_guard(
+        stock_info, historical_instruments=("9999", "2330", "8888")
+    )
+    guard_fp = historical_market_state_guard_fingerprint(guard)
+    add_check(
+        results, "market_data", case_id, "transition_guard_covers_listed_and_delisting_only_archive_members",
+        {"8888": "2024-06-30", "9999": "2025-01-02"}, guard,
+    )
+    add_check(results, "market_data", case_id, "transition_guard_identity_is_content_addressed", 64, len(guard_fp))
+    add_check(
+        results,
+        "market_data",
+        case_id,
+        "future_board_transition_cannot_authorize_earlier_emerging_sample",
+        False,
+        is_historical_market_state_eligible(stock_id="9999", date_value="2024-12-31", transition_excluded_through=guard),
+    )
+    add_check(
+        results,
+        "market_data",
+        case_id,
+        "post_transition_date_can_be_eligible",
+        True,
+        is_historical_market_state_eligible(stock_id="9999", date_value="2025-01-03", transition_excluded_through=guard),
+    )
+
+    price_contract = get_market_price_source_contract()
+    add_check(results, "market_data", case_id, "research_bar_clock_semantics_are_explicit", RESEARCH_DAILY_BAR_CLOCK, price_contract.research_daily_bar_clock)
+    add_check(
+        results,
+        "market_data",
+        case_id,
+        "no_price_day_policy_preserves_existing_provider_calendar_row_semantics",
+        ADJUSTED_PRICE_NO_PRICE_DAY_POLICY,
+        price_contract.adjusted_price_no_price_day_policy,
+    )
+
+    summary.update({"checks": len(results), "repair_contract": "market_date_and_historical_market_state_v1"})
     return results, summary

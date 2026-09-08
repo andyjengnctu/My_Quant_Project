@@ -496,3 +496,10 @@ python apps/research.py market-data verify
 - `verify`：對active compatibility materialization做deep file-set/SHA驗證。
 
 互動入口：`python apps/research.py` → `Market Data generation／Research V2 lifecycle`。互動promotion必須輸入完整freeze fingerprint並再輸入精確`PROMOTE`確認。Compatibility view的OHLC直接來自FinMind `TaiwanStockPriceAdj`，Volume只來自raw `TaiwanStockPrice.Trading_Volume`；不得建立第二套adjusted-price engine，也不得讀Trading overlay。
+
+### Market Data Rounds 1–16 Audit Repair 1（2026-09-08）
+
+- Trading universe cache 僅可在 `built_market_date == requested market_date` 時 REUSE；同一 TTL/threshold 但不同 market date 會強制重掃。
+- Trading generic completed-daily cutoff 由 `MARKET_DATA_V2_PUBLICATION_POLICY` 的 canonical `TaiwanStockPriceAdj` provider-verified publication grace 解析（目前 17:45），不再以 14:00 提前接受當日 daily row。
+- Market Data bootstrap 的 historical instrument list 只作 archive request superset；Research V2 daily universe 另外套用 `TaiwanStockInfo` date-specific transition guard，future TWSE/TPEx transition 不得反向授權 earlier emerging rows。candidate schema v8 會 pin `historical_market_state_guard_fingerprint`。
+- 無公告價日不改既有 Research bar clock：V1/V2 都維持 FinMind adjusted-price calendar-row/carry-forward semantics，只要 canonical adjusted OHLC 為正且合法就保留；raw `TaiwanStockPrice` OHLC=0 仍不是模型價格 input。

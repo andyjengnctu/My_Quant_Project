@@ -4309,6 +4309,17 @@
       "entry": "`core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`, `services/research/market_data_generation.py`, `core/market_data_contract.py`, `core/dataset_profiles.py`, `filters/breakout_quality/source_inventory.py`, `apps/research.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 388
+    },
+    {
+      "id": "B401",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data Rounds 1–16 audit Repair 1 / market-date and PIT universe correctness",
+      "item": "Trading cache/publication-time identity and Research historical market-state eligibility are fail-closed and point-in-time correct without changing existing adjusted-price calendar-bar semantics",
+      "gap": "Independent Rounds 1–16 audit reproduced stale universe-cache reuse across market dates and future board-transition leakage into earlier Research samples; generic daily completion also accepted same-day rows before FinMind documented publication. Repair must bind cache reuse to requested market_date, resolve completed-day time from publication-policy SSOT, distinguish bootstrap archive superset from date-specific Research market eligibility, pin the transition guard into candidate scientific identity, and preserve rather than silently redefine the existing FinMind PriceAdj calendar-row/no-price-day semantics.",
+      "entry": "`services/downloader/universe.py`, `core/trading_market_clock.py`, `core/market_data_instrument_universe.py`, `services/research/market_data_v2.py`, `core/market_data_research_v2.py`, `core/market_data_contract.py`",
+      "initial_status": "NEW",
+      "order": 389
     }
   ],
   "tests": [
@@ -7739,7 +7750,7 @@
     {
       "id": "T491",
       "b_id": "B371",
-      "description": "`validate_trading_prelive_operational_audit_contract_case` 覆蓋completed-daily-bar cutoff/physical trim、known download failure blocking、Research physical cutoff、required-live capability blockers、read-only audit artifacts與Workbench實盤就緒入口。",
+      "description": "`validate_trading_prelive_operational_audit_contract_case` 覆蓋completed-daily-bar publication cutoff/physical trim、provider documented publish前當日row拒絕、known download failure blocking、Research physical cutoff、required-live capability blockers、read-only audit artifacts與Workbench實盤就緒入口。",
       "initial_status": "NEW",
       "order": 481
     },
@@ -7837,14 +7848,14 @@
     {
       "id": "T505",
       "b_id": "B385",
-      "description": "`validate_downloader_universe_screening_init_error_path_case` 覆蓋FinMind bulk loader/dataset fail-closed、兩個request皆省略data_id且使用同一market_date、YFinance screening不可被呼叫、exact-date membership、ETF volume-only、非交易/停牌listed symbol保守排除、高成交量股票缺market_value時禁止發布cache、duplicate stock_id拒絕、v3 cache identity/reuse與threshold invalidation。",
+      "description": "`validate_downloader_universe_screening_init_error_path_case` 覆蓋FinMind bulk loader/dataset fail-closed、兩個request皆省略data_id且使用同一market_date、YFinance screening不可被呼叫、exact-date membership、ETF volume-only、非交易/停牌listed symbol保守排除、高成交量股票缺market_value時禁止發布cache、duplicate stock_id拒絕、v3 cache identity/reuse、threshold invalidation與built_market_date/requested market_date mismatch強制失效。",
       "initial_status": "NEW",
       "order": 495
     },
     {
       "id": "T506",
       "b_id": "B386",
-      "description": "`validate_market_data_governance_contract_case` 覆蓋canonical adjusted/raw dataset identity、raw direct-consumption禁止、自建adjusted-price engine禁止、retrospective-adjustment invariance要求、Research generation/cutoff/NOT_READY非promotion、Trading lifecycle/bootstrap generation，以及downloader dataset identity必須消費canonical owner且不得重複硬編。",
+      "description": "`validate_market_data_governance_contract_case` 覆蓋FinMind canonical adjusted-price/raw archive/lifecycle SSOT、retrospective invariance requirement，以及既有V1/V2 adjusted-price calendar-row/no-price-day carry-forward等價語意。",
       "initial_status": "NEW",
       "order": 496
     },
@@ -7892,7 +7903,7 @@
     },
     {
       "id": "T513",
-      "description": "`validate_market_data_v2_research_candidate_contract_case` 覆蓋51-dataset PIT assessment、neutral Provider Snapshot pinning、current-vintage adjusted-price fail-closed、raw-price presence historical universe、PriceLimit exact completeness ceiling、event no-row legality、零provider call candidate build、固定Research required-cutoff截斷post-cutoff archive rows、NOT_READY/no frozen cutoff/no promotion、project-relative Research artifacts、candidate/SQLite SHA tamper fail-closed與禁止讀Trading V2 overlay。",
+      "description": "`validate_market_data_v2_research_candidate_contract_case` 覆蓋51-dataset PIT assessment、neutral Provider Snapshot pinning、current-vintage adjusted-price fail-closed、raw-price presence daily universe + TaiwanStockInfo date-specific market-state guard、future轉板不得反向納入earlier emerging rows、PriceLimit exact completeness ceiling、event no-row legality、零provider call candidate build、固定Research required-cutoff截斷post-cutoff archive rows、schema-v8 market-state guard fingerprint、NOT_READY/no frozen cutoff/no promotion、project-relative Research artifacts、candidate/SQLite SHA tamper fail-closed與禁止讀Trading V2 overlay。",
       "b_id": "B393",
       "initial_status": "NEW",
       "order": 503
@@ -7945,6 +7956,13 @@
       "description": "`validate_market_data_v2_research_promotion_consumer_integration_contract_case` 覆蓋V1 safe fallback、explicit-authorization gate、freeze→materialization→promotion→active-pointer sequencing、PriceAdj OHLC/raw Price Volume exact mapping、zero provider calls、full/reduced consumer routing、effective contract/runtime-domain V2切換、full Research source inventory的generation/promotion/materialization lineage pinning、active read-view daily-universe pinning、same-identity REUSE、active-V2 candidate rebuild block與materialized CSV tamper detection。",
       "initial_status": "NEW",
       "order": 510
+    },
+    {
+      "id": "T521",
+      "description": "`validate_market_data_rounds_1_16_repair1_contract_case` 泛化驗證requested market-date cache identity、provider publication-policy SSOT、date-specific historical market-transition eligibility、transition-guard content identity，以及既有FinMind PriceAdj no-price-day calendar-row語意不被修補輪暗改。",
+      "b_id": "B401",
+      "initial_status": "NEW",
+      "order": 511
     }
   ],
   "transitions": [
@@ -25723,6 +25741,86 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_research_promotion_consumer_integration_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B401",
+      "description": "修正Rounds 1–16完整Audit確認的market-date cache、provider publication cutoff與future board-transition PIT根因，並正式化既有no-price-day adjusted-price calendar-row語意。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Repair Round 1 market-date / historical market-state closure"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T491",
+      "description": "Rounds 1–16 Audit Repair 1 擴充對抗 regression coverage。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "market-date / publication-time / historical market-state audit regression"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T491",
+      "description": "Audit Repair 1 對抗 regression 通過後重新收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "targeted synthetic PASS"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T505",
+      "description": "Rounds 1–16 Audit Repair 1 擴充對抗 regression coverage。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "market-date / publication-time / historical market-state audit regression"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T505",
+      "description": "Audit Repair 1 對抗 regression 通過後重新收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "targeted synthetic PASS"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T506",
+      "description": "Rounds 1–16 Audit Repair 1 擴充對抗 regression coverage。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "market-date / publication-time / historical market-state audit regression"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T506",
+      "description": "Audit Repair 1 對抗 regression 通過後重新收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "targeted synthetic PASS"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T513",
+      "description": "Rounds 1–16 Audit Repair 1 擴充對抗 regression coverage。",
+      "from_status": "DONE",
+      "to_status": "PARTIAL",
+      "note": "market-date / publication-time / historical market-state audit regression"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T513",
+      "description": "Audit Repair 1 對抗 regression 通過後重新收斂。",
+      "from_status": "PARTIAL",
+      "to_status": "DONE",
+      "note": "targeted synthetic PASS"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T521",
+      "description": "新增Rounds 1–16 Audit Repair 1泛化contract synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_rounds_1_16_repair1_contract_case`"
     }
   ]
 }

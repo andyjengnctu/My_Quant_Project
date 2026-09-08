@@ -516,13 +516,25 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
         with patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()), \
              patch.object(universe.rt, "MIN_VOLUME", 1_000), \
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
-            cache_reused = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now())
+            cache_reused = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now(), market_date="2026-04-03")
         add_check(results, "synthetic_error_paths", case_id, "matching_universe_v3_contract_can_reuse_cache", ["2330", "0050"], cache_reused)
+
+        with patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()), \
+             patch.object(universe.rt, "MIN_VOLUME", 1_000), \
+             patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
+            wrong_date_cache = universe._load_reusable_universe_cache(
+                cache_path, now=universe.rt.get_taipei_now(), market_date="2026-04-06"
+            )
+        add_check(
+            results, "synthetic_error_paths", case_id,
+            "universe_cache_market_date_mismatch_invalidates_membership",
+            None, wrong_date_cache,
+        )
 
         with patch.object(universe.rt, "MIN_VOLUME", 2_000), \
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
              patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()):
-            stale_threshold_cache = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now())
+            stale_threshold_cache = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now(), market_date="2026-04-03")
         add_check(results, "synthetic_error_paths", case_id, "universe_threshold_change_invalidates_bulk_cache", None, stale_threshold_cache)
 
         cache_path.unlink(missing_ok=True)

@@ -16,6 +16,7 @@ import pandas as pd
 
 from core.file_integrity import canonical_json_sha256
 from core.market_data_research_freeze import ResearchV2RequiredCommonCompleteSummary
+from core.market_data_instrument_universe import is_historical_market_state_eligible
 from core.market_data_dataset_registry import (
     PIT_ARCHIVE_ONLY,
     PIT_CURRENT_VINTAGE,
@@ -25,7 +26,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
 )
 
-RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 7
+RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 8
 RESEARCH_V2_CANDIDATE_STATUS_NOT_READY = "CANDIDATE_NOT_READY"
 RESEARCH_V2_DATASET_STATUS_EXACT_CANDIDATE = "EXACT_CANDIDATE"
 RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
@@ -37,6 +38,7 @@ RESEARCH_V2_TRADING_CALENDAR_DATASET = "TaiwanStockTradingDate"
 RESEARCH_V2_DAILY_COVERAGE_DATASET = "TaiwanStockPriceLimit"
 RESEARCH_V2_EVENT_EVIDENCE_DATASET = "TaiwanStockDelisting"
 RESEARCH_V2_ADJUSTED_PRICE_DATASET = "TaiwanStockPriceAdj"
+RESEARCH_V2_MARKET_STATE_GUARD_DATASET = "TaiwanStockInfo"
 
 RESEARCH_V2_EXACT_AUDIT_DATASETS = (
     RESEARCH_V2_TRADING_CALENDAR_DATASET,
@@ -55,6 +57,8 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "provider_as_of_date",
     "required_cutoff",
     "historical_instrument_count",
+    "historical_market_state_guard_dataset",
+    "historical_market_state_guard_fingerprint",
     "daily_universe_source_dataset",
     "daily_universe_fingerprint",
     "exact_audit_datasets",
@@ -189,6 +193,7 @@ def build_daily_pit_universe(
     raw_price_rows: pd.DataFrame,
     *,
     historical_instruments: Iterable[str],
+    transition_excluded_through: Mapping[str, str],
     trading_dates: Iterable[str] | None = None,
     provider_as_of_date: str | None = None,
 ) -> pd.DataFrame:
@@ -203,6 +208,17 @@ def build_daily_pit_universe(
     frame["date"] = _normalize_date_series(frame["date"])
     frame["stock_id"] = frame["stock_id"].astype(str).str.strip()
     frame = frame.loc[frame["date"].notna() & frame["stock_id"].isin(pool)]
+    guard = {str(key): str(value) for key, value in transition_excluded_through.items()}
+    frame = frame.loc[
+        [
+            is_historical_market_state_eligible(
+                stock_id=stock_id,
+                date_value=date_value,
+                transition_excluded_through=guard,
+            )
+            for date_value, stock_id in frame[["date", "stock_id"]].itertuples(index=False, name=None)
+        ]
+    ]
     if provider_as_of_date:
         frame = frame.loc[frame["date"] <= str(provider_as_of_date)]
     if trading_dates is not None:
@@ -338,6 +354,7 @@ def build_research_v2_candidate_identity_payload(
     provider_as_of_date: str,
     required_cutoff: str,
     historical_instrument_count: int,
+    historical_market_state_guard_fingerprint: str,
     daily_universe_fingerprint: str,
     coverage_summary: ResearchV2ExactCoverageSummary,
     adjusted_price_representation_contract_fingerprint: str,
@@ -354,6 +371,8 @@ def build_research_v2_candidate_identity_payload(
         "provider_as_of_date": str(provider_as_of_date),
         "required_cutoff": str(required_cutoff),
         "historical_instrument_count": int(historical_instrument_count),
+        "historical_market_state_guard_dataset": RESEARCH_V2_MARKET_STATE_GUARD_DATASET,
+        "historical_market_state_guard_fingerprint": str(historical_market_state_guard_fingerprint),
         "daily_universe_source_dataset": RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET,
         "daily_universe_fingerprint": str(daily_universe_fingerprint),
         "exact_audit_datasets": list(RESEARCH_V2_EXACT_AUDIT_DATASETS),
@@ -385,6 +404,7 @@ __all__ = [
     "RESEARCH_V2_DAILY_COVERAGE_DATASET",
     "RESEARCH_V2_EVENT_EVIDENCE_DATASET",
     "RESEARCH_V2_ADJUSTED_PRICE_DATASET",
+    "RESEARCH_V2_MARKET_STATE_GUARD_DATASET",
     "RESEARCH_V2_EXACT_AUDIT_DATASETS",
     "RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS",
     "ResearchV2DatasetAssessment",

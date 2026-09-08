@@ -2461,6 +2461,8 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
 def validate_market_data_governance_contract_case(_base_params):
     """Market Data provider/price/lifecycle governance stays single-source and non-promoting."""
 
+    import pandas as pd
+
     from config.market_data import (
         ACTIVE_RESEARCH_DATA_GENERATION,
         RESEARCH_DATA_GENERATIONS,
@@ -2470,6 +2472,8 @@ def validate_market_data_governance_contract_case(_base_params):
     from core.market_data_contract import (
         FINMIND_ADJUSTED_PRICE_DATASET,
         FINMIND_RAW_PRICE_ARCHIVE_DATASET,
+        RESEARCH_DAILY_BAR_CLOCK,
+        ADJUSTED_PRICE_NO_PRICE_DAY_POLICY,
         RESEARCH_STATUS_AUTHORIZED_NOT_READY,
         build_market_data_contract_snapshot,
         get_active_research_data_generation,
@@ -2496,6 +2500,34 @@ def validate_market_data_governance_contract_case(_base_params):
     add_check(results, "market_data", case_id, "raw_price_direct_consumption_remains_disabled", False, price.raw_direct_consumption_enabled)
     add_check(results, "market_data", case_id, "project_adjusted_price_engine_remains_disabled", False, price.project_adjusted_price_engine_enabled)
     add_check(results, "market_data", case_id, "retrospective_adjustment_requires_invariant_representation", True, price.retrospective_adjustment_invariance_required)
+    add_check(results, "market_data", case_id, "research_daily_bar_clock_preserves_finmind_adjusted_price_calendar_rows", RESEARCH_DAILY_BAR_CLOCK, price.research_daily_bar_clock)
+    add_check(results, "market_data", case_id, "no_price_day_policy_preserves_provider_carry_forward_when_adjusted_ohlc_valid", ADJUSTED_PRICE_NO_PRICE_DAY_POLICY, price.adjusted_price_no_price_day_policy)
+
+    from core.data_utils import sanitize_ohlcv_dataframe
+    from services.research.market_data_generation import _normalize_adjusted_rows, _normalize_volume_rows
+    v1_calendar_rows, _stats = sanitize_ohlcv_dataframe(
+        pd.DataFrame({
+            "Date": ["2026-02-27", "2026-03-02"],
+            "Open": [100.0, 100.0], "High": [101.0, 101.0],
+            "Low": [99.0, 99.0], "Close": [100.5, 100.5],
+            "Volume": [1000.0, 451.0],
+        }),
+        "SYNTH",
+        min_rows=1,
+    )
+    v2_adjusted = _normalize_adjusted_rows(
+        pd.DataFrame({
+            "date": ["2026-03-02"], "stock_id": ["SYNTH"],
+            "open": [100.0], "max": [101.0], "min": [99.0], "close": [100.5],
+        }),
+        cutoff="2026-03-02",
+    )
+    v2_volume = _normalize_volume_rows(
+        pd.DataFrame({"date": ["2026-03-02"], "stock_id": ["SYNTH"], "Trading_Volume": [451.0]}),
+        cutoff="2026-03-02",
+    )
+    add_check(results, "market_data", case_id, "v1_existing_loader_preserves_positive_provider_carry_forward_bar", 2, len(v1_calendar_rows))
+    add_check(results, "market_data", case_id, "v2_compatibility_primitives_preserve_same_calendar_bar_semantic", True, len(v2_adjusted) == 1 and len(v2_volume) == 1)
 
     configured_active = RESEARCH_DATA_GENERATIONS[ACTIVE_RESEARCH_DATA_GENERATION]
     add_check(results, "market_data", case_id, "active_research_generation_follows_config", ACTIVE_RESEARCH_DATA_GENERATION, active.generation_id)

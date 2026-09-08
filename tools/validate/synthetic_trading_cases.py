@@ -2052,7 +2052,7 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
     from core.trading_capabilities import build_trading_capability_snapshot
@@ -2060,6 +2060,7 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
         assert_completed_daily_information_date,
         latest_allowed_completed_daily_date,
         select_latest_completed_daily_date,
+        trading_daily_bar_complete_time,
     )
     from services.downloader import application as downloader_application
     from services.downloader import runtime as downloader_runtime
@@ -2072,12 +2073,16 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
     )
 
     tz = ZoneInfo("Asia/Taipei")
+    publish_hour, publish_minute = trading_daily_bar_complete_time()
+    after_close = datetime(2026, 9, 5, publish_hour, publish_minute, tzinfo=tz)
+    before_provider_publish = after_close - timedelta(minutes=1)
     morning = datetime(2026, 9, 5, 10, 0, tzinfo=tz)
-    after_close = datetime(2026, 9, 5, 14, 30, tzinfo=tz)
     add_check(results, "trading_prelive", case_id, "morning_completed_daily_cutoff_excludes_today", "2026-09-04", latest_allowed_completed_daily_date(now=morning))
-    add_check(results, "trading_prelive", case_id, "after_close_completed_daily_cutoff_allows_today", "2026-09-05", latest_allowed_completed_daily_date(now=after_close))
+    add_check(results, "trading_prelive", case_id, "before_provider_publication_cutoff_excludes_today", "2026-09-04", latest_allowed_completed_daily_date(now=before_provider_publish))
+    add_check(results, "trading_prelive", case_id, "after_provider_publication_grace_allows_today", "2026-09-05", latest_allowed_completed_daily_date(now=after_close))
     add_check(results, "trading_prelive", case_id, "provider_provisional_today_row_is_ignored_before_cutoff", "2026-09-04", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=morning))
-    add_check(results, "trading_prelive", case_id, "provider_today_row_is_eligible_after_cutoff", "2026-09-05", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=after_close))
+    add_check(results, "trading_prelive", case_id, "provider_today_row_is_ignored_before_documented_publish", "2026-09-04", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=before_provider_publish))
+    add_check(results, "trading_prelive", case_id, "provider_today_row_is_eligible_after_documented_publish_grace", "2026-09-05", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=after_close))
     try:
         assert_completed_daily_information_date("2026-09-05", now=morning)
     except RuntimeError:

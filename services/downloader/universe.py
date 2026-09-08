@@ -71,7 +71,7 @@ def _universe_contract_identity() -> dict[str, object]:
     return payload
 
 
-def _load_reusable_universe_cache(path, *, now) -> list[str] | None:
+def _load_reusable_universe_cache(path, *, now, market_date: str) -> list[str] | None:
     cache_path = rt.os.fspath(path)
     if not rt.os.path.exists(cache_path):
         return None
@@ -94,7 +94,11 @@ def _load_reusable_universe_cache(path, *, now) -> list[str] | None:
     tickers = [str(item).strip() for item in list(payload.get("qualified_tickers") or []) if str(item).strip()]
     if not tickers:
         return None
-    if str(payload.get("built_market_date") or "").strip() == "":
+    built_market_date = str(payload.get("built_market_date") or "").strip()
+    if not built_market_date:
+        return None
+    target_market_date = str(pd.Timestamp(market_date).date())
+    if built_market_date != target_market_date:
         return None
     core = {key: value for key, value in payload.items() if key != "cache_fingerprint"}
     if str(payload.get("cache_fingerprint") or "") != canonical_json_sha256(core):
@@ -274,7 +278,9 @@ def get_or_update_universe(*, market_date: str, client=None):
     market_date_text = str(pd.Timestamp(market_date).date())
     list_file = rt.get_universe_list_file_path()
 
-    cached_tickers = _load_reusable_universe_cache(list_file, now=rt.get_taipei_now())
+    cached_tickers = _load_reusable_universe_cache(
+        list_file, now=rt.get_taipei_now(), market_date=market_date_text
+    )
     if cached_tickers:
         file_mod_time = rt.get_taipei_file_mtime(list_file)
         print(f"✅ 名單有效 (更新於: {file_mod_time.strftime('%Y-%m-%d')})，直接讀取。")

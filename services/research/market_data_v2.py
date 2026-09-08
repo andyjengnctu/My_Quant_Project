@@ -28,6 +28,11 @@ from core.market_data_contract import (
     get_research_data_generation,
 )
 from core.market_data_research_promotion import get_effective_research_data_generation
+from core.market_data_instrument_universe import (
+    build_historical_market_state_guard,
+    historical_market_state_guard_fingerprint,
+    is_historical_market_state_eligible,
+)
 from core.market_data_adjusted_price_invariance import (
     PROVIDER_PRICE_FIELDS,
     PROVIDER_VOLUME_FIELD,
@@ -74,11 +79,13 @@ from core.market_data_research_pit_contract import (
     validate_research_v2_pit_review_contracts,
 )
 from core.market_data_research_v2 import (
+    RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
     RESEARCH_V2_CANDIDATE_STATUS_NOT_READY,
     RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS,
     RESEARCH_V2_DAILY_COVERAGE_DATASET,
     RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET,
     RESEARCH_V2_EVENT_EVIDENCE_DATASET,
+    RESEARCH_V2_MARKET_STATE_GUARD_DATASET,
     RESEARCH_V2_TRADING_CALENDAR_DATASET,
     build_research_v2_candidate_identity_payload,
     build_research_v2_dataset_assessments,
@@ -160,6 +167,30 @@ class ResearchV2ProviderView:
                 f"actual={len(ids)}, expected={expected}"
             )
         return tuple(ids)
+
+    def historical_market_state_guard(
+        self, *, historical_instruments: tuple[str, ...]
+    ) -> tuple[dict[str, str], str]:
+        """Return the conservative date-specific market-state exclusion guard.
+
+        ``TaiwanStockInfo`` is read here only for historical universe eligibility;
+        it is not exposed as a model-input scope seam.  The resulting transition
+        projection is pinned into the Research candidate scientific identity.
+        """
+
+        frames = list(
+            self._iter_verified_frames(
+                RESEARCH_V2_MARKET_STATE_GUARD_DATASET,
+                columns=("date", "stock_id", "type", "industry_category"),
+            )
+        )
+        if not frames:
+            raise ValueError("Research V2 缺 TaiwanStockInfo market-state guard evidence")
+        stock_info = pd.concat(frames, ignore_index=True)
+        guard = build_historical_market_state_guard(
+            stock_info, historical_instruments=historical_instruments
+        )
+        return guard, historical_market_state_guard_fingerprint(guard)
 
     def _iter_verified_frames(
         self,
@@ -530,7 +561,23 @@ def _build_exact_candidate_sqlite(
                 raise ValueError("Research V2 trading calendar evidence 不可為空")
             conn.executemany("INSERT OR IGNORE INTO trading_dates(date) VALUES (?)", ((value,) for value in sorted(trading_rows)))
 
-            historical_pool = set(view.historical_instruments())
+            historical_instruments = view.historical_instruments()
+            historical_pool = set(historical_instruments)
+            transition_excluded_through, market_state_guard_fingerprint = view.historical_market_state_guard(
+                historical_instruments=historical_instruments
+            )
+
+            def _pit_member(date_value: str, stock_id: str) -> bool:
+                return (
+                    stock_id in historical_pool
+                    and date_value in trading_rows
+                    and is_historical_market_state_eligible(
+                        stock_id=stock_id,
+                        date_value=date_value,
+                        transition_excluded_through=transition_excluded_through,
+                    )
+                )
+
             for frame in view.iter_dataset_scope_frames(
                 RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET,
                 columns=("date", "stock_id", PROVIDER_VOLUME_FIELD),
@@ -538,7 +585,7 @@ def _build_exact_candidate_sqlite(
                 rows = [
                     row
                     for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET)
-                    if row[0] <= cutoff and row[1] in historical_pool and row[0] in trading_rows
+                    if row[0] <= cutoff and _pit_member(row[0], row[1])
                 ]
                 if rows:
                     conn.executemany("INSERT OR IGNORE INTO daily_universe(date, stock_id) VALUES (?, ?)", rows)
@@ -549,7 +596,7 @@ def _build_exact_candidate_sqlite(
                         dataset=RESEARCH_V2_RAW_VOLUME_DATASET,
                         value_fields=(PROVIDER_VOLUME_FIELD,),
                     )
-                    if row[0] <= cutoff and row[1] in historical_pool and row[0] in trading_rows
+                    if row[0] <= cutoff and _pit_member(row[0], row[1])
                 ]
                 if volume_rows:
                     conn.executemany(
@@ -564,7 +611,7 @@ def _build_exact_candidate_sqlite(
                 rows = [
                     row
                     for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_DAILY_COVERAGE_DATASET)
-                    if row[0] <= cutoff and row[1] in historical_pool and row[0] in trading_rows
+                    if row[0] <= cutoff and _pit_member(row[0], row[1])
                 ]
                 if rows:
                     conn.executemany("INSERT OR IGNORE INTO price_limit_evidence(date, stock_id) VALUES (?, ?)", rows)
@@ -580,7 +627,7 @@ def _build_exact_candidate_sqlite(
                         dataset=RESEARCH_V2_ADJUSTED_PRICE_DATASET,
                         value_fields=tuple(PROVIDER_PRICE_FIELDS),
                     )
-                    if row[0] <= cutoff and row[1] in historical_pool and row[0] in trading_rows
+                    if row[0] <= cutoff and _pit_member(row[0], row[1])
                 ]
                 if adjusted_rows:
                     conn.executemany(
@@ -742,6 +789,9 @@ def _build_exact_candidate_sqlite(
                 "provider_as_of_date": provider_as_of,
                 "research_required_cutoff": cutoff,
                 "historical_instrument_count": len(historical_pool),
+                "historical_market_state_guard_dataset": RESEARCH_V2_MARKET_STATE_GUARD_DATASET,
+                "historical_market_state_guard_fingerprint": market_state_guard_fingerprint,
+                "historical_market_state_transition_count": len(transition_excluded_through),
                 "daily_universe_row_count": universe_count,
                 "daily_universe_fingerprint": universe_fingerprint,
                 "exact_coverage_fingerprint": summary.coverage_fingerprint,
@@ -903,6 +953,7 @@ def build_research_v2_candidate(
         provider_as_of_date=archive.as_of_date,
         required_cutoff=required_cutoff,
         historical_instrument_count=int(derived["historical_instrument_count"]),
+        historical_market_state_guard_fingerprint=str(derived["historical_market_state_guard_fingerprint"]),
         daily_universe_fingerprint=str(derived["daily_universe_fingerprint"]),
         coverage_summary=ResearchV2ExactCoverageSummary(**coverage_summary),
         adjusted_price_representation_contract_fingerprint=str(
@@ -922,6 +973,7 @@ def build_research_v2_candidate(
         "daily_universe_path": project_relative_display_path(universe_path, project_root=root),
         "daily_universe_file_sha256": compute_file_sha256(universe_path),
         "daily_universe_row_count": int(derived["daily_universe_row_count"]),
+        "historical_market_state_transition_count": int(derived["historical_market_state_transition_count"]),
         "daily_universe_date_count": int(coverage_summary.get("daily_universe_date_count") or 0),
         "exact_coverage": coverage_summary,
         "dataset_assessment_fingerprint": assessment_fingerprint,
@@ -986,6 +1038,11 @@ def load_research_v2_candidate(
     payload = load_json_strict(path)
     if not isinstance(payload, dict):
         raise ValueError("Research V2 candidate manifest 必須是 object")
+    if int(payload.get("schema_version") or 0) != RESEARCH_V2_CANDIDATE_SCHEMA_VERSION:
+        raise ValueError("Research V2 candidate schema version drift；請重建 candidate")
+    guard_fp = str(payload.get("historical_market_state_guard_fingerprint") or "").strip().lower()
+    if str(payload.get("historical_market_state_guard_dataset") or "") != RESEARCH_V2_MARKET_STATE_GUARD_DATASET or len(guard_fp) != 64:
+        raise ValueError("Research V2 candidate historical market-state guard identity 不完整")
     identity_keys = RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS
     # Reconstruct identity directly from persisted identity fields.  Detailed
     # coverage is supplemental; candidate_fingerprint freezes the semantic core.
