@@ -4353,6 +4353,17 @@
       "entry": "`core/dataset_profiles.py`, `core/walk_forward_policy.py`, `services/optimizer/application.py`, `services/research/strategy_compare_preparation_status.py`, `services/research/strategy_compare_reuse.py`, `services/research/strategy_comparison.py`, `filters/breakout_quality/paths.py`",
       "initial_status": "NEW",
       "order": 392
+    },
+    {
+      "id": "B405",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Rounds 1–16 Final Closure / cross-generation execution-cache identity and price-dataset SSOT",
+      "item": "Execution caches cannot cross Research generations when public profile metadata collides, and canonical FinMind price dataset identity remains single-owned",
+      "gap": "Final Closure independently reproduced a residual cross-generation collision after Repair 4: Optimizer raw cache and Portfolio prepared cache could treat different V1/V2 bytes as the same source when ticker basename, file size and mtime matched. Final closure must bind execution-cache identity to the resolved physical dataset root, invalidate prior cache schemas, and keep same-generation reuse deterministic. The same closure also removes duplicated provider price dataset declarations from Research scope/candidate/registry logic by consuming the canonical FinMind raw/adjusted dataset constants from core/market_data_contract.py. This is engineering-only and must not change Market Data scientific scope, PIT semantics, active generation, strategy parameters, or Breakout Quality MR status.",
+      "entry": "`services/optimizer/raw_cache.py`, `services/portfolio_replay.py`, `core/market_data_contract.py`, `core/market_data_dataset_registry.py`, `core/market_data_research_scope.py`, `core/market_data_research_v2.py`, `tools/validate/synthetic_regression_cases.py`",
+      "initial_status": "NEW",
+      "order": 393
     }
   ],
   "tests": [
@@ -8017,6 +8028,13 @@
       "description": "`validate_market_data_rounds_1_16_repair4_downstream_generation_identity_contract_case` 泛化驗證V1/reduced legacy identity/path不漂移、promoted V2 dataset-generation lineage改變Optimizer policy/Study DB與Strategy Compare pair cache identity，且Breakout Quality V2 model/output使用獨立generation namespace並禁止fallback覆寫V1 evidence。",
       "initial_status": "NEW",
       "order": 514
+    },
+    {
+      "id": "T525",
+      "description": "`validate_research_generation_execution_cache_isolation_case` 對抗驗證不同physical Research generation即使ticker basename/size/mtime完全相同，Optimizer raw cache與Portfolio prepared cache identity仍必須分離；同一generation重建則保持deterministic。",
+      "b_id": "B405",
+      "initial_status": "NEW",
+      "order": 515
     }
   ],
   "transitions": [
@@ -25923,6 +25941,22 @@
       "to_status": "DONE",
       "description": "新增Rounds 1–16 Audit Repair 4泛化downstream generation identity contract synthetic並納入正式DONE測試摘要。",
       "note": "`validate_market_data_rounds_1_16_repair4_downstream_generation_identity_contract_case`"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "B405",
+      "description": "Final Closure修正Repair 4後仍可重現的execution-cache跨Research generation碰撞，並收斂FinMind raw/adjusted price dataset canonical owner。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Final Closure cache identity / price-dataset SSOT closure"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "T525",
+      "description": "新增Final Closure cross-generation execution-cache regression並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_research_generation_execution_cache_isolation_case`"
     }
   ]
 }

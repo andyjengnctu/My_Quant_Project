@@ -31,6 +31,7 @@ from services.portfolio_sim.simulation_runner import (
     _build_portfolio_prepared_cache_paths,
 )
 from services.scanner.stock_processor import process_single_stock
+from services.optimizer.raw_cache import _build_raw_cache_signature
 from tools.validate.scanner_expectations import normalize_scanner_result
 
 from .checks import add_check
@@ -175,6 +176,83 @@ def validate_optimizer_raw_cache_rerun_consistency_case(_base_params):
     add_check(results, "synthetic_regression", case_id, "raw_cache_negative_volume_corrected", 0.0, float(second_cache["2330"].loc[pd.Timestamp("2026-01-04"), "Volume"]))
 
     summary["ticker_count"] = len(second_cache)
+    return results, summary
+
+
+def validate_research_generation_execution_cache_isolation_case(_base_params):
+    case_id = "RESEARCH_GENERATION_EXECUTION_CACHE_ISOLATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with TemporaryDirectory(prefix="v16_generation_cache_isolation_") as tmp_dir:
+        root = Path(tmp_dir)
+        v1_dir = root / "v1" / "tw_stock_data_vip"
+        v2_dir = root / "v2" / "tw_stock_data_vip"
+        v1_dir.mkdir(parents=True, exist_ok=True)
+        v2_dir.mkdir(parents=True, exist_ok=True)
+
+        v1_file = v1_dir / "2330.csv"
+        v2_file = v2_dir / "2330.csv"
+        # Same basename, size and mtime but different bytes reproduces the
+        # cross-generation collision found during Final Closure.
+        v1_file.write_text("AAAA\n", encoding="utf-8")
+        v2_file.write_text("BBBB\n", encoding="utf-8")
+        fixed_mtime_ns = 1_700_000_000_000_000_000
+        os.utime(v1_file, ns=(fixed_mtime_ns, fixed_mtime_ns))
+        os.utime(v2_file, ns=(fixed_mtime_ns, fixed_mtime_ns))
+
+        v1_inputs = [("2330", str(v1_file))]
+        v2_inputs = [("2330", str(v2_file))]
+        raw_v1, raw_payload_v1 = _build_raw_cache_signature(
+            v1_inputs,
+            300,
+            data_dir=str(v1_dir),
+        )
+        raw_v2, raw_payload_v2 = _build_raw_cache_signature(
+            v2_inputs,
+            300,
+            data_dir=str(v2_dir),
+        )
+
+        params = V16StrategyParams()
+        portfolio_v1 = _build_portfolio_prepared_cache_paths(str(v1_dir), v1_inputs, params)
+        portfolio_v2 = _build_portfolio_prepared_cache_paths(str(v2_dir), v2_inputs, params)
+        portfolio_v1_repeat = _build_portfolio_prepared_cache_paths(str(v1_dir), v1_inputs, params)
+
+    add_check(
+        results,
+        "synthetic_regression",
+        case_id,
+        "optimizer_raw_cache_identity_includes_physical_dataset_root",
+        True,
+        raw_v1 != raw_v2,
+    )
+    add_check(
+        results,
+        "synthetic_regression",
+        case_id,
+        "optimizer_raw_cache_payload_records_distinct_data_roots",
+        True,
+        raw_payload_v1["data_root"] != raw_payload_v2["data_root"],
+    )
+    add_check(
+        results,
+        "synthetic_regression",
+        case_id,
+        "portfolio_prepared_cache_identity_includes_physical_dataset_root",
+        True,
+        portfolio_v1["payload_path"] != portfolio_v2["payload_path"],
+    )
+    add_check(
+        results,
+        "synthetic_regression",
+        case_id,
+        "portfolio_prepared_cache_same_generation_is_deterministic",
+        portfolio_v1["payload_path"],
+        portfolio_v1_repeat["payload_path"],
+    )
+
+    summary["checks"] = len(results)
     return results, summary
 
 

@@ -29,6 +29,10 @@ from dataclasses import asdict, dataclass
 from typing import Iterable
 
 from core.file_integrity import canonical_json_sha256
+from core.market_data_contract import (
+    FINMIND_ADJUSTED_PRICE_DATASET,
+    FINMIND_RAW_PRICE_ARCHIVE_DATASET,
+)
 from core.market_data_adjusted_price_invariance import (
     PRICE_REPRESENTATION_STATUS_INVARIANT,
     PROVIDER_PRICE_FIELDS,
@@ -56,20 +60,20 @@ FIELD_USE_TRANSFORM_SOURCE_ONLY = "TRANSFORM_SOURCE_ONLY"
 RESEARCH_V2_REQUIRED_DATASETS = (
     "TaiwanStockTradingDate",
     "TaiwanStockDelisting",
-    "TaiwanStockPrice",
+    FINMIND_RAW_PRICE_ARCHIVE_DATASET,
     "TaiwanStockPriceLimit",
-    "TaiwanStockPriceAdj",
+    FINMIND_ADJUSTED_PRICE_DATASET,
 )
 
 RESEARCH_V2_COMMON_COMPLETE_DATASETS = (
     "TaiwanStockTradingDate",
-    "TaiwanStockPrice",
+    FINMIND_RAW_PRICE_ARCHIVE_DATASET,
     "TaiwanStockPriceLimit",
-    "TaiwanStockPriceAdj",
+    FINMIND_ADJUSTED_PRICE_DATASET,
 )
 
-RESEARCH_V2_RAW_VOLUME_DATASET = "TaiwanStockPrice"
-RESEARCH_V2_ADJUSTED_PRICE_DATASET = "TaiwanStockPriceAdj"
+RESEARCH_V2_RAW_VOLUME_DATASET = FINMIND_RAW_PRICE_ARCHIVE_DATASET
+RESEARCH_V2_ADJUSTED_PRICE_DATASET = FINMIND_ADJUSTED_PRICE_DATASET
 
 
 @dataclass(frozen=True)
@@ -175,8 +179,8 @@ def _required_rules(pit_fingerprint_by_dataset: dict[str, str], pit_status_by_da
             basis="round9_exact_event_universe_evidence",
             reason="required historical-universe event evidence; event no-row remains legal and is not a daily denominator",
         ),
-        "TaiwanStockPrice": contract(
-            "TaiwanStockPrice",
+        RESEARCH_V2_RAW_VOLUME_DATASET: contract(
+            RESEARCH_V2_RAW_VOLUME_DATASET,
             evidence_fields=("date", "stock_id"),
             field_authorizations=(
                 _field_rule(
@@ -201,8 +205,8 @@ def _required_rules(pit_fingerprint_by_dataset: dict[str, str], pit_status_by_da
             basis="round9_exact_daily_coverage_evidence",
             reason="required exact daily coverage evidence; price-limit payload fields are not model inputs in the foundation scope",
         ),
-        "TaiwanStockPriceAdj": contract(
-            "TaiwanStockPriceAdj",
+        RESEARCH_V2_ADJUSTED_PRICE_DATASET: contract(
+            RESEARCH_V2_ADJUSTED_PRICE_DATASET,
             evidence_fields=("date", "stock_id"),
             field_authorizations=(
                 _field_rule(

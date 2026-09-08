@@ -55,7 +55,7 @@ from services.optimizer.walk_forward import resolve_first_walk_forward_test_boun
 from services.portfolio_replay_runtime import LOAD_PROGRESS_EVERY, OUTPUT_DIR, PROJECT_ROOT, ensure_runtime_dirs, is_insufficient_data_error
 
 PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
-PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 3
+PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 4
 
 
 def _portfolio_prepared_cache_include_trade_logs() -> bool:
@@ -402,6 +402,11 @@ def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, inclu
     combined_payload = {
         "schema_version": PORTFOLIO_PREP_CACHE_SCHEMA_VERSION,
         "profile_key": str(profile_key),
+        # A Research generation switch changes the physical dataset root even
+        # when the public profile key remains ``full``.  Bind this local cache
+        # to that root so V1 and promoted V2 can never collide merely because
+        # ticker names, sizes and mtimes happen to match.
+        "data_root": str(Path(data_dir).resolve()),
         "data_signature": data_sig,
         "params_signature": params_sig,
         "include_trade_logs": bool(include_trade_logs),
@@ -430,7 +435,14 @@ def _load_portfolio_prepared_cache(cache_paths):
     expected_meta = cache_paths["meta"]
     if int(meta.get("schema_version", 0) or 0) != PORTFOLIO_PREP_CACHE_SCHEMA_VERSION:
         return None
-    for key in ("profile_key", "data_signature", "params_signature", "include_trade_logs", "raw_universe_required_min_rows"):
+    for key in (
+        "profile_key",
+        "data_root",
+        "data_signature",
+        "params_signature",
+        "include_trade_logs",
+        "raw_universe_required_min_rows",
+    ):
         if str(meta.get(key, "")) != str(expected_meta.get(key, "")):
             return None
     try:

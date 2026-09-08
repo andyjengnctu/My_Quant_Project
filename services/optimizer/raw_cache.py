@@ -19,7 +19,7 @@ from core.dataset_profiles import (
 )
 from core.runtime_utils import resolve_strict_environment_flag as _env_flag
 
-RAW_CACHE_SCHEMA_VERSION = 1
+RAW_CACHE_SCHEMA_VERSION = 2
 RAW_CACHE_LOCK_POLL_SEC = 0.25
 RAW_CACHE_LOCK_STALE_SEC = 6 * 60 * 60
 RAW_CACHE_REPLACE_RETRY_COUNT = 20
@@ -46,10 +46,15 @@ def _build_raw_cache_paths(output_dir, profile_key, required_min_rows):
     }
 
 
-def _build_raw_cache_signature(csv_inputs, required_min_rows):
+def _build_raw_cache_signature(csv_inputs, required_min_rows, *, data_dir):
     signature_payload = {
         "schema_version": RAW_CACHE_SCHEMA_VERSION,
         "required_min_rows": int(required_min_rows),
+        # Execution caches are local implementation artifacts, so the resolved
+        # physical dataset root is part of their identity.  This prevents a
+        # Research V1 and promoted-V2 dataset with identical file names/stat
+        # metadata from sharing the same parsed raw cache.
+        "data_root": str(Path(data_dir).resolve()),
         "files": [],
     }
     for ticker, file_path in csv_inputs:
@@ -306,7 +311,11 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
     signature_payload = None
     if use_raw_cache or write_raw_cache:
         cache_paths = _build_raw_cache_paths(output_dir, profile_key, required_min_rows)
-        signature, signature_payload = _build_raw_cache_signature(csv_inputs, required_min_rows)
+        signature, signature_payload = _build_raw_cache_signature(
+            csv_inputs,
+            required_min_rows,
+            data_dir=data_dir,
+        )
 
     if use_raw_cache and cache_paths is not None:
         persisted_payload = _load_persisted_raw_cache(cache_paths, signature)

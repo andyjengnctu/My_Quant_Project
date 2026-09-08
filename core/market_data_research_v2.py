@@ -15,6 +15,10 @@ from typing import Iterable, Mapping
 import pandas as pd
 
 from core.file_integrity import canonical_json_sha256
+from core.market_data_contract import (
+    FINMIND_ADJUSTED_PRICE_DATASET,
+    FINMIND_RAW_PRICE_ARCHIVE_DATASET,
+)
 from core.market_data_research_freeze import ResearchV2RequiredCommonCompleteSummary
 from core.market_data_instrument_universe import is_historical_market_state_eligible
 from core.market_data_dataset_registry import (
@@ -33,11 +37,11 @@ RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
 RESEARCH_V2_DATASET_STATUS_CURRENT_VINTAGE_BLOCKED = "CURRENT_VINTAGE_BLOCKED"
 RESEARCH_V2_DATASET_STATUS_ARCHIVE_ONLY = "ARCHIVE_ONLY"
 
-RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET = "TaiwanStockPrice"
+RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET = FINMIND_RAW_PRICE_ARCHIVE_DATASET
 RESEARCH_V2_TRADING_CALENDAR_DATASET = "TaiwanStockTradingDate"
 RESEARCH_V2_DAILY_COVERAGE_DATASET = "TaiwanStockPriceLimit"
 RESEARCH_V2_EVENT_EVIDENCE_DATASET = "TaiwanStockDelisting"
-RESEARCH_V2_ADJUSTED_PRICE_DATASET = "TaiwanStockPriceAdj"
+RESEARCH_V2_ADJUSTED_PRICE_DATASET = FINMIND_ADJUSTED_PRICE_DATASET
 RESEARCH_V2_MARKET_STATE_GUARD_DATASET = "TaiwanStockInfo"
 
 RESEARCH_V2_EXACT_AUDIT_DATASETS = (

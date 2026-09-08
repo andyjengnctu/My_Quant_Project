@@ -9,6 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from core.market_data_contract import (
+    FINMIND_ADJUSTED_PRICE_DATASET,
+    FINMIND_RAW_PRICE_ARCHIVE_DATASET,
+)
+
 ARCHIVE_INCLUDE = "include"
 ARCHIVE_EXCLUDE = "exclude"
 
@@ -124,8 +129,8 @@ MARKET_DATASET_SPECS: tuple[MarketDatasetSpec, ...] = (
     _include("TaiwanStockDelisting", "security_master", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_EXACT_CANDIDATE, primary_key_hint=("date", "stock_id")),
     _include("TaiwanStockIndustryChain", "security_master", BOOTSTRAP_SINGLE_NO_DATES, DAILY_STATIC_REFRESH, PIT_REVIEW_REQUIRED, primary_key_hint=("stock_id", "industry", "sub_industry", "date"), rationale="Current-vintage industry classification; archive now, PIT legality is reviewed later."),
     _include("TaiwanStockActiveETFInfo", "security_master", BOOTSTRAP_SINGLE_NO_DATES, DAILY_STATIC_REFRESH, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id"), rationale="Small security-master supplement for active ETFs; holdings remain Sponsor-only and excluded."),
-    _include("TaiwanStockPrice", "price", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_EXACT_CANDIDATE, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Raw archive/evidence only; current model/strategy direct consumption remains prohibited."),
-    _include("TaiwanStockPriceAdj", "price", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_CURRENT_VINTAGE, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Canonical vendor adjusted-price source; Research legality still requires representation invariance."),
+    _include(FINMIND_RAW_PRICE_ARCHIVE_DATASET, "price", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_EXACT_CANDIDATE, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Raw archive/evidence only; current model/strategy direct consumption remains prohibited."),
+    _include(FINMIND_ADJUSTED_PRICE_DATASET, "price", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_CURRENT_VINTAGE, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Canonical vendor adjusted-price source; Research legality still requires representation invariance."),
     _include("TaiwanStockPER", "valuation", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
     _include("TaiwanStockDayTrading", "trading_activity", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True),
     _include("TaiwanStockPriceLimit", "trading_constraint", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_EXACT_CANDIDATE, primary_key_hint=("date", "stock_id"), probe_data_id=DEFAULT_EQUITY_PROBE_DATA_ID, full_market_exact_date_expected=True, rationale="Bootstrap is per-instrument because daily all-market reference dates would exceed the historical instrument count; daily refresh may still use the verified all-market exact-date capability."),
