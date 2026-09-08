@@ -16,7 +16,8 @@ from core.dataset_profiles import (
     normalize_dataset_profile_key,
 )
 from core.output_paths import normalize_output_category
-from core.market_data_contract import get_active_research_data_generation, get_trading_market_data_lifecycle
+from core.market_data_contract import get_trading_market_data_lifecycle
+from core.market_data_research_promotion import get_effective_research_data_generation
 
 RUNTIME_DOMAIN_RESEARCH = "research"
 RUNTIME_DOMAIN_TRADING = "trading"
@@ -103,7 +104,7 @@ def build_runtime_domain_contract_snapshot(project_root: str | os.PathLike[str])
     root = os.path.abspath(os.fspath(project_root))
     research = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_RESEARCH)
     trading = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
-    research_generation = get_active_research_data_generation(root)
+    research_generation = get_effective_research_data_generation(root)
     trading_lifecycle = get_trading_market_data_lifecycle()
     return {
         "research": {

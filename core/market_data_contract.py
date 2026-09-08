@@ -8,12 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 from typing import Mapping
 
 from config.market_data import (
     ACTIVE_RESEARCH_DATA_GENERATION,
-    RESEARCH_DATA_GENERATION_V2,
     RESEARCH_DATA_GENERATIONS,
     TRADING_MARKET_DATA_LIFECYCLE,
 )
@@ -145,24 +143,8 @@ def get_research_data_generation(generation_id: str) -> ResearchDataGenerationCo
     )
 
 
-def get_active_research_data_generation(project_root=None) -> ResearchDataGenerationContract:
-    """Resolve effective Research truth from validated promotion state or config fallback."""
-
-    from core.market_data_research_promotion import load_active_research_v2_promotion
-
-    root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[1]
-    promoted = load_active_research_v2_promotion(root, required=False)
-    if promoted is not None:
-        blueprint = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
-        return ResearchDataGenerationContract(
-            generation_id=RESEARCH_DATA_GENERATION_V2,
-            status=RESEARCH_STATUS_ACTIVE_FROZEN,
-            lifecycle="immutable",
-            cutoff_mode=blueprint.cutoff_mode,
-            cutoff=promoted.frozen_cutoff,
-            required_cutoff=blueprint.required_cutoff,
-            universe_mode=blueprint.universe_mode,
-        )
+def get_active_research_data_generation() -> ResearchDataGenerationContract:
+    """Resolve the declarative source-code fallback Research generation."""
 
     contract = get_research_data_generation(ACTIVE_RESEARCH_DATA_GENERATION)
     if contract.cutoff is None:
@@ -194,15 +176,13 @@ def get_trading_market_data_lifecycle() -> TradingMarketDataLifecycleContract:
     )
 
 
-def build_market_data_contract_snapshot(project_root=None) -> dict[str, object]:
+def build_market_data_contract_snapshot() -> dict[str, object]:
     price = get_market_price_source_contract()
-    active_research = get_active_research_data_generation(project_root)
+    active_research = get_active_research_data_generation()
     research_generations = {
         generation_id: get_research_data_generation(generation_id).__dict__
         for generation_id in RESEARCH_DATA_GENERATIONS
     }
-    if active_research.generation_id in research_generations:
-        research_generations[active_research.generation_id] = active_research.__dict__
     trading = get_trading_market_data_lifecycle()
     return {
         "price_source": price.__dict__,

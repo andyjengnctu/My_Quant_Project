@@ -13,6 +13,13 @@ from typing import Mapping
 
 from config.market_data import RESEARCH_DATA_GENERATION_V2, RESEARCH_REQUIRED_CUTOFF
 from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
+from core.market_data_contract import (
+    RESEARCH_STATUS_ACTIVE_FROZEN,
+    ResearchDataGenerationContract,
+    build_market_data_contract_snapshot,
+    get_active_research_data_generation,
+    get_research_data_generation,
+)
 from core.market_data_adjusted_price_invariance import adjusted_price_representation_contract_fingerprint
 from core.market_data_research_materialization import (
     RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY,
@@ -247,6 +254,39 @@ def load_active_research_v2_promotion(
     )
 
 
+def get_effective_research_data_generation(project_root) -> ResearchDataGenerationContract:
+    """Resolve validated promotion state first, then the declarative fallback."""
+
+    root = Path(project_root).resolve()
+    promoted = load_active_research_v2_promotion(root, required=False)
+    if promoted is not None:
+        blueprint = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
+        return ResearchDataGenerationContract(
+            generation_id=RESEARCH_DATA_GENERATION_V2,
+            status=RESEARCH_STATUS_ACTIVE_FROZEN,
+            lifecycle="immutable",
+            cutoff_mode=blueprint.cutoff_mode,
+            cutoff=promoted.frozen_cutoff,
+            required_cutoff=blueprint.required_cutoff,
+            universe_mode=blueprint.universe_mode,
+        )
+
+    return get_active_research_data_generation()
+
+
+def build_effective_market_data_contract_snapshot(project_root) -> dict[str, object]:
+    """Overlay validated effective Research state on the canonical base snapshot."""
+
+    snapshot = build_market_data_contract_snapshot()
+    active = get_effective_research_data_generation(project_root)
+    snapshot["active_research_generation"] = active.__dict__
+    generations = dict(snapshot["research_generations"])
+    if active.generation_id in generations:
+        generations[active.generation_id] = active.__dict__
+    snapshot["research_generations"] = generations
+    return snapshot
+
+
 def resolve_promoted_research_full_dataset_dir(project_root) -> Path | None:
     active = load_active_research_v2_promotion(project_root, required=False)
     return None if active is None else active.full_dataset_dir
@@ -261,5 +301,7 @@ __all__ = [
     "promotion_identity_from_payload",
     "build_research_v2_promotion_identity_payload",
     "load_active_research_v2_promotion",
+    "get_effective_research_data_generation",
+    "build_effective_market_data_contract_snapshot",
     "resolve_promoted_research_full_dataset_dir",
 ]

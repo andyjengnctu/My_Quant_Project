@@ -45,11 +45,13 @@ def build_source_data_inventory(project_root: str | Path, dataset: str) -> dict[
     fingerprint_algorithm = SOURCE_DATA_INVENTORY_ALGORITHM
     if profile == DATASET_PROFILE_FULL:
         from config.market_data import RESEARCH_DATA_GENERATION_V2
-        from core.market_data_contract import get_active_research_data_generation
+        from core.market_data_research_promotion import (
+            get_effective_research_data_generation,
+            load_active_research_v2_promotion,
+        )
 
-        active = get_active_research_data_generation(project_root)
+        active = get_effective_research_data_generation(project_root)
         if active.generation_id == RESEARCH_DATA_GENERATION_V2:
-            from core.market_data_research_promotion import load_active_research_v2_promotion
 
             promoted = load_active_research_v2_promotion(project_root, required=True)
             generation_lineage = {

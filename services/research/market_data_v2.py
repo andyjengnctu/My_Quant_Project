@@ -25,9 +25,9 @@ from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_replace_with_retry, atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.market_data_contract import (
     RESEARCH_STATUS_AUTHORIZED_NOT_READY,
-    get_active_research_data_generation,
     get_research_data_generation,
 )
+from core.market_data_research_promotion import get_effective_research_data_generation
 from core.market_data_adjusted_price_invariance import (
     PROVIDER_PRICE_FIELDS,
     PROVIDER_VOLUME_FIELD,
@@ -855,7 +855,7 @@ def build_research_v2_candidate(
     if generation.status != RESEARCH_STATUS_AUTHORIZED_NOT_READY or generation.cutoff is not None:
         raise RuntimeError("Research V2 candidate builder 只允許 authorized_not_ready / cutoff=None 狀態")
     required_cutoff = generation.required_cutoff
-    active_generation = get_active_research_data_generation(root)
+    active_generation = get_effective_research_data_generation(root)
     if active_generation.generation_id != RESEARCH_DATA_GENERATION_V1:
         raise RuntimeError("Research V2 已 promotion 為 active generation；不得在 active V2 上重建 candidate")
 

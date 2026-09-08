@@ -27,7 +27,6 @@ from core.file_integrity import (
     compute_file_sha256,
     load_json_strict,
 )
-from core.market_data_contract import get_active_research_data_generation
 from core.market_data_research_materialization import (
     RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY,
     RESEARCH_V2_COMPAT_OUTPUT_COLUMNS,
@@ -40,6 +39,7 @@ from core.market_data_research_materialization import (
 from core.market_data_research_promotion import (
     RESEARCH_ACTIVE_POINTER_SCHEMA_VERSION,
     build_research_v2_promotion_identity_payload,
+    get_effective_research_data_generation,
     load_active_research_v2_promotion,
     promotion_identity_from_payload,
 )
@@ -524,7 +524,7 @@ def promote_research_v2(
             "provider_calls": 0,
         }
 
-    prior = get_active_research_data_generation(root)
+    prior = get_effective_research_data_generation(root)
     if prior.generation_id != RESEARCH_DATA_GENERATION_V1:
         raise RuntimeError(f"Research V2 promotion prior generation 不合法: {prior.generation_id}")
     freeze = load_research_v2_freeze_candidate(
@@ -638,7 +638,7 @@ def load_active_research_v2_read_view(
 
 def collect_research_market_data_status(project_root, *, deep: bool = False) -> dict[str, object]:
     root = Path(project_root).resolve()
-    active_contract = get_active_research_data_generation(root)
+    active_contract = get_effective_research_data_generation(root)
     active = load_active_research_v2_promotion(root, required=False)
     freezes = discover_research_v2_freeze_candidates(root)
     payload: dict[str, object] = {

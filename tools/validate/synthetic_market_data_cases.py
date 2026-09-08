@@ -3554,8 +3554,11 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
     from core.dataset_profiles import get_dataset_dir
     from core.file_integrity import atomic_write_json, compute_file_sha256
     from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest, build_registry_fingerprint
-    from core.market_data_contract import build_market_data_contract_snapshot, get_active_research_data_generation
     from core.market_data_dataset_registry import BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, BOOTSTRAP_SINGLE_FULL_RANGE, BOOTSTRAP_SINGLE_NO_DATES, get_market_dataset_specs
+    from core.market_data_research_promotion import (
+        build_effective_market_data_contract_snapshot,
+        get_effective_research_data_generation,
+    )
     from core.market_data_provider_snapshot import ProviderArtifactEvidence, build_provider_snapshot_payload
     from core.market_data_research_storage_contract import resolve_active_research_generation_path, resolve_research_v2_promotion_manifest_path
     from core.market_data_storage_contract import resolve_market_data_provider_snapshot_path, resolve_market_data_request_parquet_path
@@ -3659,7 +3662,7 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
             return frame
 
         load_ready_provider_snapshot_archive(root)
-        before = get_active_research_data_generation(root)
+        before = get_effective_research_data_generation(root)
         add_check(results, "market_data", case_id, "promotion_starts_from_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, before.generation_id)
         add_check(results, "market_data", case_id, "static_config_remains_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, ACTIVE_RESEARCH_DATA_GENERATION)
         add_check(results, "market_data", case_id, "full_dataset_before_promotion_uses_legacy_v1_path", str((root / "data" / "tw_stock_data_vip").resolve()), str(Path(get_dataset_dir(root, "full")).resolve()))
@@ -3705,10 +3708,10 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
         add_check(results, "market_data", case_id, "full_consumer_routes_to_promoted_immutable_materialization", True, "/materializations/" in promoted_dir.as_posix())
         add_check(results, "market_data", case_id, "reduced_fixture_is_not_redirected_by_research_promotion", str((root / "data" / "tw_stock_data_vip_reduced").resolve()), str(Path(get_dataset_dir(root, "reduced")).resolve()))
 
-        active = get_active_research_data_generation(root)
+        active = get_effective_research_data_generation(root)
         add_check(results, "market_data", case_id, "effective_active_generation_switches_only_after_pointer", RESEARCH_DATA_GENERATION_V2, active.generation_id)
         add_check(results, "market_data", case_id, "effective_active_contract_is_frozen", cutoff, active.cutoff)
-        contract_snapshot = build_market_data_contract_snapshot(root)
+        contract_snapshot = build_effective_market_data_contract_snapshot(root)
         add_check(results, "market_data", case_id, "market_data_contract_snapshot_reports_effective_v2", RESEARCH_DATA_GENERATION_V2, contract_snapshot["active_research_generation"]["generation_id"])
         runtime = build_runtime_domain_contract_snapshot(root)
         add_check(results, "market_data", case_id, "runtime_domain_reports_research_v2", RESEARCH_DATA_GENERATION_V2, runtime["research"]["market_data_generation"])
