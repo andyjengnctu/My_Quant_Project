@@ -73,6 +73,14 @@ def get_dataset_root_dir(project_root, profile_key=DEFAULT_DATASET_PROFILE):
 
 def get_dataset_dir(project_root, profile_key):
     normalized_key = normalize_dataset_profile_key(profile_key)
+    if normalized_key == DATASET_PROFILE_FULL:
+        # A validated Research V2 promotion atomically redirects only the formal
+        # full Research profile.  Reduced remains the stable local test fixture.
+        from core.market_data_research_promotion import resolve_promoted_research_full_dataset_dir
+
+        promoted = resolve_promoted_research_full_dataset_dir(project_root)
+        if promoted is not None:
+            return str(promoted)
     return os.path.join(get_dataset_root_dir(project_root, normalized_key), DATASET_PROFILE_SPECS[normalized_key]["dir_name"])
 
 

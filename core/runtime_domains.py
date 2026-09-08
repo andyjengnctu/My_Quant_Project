@@ -100,9 +100,10 @@ def assert_runtime_write_path_is_not_research_dataset(
 
 
 def build_runtime_domain_contract_snapshot(project_root: str | os.PathLike[str]) -> dict[str, object]:
-    research = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_RESEARCH)
-    trading = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    research_generation = get_active_research_data_generation()
+    root = os.path.abspath(os.fspath(project_root))
+    research = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_RESEARCH)
+    trading = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
+    research_generation = get_active_research_data_generation(root)
     trading_lifecycle = get_trading_market_data_lifecycle()
     return {
         "research": {

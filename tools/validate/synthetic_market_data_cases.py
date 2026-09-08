@@ -3541,3 +3541,235 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
         }
     )
     return results, summary
+
+
+def validate_market_data_v2_research_promotion_consumer_integration_contract_case(_base_params):
+    """Round-16 proves explicit promotion, immutable materialization and active consumer routing."""
+
+    from datetime import date, datetime, timedelta, timezone
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GENERATION_V1, RESEARCH_DATA_GENERATION_V2, RESEARCH_REQUIRED_CUTOFF
+    from core.dataset_profiles import get_dataset_dir
+    from core.file_integrity import atomic_write_json, compute_file_sha256
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest, build_registry_fingerprint
+    from core.market_data_contract import build_market_data_contract_snapshot, get_active_research_data_generation
+    from core.market_data_dataset_registry import BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, BOOTSTRAP_SINGLE_FULL_RANGE, BOOTSTRAP_SINGLE_NO_DATES, get_market_dataset_specs
+    from core.market_data_provider_snapshot import ProviderArtifactEvidence, build_provider_snapshot_payload
+    from core.market_data_research_storage_contract import resolve_active_research_generation_path, resolve_research_v2_promotion_manifest_path
+    from core.market_data_storage_contract import resolve_market_data_provider_snapshot_path, resolve_market_data_request_parquet_path
+    from core.runtime_domains import build_runtime_domain_contract_snapshot
+    from services.downloader.market_data_ledger import MarketDataJobLedger
+    from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
+    from services.research.market_data_generation import (
+        load_active_research_v2_read_view,
+        promote_research_v2,
+        validate_research_v2_compatibility_materialization,
+    )
+    from services.research.market_data_v2 import build_research_v2_candidate, build_research_v2_freeze_candidate
+
+    case_id = "MARKET_DATA_V2_RESEARCH_PROMOTION_CONSUMER_INTEGRATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cutoff_date = date.fromisoformat(RESEARCH_REQUIRED_CUTOFF)
+        dates = [
+            (cutoff_date - timedelta(days=4)).isoformat(),
+            (cutoff_date - timedelta(days=3)).isoformat(),
+            cutoff_date.isoformat(),
+        ]
+        cutoff = dates[-1]
+        provider_as_of = (cutoff_date + timedelta(days=190)).isoformat()
+        manifest_fingerprint = "9" * 64
+        registry_fingerprint = build_registry_fingerprint(get_market_dataset_specs(included_only=True))
+        requests = (
+            BootstrapHttpRequest("TaiwanStockTradingDate", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
+            BootstrapHttpRequest("TaiwanStockDelisting", BOOTSTRAP_SINGLE_FULL_RANGE, None, "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+        )
+        manifest = BootstrapRequestManifest(
+            as_of_date=provider_as_of,
+            full_range_start="1900-01-01",
+            registry_fingerprint=registry_fingerprint,
+            manifest_fingerprint=manifest_fingerprint,
+            historical_instrument_count=1,
+            requests=requests,
+        )
+        frame_by_request = {
+            requests[0].request_id: pd.DataFrame({"date": dates}),
+            requests[1].request_id: pd.DataFrame(columns=["date", "stock_id"]),
+            requests[2].request_id: pd.DataFrame({
+                "date": dates,
+                "stock_id": ["0050"] * 3,
+                "Trading_Volume": [1000.0, 1100.0, 1200.0],
+            }),
+            requests[3].request_id: pd.DataFrame({"date": dates, "stock_id": ["0050"] * 3}),
+            requests[4].request_id: pd.DataFrame({
+                "date": dates,
+                "stock_id": ["0050"] * 3,
+                "open": [100.0, 101.0, 102.0],
+                "max": [102.0, 103.0, 104.0],
+                "min": [99.0, 100.0, 101.0],
+                "close": [101.0, 102.0, 103.0],
+            }),
+        }
+        ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
+        ledger = MarketDataJobLedger(ledger_path)
+        workload_id = ledger.seed_manifest(manifest, now=datetime(2026, 9, 8, tzinfo=timezone.utc))
+        evidence = []
+        current = datetime(2026, 9, 8, tzinfo=timezone.utc)
+        while True:
+            job = ledger.claim_next_job(
+                workload_id,
+                owner_id="synthetic-round16",
+                now=current,
+                lease_until=current + timedelta(minutes=5),
+            )
+            if job is None:
+                break
+            request = job.to_request()
+            path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((request.request_id + "\n").encode("utf-8"))
+            digest = compute_file_sha256(path)
+            frame = frame_by_request[request.request_id]
+            ledger.mark_done(workload_id, request.request_id, row_count=len(frame), content_sha256=digest, now=current)
+            evidence.append(ProviderArtifactEvidence(request_id=request.request_id, dataset=request.dataset, row_count=len(frame), content_sha256=digest))
+            current += timedelta(seconds=1)
+        ledger.set_workload_status(workload_id, status="DONE", now=current)
+        provider_payload = build_provider_snapshot_payload(
+            manifest=manifest,
+            artifacts=evidence,
+            finalized_at="2026-09-08T00:00:00+00:00",
+        )
+        atomic_write_json(resolve_market_data_provider_snapshot_path(root, manifest_fingerprint), provider_payload)
+
+        def frame_reader(path, columns):
+            frame = frame_by_request[path.stem].copy()
+            if columns:
+                missing = [column for column in columns if column not in frame.columns]
+                if missing:
+                    raise ValueError(f"synthetic round16 frame missing columns: {missing}")
+                frame = frame.loc[:, list(columns)]
+            return frame
+
+        load_ready_provider_snapshot_archive(root)
+        before = get_active_research_data_generation(root)
+        add_check(results, "market_data", case_id, "promotion_starts_from_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, before.generation_id)
+        add_check(results, "market_data", case_id, "static_config_remains_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, ACTIVE_RESEARCH_DATA_GENERATION)
+        add_check(results, "market_data", case_id, "full_dataset_before_promotion_uses_legacy_v1_path", str((root / "data" / "tw_stock_data_vip").resolve()), str(Path(get_dataset_dir(root, "full")).resolve()))
+
+        candidate = build_research_v2_candidate(root, frame_reader=frame_reader, now=datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc))
+        freeze = build_research_v2_freeze_candidate(root, frame_reader=frame_reader, now=datetime(2026, 9, 8, 8, 5, tzinfo=timezone.utc))
+        add_check(results, "market_data", case_id, "promotion_fixture_candidate_reaches_fixed_common_complete_cutoff", cutoff, candidate["research_common_complete_cutoff"])
+        add_check(results, "market_data", case_id, "promotion_consumes_ready_freeze_candidate", cutoff, freeze["frozen_cutoff"])
+
+        permission_blocked = False
+        try:
+            promote_research_v2(
+                root,
+                freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
+                explicit_authorization=False,
+                frame_reader=frame_reader,
+            )
+        except PermissionError:
+            permission_blocked = True
+        add_check(results, "market_data", case_id, "promotion_requires_explicit_authorization", True, permission_blocked)
+        add_check(results, "market_data", case_id, "rejected_promotion_does_not_publish_active_pointer", False, resolve_active_research_generation_path(root).exists())
+
+        promoted = promote_research_v2(
+            root,
+            freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
+            explicit_authorization=True,
+            frame_reader=frame_reader,
+            now=datetime(2026, 9, 8, 8, 10, tzinfo=timezone.utc),
+        )
+        materialization = dict(promoted["materialization"])
+        add_check(results, "market_data", case_id, "explicit_promotion_publishes_v2", RESEARCH_DATA_GENERATION_V2, promoted["generation_id"])
+        add_check(results, "market_data", case_id, "promotion_pins_fixed_cutoff", cutoff, promoted["frozen_cutoff"])
+        add_check(results, "market_data", case_id, "promotion_and_materialization_make_zero_provider_calls", 0, int(promoted["provider_calls"]) + int(materialization["provider_calls"]))
+        add_check(results, "market_data", case_id, "compatibility_materialization_has_one_ticker_file", 1, materialization["csv_file_count"])
+        add_check(results, "market_data", case_id, "compatibility_materialization_has_three_eligible_rows", 3, materialization["row_count"])
+
+        promoted_dir = Path(get_dataset_dir(root, "full")).resolve()
+        csv_path = promoted_dir / "0050.csv"
+        csv_frame = pd.read_csv(csv_path)
+        add_check(results, "market_data", case_id, "legacy_compatibility_schema_is_exact_six_column_ohlcv", ["Date", "Open", "High", "Low", "Close", "Volume"], list(csv_frame.columns))
+        add_check(results, "market_data", case_id, "compatibility_ohlc_comes_from_canonical_price_adj", [100.0, 101.0, 102.0], csv_frame["Open"].tolist())
+        add_check(results, "market_data", case_id, "compatibility_volume_comes_from_raw_price", [1000, 1100, 1200], csv_frame["Volume"].tolist())
+        add_check(results, "market_data", case_id, "full_consumer_routes_to_promoted_immutable_materialization", True, "/materializations/" in promoted_dir.as_posix())
+        add_check(results, "market_data", case_id, "reduced_fixture_is_not_redirected_by_research_promotion", str((root / "data" / "tw_stock_data_vip_reduced").resolve()), str(Path(get_dataset_dir(root, "reduced")).resolve()))
+
+        active = get_active_research_data_generation(root)
+        add_check(results, "market_data", case_id, "effective_active_generation_switches_only_after_pointer", RESEARCH_DATA_GENERATION_V2, active.generation_id)
+        add_check(results, "market_data", case_id, "effective_active_contract_is_frozen", cutoff, active.cutoff)
+        contract_snapshot = build_market_data_contract_snapshot(root)
+        add_check(results, "market_data", case_id, "market_data_contract_snapshot_reports_effective_v2", RESEARCH_DATA_GENERATION_V2, contract_snapshot["active_research_generation"]["generation_id"])
+        runtime = build_runtime_domain_contract_snapshot(root)
+        add_check(results, "market_data", case_id, "runtime_domain_reports_research_v2", RESEARCH_DATA_GENERATION_V2, runtime["research"]["market_data_generation"])
+        add_check(results, "market_data", case_id, "runtime_domain_routes_research_data_dir_to_materialization", promoted_dir, Path(runtime["research"]["data_dir"]).resolve())
+        add_check(results, "market_data", case_id, "runtime_domain_keeps_trading_root_separate", True, Path(runtime["trading"]["data_dir"]).resolve() != promoted_dir)
+
+        from filters.breakout_quality.source_inventory import build_source_data_inventory
+        source_inventory = build_source_data_inventory(root, "full")
+        source_lineage = dict(source_inventory.get("research_market_data_lineage") or {})
+        add_check(results, "market_data", case_id, "full_research_source_inventory_pins_v2_generation", RESEARCH_DATA_GENERATION_V2, source_lineage.get("generation_id"))
+        add_check(results, "market_data", case_id, "full_research_source_inventory_pins_promotion_identity", promoted["promotion_fingerprint"], source_lineage.get("promotion_fingerprint"))
+        add_check(results, "market_data", case_id, "full_research_source_inventory_pins_materialization_identity", materialization["materialization_fingerprint"], source_lineage.get("materialization_fingerprint"))
+
+        read_view = load_active_research_v2_read_view(root, frame_reader=frame_reader)
+        add_check(results, "market_data", case_id, "active_v2_read_view_pins_frozen_cutoff", cutoff, read_view.frozen_cutoff)
+        add_check(results, "market_data", case_id, "active_v2_read_view_uses_exact_daily_universe", ("0050",), read_view.eligible_stock_ids(cutoff))
+        post_cutoff_blocked = False
+        try:
+            read_view.eligible_stock_ids((cutoff_date + timedelta(days=1)).isoformat())
+        except ValueError:
+            post_cutoff_blocked = True
+        add_check(results, "market_data", case_id, "active_v2_read_view_rejects_post_cutoff_queries", True, post_cutoff_blocked)
+
+        promotion_manifest = resolve_research_v2_promotion_manifest_path(root, promoted["promotion_fingerprint"])
+        add_check(results, "market_data", case_id, "promotion_manifest_is_immutable_fingerprint_addressed", True, promotion_manifest.is_file() and f"/promotions/{promoted['promotion_fingerprint']}/" in promotion_manifest.as_posix())
+        add_check(results, "market_data", case_id, "active_pointer_is_small_separate_state", True, resolve_active_research_generation_path(root).is_file() and resolve_active_research_generation_path(root) != promotion_manifest)
+
+        reused = promote_research_v2(
+            root,
+            freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
+            explicit_authorization=True,
+            frame_reader=frame_reader,
+        )
+        add_check(results, "market_data", case_id, "same_promotion_identity_reuses_existing_activation", True, reused["reused"])
+        add_check(results, "market_data", case_id, "same_promotion_identity_keeps_same_fingerprint", promoted["promotion_fingerprint"], reused["promotion_fingerprint"])
+
+        candidate_after_promotion_blocked = False
+        try:
+            build_research_v2_candidate(root, frame_reader=frame_reader)
+        except RuntimeError:
+            candidate_after_promotion_blocked = True
+        add_check(results, "market_data", case_id, "active_v2_blocks_new_candidate_build_on_same_research_generation", True, candidate_after_promotion_blocked)
+
+        deep = validate_research_v2_compatibility_materialization(
+            root,
+            materialization_fingerprint=materialization["materialization_fingerprint"],
+            deep=True,
+        )
+        add_check(results, "market_data", case_id, "deep_materialization_validation_roundtrips_inventory", materialization["dataset_inventory_sha256"], deep["dataset_inventory_sha256"])
+        original = csv_path.read_bytes()
+        csv_path.write_bytes(original + b"\n")
+        tamper_blocked = False
+        try:
+            validate_research_v2_compatibility_materialization(
+                root,
+                materialization_fingerprint=materialization["materialization_fingerprint"],
+                deep=True,
+            )
+        except ValueError:
+            tamper_blocked = True
+        add_check(results, "market_data", case_id, "deep_validation_detects_materialized_csv_tamper", True, tamper_blocked)
+
+    summary.update({"checks": len(results), "promotion_is_explicit": True, "active_generation": RESEARCH_DATA_GENERATION_V2})
+    return results, summary

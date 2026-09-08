@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from core.data_utils import discover_unique_csv_inputs
-from core.dataset_profiles import get_dataset_dir, normalize_dataset_profile_key
+from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir, normalize_dataset_profile_key
 
 SOURCE_DATA_INVENTORY_SCHEMA_VERSION = 1
 SOURCE_DATA_INVENTORY_ALGORITHM = "sha256(ticker,relative_path,size_bytes,mtime_ns)"
@@ -41,16 +41,46 @@ def build_source_data_inventory(project_root: str | Path, dataset: str) -> dict[
             digest.update(token.encode("utf-8"))
             digest.update(b"\0")
 
-    return {
+    generation_lineage = None
+    fingerprint_algorithm = SOURCE_DATA_INVENTORY_ALGORITHM
+    if profile == DATASET_PROFILE_FULL:
+        from config.market_data import RESEARCH_DATA_GENERATION_V2
+        from core.market_data_contract import get_active_research_data_generation
+
+        active = get_active_research_data_generation(project_root)
+        if active.generation_id == RESEARCH_DATA_GENERATION_V2:
+            from core.market_data_research_promotion import load_active_research_v2_promotion
+
+            promoted = load_active_research_v2_promotion(project_root, required=True)
+            generation_lineage = {
+                "generation_id": active.generation_id,
+                "frozen_cutoff": str(active.cutoff),
+                "promotion_fingerprint": promoted.promotion_fingerprint,
+                "materialization_fingerprint": promoted.materialization_fingerprint,
+            }
+            for token in (
+                generation_lineage["generation_id"],
+                generation_lineage["frozen_cutoff"],
+                generation_lineage["promotion_fingerprint"],
+                generation_lineage["materialization_fingerprint"],
+            ):
+                digest.update(str(token).encode("utf-8"))
+                digest.update(b"\0")
+            fingerprint_algorithm += "+research_v2_generation_lineage"
+
+    payload = {
         "schema_version": SOURCE_DATA_INVENTORY_SCHEMA_VERSION,
         "dataset_profile": profile,
         "csv_file_count": int(len(csv_inputs)),
         "csv_total_bytes": int(total_size_bytes),
         "csv_latest_mtime_ns": int(latest_mtime_ns),
         "csv_inventory_sha256": digest.hexdigest(),
-        "fingerprint_algorithm": SOURCE_DATA_INVENTORY_ALGORITHM,
+        "fingerprint_algorithm": fingerprint_algorithm,
         "ignored_duplicate_count": int(len(duplicate_lines or [])),
     }
+    if generation_lineage is not None:
+        payload["research_market_data_lineage"] = generation_lineage
+    return payload
 
 
 __all__ = [

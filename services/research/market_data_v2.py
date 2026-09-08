@@ -20,10 +20,14 @@ from typing import Callable, Iterator
 
 import pandas as pd
 
-from config.market_data import ACTIVE_RESEARCH_DATA_GENERATION, RESEARCH_DATA_GENERATION_V1, RESEARCH_DATA_GENERATION_V2
+from config.market_data import RESEARCH_DATA_GENERATION_V1, RESEARCH_DATA_GENERATION_V2
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_replace_with_retry, atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
-from core.market_data_contract import RESEARCH_STATUS_AUTHORIZED_NOT_READY, get_research_data_generation
+from core.market_data_contract import (
+    RESEARCH_STATUS_AUTHORIZED_NOT_READY,
+    get_active_research_data_generation,
+    get_research_data_generation,
+)
 from core.market_data_adjusted_price_invariance import (
     PROVIDER_PRICE_FIELDS,
     PROVIDER_VOLUME_FIELD,
@@ -851,8 +855,9 @@ def build_research_v2_candidate(
     if generation.status != RESEARCH_STATUS_AUTHORIZED_NOT_READY or generation.cutoff is not None:
         raise RuntimeError("Research V2 candidate builder 只允許 authorized_not_ready / cutoff=None 狀態")
     required_cutoff = generation.required_cutoff
-    if ACTIVE_RESEARCH_DATA_GENERATION != RESEARCH_DATA_GENERATION_V1:
-        raise RuntimeError("Research V2 candidate build 不得在本輪自行切換 ACTIVE Research generation")
+    active_generation = get_active_research_data_generation(root)
+    if active_generation.generation_id != RESEARCH_DATA_GENERATION_V1:
+        raise RuntimeError("Research V2 已 promotion 為 active generation；不得在 active V2 上重建 candidate")
 
     contract_stats = validate_research_v2_candidate_contract()
     pit_review_contracts = build_research_v2_pit_review_contracts()
@@ -947,7 +952,7 @@ def build_research_v2_candidate(
             required_common_complete_summary=required_common_complete_payload,
         ),
         "promotion_authorized": False,
-        "active_research_generation": ACTIVE_RESEARCH_DATA_GENERATION,
+        "active_research_generation": active_generation.generation_id,
     }
     manifest_path = resolve_research_v2_candidate_manifest_path(root, archive.snapshot_fingerprint)
     atomic_write_json(manifest_path, payload)

@@ -4298,6 +4298,17 @@
       "entry": "`core/market_data_research_freeze.py`, `core/market_data_research_v2.py`, `core/market_data_research_storage_contract.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 387
+    },
+    {
+      "id": "B400",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Research explicit promotion / active consumer integration",
+      "item": "Research V2 promotion is an explicit immutable state transition that materializes the authorized OHLCV compatibility view and atomically routes active Research consumers without changing the safe V1 source-code fallback",
+      "gap": "Round 16不得只改ACTIVE_RESEARCH_DATA_GENERATION常數，也不得以artifact存在推測active。promotion必須消費一個validated Round-15 freeze candidate、先建立fingerprint-addressed immutable compatibility materialization，再寫immutable promotion manifest，最後atomic publish小型active pointer；沒有pointer或任一lineage/hash/contract驗證失敗時effective generation必須fail-closed回V1或報錯。compatibility OHLC只可直接取TaiwanStockPriceAdj open/max/min/close，Volume只可取raw TaiwanStockPrice.Trading_Volume，不得新增第二套還原價engine、不得讀Trading overlay或打provider。full Research consumer必須透過既有dataset-profile seam切到promoted immutable dir，reduced fixture與Trading namespace不變；direct V2 reader須pin exact provider snapshot與daily-universe physical hash。promotion必須是明確user action，多freeze candidates時不得自動選latest；同identity只能REUSE，不同active freeze不得隱性repromotion。active V2後不得重建同generation candidate。",
+      "entry": "`core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`, `services/research/market_data_generation.py`, `core/market_data_contract.py`, `core/dataset_profiles.py`, `filters/breakout_quality/source_inventory.py`, `apps/research.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 388
     }
   ],
   "tests": [
@@ -7927,6 +7938,13 @@
       "description": "`validate_market_data_v2_research_required_common_complete_freeze_contract_case` 覆蓋4個required daily participants、optional dataset fingerprint isolation、cutoff缺PriceAdj operand fail-closed、scope reader欄位白名單、raw Trading_Volume / PriceAdj OHLC逐universe completeness、required_scope_coverage與required_common_complete SQLite evidence、candidate schema v7 common-complete identity、candidate仍unfrozen/unpromoted、fingerprint-addressed freeze candidate、source artifact/hash/contract pinning、同identity REUSE及active research_v1/config不變。",
       "initial_status": "NEW",
       "order": 509
+    },
+    {
+      "id": "T520",
+      "b_id": "B400",
+      "description": "`validate_market_data_v2_research_promotion_consumer_integration_contract_case` 覆蓋V1 safe fallback、explicit-authorization gate、freeze→materialization→promotion→active-pointer sequencing、PriceAdj OHLC/raw Price Volume exact mapping、zero provider calls、full/reduced consumer routing、effective contract/runtime-domain V2切換、full Research source inventory的generation/promotion/materialization lineage pinning、active read-view daily-universe pinning、same-identity REUSE、active-V2 candidate rebuild block與materialized CSV tamper detection。",
+      "initial_status": "NEW",
+      "order": 510
     }
   ],
   "transitions": [
@@ -25689,6 +25707,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_research_required_common_complete_freeze_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B400",
+      "description": "完成Research V2 explicit promotion、immutable compatibility materialization與active consumer routing contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Round 16 promotion + consumer integration"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T520",
+      "description": "新增Research V2 promotion / active consumer integration dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_research_promotion_consumer_integration_contract_case`"
     }
   ]
 }

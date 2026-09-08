@@ -478,3 +478,21 @@ Workbench「完整更新 Trading 資料」與 Smart Downloader `[1]` 在同一 `
 目前 config `1990-01-01` 起算、六個月一段，到 2026-09-07 共 74 個 PriceAdj range identities；完整 V2 planner仍為 342 logical requests，其中最近七個 PriceAdj exact-date identities可由相同 raw response cache-hit，因此正常「新交易日、legacy universe大量 stale」設計值約為 409 provider data requests，而不是先前兩條路各抓造成的約 900。少數 stale ticker時 request planner會選更便宜的 per-ticker path；provider不支援 bulk 或觸發 fallback 時實際 request 可高於409。`provider_request_session` 會回報 total/legacy/V2 provider request counts、cache hit/miss與 uncached historical bulk fetch；歷史 bulk raw frame用完即釋放，不會把74段全市場原始資料全部留在shared cache。這些只是 operational metrics，不改 neutral Provider Snapshot、registry fingerprint、V2 logical manifest或 Trading execution truth。
 
 V2 recent/event repair window同時具備 long-gap continuity：若某 dataset 的 `last_ready_target_date + 1` 早於正常 7/30-day repair window，partial manifest會從較早日期補起，避免電腦長時間關機後只修最近窗口而留下中間資料缺口。Round 6 同時補齊 execution target discovery：scheduler 不再永遠停在舊 Trading snapshot date；到本機 policy 指定的 Price publication window 才以一個 canonical PriceAdj probe 發現新 completed day，並重用該 process 的 shared response/cache。新日 execution refresh 與 V2 publication sync仍由同一 service/due truth串接，但不把 V2 51 datasets 提前整批抓取。
+
+## Research Market Data V2 lifecycle（Round 16）
+
+Research Market Data generation由`apps/research.py`單一正式入口管理；套用程式碼本身不會切換active generation。
+
+```powershell
+python apps/research.py market-data status
+python apps/research.py market-data freeze
+python apps/research.py market-data promote <freeze_candidate_fingerprint>
+python apps/research.py market-data verify
+```
+
+- `status`：顯示effective generation、fixed cutoff、freeze candidates、promotion/materialization identity與目前full Research data dir；不呼叫provider。
+- `freeze`：對目前READY Provider Snapshot建立／REUSE Round-15 immutable freeze candidate；不切active、不授權promotion。
+- `promote <fingerprint>`：明確指定一個freeze candidate後才執行promotion；若存在多個candidate，禁止自動選latest。Promotion先建立／驗證immutable compatibility OHLCV materialization，成功後才atomic publish active pointer。
+- `verify`：對active compatibility materialization做deep file-set/SHA驗證。
+
+互動入口：`python apps/research.py` → `Market Data generation／Research V2 lifecycle`。互動promotion必須輸入完整freeze fingerprint並再輸入精確`PROMOTE`確認。Compatibility view的OHLC直接來自FinMind `TaiwanStockPriceAdj`，Volume只來自raw `TaiwanStockPrice.Trading_Volume`；不得建立第二套adjusted-price engine，也不得讀Trading overlay。
