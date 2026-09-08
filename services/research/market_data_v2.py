@@ -40,6 +40,7 @@ from core.market_data_research_pit_contract import (
     ResearchV2MechanicalCommonCompleteSummary,
     build_research_v2_pit_review_contracts,
     research_v2_pit_review_contract_fingerprint,
+    research_v2_pit_review_contract_payloads,
     summarize_mechanical_common_complete_tail,
     validate_research_v2_pit_review_contracts,
 )
@@ -571,7 +572,18 @@ def _build_candidate_blockers(
                 "code": "DATASET_SPECIFIC_PIT_REVIEW_REQUIRED",
                 "dataset_count": review_count,
                 "audit_mode_counts": dict(pit_review_stats.get("mode_counts") or {}),
-                "reason": "review_required datasets 已按 cadence 分類 audit path，但 publication/revision/information-time legality 尚未因此獲得 model-input authorization。",
+                "pit_legality_status_counts": dict(pit_review_stats.get("pit_legality_status_counts") or {}),
+                "event_information_time_anchor_ready_count": int(
+                    pit_review_stats.get("event_information_time_anchor_ready_count") or 0
+                ),
+                "historical_publication_vintage_blocked_count": int(
+                    pit_review_stats.get("historical_publication_vintage_blocked_count") or 0
+                ),
+                "reason": (
+                    "review_required datasets 已有 canonical audit/legality matrix；event rows 最多只取得 conservative "
+                    "information-time anchor，periodic/static 缺 historical publication/as-of vintage 時維持 BLOCKED，"
+                    "且任何 dataset 都尚未因此取得 model-input authorization。"
+                ),
             }
         )
     if not coverage_summary.get("latest_exact_complete_date"):
@@ -690,7 +702,7 @@ def build_research_v2_candidate(
         "exact_coverage": coverage_summary,
         "dataset_assessments": [asdict(row) for row in assessment_rows],
         "dataset_assessment_counts": contract_stats,
-        "pit_review_contracts": [asdict(row) for row in pit_review_contracts],
+        "pit_review_contracts": research_v2_pit_review_contract_payloads(pit_review_contracts),
         "pit_review_contract_counts": pit_review_stats,
         "dataset_date_audits": list(derived["date_audits"]),
         "mechanical_common_complete": mechanical_summary,
@@ -761,7 +773,7 @@ def load_research_v2_candidate(
         raise ValueError("Research V2 candidate dataset assessment contract drift")
     if payload.get("dataset_assessments") != expected_assessments:
         raise ValueError("Research V2 candidate persisted dataset assessments drift")
-    expected_pit_reviews = [asdict(row) for row in build_research_v2_pit_review_contracts()]
+    expected_pit_reviews = research_v2_pit_review_contract_payloads()
     if str(payload.get("pit_review_contract_fingerprint") or "") != research_v2_pit_review_contract_fingerprint():
         raise ValueError("Research V2 candidate PIT review contract drift")
     if payload.get("pit_review_contracts") != expected_pit_reviews:

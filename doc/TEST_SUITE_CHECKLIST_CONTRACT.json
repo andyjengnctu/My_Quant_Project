@@ -4254,6 +4254,17 @@
       "entry": "`config/market_data.py`, `core/market_data_contract.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 383
+    },
+    {
+      "id": "B396",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Research non-daily PIT legality / historical-vintage fail-closed",
+      "item": "Research V2 non-daily datasets expose canonical information-time/revision evidence without converting provider current-vintage rows into authorized historical model inputs",
+      "gap": "Research V2對9個event、8個periodic與4個static/current-vintage review datasets必須由單一canonical PIT contract持有dataset-specific information-time/revision evidence，不得在service逐dataset堆if/elif，也不得把Trading current-endpoint publication schedule當成historical Research evidence。Event dataset若provider schema能提供公告timestamp或可觀察event/effective date，只能建立conservative information-time anchor：公告timestamp依公告時點、只有date時最早從下一個Taiwan trading session起算；同列其他可能稍後補入/修訂的field仍須field-scope proof，因此scientific_input_authorized必須維持false。Periodic的period/effective date不是publication time；static/current-vintage row若沒有完整historical as-of transition chain也不得回填。缺historical publication/revision vintage時必須明確HISTORICAL_PUBLICATION_VINTAGE_BLOCKED。TaiwanStockPriceAdj維持獨立current-vintage hard block。PIT legality status、information-time rule/columns、revision rule與evidence source必須進contract fingerprint/candidate identity；Round 12不得設定research_common_complete_cutoff/frozen_cutoff，不得promotion，也不得改active research_v1。",
+      "entry": "`core/market_data_research_pit_contract.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 384
     }
   ],
   "tests": [
@@ -7855,6 +7866,13 @@
       "description": "`validate_market_data_v2_research_required_cutoff_isolation_contract_case` 覆蓋Research V1/V2 required-cutoff一致性、Provider Snapshot可晚於但不得早於Research horizon、candidate identity納入required_cutoff、review date-presence排除post-cutoff rows與mechanical common-complete不得越過Research cutoff。",
       "initial_status": "NEW",
       "order": 505
+    },
+    {
+      "id": "T516",
+      "b_id": "B396",
+      "description": "`validate_market_data_v2_research_non_daily_pit_legality_contract_case` 覆蓋21個non-daily review dataset canonical PIT policy、9個event conservative information-time anchor、8 periodic + 4 static historical publication/as-of vintage fail-closed、Dividend AnnouncementDate/Time與Disposition announcement-date next-session規則、MonthRevenue historical create_time gap、TaiwanStockPriceAdj獨立hard block、零scientific auto-authorization，以及candidate blocker/identity保存legality evidence。",
+      "initial_status": "NEW",
+      "order": 506
     }
   ],
   "transitions": [
@@ -25553,6 +25571,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_research_required_cutoff_isolation_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B396",
+      "description": "新增Research V2 non-daily information-time/revision legality matrix與historical-vintage fail-closed治理。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`core/market_data_research_pit_contract.py`, `services/research/market_data_v2.py`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T516",
+      "description": "新增Research V2 non-daily PIT legality dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_research_non_daily_pit_legality_contract_case`"
     }
   ]
 }

@@ -1110,6 +1110,7 @@ __all__ = [
     "validate_market_data_v2_research_candidate_contract_case",
     "validate_market_data_v2_research_pit_review_contract_case",
     "validate_market_data_v2_research_required_cutoff_isolation_contract_case",
+    "validate_market_data_v2_research_non_daily_pit_legality_contract_case",
 ]
 
 def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_params):
@@ -2831,7 +2832,7 @@ def validate_market_data_v2_research_required_cutoff_isolation_contract_case(_ba
     add_check(results, "market_data", case_id, "research_v1_required_cutoff_uses_ssot", RESEARCH_REQUIRED_CUTOFF, v1.required_cutoff)
     add_check(results, "market_data", case_id, "research_v2_required_cutoff_uses_same_ssot", RESEARCH_REQUIRED_CUTOFF, v2.required_cutoff)
     add_check(results, "market_data", case_id, "research_v2_remains_unfrozen_before_promotion", None, v2.cutoff)
-    add_check(results, "market_data", case_id, "research_v2_candidate_schema_bumped_for_cutoff_identity", 3, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION)
+    add_check(results, "market_data", case_id, "research_v2_candidate_schema_still_carries_cutoff_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 3)
     add_check(results, "market_data", case_id, "required_cutoff_participates_in_candidate_identity", True, "required_cutoff" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
     add_check(
         results,
@@ -2887,4 +2888,96 @@ def validate_market_data_v2_research_required_cutoff_isolation_contract_case(_ba
     add_check(results, "market_data", case_id, "round11_review_audit_still_covers_full_registry", 51, len(audits))
 
     summary.update({"checks": len(results), "required_cutoff": v2.required_cutoff})
+    return results, summary
+
+
+
+def validate_market_data_v2_research_non_daily_pit_legality_contract_case(_base_params):
+    """Round-12 closes non-daily information-time/revision legality without authorizing model inputs."""
+
+    from core.market_data_freshness_contract import (
+        CADENCE_CURRENT_VINTAGE,
+        CADENCE_EVENT_DRIVEN,
+        CADENCE_PERIODIC,
+    )
+    from core.market_data_research_pit_contract import (
+        AUDIT_MODE_CURRENT_VINTAGE_BLOCKED,
+        PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED,
+        PIT_LEGALITY_STATUS_EVENT_ANCHOR_READY,
+        PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED,
+        RESEARCH_PIT_REVIEW_SCHEMA_VERSION,
+        build_research_v2_pit_review_contracts,
+        research_v2_pit_review_contract_fingerprint,
+        validate_research_v2_pit_review_contracts,
+    )
+    from core.market_data_research_v2 import (
+        RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
+        RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS,
+    )
+    from services.research.market_data_v2 import _build_candidate_blockers
+
+    case_id = "MARKET_DATA_V2_RESEARCH_NON_DAILY_PIT_LEGALITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    contracts = build_research_v2_pit_review_contracts()
+    by_dataset = {row.dataset: row for row in contracts}
+    stats = validate_research_v2_pit_review_contracts(contracts)
+    non_daily = [
+        row for row in contracts
+        if row.audit_mode in {
+            "event_information_time_review",
+            "periodic_publication_revision_review",
+            "static_current_vintage_review",
+        }
+    ]
+    events = [row for row in non_daily if row.cadence == CADENCE_EVENT_DRIVEN]
+    blocked_vintage = [
+        row for row in non_daily if row.cadence in {CADENCE_PERIODIC, CADENCE_CURRENT_VINTAGE}
+    ]
+
+    add_check(results, "market_data", case_id, "round12_pit_contract_schema_is_versioned", True, RESEARCH_PIT_REVIEW_SCHEMA_VERSION >= 2)
+    add_check(results, "market_data", case_id, "round12_non_daily_policy_covers_registry_derived_review_datasets", len(non_daily), stats["non_daily_policy_count"])
+    add_check(results, "market_data", case_id, "round12_event_information_time_anchor_count_is_registry_driven", len(events), stats["event_information_time_anchor_ready_count"])
+    add_check(results, "market_data", case_id, "round12_periodic_static_historical_vintage_block_count_is_registry_driven", len(blocked_vintage), stats["historical_publication_vintage_blocked_count"])
+    add_check(results, "market_data", case_id, "event_contracts_are_anchor_ready_not_model_authorized", True, bool(events) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_EVENT_ANCHOR_READY and row.information_time_anchor_ready and row.field_scope_required and not row.scientific_input_authorized for row in events))
+    add_check(results, "market_data", case_id, "periodic_static_contracts_fail_closed_without_historical_vintage", True, bool(blocked_vintage) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED and not row.information_time_anchor_ready and row.field_scope_required and not row.scientific_input_authorized for row in blocked_vintage))
+
+    dividend = by_dataset["TaiwanStockDividend"]
+    add_check(results, "market_data", case_id, "dividend_uses_intrinsic_announcement_timestamp_anchor", ("AnnouncementDate", "AnnouncementTime"), dividend.information_time_columns)
+    add_check(results, "market_data", case_id, "dividend_disallows_same_day_assumption", "next_taiwan_trading_session_after_announcement_timestamp", dividend.information_time_rule)
+    disposition = by_dataset["TaiwanStockDispositionSecuritiesPeriod"]
+    add_check(results, "market_data", case_id, "disposition_uses_documented_announcement_date_anchor", ("date",), disposition.information_time_columns)
+    add_check(results, "market_data", case_id, "disposition_missing_intraday_time_uses_next_session", "next_taiwan_trading_session_after_announcement_date", disposition.information_time_rule)
+
+    month_revenue = by_dataset["TaiwanStockMonthRevenue"]
+    add_check(results, "market_data", case_id, "month_revenue_historical_create_time_gap_stays_blocked", PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED, month_revenue.pit_legality_status)
+    add_check(results, "market_data", case_id, "month_revenue_evidence_records_provider_schema_transition", True, "2026-04-21" in month_revenue.evidence_source)
+    static_rows = [row for row in non_daily if row.cadence == CADENCE_CURRENT_VINTAGE]
+    add_check(results, "market_data", case_id, "all_registry_static_current_vintage_review_datasets_fail_closed", True, bool(static_rows) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED for row in static_rows))
+
+    adjusted = by_dataset["TaiwanStockPriceAdj"]
+    add_check(results, "market_data", case_id, "adjusted_price_retains_separate_current_vintage_hard_block", PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.pit_legality_status)
+    add_check(results, "market_data", case_id, "round12_never_auto_authorizes_any_model_input", 0, sum(row.scientific_input_authorized for row in contracts))
+    add_check(results, "market_data", case_id, "pit_legality_evidence_participates_in_candidate_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 4 and "pit_review_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    add_check(results, "market_data", case_id, "pit_contract_fingerprint_is_deterministic_after_legality_extension", research_v2_pit_review_contract_fingerprint(contracts), research_v2_pit_review_contract_fingerprint())
+
+    blockers = _build_candidate_blockers(
+        {"review_required_count": stats["review_required_count"]},
+        {"latest_exact_complete_date": "2030-01-15"},
+        required_cutoff="2030-01-15",
+        pit_review_stats=stats,
+        mechanical_summary={"audit_complete": True, "common_complete_ceiling_date": "2030-01-15"},
+    )
+    pit_blocker = next(row for row in blockers if row.get("code") == "DATASET_SPECIFIC_PIT_REVIEW_REQUIRED")
+    add_check(results, "market_data", case_id, "candidate_blocker_reports_event_anchor_progress", len(events), pit_blocker["event_information_time_anchor_ready_count"])
+    add_check(results, "market_data", case_id, "candidate_blocker_reports_remaining_non_daily_vintage_blocks", len(blocked_vintage), pit_blocker["historical_publication_vintage_blocked_count"])
+    add_check(results, "market_data", case_id, "candidate_still_not_promoted_by_round12", True, any(row.get("code") == "RESEARCH_DATASET_SCOPE_NOT_AUTHORIZED" for row in blockers))
+
+    summary.update({
+        "checks": len(results),
+        "non_daily_policy_count": stats["non_daily_policy_count"],
+        "event_anchor_ready_count": stats["event_information_time_anchor_ready_count"],
+        "historical_vintage_blocked_count": stats["historical_publication_vintage_blocked_count"],
+    })
     return results, summary
