@@ -15,6 +15,7 @@ from typing import Iterable, Mapping
 import pandas as pd
 
 from core.file_integrity import canonical_json_sha256
+from core.market_data_research_freeze import ResearchV2RequiredCommonCompleteSummary
 from core.market_data_dataset_registry import (
     PIT_ARCHIVE_ONLY,
     PIT_CURRENT_VINTAGE,
@@ -24,7 +25,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
 )
 
-RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 6
+RESEARCH_V2_CANDIDATE_SCHEMA_VERSION = 7
 RESEARCH_V2_CANDIDATE_STATUS_NOT_READY = "CANDIDATE_NOT_READY"
 RESEARCH_V2_DATASET_STATUS_EXACT_CANDIDATE = "EXACT_CANDIDATE"
 RESEARCH_V2_DATASET_STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED"
@@ -64,6 +65,9 @@ RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS = (
     "adjusted_price_representation_contract_fingerprint",
     "research_scope_contract_fingerprint",
     "required_dataset_scope",
+    "required_common_complete_start_date",
+    "required_common_complete_tail_date_count",
+    "required_common_complete_fingerprint",
     "research_common_complete_cutoff",
     "frozen_cutoff",
     "active_research_generation_changed",
@@ -339,6 +343,7 @@ def build_research_v2_candidate_identity_payload(
     adjusted_price_representation_contract_fingerprint: str,
     research_scope_contract_fingerprint: str,
     required_dataset_scope: Iterable[str],
+    required_common_complete_summary: ResearchV2RequiredCommonCompleteSummary,
 ) -> dict[str, object]:
     return {
         "schema_version": RESEARCH_V2_CANDIDATE_SCHEMA_VERSION,
@@ -359,7 +364,10 @@ def build_research_v2_candidate_identity_payload(
         "adjusted_price_representation_contract_fingerprint": str(adjusted_price_representation_contract_fingerprint),
         "research_scope_contract_fingerprint": str(research_scope_contract_fingerprint),
         "required_dataset_scope": [str(value) for value in required_dataset_scope],
-        "research_common_complete_cutoff": None,
+        "required_common_complete_start_date": required_common_complete_summary.common_complete_tail_start,
+        "required_common_complete_tail_date_count": int(required_common_complete_summary.common_complete_tail_date_count),
+        "required_common_complete_fingerprint": str(required_common_complete_summary.coverage_fingerprint),
+        "research_common_complete_cutoff": required_common_complete_summary.common_complete_cutoff,
         "frozen_cutoff": None,
         "active_research_generation_changed": False,
     }

@@ -6,7 +6,9 @@ import re
 
 RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT = Path("data") / "research" / "market_data_v2"
 RESEARCH_MARKET_DATA_V2_CANDIDATES_DIRNAME = "candidates"
+RESEARCH_MARKET_DATA_V2_FREEZE_CANDIDATES_DIRNAME = "freeze_candidates"
 RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME = "research_v2_candidate_manifest.json"
+RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME = "research_v2_freeze_candidate_manifest.json"
 RESEARCH_V2_DAILY_UNIVERSE_FILENAME = "daily_universe.sqlite3"
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -35,12 +37,32 @@ def resolve_research_v2_daily_universe_path(project_root, provider_snapshot_fing
     return resolve_research_v2_candidate_dir(project_root, provider_snapshot_fingerprint) / RESEARCH_V2_DAILY_UNIVERSE_FILENAME
 
 
+def resolve_research_v2_freeze_candidate_dir(project_root, freeze_candidate_fingerprint: str) -> Path:
+    return (
+        Path(project_root).resolve()
+        / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT
+        / RESEARCH_MARKET_DATA_V2_FREEZE_CANDIDATES_DIRNAME
+        / _require_fingerprint(freeze_candidate_fingerprint)
+    )
+
+
+def resolve_research_v2_freeze_candidate_manifest_path(project_root, freeze_candidate_fingerprint: str) -> Path:
+    return (
+        resolve_research_v2_freeze_candidate_dir(project_root, freeze_candidate_fingerprint)
+        / RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME
+    )
+
+
 __all__ = [
     "RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT",
     "RESEARCH_MARKET_DATA_V2_CANDIDATES_DIRNAME",
+    "RESEARCH_MARKET_DATA_V2_FREEZE_CANDIDATES_DIRNAME",
     "RESEARCH_V2_CANDIDATE_MANIFEST_FILENAME",
+    "RESEARCH_V2_FREEZE_CANDIDATE_MANIFEST_FILENAME",
     "RESEARCH_V2_DAILY_UNIVERSE_FILENAME",
     "resolve_research_v2_candidate_dir",
     "resolve_research_v2_candidate_manifest_path",
     "resolve_research_v2_daily_universe_path",
+    "resolve_research_v2_freeze_candidate_dir",
+    "resolve_research_v2_freeze_candidate_manifest_path",
 ]

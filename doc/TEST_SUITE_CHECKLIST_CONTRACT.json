@@ -4287,6 +4287,17 @@
       "entry": "`core/market_data_research_scope.py`, `core/market_data_research_v2.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
       "initial_status": "NEW",
       "order": 386
+    },
+    {
+      "id": "B399",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Research required-scope true common-complete / immutable freeze candidate",
+      "item": "Research V2 computes field-aware completeness only across the Round-14 authorized foundation scope and freezes a fingerprint-addressed promotion candidate without changing active Research truth",
+      "gap": "Round 15不得重用archive-wide mechanical common-complete，也不得只看dataset有date row。canonical common-complete owner必須只使用Round-14四個daily participants：TaiwanStockTradingDate作calendar，TaiwanStockPrice必須對daily universe逐(date,stock_id)具可解析Trading_Volume，TaiwanStockPriceLimit必須exact cover daily universe，TaiwanStockPriceAdj必須對daily universe逐列具可解析open/max/min/close operands；TaiwanStockDelisting為required event evidence但no-row合法且不進daily denominator，46個OPTIONAL_NOT_SELECTED datasets及其PIT/mechanical diagnostics不得污染foundation completeness/fingerprint。candidate只有在latest contiguous required-scope complete tail ceiling精確等於fixed required_cutoff時才可填research_common_complete_cutoff；candidate仍須CANDIDATE_NOT_READY、frozen_cutoff=null、promotion_authorized=false。immutable freeze candidate必須另以自身fingerprint namespace保存，pin provider snapshot、source candidate、daily-universe physical hash、scope/adjusted-representation/common-complete identities與fixed frozen_cutoff；同identity rebuild只能REUSE，且freeze candidate仍promotion_authorized=false、不得修改config/market_data.py或ACTIVE_RESEARCH_DATA_GENERATION。",
+      "entry": "`core/market_data_research_freeze.py`, `core/market_data_research_v2.py`, `core/market_data_research_storage_contract.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 387
     }
   ],
   "tests": [
@@ -7909,6 +7920,13 @@
       "description": "`validate_market_data_v2_research_scope_field_authorization_contract_case` 覆蓋registry-driven scope coverage、5個required/46個optional-not-selected、4個daily common-complete participants、Delisting event no-row、raw TaiwanStockPrice僅Trading_Volume direct input與next-session availability、raw OHLC禁止、TaiwanStockPriceAdj OHLC transform-source-only且只授權Round-13 invariant representations、adjusted volume/absolute level禁止、optional event/periodic datasets不自動選入且optional PIT diagnostic變動不改foundation fingerprint、candidate scope identity與Round-15 common-complete gate。",
       "initial_status": "NEW",
       "order": 508
+    },
+    {
+      "id": "T519",
+      "b_id": "B399",
+      "description": "`validate_market_data_v2_research_required_common_complete_freeze_contract_case` 覆蓋4個required daily participants、optional dataset fingerprint isolation、cutoff缺PriceAdj operand fail-closed、scope reader欄位白名單、raw Trading_Volume / PriceAdj OHLC逐universe completeness、required_scope_coverage與required_common_complete SQLite evidence、candidate schema v7 common-complete identity、candidate仍unfrozen/unpromoted、fingerprint-addressed freeze candidate、source artifact/hash/contract pinning、同identity REUSE及active research_v1/config不變。",
+      "initial_status": "NEW",
+      "order": 509
     }
   ],
   "transitions": [
@@ -25655,6 +25673,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_research_scope_field_authorization_contract_case`"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "B399",
+      "description": "完成Research V2 required-scope field-aware true common-complete與immutable freeze candidate contract。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Round 15 common-complete + freeze candidate"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "T519",
+      "description": "新增required-scope common-complete / immutable freeze candidate dedicated synthetic並納入正式DONE測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_research_required_common_complete_freeze_contract_case`"
     }
   ]
 }

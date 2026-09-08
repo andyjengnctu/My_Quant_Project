@@ -2640,9 +2640,9 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         frame_by_request = {
             requests[0].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff]}),
             requests[1].request_id: pd.DataFrame(columns=["date", "stock_id"]),
-            requests[2].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3}),
-            requests[3].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3}),
-            requests[4].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"], "close": [100.0]}),
+            requests[2].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3, "Trading_Volume": [1000.0, 1100.0, 1200.0]}),
+            requests[3].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3, "Trading_Volume": [2000.0, 2100.0, 2200.0]}),
+            requests[4].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"], "open": [99.0], "max": [101.0], "min": [98.0], "close": [100.0]}),
             requests[5].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["0050"] * 3, "PER": [20.0, 21.0, 22.0]}),
             requests[6].request_id: pd.DataFrame({"date": [before_cutoff], "stock_id": ["0050"]}),
             requests[7].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3}),
@@ -2743,7 +2743,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         add_check(results, "market_data", case_id, "research_v2_candidate_pins_authorized_required_dataset_scope", True, bool(candidate.get("research_scope_contract_fingerprint")) and bool(candidate.get("required_dataset_scope")))
         adjusted_scope = next(row for row in candidate["research_scope_contracts"] if row["dataset"] == "TaiwanStockPriceAdj")
         add_check(results, "market_data", case_id, "research_v2_candidate_keeps_raw_adjusted_price_levels_fail_closed_in_scope_contract", False, any(rule["direct_scientific_use_authorized"] for rule in adjusted_scope["field_authorizations"]))
-        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blockers)
+        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_REQUIRED_SCOPE_COMMON_COMPLETE_NOT_READY" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_keeps_archive_wide_mechanical_audit_diagnostic_only", False, any(code.startswith("MECHANICAL_") for code in blockers))
         add_check(results, "market_data", case_id, "research_v2_candidate_blocks_incomplete_required_cutoff_exact_coverage", True, "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY" in blockers)
         add_check(results, "market_data", case_id, "research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
@@ -3244,4 +3244,300 @@ def validate_market_data_v2_research_scope_field_authorization_contract_case(_ba
         "optional_not_selected_count": stats["optional_not_selected_count"],
         "contract_fingerprint": stats["contract_fingerprint"],
     })
+    return results, summary
+
+
+def validate_market_data_v2_research_required_common_complete_freeze_contract_case(_base_params):
+    """Round-15 proves field-aware required-scope completeness and immutable freeze-candidate semantics."""
+
+    from datetime import date, datetime, timedelta, timezone
+    from pathlib import Path
+    import sqlite3
+    from tempfile import TemporaryDirectory
+
+    from config.market_data import (
+        ACTIVE_RESEARCH_DATA_GENERATION,
+        RESEARCH_DATA_GENERATION_V1,
+        RESEARCH_DATA_GENERATION_V2,
+        RESEARCH_REQUIRED_CUTOFF,
+    )
+    from core.file_integrity import atomic_write_json, compute_file_sha256, load_json_strict
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest, build_registry_fingerprint
+    from core.market_data_contract import RESEARCH_STATUS_AUTHORIZED_NOT_READY, get_research_data_generation
+    from core.market_data_dataset_registry import (
+        BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE,
+        BOOTSTRAP_SINGLE_FULL_RANGE,
+        BOOTSTRAP_SINGLE_NO_DATES,
+        get_market_dataset_specs,
+    )
+    from core.market_data_provider_snapshot import ProviderArtifactEvidence, build_provider_snapshot_payload
+    from core.market_data_research_freeze import (
+        RESEARCH_V2_FREEZE_CANDIDATE_STATUS_READY,
+        RESEARCH_V2_REQUIRED_COMMON_COMPLETE_SCHEMA_VERSION,
+        build_research_v2_required_common_complete,
+    )
+    from core.market_data_research_scope import (
+        RESEARCH_V2_COMMON_COMPLETE_DATASETS,
+        RESEARCH_V2_REQUIRED_DATASETS,
+        validate_research_v2_dataset_scope_contracts,
+    )
+    from core.market_data_research_storage_contract import (
+        resolve_research_v2_candidate_manifest_path,
+        resolve_research_v2_daily_universe_path,
+        resolve_research_v2_freeze_candidate_manifest_path,
+    )
+    from core.market_data_storage_contract import (
+        resolve_market_data_provider_snapshot_path,
+        resolve_market_data_request_parquet_path,
+    )
+    from services.downloader.market_data_ledger import MarketDataJobLedger
+    from services.research.market_data_v2 import (
+        ResearchV2ProviderView,
+        build_research_v2_candidate,
+        build_research_v2_freeze_candidate,
+        load_research_v2_candidate,
+        load_research_v2_freeze_candidate,
+    )
+    from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
+
+    case_id = "MARKET_DATA_V2_RESEARCH_REQUIRED_COMMON_COMPLETE_FREEZE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+    scope_stats = validate_research_v2_dataset_scope_contracts()
+    synthetic_dates = ("2030-01-13", "2030-01-14", "2030-01-15")
+    complete_map = {dataset: synthetic_dates for dataset in RESEARCH_V2_COMMON_COMPLETE_DATASETS}
+    common_dates, complete_summary = build_research_v2_required_common_complete(
+        trading_dates=synthetic_dates,
+        complete_dates_by_dataset=complete_map,
+        required_cutoff="2030-01-15",
+        research_scope_contract_fingerprint=str(scope_stats["contract_fingerprint"]),
+    )
+    add_check(results, "market_data", case_id, "round15_required_common_complete_contract_is_versioned", True, RESEARCH_V2_REQUIRED_COMMON_COMPLETE_SCHEMA_VERSION >= 1)
+    add_check(results, "market_data", case_id, "required_common_complete_uses_exact_round14_participant_scope", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), set(complete_summary.participating_datasets))
+    add_check(results, "market_data", case_id, "required_common_complete_reaches_fixed_cutoff_only_when_all_participants_complete", "2030-01-15", complete_summary.common_complete_cutoff)
+    add_check(results, "market_data", case_id, "required_common_complete_preserves_contiguous_tail_start", "2030-01-13", complete_summary.common_complete_tail_start)
+    add_check(results, "market_data", case_id, "required_common_complete_date_set_is_deterministic", synthetic_dates, common_dates)
+    incomplete_map = dict(complete_map)
+    incomplete_map["TaiwanStockPriceAdj"] = synthetic_dates[:-1]
+    _incomplete_dates, incomplete_summary = build_research_v2_required_common_complete(
+        trading_dates=synthetic_dates,
+        complete_dates_by_dataset=incomplete_map,
+        required_cutoff="2030-01-15",
+        research_scope_contract_fingerprint=str(scope_stats["contract_fingerprint"]),
+    )
+    add_check(results, "market_data", case_id, "missing_adjusted_price_operand_at_cutoff_fail_closes_freeze_readiness", None, incomplete_summary.common_complete_cutoff)
+    extra_optional_map = {**complete_map, "TaiwanStockDividend": synthetic_dates}
+    _optional_dates, optional_summary = build_research_v2_required_common_complete(
+        trading_dates=synthetic_dates,
+        complete_dates_by_dataset=extra_optional_map,
+        required_cutoff="2030-01-15",
+        research_scope_contract_fingerprint=str(scope_stats["contract_fingerprint"]),
+    )
+    add_check(results, "market_data", case_id, "optional_archive_dates_do_not_pollute_required_common_complete_identity", complete_summary.coverage_fingerprint, optional_summary.coverage_fingerprint)
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cutoff_date = date.fromisoformat(RESEARCH_REQUIRED_CUTOFF)
+        d1 = (cutoff_date - timedelta(days=4)).isoformat()
+        d2 = (cutoff_date - timedelta(days=3)).isoformat()
+        cutoff = cutoff_date.isoformat()
+        provider_as_of = (cutoff_date + timedelta(days=190)).isoformat()
+        dates = [d1, d2, cutoff]
+        manifest_fingerprint = "8" * 64
+        registry_fingerprint = build_registry_fingerprint(get_market_dataset_specs(included_only=True))
+        requests = (
+            BootstrapHttpRequest("TaiwanStockTradingDate", BOOTSTRAP_SINGLE_NO_DATES, None, None, None),
+            BootstrapHttpRequest("TaiwanStockDelisting", BOOTSTRAP_SINGLE_FULL_RANGE, None, "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPrice", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceLimit", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "0050", "1900-01-01", provider_as_of),
+            BootstrapHttpRequest("TaiwanStockPriceAdj", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, "2330", "1900-01-01", provider_as_of),
+        )
+        manifest = BootstrapRequestManifest(
+            as_of_date=provider_as_of,
+            full_range_start="1900-01-01",
+            registry_fingerprint=registry_fingerprint,
+            manifest_fingerprint=manifest_fingerprint,
+            historical_instrument_count=2,
+            requests=requests,
+        )
+        frame_by_request = {
+            requests[0].request_id: pd.DataFrame({"date": dates}),
+            requests[1].request_id: pd.DataFrame(columns=["date", "stock_id"]),
+            requests[2].request_id: pd.DataFrame({"date": dates, "stock_id": ["0050"] * 3, "Trading_Volume": [1000.0, 1100.0, 1200.0]}),
+            requests[3].request_id: pd.DataFrame({"date": dates, "stock_id": ["2330"] * 3, "Trading_Volume": [2000.0, 2100.0, 2200.0]}),
+            requests[4].request_id: pd.DataFrame({"date": dates, "stock_id": ["0050"] * 3}),
+            requests[5].request_id: pd.DataFrame({"date": dates, "stock_id": ["2330"] * 3}),
+            requests[6].request_id: pd.DataFrame({
+                "date": dates,
+                "stock_id": ["0050"] * 3,
+                "open": [100.0, 101.0, 102.0],
+                "max": [102.0, 103.0, 104.0],
+                "min": [99.0, 100.0, 101.0],
+                "close": [101.0, 102.0, 103.0],
+            }),
+            requests[7].request_id: pd.DataFrame({
+                "date": dates,
+                "stock_id": ["2330"] * 3,
+                "open": [500.0, 501.0, 502.0],
+                "max": [502.0, 503.0, 504.0],
+                "min": [499.0, 500.0, 501.0],
+                "close": [501.0, 502.0, 503.0],
+            }),
+        }
+
+        ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
+        ledger = MarketDataJobLedger(ledger_path)
+        workload_id = ledger.seed_manifest(manifest, now=datetime(2026, 9, 8, tzinfo=timezone.utc))
+        evidence = []
+        current = datetime(2026, 9, 8, tzinfo=timezone.utc)
+        while True:
+            job = ledger.claim_next_job(
+                workload_id,
+                owner_id="synthetic-round15",
+                now=current,
+                lease_until=current + timedelta(minutes=5),
+            )
+            if job is None:
+                break
+            request = job.to_request()
+            path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((request.request_id + "\n").encode("utf-8"))
+            digest = compute_file_sha256(path)
+            frame = frame_by_request[request.request_id]
+            ledger.mark_done(
+                workload_id,
+                request.request_id,
+                row_count=len(frame),
+                content_sha256=digest,
+                now=current,
+            )
+            evidence.append(
+                ProviderArtifactEvidence(
+                    request_id=request.request_id,
+                    dataset=request.dataset,
+                    row_count=len(frame),
+                    content_sha256=digest,
+                )
+            )
+            current += timedelta(seconds=1)
+        ledger.set_workload_status(workload_id, status="DONE", now=current)
+        provider_payload = build_provider_snapshot_payload(
+            manifest=manifest,
+            artifacts=evidence,
+            finalized_at="2026-09-08T00:00:00+00:00",
+        )
+        provider_path = resolve_market_data_provider_snapshot_path(root, manifest_fingerprint)
+        atomic_write_json(provider_path, provider_payload)
+
+        def frame_reader(path, columns):
+            frame = frame_by_request[path.stem].copy()
+            if columns:
+                missing = [column for column in columns if column not in frame.columns]
+                if missing:
+                    raise ValueError(f"synthetic round15 frame missing columns: {missing}")
+                frame = frame.loc[:, list(columns)]
+            return frame
+
+        archive = load_ready_provider_snapshot_archive(root)
+        view = ResearchV2ProviderView(project_root=root, archive=archive, frame_reader=frame_reader)
+        adjusted_scope_frame = next(view.iter_dataset_scope_frames("TaiwanStockPriceAdj", columns=("date", "stock_id", "open", "max", "min", "close")))
+        add_check(results, "market_data", case_id, "scope_reader_allows_only_authorized_adjusted_price_operands", 3, len(adjusted_scope_frame))
+        adjusted_volume_blocked = False
+        try:
+            next(view.iter_dataset_scope_frames("TaiwanStockPriceAdj", columns=("date", "stock_id", "Trading_Volume")))
+        except RuntimeError:
+            adjusted_volume_blocked = True
+        add_check(results, "market_data", case_id, "scope_reader_rejects_unlisted_adjusted_volume_field", True, adjusted_volume_blocked)
+
+        candidate = build_research_v2_candidate(
+            root,
+            frame_reader=frame_reader,
+            now=datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc),
+        )
+        add_check(results, "market_data", case_id, "candidate_computes_true_required_scope_common_complete_cutoff", cutoff, candidate["research_common_complete_cutoff"])
+        add_check(results, "market_data", case_id, "candidate_common_complete_tail_starts_at_first_fully_usable_synthetic_date", d1, candidate["required_common_complete_start_date"])
+        add_check(results, "market_data", case_id, "candidate_required_common_complete_tail_count_matches_calendar", 3, candidate["required_common_complete_tail_date_count"])
+        add_check(results, "market_data", case_id, "candidate_has_no_foundation_blockers_when_required_scope_is_complete", [], candidate["blockers"])
+        add_check(results, "market_data", case_id, "candidate_remains_unfrozen_even_after_common_complete_proof", None, candidate["frozen_cutoff"])
+        add_check(results, "market_data", case_id, "candidate_never_authorizes_promotion", False, candidate["promotion_authorized"])
+        add_check(results, "market_data", case_id, "candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
+        add_check(results, "market_data", case_id, "candidate_required_scope_coverage_is_persisted_and_fingerprinted", True, int(candidate["required_scope_coverage_row_count"]) == 3 and len(str(candidate["required_scope_coverage_fingerprint"])) == 64)
+        add_check(results, "market_data", case_id, "candidate_required_common_complete_fingerprint_is_scientific_identity", str(candidate["required_common_complete"]["coverage_fingerprint"]), candidate["required_common_complete_fingerprint"])
+
+        universe_path = resolve_research_v2_daily_universe_path(root, provider_payload["snapshot_fingerprint"])
+        conn = sqlite3.connect(universe_path)
+        try:
+            last_required = conn.execute(
+                "SELECT date, missing_raw_volume_count, missing_price_limit_count, missing_adjusted_price_operand_count, required_complete "
+                "FROM required_scope_coverage ORDER BY date DESC LIMIT 1"
+            ).fetchone()
+            common_cutoff = conn.execute("SELECT MAX(date) FROM required_common_complete").fetchone()[0]
+            transient_tables = {
+                str(row[0])
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                if str(row[0]) in {"raw_volume_field_evidence", "price_limit_evidence", "adjusted_price_operand_evidence"}
+            }
+        finally:
+            conn.close()
+        add_check(results, "market_data", case_id, "required_scope_coverage_cutoff_row_is_field_complete", (cutoff, 0, 0, 0, 1), tuple(last_required))
+        add_check(results, "market_data", case_id, "required_common_complete_sqlite_ceiling_equals_fixed_cutoff", cutoff, common_cutoff)
+        add_check(results, "market_data", case_id, "row_level_transient_completeness_evidence_is_not_duplicated_in_persistent_sqlite", set(), transient_tables)
+
+        loaded_candidate = load_research_v2_candidate(root, required=True)
+        add_check(results, "market_data", case_id, "round15_candidate_identity_roundtrips", candidate["candidate_fingerprint"], loaded_candidate["candidate_fingerprint"])
+        candidate_manifest_path = resolve_research_v2_candidate_manifest_path(root, provider_payload["snapshot_fingerprint"])
+        add_check(results, "market_data", case_id, "candidate_manifest_remains_candidate_namespace_before_promotion", True, candidate_manifest_path.is_file() and "/candidates/" in candidate_manifest_path.as_posix())
+
+        freeze = build_research_v2_freeze_candidate(
+            root,
+            frame_reader=frame_reader,
+            now=datetime(2026, 9, 8, 8, 5, tzinfo=timezone.utc),
+        )
+        add_check(results, "market_data", case_id, "freeze_candidate_is_ready_artifact_not_active_generation", RESEARCH_V2_FREEZE_CANDIDATE_STATUS_READY, freeze["status"])
+        add_check(results, "market_data", case_id, "freeze_candidate_pins_fixed_frozen_cutoff", cutoff, freeze["frozen_cutoff"])
+        add_check(results, "market_data", case_id, "freeze_candidate_keeps_promotion_unauthorized", False, freeze["promotion_authorized"])
+        add_check(results, "market_data", case_id, "freeze_candidate_does_not_claim_active_generation_changed", False, freeze["active_research_generation_changed"])
+        add_check(results, "market_data", case_id, "freeze_candidate_pins_source_candidate_identity", candidate["candidate_fingerprint"], freeze["candidate_fingerprint"])
+        add_check(results, "market_data", case_id, "freeze_candidate_pins_required_common_complete_identity", candidate["required_common_complete_fingerprint"], freeze["required_common_complete_fingerprint"])
+        add_check(results, "market_data", case_id, "freeze_candidate_requires_exact_round14_required_scope", set(RESEARCH_V2_REQUIRED_DATASETS), set(freeze["required_dataset_scope"]))
+        add_check(results, "market_data", case_id, "freeze_candidate_requires_exact_round14_common_complete_scope", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), set(freeze["common_complete_dataset_scope"]))
+        freeze_manifest = resolve_research_v2_freeze_candidate_manifest_path(root, freeze["freeze_candidate_fingerprint"])
+        add_check(results, "market_data", case_id, "freeze_candidate_is_stored_under_fingerprint_namespace", True, freeze_manifest.is_file() and f"/freeze_candidates/{freeze['freeze_candidate_fingerprint']}/" in freeze_manifest.as_posix())
+        add_check(results, "market_data", case_id, "freeze_candidate_build_consumes_zero_provider_calls", 0, freeze["provider_calls"])
+
+        reused = build_research_v2_freeze_candidate(
+            root,
+            frame_reader=frame_reader,
+            now=datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc),
+        )
+        add_check(results, "market_data", case_id, "freeze_candidate_rebuild_reuses_same_immutable_identity", freeze["freeze_candidate_fingerprint"], reused["freeze_candidate_fingerprint"])
+        add_check(results, "market_data", case_id, "freeze_candidate_rebuild_reports_reuse", True, reused["reused"])
+        loaded_freeze = load_research_v2_freeze_candidate(
+            root,
+            freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
+            required=True,
+        )
+        add_check(results, "market_data", case_id, "freeze_candidate_loader_roundtrips_identity", freeze["freeze_candidate_fingerprint"], loaded_freeze["freeze_candidate_fingerprint"])
+
+        v2_generation = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
+        add_check(results, "market_data", case_id, "round15_does_not_change_configured_v2_status", RESEARCH_STATUS_AUTHORIZED_NOT_READY, v2_generation.status)
+        add_check(results, "market_data", case_id, "round15_does_not_change_configured_v2_cutoff", None, v2_generation.cutoff)
+        add_check(results, "market_data", case_id, "round15_does_not_change_active_research_generation", RESEARCH_DATA_GENERATION_V1, ACTIVE_RESEARCH_DATA_GENERATION)
+
+        persisted_freeze = load_json_strict(freeze_manifest)
+        add_check(results, "market_data", case_id, "freeze_candidate_manifest_paths_are_project_relative", False, str(persisted_freeze["candidate_manifest_path"]).startswith(str(root)))
+
+    summary.update(
+        {
+            "checks": len(results),
+            "required_dataset_count": len(RESEARCH_V2_REQUIRED_DATASETS),
+            "common_complete_dataset_count": len(RESEARCH_V2_COMMON_COMPLETE_DATASETS),
+            "scope_contract_fingerprint": scope_stats["contract_fingerprint"],
+        }
+    )
     return results, summary
