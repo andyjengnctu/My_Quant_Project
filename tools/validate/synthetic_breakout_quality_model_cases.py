@@ -100,6 +100,19 @@ def _same_fields(left, right, fields) -> bool:
     return all(getattr(left, field) == getattr(right, field) for field in fields)
 
 
+def _same_model_spec_except_identity(base_spec, extension_spec, pooling) -> bool:
+    base = base_spec.as_manifest_payload()
+    extension = extension_spec.as_manifest_payload()
+    return bool(
+        all(
+            base[key] == extension[key]
+            for key in base
+            if key not in {"architecture", "family", "pooling"}
+        )
+        and tuple(extension_spec.pooling) == tuple(pooling)
+    )
+
+
 _CONTROLLED_PROFILE_RECIPE_FIELDS = (
     "optimizer_name",
     "lr_schedule_name",
@@ -311,6 +324,99 @@ def _five_item_hs_group_table(*, include_label: bool):
         data["label"] = [1] * 5
     return pd.DataFrame(data)
 
+
+def _split_bigru_runtime_contract(*, architecture: str, x, output_kind: str) -> bool:
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.spec import get_model_spec
+
+    torch, _nn = require_torch()
+    spec = get_model_spec(architecture)
+    model = build_active_model(10, 0, architecture=architecture)
+    head_attrs = (
+        ("raw_safety_classifier", "raw_mfe_classifier")
+        if output_kind == "dual"
+        else ("classifier",)
+    )
+    if output_kind == "dual":
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            safety, mfe = model.forward_safety_mfe_heads(x, None)
+        output_contract = bool(
+            int(model.raw_safety_classifier.in_features) == int(spec.channels)
+            and int(model.raw_mfe_classifier.in_features) == int(spec.channels)
+            and safety.shape == mfe.shape == (3, 2)
+            and safety.dtype == mfe.dtype == torch.float32
+            and bool(torch.isfinite(safety).all() and torch.isfinite(mfe).all())
+        )
+        compare_full_hidden = True
+    elif output_kind == "single_rank":
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            logits = model(x, None)
+        output_contract = bool(
+            "rank_head" in spec.pooling
+            and spec.family == "gru_ranker"
+            and model.classifier is not None
+            and model.raw_safety_classifier is None
+            and model.raw_mfe_classifier is None
+            and int(model.classifier.in_features) == int(spec.channels)
+            and logits.shape == (3, 2)
+            and logits.dtype == torch.float32
+            and bool(torch.isfinite(logits).all())
+        )
+        compare_full_hidden = False
+    else:
+        raise ValueError(f"unsupported split BiGRU output kind: {output_kind}")
+
+    hidden_size = int(spec.gru_hidden_size or 0)
+    equivalence_x = torch.linspace(-1.0, 1.0, steps=220, dtype=torch.float32).reshape(2, 11, 10)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(20260904)
+        native_gru = torch.nn.GRU(
+            10, hidden_size, num_layers=1, batch_first=True, dropout=0.0, bidirectional=True
+        )
+        native_heads = [torch.nn.Linear(2 * hidden_size, 2) for _ in head_attrs]
+        torch.manual_seed(20260904)
+        split_model = build_active_model(10, 0, architecture=architecture)
+        native_hidden = native_gru(equivalence_x)[1]
+        split_fast_hidden = split_model.gru.final_hidden(equivalence_x)
+        native_latent = torch.cat((native_hidden[-2], native_hidden[-1]), dim=1)
+        split_fast_latent = torch.cat((split_fast_hidden[-2], split_fast_hidden[-1]), dim=1)
+        initialization_equivalent = all(
+            torch.equal(getattr(native_gru, name), getattr(split_model.gru.forward_gru, name))
+            and torch.equal(
+                getattr(native_gru, name + "_reverse"), getattr(split_model.gru.backward_gru, name)
+            )
+            for name in ("weight_ih_l0", "weight_hh_l0", "bias_ih_l0", "bias_hh_l0")
+        )
+        heads_equivalent = all(
+            getattr(split_model, attr) is not None
+            and torch.equal(native_head.weight, getattr(split_model, attr).weight)
+            and torch.equal(native_head.bias, getattr(split_model, attr).bias)
+            for native_head, attr in zip(native_heads, head_attrs, strict=True)
+        )
+        final_state_equivalent = torch.allclose(
+            native_latent, split_fast_latent, rtol=1e-6, atol=1e-6
+        )
+        if compare_full_hidden:
+            split_hidden = split_model.gru(equivalence_x)[1]
+            split_latent = torch.cat((split_hidden[-2], split_hidden[-1]), dim=1)
+            final_state_equivalent = final_state_equivalent and torch.allclose(
+                native_latent, split_latent, rtol=1e-6, atol=1e-6
+            )
+
+    return bool(
+        spec.gru_bidirectional
+        and spec.gru_pooling == "final_state_concat"
+        and "bidirectional_final_recurrent_state_concat" in spec.pooling
+        and int(spec.channels) == 2 * hidden_size
+        and bool(getattr(model.gru, "bidirectional", False))
+        and getattr(model.gru, "execution_strategy", None) == "split_unidirectional_parallel_cuda"
+        and hasattr(model.gru, "final_hidden")
+        and initialization_equivalent
+        and heads_equivalent
+        and bool(final_state_equivalent)
+        and output_contract
+    )
 
 def _strategy_c75_uses_experiment_profile(profile_name: str) -> bool:
     """Return whether the current C75 conversion is sourced from this model profile.
@@ -3975,41 +4081,27 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         == len(ACTIVE_MODEL_ARCHITECTURES),
     )
 
-    recurrent_architectures = [
-        architecture
-        for architecture in ACTIVE_MODEL_ARCHITECTURES
-        if get_architecture_descriptor(architecture).has_capability("gated_recurrent_state")
-    ]
-    recurrent_fp32_architectures = [
-        architecture
-        for architecture in recurrent_architectures
-        if not get_architecture_descriptor(architecture).has_capability("recurrent_outer_autocast")
-    ]
-    recurrent_fp32_unidirectional = [
-        architecture
-        for architecture in recurrent_fp32_architectures
-        if not bool(get_model_spec(architecture).gru_bidirectional)
-    ]
-    recurrent_fp32_bidirectional = [
-        architecture
-        for architecture in recurrent_fp32_architectures
-        if bool(get_model_spec(architecture).gru_bidirectional)
-    ]
-    recurrent_fp32_bidirectional_dual = [
-        architecture
-        for architecture in recurrent_fp32_bidirectional
-        if get_architecture_descriptor(architecture).has_capability("shared_safety_mfe")
-    ]
-    recurrent_fp32_bidirectional_single_rank = [
-        architecture
-        for architecture in recurrent_fp32_bidirectional
-        if get_architecture_descriptor(architecture).has_capability("single_rank_head")
-    ]
-    recurrent_guarded_architectures = [
-        architecture
-        for architecture in recurrent_architectures
-        if get_architecture_descriptor(architecture).has_capability("same_batch_fp32_nonfinite_retry")
-    ]
+    recurrent_fp32_unidirectional = []
+    recurrent_fp32_bidirectional = []
+    recurrent_fp32_bidirectional_dual = []
+    recurrent_fp32_bidirectional_single_rank = []
+    recurrent_guarded_architectures = []
+    for architecture in ACTIVE_MODEL_ARCHITECTURES:
+        descriptor = get_architecture_descriptor(architecture)
+        if not descriptor.has_capability("gated_recurrent_state"):
+            continue
+        if descriptor.has_capability("same_batch_fp32_nonfinite_retry"):
+            recurrent_guarded_architectures.append(architecture)
+        if descriptor.has_capability("recurrent_outer_autocast"):
+            continue
+        if not bool(get_model_spec(architecture).gru_bidirectional):
+            recurrent_fp32_unidirectional.append(architecture)
+            continue
+        recurrent_fp32_bidirectional.append(architecture)
+        if descriptor.has_capability("shared_safety_mfe"):
+            recurrent_fp32_bidirectional_dual.append(architecture)
+        if descriptor.has_capability("single_rank_head"):
+            recurrent_fp32_bidirectional_single_rank.append(architecture)
     check_true(
         "active_gated_recurrent_backbones_expose_fp32_directionality_controls_and_guarded_bf16_control",
         bool(recurrent_fp32_unidirectional)
@@ -4018,186 +4110,30 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     )
     if recurrent_fp32_bidirectional_dual:
         bidirectional_x = torch.randn((3, 300, 10), dtype=torch.float32)
-        bidirectional_contracts = []
-        for architecture in recurrent_fp32_bidirectional_dual:
-            bidirectional_spec = get_model_spec(architecture)
-            bidirectional_model = build_active_model(10, 0, architecture=architecture)
-            with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-                bi_safety, bi_mfe = bidirectional_model.forward_safety_mfe_heads(
-                    bidirectional_x, None
-                )
-            # The split execution path is a performance implementation detail, not
-            # a topology change. Verify that construction preserves native BiGRU
-            # initialization order and that final states remain numerically equivalent.
-            hidden_size = int(bidirectional_spec.gru_hidden_size or 0)
-            equivalence_x = torch.linspace(
-                -1.0, 1.0, steps=2 * 11 * 10, dtype=torch.float32
-            ).reshape(2, 11, 10)
-            with torch.random.fork_rng(devices=[]):
-                torch.manual_seed(20260904)
-                native_gru = torch.nn.GRU(
-                    input_size=10,
-                    hidden_size=hidden_size,
-                    num_layers=1,
-                    batch_first=True,
-                    dropout=0.0,
-                    bidirectional=True,
-                )
-                native_safety = torch.nn.Linear(2 * hidden_size, 2)
-                native_mfe = torch.nn.Linear(2 * hidden_size, 2)
-                torch.manual_seed(20260904)
-                split_model = build_active_model(10, 0, architecture=architecture)
-                _native_output, native_hidden = native_gru(equivalence_x)
-                _split_output, split_hidden = split_model.gru(equivalence_x)
-                split_fast_hidden = split_model.gru.final_hidden(equivalence_x)
-                native_latent = torch.cat((native_hidden[-2], native_hidden[-1]), dim=1)
-                split_latent = torch.cat((split_hidden[-2], split_hidden[-1]), dim=1)
-                split_fast_latent = torch.cat(
-                    (split_fast_hidden[-2], split_fast_hidden[-1]), dim=1
-                )
-                split_forward = split_model.gru.forward_gru
-                split_backward = split_model.gru.backward_gru
-                initialization_equivalent = all(
-                    (
-                        torch.equal(getattr(native_gru, native_name), getattr(split_forward, split_name))
-                        and torch.equal(
-                            getattr(native_gru, native_name + "_reverse"),
-                            getattr(split_backward, split_name),
-                        )
-                    )
-                    for native_name, split_name in (
-                        ("weight_ih_l0", "weight_ih_l0"),
-                        ("weight_hh_l0", "weight_hh_l0"),
-                        ("bias_ih_l0", "bias_ih_l0"),
-                        ("bias_hh_l0", "bias_hh_l0"),
-                    )
-                )
-                heads_equivalent = (
-                    torch.equal(native_safety.weight, split_model.raw_safety_classifier.weight)
-                    and torch.equal(native_safety.bias, split_model.raw_safety_classifier.bias)
-                    and torch.equal(native_mfe.weight, split_model.raw_mfe_classifier.weight)
-                    and torch.equal(native_mfe.bias, split_model.raw_mfe_classifier.bias)
-                )
-                final_state_equivalent = (
-                    torch.allclose(native_latent, split_latent, rtol=1e-6, atol=1e-6)
-                    and torch.allclose(
-                        native_latent, split_fast_latent, rtol=1e-6, atol=1e-6
-                    )
-                )
-
-            bidirectional_contracts.append(
-                bool(bidirectional_spec.gru_bidirectional)
-                and bidirectional_spec.gru_pooling == "final_state_concat"
-                and "bidirectional_final_recurrent_state_concat" in bidirectional_spec.pooling
-                and int(bidirectional_spec.channels)
-                == 2 * int(bidirectional_spec.gru_hidden_size or 0)
-                and bool(getattr(bidirectional_model.gru, "bidirectional", False))
-                and getattr(bidirectional_model.gru, "execution_strategy", None)
-                == "split_unidirectional_parallel_cuda"
-                and hasattr(bidirectional_model.gru, "final_hidden")
-                and initialization_equivalent
-                and heads_equivalent
-                and bool(final_state_equivalent)
-                and int(bidirectional_model.raw_safety_classifier.in_features)
-                == int(bidirectional_spec.channels)
-                and int(bidirectional_model.raw_mfe_classifier.in_features)
-                == int(bidirectional_spec.channels)
-                and bi_safety.shape == (3, 2)
-                and bi_mfe.shape == (3, 2)
-                and bi_safety.dtype == torch.float32
-                and bi_mfe.dtype == torch.float32
-                and bool(torch.isfinite(bi_safety).all().item())
-                and bool(torch.isfinite(bi_mfe).all().item())
-            )
         check_true(
             "bidirectional_gru_uses_concat_final_states_with_fp32_recurrent_execution",
-            all(bidirectional_contracts),
+            all(
+                _split_bigru_runtime_contract(
+                    architecture=architecture,
+                    x=bidirectional_x,
+                    output_kind="dual",
+                )
+                for architecture in recurrent_fp32_bidirectional_dual
+            ),
         )
 
     if recurrent_fp32_bidirectional_single_rank:
         rank_x = torch.randn((3, 300, 10), dtype=torch.float32)
-        rank_contracts = []
-        for architecture in recurrent_fp32_bidirectional_single_rank:
-            rank_spec = get_model_spec(architecture)
-            rank_model = build_active_model(10, 0, architecture=architecture)
-            with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-                rank_logits = rank_model(rank_x, None)
-
-            hidden_size = int(rank_spec.gru_hidden_size or 0)
-            equivalence_x = torch.linspace(
-                -1.0, 1.0, steps=2 * 11 * 10, dtype=torch.float32
-            ).reshape(2, 11, 10)
-            with torch.random.fork_rng(devices=[]):
-                torch.manual_seed(20260904)
-                native_gru = torch.nn.GRU(
-                    input_size=10,
-                    hidden_size=hidden_size,
-                    num_layers=1,
-                    batch_first=True,
-                    dropout=0.0,
-                    bidirectional=True,
-                )
-                native_rank = torch.nn.Linear(2 * hidden_size, 2)
-                torch.manual_seed(20260904)
-                split_model = build_active_model(10, 0, architecture=architecture)
-                _native_output, native_hidden = native_gru(equivalence_x)
-                split_fast_hidden = split_model.gru.final_hidden(equivalence_x)
-                native_latent = torch.cat((native_hidden[-2], native_hidden[-1]), dim=1)
-                split_latent = torch.cat(
-                    (split_fast_hidden[-2], split_fast_hidden[-1]), dim=1
-                )
-                split_forward = split_model.gru.forward_gru
-                split_backward = split_model.gru.backward_gru
-                initialization_equivalent = all(
-                    (
-                        torch.equal(getattr(native_gru, native_name), getattr(split_forward, split_name))
-                        and torch.equal(
-                            getattr(native_gru, native_name + "_reverse"),
-                            getattr(split_backward, split_name),
-                        )
-                    )
-                    for native_name, split_name in (
-                        ("weight_ih_l0", "weight_ih_l0"),
-                        ("weight_hh_l0", "weight_hh_l0"),
-                        ("bias_ih_l0", "bias_ih_l0"),
-                        ("bias_hh_l0", "bias_hh_l0"),
-                    )
-                )
-                rank_head_equivalent = (
-                    split_model.classifier is not None
-                    and torch.equal(native_rank.weight, split_model.classifier.weight)
-                    and torch.equal(native_rank.bias, split_model.classifier.bias)
-                )
-                final_state_equivalent = torch.allclose(
-                    native_latent, split_latent, rtol=1e-6, atol=1e-6
-                )
-
-            rank_contracts.append(
-                bool(rank_spec.gru_bidirectional)
-                and rank_spec.gru_pooling == "final_state_concat"
-                and "bidirectional_final_recurrent_state_concat" in rank_spec.pooling
-                and "rank_head" in rank_spec.pooling
-                and rank_spec.family == "gru_ranker"
-                and int(rank_spec.channels)
-                == 2 * int(rank_spec.gru_hidden_size or 0)
-                and bool(getattr(rank_model.gru, "bidirectional", False))
-                and getattr(rank_model.gru, "execution_strategy", None)
-                == "split_unidirectional_parallel_cuda"
-                and hasattr(rank_model.gru, "final_hidden")
-                and initialization_equivalent
-                and rank_head_equivalent
-                and bool(final_state_equivalent)
-                and rank_model.classifier is not None
-                and rank_model.raw_safety_classifier is None
-                and rank_model.raw_mfe_classifier is None
-                and int(rank_model.classifier.in_features) == int(rank_spec.channels)
-                and rank_logits.shape == (3, 2)
-                and rank_logits.dtype == torch.float32
-                and bool(torch.isfinite(rank_logits).all().item())
-            )
         check_true(
             "bidirectional_gru_single_rank_head_reuses_same_recurrent_execution_contract",
-            all(rank_contracts),
+            all(
+                _split_bigru_runtime_contract(
+                    architecture=architecture,
+                    x=rank_x,
+                    output_kind="single_rank",
+                )
+                for architecture in recurrent_fp32_bidirectional_single_rank
+            ),
         )
 
     if recurrent_fp32_unidirectional and recurrent_guarded_architectures:
@@ -5842,22 +5778,17 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # only the Safety pooling scorer is new, and MFE loss must not update it.
     ao_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
     safety_attn_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1)
-    ao_manifest = ao_spec.as_manifest_payload()
-    attn_manifest = safety_attn_spec.as_manifest_payload()
-    architecture_only_fields = {"architecture", "family", "pooling"}
     check_true(
         "safety_attention_pool_keeps_ao_trunk_and_head_spec_except_pooling_identity",
-        all(
-            ao_manifest[key] == attn_manifest[key]
-            for key in ao_manifest
-            if key not in architecture_only_fields
-        )
-        and tuple(safety_attn_spec.pooling)
-        == (
+        _same_model_spec_except_identity(
+            ao_spec,
+            safety_attn_spec,
+            (
             "safety_scalar_attention_pool",
             "mfe_global_average",
             "raw_safety_head",
             "raw_mfe_head",
+            ),
         ),
     )
     torch.manual_seed(20260903)
@@ -5907,22 +5838,18 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # Safety temporal-attention primitive.  Relative to the task-specific GAP model,
     # only the Safety pooling scorer may be new; MFE branch topology/logits must stay exact.
     task_attn_spec = get_model_spec(INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1)
-    task_manifest = task_spec.as_manifest_payload()
-    task_attn_manifest = task_attn_spec.as_manifest_payload()
     check_true(
         "task_specific_safety_attention_composes_existing_primitives_without_new_hyperparameters",
-        all(
-            task_manifest[key] == task_attn_manifest[key]
-            for key in task_manifest
-            if key not in architecture_only_fields
-        )
-        and tuple(task_attn_spec.pooling)
-        == (
+        _same_model_spec_except_identity(
+            task_spec,
+            task_attn_spec,
+            (
             "task_specific_final_residual_group",
             "safety_scalar_attention_pool",
             "mfe_global_average",
             "raw_safety_head",
             "raw_mfe_head",
+            ),
         ),
     )
     task_gap_model, task_attn_model, task_attn_common_exact, task_extra_keys = (
@@ -5983,21 +5910,18 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # pooling variant.  AO feature extraction/MFE GAP remain exact; only Safety receives
     # single-head time-to-time Q/K/V interaction followed by the unchanged GAP.
     self_attn_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1)
-    self_attn_manifest = self_attn_spec.as_manifest_payload()
     check_true(
         "safety_temporal_self_attention_keeps_ao_spec_except_interaction_identity",
-        all(
-            ao_manifest[key] == self_attn_manifest[key]
-            for key in ao_manifest
-            if key not in architecture_only_fields
-        )
-        and tuple(self_attn_spec.pooling)
-        == (
+        _same_model_spec_except_identity(
+            ao_spec,
+            self_attn_spec,
+            (
             "safety_single_head_temporal_self_attention_residual",
             "safety_global_average",
             "mfe_global_average",
             "raw_safety_head",
             "raw_mfe_head",
+            ),
         ),
     )
     self_attn_probe = _safety_only_extension_probe(
@@ -6086,6 +6010,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         )
         and model_spec_from_manifest(relation_manifest) == relation_spec,
     )
+    relation_x = torch.zeros((2, 32, 10), dtype=torch.float32)
+    relation_base = torch.linspace(-0.15, 0.12, steps=32)
+    relation_x[:, :, 0] = relation_base
+    relation_x[:, :, 1] = relation_base + 0.03
+    relation_x[:, :, 2] = relation_base - 0.03
+    relation_x[:, :, 3] = relation_base + 0.01
+    relation_x[:, :, 4] = torch.linspace(-1.0, 1.0, steps=32)
     relation_probe = _safety_only_extension_probe(
         INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1,
@@ -6108,13 +6039,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         )
         == 56,
     )
-    relation_x = torch.zeros((2, 32, 10), dtype=torch.float32)
-    relation_base = torch.linspace(-0.15, 0.12, steps=32)
-    relation_x[:, :, 0] = relation_base
-    relation_x[:, :, 1] = relation_base + 0.03
-    relation_x[:, :, 2] = relation_base - 0.03
-    relation_x[:, :, 3] = relation_base + 0.01
-    relation_x[:, :, 4] = torch.linspace(-1.0, 1.0, steps=32)
     relation_features = relation_model.safety_temporal_relation_bias.build_relation_features(
         relation_x
     )
