@@ -19,7 +19,25 @@ from .reporting import print_history_qualified_summary, print_scanner_start_bann
 from .runtime_common import ACTIVE_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
 
 
-def _prepare_scan_inputs(data_dir, params, *, output_dir=None):
+def _normalize_ticker_membership(ticker_membership):
+    if ticker_membership is None:
+        return None
+    normalized = []
+    seen = set()
+    for raw in ticker_membership:
+        ticker = str(raw or "").strip()
+        if not ticker:
+            raise ValueError("Scanner ticker membership 不得包含空白 ticker")
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+        normalized.append(ticker)
+    if not normalized:
+        raise ValueError("Scanner ticker membership 不可為空")
+    return tuple(sorted(normalized))
+
+
+def _prepare_scan_inputs(data_dir, params, *, output_dir=None, ticker_membership=None):
     from core.data_utils import discover_unique_csv_inputs
 
     if not os.path.exists(data_dir):
@@ -27,6 +45,23 @@ def _prepare_scan_inputs(data_dir, params, *, output_dir=None):
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
+    normalized_membership = _normalize_ticker_membership(ticker_membership)
+    if normalized_membership is not None:
+        requested = set(normalized_membership)
+        available = {str(ticker) for ticker, _file_path in csv_inputs}
+        missing = sorted(requested - available)
+        if missing:
+            raise FileNotFoundError(
+                "Scanner ticker membership 缺少 canonical CSV；"
+                f"missing={missing[:20]}"
+            )
+        csv_inputs = [(ticker, file_path) for ticker, file_path in csv_inputs if str(ticker) in requested]
+        duplicate_file_issue_lines = [
+            line
+            for line in duplicate_file_issue_lines
+            if any(str(line).startswith(f"[重複檔名] {ticker}:") for ticker in requested)
+        ]
+
     ensure_runtime_dirs(output_dir=output_dir)
     print_scanner_start_banner(get_taipei_now().strftime('%Y-%m-%d %H:%M'))
     total_files = len(csv_inputs)
@@ -38,7 +73,7 @@ def _prepare_scan_inputs(data_dir, params, *, output_dir=None):
     print_scanner_header(params)
     print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額以 scanner_live_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")
     print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
-    return csv_inputs, duplicate_file_issue_lines, total_files
+    return csv_inputs, duplicate_file_issue_lines, total_files, [str(ticker) for ticker, _file_path in csv_inputs]
 
 
 def _adapt_candidate_scan_result(result):
@@ -113,9 +148,23 @@ def _format_history_progress(count_scanned, total_files, rows):
     )
 
 
-def _run_parallel_scan(data_dir, params, *, process_single_stock_fn, adapt_result_fn, progress_formatter, output_dir=None):
+def _run_parallel_scan(
+    data_dir,
+    params,
+    *,
+    process_single_stock_fn,
+    adapt_result_fn,
+    progress_formatter,
+    output_dir=None,
+    ticker_membership=None,
+):
     resolved_output_dir = OUTPUT_DIR if output_dir is None else os.fspath(output_dir)
-    csv_inputs, duplicate_file_issue_lines, total_files = _prepare_scan_inputs(data_dir, params, output_dir=resolved_output_dir)
+    csv_inputs, duplicate_file_issue_lines, total_files, scanned_tickers = _prepare_scan_inputs(
+        data_dir,
+        params,
+        output_dir=resolved_output_dir,
+        ticker_membership=ticker_membership,
+    )
 
     count_scanned = 0
     count_history_qualified = 0
@@ -161,11 +210,19 @@ def _run_parallel_scan(data_dir, params, *, process_single_stock_fn, adapt_resul
         'max_workers': max_workers,
         'pool_start_method': pool_start_method,
         'rows': rows,
+        'scanned_tickers': list(scanned_tickers),
         'scanner_issue_log_path': scanner_issue_log_path,
     }
 
 
-def run_daily_scanner(data_dir, params, *, output_dir=None, include_execution_context=False):
+def run_daily_scanner(
+    data_dir,
+    params,
+    *,
+    output_dir=None,
+    include_execution_context=False,
+    ticker_membership=None,
+):
     from .stock_processor import process_single_stock, process_single_stock_actionable_detail
 
     process_fn = process_single_stock_actionable_detail if bool(include_execution_context) else process_single_stock
@@ -176,6 +233,7 @@ def run_daily_scanner(data_dir, params, *, output_dir=None, include_execution_co
         adapt_result_fn=_adapt_candidate_scan_result,
         progress_formatter=_format_candidate_progress,
         output_dir=output_dir,
+        ticker_membership=ticker_membership,
     )
     candidate_rows = list(scan_state['rows'])
     print_scanner_summary(
@@ -198,11 +256,12 @@ def run_daily_scanner(data_dir, params, *, output_dir=None, include_execution_co
         'max_workers': scan_state['max_workers'],
         'pool_start_method': scan_state['pool_start_method'],
         'candidate_rows': list(candidate_rows),
+        'scanned_tickers': list(scan_state['scanned_tickers']),
         'scanner_issue_log_path': scan_state['scanner_issue_log_path'],
     }
 
 
-def run_history_qualified_scanner(data_dir, params, *, output_dir=None):
+def run_history_qualified_scanner(data_dir, params, *, output_dir=None, ticker_membership=None):
     from .stock_processor import process_single_stock_history_qualified
 
     scan_state = _run_parallel_scan(
@@ -212,6 +271,7 @@ def run_history_qualified_scanner(data_dir, params, *, output_dir=None):
         adapt_result_fn=_adapt_history_scan_result,
         progress_formatter=_format_history_progress,
         output_dir=output_dir,
+        ticker_membership=ticker_membership,
     )
     print_history_qualified_summary(
         count_scanned=scan_state['count_scanned'],
@@ -233,6 +293,7 @@ def run_history_qualified_scanner(data_dir, params, *, output_dir=None):
         'max_workers': scan_state['max_workers'],
         'pool_start_method': scan_state['pool_start_method'],
         'history_qualified_rows': list(scan_state['rows']),
+        'scanned_tickers': list(scan_state['scanned_tickers']),
         'scanner_issue_log_path': scan_state['scanner_issue_log_path'],
     }
 

@@ -4397,6 +4397,17 @@
       "entry": "`services/downloader/finmind_http.py`, `services/downloader/trading_price_refresh.py`, `services/downloader/sync.py`, `services/downloader/universe.py`",
       "initial_status": "NEW",
       "order": 396
+    },
+    {
+      "id": "B409",
+      "section": "B2",
+      "priority": "P2",
+      "category": "Trading actionable-universe Scanner membership / historical-retention separation",
+      "item": "Trading new-buy Scanner must consume the canonical current-universe membership while retained historical/required-position CSVs remain available for Optimizer, audit and position management",
+      "gap": "Trading data_dir intentionally retains historical ticker CSVs after they leave the current actionable universe, but the generic Scanner previously discovered every CSV in the directory. Stale-date filtering prevented an old row from becoming a same-day order, yet obsolete tickers still entered Scanner work and could contaminate opportunity-set membership semantics. Repair must keep physical historical retention separate from today actionable membership: generic Scanner defaults to full-dataset discovery for Research/other callers, Trading Daily Workflow passes market-data snapshot current_universe_tickers explicitly, missing requested CSVs fail-closed, required holdings outside the current universe remain retained but are excluded from new-buy scanning, and candidate snapshots persist/revalidate the exact scanned ticker membership plus market-data snapshot identity.",
+      "entry": "`services/scanner/scan_runner.py`, `services/trading/daily_workflow.py`, `services/trading/scanner_state.py`, `tools/local_regression/meta_quality_targets.py`",
+      "initial_status": "NEW",
+      "order": 397
     }
   ],
   "tests": [
@@ -8089,6 +8100,13 @@
       "description": "`validate_trading_execution_finmind_retry_contract_case` 驗證 retryable transient 依 execution policy bounded retry、quota/permanent error 單次 fail-closed、retry budget 不超限、historical bulk retain_cache=False 不變，且 real per-ticker fallback 與 universe exact-date consumer 實際共用相同 retry contract。",
       "initial_status": "NEW",
       "order": 518
+    },
+    {
+      "id": "T529",
+      "b_id": "B409",
+      "description": "`validate_trading_actionable_universe_scanner_membership_contract_case` 驗 generic Scanner 預設仍掃完整 dataset、optional ticker membership 只掃指定且缺檔 fail-closed、Trading Scanner 只接 current_universe_tickers、不把 universe 外 required holding 當新買 candidate、candidate snapshot schema v3 保存 exact scanned membership 並拒絕 membership 外 candidate／過期 membership。",
+      "initial_status": "NEW",
+      "order": 519
     }
   ],
   "transitions": [
@@ -26059,6 +26077,22 @@
       "to_status": "DONE",
       "description": "新增 execution-critical FinMind transient retry regression 並納入正式 DONE 測試摘要。",
       "note": "`validate_trading_execution_finmind_retry_contract_case`"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "B409",
+      "description": "分離 Trading 歷史 CSV retention 與今日 actionable Scanner membership；current universe 成為新買 Scanner SSOT。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Trading actionable-universe Scanner membership SSOT"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "T529",
+      "description": "新增 Trading actionable-universe Scanner membership regression 並納入正式 DONE 測試摘要。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "validate_trading_actionable_universe_scanner_membership_contract_case"
     }
   ]
 }

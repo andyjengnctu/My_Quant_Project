@@ -42,15 +42,29 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     output_dir = resolve_runtime_output_dir(
         root, domain=RUNTIME_DOMAIN_TRADING, category="scanner"
     )
+    expected_scanned_tickers = list(runtime.get("current_universe_tickers") or [])
+    if not expected_scanned_tickers:
+        raise RuntimeError("Trading Scanner 缺少 canonical current universe membership；請重新更新 Trading 資料")
     result = run_daily_scanner(
         str(runtime["data_dir"]),
         runtime["params"],
         output_dir=output_dir,
         include_execution_context=True,
+        ticker_membership=expected_scanned_tickers,
     )
+    actual_scanned_tickers = list(result.get("scanned_tickers") or [])
+    if actual_scanned_tickers != expected_scanned_tickers:
+        raise RuntimeError(
+            "Trading Scanner 實際掃描 membership 與 canonical current universe 不一致；"
+            f"expected={expected_scanned_tickers[:20]}, actual={actual_scanned_tickers[:20]}"
+        )
     runtime_after = load_trading_scanner_runtime(project_root, verify_dataset_content=True)
     stable_fields = (
-        "latest_data_date", "selected_params_sha256", "dataset_content_sha256", "param_binding_sha256",
+        "latest_data_date",
+        "selected_params_sha256",
+        "market_data_snapshot_sha256",
+        "dataset_content_sha256",
+        "param_binding_sha256",
     )
     changed = [field for field in stable_fields if str(runtime_after.get(field) or "") != str(runtime.get(field) or "")]
     if changed:
@@ -75,7 +89,9 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         'market_data_snapshot_sha256': runtime['market_data_snapshot_sha256'],
         'dataset_content_sha256': runtime['dataset_content_sha256'],
         'param_binding_sha256': runtime['param_binding_sha256'],
+        'scanned_tickers': list(actual_scanned_tickers),
         'candidate_rows': candidate_rows,
+        'scanned_tickers': list(actual_scanned_tickers),
         'stale_candidate_rows_skipped': stale_candidate_rows,
     }
     atomic_write_json(snapshot_path, snapshot_payload)

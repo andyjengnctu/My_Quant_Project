@@ -57,6 +57,7 @@ from .synthetic_unit_cases import (
 from .synthetic_trading_cases import (
     validate_trading_account_state_contract_case,
     validate_trading_daily_workflow_contract_case,
+    validate_trading_actionable_universe_scanner_membership_contract_case,
     validate_trading_proposed_order_plan_contract_case,
     validate_trading_pending_order_state_contract_case,
     validate_trading_confirmed_fill_reconciliation_contract_case,
@@ -411,6 +412,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_account_state_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_daily_workflow_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_actionable_universe_scanner_membership_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_proposed_order_plan_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_pending_order_state_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_confirmed_fill_reconciliation_contract_case, layer="core_invariant", cost_class="fast"),

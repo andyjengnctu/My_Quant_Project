@@ -88,6 +88,7 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
         "market_data_snapshot_sha256": runtime["market_data_snapshot_sha256"],
         "dataset_content_sha256": runtime["dataset_content_sha256"],
         "param_binding_sha256": runtime["param_binding_sha256"],
+        "scanned_tickers": list(runtime.get("current_universe_tickers") or []),
         "candidate_rows": list(candidate_rows),
         "stale_candidate_rows_skipped": [],
     }
@@ -408,6 +409,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
             "count_sanitized_candidates": 0,
             "max_workers": 1,
             "pool_start_method": "spawn",
+            "scanned_tickers": ["2330"],
             "candidate_rows": [{
                 "ticker": "2330",
                 "kind": "buy",
@@ -426,6 +428,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("trading_scanner_uses_trading_data_dir", str(data_dir), str(scanner_args.args[0]))
         check("trading_scanner_injects_trading_output_dir", str((root / "outputs" / "trading" / "scanner").resolve()), str(Path(scanner_args.kwargs["output_dir"]).resolve()))
         check("trading_scanner_requests_execution_context_for_allocator", True, scanner_args.kwargs.get("include_execution_context"))
+        check("trading_scanner_receives_canonical_current_universe_membership", ["2330"], scanner_args.kwargs.get("ticker_membership"))
+        check("trading_scanner_reports_exact_scanned_membership", ["2330"], scan_result.get("scanned_tickers"))
         check("trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
         check("trading_scanner_persists_candidate_snapshot", True, (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").is_file())
         check("trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
@@ -470,6 +474,196 @@ def validate_trading_daily_workflow_contract_case(base_params):
 
     summary["checks"] = len(results)
     return results, summary
+
+
+def validate_trading_actionable_universe_scanner_membership_contract_case(base_params):
+    case_id = "TRADING_ACTIONABLE_UNIVERSE_SCANNER_MEMBERSHIP"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "trading_scanner_membership")
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.params_io import params_to_json_dict
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+    from core.file_integrity import load_json_strict
+    from services.scanner import scan_runner
+    import services.trading.daily_workflow as daily_workflow
+    from services.trading.scanner_state import load_trading_candidate_snapshot
+    from services.trading.market_data_state import publish_trading_market_data_snapshot
+
+    profile = get_trading_strategy_profile()
+
+    with tempfile.TemporaryDirectory(prefix="trading_scanner_membership_") as temp_dir:
+        root = Path(temp_dir)
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        current_rows = {
+            "Date": ["2026-09-03", "2026-09-04"],
+            "Open": [100.0, 101.0],
+            "High": [102.0, 103.0],
+            "Low": [99.0, 100.0],
+            "Close": [101.0, 102.0],
+            "Volume": [1000, 1100],
+        }
+        stale_rows = {
+            "Date": ["2026-09-02", "2026-09-03"],
+            "Open": [50.0, 51.0],
+            "High": [52.0, 53.0],
+            "Low": [49.0, 50.0],
+            "Close": [51.0, 52.0],
+            "Volume": [800, 850],
+        }
+        pd.DataFrame(current_rows).to_csv(data_dir / "2330.csv", index=False)
+        pd.DataFrame(current_rows).to_csv(data_dir / "2317.csv", index=False)
+        pd.DataFrame(stale_rows).to_csv(data_dir / "2454.csv", index=False)
+
+        selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        )
+        selected_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _publish_synthetic_trading_input_lineage(
+            root,
+            market_date="2026-09-04",
+            current_universe_tickers=["2330", "2317"],
+            required_position_tickers=["2454"],
+        )
+
+        all_inputs, _issues, all_count, all_tickers = scan_runner._prepare_scan_inputs(
+            str(data_dir), base_params, output_dir=root / "outputs" / "all"
+        )
+        check("generic_scanner_default_keeps_full_dataset_membership", ["2317", "2330", "2454"], all_tickers)
+        check("generic_scanner_default_scans_all_csv_files", 3, all_count)
+        check("generic_scanner_default_paths_include_retained_historical_ticker", True, any(t == "2454" for t, _p in all_inputs))
+
+        filtered_inputs, _issues, filtered_count, filtered_tickers = scan_runner._prepare_scan_inputs(
+            str(data_dir),
+            base_params,
+            output_dir=root / "outputs" / "filtered",
+            ticker_membership=["2330", "2317"],
+        )
+        check("membership_filter_scans_only_requested_tickers", ["2317", "2330"], filtered_tickers)
+        check("membership_filter_excludes_retained_historical_ticker", False, any(t == "2454" for t, _p in filtered_inputs))
+        check("membership_filter_count_matches_actionable_universe", 2, filtered_count)
+        try:
+            scan_runner._prepare_scan_inputs(
+                str(data_dir),
+                base_params,
+                output_dir=root / "outputs" / "missing",
+                ticker_membership=["2330", "9999"],
+            )
+        except FileNotFoundError as exc:
+            missing_fail_closed = "9999" in str(exc)
+        else:
+            missing_fail_closed = False
+        check("membership_filter_missing_csv_fails_closed", True, missing_fail_closed)
+
+        generic_state = {
+            "count_scanned": 2, "elapsed_time": 0.01, "count_history_qualified": 0,
+            "count_skipped_insufficient": 0, "count_sanitized_candidates": 0,
+            "max_workers": 1, "pool_start_method": "spawn", "rows": [],
+            "scanned_tickers": ["2317", "2330"], "scanner_issue_log_path": None,
+        }
+        with patch.object(scan_runner, "_run_parallel_scan", return_value=generic_state) as parallel_mock, \
+             patch.object(scan_runner, "print_scanner_summary", return_value=None):
+            generic_result = scan_runner.run_daily_scanner(
+                str(data_dir), base_params, ticker_membership=["2330", "2317"]
+            )
+        check("run_daily_scanner_forwards_optional_membership_to_scan_engine", ["2330", "2317"], parallel_mock.call_args.kwargs.get("ticker_membership"))
+        check("run_daily_scanner_returns_actual_scanned_membership", ["2317", "2330"], generic_result.get("scanned_tickers"))
+
+        fake_scan = {
+            "count_scanned": 2,
+            "elapsed_time": 0.01,
+            "count_history_qualified": 1,
+            "count_skipped_insufficient": 0,
+            "count_sanitized_candidates": 0,
+            "max_workers": 1,
+            "pool_start_method": "spawn",
+            "scanned_tickers": ["2317", "2330"],
+            "candidate_rows": [{
+                "ticker": "2330",
+                "kind": "buy",
+                "sort_value": 1.0,
+                "expected_value": 0.2,
+                "proj_cost": 100000,
+                "text": "membership candidate",
+                "trade_date": "2026-09-04",
+                "execution_plan_seed": {
+                    "ticker": "2330", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0,
+                    "target_price": 106.0, "entry_atr": 2.0, "trade_date": "2026-09-04",
+                },
+            }],
+            "scanner_issue_log_path": None,
+        }
+        with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan) as scanner_mock:
+            scan_result = daily_workflow.run_trading_candidate_scan(project_root=root)
+        scanner_kwargs = scanner_mock.call_args.kwargs
+        check("trading_candidate_scan_passes_snapshot_current_universe_only", ["2317", "2330"], scanner_kwargs.get("ticker_membership"))
+        check("trading_candidate_scan_does_not_pass_required_holding_to_new_buy_scanner", False, "2454" in list(scanner_kwargs.get("ticker_membership") or []))
+        check("trading_candidate_scan_persists_scanned_membership", ["2317", "2330"], scan_result.get("scanned_tickers"))
+        check("retained_holding_csv_is_not_deleted_by_scanner_membership", True, (data_dir / "2454.csv").is_file())
+
+        candidate_snapshot = load_trading_candidate_snapshot(root, require_current=True)
+        check("candidate_snapshot_v3_binds_exact_scanned_membership", ["2317", "2330"], candidate_snapshot.get("scanned_tickers"))
+        check("candidate_snapshot_candidate_is_inside_scanned_membership", "2330", candidate_snapshot["candidate_rows"][0]["ticker"])
+
+        publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            current_universe_tickers=["2330"],
+            required_position_tickers=["2454"],
+        )
+        try:
+            load_trading_candidate_snapshot(root, require_current=True)
+        except RuntimeError as exc:
+            market_membership_drift_rejected = "market-data membership" in str(exc) or "scanned membership" in str(exc)
+        else:
+            market_membership_drift_rejected = False
+        check("candidate_snapshot_rejects_market_snapshot_membership_drift_same_dataset_bytes", True, market_membership_drift_rejected)
+        publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            current_universe_tickers=["2330", "2317"],
+            required_position_tickers=["2454"],
+        )
+
+        candidate_path = root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json"
+        tampered = load_json_strict(candidate_path)
+        tampered["scanned_tickers"] = ["2330", "2454"]
+        atomic_write_json(candidate_path, tampered)
+        try:
+            load_trading_candidate_snapshot(root, require_current=True)
+        except (ValueError, RuntimeError) as exc:
+            stale_membership_rejected = "membership" in str(exc) or "scanned" in str(exc)
+        else:
+            stale_membership_rejected = False
+        check("candidate_snapshot_rejects_noncanonical_scanned_membership", True, stale_membership_rejected)
+
+        bad_payload = _build_synthetic_candidate_snapshot_payload(root, candidate_rows=[{
+            "ticker": "2454",
+            "kind": "buy",
+            "trade_date": "2026-09-04",
+            "execution_plan_seed": {
+                "ticker": "2454", "limit_price": 52.0, "init_sl": 48.0, "init_trail": 49.0,
+                "target_price": 56.0, "entry_atr": 1.0, "trade_date": "2026-09-04",
+            },
+        }])
+        try:
+            from services.trading.scanner_state import _validate_trading_candidate_snapshot_payload
+            _validate_trading_candidate_snapshot_payload(bad_payload)
+        except ValueError as exc:
+            outside_candidate_rejected = "membership" in str(exc)
+        else:
+            outside_candidate_rejected = False
+        check("candidate_snapshot_rejects_candidate_outside_actionable_membership", True, outside_candidate_rejected)
+
+    summary["checks"] = len(results)
+    return results, summary
+
 
 def validate_trading_proposed_order_plan_contract_case(base_params):
     case_id = "TRADING_PROPOSED_ORDERS"
@@ -2905,6 +3099,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             "count_scanned": 1, "elapsed_time": 0.01, "count_history_qualified": 1,
             "count_skipped_insufficient": 0, "count_sanitized_candidates": 0, "max_workers": 1,
             "pool_start_method": "spawn", "scanner_issue_log_path": None,
+            "scanned_tickers": ["2330"],
             "candidate_rows": [{
                 "ticker": "2330", "trade_date": "2026-09-04", "kind": "buy", "sort_value": 1.0,
                 "expected_value": 0.2,

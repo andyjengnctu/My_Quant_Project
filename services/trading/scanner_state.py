@@ -26,7 +26,7 @@ from services.trading.strategy_param_state import (
 )
 
 
-TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 2
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 3
 
 
 def partition_trading_candidate_rows_for_information_date(
@@ -159,6 +159,8 @@ def load_trading_scanner_runtime(
         "params": param_source["primary_params"],
         "market_data_snapshot_sha256": get_trading_market_data_snapshot_sha256(root),
         "dataset_content_sha256": str(market_snapshot["dataset_fingerprint"]["csv_content_sha256"]),
+        "current_universe_tickers": list(market_snapshot.get("current_universe_tickers") or []),
+        "required_position_tickers": list(market_snapshot.get("required_position_tickers") or []),
         "param_binding_sha256": get_trading_strategy_param_binding_sha256(root),
         "param_binding_fingerprint": str(param_binding["binding_fingerprint"]),
         "trading_data_readiness": data_readiness,
@@ -289,8 +291,24 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
     for field in ("market_data_snapshot_sha256", "dataset_content_sha256", "param_binding_sha256"):
         if not str(payload.get(field) or "").strip():
             raise ValueError(f"Trading candidate snapshot 缺少 {field}")
+    scanned_tickers = payload.get("scanned_tickers")
+    if not isinstance(scanned_tickers, list) or not scanned_tickers:
+        raise ValueError("Trading candidate snapshot scanned_tickers 必須是非空 list")
+    normalized_scanned = sorted({normalize_trading_ticker(item) for item in scanned_tickers})
+    if list(scanned_tickers) != normalized_scanned:
+        raise ValueError("Trading candidate snapshot scanned_tickers 必須為排序後唯一 canonical ticker")
     if not isinstance(payload.get("candidate_rows"), list):
         raise ValueError("Trading candidate snapshot candidate_rows 必須是 list")
+    candidate_rows = list(payload.get("candidate_rows") or [])
+    if any(not isinstance(row, dict) for row in candidate_rows):
+        raise TypeError("Trading candidate snapshot candidate row 必須是 object")
+    candidate_tickers = {normalize_trading_ticker(row.get("ticker")) for row in candidate_rows}
+    outside_membership = sorted(candidate_tickers - set(normalized_scanned))
+    if outside_membership:
+        raise ValueError(
+            "Trading candidate snapshot 含 scanner membership 外的 candidate；"
+            f"outside={outside_membership[:20]}"
+        )
     current_rows, stale_rows = partition_trading_candidate_rows_for_information_date(
         list(payload.get("candidate_rows") or []),
         information_date=payload.get("latest_data_date"),
@@ -324,6 +342,10 @@ def load_trading_candidate_snapshot(
         raise RuntimeError("Trading candidate snapshot params date 與目前設定不一致；請重新執行 Scanner")
     if str(payload.get("selected_params_sha256") or "") != str(runtime["selected_params_sha256"]):
         raise RuntimeError("Trading candidate snapshot 對應的 params 已改變；請重新執行 Scanner")
+    if str(payload.get("market_data_snapshot_sha256") or "") != str(runtime["market_data_snapshot_sha256"]):
+        raise RuntimeError("Trading candidate snapshot 對應的 market-data membership 已改變；請重新執行 Scanner")
+    if list(payload.get("scanned_tickers") or []) != list(runtime.get("current_universe_tickers") or []):
+        raise RuntimeError("Trading candidate snapshot scanned membership 已過期；請重新執行 Scanner")
     if str(payload.get("dataset_content_sha256") or "") != str(runtime["dataset_content_sha256"]):
         raise RuntimeError("Trading candidate snapshot dataset content identity 已改變；請重新執行 Scanner")
     if str(payload.get("param_binding_sha256") or "") != str(runtime["param_binding_sha256"]):
@@ -366,6 +388,8 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
         "valid": True,
         "fresh": freshness_error is None,
         "candidate_count": len(payload.get("candidate_rows") or []),
+        "scanned_tickers": list(payload.get("scanned_tickers") or []),
+        "scanned_ticker_count": len(payload.get("scanned_tickers") or []),
         "stale_candidate_rows_skipped": list(payload.get("stale_candidate_rows_skipped") or []),
         "stale_candidate_count": len(payload.get("stale_candidate_rows_skipped") or []),
         "information_date": payload.get("latest_data_date"),
