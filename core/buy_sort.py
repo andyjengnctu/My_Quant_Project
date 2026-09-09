@@ -121,6 +121,223 @@ SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES = (
 )
 BREAKOUT_QUALITY_CAPITAL_BUCKET_COUNT = 3
 
+# Canonical ranking-policy execution-description contract consumed by Strategy Compare metadata.
+_DEFAULT_BREAKOUT_QUALITY_SCORE_RANKING_ORDER = (
+    'capital_deployment_bucket_desc',
+    'breakout_quality_score_desc',
+    'existing_buy_sort',
+    'ticker_deterministic',
+)
+_BREAKOUT_QUALITY_NON_RESOURCE_SCORE_ORDER_OVERRIDES = {
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE: ('breakout_quality_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED: ('capital_adjusted_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL: ('same_param_exact_resource_baseline', 'fixed_baseline_order_count_and_r0', 'frozen_primary_continuous_dl_score', 'frozen_secondary_low_adverse_score',
+     'same_day_primary_and_safety_rank_percentiles', 'ols_expected_safety_rank_given_primary_rank',
+     'baseline_relative_residual_safety_coverage_and_score_sum_floor', 'exact_branch_and_bound_full_candidate_universe',
+     'canonical_cash_capped_plan_on_every_included_state', 'maximize_primary_continuous_dl_score_sum', 'global_optimum_certificate', 'ticker_deterministic'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL: ('same_param_exact_resource_baseline', 'fixed_baseline_order_count_and_r0', 'frozen_primary_continuous_dl_score', 'frozen_secondary_low_adverse_score',
+     'baseline_relative_secondary_coverage_and_score_sum_floor', 'exact_branch_and_bound_full_candidate_universe',
+     'canonical_cash_capped_plan_on_every_included_state', 'maximize_primary_continuous_dl_score_sum', 'global_optimum_certificate', 'ticker_deterministic'),
+}
+
+# value = (score_order, dl_intervention, quality_objective, resource_feasibility, selection_objective, fallback)
+_BREAKOUT_QUALITY_RESOURCE_AWARE_REPORT_SPECS = {
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY: (('resource_bottleneck_gate', 'binary_pass_promotions', 'existing_buy_sort', 'ticker_deterministic'),
+     'only_when_baseline_stops_before_free_slots_with_unselected_candidates', 'increase_reserved_capital_assigned_to_pass_candidates',
+     'cash remains the binding pre-market resource after the selected basket', 'first_improving_pass_reserved_promotion', 'canonical_same_param_baseline_order'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET: (('resource_bottleneck_gate', 'best_improvement_pass_basket', 'existing_buy_sort', 'ticker_deterministic'),
+     'only_when_baseline_stops_before_free_slots_with_unselected_candidates', 'increase_reserved_capital_assigned_to_pass_candidates',
+     'cash remains the binding pre-market resource after the selected basket', 'best_improvement_pass_reserved_then_pass_count_then_min_roos_rank',
+     'canonical_same_param_baseline_order'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS: (('resource_bottleneck_gate', 'continuous_score_desc_if_cash_binding', 'existing_buy_sort_fallback', 'ticker_deterministic'),
+     'only_when_baseline_stops_before_free_slots_with_unselected_candidates', 'maximize_selected_continuous_score_without_breaking_cash_binding',
+     'cash remains the binding pre-market resource after the selected basket', 'continuous_score_desc_with_cash_binding_constrained_promotions',
+     'canonical_same_param_baseline_order'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING: (('same_param_exact_resource_baseline', 'continuous_score_desc', 'selected_count_not_below_baseline', 'reserved_capital_not_below_baseline',
+      'existing_buy_sort_fallback', 'ticker_deterministic'),
+     'cash_or_slot_binding_with_exact_baseline_resource_preservation', 'maximize_selected_continuous_score_subject_to_same_param_baseline_resource_floor',
+     'selected_count>=baseline_selected_count and reserved_cost>=baseline_reserved_cost', 'best_improvement_continuous_score_with_exact_resource_floor',
+     'canonical_same_param_baseline_order'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count_and_r0', 'frozen_mr13e_daily_percentile_to_pit_expected_excess_r',
+      'exact_branch_and_bound_full_candidate_universe', 'canonical_cash_capped_plan_on_every_included_state',
+      'maximize_expected_excess_r_times_canonical_planned_initial_risk', 'global_optimum_certificate', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_sum_expected_excess_r_times_canonical_planned_initial_risk_subject_to_same_k_r0_exact_global_search',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost', 'exact_branch_and_bound_full_universe_subject_to_k_r0_and_canonical_cash',
+     'c39_feasible_ascent_is_incumbent_lower_bound_only; exact_search_space_is_not_restricted'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count', 'frozen_mr13e_daily_percentile_to_pit_expected_excess_r',
+      'expected_excess_r_times_canonical_planned_initial_risk_top_k', 'deterministic_minimum_repair_seed', 'best_feasible_single_swap_excess_alpha_ascent',
+      'one_swap_local_optimum', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_sum_expected_excess_r_times_canonical_planned_initial_risk_subject_to_same_k_r0',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost',
+     'expected_excess_alpha_top_k_repair_seed_then_best_feasible_single_swap_excess_alpha_ascent',
+     'same_param_baseline_only_if_excess_alpha_minimum_repair_cannot_reach_k_r0_then_excess_alpha_ascent_continues'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count', 'frozen_mr13e_daily_percentile_to_pit_expected_excess_r',
+      'expected_excess_r_times_canonical_planned_initial_risk_top_k', 'no_baseline_reserved_capital_floor', 'no_r0_minimum_repair',
+      'k_only_cash_feasible_seed_if_raw_top_k_cannot_place_k_orders', 'best_k_only_cash_feasible_single_swap_excess_alpha_ascent', 'one_swap_local_optimum',
+      'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_sum_expected_excess_r_times_canonical_planned_initial_risk_subject_to_same_k_and_true_cash_only',
+     'selected_count==baseline_selected_count; no baseline R0 floor; canonical cash-capped reservation remains binding',
+     'expected_excess_alpha_top_k_then_k_only_cash_feasible_seed_if_needed_then_best_single_swap_ascent',
+     'same_param_baseline_is_only_a_k_cash_feasible_seed_when_raw_top_k_cannot_place_k_orders; no_r0_repair'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count', 'frozen_mr13e_daily_percentile_to_expected_r',
+      'expected_r_times_canonical_planned_initial_risk_top_k', 'deterministic_minimum_repair_seed', 'best_feasible_single_swap_expected_pnl_ascent',
+      'one_swap_local_optimum', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_sum_expected_r_times_canonical_planned_initial_risk_subject_to_same_k_r0',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost',
+     'expected_pnl_top_k_repair_seed_then_best_feasible_single_swap_expected_pnl_ascent',
+     'same_param_baseline_only_if_expected_pnl_minimum_repair_cannot_reach_k_r0_then_expected_pnl_ascent_continues'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count', 'continuous_score_top_k', 'deterministic_minimum_repair_if_needed',
+      'reserved_capital_not_below_baseline', 'baseline_fallback_only_if_repair_fails', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_fixed_k_continuous_score_subject_to_same_param_baseline_reserved_capital_floor',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost', 'dl_top_k_then_deterministic_minimum_repair',
+     'canonical_same_param_baseline_order'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count', 'continuous_score_top_k', 'deterministic_minimum_repair_seed',
+      'best_feasible_single_swap_ascent', 'one_swap_local_optimum', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_fixed_k_continuous_score_subject_to_same_param_baseline_reserved_capital_floor',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost', 'dl_top_k_repair_seed_then_best_feasible_single_swap_ascent',
+     'minimum_repair_seed_may_use_same_param_baseline_then_feasible_ascent_continues'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count', 'continuous_score_top_k', 'deterministic_minimum_repair_seed',
+      'stale_score_membership_guard', 'fresh_only_best_feasible_single_swap_ascent', 'one_swap_local_optimum', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_fixed_k_continuous_score_subject_to_same_param_baseline_reserved_capital_floor',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost',
+     'dl_top_k_repair_seed_then_stale_membership_guard_then_fresh_only_best_feasible_single_swap_ascent',
+     'stale_score_membership_change_blocked_to_same_param_baseline_or_fresh_only_ascent'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT: (('capital_deployment_bucket_desc', 'breakout_quality_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
+     'only_when_baseline_stops_before_free_slots_with_unselected_candidates',
+     'maximize_local_feasible_count_then_continuous_score_subject_to_baseline_k_to_physical_free_slots_and_r0',
+     'baseline_selected_count<=selected_count<=physical_free_slots and reserved_cost>=baseline_reserved_cost',
+     'fixed_k_feasible_seed_then_best_feasible_single_add_or_swap_ascent_count_first_then_score',
+     'same_fixed_k_feasible_seed_then_deterministic_local_add_swap_search; no_global_optimum_claim'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_MATCHED_FEASIBLE_ASCENT: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count', 'continuous_score_top_k', 'deterministic_minimum_repair_seed',
+      'best_feasible_single_swap_ascent', 'one_swap_local_optimum', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_fixed_k_continuous_score_subject_to_same_param_baseline_reserved_capital_floor',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost', 'dl_top_k_repair_seed_then_best_feasible_single_swap_ascent',
+     'minimum_repair_seed_may_use_same_param_baseline_then_feasible_ascent_continues'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count_only_no_r0', 'frozen_continuous_dl_score', 'exact_branch_and_bound_full_candidate_universe',
+      'canonical_cash_capped_plan_on_every_included_state', 'maximize_continuous_dl_score_times_reserved_capital_sum', 'global_optimum_certificate',
+      'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_sum_continuous_dl_score_times_canonical_reserved_capital_subject_to_same_k_and_true_cash_only_exact_global_search',
+     'selected_count==baseline_selected_count; no baseline R0 floor; canonical cash-capped reservation remains binding',
+     'exact_branch_and_bound_full_universe_subject_to_k_and_canonical_cash_no_r0',
+     'objective_top_k_if_cash_feasible_else_same_param_baseline_is_incumbent_only; no_r0_repair; exact_search_space_is_not_restricted'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count_only_no_r0', 'frozen_continuous_dl_score', 'exact_branch_and_bound_full_candidate_universe',
+      'canonical_cash_capped_plan_on_every_included_state', 'maximize_score_coverage_first', 'derive_exact_score_and_reserved_capital_pareto_extremes',
+      'normalize_quality_and_capital_by_pareto_extremes', 'maximize_normalized_quality_times_capital_product', 'global_optimum_certificate',
+      'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_normalized_basket_score_quality_times_canonical_reserved_capital_using_exact_pareto_extremes_subject_to_same_k_and_true_cash_only',
+     'selected_count==baseline_selected_count; no baseline R0 floor; canonical cash-capped reservation remains binding',
+     'three_exact_passes_score_endpoint_capital_endpoint_then_normalized_product_global_optimum',
+     'same_param_baseline_is_feasible_incumbent_only; score_and_capital_exact_endpoints_seed_final_product_pass; no_r0_repair'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count_and_r0', 'frozen_continuous_dl_score', 'exact_branch_and_bound_full_candidate_universe',
+      'canonical_cash_capped_plan_on_every_included_state', 'maximize_continuous_dl_score_sum', 'global_optimum_certificate', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count', 'maximize_sum_continuous_dl_score_subject_to_same_k_r0_exact_global_search',
+     'selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost', 'exact_branch_and_bound_full_universe_subject_to_k_r0_and_canonical_cash',
+     'c35_feasible_ascent_is_incumbent_lower_bound_only; exact_search_space_is_not_restricted'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL: (('same_param_exact_resource_baseline', 'baseline_order_count_is_minimum', 'physical_free_slots_is_maximum', 'baseline_r0_floor_preserved',
+      'maximize_feasible_planned_order_count_first', 'frozen_continuous_dl_score', 'exact_branch_and_bound_full_candidate_universe',
+      'canonical_cash_capped_plan_on_every_included_state', 'maximize_continuous_dl_score_sum_at_selected_count', 'global_optimum_certificate',
+      'ticker_deterministic'),
+     'all_days_with_feasible_baskets_between_baseline_k_and_physical_free_slots_while_preserving_r0',
+     'maximize_feasible_count_then_sum_continuous_dl_score_subject_to_baseline_k_to_physical_free_slots_r0_exact_global_search',
+     'baseline_selected_count<=selected_count<=physical_free_slots and reserved_cost>=baseline_reserved_cost',
+     'descending_count_search_then_exact_branch_and_bound_maximize_score_subject_to_r0_and_canonical_cash',
+     'try_counts_from_physical_free_slots_down_to_baseline_k; objective_top_count_and_deterministic_reserve_orders_are_incumbents_only; '
+     'exact_search_space_is_not_restricted'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0: (('capital_deployment_bucket_desc', 'breakout_quality_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
+     'all_days; score order may select any canonically cash-feasible count from zero to physical free slots',
+     'existing_frozen_continuous_model_score_descending_then_original_deterministic_rank_tie',
+     '0<=selected_count<=physical_free_slots; no baseline K/R0 floor; canonical cash-capped sizing/orderability remains authoritative',
+     'deterministic_frozen_model_score_descending_then_canonical_cash_simulation; no combinatorial search',
+     'none; same-param baseline is diagnostic only and never repairs/replaces score-order membership'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE: (('capital_deployment_bucket_desc', 'breakout_quality_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
+     'all_days; score order may select any canonically cash-feasible count from zero to physical free slots',
+     'raw_safety_same_day_orderable_percentile_gate_then_existing_frozen_conditional_mfe_score_descending',
+     '0<=selected_count<=physical_free_slots; no baseline K/R0 floor; canonical cash-capped sizing/orderability remains authoritative',
+     'raw_safety_gate_then_deterministic_frozen_model_score_descending_then_canonical_cash_simulation; no combinatorial search',
+     'none; same-param baseline is diagnostic only and never repairs/replaces score-order membership'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT: (('capital_deployment_bucket_desc', 'breakout_quality_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
+     'all_days; score order may select any canonically cash-feasible count from zero to physical free slots',
+     'same_day_orderable_raw_safety_percentile_times_conditional_mfe_percentile_descending',
+     '0<=selected_count<=physical_free_slots; no baseline K/R0 floor; canonical cash-capped sizing/orderability remains authoritative',
+     'same_day_raw_safety_percentile_x_conditional_mfe_percentile_descending_then_canonical_cash_simulation; no threshold; no fitted weight; no combinatorial '
+     'search',
+     'none; same-param baseline is diagnostic only and never repairs/replaces score-order membership'),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL: (('same_param_exact_resource_baseline', 'fixed_baseline_order_count_only_no_r0', 'frozen_continuous_dl_score', 'exact_branch_and_bound_full_candidate_universe',
+      'canonical_cash_capped_plan_on_every_included_state', 'maximize_continuous_dl_score_sum', 'global_optimum_certificate', 'ticker_deterministic'),
+     'all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count',
+     'maximize_sum_continuous_dl_score_subject_to_same_k_and_true_cash_only_exact_global_search',
+     'selected_count==baseline_selected_count; no baseline R0 floor; canonical cash-capped reservation remains binding',
+     'exact_branch_and_bound_full_universe_subject_to_k_and_canonical_cash_no_r0',
+     'objective_top_k_if_cash_feasible_else_same_param_baseline_is_incumbent_only; no_r0_repair; exact_search_space_is_not_restricted'),
+}
+
+_BREAKOUT_QUALITY_NO_K_NO_R0_REPORT_POLICIES = frozenset({
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
+})
+
+
+def build_breakout_quality_score_ranking_order(ranking_policy, *, include_runtime_member_vote_count=False):
+    resource_spec = _BREAKOUT_QUALITY_RESOURCE_AWARE_REPORT_SPECS.get(ranking_policy)
+    order = list(
+        resource_spec[0]
+        if resource_spec is not None
+        else _BREAKOUT_QUALITY_NON_RESOURCE_SCORE_ORDER_OVERRIDES.get(
+            ranking_policy,
+            _DEFAULT_BREAKOUT_QUALITY_SCORE_RANKING_ORDER,
+        )
+    )
+    if include_runtime_member_vote_count:
+        order.insert(0, 'runtime_member_vote_count_desc')
+    return order
+
+
+def build_breakout_quality_capital_aware_ranking_contract(ranking_policy, *, ranking_options):
+    resource_spec = _BREAKOUT_QUALITY_RESOURCE_AWARE_REPORT_SPECS.get(ranking_policy)
+    if resource_spec is not None:
+        _, dl_intervention, quality_objective, resource_feasibility, selection_objective, fallback = resource_spec
+        contract = {
+            'resource_gate': (
+                'canonical_cash_sizing_orderability_and_physical_slots_only; baseline K/R0 diagnostic_only'
+                if ranking_policy in _BREAKOUT_QUALITY_NO_K_NO_R0_REPORT_POLICIES
+                else 'canonical_same_param_exact_cash_cap_baseline'
+            ),
+            'dl_intervention': dl_intervention,
+            'quality_objective': quality_objective,
+            'resource_feasibility': resource_feasibility,
+            'selection_objective': selection_objective,
+            'fallback': fallback,
+            'future_target_used': False,
+            'additional_numeric_thresholds': [],
+        }
+        if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+            contract['additional_numeric_thresholds'] = [{
+                'name': 'stale_score_membership_guard_max_age_days',
+                'value': ranking_options.get('stale_score_membership_guard_max_age_days'),
+                'unit': 'calendar_days',
+                'source': 'config/strategy_compare.py',
+            }]
+        return contract
+    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+        return None
+    return {
+        'projected_capital_fraction_source': 'canonical_pretrade_proj_cost_div_sizing_capital',
+        'deployment_rate': 'min(1, projected_capital_fraction / max_position_cap_pct)',
+        'capital_bucket_count': BREAKOUT_QUALITY_CAPITAL_BUCKET_COUNT,
+        'capital_bucket_scope': 'same_day_score_available_orderable_candidates',
+        'future_target_used': False,
+    }
 
 def _as_finite_float(value, *, default):
     try:
