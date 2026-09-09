@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import run_bound_checks
+
 import importlib
 import io
 import json
@@ -49,7 +51,7 @@ from services.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
-from .checks import add_check
+from .checks import raises_expected, bind_synthetic_case, bind_checks, add_check
 
 
 def _optimizer_search_space_spec(name):
@@ -385,29 +387,19 @@ def _build_dummy_ohlcv_df() -> pd.DataFrame:
 def validate_model_io_schema_case(base_params):
     params = base_params if base_params is not None else V16StrategyParams()
     case_id = "MODEL_IO_SCHEMA"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_schema')
 
     default_payload = params_to_json_dict(V16StrategyParams())
     trial_params = _optimizer_synthetic_param_payload(prefer_enabled=True)
     fake_trial = _FakeTrial(trial_params, user_attrs={"fixed_tp_percent": 0.25})
     best_params_payload = build_best_params_payload_from_trial(fake_trial, fixed_tp_percent=None)
 
-    add_check(
-        results,
-        "strategy_schema",
-        case_id,
-        "optimizer_best_params_payload_keys_match_strategy_schema",
-        sorted(default_payload.keys()),
-        sorted(best_params_payload.keys()),
-    )
-    add_check(
-        results,
-        "strategy_schema",
-        case_id,
-        "optimizer_best_params_payload_excludes_runtime_only_fields",
-        True,
-        all(key not in best_params_payload for key in ("optimizer_max_workers", "scanner_max_workers")),
+    run_bound_checks(
+        check,
+        (
+            ('optimizer_best_params_payload_keys_match_strategy_schema', sorted(default_payload.keys()), sorted(best_params_payload.keys()),),
+            ('optimizer_best_params_payload_excludes_runtime_only_fields', True, all((key not in best_params_payload for key in ('optimizer_max_workers', 'scanner_max_workers'))),),
+        ),
     )
 
     for field_name, default_value in default_payload.items():
@@ -427,7 +419,7 @@ def validate_model_io_schema_case(base_params):
         else:
             expected = True
             actual = isinstance(actual_value, type(default_value))
-        add_check(results, "strategy_schema", case_id, f"best_params_type::{field_name}", expected, actual)
+        check(f"best_params_type::{field_name}", expected, actual)
 
     shipped_best_params_paths = _existing_shipped_reference_param_paths()
     shipped_payload_keys = {}
@@ -466,29 +458,16 @@ def validate_model_io_schema_case(base_params):
                     mismatch_fields.append(f"{member_prefix}{field_name}:{type(actual_value).__name__}")
         shipped_payload_type_mismatches[shipped_path.name] = mismatch_fields
 
-    add_check(
-        results,
-        "strategy_schema",
-        case_id,
-        "repo_shipped_reference_payload_keys_match_strategy_schema",
-        {path.name: sorted(default_payload.keys()) for path in shipped_best_params_paths},
-        shipped_payload_keys,
-    )
-    add_check(
-        results,
-        "strategy_schema",
-        case_id,
-        "repo_shipped_reference_payload_types_match_strategy_schema",
-        {path.name: [] for path in shipped_best_params_paths},
-        shipped_payload_type_mismatches,
+    run_bound_checks(
+        check,
+        (
+            ('repo_shipped_reference_payload_keys_match_strategy_schema', {path.name: sorted(default_payload.keys()) for path in shipped_best_params_paths}, shipped_payload_keys,),
+            ('repo_shipped_reference_payload_types_match_strategy_schema', {path.name: [] for path in shipped_best_params_paths}, shipped_payload_type_mismatches,),
+        ),
     )
 
     restored_trial_params = build_optimizer_trial_params(fake_trial.params, fake_trial.user_attrs, fixed_tp_percent=None)
-    add_check(
-        results,
-        "strategy_schema",
-        case_id,
-        "optimizer_trial_params_contains_fixed_tp_percent",
+    check("optimizer_trial_params_contains_fixed_tp_percent",
         True,
         math.isclose(restored_trial_params["tp_percent"], 0.25, rel_tol=0.0, abs_tol=1e-9),
     )
@@ -537,28 +516,28 @@ def validate_model_io_schema_case(base_params):
             buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
 
         expected_keys = ["expected_value", "message", "proj_cost", "sanitize_issue", "sort_value", "status", "ticker"]
-        add_check(results, "strategy_schema", case_id, "scanner_buy_result_keys", expected_keys, sorted(buy_result.keys()))
-        add_check(results, "strategy_schema", case_id, "scanner_buy_status_type", True, isinstance(buy_result["status"], str))
-        add_check(results, "strategy_schema", case_id, "scanner_buy_proj_cost_finite", True, math.isfinite(float(buy_result["proj_cost"])))
-        add_check(results, "strategy_schema", case_id, "scanner_buy_expected_value_finite", True, math.isfinite(float(buy_result["expected_value"])))
-        add_check(results, "strategy_schema", case_id, "scanner_buy_sort_value_finite", True, math.isfinite(float(buy_result["sort_value"])))
-        add_check(results, "strategy_schema", case_id, "scanner_buy_message_contains_ticker", True, "2330" in str(buy_result["message"]))
-        add_check(results, "strategy_schema", case_id, "scanner_buy_sanitize_issue_nullable", True, buy_result["sanitize_issue"] is None or isinstance(buy_result["sanitize_issue"], str))
+        check("scanner_buy_result_keys", expected_keys, sorted(buy_result.keys()))
+        check("scanner_buy_status_type", True, isinstance(buy_result["status"], str))
+        check("scanner_buy_proj_cost_finite", True, math.isfinite(float(buy_result["proj_cost"])))
+        check("scanner_buy_expected_value_finite", True, math.isfinite(float(buy_result["expected_value"])))
+        check("scanner_buy_sort_value_finite", True, math.isfinite(float(buy_result["sort_value"])))
+        check("scanner_buy_message_contains_ticker", True, "2330" in str(buy_result["message"]))
+        check("scanner_buy_sanitize_issue_nullable", True, buy_result["sanitize_issue"] is None or isinstance(buy_result["sanitize_issue"], str))
 
         with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "services.scanner.stock_processor.run_v16_backtest", return_value=candidate_stats
         ):
             candidate_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
-        add_check(results, "strategy_schema", case_id, "scanner_candidate_status", "candidate", candidate_result["status"])
-        add_check(results, "strategy_schema", case_id, "scanner_candidate_proj_cost_none", None, candidate_result["proj_cost"])
-        add_check(results, "strategy_schema", case_id, "scanner_candidate_expected_value_none", None, candidate_result["expected_value"])
-        add_check(results, "strategy_schema", case_id, "scanner_candidate_sort_value_none", None, candidate_result["sort_value"])
+        check("scanner_candidate_status", "candidate", candidate_result["status"])
+        check("scanner_candidate_proj_cost_none", None, candidate_result["proj_cost"])
+        check("scanner_candidate_expected_value_none", None, candidate_result["expected_value"])
+        check("scanner_candidate_sort_value_none", None, candidate_result["sort_value"])
 
         with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", side_effect=skip_exc):
             skip_result = process_single_stock(str(file_path), "2330", params)
         normalized_skip = normalize_scanner_result(skip_result)
-        add_check(results, "strategy_schema", case_id, "scanner_skip_status", "skip_insufficient", normalized_skip["status"])
-        add_check(results, "strategy_schema", case_id, "scanner_skip_message_none", None, normalized_skip["message"])
+        check("scanner_skip_status", "skip_insufficient", normalized_skip["status"])
+        check("scanner_skip_message_none", None, normalized_skip["message"])
 
     summary["best_params_key_count"] = len(best_params_payload)
     return results, summary
@@ -567,28 +546,27 @@ def validate_model_io_schema_case(base_params):
 def validate_ranking_scoring_sanity_case(base_params):
     params = base_params if base_params is not None else V16StrategyParams()
     case_id = "RANKING_SCORING_SANITY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_score')
 
     ev_low = calc_buy_sort_value("EV", 0.5, 10000, 0.4, 10)
     ev_high = calc_buy_sort_value("EV", 1.5, 10000, 0.4, 10)
-    add_check(results, "strategy_score", case_id, "buy_sort_ev_monotonic", True, ev_high > ev_low)
-    add_check(results, "strategy_score", case_id, "buy_sort_ev_type", True, isinstance(ev_high, float))
-    add_check(results, "strategy_score", case_id, "buy_sort_ev_finite", True, math.isfinite(ev_high))
+    check("buy_sort_ev_monotonic", True, ev_high > ev_low)
+    check("buy_sort_ev_type", True, isinstance(ev_high, float))
+    check("buy_sort_ev_finite", True, math.isfinite(ev_high))
 
     cost_low = calc_buy_sort_value("PROJ_COST", 0.5, 5000, 0.4, 10)
     cost_high = calc_buy_sort_value("PROJ_COST", 0.5, 9000, 0.4, 10)
-    add_check(results, "strategy_score", case_id, "buy_sort_proj_cost_monotonic", True, cost_high > cost_low)
+    check("buy_sort_proj_cost_monotonic", True, cost_high > cost_low)
 
     hist_low = calc_buy_sort_value("HIST_WIN_X_TRADES", 0.5, 10000, 0.35, 8)
     hist_high = calc_buy_sort_value("HIST_WIN_X_TRADES", 0.5, 10000, 0.45, 9)
-    add_check(results, "strategy_score", case_id, "buy_sort_hist_win_x_trades_monotonic", True, hist_high > hist_low)
+    check("buy_sort_hist_win_x_trades_monotonic", True, hist_high > hist_low)
 
     growth_low = calc_buy_sort_value("ASSET_GROWTH", 0.5, 10000, 0.35, 8, 12.0)
     growth_high = calc_buy_sort_value("ASSET_GROWTH", 0.5, 10000, 0.35, 8, 28.0)
-    add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_monotonic", True, growth_high > growth_low)
-    add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_type", True, isinstance(growth_high, float))
-    add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_finite", True, math.isfinite(growth_high))
+    check("buy_sort_asset_growth_monotonic", True, growth_high > growth_low)
+    check("buy_sort_asset_growth_type", True, isinstance(growth_high, float))
+    check("buy_sort_asset_growth_finite", True, math.isfinite(growth_high))
 
     overage_below_limit = calc_buy_sort_value(
         "BUY_LIMIT_OVERAGE_THEN_PROJ_COST",
@@ -617,15 +595,15 @@ def validate_ranking_scoring_sanity_case(base_params):
         prev_close=103.0,
         limit_price=100.0,
     )
-    add_check(results, "strategy_score", case_id, "buy_sort_limit_overage_below_limit_zero", 0.0, overage_below_limit)
-    add_check(results, "strategy_score", case_id, "buy_sort_limit_overage_monotonic", True, overage_below_limit < overage_above_limit < overage_far_above_limit)
+    check("buy_sort_limit_overage_below_limit_zero", 0.0, overage_below_limit)
+    check("buy_sort_limit_overage_monotonic", True, overage_below_limit < overage_above_limit < overage_far_above_limit)
     overage_rows = [
         {"ticker": "A", "sort_value": overage_above_limit, "proj_cost": 9000.0},
         {"ticker": "B", "sort_value": overage_below_limit, "proj_cost": 5000.0},
         {"ticker": "C", "sort_value": overage_below_limit, "proj_cost": 8000.0},
     ]
     sort_candidate_rows(overage_rows, "BUY_LIMIT_OVERAGE_THEN_PROJ_COST")
-    add_check(results, "strategy_score", case_id, "buy_sort_limit_overage_order", ["C", "B", "A"], [row["ticker"] for row in overage_rows])
+    check("buy_sort_limit_overage_order", ["C", "B", "A"], [row["ticker"] for row in overage_rows])
 
     entry_type_rows = [
         {"ticker": "EXT_LOW_OVER", "type": "extended", "sort_value": 0.0, "proj_cost": 12000.0, "buy_limit_overage_pct": 0.0},
@@ -634,30 +612,26 @@ def validate_ranking_scoring_sanity_case(base_params):
         {"ticker": "NEW_LOW_OVER", "type": "normal", "sort_value": 1.0, "proj_cost": 8000.0, "buy_limit_overage_pct": 1.0},
     ]
     sort_candidate_rows(entry_type_rows, "ENTRY_TYPE_THEN_PROJ_COST")
-    add_check(
-        results,
-        "strategy_score",
-        case_id,
-        "buy_sort_entry_type_then_buy_limit_overage_order",
+    check("buy_sort_entry_type_then_buy_limit_overage_order",
         ["RE_LOW_OVER", "NEW_LOW_OVER", "NEW_HIGH_OVER", "EXT_LOW_OVER"],
         [row["ticker"] for row in entry_type_rows],
     )
     entry_type_sort_value = calc_buy_sort_value("ENTRY_TYPE_THEN_PROJ_COST", 0.5, 7000, 0.4, 10, prev_close=103.0, limit_price=100.0)
-    add_check(results, "strategy_score", case_id, "buy_sort_entry_type_uses_buy_limit_overage_value", 3.0, entry_type_sort_value)
+    check("buy_sort_entry_type_uses_buy_limit_overage_value", 3.0, entry_type_sort_value)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=10.0)
         score_high_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
         score_worse_mdd = calc_portfolio_score(sys_ret=10.0, sys_mdd=-30.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
-    add_check(results, "strategy_score", case_id, "portfolio_score_return_monotonic", True, score_high_return > score_low_return)
-    add_check(results, "strategy_score", case_id, "portfolio_score_mdd_monotonic", True, score_high_return > score_worse_mdd)
-    add_check(results, "strategy_score", case_id, "portfolio_score_romd_finite", True, math.isfinite(score_high_return))
+    check("portfolio_score_return_monotonic", True, score_high_return > score_low_return)
+    check("portfolio_score_mdd_monotonic", True, score_high_return > score_worse_mdd)
+    check("portfolio_score_romd_finite", True, math.isfinite(score_high_return))
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_quality = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=20.0)
         score_high_quality = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=20.0)
-    add_check(results, "strategy_score", case_id, "portfolio_score_log_r2_quality_monotonic", True, score_high_quality > score_low_quality)
-    add_check(results, "strategy_score", case_id, "portfolio_score_log_r2_finite", True, math.isfinite(score_high_quality))
+    check("portfolio_score_log_r2_quality_monotonic", True, score_high_quality > score_low_quality)
+    check("portfolio_score_log_r2_finite", True, math.isfinite(score_high_quality))
 
     with TemporaryDirectory() as tmp_dir:
         file_path = Path(tmp_dir) / "2330.csv"
@@ -697,8 +671,8 @@ def validate_ranking_scoring_sanity_case(base_params):
             prev_close=buy_stats.get("close_last"),
             limit_price=buy_stats.get("buy_limit"),
         )
-        add_check(results, "strategy_score", case_id, "scanner_sort_value_matches_buy_sort_formula", expected_sort, buy_result["sort_value"])
-        add_check(results, "strategy_score", case_id, "scanner_sort_value_comparable", True, isinstance(buy_result["sort_value"], float) and math.isfinite(float(buy_result["sort_value"])))
+        check("scanner_sort_value_matches_buy_sort_formula", expected_sort, buy_result["sort_value"])
+        check("scanner_sort_value_comparable", True, isinstance(buy_result["sort_value"], float) and math.isfinite(float(buy_result["sort_value"])))
 
     summary["score_calc_method_default"] = SCORE_CALC_METHOD
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
@@ -708,8 +682,7 @@ def validate_ranking_scoring_sanity_case(base_params):
 
 def validate_score_numerator_option_case(_base_params):
     case_id = "SCORE_NUMERATOR_OPTION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_score')
 
     base_mdd_power = 1.0
     base_mdd_epsilon = 0.0001
@@ -721,48 +694,48 @@ def validate_score_numerator_option_case(_base_params):
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         annual_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_annual = _romd_expected(18.0, -20.0)
-    add_check(results, "strategy_score", case_id, "annual_return_numerator_formula", expected_annual, annual_score)
+    check("annual_return_numerator_formula", expected_annual, annual_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         total_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_total = _romd_expected(12.0, -20.0)
-    add_check(results, "strategy_score", case_id, "total_return_numerator_formula", expected_total, total_score)
-    add_check(results, "strategy_score", case_id, "numerator_switch_changes_score_when_returns_differ", True, annual_score != total_score)
+    check("total_return_numerator_formula", expected_total, total_score)
+    check("numerator_switch_changes_score_when_returns_differ", True, annual_score != total_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         powered_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_powered = _romd_expected(12.0, -20.0, power=stronger_mdd_power)
-    add_check(results, "strategy_score", case_id, "mdd_power_denominator_formula", expected_powered, powered_score)
-    add_check(results, "strategy_score", case_id, "mdd_power_stronger_than_base_penalty", True, powered_score < total_score)
+    check("mdd_power_denominator_formula", expected_powered, powered_score)
+    check("mdd_power_stronger_than_base_penalty", True, powered_score < total_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
         low_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=40.0)
         high_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=40.0)
-    add_check(results, "strategy_score", case_id, "log_r2_total_return_quality_monotonic", True, high_total_score > low_total_score)
+    check("log_r2_total_return_quality_monotonic", True, high_total_score > low_total_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_low = calc_portfolio_score(sys_ret=500.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
         total_r_high = calc_portfolio_score(sys_ret=-20.0, sys_mdd=-5.0, m_win_rate=10.0, r_sq=0.10, annual_return_pct=-5.0, total_r=24.0)
-    add_check(results, "strategy_score", case_id, "total_r_numerator_formula", _romd_expected(12.5, -5.0), total_r_low)
-    add_check(results, "strategy_score", case_id, "total_r_numerator_monotonic_when_mdd_equal", True, total_r_high > total_r_low)
+    check("total_r_numerator_formula", _romd_expected(12.5, -5.0), total_r_low)
+    check("total_r_numerator_monotonic_when_mdd_equal", True, total_r_high > total_r_low)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_PORTFOLIO_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_x_return_positive = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
         total_r_x_return_negative = calc_portfolio_score(sys_ret=-20.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
-    add_check(results, "strategy_score", case_id, "portfolio_return_multiplier_pct_to_multiple", 1.5, calc_score_portfolio_return_multiplier(150.0))
-    add_check(results, "strategy_score", case_id, "portfolio_return_multiplier_clamps_negative", 0.0, calc_score_portfolio_return_multiplier(-20.0))
-    add_check(results, "strategy_score", case_id, "total_r_x_portfolio_return_numerator_formula", _romd_expected(12.5 * 1.5, -5.0), total_r_x_return_positive)
-    add_check(results, "strategy_score", case_id, "total_r_x_portfolio_return_zero_when_portfolio_loss", 0.0, total_r_x_return_negative)
+    check("portfolio_return_multiplier_pct_to_multiple", 1.5, calc_score_portfolio_return_multiplier(150.0))
+    check("portfolio_return_multiplier_clamps_negative", 0.0, calc_score_portfolio_return_multiplier(-20.0))
+    check("total_r_x_portfolio_return_numerator_formula", _romd_expected(12.5 * 1.5, -5.0), total_r_x_return_positive)
+    check("total_r_x_portfolio_return_zero_when_portfolio_loss", 0.0, total_r_x_return_negative)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_x_annual_positive = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
         total_r_x_annual_negative = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=-20.0, total_r=12.5)
         total_r_x_annual_missing = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=None, total_r=12.5)
-    add_check(results, "strategy_score", case_id, "positive_return_multiplier_pct_to_multiple", 0.8, calc_score_positive_return_multiplier(80.0))
-    add_check(results, "strategy_score", case_id, "positive_return_multiplier_clamps_negative", 0.0, calc_score_positive_return_multiplier(-20.0))
-    add_check(results, "strategy_score", case_id, "total_r_x_annual_return_numerator_formula", _romd_expected(12.5 * 0.8, -5.0), total_r_x_annual_positive)
-    add_check(results, "strategy_score", case_id, "total_r_x_annual_return_zero_when_annual_loss", 0.0, total_r_x_annual_negative)
-    add_check(results, "strategy_score", case_id, "total_r_x_annual_return_missing_uses_total_return_fallback", _romd_expected(12.5 * 1.5, -5.0), total_r_x_annual_missing)
+    check("positive_return_multiplier_pct_to_multiple", 0.8, calc_score_positive_return_multiplier(80.0))
+    check("positive_return_multiplier_clamps_negative", 0.0, calc_score_positive_return_multiplier(-20.0))
+    check("total_r_x_annual_return_numerator_formula", _romd_expected(12.5 * 0.8, -5.0), total_r_x_annual_positive)
+    check("total_r_x_annual_return_zero_when_annual_loss", 0.0, total_r_x_annual_negative)
+    check("total_r_x_annual_return_missing_uses_total_return_fallback", _romd_expected(12.5 * 1.5, -5.0), total_r_x_annual_missing)
 
     replay_result = (
         None,
@@ -801,7 +774,7 @@ def validate_score_numerator_option_case(_base_params):
     )
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False):
         _candidate_metrics, benchmark_metrics, _range_text = optimizer_callbacks._portfolio_replay_metrics_from_result(replay_result, initial_capital=1000000.0)
-    add_check(results, "strategy_score", case_id, "benchmark_oos_display_uses_plain_romd_under_total_r_numerator", calc_plain_romd(203.67, -33.96), benchmark_metrics["pf_romd"])
+    check("benchmark_oos_display_uses_plain_romd_under_total_r_numerator", calc_plain_romd(203.67, -33.96), benchmark_metrics["pf_romd"])
 
     from tools.optimizer.outer_rolling_oos import _render_results_table
     optimizer_table = _render_results_table(
@@ -825,8 +798,8 @@ def validate_score_numerator_option_case(_base_params):
         policy_names=("base_finalists_agree",),
         table_title="FINALISTS AGREE RESULTS",
     )
-    add_check(results, "strategy_score", case_id, "optimizer_oos_table_hides_system_score_column", True, "score" not in optimizer_table and "1946.33" not in optimizer_table)
-    add_check(results, "strategy_score", case_id, "optimizer_oos_table_keeps_plain_romd_and_0050_compare", True, "RoMD" in optimizer_table and "7.97" in optimizer_table and "6.00 (+1.97)" in optimizer_table)
+    check("optimizer_oos_table_hides_system_score_column", True, "score" not in optimizer_table and "1946.33" not in optimizer_table)
+    check("optimizer_oos_table_keeps_plain_romd_and_0050_compare", True, "RoMD" in optimizer_table and "7.97" in optimizer_table and "6.00 (+1.97)" in optimizer_table)
 
     single_stock_score_fields = build_score_single_stock_profile_fields({
         "trade_count": 2854,
@@ -836,94 +809,94 @@ def validate_score_numerator_option_case(_base_params):
         "median_r": -0.109,
         "total_r": 1715.0,
     })
-    add_check(results, "strategy_score", case_id, "total_r_score_source_is_single_stock", 1715.0, single_stock_score_fields["score_total_r"])
-    add_check(results, "strategy_score", case_id, "median_r_score_source_is_single_stock", -0.109, single_stock_score_fields["score_median_r"])
-    add_check(results, "strategy_score", case_id, "score_r_source_label_is_single_stock", "single_stock", single_stock_score_fields["score_r_source"])
+    check("total_r_score_source_is_single_stock", 1715.0, single_stock_score_fields["score_total_r"])
+    check("median_r_score_source_is_single_stock", -0.109, single_stock_score_fields["score_median_r"])
+    check("score_r_source_label_is_single_stock", "single_stock", single_stock_score_fields["score_r_source"])
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_powered_score = calc_portfolio_score(sys_ret=500.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
-    add_check(results, "strategy_score", case_id, "total_r_numerator_still_uses_mdd_denominator", True, total_r_powered_score < total_r_low)
+    check("total_r_numerator_still_uses_mdd_denominator", True, total_r_powered_score < total_r_low)
 
     old_linear_low = 40.0 / 50.0
     old_linear_high = 50.0 / 50.0
     new_amp_low = calc_score_win_rate_multiplier(40.0, 50.0)
     new_amp_mid = calc_score_win_rate_multiplier(50.0, 50.0)
     new_amp_high = calc_score_win_rate_multiplier(60.0, 50.0)
-    add_check(results, "strategy_score", case_id, "score_win_rate_amp_hits_target_at_one", 1.0, new_amp_mid)
-    add_check(results, "strategy_score", case_id, "score_win_rate_amp_stronger_than_old_linear_below_target", True, new_amp_low < old_linear_low)
-    add_check(results, "strategy_score", case_id, "score_win_rate_amp_boosts_above_target", True, new_amp_high > new_amp_mid)
+    check("score_win_rate_amp_hits_target_at_one", 1.0, new_amp_mid)
+    check("score_win_rate_amp_stronger_than_old_linear_below_target", True, new_amp_low < old_linear_low)
+    check("score_win_rate_amp_boosts_above_target", True, new_amp_high > new_amp_mid)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", True), patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_TARGET", 50.0), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         low_monthly_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.8, annual_return_pct=18.0)
         target_monthly_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
         high_monthly_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.8, annual_return_pct=18.0)
-    add_check(results, "strategy_score", case_id, "portfolio_score_monthly_win_rate_amp_monotonic", True, low_monthly_score < target_monthly_score < high_monthly_score)
+    check("portfolio_score_monthly_win_rate_amp_monotonic", True, low_monthly_score < target_monthly_score < high_monthly_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", True), patch("config.training_policy.SCORE_WIN_RATE_TARGET", 50.0):
         low_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=40.0)
         target_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=50.0)
         high_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=60.0)
-    add_check(results, "strategy_score", case_id, "portfolio_score_win_rate_amp_monotonic", True, low_win_score < target_win_score < high_win_score)
-    add_check(results, "strategy_score", case_id, "portfolio_score_win_rate_amp_beats_old_linear_gap", True, (target_win_score / low_win_score) > (old_linear_high / old_linear_low))
+    check("portfolio_score_win_rate_amp_monotonic", True, low_win_score < target_win_score < high_win_score)
+    check("portfolio_score_win_rate_amp_beats_old_linear_gap", True, (target_win_score / low_win_score) > (old_linear_high / old_linear_low))
 
     min_year_low_amp = calc_score_min_full_year_return_multiplier(-20.0, -35.0, 0.0)
     min_year_target_amp = calc_score_min_full_year_return_multiplier(0.0, -35.0, 0.0)
     min_year_high_amp = calc_score_min_full_year_return_multiplier(10.0, -35.0, 0.0)
-    add_check(results, "strategy_score", case_id, "score_min_full_year_return_amp_hits_target_at_one", 1.0, min_year_target_amp)
-    add_check(results, "strategy_score", case_id, "score_min_full_year_return_amp_monotonic", True, min_year_low_amp < min_year_target_amp < min_year_high_amp)
+    check("score_min_full_year_return_amp_hits_target_at_one", 1.0, min_year_target_amp)
+    check("score_min_full_year_return_amp_monotonic", True, min_year_low_amp < min_year_target_amp < min_year_high_amp)
 
     min_month_low_amp = calc_score_min_month_return_multiplier(-2.0, -5.0, 5.0)
     min_month_target_amp = calc_score_min_month_return_multiplier(5.0, -5.0, 5.0)
     min_month_high_amp = calc_score_min_month_return_multiplier(8.0, -5.0, 5.0)
-    add_check(results, "strategy_score", case_id, "score_min_month_return_amp_hits_target_at_one", 1.0, min_month_target_amp)
-    add_check(results, "strategy_score", case_id, "score_min_month_return_amp_monotonic", True, min_month_low_amp < min_month_target_amp < min_month_high_amp)
+    check("score_min_month_return_amp_hits_target_at_one", 1.0, min_month_target_amp)
+    check("score_min_month_return_amp_monotonic", True, min_month_low_amp < min_month_target_amp < min_month_high_amp)
 
     min_quarter_low_amp = calc_score_min_quarter_return_multiplier(-5.0, -10.0, 10.0)
     min_quarter_target_amp = calc_score_min_quarter_return_multiplier(10.0, -10.0, 10.0)
     min_quarter_high_amp = calc_score_min_quarter_return_multiplier(15.0, -10.0, 10.0)
-    add_check(results, "strategy_score", case_id, "score_min_quarter_return_amp_hits_target_at_one", 1.0, min_quarter_target_amp)
-    add_check(results, "strategy_score", case_id, "score_min_quarter_return_amp_monotonic", True, min_quarter_low_amp < min_quarter_target_amp < min_quarter_high_amp)
+    check("score_min_quarter_return_amp_hits_target_at_one", 1.0, min_quarter_target_amp)
+    check("score_min_quarter_return_amp_monotonic", True, min_quarter_low_amp < min_quarter_target_amp < min_quarter_high_amp)
 
     median_r_low_amp = calc_score_median_r_multiplier(-0.5, -1.0, 0.0)
     median_r_target_amp = calc_score_median_r_multiplier(0.0, -1.0, 0.0)
     median_r_high_amp = calc_score_median_r_multiplier(0.5, -1.0, 0.0)
-    add_check(results, "strategy_score", case_id, "score_median_r_amp_hits_target_at_one", 1.0, median_r_target_amp)
-    add_check(results, "strategy_score", case_id, "score_median_r_amp_monotonic", True, median_r_low_amp < median_r_target_amp < median_r_high_amp)
+    check("score_median_r_amp_hits_target_at_one", 1.0, median_r_target_amp)
+    check("score_median_r_amp_monotonic", True, median_r_low_amp < median_r_target_amp < median_r_high_amp)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", True), patch("config.training_policy.MIN_FULL_YEAR_RETURN_PCT", -35.0), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_TARGET", 0.0):
         low_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=-20.0)
         target_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=0.0)
         high_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=10.0)
-    add_check(results, "strategy_score", case_id, "portfolio_score_min_full_year_return_amp_monotonic", True, low_min_year_score < target_min_year_score < high_min_year_score)
+    check("portfolio_score_min_full_year_return_amp_monotonic", True, low_min_year_score < target_min_year_score < high_min_year_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_MONTH_RETURN_AMP_ENABLED", True), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_MONTH_RETURN_TARGET", 5.0), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         low_min_month_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_month_return_pct=-2.0)
         target_min_month_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_month_return_pct=5.0)
         high_min_month_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_month_return_pct=8.0)
-    add_check(results, "strategy_score", case_id, "portfolio_score_min_month_return_amp_monotonic", True, low_min_month_score < target_min_month_score < high_min_month_score)
+    check("portfolio_score_min_month_return_amp_monotonic", True, low_min_month_score < target_min_month_score < high_min_month_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_MONTH_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", True), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_TARGET", 10.0), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         low_min_quarter_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_quarter_return_pct=-5.0)
         target_min_quarter_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_quarter_return_pct=10.0)
         high_min_quarter_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_quarter_return_pct=15.0)
-    add_check(results, "strategy_score", case_id, "portfolio_score_min_quarter_return_amp_monotonic", True, low_min_quarter_score < target_min_quarter_score < high_min_quarter_score)
+    check("portfolio_score_min_quarter_return_amp_monotonic", True, low_min_quarter_score < target_min_quarter_score < high_min_quarter_score)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", True), patch("config.training_policy.SCORE_MEDIAN_R_FLOOR", -1.0), patch("config.training_policy.SCORE_MEDIAN_R_TARGET", 0.0):
         low_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=-0.5)
         target_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=0.0)
         high_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=0.5)
-    add_check(results, "strategy_score", case_id, "portfolio_score_median_r_amp_monotonic", True, low_median_r_score < target_median_r_score < high_median_r_score)
+    check("portfolio_score_median_r_amp_monotonic", True, low_median_r_score < target_median_r_score < high_median_r_score)
 
     annual_missing = None
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         annual_missing = calc_portfolio_score(sys_ret=9.0, sys_mdd=-15.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=None)
     expected_fallback = _romd_expected(9.0, -15.0)
-    add_check(results, "strategy_score", case_id, "annual_return_numerator_falls_back_to_total_return_when_missing", expected_fallback, annual_missing)
+    check("annual_return_numerator_falls_back_to_total_return_when_missing", expected_fallback, annual_missing)
 
     current_mdd_power = get_score_mdd_power()
     current_mdd_epsilon = get_score_mdd_denominator_epsilon()
-    add_check(results, "strategy_score", case_id, "score_mdd_power_setting_accepts_manual_training_policy_value", True, math.isfinite(current_mdd_power) and current_mdd_power >= 0.0)
-    add_check(results, "strategy_score", case_id, "score_mdd_epsilon_setting_accepts_manual_training_policy_value", True, math.isfinite(current_mdd_epsilon) and current_mdd_epsilon > 0.0)
+    check("score_mdd_power_setting_accepts_manual_training_policy_value", True, math.isfinite(current_mdd_power) and current_mdd_power >= 0.0)
+    check("score_mdd_epsilon_setting_accepts_manual_training_policy_value", True, math.isfinite(current_mdd_epsilon) and current_mdd_epsilon > 0.0)
 
     summary["score_calc_method_default"] = SCORE_CALC_METHOD
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
@@ -1031,8 +1004,7 @@ def validate_strategy_repeatability_case(base_params):
 def validate_strategy_minimum_viability_case(base_params):
     params = base_params if base_params is not None else V16StrategyParams()
     case_id = "STRATEGY_MINIMUM_VIABILITY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_viability')
 
     with TemporaryDirectory() as tmp_dir:
         file_path = Path(tmp_dir) / "2330.csv"
@@ -1060,7 +1032,7 @@ def validate_strategy_minimum_viability_case(base_params):
             "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
             scanner_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
-    add_check(results, "strategy_viability", case_id, "scanner_smoke_status", "buy", scanner_result["status"])
+    check("scanner_smoke_status", "buy", scanner_result["status"])
 
     session = _FakeOptimizerSession(fixed_tp_percent=0.25)
     trial = _FakeOptunaTrial(
@@ -1080,7 +1052,7 @@ def validate_strategy_minimum_viability_case(base_params):
         "services.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
     ), patch("services.optimizer.objective_runner.time.perf_counter", side_effect=lambda: next(perf_counter_values)):
         optimizer_value = run_optimizer_objective(session, trial)
-    add_check(results, "strategy_viability", case_id, "optimizer_smoke_returns_score", 88.123, optimizer_value)
+    check("optimizer_smoke_returns_score", 88.123, optimizer_value)
 
     scanner_issue_log_path = "outputs/vip_scanner/issues.csv"
     scanner_summary_buffer = io.StringIO()
@@ -1097,7 +1069,7 @@ def validate_strategy_minimum_viability_case(base_params):
             scanner_issue_log_path=scanner_issue_log_path,
         )
     scanner_summary_text = scanner_summary_buffer.getvalue()
-    add_check(results, "strategy_viability", case_id, "scanner_reporting_smoke_runs", True, "明日候選清單" in scanner_summary_text and scanner_issue_log_path in scanner_summary_text)
+    check("scanner_reporting_smoke_runs", True, "明日候選清單" in scanner_summary_text and scanner_issue_log_path in scanner_summary_text)
 
     yearly_buffer = io.StringIO()
     yearly_rows = [
@@ -1106,7 +1078,7 @@ def validate_strategy_minimum_viability_case(base_params):
     ]
     with redirect_stdout(yearly_buffer):
         df_yearly = print_yearly_return_report(yearly_rows)
-    add_check(results, "strategy_viability", case_id, "portfolio_reporting_smoke_runs", 2, len(df_yearly))
+    check("portfolio_reporting_smoke_runs", 2, len(df_yearly))
 
     dashboard_buffer = io.StringIO()
     with redirect_stdout(dashboard_buffer):
@@ -1141,7 +1113,7 @@ def validate_strategy_minimum_viability_case(base_params):
             min_full_year_return_pct=5.5,
             bm_min_full_year_return_pct=1.2,
         )
-    add_check(results, "strategy_viability", case_id, "strategy_dashboard_smoke_runs", True, "【訓練參數】" in dashboard_buffer.getvalue() and "系統得分" in dashboard_buffer.getvalue())
+    check("strategy_dashboard_smoke_runs", True, "【訓練參數】" in dashboard_buffer.getvalue() and "系統得分" in dashboard_buffer.getvalue())
 
     summary["scanner_status"] = scanner_result["status"]
     summary["optimizer_value"] = optimizer_value
@@ -1152,8 +1124,7 @@ def validate_strategy_minimum_viability_case(base_params):
 def validate_strategy_reporting_schema_compatibility_case(base_params):
     params = base_params if base_params is not None else V16StrategyParams()
     case_id = "STRATEGY_REPORTING_SCHEMA_COMPATIBILITY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_reporting')
 
     default_payload = params_to_json_dict(V16StrategyParams())
     export_trial = SimpleNamespace(
@@ -1201,11 +1172,11 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
         ):
             scanner_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
 
-    add_check(results, "strategy_reporting", case_id, "best_params_export_status", 0, export_status)
-    add_check(results, "strategy_reporting", case_id, "best_params_export_keys_match_strategy_schema", sorted(default_payload.keys()), sorted(exported_payload.keys()))
+    check("best_params_export_status", 0, export_status)
+    check("best_params_export_keys_match_strategy_schema", sorted(default_payload.keys()), sorted(exported_payload.keys()))
 
     expected_scanner_keys = ["expected_value", "message", "proj_cost", "sanitize_issue", "sort_value", "status", "ticker"]
-    add_check(results, "strategy_reporting", case_id, "scanner_normalized_payload_keys_stable", expected_scanner_keys, sorted(scanner_result.keys()))
+    check("scanner_normalized_payload_keys_stable", expected_scanner_keys, sorted(scanner_result.keys()))
 
     yearly_rows = [
         {"year": 2024, "year_return_pct": 12.5, "is_full_year": True, "start_date": "2024-01-02", "end_date": "2024-12-31"},
@@ -1213,15 +1184,11 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
     ]
     with redirect_stdout(io.StringIO()):
         df_yearly = print_yearly_return_report(yearly_rows)
-    add_check(
-        results,
-        "strategy_reporting",
-        case_id,
-        "yearly_report_columns_stable",
+    check("yearly_report_columns_stable",
         ["year", "year_return_pct", "is_full_year", "start_date", "end_date", "year_label", "year_type"],
         list(df_yearly.columns),
     )
-    add_check(results, "strategy_reporting", case_id, "yearly_report_year_type_values", ["完整", "非完整"], df_yearly["year_type"].tolist())
+    check("yearly_report_year_type_values", ["完整", "非完整"], df_yearly["year_type"].tolist())
 
     summary["exported_key_count"] = len(exported_payload)
     summary["scanner_status"] = scanner_result["status"]
@@ -1312,18 +1279,13 @@ def _make_fake_portfolio_runner(*, ret_pct, mdd, annual_return_pct, yearly_retur
 
 def validate_optimizer_objective_export_contract_case(_base_params):
     case_id = "OPTIMIZER_OBJECTIVE_EXPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_contract')
 
     runtime_session = _FakeOptimizerSession(
         fixed_strategy_param_overrides={"use_breakout_quality_ranking": True},
         runtime_cache_identity="synthetic-pit-identity",
     )
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "optimizer_test_session_inherits_canonical_session_contract",
+    check("optimizer_test_session_inherits_canonical_session_contract",
         True,
         isinstance(runtime_session, OptimizerSession),
     )
@@ -1332,11 +1294,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     )
     with runtime_session.optimizer_runtime_context():
         runtime_context_entered = True
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "optimizer_test_session_mirrors_fixed_override_and_runtime_identity_hooks",
+    check("optimizer_test_session_mirrors_fixed_override_and_runtime_identity_hooks",
         (True, "synthetic-pit-identity", True),
         (
             overridden_params.use_breakout_quality_ranking,
@@ -1351,24 +1309,20 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         user_attrs={"fixed_tp_percent": 0.22},
         fixed_tp_percent=0.33,
     )
-    add_check(results, "strategy_contract", case_id, "tp_percent_prefers_trial_params", 0.11, explicit_tp_params["tp_percent"])
+    check("tp_percent_prefers_trial_params", 0.11, explicit_tp_params["tp_percent"])
 
     attr_tp_params = build_optimizer_trial_params(
         {"high_len": sample_high_len},
         user_attrs={"fixed_tp_percent": 0.22},
         fixed_tp_percent=0.33,
     )
-    add_check(results, "strategy_contract", case_id, "tp_percent_falls_back_to_user_attr", 0.22, attr_tp_params["tp_percent"])
+    check("tp_percent_falls_back_to_user_attr", 0.22, attr_tp_params["tp_percent"])
 
     fixed_tp_params = build_optimizer_trial_params({"high_len": sample_high_len}, user_attrs={}, fixed_tp_percent=0.33)
-    add_check(results, "strategy_contract", case_id, "tp_percent_falls_back_to_fixed_setting", 0.33, fixed_tp_params["tp_percent"])
+    check("tp_percent_falls_back_to_fixed_setting", 0.33, fixed_tp_params["tp_percent"])
 
-    missing_tp_raises = False
-    try:
-        build_optimizer_trial_params({"high_len": sample_high_len}, user_attrs={}, fixed_tp_percent=None)
-    except ValueError:
-        missing_tp_raises = True
-    add_check(results, "strategy_contract", case_id, "tp_percent_missing_everywhere_is_fail_fast", True, missing_tp_raises)
+    missing_tp_raises = raises_expected(ValueError, lambda: build_optimizer_trial_params({"high_len": sample_high_len}, user_attrs={}, fixed_tp_percent=None))
+    check("tp_percent_missing_everywhere_is_fail_fast", True, missing_tp_raises)
 
     filter_fail_session = _FakeOptimizerSession(fixed_tp_percent=0.25)
     filter_fail_trial = _FakeOptunaTrial(
@@ -1387,13 +1341,13 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         filter_fail_value = run_optimizer_objective(filter_fail_session, filter_fail_trial)
 
     filter_fail_profile = filter_fail_trial.user_attrs.get("profile_row", {})
-    add_check(results, "strategy_contract", case_id, "objective_filter_fail_returns_invalid_trial_value", INVALID_TRIAL_VALUE, filter_fail_value)
-    add_check(results, "strategy_contract", case_id, "objective_filter_fail_sets_fail_reason", "月勝率偏低 (30%)", filter_fail_trial.user_attrs.get("fail_reason"))
-    add_check(results, "strategy_contract", case_id, "objective_filter_fail_profile_trial_value", INVALID_TRIAL_VALUE, filter_fail_profile.get("trial_value"))
-    add_check(results, "strategy_contract", case_id, "objective_filter_fail_profile_reason", "月勝率偏低 (30%)", filter_fail_profile.get("fail_reason"))
-    add_check(results, "strategy_contract", case_id, "objective_filter_fail_profile_row_recorded", 1, len(filter_fail_session.profile_recorder.rows))
-    add_check(results, "strategy_contract", case_id, "objective_filter_fail_records_only_insufficient_prep_failures", [("2330", "有效資料不足: 2330")], filter_fail_session.recorded_prep_failures)
-    add_check(results, "strategy_contract", case_id, "objective_filter_fail_does_not_set_pf_return", False, "pf_return" in filter_fail_trial.user_attrs)
+    check("objective_filter_fail_returns_invalid_trial_value", INVALID_TRIAL_VALUE, filter_fail_value)
+    check("objective_filter_fail_sets_fail_reason", "月勝率偏低 (30%)", filter_fail_trial.user_attrs.get("fail_reason"))
+    check("objective_filter_fail_profile_trial_value", INVALID_TRIAL_VALUE, filter_fail_profile.get("trial_value"))
+    check("objective_filter_fail_profile_reason", "月勝率偏低 (30%)", filter_fail_profile.get("fail_reason"))
+    check("objective_filter_fail_profile_row_recorded", 1, len(filter_fail_session.profile_recorder.rows))
+    check("objective_filter_fail_records_only_insufficient_prep_failures", [("2330", "有效資料不足: 2330")], filter_fail_session.recorded_prep_failures)
+    check("objective_filter_fail_does_not_set_pf_return", False, "pf_return" in filter_fail_trial.user_attrs)
 
     success_session = _FakeOptimizerSession(fixed_tp_percent=0.25)
     success_trial = _FakeOptunaTrial(
@@ -1414,13 +1368,13 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         success_value = run_optimizer_objective(success_session, success_trial)
 
     success_profile = success_trial.user_attrs.get("profile_row", {})
-    add_check(results, "strategy_contract", case_id, "objective_success_returns_score", 88.123, success_value)
-    add_check(results, "strategy_contract", case_id, "objective_success_sets_base_score", 88.123, success_trial.user_attrs.get("base_score"))
-    add_check(results, "strategy_contract", case_id, "objective_success_sets_pf_return", 26.0, success_trial.user_attrs.get("pf_return"))
-    add_check(results, "strategy_contract", case_id, "objective_success_sets_yearly_rows", 2, len(success_trial.user_attrs.get("yearly_return_rows", [])))
-    add_check(results, "strategy_contract", case_id, "objective_success_profile_trial_value", 88.123, success_profile.get("trial_value"))
-    add_check(results, "strategy_contract", case_id, "objective_success_profile_reason_empty", "", success_profile.get("fail_reason"))
-    add_check(results, "strategy_contract", case_id, "objective_success_profile_row_recorded", 1, len(success_session.profile_recorder.rows))
+    check("objective_success_returns_score", 88.123, success_value)
+    check("objective_success_sets_base_score", 88.123, success_trial.user_attrs.get("base_score"))
+    check("objective_success_sets_pf_return", 26.0, success_trial.user_attrs.get("pf_return"))
+    check("objective_success_sets_yearly_rows", 2, len(success_trial.user_attrs.get("yearly_return_rows", [])))
+    check("objective_success_profile_trial_value", 88.123, success_profile.get("trial_value"))
+    check("objective_success_profile_reason_empty", "", success_profile.get("fail_reason"))
+    check("objective_success_profile_row_recorded", 1, len(success_session.profile_recorder.rows))
 
     export_colors = {"red": "", "green": "", "reset": ""}
     qualified_high_len = _optimizer_search_space_sample_value("high_len", step_offset=3)
@@ -1469,30 +1423,21 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             colors=export_colors,
         )
 
-    add_check(results, "strategy_contract", case_id, "export_best_params_success_status", 0, success_status)
-    add_check(results, "strategy_contract", case_id, "export_best_params_uses_best_trial_tp_percent", 0.3, exported_payload["tp_percent"])
-    add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_tp_percent_step_float", "0.3", repr(exported_payload["tp_percent"]))
-    add_check(results, "strategy_contract", case_id, "export_best_params_preserves_best_trial_high_len", qualified_high_len, exported_payload["high_len"])
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "export_best_params_canonicalizes_atr_buy_tol_step_float",
-        _canonicalize_optimizer_export_repr("atr_buy_tol", qualified_atr_buy_tol),
-        repr(exported_payload["atr_buy_tol"]),
+    run_bound_checks(
+        check,
+        (
+            ('export_best_params_success_status', 0, success_status,),
+            ('export_best_params_uses_best_trial_tp_percent', 0.3, exported_payload['tp_percent'],),
+            ('export_best_params_canonicalizes_tp_percent_step_float', '0.3', repr(exported_payload['tp_percent']),),
+            ('export_best_params_preserves_best_trial_high_len', qualified_high_len, exported_payload['high_len'],),
+            ('export_best_params_canonicalizes_atr_buy_tol_step_float', _canonicalize_optimizer_export_repr('atr_buy_tol', qualified_atr_buy_tol), repr(exported_payload['atr_buy_tol']),),
+            ('export_best_params_canonicalizes_min_history_ev_step_float', _canonicalize_optimizer_export_repr('min_history_ev', qualified_min_history_ev), repr(exported_payload['min_history_ev']),),
+            ('export_best_params_keeps_default_buy_fee_canonical_decimal', '0.000399', repr(exported_payload['buy_fee']),),
+            ('export_best_params_keeps_default_sell_fee_canonical_decimal', '0.000399', repr(exported_payload['sell_fee']),),
+            ('export_best_params_failure_status_for_unqualified_best_trial', 1, failure_status,),
+            ('export_best_params_failure_does_not_create_payload', False, failure_export_path.exists(),),
+        ),
     )
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "export_best_params_canonicalizes_min_history_ev_step_float",
-        _canonicalize_optimizer_export_repr("min_history_ev", qualified_min_history_ev),
-        repr(exported_payload["min_history_ev"]),
-    )
-    add_check(results, "strategy_contract", case_id, "export_best_params_keeps_default_buy_fee_canonical_decimal", "0.000399", repr(exported_payload["buy_fee"]))
-    add_check(results, "strategy_contract", case_id, "export_best_params_keeps_default_sell_fee_canonical_decimal", "0.000399", repr(exported_payload["sell_fee"]))
-    add_check(results, "strategy_contract", case_id, "export_best_params_failure_status_for_unqualified_best_trial", 1, failure_status)
-    add_check(results, "strategy_contract", case_id, "export_best_params_failure_does_not_create_payload", False, failure_export_path.exists())
 
     canonical_model_files = _existing_shipped_reference_param_paths()
     canonical_field_names = set(_optimizer_export_canonical_decimal_places()) | {"buy_fee", "sell_fee"}
@@ -1513,11 +1458,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
                 else:
                     expected_shipped_repr_map[map_key] = _canonicalize_optimizer_export_repr(field_name, param_payload[field_name])
 
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "repo_shipped_reference_artifacts_use_canonical_optimizer_decimal_repr",
+    check("repo_shipped_reference_artifacts_use_canonical_optimizer_decimal_repr",
         expected_shipped_repr_map,
         shipped_repr_map,
     )
@@ -1545,8 +1486,8 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         candidate_summary=incompatible_candidate_summary,
         run_best_summary=stale_run_best_summary,
     )
-    add_check(results, "strategy_contract", case_id, "optimizer_promote_rejects_stale_run_best_policy_baseline", False, should_promote_stale_policy)
-    add_check(results, "strategy_contract", case_id, "optimizer_promote_reports_stale_run_best_policy_baseline", True, "effective policy" in stale_policy_reason)
+    check("optimizer_promote_rejects_stale_run_best_policy_baseline", False, should_promote_stale_policy)
+    check("optimizer_promote_reports_stale_run_best_policy_baseline", True, "effective policy" in stale_policy_reason)
 
     robustness = importlib.import_module("tools.optimizer.robustness")
     training_policy = importlib.import_module("config.training_policy")
@@ -1556,7 +1497,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     with patch.object(robustness, "_build_neighbor_candidates", return_value=[]):
         no_neighbor_local_min = robustness.compute_local_min_score(no_neighbor_session, no_neighbor_trial)
     expected_no_neighbor_local_min = INVALID_TRIAL_VALUE if training_policy_runtime.is_optimizer_local_min_review_enabled() else 42.0
-    add_check(results, "strategy_contract", case_id, "local_min_score_no_legal_neighbor_respects_training_policy", expected_no_neighbor_local_min, no_neighbor_local_min)
+    check("local_min_score_no_legal_neighbor_respects_training_policy", expected_no_neighbor_local_min, no_neighbor_local_min)
 
     previous_runtime_mode = training_policy_runtime.resolve_optimizer_runtime_model_mode()
     try:
@@ -1577,21 +1518,17 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         oos_mode_local_enabled = training_policy_runtime.is_optimizer_local_min_review_enabled()
     finally:
         training_policy_runtime.set_optimizer_runtime_model_mode(previous_runtime_mode)
-    add_check(results, "strategy_contract", case_id, "optimizer_full_mode_local_min_review_default_disabled", False, full_mode_local_enabled)
-    add_check(results, "strategy_contract", case_id, "optimizer_full_mode_local_retention_policy_indicators_disabled_by_default", ("base_finalist_best", "base_finalists_agree", "base"), full_mode_local_policy_names)
-    add_check(results, "strategy_contract", case_id, "optimizer_oos_mode_preserves_global_local_min_review_default", bool(training_policy.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED), oos_mode_local_enabled)
+    check("optimizer_full_mode_local_min_review_default_disabled", False, full_mode_local_enabled)
+    check("optimizer_full_mode_local_retention_policy_indicators_disabled_by_default", ("base_finalist_best", "base_finalists_agree", "base"), full_mode_local_policy_names)
+    check("optimizer_oos_mode_preserves_global_local_min_review_default", bool(training_policy.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED), oos_mode_local_enabled)
 
     outer_rolling_oos = importlib.import_module("tools.optimizer.outer_rolling_oos")
-    add_check(results, "strategy_contract", case_id, "optimizer_full_seed_ensemble_base_filename_has_ensemble_dimension", "full_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="full"))
-    add_check(results, "strategy_contract", case_id, "optimizer_oos_seed_ensemble_base_filename_has_ensemble_dimension", "oos_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="oos"))
-    add_check(results, "strategy_contract", case_id, "optimizer_roos_seed_ensemble_base_filename_has_ensemble_dimension", "roos_ensemble_base.json", outer_rolling_oos.get_optimizer_policy_paramset_filename("base"))
-    add_check(results, "strategy_contract", case_id, "optimizer_study_legacy_base_filename_remains_stable", "base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="study"))
+    check("optimizer_full_seed_ensemble_base_filename_has_ensemble_dimension", "full_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="full"))
+    check("optimizer_oos_seed_ensemble_base_filename_has_ensemble_dimension", "oos_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="oos"))
+    check("optimizer_roos_seed_ensemble_base_filename_has_ensemble_dimension", "roos_ensemble_base.json", outer_rolling_oos.get_optimizer_policy_paramset_filename("base"))
+    check("optimizer_study_legacy_base_filename_remains_stable", "base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="study"))
 
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "optimizer_default_interactive_trials_is_1000",
+    check("optimizer_default_interactive_trials_is_1000",
         1000,
         DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE,
     )
@@ -1605,29 +1542,13 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         int(training_policy.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN),
         int(math.ceil(small_trial_count * float(training_policy.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE))),
     )
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "local_min_score_finalist_top_k_respects_training_policy_rate",
-        expected_sample_top_k,
-        training_policy_runtime.resolve_optimizer_local_min_score_finalist_top_k(sample_trial_count),
-    )
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "local_min_score_finalist_top_k_respects_training_policy_floor",
-        expected_small_top_k,
-        training_policy_runtime.resolve_optimizer_local_min_score_finalist_top_k(small_trial_count),
-    )
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "local_min_score_finalist_top_k_uses_session_trial_count_by_default",
-        expected_sample_top_k,
-        robustness._resolve_local_min_score_finalist_top_k(SimpleNamespace(n_trials=sample_trial_count)),
+    run_bound_checks(
+        check,
+        (
+            ('local_min_score_finalist_top_k_respects_training_policy_rate', expected_sample_top_k, training_policy_runtime.resolve_optimizer_local_min_score_finalist_top_k(sample_trial_count),),
+            ('local_min_score_finalist_top_k_respects_training_policy_floor', expected_small_top_k, training_policy_runtime.resolve_optimizer_local_min_score_finalist_top_k(small_trial_count),),
+            ('local_min_score_finalist_top_k_uses_session_trial_count_by_default', expected_sample_top_k, robustness._resolve_local_min_score_finalist_top_k(SimpleNamespace(n_trials=sample_trial_count)),),
+        ),
     )
 
     summary["success_export_key_count"] = len(exported_payload)
@@ -1640,32 +1561,31 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     from tools.optimizer.runtime import resolve_training_session_export_policy
 
     case_id = "OPTIMIZER_INTERRUPT_EXPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_contract')
 
     export_only_allowed, export_only_reason = resolve_training_session_export_policy(
         requested_n_trials=0,
         completed_session_trials=0,
         interrupted=False,
     )
-    add_check(results, "strategy_contract", case_id, "export_policy_allows_export_only_mode", True, export_only_allowed)
-    add_check(results, "strategy_contract", case_id, "export_policy_export_only_reason", "export_only", export_only_reason)
+    check("export_policy_allows_export_only_mode", True, export_only_allowed)
+    check("export_policy_export_only_reason", "export_only", export_only_reason)
 
     target_reached_allowed, target_reached_reason = resolve_training_session_export_policy(
         requested_n_trials=5,
         completed_session_trials=5,
         interrupted=True,
     )
-    add_check(results, "strategy_contract", case_id, "export_policy_allows_export_when_target_reached", True, target_reached_allowed)
-    add_check(results, "strategy_contract", case_id, "export_policy_target_reached_reason", "target_reached", target_reached_reason)
+    check("export_policy_allows_export_when_target_reached", True, target_reached_allowed)
+    check("export_policy_target_reached_reason", "target_reached", target_reached_reason)
 
     interrupted_allowed, interrupted_reason = resolve_training_session_export_policy(
         requested_n_trials=5,
         completed_session_trials=2,
         interrupted=True,
     )
-    add_check(results, "strategy_contract", case_id, "export_policy_blocks_interrupted_partial_session", False, interrupted_allowed)
-    add_check(results, "strategy_contract", case_id, "export_policy_interrupted_reason", "interrupted_before_target", interrupted_reason)
+    check("export_policy_blocks_interrupted_partial_session", False, interrupted_allowed)
+    check("export_policy_interrupted_reason", "interrupted_before_target", interrupted_reason)
 
     optimizer_main = importlib.import_module("tools.optimizer.main")
 
@@ -1794,12 +1714,12 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
 
     stdout_text = stdout_buffer.getvalue()
     stderr_text = stderr_buffer.getvalue()
-    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_returns_zero", 0, rc)
-    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_does_not_call_export", 0, len(fake_export_calls))
-    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_preserves_existing_run_best_params_json", "keep", persisted_payload.get("marker"))
-    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_warning", True, "使用者中斷訓練流程" in stdout_text)
-    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_skip_overwrite", True, "不自動覆寫" in stdout_text and "2/5" in stdout_text)
-    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_stderr_empty", "", stderr_text)
+    check("optimizer_main_interrupt_returns_zero", 0, rc)
+    check("optimizer_main_interrupt_does_not_call_export", 0, len(fake_export_calls))
+    check("optimizer_main_interrupt_preserves_existing_run_best_params_json", "keep", persisted_payload.get("marker"))
+    check("optimizer_main_interrupt_reports_warning", True, "使用者中斷訓練流程" in stdout_text)
+    check("optimizer_main_interrupt_reports_skip_overwrite", True, "不自動覆寫" in stdout_text and "2/5" in stdout_text)
+    check("optimizer_main_interrupt_stderr_empty", "", stderr_text)
 
     summary["checks"] = len(results)
     return results, summary
@@ -1876,23 +1796,18 @@ def validate_optimizer_session_milestone_cache_case(_base_params):
 
 def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     case_id = "OPTIMIZER_WALK_FORWARD_POLICY_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_contract')
 
     project_root = Path(__file__).resolve().parents[2]
     default_policy = load_walk_forward_policy(str(project_root), environ={})
     default_policy_path = str(default_policy.get("policy_path", "")).replace("\\", "/")
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_training_policy", True, default_policy_path.endswith("config/training_policy.py"))
+    check("default_walk_forward_policy_uses_training_policy", True, default_policy_path.endswith("config/training_policy.py"))
     default_oos_start_year = default_policy.get("oos_start_year")
     if default_oos_start_year is not None:
         expected_default_search_train_end_year = int(default_oos_start_year) - 1
     else:
         expected_default_search_train_end_year = int(default_policy.get("train_start_year", 0)) + int(default_policy.get("min_train_years", 0)) - 1
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "default_walk_forward_policy_auto_derives_search_train_end_year",
+    check("default_walk_forward_policy_auto_derives_search_train_end_year",
         expected_default_search_train_end_year,
         int(default_policy.get("search_train_end_year", 0)),
     )
@@ -1900,15 +1815,15 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     expected_full_end_date = None if expected_full_end_year is None else f"{expected_full_end_year:04d}-12-31"
     expected_oos_end_year = None if OOS_EVALUATION_END_YEAR is None else int(OOS_EVALUATION_END_YEAR)
     expected_oos_end_date = None if expected_oos_end_year is None else f"{expected_oos_end_year:04d}-12-31"
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_full_end_year", expected_full_end_year, default_policy.get("full_end_year"))
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_oos_end_year", expected_oos_end_year, default_policy.get("oos_end_year"))
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_derives_oos_end_date", expected_oos_end_date, default_policy.get("oos_end_date"))
+    check("default_walk_forward_policy_has_full_end_year", expected_full_end_year, default_policy.get("full_end_year"))
+    check("default_walk_forward_policy_has_oos_end_year", expected_oos_end_year, default_policy.get("oos_end_year"))
+    check("default_walk_forward_policy_derives_oos_end_date", expected_oos_end_date, default_policy.get("oos_end_date"))
 
     latest_data_date = "2026-03-02"
     study_full_policy = build_optimizer_runtime_policy(default_policy, "study", latest_data_date=latest_data_date, study_scope="full")
     expected_full_runtime_end_date = min(value for value in (latest_data_date, expected_full_end_date) if value is not None)
-    add_check(results, "strategy_contract", case_id, "study_full_runtime_respects_configured_full_end_year", expected_full_runtime_end_date, study_full_policy.get("search_train_end_date"))
-    add_check(results, "strategy_contract", case_id, "study_full_runtime_has_no_oos_end_date", None, study_full_policy.get("oos_end_date"))
+    check("study_full_runtime_respects_configured_full_end_year", expected_full_runtime_end_date, study_full_policy.get("search_train_end_date"))
+    check("study_full_runtime_has_no_oos_end_date", None, study_full_policy.get("oos_end_date"))
 
     study_full_latest_clip_policy = build_optimizer_runtime_policy(
         {**default_policy, "full_end_year": 2028},
@@ -1916,16 +1831,16 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         latest_data_date="2026-03-02",
         study_scope="full",
     )
-    add_check(results, "strategy_contract", case_id, "full_runtime_clips_future_end_year_to_latest_data", "2026-03-02", str(study_full_latest_clip_policy.get("search_train_end_date") or ""))
+    check("full_runtime_clips_future_end_year_to_latest_data", "2026-03-02", str(study_full_latest_clip_policy.get("search_train_end_date") or ""))
 
     oos_policy = build_optimizer_runtime_policy(default_policy, "oos")
     study_oos_policy = build_optimizer_runtime_policy(default_policy, "study", study_scope="oos")
     full_policy = build_optimizer_runtime_policy(default_policy, "full", latest_data_date="2026-03-02")
     trade_policy = build_optimizer_runtime_policy(default_policy, "trade", latest_data_date="2026-03-02")
-    add_check(results, "strategy_contract", case_id, "full_runtime_uses_configured_full_window_and_has_no_oos", True, full_policy.get("evaluation_scope") == "full_seed_ensemble" and full_policy.get("search_train_end_date") == expected_full_runtime_end_date and full_policy.get("oos_end_date") is None)
-    add_check(results, "strategy_contract", case_id, "oos_runtime_respects_configured_end_year", expected_oos_end_date, oos_policy.get("oos_end_date"))
-    add_check(results, "strategy_contract", case_id, "study_oos_runtime_respects_configured_end_year", expected_oos_end_date, study_oos_policy.get("oos_end_date"))
-    add_check(results, "strategy_contract", case_id, "trade_runtime_drops_oos_end_year", None, trade_policy.get("oos_end_year"))
+    check("full_runtime_uses_configured_full_window_and_has_no_oos", True, full_policy.get("evaluation_scope") == "full_seed_ensemble" and full_policy.get("search_train_end_date") == expected_full_runtime_end_date and full_policy.get("oos_end_date") is None)
+    check("oos_runtime_respects_configured_end_year", expected_oos_end_date, oos_policy.get("oos_end_date"))
+    check("study_oos_runtime_respects_configured_end_year", expected_oos_end_date, study_oos_policy.get("oos_end_date"))
+    check("trade_runtime_drops_oos_end_year", None, trade_policy.get("oos_end_year"))
 
     from tools.optimizer.outer_rolling_oos import _resolve_config as resolve_outer_rolling_config
 
@@ -1941,7 +1856,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     latest_oos_month = pd.Timestamp(latest_data_date).normalize().replace(day=1)
     if expected_oos_end_date is not None:
         latest_oos_month = min(latest_oos_month, pd.Timestamp(expected_oos_end_date).normalize().replace(day=1))
-    add_check(results, "strategy_contract", case_id, "rolling_oos_default_last_date_respects_configured_end_year", latest_oos_month.strftime("%Y-%m-%d"), str(rolling_config.last_oos_date))
+    check("rolling_oos_default_last_date_respects_configured_end_year", latest_oos_month.strftime("%Y-%m-%d"), str(rolling_config.last_oos_date))
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.py"
         tmp_path.write_text(
@@ -1952,7 +1867,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             str(project_root),
             environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)},
         )
-    add_check(results, "strategy_contract", case_id, "python_override_policy_auto_derives_search_train_end_year", 2014, int(override_policy.get("search_train_end_year", 0)))
+    check("python_override_policy_auto_derives_search_train_end_year", 2014, int(override_policy.get("search_train_end_year", 0)))
 
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.json"
@@ -1964,27 +1879,27 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             str(project_root),
             environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)},
         )
-    add_check(results, "strategy_contract", case_id, "json_override_policy_still_supported", 2010, int(json_override_policy.get("search_train_end_year", 0)))
-    add_check(results, "strategy_contract", case_id, "external_override_without_oos_scope_drops_default_oos_end_date", None, json_override_policy.get("oos_end_date"))
+    check("json_override_policy_still_supported", 2010, int(json_override_policy.get("search_train_end_year", 0)))
+    check("external_override_without_oos_scope_drops_default_oos_end_date", None, json_override_policy.get("oos_end_date"))
 
     env_oos_end_policy = load_walk_forward_policy(str(project_root), environ={"V16_WF_OOS_END_YEAR": "2024"})
-    add_check(results, "strategy_contract", case_id, "inline_oos_end_year_override_is_supported", "2024-12-31", str(env_oos_end_policy.get("oos_end_date") or ""))
+    check("inline_oos_end_year_override_is_supported", "2024-12-31", str(env_oos_end_policy.get("oos_end_date") or ""))
     env_oos_end_date_policy = load_walk_forward_policy(str(project_root), environ={"V16_WF_OOS_END_DATE": "2024-06-30"})
-    add_check(results, "strategy_contract", case_id, "inline_oos_end_date_override_takes_precedence_over_default_year", "2024-06-30", str(env_oos_end_date_policy.get("oos_end_date") or ""))
+    check("inline_oos_end_date_override_takes_precedence_over_default_year", "2024-06-30", str(env_oos_end_date_policy.get("oos_end_date") or ""))
 
     try:
         load_walk_forward_policy(str(project_root), environ={"V16_WF_OOS_END_YEAR": "2024", "V16_WF_OOS_END_DATE": "2025-06-30"})
         conflicting_oos_end_override_rejected = False
     except ValueError as exc:
         conflicting_oos_end_override_rejected = "oos_end_year" in str(exc)
-    add_check(results, "strategy_contract", case_id, "conflicting_explicit_oos_end_year_and_date_rejected", True, conflicting_oos_end_override_rejected)
+    check("conflicting_explicit_oos_end_year_and_date_rejected", True, conflicting_oos_end_override_rejected)
 
     try:
         build_optimizer_runtime_policy({**default_policy, "full_start_year": 2023, "full_end_year": 2022}, "study", latest_data_date="2026-03-02", study_scope="full")
         invalid_study_full_range_rejected = False
     except ValueError as exc:
         invalid_study_full_range_rejected = "full_end_year" in str(exc)
-    add_check(results, "strategy_contract", case_id, "full_reverse_year_range_rejected", True, invalid_study_full_range_rejected)
+    check("full_reverse_year_range_rejected", True, invalid_study_full_range_rejected)
 
 
     with TemporaryDirectory() as tmp_dir:
@@ -1995,7 +1910,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             invalid_legacy_symbol_rejected = False
         except ValueError as exc:
             invalid_legacy_symbol_rejected = "TRAINING_SPLIT_POLICY" in str(exc)
-    add_check(results, "strategy_contract", case_id, "legacy_walk_forward_policy_symbol_rejected", True, invalid_legacy_symbol_rejected)
+    check("legacy_walk_forward_policy_symbol_rejected", True, invalid_legacy_symbol_rejected)
 
     callbacks_source = Path(optimizer_callbacks.__file__).read_text(encoding="utf-8")
     static_ensemble_dashboard_source = (project_root / "services" / "optimizer" / "static_ensemble_dashboard.py").read_text(encoding="utf-8")
@@ -2004,9 +1919,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     optimizer_outer_rolling_source = (project_root / "services" / "optimizer" / "outer_rolling_oos.py").read_text(encoding="utf-8")
     optimizer_walk_forward_source = (project_root / "services" / "optimizer" / "walk_forward.py").read_text(encoding="utf-8")
     objective_runner_source = (project_root / "services" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
-    add_check(results, "strategy_contract", case_id, "optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
-    add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_callbacks", True, "from core.walk_forward_policy import filter_search_train_dates" in callbacks_source and "def _filter_search_train_dates" not in callbacks_source)
-    add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_objective_runner", True, "from core.walk_forward_policy import filter_search_train_dates" in objective_runner_source and "def _filter_search_train_dates" not in objective_runner_source)
+    check("optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
+    check("search_train_date_filter_reuses_core_single_source_in_callbacks", True, "from core.walk_forward_policy import filter_search_train_dates" in callbacks_source and "def _filter_search_train_dates" not in callbacks_source)
+    check("search_train_date_filter_reuses_core_single_source_in_objective_runner", True, "from core.walk_forward_policy import filter_search_train_dates" in objective_runner_source and "def _filter_search_train_dates" not in objective_runner_source)
 
     params = V16StrategyParams()
     params.use_kc = True
@@ -2014,14 +1929,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     params.kc_mult = 1.8
     training_lines = optimizer_callbacks._build_training_param_lines(params)
     rendered_training_text = "\n".join(training_lines)
-    add_check(results, "strategy_contract", case_id, "optimizer_callbacks_kc_label_matches_dashboard_wording", True, "阿肯那(KC)" in rendered_training_text and "阿唐那(KC)" not in rendered_training_text)
+    check("optimizer_callbacks_kc_label_matches_dashboard_wording", True, "阿肯那(KC)" in rendered_training_text and "阿唐那(KC)" not in rendered_training_text)
     params.use_breakout_reclaim_reentry = True
     counted_training_text = "\n".join(optimizer_callbacks._build_training_param_lines(params, entry_trade_counts={"breakout_trades": 12, "extended_trades": 7, "reentry_trades": 3}))
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "optimizer_training_params_hide_entry_trade_counts",
+    check("optimizer_training_params_hide_entry_trade_counts",
         True,
         "突破買進 啟用 (突破 201 日新高)" in counted_training_text
         and "Re-entry 啟用（20日內站回 STOP+0.8ATR）" in counted_training_text
@@ -2085,13 +1996,13 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     )
     row_names = [str(row.get("name", "")) for row in sample_rows]
     row_map = {str(row.get("name", "")): row for row in sample_rows}
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_keeps_final_equity_row", True, "最終資產" in row_names)
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_combines_payoff_and_ev_label_without_extra_spaces", True, "風報比: 期望值" in row_names and "風報比 : 期望值" not in row_names)
+    check("optimizer_first_zone_keeps_final_equity_row", True, "最終資產" in row_names)
+    check("optimizer_first_zone_combines_payoff_and_ev_label_without_extra_spaces", True, "風報比: 期望值" in row_names and "風報比 : 期望值" not in row_names)
     romd_row = row_map.get("報酬回撤比 (RoMD)", {})
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_romd_row_uses_plain_return_mdd_not_system_score", True, "1.41" in str(romd_row.get("candidate", "")) and "0.67" in str(romd_row.get("benchmark", "")))
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_payoff_ev_pair_with_consistent_spacing", True, row_map.get("風報比: 期望值", {}).get("candidate") == "1.50: 0.250R" and "1.40: 0.200R" in str(row_map.get("風報比: 期望值", {}).get("reference", "")) and "(+0.10: +0.050R)" in str(row_map.get("風報比: 期望值", {}).get("reference", "")))
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 2｜重進: 1)" and row_map.get("總交易次數", {}).get("reference") == "10 (正常: 7｜延續: 2｜重進: 1)")
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_missed_split_with_consistent_spacing", True, row_map.get("錯失交易次數", {}).get("candidate") == "2 (買: 1｜賣: 1)" and row_map.get("錯失交易次數", {}).get("reference") == "3 (買: 2｜賣: 1)")
+    check("optimizer_first_zone_romd_row_uses_plain_return_mdd_not_system_score", True, "1.41" in str(romd_row.get("candidate", "")) and "0.67" in str(romd_row.get("benchmark", "")))
+    check("optimizer_first_zone_formats_payoff_ev_pair_with_consistent_spacing", True, row_map.get("風報比: 期望值", {}).get("candidate") == "1.50: 0.250R" and "1.40: 0.200R" in str(row_map.get("風報比: 期望值", {}).get("reference", "")) and "(+0.10: +0.050R)" in str(row_map.get("風報比: 期望值", {}).get("reference", "")))
+    check("optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 2｜重進: 1)" and row_map.get("總交易次數", {}).get("reference") == "10 (正常: 7｜延續: 2｜重進: 1)")
+    check("optimizer_first_zone_formats_missed_split_with_consistent_spacing", True, row_map.get("錯失交易次數", {}).get("candidate") == "2 (買: 1｜賣: 1)" and row_map.get("錯失交易次數", {}).get("reference") == "3 (買: 2｜賣: 1)")
 
     long_training_rows = [
         {
@@ -2147,7 +2058,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     ansi_re = re.compile(r"\[[0-9;]*m")
     dashboard_lines = [ansi_re.sub("", line) for line in dashboard_buffer.getvalue().splitlines()]
     dashboard_text_plain = "\n".join(dashboard_lines)
-    add_check(results, "strategy_contract", case_id, "optimizer_console_training_table_uses_benchmark_and_delta_columns", True, "| 指標項目" in dashboard_text_plain and "| 本輪候選" in dashboard_text_plain and "| 同期大盤0050" in dashboard_text_plain and "| 差異" in dashboard_text_plain and "run_best (差異)" not in dashboard_text_plain)
+    check("optimizer_console_training_table_uses_benchmark_and_delta_columns", True, "| 指標項目" in dashboard_text_plain and "| 本輪候選" in dashboard_text_plain and "| 同期大盤0050" in dashboard_text_plain and "| 差異" in dashboard_text_plain and "run_best (差異)" not in dashboard_text_plain)
     table_lines = [line for line in dashboard_lines if line.startswith("| ") and any(token in line for token in ("風報比: 期望值", "總交易次數", "錯失交易次數"))]
 
     def _pipe_display_positions(text: str) -> tuple[int, ...]:
@@ -2162,19 +2073,15 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         return tuple(positions)
 
     pipe_positions = [_pipe_display_positions(line) for line in table_lines]
-    add_check(results, "strategy_contract", case_id, "optimizer_console_table_keeps_pipe_alignment_for_long_first_zone_rows", True, len(pipe_positions) == 6 and len(set(pipe_positions)) == 1)
+    check("optimizer_console_table_keeps_pipe_alignment_for_long_first_zone_rows", True, len(pipe_positions) == 6 and len(set(pipe_positions)) == 1)
 
     optimizer_study_utils_source = (project_root / "services" / "optimizer" / "study_utils.py").read_text(encoding="utf-8")
     train_test_policy_lines = [line for line in optimizer_main_source.splitlines() if "Train/Test policy:" in line]
-    add_check(results, "strategy_contract", case_id, "optimizer_start_banner_omits_raw_objective_mode_token", True, bool(train_test_policy_lines) and all("objective=" not in line for line in train_test_policy_lines))
-    add_check(results, "strategy_contract", case_id, "system_score_display_formatter_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}", format_system_score_for_display(1.23, decimals=2))
-    add_check(results, "strategy_contract", case_id, "optimizer_system_score_display_helper_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.3f}", format_optimizer_score_for_display(1.23, decimals=3))
-    add_check(results, "strategy_contract", case_id, "optimizer_system_score_display_helper_preserves_invalid_sentinel", f"{INVALID_TRIAL_VALUE:.3f}", format_optimizer_score_for_display(INVALID_TRIAL_VALUE, decimals=3))
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "optimizer_dashboard_system_score_display_uses_multiplier_formatter",
+    check("optimizer_start_banner_omits_raw_objective_mode_token", True, bool(train_test_policy_lines) and all("objective=" not in line for line in train_test_policy_lines))
+    check("system_score_display_formatter_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}", format_system_score_for_display(1.23, decimals=2))
+    check("optimizer_system_score_display_helper_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.3f}", format_optimizer_score_for_display(1.23, decimals=3))
+    check("optimizer_system_score_display_helper_preserves_invalid_sentinel", f"{INVALID_TRIAL_VALUE:.3f}", format_optimizer_score_for_display(INVALID_TRIAL_VALUE, decimals=3))
+    check("optimizer_dashboard_system_score_display_uses_multiplier_formatter",
         True,
         "format_system_score_for_display(attrs.get('base_score'" in callbacks_source
         and "format_system_score_for_display(candidate_train_metrics.get('pf_romd'" in static_ensemble_dashboard_source
@@ -2185,23 +2092,23 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "OOS 系統得分" in optimizer_walk_forward_source
         and "OOS RoMD" in optimizer_walk_forward_source,
     )
-    add_check(results, "strategy_contract", case_id, "study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
-    add_check(results, "strategy_contract", case_id, "interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] Full Mode [2] OOS Mode [3] Rolling OOS Mode  [4] Trade Mode" in optimizer_study_utils_source)
+    check("study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
+    check("interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] Full Mode [2] OOS Mode [3] Rolling OOS Mode  [4] Trade Mode" in optimizer_study_utils_source)
     with patch("builtins.input", side_effect=["1", "0"]):
         interactive_full_zero_request = study_utils._resolve_interactive_optimizer_run_request()
-    add_check(results, "strategy_contract", case_id, "interactive_one_routes_to_full_mode", True, interactive_full_zero_request.get("model_mode") == "full" and interactive_full_zero_request.get("n_trials") == 0 and interactive_full_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
-    add_check(results, "strategy_contract", case_id, "interactive_study_scope_menu_uses_one_for_oos", True, "[Enter] Study-Full [1] Study-OOS" in optimizer_study_utils_source and "[2] Study-OOS" not in optimizer_study_utils_source)
-    add_check(results, "strategy_contract", case_id, "study_oos_dashboard_shows_train_period_single_stock_breakout_stats", True, "def _study_single_stock_breakout_stats_title" in callbacks_source and "Study-OOS 單股突破統計｜Train Period" in callbacks_source and "study_full_breakout_stats_title" in callbacks_source)
-    add_check(results, "strategy_contract", case_id, "interactive_trial_prompt_exposes_zero_export", True, "[0] 輸出參數" in optimizer_study_utils_source and "min_value=0" in optimizer_study_utils_source)
+    check("interactive_one_routes_to_full_mode", True, interactive_full_zero_request.get("model_mode") == "full" and interactive_full_zero_request.get("n_trials") == 0 and interactive_full_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
+    check("interactive_study_scope_menu_uses_one_for_oos", True, "[Enter] Study-Full [1] Study-OOS" in optimizer_study_utils_source and "[2] Study-OOS" not in optimizer_study_utils_source)
+    check("study_oos_dashboard_shows_train_period_single_stock_breakout_stats", True, "def _study_single_stock_breakout_stats_title" in callbacks_source and "Study-OOS 單股突破統計｜Train Period" in callbacks_source and "study_full_breakout_stats_title" in callbacks_source)
+    check("interactive_trial_prompt_exposes_zero_export", True, "[0] 輸出參數" in optimizer_study_utils_source and "min_value=0" in optimizer_study_utils_source)
     with patch("builtins.input", side_effect=["S", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
         interactive_zero_request = study_utils._resolve_interactive_optimizer_run_request()
-    add_check(results, "strategy_contract", case_id, "interactive_zero_trials_routes_to_export_candidate", True, interactive_zero_request.get("n_trials") == 0 and interactive_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE and interactive_zero_request.get("model_mode") == "study" and interactive_zero_request.get("study_db_action") == "resume")
+    check("interactive_zero_trials_routes_to_export_candidate", True, interactive_zero_request.get("n_trials") == 0 and interactive_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE and interactive_zero_request.get("model_mode") == "study" and interactive_zero_request.get("study_db_action") == "resume")
     with patch("builtins.input", side_effect=["", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
         interactive_default_zero_request = study_utils._resolve_interactive_optimizer_run_request()
-    add_check(results, "strategy_contract", case_id, "interactive_enter_mode_defaults_to_study_base_export", True, interactive_default_zero_request.get("model_mode") == "study" and interactive_default_zero_request.get("n_trials") == 0 and interactive_default_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
+    check("interactive_enter_mode_defaults_to_study_base_export", True, interactive_default_zero_request.get("model_mode") == "study" and interactive_default_zero_request.get("n_trials") == 0 and interactive_default_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
     with patch("builtins.input", side_effect=["S", "", "1"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value="1"):
         interactive_restart_request = study_utils._resolve_interactive_optimizer_run_request()
-    add_check(results, "strategy_contract", case_id, "interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)
+    check("interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)
 
     summary["checks"] = len(results)
     return results, summary

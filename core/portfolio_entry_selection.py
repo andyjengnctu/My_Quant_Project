@@ -69,6 +69,123 @@ from core.portfolio_entry_selection_max_dl import (
 )
 
 
+_RESOURCE_AWARE_POLICY_SPECS = {
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET: (
+        'best-improvement-basket', _reorder_resource_aware_binary_basket, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS: (
+        'continuous-score-constrained', _reorder_resource_aware_continuous, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING: (
+        'continuous-score-capital-preserving', _reorder_resource_aware_continuous_capital_preserving, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL: (
+        'continuous-score-max-dl', _reorder_resource_aware_continuous_max_dl, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT: (
+        'continuous-score-max-dl-feasible-ascent', _reorder_resource_aware_continuous_max_dl_feasible_ascent, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD: (
+        'continuous-score-max-dl-feasible-ascent-stale-score-guard',
+        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT: (
+        'continuous-expected-pnl-feasible-ascent',
+        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
+        {'objective_mode': 'expected_pnl'},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT: (
+        'continuous-excess-alpha-feasible-ascent',
+        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
+        {'objective_mode': 'excess_alpha'},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT: (
+        'continuous-excess-alpha-no-r0-feasible-ascent',
+        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
+        {'objective_mode': 'excess_alpha', 'preserve_reserve_floor': False, 'minimum_repair_enabled': False},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL: (
+        'continuous-excess-alpha-constrained-optimal', _reorder_resource_aware_continuous_excess_alpha_constrained_optimal, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL: (
+        'continuous-score-constrained-optimal', _reorder_resource_aware_continuous_score_constrained_optimal, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL: (
+        'continuous-score-k-flex-r0-constrained-optimal',
+        _reorder_resource_aware_continuous_score_k_flex_r0_constrained_optimal,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL: (
+        'continuous-score-safety-constrained-optimal',
+        _reorder_resource_aware_continuous_score_safety_constrained_optimal,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL: (
+        'continuous-score-residual-safety-constrained-optimal',
+        _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL: (
+        'continuous-score-no-r0-constrained-optimal',
+        _reorder_resource_aware_continuous_score_no_r0_constrained_optimal,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0: (
+        'continuous-score-no-k-no-r0', _reorder_resource_aware_continuous_score_no_k_no_r0, {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE: (
+        'continuous-score-no-k-no-r0-raw-safety-gate',
+        _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT: (
+        'continuous-score-no-k-no-r0-safety-mfe-product',
+        _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL: (
+        'continuous-score-capital-no-r0-constrained-optimal',
+        _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal,
+        {},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL: (
+        'continuous-score-capital-pareto-no-r0-constrained-optimal',
+        _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal,
+        {},
+    ),
+    # Preserve the historical diagnostic selector label for these two variants.
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_MATCHED_FEASIBLE_ASCENT: (
+        'greedy-first-improvement',
+        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
+        {'matched_score_proposal': True},
+    ),
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT: (
+        'greedy-first-improvement',
+        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
+        {'allow_count_growth': True, 'matched_score_proposal': True},
+    ),
+}
+
+_RESOURCE_AWARE_SCORE_DECORATORS = {
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
+        _decorate_same_day_rank_safety_scores,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
+        _decorate_same_day_rank_safety_mfe_product_scores,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
+        _decorate_same_day_rank_residual_safety_scores,
+}
+
+
+def _resource_aware_dynamic_kwargs(policy, rows):
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+        return {'stale_score_membership_guard_max_age_days': _stale_score_guard_max_age_days(rows)}
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
+        options = dict(rows[0].get('breakout_quality_ranking_options') or {}) if rows else {}
+        return {'safety_percentile_cutoff': float(options.get('safety_percentile_cutoff', 0.5))}
+    return {}
+
+
 def select_resource_aware_action_candidates(orderable_candidates_today, resource_selection_diag):
     """Return the candidates that may create pre-market orders, preserving full diagnostics input."""
 
@@ -129,56 +246,14 @@ def reorder_candidates_for_resource_aware_quality(
     rows = list(orderable_candidates_today or [])
     free_slots = max(0, int(max_positions) - int(pre_market_occupied))
     policy = _resource_aware_quality_policy(rows)
-    selector = (
-        'best-improvement-basket'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
-        else 'continuous-score-max-dl-feasible-ascent-stale-score-guard'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
-        else 'continuous-expected-pnl-feasible-ascent'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
-        else 'continuous-excess-alpha-feasible-ascent'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT
-        else 'continuous-excess-alpha-no-r0-feasible-ascent'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT
-        else 'continuous-excess-alpha-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL
-        else 'continuous-score-residual-safety-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL
-        else 'continuous-score-safety-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL
-        else 'continuous-score-k-flex-r0-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL
-        else 'continuous-score-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
-        else 'continuous-score-no-r0-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL
-        else 'continuous-score-no-k-no-r0-raw-safety-gate'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE
-        else 'continuous-score-no-k-no-r0-safety-mfe-product'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT
-        else 'continuous-score-no-k-no-r0'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0
-        else 'continuous-score-capital-no-r0-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL
-        else 'continuous-score-capital-pareto-no-r0-constrained-optimal'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL
-        else 'continuous-score-max-dl-feasible-ascent'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
-        else 'continuous-score-max-dl'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
-        else 'continuous-score-capital-preserving'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
-        else 'continuous-score-constrained'
-        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
-        else 'greedy-first-improvement'
+    selector, handler, static_kwargs = _RESOURCE_AWARE_POLICY_SPECS.get(
+        policy,
+        ('greedy-first-improvement', _reorder_resource_aware_binary_greedy, {}),
     )
     residual_fit_diag = {}
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
-        rows, residual_fit_diag = _decorate_same_day_rank_safety_scores(rows)
-    elif policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
-        rows, residual_fit_diag = _decorate_same_day_rank_safety_mfe_product_scores(rows)
-    elif policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
-        rows, residual_fit_diag = _decorate_same_day_rank_residual_safety_scores(rows)
+    decorator = _RESOURCE_AWARE_SCORE_DECORATORS.get(policy)
+    if decorator is not None:
+        rows, residual_fit_diag = decorator(rows)
     default_diag = _resource_aware_default_diag(rows, free_slots, selector=selector)
 
     def finish(order, diag):
@@ -201,261 +276,9 @@ def reorder_candidates_for_resource_aware_quality(
         free_slots=free_slots,
         params=params,
     )
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
-        max_age_days = _stale_score_guard_max_age_days(rows)
-        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-            stale_score_membership_guard_max_age_days=max_age_days,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
-        order, diag = _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:
-        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-            objective_mode='expected_pnl',
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
-        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-            objective_mode='excess_alpha',
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT:
-        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-            objective_mode='excess_alpha',
-            preserve_reserve_floor=False,
-            minimum_repair_enabled=False,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_score_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_score_k_flex_r0_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_score_safety_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0:
-        order, diag = _reorder_resource_aware_continuous_score_no_k_no_r0(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
-        options = dict(rows[0].get('breakout_quality_ranking_options') or {}) if rows else {}
-        order, diag = _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-            safety_percentile_cutoff=float(options.get('safety_percentile_cutoff', 0.5)),
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_score_no_r0_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL:
-        order, diag = _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT:
-        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_MATCHED_FEASIBLE_ASCENT:
-        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-            matched_score_proposal=True,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT:
-        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-            allow_count_growth=True,
-            matched_score_proposal=True,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL:
-        order, diag = _reorder_resource_aware_continuous_max_dl(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING:
-        order, diag = _reorder_resource_aware_continuous_capital_preserving(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS:
-        order, diag = _reorder_resource_aware_continuous(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET:
-        order, diag = _reorder_resource_aware_binary_basket(
-            rows,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=free_slots,
-            params=params,
-            baseline=baseline,
-            default_diag=default_diag,
-        )
-        return finish(order, diag)
-    order, diag = _reorder_resource_aware_binary_greedy(
+    extra_kwargs = dict(static_kwargs)
+    extra_kwargs.update(_resource_aware_dynamic_kwargs(policy, rows))
+    order, diag = handler(
         rows,
         available_cash=available_cash,
         sizing_equity=sizing_equity,
@@ -463,7 +286,7 @@ def reorder_candidates_for_resource_aware_quality(
         params=params,
         baseline=baseline,
         default_diag=default_diag,
+        **extra_kwargs,
     )
     return finish(order, diag)
-
 

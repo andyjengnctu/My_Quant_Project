@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .checks import bind_checks
+from .checks import bind_synthetic_case, bind_checks
 
 from .synthetic_breakout_quality_support import (
     ARTIFACT_CONTRACT_VERSION,
@@ -844,9 +844,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
 def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     """Protect the runtime artifact boundary, not every historical model recipe."""
     case_id = "BREAKOUT_QUALITY_RUNTIME_ARTIFACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_breakout_quality")
 
     filter_id = "synthetic_quality"
     architecture = "inception_time_v1"

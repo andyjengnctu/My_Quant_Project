@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .checks import bind_checks
+from .checks import bind_synthetic_case, bind_checks
 
 from copy import deepcopy
 import json
@@ -63,9 +63,7 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
     """Profile membership changes must not alter proven artifact/period bindings."""
 
     case_id = "STRATEGY_COMPARE_RESOLVED_PLAN_TRANSITION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_breakout_quality")
 
     base = get_strategy_comparison_settings("forward_oos")
     current_dl_arms = tuple(arm for arm in base.enabled_arms if arm.dl_enabled)

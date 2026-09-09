@@ -12,7 +12,7 @@ from core.price_utils import calc_half_take_profit_sell_qty
 from core.trade_plans import build_normal_candidate_plan, clone_shadow_position, create_signal_tracking_state, execute_pre_market_entry_plan
 from core.position_step import execute_bar_step
 
-from .checks import add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
+from .checks import bind_synthetic_case, bind_checks, add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
 from .synthetic_frame_utils import build_synthetic_baseline_frame, set_synthetic_bar
 from .synthetic_portfolio_common import (
@@ -197,8 +197,7 @@ def validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case(ba
     params.min_history_win_rate = 0.0
 
     case_id = "SYNTH_NON_CANDIDATE_SETUP_NO_EXTENDED_SEED"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_non_candidate_setup_no_extended_seed')
 
     dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
     df = pd.DataFrame(
@@ -258,13 +257,13 @@ def validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case(ba
         params=params,
     )
 
-    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_has_normal_setup_today", [ticker], sorted(day2_normal_setup_tickers))
-    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_candidates_blocked_by_history_filter", 0, len(day2_candidates))
-    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_orderable_blocked_by_history_filter", 0, len(day2_orderable))
-    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_failed_setup_clears_active_extended_signal", False, ticker in active_extended_signals)
-    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day3_has_no_new_normal_setup", [], sorted(day3_normal_setup_tickers))
-    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day3_candidates_not_revived_by_stale_signal", 0, len(day3_candidates))
-    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day3_orderable_not_revived_by_stale_signal", 0, len(day3_orderable))
+    check("day2_has_normal_setup_today", [ticker], sorted(day2_normal_setup_tickers))
+    check("day2_candidates_blocked_by_history_filter", 0, len(day2_candidates))
+    check("day2_orderable_blocked_by_history_filter", 0, len(day2_orderable))
+    check("day2_failed_setup_clears_active_extended_signal", False, ticker in active_extended_signals)
+    check("day3_has_no_new_normal_setup", [], sorted(day3_normal_setup_tickers))
+    check("day3_candidates_not_revived_by_stale_signal", 0, len(day3_candidates))
+    check("day3_orderable_not_revived_by_stale_signal", 0, len(day3_orderable))
 
     summary["day2_candidate_count"] = len(day2_candidates)
     summary["day2_active_signal_retained"] = ticker in active_extended_signals
@@ -276,8 +275,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     params.atr_times_init = 1.0
     case_id = "SYNTH_EXTENDED_SIGNAL_FIXED_COUNTERFACTUAL_BARRIER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_extended_signal_counterfactual_barrier')
 
     dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"])
     ticker = "9818"
@@ -318,16 +316,16 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         params=params,
     )
     day2_plan = day2_candidates[0] if day2_candidates else None
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_no_new_normal_setup", [], sorted(day2_normal_setup_tickers))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_candidate_stays_valid_even_when_not_orderable", 1, len(day2_candidates))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_signal_day_limit_used_before_anchor_exists", 100.0, None if day2_plan is None else float(day2_plan["limit_px"]))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_limit_down_guard_keeps_candidate_out_of_orderable_list", 0, len(day2_orderable))
+    check("day2_no_new_normal_setup", [], sorted(day2_normal_setup_tickers))
+    check("day2_candidate_stays_valid_even_when_not_orderable", 1, len(day2_candidates))
+    check("day2_signal_day_limit_used_before_anchor_exists", 100.0, None if day2_plan is None else float(day2_plan["limit_px"]))
+    check("day2_limit_down_guard_keeps_candidate_out_of_orderable_list", 0, len(day2_orderable))
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[1], params, sizing_capital)
     updated_signal_state = active_extended_signals.get(ticker)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_reachable_counterfactual_fill_freezes_entry_ref_from_open_vs_limit", 98.0, None if updated_signal_state is None else float(updated_signal_state.get("entry_ref_price", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_invalidation_barrier_uses_fixed_counterfactual_fill_basis", 88.0, None if updated_signal_state is None else float(updated_signal_state.get("continuation_invalidation_barrier", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_completion_barrier_uses_fixed_counterfactual_fill_basis", 108.0, None if updated_signal_state is None else float(updated_signal_state.get("continuation_completion_barrier", float("nan"))))
+    check("day2_reachable_counterfactual_fill_freezes_entry_ref_from_open_vs_limit", 98.0, None if updated_signal_state is None else float(updated_signal_state.get("entry_ref_price", float("nan"))))
+    check("day2_invalidation_barrier_uses_fixed_counterfactual_fill_basis", 88.0, None if updated_signal_state is None else float(updated_signal_state.get("continuation_invalidation_barrier", float("nan"))))
+    check("day2_completion_barrier_uses_fixed_counterfactual_fill_basis", 108.0, None if updated_signal_state is None else float(updated_signal_state.get("continuation_completion_barrier", float("nan"))))
 
     day3_candidates, day3_orderable, _day3_normal_setup_tickers = build_daily_candidates(
         normal_setup_index={},
@@ -341,10 +339,10 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         params=params,
     )
     day3_plan = day3_candidates[0] if day3_candidates else None
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_limit_keeps_original_limit_after_shadow_anchor", 100.0, None if day3_plan is None else float(day3_plan["limit_px"]))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_sizing_stop_tracks_fixed_counterfactual_entry_ref", 88.0, None if day3_plan is None else float(day3_plan["init_sl"]))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_carries_shadow_state_into_portfolio_entry_seed", True, day3_plan is not None and day3_plan.get("shadow_position_state") is not None)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
+    check("day3_candidate_limit_keeps_original_limit_after_shadow_anchor", 100.0, None if day3_plan is None else float(day3_plan["limit_px"]))
+    check("day3_candidate_sizing_stop_tracks_fixed_counterfactual_entry_ref", 88.0, None if day3_plan is None else float(day3_plan["init_sl"]))
+    check("day3_candidate_carries_shadow_state_into_portfolio_entry_seed", True, day3_plan is not None and day3_plan.get("shadow_position_state") is not None)
+    check("day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
 
     # # (AI註: replay hot path 不得對 ensemble context 做遞迴深拷貝；shadow top-level 與 exec contexts 仍須隔離。)
     runtime_context = {"all_dfs_fast": object()}
@@ -352,10 +350,10 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     shadow_with_runtime_context["_entry_context"] = runtime_context
     shadow_with_runtime_context["_last_exec_contexts"] = [{"event": "STOP", "qty": 1}]
     cloned_shadow = clone_shadow_position(shadow_with_runtime_context)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_separates_top_level_state", True, cloned_shadow is not shadow_with_runtime_context)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_keeps_large_runtime_context_by_reference", True, cloned_shadow.get("_entry_context") is runtime_context)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_separates_exec_context_list", True, cloned_shadow.get("_last_exec_contexts") is not shadow_with_runtime_context.get("_last_exec_contexts"))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_separates_exec_context_rows", True, cloned_shadow.get("_last_exec_contexts", [None])[0] is not shadow_with_runtime_context.get("_last_exec_contexts", [None])[0])
+    check("shadow_clone_separates_top_level_state", True, cloned_shadow is not shadow_with_runtime_context)
+    check("shadow_clone_keeps_large_runtime_context_by_reference", True, cloned_shadow.get("_entry_context") is runtime_context)
+    check("shadow_clone_separates_exec_context_list", True, cloned_shadow.get("_last_exec_contexts") is not shadow_with_runtime_context.get("_last_exec_contexts"))
+    check("shadow_clone_separates_exec_context_rows", True, cloned_shadow.get("_last_exec_contexts", [None])[0] is not shadow_with_runtime_context.get("_last_exec_contexts", [None])[0])
 
     buy_portfolio = {}
     buy_active_extended_signals = {ticker: copy.deepcopy(active_extended_signals[ticker])}
@@ -376,11 +374,11 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         total_missed_buys=0,
     )
     inherited_position = buy_portfolio.get(ticker) or {}
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_inherits_shadow_management_state", True, bool(inherited_position.get("inherited_shadow_management", False)))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_actual_fill_separate_from_shadow_entry", 97.0, None if not inherited_position else float(inherited_position.get("entry_fill_price", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_shadow_entry_reference", 98.0, None if not inherited_position else float(inherited_position.get("shadow_entry_fill_price", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_original_order_limit", 100.0, None if not inherited_position else float(inherited_position.get("limit_price", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_uses_shadow_stop_not_late_fill_stop", 88.0, None if not inherited_position else float(inherited_position.get("initial_stop", float("nan"))))
+    check("day3_portfolio_extended_fill_inherits_shadow_management_state", True, bool(inherited_position.get("inherited_shadow_management", False)))
+    check("day3_portfolio_extended_fill_keeps_actual_fill_separate_from_shadow_entry", 97.0, None if not inherited_position else float(inherited_position.get("entry_fill_price", float("nan"))))
+    check("day3_portfolio_extended_fill_keeps_shadow_entry_reference", 98.0, None if not inherited_position else float(inherited_position.get("shadow_entry_fill_price", float("nan"))))
+    check("day3_portfolio_extended_fill_keeps_original_order_limit", 100.0, None if not inherited_position else float(inherited_position.get("limit_price", float("nan"))))
+    check("day3_portfolio_extended_fill_uses_shadow_stop_not_late_fill_stop", 88.0, None if not inherited_position else float(inherited_position.get("initial_stop", float("nan"))))
     if inherited_position:
         stop_ledger = build_sell_ledger_from_price(
             inherited_position.get("sl"),
@@ -397,7 +395,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         )
     else:
         expected_risk_milli = None
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_risk_uses_actual_fill_vs_inherited_stop", expected_risk_milli, None if not inherited_position else int(inherited_position.get("initial_risk_total_milli", 0)))
+    check("day3_portfolio_extended_fill_risk_uses_actual_fill_vs_inherited_stop", expected_risk_milli, None if not inherited_position else int(inherited_position.get("initial_risk_total_milli", 0)))
 
     display_trade_history = []
     display_portfolio = {}
@@ -419,15 +417,15 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         total_missed_buys=0,
     )
     display_buy_row = display_trade_history[0] if display_trade_history else {}
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_buy_history_keeps_order_limit", 100.0, None if not display_buy_row else float(display_buy_row.get("買入限價", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_buy_history_shows_inherited_stop", 88.0, None if not display_buy_row else float(display_buy_row.get("停損價", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_buy_history_shows_shadow_entry", 98.0, None if not display_buy_row else float(display_buy_row.get("Shadow買進價", float("nan"))))
+    check("day3_portfolio_extended_buy_history_keeps_order_limit", 100.0, None if not display_buy_row else float(display_buy_row.get("買入限價", float("nan"))))
+    check("day3_portfolio_extended_buy_history_shows_inherited_stop", 88.0, None if not display_buy_row else float(display_buy_row.get("停損價", float("nan"))))
+    check("day3_portfolio_extended_buy_history_shows_shadow_entry", 98.0, None if not display_buy_row else float(display_buy_row.get("Shadow買進價", float("nan"))))
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2], params, sizing_capital)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_no_barrier_hit_signal_remains_active", True, ticker in active_extended_signals)
+    check("day3_no_barrier_hit_signal_remains_active", True, ticker in active_extended_signals)
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[3], params, sizing_capital)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_completion_barrier_hit_clears_live_shadow_signal", False, ticker in active_extended_signals)
+    check("day4_completion_barrier_hit_clears_live_shadow_signal", False, ticker in active_extended_signals)
 
     unreachable_frame = frame.copy()
     unreachable_frame.loc[dates[1], ["Open", "High", "Low", "Close"]] = [105.0, 109.0, 104.0, 106.0]
@@ -435,9 +433,9 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     unreachable_active_extended_signals = {ticker: create_signal_tracking_state(100.0, 10.0, params)}
     cleanup_extended_signals_for_day(unreachable_active_extended_signals, {}, unreachable_dfs_fast, dates[1], params, sizing_capital)
     unreachable_state = unreachable_active_extended_signals.get(ticker)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_unreachable_bar_still_freezes_shadow_entry_at_orig_limit", 100.0, None if unreachable_state is None else float(unreachable_state.get("entry_ref_price", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_unreachable_bar_still_initializes_shadow_stop_from_next_day_anchor", 90.0, None if unreachable_state is None else float(unreachable_state.get("continuation_invalidation_barrier", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_unreachable_bar_still_initializes_shadow_target_from_next_day_anchor", 110.0, None if unreachable_state is None else float(unreachable_state.get("continuation_completion_barrier", float("nan"))))
+    check("day2_unreachable_bar_still_freezes_shadow_entry_at_orig_limit", 100.0, None if unreachable_state is None else float(unreachable_state.get("entry_ref_price", float("nan"))))
+    check("day2_unreachable_bar_still_initializes_shadow_stop_from_next_day_anchor", 90.0, None if unreachable_state is None else float(unreachable_state.get("continuation_invalidation_barrier", float("nan"))))
+    check("day2_unreachable_bar_still_initializes_shadow_target_from_next_day_anchor", 110.0, None if unreachable_state is None else float(unreachable_state.get("continuation_completion_barrier", float("nan"))))
 
     stop_frame = frame.copy()
     stop_frame.loc[dates[3], ["Open", "High", "Low", "Close"]] = [96.0, 97.0, 87.5, 90.0]
@@ -445,7 +443,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     stop_active_extended_signals = {ticker: create_signal_tracking_state(100.0, 10.0, params)}
     cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[1], params, sizing_capital)
     cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[3], params, sizing_capital)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_invalidation_barrier_hit_clears_signal_next_day", False, ticker in stop_active_extended_signals)
+    check("day4_invalidation_barrier_hit_clears_signal_next_day", False, ticker in stop_active_extended_signals)
 
     summary["day2_orderable_count"] = len(day2_orderable)
     summary["day3_orderable_count"] = len(day3_orderable)
@@ -459,8 +457,7 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     params.atr_times_trail = 1.0
 
     case_id = "SYNTH_INIT_SL_SINGLE_SOURCE_RUNTIME"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_init_sl_single_source_runtime')
 
     limit_price = 100.0
     atr = 5.0
@@ -500,19 +497,19 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     expected_filled_current_sl = 93.0
     expected_filled_target = 108.0
 
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_keeps_limit_based_worst_case_stop_for_sizing", expected_candidate_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_keeps_limit_based_target_for_preview", expected_candidate_target, None if candidate_plan is None else float(candidate_plan['target_price']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_trailing_stop_kept_separate", expected_candidate_init_trail, None if candidate_plan is None else float(candidate_plan['init_trail']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_initial_stop_uses_actual_fill_plus_atr", expected_filled_init_sl, None if tp_position is None else float(tp_position['initial_stop']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_current_sl_starts_from_tighter_of_initial_vs_trail", expected_filled_current_sl, None if tp_position is None else float(tp_position['sl']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_filled_init_trail, None if tp_position is None else float(tp_position['trailing_stop']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_tp_half_uses_actual_fill_not_limit", expected_filled_target, None if tp_position is None else float(tp_position['tp_half']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_tp_hit_queues_next_day_open_action", 'TP_HALF', None if tp_position is None else tp_position.get('pending_exit_action'))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_stop_hit_queues_next_day_open_action", 'STOP', None if stop_position is None else stop_position.get('pending_exit_action'))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_high_watermark_tracks_entry_bar_high", 109.0, None if tp_position is None else float(tp_position.get('highest_high_since_entry', float('nan'))))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_counterfactual_entry_ref_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('entry_ref_price')))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_invalidation_barrier_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_invalidation_barrier')))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_completion_barrier_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_completion_barrier')))
+    check("candidate_plan_keeps_limit_based_worst_case_stop_for_sizing", expected_candidate_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
+    check("candidate_plan_keeps_limit_based_target_for_preview", expected_candidate_target, None if candidate_plan is None else float(candidate_plan['target_price']))
+    check("candidate_plan_trailing_stop_kept_separate", expected_candidate_init_trail, None if candidate_plan is None else float(candidate_plan['init_trail']))
+    check("filled_position_initial_stop_uses_actual_fill_plus_atr", expected_filled_init_sl, None if tp_position is None else float(tp_position['initial_stop']))
+    check("filled_position_current_sl_starts_from_tighter_of_initial_vs_trail", expected_filled_current_sl, None if tp_position is None else float(tp_position['sl']))
+    check("filled_position_trailing_stop_uses_actual_fill_basis", expected_filled_init_trail, None if tp_position is None else float(tp_position['trailing_stop']))
+    check("filled_position_tp_half_uses_actual_fill_not_limit", expected_filled_target, None if tp_position is None else float(tp_position['tp_half']))
+    check("entry_day_tp_hit_queues_next_day_open_action", 'TP_HALF', None if tp_position is None else tp_position.get('pending_exit_action'))
+    check("entry_day_stop_hit_queues_next_day_open_action", 'STOP', None if stop_position is None else stop_position.get('pending_exit_action'))
+    check("entry_day_high_watermark_tracks_entry_bar_high", 109.0, None if tp_position is None else float(tp_position.get('highest_high_since_entry', float('nan'))))
+    check("extended_signal_has_no_counterfactual_entry_ref_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('entry_ref_price')))
+    check("extended_signal_has_no_invalidation_barrier_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_invalidation_barrier')))
+    check("extended_signal_has_no_completion_barrier_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_completion_barrier')))
 
     if tp_position is None or stop_position is None:
         raise ValueError("validate_synthetic_init_sl_single_source_runtime_case 需要有效成交部位")
@@ -546,13 +543,13 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     )
     stop_exec_context = next((ctx for ctx in updated_stop_position.get('_last_exec_contexts', []) if ctx.get('event') == 'STOP'), None)
 
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_deferred_tp_executes_at_open_without_rehit", True, 'DEFERRED_TP_HALF_ON_OPEN' in tp_events and 'TP_HALF' in tp_events)
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_trailing_stop_stays_unchanged_without_new_high", 93.0, float(updated_tp_position['trailing_stop']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_effective_stop_stays_unchanged_without_new_high", 93.0, float(updated_tp_position['sl']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_deferred_tp_reduces_position_even_without_rehit", tp_position['initial_qty'] - calc_half_take_profit_sell_qty(tp_position['initial_qty'], params.tp_percent), int(updated_tp_position['qty']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_executes_from_queued_entry_day_trigger", True, 'DEFERRED_STOP_ON_OPEN' in stop_events and 'STOP' in stop_events)
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_records_current_bar_execution_context", 92.0, None if stop_exec_context is None else float(stop_exec_context['exec_price']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_closes_position_without_rehit", 0, int(updated_stop_position['qty']))
+    check("next_day_deferred_tp_executes_at_open_without_rehit", True, 'DEFERRED_TP_HALF_ON_OPEN' in tp_events and 'TP_HALF' in tp_events)
+    check("next_day_trailing_stop_stays_unchanged_without_new_high", 93.0, float(updated_tp_position['trailing_stop']))
+    check("next_day_effective_stop_stays_unchanged_without_new_high", 93.0, float(updated_tp_position['sl']))
+    check("next_day_deferred_tp_reduces_position_even_without_rehit", tp_position['initial_qty'] - calc_half_take_profit_sell_qty(tp_position['initial_qty'], params.tp_percent), int(updated_tp_position['qty']))
+    check("next_day_stop_executes_from_queued_entry_day_trigger", True, 'DEFERRED_STOP_ON_OPEN' in stop_events and 'STOP' in stop_events)
+    check("next_day_stop_records_current_bar_execution_context", 92.0, None if stop_exec_context is None else float(stop_exec_context['exec_price']))
+    check("next_day_stop_closes_position_without_rehit", 0, int(updated_stop_position['qty']))
 
     summary['candidate_target_price'] = None if candidate_plan is None else float(candidate_plan['target_price'])
     summary['filled_tp_half'] = None if tp_position is None else float(tp_position['tp_half'])
@@ -567,8 +564,7 @@ def validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case(base
     params.atr_times_trail = 1.0
 
     case_id = "SYNTH_FILL_BELOW_LIMIT_BASED_SIZING_STOP_STILL_ENTERS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_fill_below_limit_based_sizing_stop_still_enters')
 
     limit_price = 100.0
     atr = 5.0
@@ -592,16 +588,16 @@ def validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case(base
     expected_position_trail = 84.0
     expected_position_target = 99.0
 
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "candidate_plan_keeps_limit_based_stop_for_sizing_only", expected_candidate_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_low_reaches_limit_price", True, bool(88.5 <= limit_price))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "buy_price_is_below_candidate_limit_based_stop", True, bool(expected_buy_price <= expected_candidate_init_sl), note="此情境直接釘死不得再用 candidate_plan.init_sl 當成交否決下限。")
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_still_fills_when_price_is_below_candidate_limit_based_stop", True, bool(entry_result['filled']))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_is_not_labeled_as_worse_than_initial_stop", False, bool(entry_result['is_worse_than_initial_stop']))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_does_not_count_as_missed_buy_after_fill", False, bool(entry_result['count_as_missed_buy']))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_buy_price_uses_open_when_open_below_limit", expected_buy_price, None if pd.isna(entry_result['buy_price']) else float(entry_result['buy_price']))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_position_initial_stop_uses_actual_fill_plus_atr", expected_position_stop, None if position is None else float(position['initial_stop']))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_position_trail, None if position is None else float(position['trailing_stop']))
-    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_position_tp_half_uses_actual_fill_basis", expected_position_target, None if position is None else float(position['tp_half']))
+    check("candidate_plan_keeps_limit_based_stop_for_sizing_only", expected_candidate_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
+    check("entry_low_reaches_limit_price", True, bool(88.5 <= limit_price))
+    check("buy_price_is_below_candidate_limit_based_stop", True, bool(expected_buy_price <= expected_candidate_init_sl), note="此情境直接釘死不得再用 candidate_plan.init_sl 當成交否決下限。")
+    check("entry_still_fills_when_price_is_below_candidate_limit_based_stop", True, bool(entry_result['filled']))
+    check("entry_is_not_labeled_as_worse_than_initial_stop", False, bool(entry_result['is_worse_than_initial_stop']))
+    check("entry_does_not_count_as_missed_buy_after_fill", False, bool(entry_result['count_as_missed_buy']))
+    check("filled_buy_price_uses_open_when_open_below_limit", expected_buy_price, None if pd.isna(entry_result['buy_price']) else float(entry_result['buy_price']))
+    check("filled_position_initial_stop_uses_actual_fill_plus_atr", expected_position_stop, None if position is None else float(position['initial_stop']))
+    check("filled_position_trailing_stop_uses_actual_fill_basis", expected_position_trail, None if position is None else float(position['trailing_stop']))
+    check("filled_position_tp_half_uses_actual_fill_basis", expected_position_target, None if position is None else float(position['tp_half']))
 
     summary['candidate_init_sl'] = None if candidate_plan is None else float(candidate_plan['init_sl'])
     summary['buy_price'] = None if pd.isna(entry_result['buy_price']) else float(entry_result['buy_price'])
@@ -616,8 +612,7 @@ def validate_synthetic_inherited_entry_fill_must_be_above_stop_case(base_params)
     params.atr_times_trail = 1.0
 
     case_id = "SYNTH_INHERITED_ENTRY_FILL_MUST_BE_ABOVE_STOP"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_inherited_entry_fill_must_be_above_stop')
 
     candidate_plan = build_normal_candidate_plan(100.0, 5.0, 1_000_000.0, params)
     shadow_position = {
@@ -676,12 +671,12 @@ def validate_synthetic_inherited_entry_fill_must_be_above_stop_case(base_params)
         entry_type="normal",
     )
 
-    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_fill_at_or_below_stop_is_rejected", False, bool(blocked_result["filled"]))
-    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_rejected_fill_is_labeled_worse_than_stop", True, bool(blocked_result["is_worse_than_initial_stop"]))
-    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_rejected_fill_not_counted_as_missed_buy", False, bool(blocked_result["count_as_missed_buy"]))
-    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_fill_above_stop_is_allowed", True, bool(filled_result["filled"]))
-    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_allowed_fill_keeps_parent_stop", 90.0, None if filled_result.get("position") is None else float(filled_result["position"]["sl"]))
-    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "normal_fill_below_limit_sizing_stop_still_allowed", True, bool(normal_result["filled"]))
+    check("inherited_fill_at_or_below_stop_is_rejected", False, bool(blocked_result["filled"]))
+    check("inherited_rejected_fill_is_labeled_worse_than_stop", True, bool(blocked_result["is_worse_than_initial_stop"]))
+    check("inherited_rejected_fill_not_counted_as_missed_buy", False, bool(blocked_result["count_as_missed_buy"]))
+    check("inherited_fill_above_stop_is_allowed", True, bool(filled_result["filled"]))
+    check("inherited_allowed_fill_keeps_parent_stop", 90.0, None if filled_result.get("position") is None else float(filled_result["position"]["sl"]))
+    check("normal_fill_below_limit_sizing_stop_still_allowed", True, bool(normal_result["filled"]))
 
     summary["blocked_buy_price"] = None if pd.isna(blocked_result["buy_price"]) else float(blocked_result["buy_price"])
     summary["inherited_stop"] = 90.0
@@ -695,8 +690,7 @@ def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_cas
     params.atr_times_trail = 1.0
 
     case_id = "SYNTH_PORTFOLIO_ENTRY_PRESERVES_FILL_BASED_FIRST_ACTIONABLE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_portfolio_entry_preserves_fill_based_first_actionable')
 
     dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
     df = pd.DataFrame(
@@ -767,17 +761,17 @@ def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_cas
     expected_position_trail = 93.0
     expected_position_target = 108.0
 
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "candidate_row_count", 1, len(candidates_today))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "orderable_candidate_row_count", 1, len(orderable_candidates_today))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "candidate_row_carries_target_price", expected_candidate_target, None if candidate is None else float(candidate['target_price']))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "candidate_row_carries_entry_atr", 5.0, None if candidate is None else float(candidate['entry_atr']))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "portfolio_fill_creates_position", 1, len(portfolio))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "portfolio_fill_has_no_missed_buy", 0, int(total_missed_buys))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_initial_stop_uses_actual_fill_plus_atr", expected_position_stop, None if position is None else float(position['initial_stop']))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_position_trail, None if position is None else float(position['trailing_stop']))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_tp_half_uses_actual_fill_not_limit", expected_position_target, None if position is None else float(position['tp_half']))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "entry_day_tp_hit_queues_next_day_open_action", 'TP_HALF', None if position is None else position.get('pending_exit_action'))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "cash_uses_actual_entry_cost_not_reserved_limit_cost", True, float(cash) > (1_000_000.0 - (100.0 * (position['initial_qty'] if position else 0))))
+    check("candidate_row_count", 1, len(candidates_today))
+    check("orderable_candidate_row_count", 1, len(orderable_candidates_today))
+    check("candidate_row_carries_target_price", expected_candidate_target, None if candidate is None else float(candidate['target_price']))
+    check("candidate_row_carries_entry_atr", 5.0, None if candidate is None else float(candidate['entry_atr']))
+    check("portfolio_fill_creates_position", 1, len(portfolio))
+    check("portfolio_fill_has_no_missed_buy", 0, int(total_missed_buys))
+    check("filled_position_initial_stop_uses_actual_fill_plus_atr", expected_position_stop, None if position is None else float(position['initial_stop']))
+    check("filled_position_trailing_stop_uses_actual_fill_basis", expected_position_trail, None if position is None else float(position['trailing_stop']))
+    check("filled_position_tp_half_uses_actual_fill_not_limit", expected_position_target, None if position is None else float(position['tp_half']))
+    check("entry_day_tp_hit_queues_next_day_open_action", 'TP_HALF', None if position is None else position.get('pending_exit_action'))
+    check("cash_uses_actual_entry_cost_not_reserved_limit_cost", True, float(cash) > (1_000_000.0 - (100.0 * (position['initial_qty'] if position else 0))))
 
     summary['candidate_target_price'] = None if candidate is None else float(candidate['target_price'])
     summary['filled_position_initial_stop'] = None if position is None else float(position['initial_stop'])
@@ -788,8 +782,7 @@ def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_cas
 def validate_synthetic_candidate_order_fill_layer_separation_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     case_id = "SYNTH_CANDIDATE_ORDER_FILL_LAYER_SEPARATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_candidate_order_fill_layer_separation')
 
     candidate_case = build_synthetic_half_tp_full_year_case(base_params)
     candidate_case["params"].initial_capital = 50.0
@@ -811,16 +804,16 @@ def validate_synthetic_candidate_order_fill_layer_separation_case(base_params):
     missed_buy_rows = [row for row in missed_outcome["trade_history"] if str(row.get("Type", "")).startswith("買進")]
     missed_miss_rows = [row for row in missed_outcome["trade_history"] if str(row.get("Type", "")).startswith("錯失買進")]
 
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "candidate_only_status_when_qty_zero", "candidate", None if scanner_result is None else scanner_result.get("status"))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "candidate_only_has_no_projected_order_cost", None, None if scanner_result is None else scanner_result.get("proj_cost"), note="候選資格成立但 projected qty 為 0 時，只能保留 candidate，不得混成掛單或 miss buy。")
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_records_buy_row", 1, len(filled_buy_rows))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_has_no_missed_buy", 0, int(filled_outcome["total_missed_buys"]))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_does_not_emit_missed_buy_row", 0, len(filled_miss_rows))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_enters_portfolio", 1, len(filled_outcome["portfolio"]))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_does_not_emit_buy_row", 0, len(missed_buy_rows))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_count_tracks_unfilled_order", 1, int(missed_outcome["total_missed_buys"]))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_row_emitted_once", 1, len(missed_miss_rows))
-    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_does_not_enter_portfolio", 0, len(missed_outcome["portfolio"]))
+    check("candidate_only_status_when_qty_zero", "candidate", None if scanner_result is None else scanner_result.get("status"))
+    check("candidate_only_has_no_projected_order_cost", None, None if scanner_result is None else scanner_result.get("proj_cost"), note="候選資格成立但 projected qty 為 0 時，只能保留 candidate，不得混成掛單或 miss buy。")
+    check("filled_order_records_buy_row", 1, len(filled_buy_rows))
+    check("filled_order_has_no_missed_buy", 0, int(filled_outcome["total_missed_buys"]))
+    check("filled_order_does_not_emit_missed_buy_row", 0, len(filled_miss_rows))
+    check("filled_order_enters_portfolio", 1, len(filled_outcome["portfolio"]))
+    check("missed_buy_does_not_emit_buy_row", 0, len(missed_buy_rows))
+    check("missed_buy_count_tracks_unfilled_order", 1, int(missed_outcome["total_missed_buys"]))
+    check("missed_buy_row_emitted_once", 1, len(missed_miss_rows))
+    check("missed_buy_does_not_enter_portfolio", 0, len(missed_outcome["portfolio"]))
 
     matrix_results, matrix_summary = _run_resource_aware_entry_selection_matrix_case(base_params)
     results.extend(matrix_results)
@@ -858,8 +851,7 @@ def validate_synthetic_missed_buy_no_replacement_case(base_params):
 def validate_synthetic_same_day_buy_sell_forbidden_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     case_id = "SYNTH_SAME_DAY_BUY_SELL_FORBIDDEN"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_same_day_buy_sell_forbidden')
 
     df = build_synthetic_baseline_frame("2024-01-01", 60)
     set_synthetic_bar(df, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
@@ -886,10 +878,10 @@ def validate_synthetic_same_day_buy_sell_forbidden_case(base_params):
         exit_date = pd.to_datetime(exit_rows.iloc[0]["Date"]) if len(exit_rows) > 0 else None
         same_day_exit = bool(((pd.to_datetime(df_trades["Date"]) == buy_date) & df_trades["Type"].fillna("").isin(["全倉結算(停損)", "全倉結算(指標)"])).any()) if buy_date is not None else False
 
-        add_check(results, "synthetic_same_day_buy_sell_forbidden", case_id, "buy_row_count", 1, len(buy_rows))
-        add_check(results, "synthetic_same_day_buy_sell_forbidden", case_id, "exit_row_count", 1, len(exit_rows))
-        add_check(results, "synthetic_same_day_buy_sell_forbidden", case_id, "same_day_buy_has_no_same_day_exit", False, same_day_exit, note="買入當日即使觸及停損或停利，也不得同日賣出。")
-        add_check(results, "synthetic_same_day_buy_sell_forbidden", case_id, "next_day_exit_occurs_after_buy_date", True, (buy_date is not None and exit_date is not None and exit_date > buy_date))
+        check("buy_row_count", 1, len(buy_rows))
+        check("exit_row_count", 1, len(exit_rows))
+        check("same_day_buy_has_no_same_day_exit", False, same_day_exit, note="買入當日即使觸及停損或停利，也不得同日賣出。")
+        check("next_day_exit_occurs_after_buy_date", True, (buy_date is not None and exit_date is not None and exit_date > buy_date))
 
     summary["same_day_exit_blocked"] = True
     return results, summary
@@ -1105,20 +1097,19 @@ def validate_synthetic_empty_backtest_df_contract_case(base_params):
     from core.backtest_core import run_v16_backtest
 
     case_id = "SYNTH_EMPTY_BACKTEST_DF_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'flow')
 
     empty_df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
     stats, trade_logs = run_v16_backtest(empty_df, make_synthetic_validation_params(base_params), return_logs=True)
 
-    add_check(results, "flow", case_id, "empty_df_trade_count_zero", 0, stats["trade_count"])
-    add_check(results, "flow", case_id, "empty_df_missed_buys_zero", 0, stats["missed_buys"])
-    add_check(results, "flow", case_id, "empty_df_missed_sells_zero", 0, stats["missed_sells"])
-    add_check(results, "flow", case_id, "empty_df_current_position_zero", 0, stats["current_position"])
-    add_check(results, "flow", case_id, "empty_df_is_candidate_false", False, stats["is_candidate"])
-    add_check(results, "flow", case_id, "empty_df_is_setup_today_false", False, stats["is_setup_today"])
-    add_check(results, "flow", case_id, "empty_df_logs_empty", 0, len(trade_logs))
-    add_check(results, "flow", case_id, "empty_df_asset_growth_zero", 0.0, stats["asset_growth"])
+    check("empty_df_trade_count_zero", 0, stats["trade_count"])
+    check("empty_df_missed_buys_zero", 0, stats["missed_buys"])
+    check("empty_df_missed_sells_zero", 0, stats["missed_sells"])
+    check("empty_df_current_position_zero", 0, stats["current_position"])
+    check("empty_df_is_candidate_false", False, stats["is_candidate"])
+    check("empty_df_is_setup_today_false", False, stats["is_setup_today"])
+    check("empty_df_logs_empty", 0, len(trade_logs))
+    check("empty_df_asset_growth_zero", 0.0, stats["asset_growth"])
     return results, summary
 
 
@@ -1128,8 +1119,7 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
     from core.portfolio_exits import settle_portfolio_positions
 
     case_id = "SYNTH_ENSEMBLE_REENTRY_CONSENSUS_WATCHLIST"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'ensemble_reentry')
     ticker = "9903"
 
     def _build_member_params(confirm_atr):
@@ -1187,9 +1177,9 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
     aggregated_rows = _aggregate_ensemble_candidate_rows(candidate_rows, min_agree=2)
     aggregated = aggregated_rows[0] if aggregated_rows else {}
 
-    add_check(results, "ensemble_reentry", case_id, "entry_consensus_row_count", 1, len(aggregated_rows))
-    add_check(results, "ensemble_reentry", case_id, "entry_consensus_vote_count", 3, aggregated.get("ensemble_vote_count"))
-    add_check(results, "ensemble_reentry", case_id, "entry_consensus_persists_all_member_params", sorted(params_by_key), sorted((aggregated.get("ensemble_member_params_by_key") or {}).keys()))
+    check("entry_consensus_row_count", 1, len(aggregated_rows))
+    check("entry_consensus_vote_count", 3, aggregated.get("ensemble_vote_count"))
+    check("entry_consensus_persists_all_member_params", sorted(params_by_key), sorted((aggregated.get("ensemble_member_params_by_key") or {}).keys()))
 
     portfolio = {}
     cash, total_missed_buys = execute_reserved_entries_for_day(
@@ -1209,10 +1199,10 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
         0,
     )
     filled_position = portfolio.get(ticker) or {}
-    add_check(results, "ensemble_reentry", case_id, "entry_fill_exists", True, ticker in portfolio)
-    add_check(results, "ensemble_reentry", case_id, "entry_fill_has_no_missed_buy", 0, total_missed_buys)
-    add_check(results, "ensemble_reentry", case_id, "entry_fill_persists_all_member_keys", sorted(params_by_key), sorted(filled_position.get("_ensemble_member_keys") or []))
-    add_check(results, "ensemble_reentry", case_id, "entry_fill_persists_all_member_params", sorted(params_by_key), sorted((filled_position.get("_ensemble_member_params_by_key") or {}).keys()))
+    check("entry_fill_exists", True, ticker in portfolio)
+    check("entry_fill_has_no_missed_buy", 0, total_missed_buys)
+    check("entry_fill_persists_all_member_keys", sorted(params_by_key), sorted(filled_position.get("_ensemble_member_keys") or []))
+    check("entry_fill_persists_all_member_params", sorted(params_by_key), sorted((filled_position.get("_ensemble_member_params_by_key") or {}).keys()))
 
     sold_today = set()
     watchlists_by_member = {}
@@ -1232,13 +1222,9 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
         active_reentry_watchlists_by_member=watchlists_by_member,
     )
 
-    add_check(results, "ensemble_reentry", case_id, "stop_registers_watchlist_for_every_entry_voter", sorted(params_by_key), sorted(watchlists_by_member))
-    add_check(results, "ensemble_reentry", case_id, "stop_watchlist_ticker_count", 3, sum(1 for watchlist in watchlists_by_member.values() if ticker in watchlist))
-    add_check(
-        results,
-        "ensemble_reentry",
-        case_id,
-        "stop_watchlist_preserves_member_specific_confirm_atr",
+    check("stop_registers_watchlist_for_every_entry_voter", sorted(params_by_key), sorted(watchlists_by_member))
+    check("stop_watchlist_ticker_count", 3, sum(1 for watchlist in watchlists_by_member.values() if ticker in watchlist))
+    check("stop_watchlist_preserves_member_specific_confirm_atr",
         [0.5, 0.8, 1.0],
         sorted(round(float(watchlists_by_member[key][ticker]["confirm_atr"]), 3) for key in sorted(watchlists_by_member)),
     )
@@ -1257,19 +1243,19 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
         )
         signals_by_member[member_key] = member_signals
 
-    add_check(results, "ensemble_reentry", case_id, "reclaim_activates_signal_for_every_entry_voter", sorted(params_by_key), sorted(key for key, signals in signals_by_member.items() if ticker in signals))
+    check("reclaim_activates_signal_for_every_entry_voter", sorted(params_by_key), sorted(key for key, signals in signals_by_member.items() if ticker in signals))
     reentry_rows = [
         {"ticker": ticker, "type": "reentry", "sort_value": float(idx), "ensemble_member_key": member_key, "params_obj": params_by_key[member_key]}
         for idx, member_key in enumerate(sorted(signals_by_member), start=1)
         if ticker in signals_by_member[member_key]
     ]
     reentry_consensus = _aggregate_ensemble_candidate_rows(reentry_rows, min_agree=2)
-    add_check(results, "ensemble_reentry", case_id, "reentry_can_reform_min_agree_consensus", 1, len(reentry_consensus))
-    add_check(results, "ensemble_reentry", case_id, "reentry_reformed_vote_count", 3, reentry_consensus[0].get("ensemble_vote_count") if reentry_consensus else None)
+    check("reentry_can_reform_min_agree_consensus", 1, len(reentry_consensus))
+    check("reentry_reformed_vote_count", 3, reentry_consensus[0].get("ensemble_vote_count") if reentry_consensus else None)
 
     active_level_rows = []
     _append_portfolio_extended_shadow_level_rows(active_level_rows, {ticker: signals_by_member["m1"][ticker]}, portfolio, dates[4])
-    add_check(results, "ensemble_reentry", case_id, "reentry_shadow_level_keeps_reentry_type", "reentry", active_level_rows[0].get("進場類型") if active_level_rows else None)
+    check("reentry_shadow_level_keeps_reentry_type", "reentry", active_level_rows[0].get("進場類型") if active_level_rows else None)
     summary["watchlist_member_count"] = len(watchlists_by_member)
     return results, summary
 

@@ -18,7 +18,7 @@ from core.portfolio_fast_data import calc_mark_to_market_equity, pack_prepared_s
 from core.portfolio_engine import run_portfolio_timeline
 from .synthetic_frame_utils import build_synthetic_baseline_frame, set_synthetic_bar
 
-from .checks import add_check, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
+from .checks import bind_synthetic_case, bind_checks, add_check, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
 from .synthetic_portfolio_common import (
     add_portfolio_stats_equality_checks,
@@ -32,8 +32,7 @@ from .tool_adapters import run_debug_trade_log_check, run_portfolio_sim_tool_che
 def validate_synthetic_same_bar_stop_priority_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.5)
     case_id = "SYNTH_SAME_BAR_STOP_PRIORITY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_same_bar_stop_priority')
 
     buy_price = 100.0
     qty = 10
@@ -71,13 +70,13 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
     expected_freed_cash = milli_to_money(expected_sell_ledger["net_sell_total_milli"])
     expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - original_cost_basis_milli)
 
-    add_check(results, "synthetic_same_bar_stop_priority", case_id, "stop_event_emitted", True, "STOP" in events)
-    add_check(results, "synthetic_same_bar_stop_priority", case_id, "tp_half_event_suppressed", False, "TP_HALF" in events, note="同 K 棒同時碰到停損 / 停利時，必須以最壞停損計算。")
-    add_check(results, "synthetic_same_bar_stop_priority", case_id, "position_fully_closed", 0, int(updated_position["qty"]))
-    add_check(results, "synthetic_same_bar_stop_priority", case_id, "sold_half_remains_false", False, bool(updated_position["sold_half"]))
-    add_check(results, "synthetic_same_bar_stop_priority", case_id, "freed_cash_matches_stop_only", expected_freed_cash, float(freed_cash), tol=0.01)
-    add_check(results, "synthetic_same_bar_stop_priority", case_id, "realized_pnl_matches_stop_only", expected_pnl, float(pnl_realized), tol=0.01)
-    add_check(results, "synthetic_same_bar_stop_priority", case_id, "position_realized_pnl_matches_stop_only", expected_pnl, float(updated_position["realized_pnl"]), tol=0.01)
+    check("stop_event_emitted", True, "STOP" in events)
+    check("tp_half_event_suppressed", False, "TP_HALF" in events, note="同 K 棒同時碰到停損 / 停利時，必須以最壞停損計算。")
+    check("position_fully_closed", 0, int(updated_position["qty"]))
+    check("sold_half_remains_false", False, bool(updated_position["sold_half"]))
+    check("freed_cash_matches_stop_only", expected_freed_cash, float(freed_cash), tol=0.01)
+    check("realized_pnl_matches_stop_only", expected_pnl, float(pnl_realized), tol=0.01)
+    check("position_realized_pnl_matches_stop_only", expected_pnl, float(updated_position["realized_pnl"]), tol=0.01)
 
     summary["events"] = list(events)
     summary["expected_pnl"] = round(float(expected_pnl), 4)
@@ -89,8 +88,7 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
     params.atr_times_init = 2.0
     params.atr_times_trail = 1.0
     case_id = "SYNTH_CONSERVATIVE_EXECUTABLE_EXIT_INTERPRETATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_conservative_executable_exit_interpretation')
 
     ambiguous_position = build_position_from_entry_fill(
         buy_price=100.0,
@@ -122,12 +120,12 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
     expected_same_bar_freed_cash = milli_to_money(expected_same_bar_sell_ledger["net_sell_total_milli"])
     expected_same_bar_pnl = milli_to_money(expected_same_bar_sell_ledger["net_sell_total_milli"] - original_cost_basis_milli)
 
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_ambiguous_exit_prefers_stop", True, "STOP" in events)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_ambiguous_exit_suppresses_tp_half", False, "TP_HALF" in events, note="同一事件若同棒同時滿足停損 / 停利，只能採最保守、最不利於績效的停損解讀。")
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_executes_at_first_worse_executable_open", 90.0, None if stop_exec_context is None else float(stop_exec_context["exec_price"]))
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_freed_cash_uses_worse_executable_open", expected_same_bar_freed_cash, float(freed_cash), tol=0.01)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_realized_pnl_uses_worse_executable_open", expected_same_bar_pnl, float(pnl_realized), tol=0.01)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_closes_position", 0, int(updated_position["qty"]))
+    check("same_bar_ambiguous_exit_prefers_stop", True, "STOP" in events)
+    check("same_bar_ambiguous_exit_suppresses_tp_half", False, "TP_HALF" in events, note="同一事件若同棒同時滿足停損 / 停利，只能採最保守、最不利於績效的停損解讀。")
+    check("same_bar_stop_executes_at_first_worse_executable_open", 90.0, None if stop_exec_context is None else float(stop_exec_context["exec_price"]))
+    check("same_bar_stop_freed_cash_uses_worse_executable_open", expected_same_bar_freed_cash, float(freed_cash), tol=0.01)
+    check("same_bar_stop_realized_pnl_uses_worse_executable_open", expected_same_bar_pnl, float(pnl_realized), tol=0.01)
+    check("same_bar_stop_closes_position", 0, int(updated_position["qty"]))
 
     limit_price = 100.0
     atr = 5.0
@@ -147,7 +145,7 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
     if deferred_stop_position is None:
         raise ValueError("validate_synthetic_conservative_executable_exit_interpretation_case 需要有效成交部位")
 
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "entry_day_stop_queues_next_day_open_execution", "STOP", deferred_stop_position.get("pending_exit_action"))
+    check("entry_day_stop_queues_next_day_open_execution", "STOP", deferred_stop_position.get("pending_exit_action"))
 
     deferred_original_qty = int(deferred_stop_position["qty"])
     deferred_original_cost_basis_milli = int(deferred_stop_position["remaining_cost_basis_milli"])
@@ -169,13 +167,13 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
     expected_deferred_freed_cash = milli_to_money(expected_deferred_sell_ledger["net_sell_total_milli"])
     expected_deferred_pnl = milli_to_money(expected_deferred_sell_ledger["net_sell_total_milli"] - deferred_original_cost_basis_milli)
 
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_executes_from_queued_open_without_rehit", True, "STOP" in deferred_events)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_keeps_deferred_marker", True, "DEFERRED_STOP_ON_OPEN" in deferred_events)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_uses_current_bar_first_worse_executable_open", 92.0, None if deferred_stop_context is None else float(deferred_stop_context["exec_price"]))
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_freed_cash_uses_current_bar_execution", expected_deferred_freed_cash, float(deferred_freed_cash), tol=0.01)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_realized_pnl_uses_current_bar_execution", expected_deferred_pnl, float(deferred_pnl_realized), tol=0.01)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_closes_position_without_rehit", 0, int(updated_deferred_position["qty"]))
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_leaves_no_pending_action", None, updated_deferred_position.get("pending_exit_action"))
+    check("next_day_stop_executes_from_queued_open_without_rehit", True, "STOP" in deferred_events)
+    check("next_day_stop_keeps_deferred_marker", True, "DEFERRED_STOP_ON_OPEN" in deferred_events)
+    check("next_day_stop_uses_current_bar_first_worse_executable_open", 92.0, None if deferred_stop_context is None else float(deferred_stop_context["exec_price"]))
+    check("next_day_stop_freed_cash_uses_current_bar_execution", expected_deferred_freed_cash, float(deferred_freed_cash), tol=0.01)
+    check("next_day_stop_realized_pnl_uses_current_bar_execution", expected_deferred_pnl, float(deferred_pnl_realized), tol=0.01)
+    check("next_day_stop_closes_position_without_rehit", 0, int(updated_deferred_position["qty"]))
+    check("next_day_stop_leaves_no_pending_action", None, updated_deferred_position.get("pending_exit_action"))
 
     summary["same_bar_events"] = list(events)
     summary["same_bar_exec_price"] = None if stop_exec_context is None else float(stop_exec_context["exec_price"])
@@ -187,8 +185,7 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
 def validate_synthetic_exit_orders_only_for_held_positions_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.5)
     case_id = "SYNTH_EXIT_ORDERS_ONLY_FOR_HELD_POSITIONS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_exit_orders_only_for_held_positions')
 
     position = build_position_from_entry_fill(
         buy_price=100.0,
@@ -213,11 +210,11 @@ def validate_synthetic_exit_orders_only_for_held_positions_case(base_params):
         params=params,
     )
 
-    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_has_no_events", [], list(events))
-    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_has_no_freed_cash", 0.0, float(freed_cash), tol=0.01)
-    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_has_no_realized_pnl", 0.0, float(pnl_realized), tol=0.01)
-    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_position_stays_zero", 0, int(updated_position["qty"]))
-    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_realized_pnl_stays_zero", 0.0, float(updated_position["realized_pnl"]), tol=0.01)
+    check("zero_qty_has_no_events", [], list(events))
+    check("zero_qty_has_no_freed_cash", 0.0, float(freed_cash), tol=0.01)
+    check("zero_qty_has_no_realized_pnl", 0.0, float(pnl_realized), tol=0.01)
+    check("zero_qty_position_stays_zero", 0, int(updated_position["qty"]))
+    check("zero_qty_realized_pnl_stays_zero", 0.0, float(updated_position["realized_pnl"]), tol=0.01)
 
     summary["events"] = list(events)
     return results, summary
@@ -226,8 +223,7 @@ def validate_synthetic_exit_orders_only_for_held_positions_case(base_params):
 def validate_synthetic_fee_tax_net_equity_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     case_id = "SYNTH_FEE_TAX_NET_EQUITY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_fee_tax_net_equity')
 
     df = build_synthetic_baseline_frame("2024-01-01", 60)
     set_synthetic_bar(df, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
@@ -334,15 +330,15 @@ def validate_synthetic_fee_tax_net_equity_case(base_params):
         exit_trade_row = df_trades[df_trades["Type"].fillna("").isin(["全倉結算(停損)", "全倉結算(指標)"])].iloc[0]
         actual_entry_cash = float(entry_row["Equity"] - entry_row["Invested_Amount"])
 
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "entry_qty_positive", True, entry_qty > 0)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "exit_event_is_stop", True, "STOP" in events)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "entry_day_cash_matches_net_entry_cost", entry_cash_after_buy, actual_entry_cash, tol=0.01)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "entry_day_equity_marks_to_net_sell_value", expected_entry_day_equity, float(entry_row["Equity"]), tol=0.01)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "exit_trade_total_pnl_matches_net_realized_pnl", float(updated_position["realized_pnl"]), float(exit_trade_row["該筆總損益"]), tol=0.01)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "exit_day_equity_matches_final_cash", expected_final_eq, float(exit_row["Equity"]), tol=0.01)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "final_equity_matches_net_cash", expected_final_eq, actual_final_eq, tol=0.01)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "total_return_matches_net_final_equity", expected_total_return, actual_total_return, tol=0.0001)
-        add_check(results, "synthetic_fee_tax_net_equity", case_id, "pnl_matches_net_cash_delta", params.initial_capital + float(pnl_realized), expected_final_eq, tol=0.01)
+        check("entry_qty_positive", True, entry_qty > 0)
+        check("exit_event_is_stop", True, "STOP" in events)
+        check("entry_day_cash_matches_net_entry_cost", entry_cash_after_buy, actual_entry_cash, tol=0.01)
+        check("entry_day_equity_marks_to_net_sell_value", expected_entry_day_equity, float(entry_row["Equity"]), tol=0.01)
+        check("exit_trade_total_pnl_matches_net_realized_pnl", float(updated_position["realized_pnl"]), float(exit_trade_row["該筆總損益"]), tol=0.01)
+        check("exit_day_equity_matches_final_cash", expected_final_eq, float(exit_row["Equity"]), tol=0.01)
+        check("final_equity_matches_net_cash", expected_final_eq, actual_final_eq, tol=0.01)
+        check("total_return_matches_net_final_equity", expected_total_return, actual_total_return, tol=0.0001)
+        check("pnl_matches_net_cash_delta", params.initial_capital + float(pnl_realized), expected_final_eq, tol=0.01)
 
     summary["expected_final_eq"] = round(expected_final_eq, 4)
     summary["entry_qty"] = entry_qty
@@ -354,8 +350,7 @@ def validate_synthetic_fee_tax_net_equity_case(base_params):
 def validate_synthetic_missed_sell_accounting_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     case_id = "SYNTH_MISSED_SELL_ACCOUNTING"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_missed_sell_accounting')
 
     df = build_synthetic_baseline_frame("2024-01-01", 60)
     set_synthetic_bar(df, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
@@ -399,15 +394,15 @@ def validate_synthetic_missed_sell_accounting_case(base_params):
         missed_sell_total_pnl = float(portfolio_missed_rows.iloc[0]["該筆總損益"]) if len(portfolio_missed_rows) > 0 else None
         missed_sell_note = None if missed_sell_row is None else missed_sell_row.get("備註")
 
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "core_total_missed_sells", 1, int(core_stats["total_missed_sells"]))
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "portfolio_total_missed_sells", 1, int(sim_stats["total_missed_sells"]))
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "portfolio_missed_sell_rows", 1, int(sim_stats["portfolio_missed_sell_rows"]))
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "df_trades_missed_sell_rows", 1, len(portfolio_missed_rows))
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "debug_missed_sell_rows", 1, missed_sell_rows)
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "missed_sell_note_marks_block_reason", True, missed_sell_note == "零量，當日無法賣出")
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "missed_sell_row_carries_pre_exit_realized_pnl", 0.0, missed_sell_total_pnl, tol=0.01)
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "eventual_exit_keeps_round_trip_trade_count", 1, int(sim_stats["trade_count"]))
-        add_check(results, "synthetic_missed_sell_accounting", case_id, "eventual_exit_round_trip_pnl_matches_completed_trade", completed_trade_pnl, final_exit_total_pnl, tol=0.01)
+        check("core_total_missed_sells", 1, int(core_stats["total_missed_sells"]))
+        check("portfolio_total_missed_sells", 1, int(sim_stats["total_missed_sells"]))
+        check("portfolio_missed_sell_rows", 1, int(sim_stats["portfolio_missed_sell_rows"]))
+        check("df_trades_missed_sell_rows", 1, len(portfolio_missed_rows))
+        check("debug_missed_sell_rows", 1, missed_sell_rows)
+        check("missed_sell_note_marks_block_reason", True, missed_sell_note == "零量，當日無法賣出")
+        check("missed_sell_row_carries_pre_exit_realized_pnl", 0.0, missed_sell_total_pnl, tol=0.01)
+        check("eventual_exit_keeps_round_trip_trade_count", 1, int(sim_stats["trade_count"]))
+        check("eventual_exit_round_trip_pnl_matches_completed_trade", completed_trade_pnl, final_exit_total_pnl, tol=0.01)
 
     summary["missed_sell_rows"] = missed_sell_rows
     return results, summary

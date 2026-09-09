@@ -34,7 +34,7 @@ from services.scanner.stock_processor import process_single_stock
 from services.optimizer.raw_cache import _build_raw_cache_signature
 from tools.validate.scanner_expectations import normalize_scanner_result
 
-from .checks import add_check
+from .checks import raises_expected, add_check
 
 
 def _build_repeatable_ohlcv_df() -> pd.DataFrame:
@@ -325,11 +325,7 @@ def validate_optimizer_replay_raw_universe_contract_case(_base_params):
         raw_universe_required_min_rows=contract_min_rows,
     )
     meta_fallback_payload = {"meta": {RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: contract_min_rows}}
-    malformed_contract_rejected = False
-    try:
-        resolve_raw_universe_required_min_rows({RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: contract_min_rows + 0.5})
-    except ValueError:
-        malformed_contract_rejected = True
+    malformed_contract_rejected = raises_expected(ValueError, lambda: resolve_raw_universe_required_min_rows({RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: contract_min_rows + 0.5}))
 
     add_check(results, "synthetic_regression", case_id, "selected_params_require_shorter_history_than_training_contract", True, selected_required_min_rows < contract_min_rows)
     add_check(results, "synthetic_regression", case_id, "legacy_replay_can_include_boundary_ticker", ["0050", "BOUNDARY"], sorted(legacy_source["raw_data_cache"].keys()))

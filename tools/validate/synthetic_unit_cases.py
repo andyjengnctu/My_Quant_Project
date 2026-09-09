@@ -51,14 +51,13 @@ from core.price_utils import (
 )
 from core.signal_utils import generate_signals
 
-from .checks import add_check
+from .checks import bind_synthetic_case, bind_checks, add_check
 
 
 def validate_price_utils_unit_case(_base_params):
     params = V16StrategyParams()
     case_id = "UNIT_PRICE_UTILS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_price_utils')
 
     sized_qty = calc_position_size(100.0, 95.0, 10_000.0, 0.02, params)
     entry_ledger = build_buy_ledger_from_price(100.0, sized_qty, params)
@@ -67,18 +66,18 @@ def validate_price_utils_unit_case(_base_params):
     exit_net = milli_to_money(stop_ledger["net_sell_total_milli"])
     actual_risk = entry_cost - exit_net
 
-    add_check(results, "unit_price_utils", case_id, "buy_limit_rounds_down_to_tick", 10.0, adjust_long_buy_limit(10.03), tol=1e-9)
-    add_check(results, "unit_price_utils", case_id, "sell_fill_rounds_down_to_tick", 10.0, adjust_long_sell_fill_price(10.03), tol=1e-9)
-    add_check(results, "unit_price_utils", case_id, "entry_price_uses_min_fee", 102.0, calc_entry_price(100.0, 10, params), tol=1e-9)
-    add_check(results, "unit_price_utils", case_id, "net_sell_price_includes_fee_and_tax", 97.7, calc_net_sell_price(100.0, 10, params), tol=1e-9)
-    add_check(results, "unit_price_utils", case_id, "position_size_expected_qty", 29, sized_qty)
-    add_check(results, "unit_price_utils", case_id, "position_size_entry_cost_respects_cap", True, entry_cost <= 10_000.0)
-    add_check(results, "unit_price_utils", case_id, "position_size_actual_risk_respects_limit", True, actual_risk <= 200.0 + 1e-9)
-    add_check(results, "unit_price_utils", case_id, "invalid_stop_returns_zero_qty", 0, calc_position_size(100.0, 101.0, 10_000.0, 0.02, params))
-    add_check(results, "unit_price_utils", case_id, "half_take_profit_qty_for_odd_lot", 1, calc_half_take_profit_sell_qty(3, 0.5))
-    add_check(results, "unit_price_utils", case_id, "half_take_profit_qty_blocks_full_liquidation", 0, calc_half_take_profit_sell_qty(1, 0.5))
-    add_check(results, "unit_price_utils", case_id, "can_execute_half_tp_false_for_single_share", False, can_execute_half_take_profit(1, 0.5))
-    add_check(results, "unit_price_utils", case_id, "can_execute_half_tp_true_for_three_shares", True, can_execute_half_take_profit(3, 0.5))
+    check("buy_limit_rounds_down_to_tick", 10.0, adjust_long_buy_limit(10.03), tol=1e-9)
+    check("sell_fill_rounds_down_to_tick", 10.0, adjust_long_sell_fill_price(10.03), tol=1e-9)
+    check("entry_price_uses_min_fee", 102.0, calc_entry_price(100.0, 10, params), tol=1e-9)
+    check("net_sell_price_includes_fee_and_tax", 97.7, calc_net_sell_price(100.0, 10, params), tol=1e-9)
+    check("position_size_expected_qty", 29, sized_qty)
+    check("position_size_entry_cost_respects_cap", True, entry_cost <= 10_000.0)
+    check("position_size_actual_risk_respects_limit", True, actual_risk <= 200.0 + 1e-9)
+    check("invalid_stop_returns_zero_qty", 0, calc_position_size(100.0, 101.0, 10_000.0, 0.02, params))
+    check("half_take_profit_qty_for_odd_lot", 1, calc_half_take_profit_sell_qty(3, 0.5))
+    check("half_take_profit_qty_blocks_full_liquidation", 0, calc_half_take_profit_sell_qty(1, 0.5))
+    check("can_execute_half_tp_false_for_single_share", False, can_execute_half_take_profit(1, 0.5))
+    check("can_execute_half_tp_true_for_three_shares", True, can_execute_half_take_profit(3, 0.5))
 
     summary["checked_qty"] = sized_qty
     return results, summary
@@ -88,8 +87,7 @@ def validate_history_filters_unit_case(_base_params):
     import config.training_policy as training_policy
 
     case_id = "UNIT_HISTORY_FILTERS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_history_filters')
     params = V16StrategyParams()
     params.use_history_threshold = True
 
@@ -103,41 +101,41 @@ def validate_history_filters_unit_case(_base_params):
         params.min_history_ev = 0.0
         params.min_history_win_rate = 0.0
         zero_allowed = evaluate_history_candidate_metrics(0, 0, 0.0, 0.0, 0.0, params)
-        add_check(results, "unit_history_filters", case_id, "zero_history_can_be_allowed", (True, 0.0, 0.0, 0), zero_allowed)
+        check("zero_history_can_be_allowed", (True, 0.0, 0.0, 0), zero_allowed)
 
         params.min_history_trades = 5
         insufficient = evaluate_history_candidate_metrics(4, 3, 2.0, 3.0, -1.0, params)
-        add_check(results, "unit_history_filters", case_id, "insufficient_trade_count_rejected", False, insufficient[0])
-        add_check(results, "unit_history_filters", case_id, "insufficient_trade_count_preserved", 4, insufficient[3])
+        check("insufficient_trade_count_rejected", False, insufficient[0])
+        check("insufficient_trade_count_preserved", 4, insufficient[3])
 
         training_policy.EV_CALC_METHOD = "A"
         params.min_history_trades = 1
         params.min_history_ev = 0.4
         params.min_history_win_rate = 0.7
         method_a = evaluate_history_candidate_metrics(4, 3, 2.0, 3.0, -1.0, params)
-        add_check(results, "unit_history_filters", case_id, "method_a_candidate_true", True, method_a[0])
-        add_check(results, "unit_history_filters", case_id, "method_a_expected_value", 0.5, method_a[1], tol=1e-9)
-        add_check(results, "unit_history_filters", case_id, "method_a_win_rate", 0.75, method_a[2], tol=1e-9)
+        check("method_a_candidate_true", True, method_a[0])
+        check("method_a_expected_value", 0.5, method_a[1], tol=1e-9)
+        check("method_a_win_rate", 0.75, method_a[2], tol=1e-9)
 
         training_policy.EV_CALC_METHOD = "B"
         params.min_history_ev = 1.4
         params.min_history_win_rate = 0.5
         method_b = evaluate_history_candidate_metrics(4, 2, 0.0, 4.0, -1.0, params)
-        add_check(results, "unit_history_filters", case_id, "method_b_candidate_true", True, method_b[0])
-        add_check(results, "unit_history_filters", case_id, "method_b_expected_value", 1.5, method_b[1], tol=1e-9)
-        add_check(results, "unit_history_filters", case_id, "method_b_win_rate", 0.5, method_b[2], tol=1e-9)
+        check("method_b_candidate_true", True, method_b[0])
+        check("method_b_expected_value", 1.5, method_b[1], tol=1e-9)
+        check("method_b_win_rate", 0.5, method_b[2], tol=1e-9)
 
         params.min_history_ev = 90.0
         params.min_history_win_rate = 1.0
         all_win = evaluate_history_candidate_metrics(3, 3, 0.0, 6.0, 0.0, params)
-        add_check(results, "unit_history_filters", case_id, "method_b_all_win_candidate_true", True, all_win[0])
-        add_check(results, "unit_history_filters", case_id, "method_b_all_win_payoff_cap_fallback", 99.9, all_win[1], tol=1e-9)
+        check("method_b_all_win_candidate_true", True, all_win[0])
+        check("method_b_all_win_payoff_cap_fallback", 99.9, all_win[1], tol=1e-9)
 
         params.min_history_ev = -0.5
         params.min_history_win_rate = 0.1
         all_loss = evaluate_history_candidate_metrics(3, 0, -3.0, 0.0, -3.0, params)
-        add_check(results, "unit_history_filters", case_id, "method_b_all_loss_expected_value", -1.0, all_loss[1], tol=1e-9)
-        add_check(results, "unit_history_filters", case_id, "method_b_all_loss_win_rate", 0.0, all_loss[2], tol=1e-9)
+        check("method_b_all_loss_expected_value", -1.0, all_loss[1], tol=1e-9)
+        check("method_b_all_loss_win_rate", 0.0, all_loss[2], tol=1e-9)
     finally:
         training_policy.EV_CALC_METHOD = original_ev_method
 
@@ -188,8 +186,7 @@ def validate_signal_utils_unit_case(_base_params):
 
 def validate_portfolio_stats_unit_case(_base_params):
     case_id = "UNIT_PORTFOLIO_STATS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_portfolio_stats')
 
     empty_r_sq, empty_monthly_win = calc_curve_stats([])
     growth_r_sq, growth_monthly_win = calc_curve_stats([100.0, 110.0, 121.0, 133.1])
@@ -248,31 +245,27 @@ def validate_portfolio_stats_unit_case(_base_params):
     )
     sim_years = calc_sim_years(sorted_dates, start_idx=1)
 
-    add_check(results, "unit_portfolio_stats", case_id, "empty_curve_r_squared", 0.0, empty_r_sq, tol=1e-12)
-    add_check(results, "unit_portfolio_stats", case_id, "empty_curve_monthly_win_rate", 0.0, empty_monthly_win, tol=1e-12)
-    add_check(results, "unit_portfolio_stats", case_id, "growth_curve_r_squared_near_one", True, growth_r_sq > 0.9999)
-    add_check(results, "unit_portfolio_stats", case_id, "growth_curve_monthly_win_rate", 100.0, growth_monthly_win, tol=1e-9)
-    add_check(results, "unit_portfolio_stats", case_id, "partial_year_excluded_from_full_year_count", 1, full_year_stats["full_year_count"])
-    add_check(results, "unit_portfolio_stats", case_id, "partial_year_still_kept_in_rows", 2, len(full_year_stats["yearly_return_rows"]))
-    add_check(
-        results,
-        "unit_portfolio_stats",
-        case_id,
-        "clipped_final_year_does_not_become_full_year",
+    check("empty_curve_r_squared", 0.0, empty_r_sq, tol=1e-12)
+    check("empty_curve_monthly_win_rate", 0.0, empty_monthly_win, tol=1e-12)
+    check("growth_curve_r_squared_near_one", True, growth_r_sq > 0.9999)
+    check("growth_curve_monthly_win_rate", 100.0, growth_monthly_win, tol=1e-9)
+    check("partial_year_excluded_from_full_year_count", 1, full_year_stats["full_year_count"])
+    check("partial_year_still_kept_in_rows", 2, len(full_year_stats["yearly_return_rows"]))
+    check("clipped_final_year_does_not_become_full_year",
         [True, False],
         [row["is_full_year"] for row in clipped_year_stats["yearly_return_rows"]],
     )
-    add_check(results, "unit_portfolio_stats", case_id, "full_year_min_return_uses_only_complete_years", -25.0, full_year_stats["min_full_year_return_pct"], tol=1e-9)
-    add_check(results, "unit_portfolio_stats", case_id, "partial_month_excluded_from_full_month_count", 1, full_month_stats["full_month_count"])
-    add_check(results, "unit_portfolio_stats", case_id, "partial_month_still_kept_in_rows", 2, len(full_month_stats["monthly_return_rows"]))
-    add_check(results, "unit_portfolio_stats", case_id, "full_month_min_return_uses_only_complete_months", -25.0, full_month_stats["min_month_return_pct"], tol=1e-9)
-    add_check(results, "unit_portfolio_stats", case_id, "partial_quarter_excluded_from_full_quarter_count", 1, full_quarter_stats["full_quarter_count"])
-    add_check(results, "unit_portfolio_stats", case_id, "partial_quarter_still_kept_in_rows", 2, len(full_quarter_stats["quarterly_return_rows"]))
-    add_check(results, "unit_portfolio_stats", case_id, "full_quarter_min_return_uses_only_complete_quarters", -25.0, full_quarter_stats["min_quarter_return_pct"], tol=1e-9)
-    add_check(results, "unit_portfolio_stats", case_id, "find_sim_start_idx_hits_first_date_ge_start_year", 2, find_sim_start_idx(sorted_dates, 2025))
-    add_check(results, "unit_portfolio_stats", case_id, "calc_sim_years_shared_period_basis", 366.0 / 365.25, sim_years, tol=1e-9)
-    add_check(results, "unit_portfolio_stats", case_id, "calc_annual_return_pct_cagr", 10.0, calc_annual_return_pct(100.0, 121.0, 2.0), tol=1e-9)
-    add_check(results, "unit_portfolio_stats", case_id, "calc_annual_return_pct_end_value_non_positive", -100.0, calc_annual_return_pct(100.0, 0.0, 2.0), tol=1e-9)
+    check("full_year_min_return_uses_only_complete_years", -25.0, full_year_stats["min_full_year_return_pct"], tol=1e-9)
+    check("partial_month_excluded_from_full_month_count", 1, full_month_stats["full_month_count"])
+    check("partial_month_still_kept_in_rows", 2, len(full_month_stats["monthly_return_rows"]))
+    check("full_month_min_return_uses_only_complete_months", -25.0, full_month_stats["min_month_return_pct"], tol=1e-9)
+    check("partial_quarter_excluded_from_full_quarter_count", 1, full_quarter_stats["full_quarter_count"])
+    check("partial_quarter_still_kept_in_rows", 2, len(full_quarter_stats["quarterly_return_rows"]))
+    check("full_quarter_min_return_uses_only_complete_quarters", -25.0, full_quarter_stats["min_quarter_return_pct"], tol=1e-9)
+    check("find_sim_start_idx_hits_first_date_ge_start_year", 2, find_sim_start_idx(sorted_dates, 2025))
+    check("calc_sim_years_shared_period_basis", 366.0 / 365.25, sim_years, tol=1e-9)
+    check("calc_annual_return_pct_cagr", 10.0, calc_annual_return_pct(100.0, 121.0, 2.0), tol=1e-9)
+    check("calc_annual_return_pct_end_value_non_positive", -100.0, calc_annual_return_pct(100.0, 0.0, 2.0), tol=1e-9)
 
     summary["full_year_count"] = full_year_stats["full_year_count"]
     summary["full_month_count"] = full_month_stats["full_month_count"]
@@ -284,16 +277,15 @@ def validate_portfolio_stats_unit_case(_base_params):
 def validate_exact_accounting_ledger_conservation_case(_base_params):
     params = V16StrategyParams()
     case_id = "UNIT_EXACT_LEDGER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_exact_accounting')
 
     buy_ledger = build_buy_ledger_from_price(10.05, 3000, params)
     sell_ledger = build_sell_ledger_from_price(10.95, 3000, params)
 
-    add_check(results, "unit_exact_accounting", case_id, "buy_ledger_gross_plus_fee_equals_net", buy_ledger["gross_buy_milli"] + buy_ledger["buy_fee_milli"], buy_ledger["net_buy_total_milli"])
-    add_check(results, "unit_exact_accounting", case_id, "sell_ledger_gross_minus_fee_minus_tax_equals_net", sell_ledger["gross_sell_milli"] - sell_ledger["sell_fee_milli"] - sell_ledger["tax_milli"], sell_ledger["net_sell_total_milli"])
-    add_check(results, "unit_exact_accounting", case_id, "entry_total_helper_matches_buy_ledger", milli_to_money(buy_ledger["net_buy_total_milli"]), calc_entry_total_cost(10.05, 3000, params), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "exit_total_helper_matches_sell_ledger", milli_to_money(sell_ledger["net_sell_total_milli"]), calc_exit_net_total(10.95, 3000, params), tol=1e-12)
+    check("buy_ledger_gross_plus_fee_equals_net", buy_ledger["gross_buy_milli"] + buy_ledger["buy_fee_milli"], buy_ledger["net_buy_total_milli"])
+    check("sell_ledger_gross_minus_fee_minus_tax_equals_net", sell_ledger["gross_sell_milli"] - sell_ledger["sell_fee_milli"] - sell_ledger["tax_milli"], sell_ledger["net_sell_total_milli"])
+    check("entry_total_helper_matches_buy_ledger", milli_to_money(buy_ledger["net_buy_total_milli"]), calc_entry_total_cost(10.05, 3000, params), tol=1e-12)
+    check("exit_total_helper_matches_sell_ledger", milli_to_money(sell_ledger["net_sell_total_milli"]), calc_exit_net_total(10.95, 3000, params), tol=1e-12)
 
     summary["buy_net_total_milli"] = buy_ledger["net_buy_total_milli"]
     return results, summary
@@ -303,8 +295,7 @@ def validate_exact_accounting_cost_basis_allocation_case(_base_params):
     params = V16StrategyParams()
     params.tp_percent = 0.5
     case_id = "UNIT_EXACT_COST_BASIS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_exact_accounting')
 
     position = build_position_from_entry_fill(100.0, 3, init_sl=95.0, init_trail=95.0, params=params, target_price=110.0)
     original_cost_basis_milli = position["remaining_cost_basis_milli"]
@@ -337,11 +328,11 @@ def validate_exact_accounting_cost_basis_allocation_case(_base_params):
     )
     stop_context = position.get("_last_exec_contexts", [])[0]
 
-    add_check(results, "unit_exact_accounting", case_id, "tp_half_event_fired", True, "TP_HALF" in tp_events)
-    add_check(results, "unit_exact_accounting", case_id, "stop_event_fired", True, "STOP" in stop_events)
-    add_check(results, "unit_exact_accounting", case_id, "allocated_cost_basis_sums_back_to_original", original_cost_basis_milli, int(tp_context["allocated_cost_milli"]) + int(stop_context["allocated_cost_milli"]))
-    add_check(results, "unit_exact_accounting", case_id, "remaining_cost_basis_zero_after_tail_exit", 0, position["remaining_cost_basis_milli"])
-    add_check(results, "unit_exact_accounting", case_id, "realized_pnl_tracks_sum_of_legs", int(tp_context["pnl_milli"]) + int(stop_context["pnl_milli"]), position["realized_pnl_milli"])
+    check("tp_half_event_fired", True, "TP_HALF" in tp_events)
+    check("stop_event_fired", True, "STOP" in stop_events)
+    check("allocated_cost_basis_sums_back_to_original", original_cost_basis_milli, int(tp_context["allocated_cost_milli"]) + int(stop_context["allocated_cost_milli"]))
+    check("remaining_cost_basis_zero_after_tail_exit", 0, position["remaining_cost_basis_milli"])
+    check("realized_pnl_tracks_sum_of_legs", int(tp_context["pnl_milli"]) + int(stop_context["pnl_milli"]), position["realized_pnl_milli"])
 
     summary["original_cost_basis_milli"] = original_cost_basis_milli
     return results, summary
@@ -349,8 +340,7 @@ def validate_exact_accounting_cost_basis_allocation_case(_base_params):
 
 def validate_exact_accounting_tick_limit_integer_case(_base_params):
     case_id = "UNIT_EXACT_TICK_LIMIT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_exact_accounting')
 
     up_limit = calc_limit_up_price(95.1)
     down_limit = calc_limit_down_price(95.1)
@@ -361,20 +351,20 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     raw_limit_cross_up_ref = 9.22
     raw_limit_cross_down_ref = 10.01
 
-    add_check(results, "unit_exact_accounting", case_id, "limit_up_price_rounds_to_expected_tick", 104.5, up_limit, tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "limit_down_price_rounds_to_expected_tick", 85.6, down_limit, tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "limit_up_price_uses_raw_limit_price_tick_band_when_crossing_band", 10.1, calc_limit_up_price(raw_limit_cross_up_ref), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "limit_down_price_uses_raw_limit_price_tick_band_when_crossing_band", 9.01, calc_limit_down_price(raw_limit_cross_down_ref), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "nearby_float_normalizes_to_same_limit_up_milli", price_to_milli(up_limit), price_to_milli(near_up))
-    add_check(results, "unit_exact_accounting", case_id, "nearby_float_normalizes_to_same_limit_down_milli", price_to_milli(down_limit), price_to_milli(near_down))
-    add_check(results, "unit_exact_accounting", case_id, "limit_up_bar_uses_integer_price_comparison", True, is_limit_up_bar(near_up, near_up, near_up, near_up, 95.1))
-    add_check(results, "unit_exact_accounting", case_id, "limit_down_bar_uses_integer_price_comparison", True, is_limit_down_bar(near_down, near_down, near_down, near_down, 95.1))
-    add_check(results, "unit_exact_accounting", case_id, "directional_up_rounding_preserves_raw_price_ceiling", 34.4, milli_to_money(round_price_to_tick_milli(raw_stop, direction="up")), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "directional_up_rounding_result_not_below_raw_price", True, milli_to_money(round_price_to_tick_milli(raw_stop, direction="up")) >= raw_stop)
-    add_check(results, "unit_exact_accounting", case_id, "directional_down_rounding_preserves_raw_price_floor", 34.35, milli_to_money(round_price_to_tick_milli(raw_stop, direction="down")), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "directional_down_rounding_result_not_above_raw_price", True, milli_to_money(round_price_to_tick_milli(raw_stop, direction="down")) <= raw_stop)
-    add_check(results, "unit_exact_accounting", case_id, "tick_band_lookup_uses_raw_price_before_milli_quantization", 0.01, get_tick_size(raw_tick_boundary), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "tick_band_lookup_array_uses_raw_price_before_milli_quantization", 0.01, get_tick_size_array(np.array([raw_tick_boundary], dtype=np.float64))[0], tol=1e-12)
+    check("limit_up_price_rounds_to_expected_tick", 104.5, up_limit, tol=1e-12)
+    check("limit_down_price_rounds_to_expected_tick", 85.6, down_limit, tol=1e-12)
+    check("limit_up_price_uses_raw_limit_price_tick_band_when_crossing_band", 10.1, calc_limit_up_price(raw_limit_cross_up_ref), tol=1e-12)
+    check("limit_down_price_uses_raw_limit_price_tick_band_when_crossing_band", 9.01, calc_limit_down_price(raw_limit_cross_down_ref), tol=1e-12)
+    check("nearby_float_normalizes_to_same_limit_up_milli", price_to_milli(up_limit), price_to_milli(near_up))
+    check("nearby_float_normalizes_to_same_limit_down_milli", price_to_milli(down_limit), price_to_milli(near_down))
+    check("limit_up_bar_uses_integer_price_comparison", True, is_limit_up_bar(near_up, near_up, near_up, near_up, 95.1))
+    check("limit_down_bar_uses_integer_price_comparison", True, is_limit_down_bar(near_down, near_down, near_down, near_down, 95.1))
+    check("directional_up_rounding_preserves_raw_price_ceiling", 34.4, milli_to_money(round_price_to_tick_milli(raw_stop, direction="up")), tol=1e-12)
+    check("directional_up_rounding_result_not_below_raw_price", True, milli_to_money(round_price_to_tick_milli(raw_stop, direction="up")) >= raw_stop)
+    check("directional_down_rounding_preserves_raw_price_floor", 34.35, milli_to_money(round_price_to_tick_milli(raw_stop, direction="down")), tol=1e-12)
+    check("directional_down_rounding_result_not_above_raw_price", True, milli_to_money(round_price_to_tick_milli(raw_stop, direction="down")) <= raw_stop)
+    check("tick_band_lookup_uses_raw_price_before_milli_quantization", 0.01, get_tick_size(raw_tick_boundary), tol=1e-12)
+    check("tick_band_lookup_array_uses_raw_price_before_milli_quantization", 0.01, get_tick_size_array(np.array([raw_tick_boundary], dtype=np.float64))[0], tol=1e-12)
 
     profile_stock = infer_security_profile("2330")
     profile_etf = infer_security_profile("0050")
@@ -383,34 +373,34 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     profile_etn = infer_security_profile("020032")
     profile_reit = infer_security_profile("01001T")
 
-    add_check(results, "unit_exact_accounting", case_id, "security_profile_stock_detects_stock_family", ("stock", "stock"), (profile_stock["family"], profile_stock["broad_type"]))
-    add_check(results, "unit_exact_accounting", case_id, "security_profile_etf_detects_etf_family", ("etf", "etf"), (profile_etf["family"], profile_etf["broad_type"]))
-    add_check(results, "unit_exact_accounting", case_id, "security_profile_leveraged_detects_broad_type", "leveraged_inverse", profile_leveraged["broad_type"])
-    add_check(results, "unit_exact_accounting", case_id, "security_profile_bond_detects_broad_type", "bond", profile_bond["broad_type"])
-    add_check(results, "unit_exact_accounting", case_id, "security_profile_etn_detects_two_tier_family", ("etn", "fund_two_tier"), (profile_etn["family"], profile_etn["tick_profile"]))
-    add_check(results, "unit_exact_accounting", case_id, "security_profile_reit_detects_two_tier_family", ("reit", "fund_two_tier"), (profile_reit["family"], profile_reit["tick_profile"]))
+    check("security_profile_stock_detects_stock_family", ("stock", "stock"), (profile_stock["family"], profile_stock["broad_type"]))
+    check("security_profile_etf_detects_etf_family", ("etf", "etf"), (profile_etf["family"], profile_etf["broad_type"]))
+    check("security_profile_leveraged_detects_broad_type", "leveraged_inverse", profile_leveraged["broad_type"])
+    check("security_profile_bond_detects_broad_type", "bond", profile_bond["broad_type"])
+    check("security_profile_etn_detects_two_tier_family", ("etn", "fund_two_tier"), (profile_etn["family"], profile_etn["tick_profile"]))
+    check("security_profile_reit_detects_two_tier_family", ("reit", "fund_two_tier"), (profile_reit["family"], profile_reit["tick_profile"]))
 
-    add_check(results, "unit_exact_accounting", case_id, "etf_tick_size_uses_two_tier_profile", 0.01, get_tick_size(10.17, ticker="0050"), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "stock_tick_size_keeps_stock_ladder", 0.05, get_tick_size(10.17, ticker="1101"), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "etf_round_to_tick_preserves_legal_price", 10.17, round_money_for_display(milli_to_money(round_price_to_tick_milli(10.17, direction="nearest", ticker="0050"))), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "stock_round_to_tick_uses_stock_ladder", 10.15, round_money_for_display(milli_to_money(round_price_to_tick_milli(10.17, direction="nearest", ticker="1101"))), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "etf_limit_up_uses_two_tier_tick_profile", 11.18, calc_limit_up_price(10.17, ticker="0050"), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "etf_limit_down_uses_two_tier_tick_profile", 9.16, calc_limit_down_price(10.17, ticker="0050"), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "stock_limit_up_keeps_stock_tick_profile", 11.15, calc_limit_up_price(10.17, ticker="1101"), tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "etf_limit_up_bar_uses_etf_tick_profile", True, is_limit_up_bar(11.18, 11.18, 11.18, 11.18, 10.17, ticker="0050"))
-    add_check(results, "unit_exact_accounting", case_id, "stock_limit_up_bar_uses_stock_tick_profile", True, is_limit_up_bar(11.15, 11.15, 11.15, 11.15, 10.17, ticker="1101"))
+    check("etf_tick_size_uses_two_tier_profile", 0.01, get_tick_size(10.17, ticker="0050"), tol=1e-12)
+    check("stock_tick_size_keeps_stock_ladder", 0.05, get_tick_size(10.17, ticker="1101"), tol=1e-12)
+    check("etf_round_to_tick_preserves_legal_price", 10.17, round_money_for_display(milli_to_money(round_price_to_tick_milli(10.17, direction="nearest", ticker="0050"))), tol=1e-12)
+    check("stock_round_to_tick_uses_stock_ladder", 10.15, round_money_for_display(milli_to_money(round_price_to_tick_milli(10.17, direction="nearest", ticker="1101"))), tol=1e-12)
+    check("etf_limit_up_uses_two_tier_tick_profile", 11.18, calc_limit_up_price(10.17, ticker="0050"), tol=1e-12)
+    check("etf_limit_down_uses_two_tier_tick_profile", 9.16, calc_limit_down_price(10.17, ticker="0050"), tol=1e-12)
+    check("stock_limit_up_keeps_stock_tick_profile", 11.15, calc_limit_up_price(10.17, ticker="1101"), tol=1e-12)
+    check("etf_limit_up_bar_uses_etf_tick_profile", True, is_limit_up_bar(11.18, 11.18, 11.18, 11.18, 10.17, ticker="0050"))
+    check("stock_limit_up_bar_uses_stock_tick_profile", True, is_limit_up_bar(11.15, 11.15, 11.15, 11.15, 10.17, ticker="1101"))
 
-    add_check(results, "unit_exact_accounting", case_id, "stock_sell_tax_ppm_uses_stock_policy_rate", 3000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="1101", trade_date="2026-03-02"))
-    add_check(results, "unit_exact_accounting", case_id, "etf_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="0050", trade_date="2026-03-02"))
-    add_check(results, "unit_exact_accounting", case_id, "leveraged_etf_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00631L", trade_date="2026-03-02"))
-    add_check(results, "unit_exact_accounting", case_id, "etn_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="020032", trade_date="2026-03-02"))
-    add_check(results, "unit_exact_accounting", case_id, "reit_sell_tax_ppm_is_exempt", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="01001T", trade_date="2026-03-02"))
-    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_tax_ppm_is_exempt_before_deadline", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2026-03-02"))
-    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_tax_ppm_reverts_after_deadline", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2027-01-02"))
-    add_check(results, "unit_exact_accounting", case_id, "etf_sell_ledger_uses_fund_tax_rate", 80350, build_sell_ledger_from_price(80.35, 1000, V16StrategyParams(), ticker="0050", trade_date="2026-03-02")["tax_milli"])
-    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_ledger_zero_tax_before_deadline", 0, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2026-03-02")["tax_milli"])
-    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_ledger_tax_after_deadline_uses_fund_rate", 28000, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2027-01-02")["tax_milli"])
-    add_check(results, "unit_exact_accounting", case_id, "reit_sell_ledger_tax_is_exempt", 0, build_sell_ledger_from_price(10.0, 1000, V16StrategyParams(), ticker="01001T", trade_date="2026-03-02")["tax_milli"])
+    check("stock_sell_tax_ppm_uses_stock_policy_rate", 3000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="1101", trade_date="2026-03-02"))
+    check("etf_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="0050", trade_date="2026-03-02"))
+    check("leveraged_etf_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00631L", trade_date="2026-03-02"))
+    check("etn_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="020032", trade_date="2026-03-02"))
+    check("reit_sell_tax_ppm_is_exempt", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="01001T", trade_date="2026-03-02"))
+    check("bond_etf_sell_tax_ppm_is_exempt_before_deadline", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2026-03-02"))
+    check("bond_etf_sell_tax_ppm_reverts_after_deadline", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2027-01-02"))
+    check("etf_sell_ledger_uses_fund_tax_rate", 80350, build_sell_ledger_from_price(80.35, 1000, V16StrategyParams(), ticker="0050", trade_date="2026-03-02")["tax_milli"])
+    check("bond_etf_sell_ledger_zero_tax_before_deadline", 0, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2026-03-02")["tax_milli"])
+    check("bond_etf_sell_ledger_tax_after_deadline_uses_fund_rate", 28000, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2027-01-02")["tax_milli"])
+    check("reit_sell_ledger_tax_is_exempt", 0, build_sell_ledger_from_price(10.0, 1000, V16StrategyParams(), ticker="01001T", trade_date="2026-03-02")["tax_milli"])
 
     summary["limit_up"] = up_limit
     summary["etf_tick_size"] = get_tick_size(10.17, ticker="0050")
@@ -421,8 +411,7 @@ def validate_exact_accounting_cash_risk_boundary_case(_base_params):
     params = V16StrategyParams()
     params.min_entry_notional = 0.0
     case_id = "UNIT_EXACT_CASH_RISK"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_exact_accounting')
 
     candidate_plan = {
         "limit_price": 5.0,
@@ -439,10 +428,10 @@ def validate_exact_accounting_cash_risk_boundary_case(_base_params):
     accepted = build_cash_capped_entry_plan(candidate_plan, exact_cash, params)
     resized_down = build_cash_capped_entry_plan(candidate_plan, below_cash, params)
 
-    add_check(results, "unit_exact_accounting", case_id, "cash_cap_accepts_exact_reserved_total", True, accepted is not None)
-    add_check(results, "unit_exact_accounting", case_id, "one_milli_shortfall_triggers_qty_resize", True, resized_down is not None and resized_down["qty"] < resized["qty"])
-    add_check(results, "unit_exact_accounting", case_id, "resized_plan_stays_within_one_milli_shortfall_cash_cap", True, resized_down is not None and resized_down["reserved_cost_milli"] <= money_to_milli(below_cash))
-    add_check(results, "unit_exact_accounting", case_id, "reserved_cost_stored_as_integer_total", resized["reserved_cost_milli"], money_to_milli(resized["reserved_cost"]))
+    check("cash_cap_accepts_exact_reserved_total", True, accepted is not None)
+    check("one_milli_shortfall_triggers_qty_resize", True, resized_down is not None and resized_down["qty"] < resized["qty"])
+    check("resized_plan_stays_within_one_milli_shortfall_cash_cap", True, resized_down is not None and resized_down["reserved_cost_milli"] <= money_to_milli(below_cash))
+    check("reserved_cost_stored_as_integer_total", resized["reserved_cost_milli"], money_to_milli(resized["reserved_cost"]))
 
     summary["reserved_cost_milli"] = resized["reserved_cost_milli"]
     summary["resized_down_qty"] = None if resized_down is None else resized_down["qty"]
@@ -468,8 +457,7 @@ def validate_exact_accounting_display_leg_reconciliation_case(_base_params):
 def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
     params = V16StrategyParams()
     case_id = "UNIT_EXACT_SINGLE_PORTFOLIO_PARITY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_exact_accounting')
 
     base_position = build_position_from_entry_fill(100.0, 10, init_sl=95.0, init_trail=95.0, params=params, target_price=110.0, entry_type="normal")
     single_position = copy.deepcopy(base_position)
@@ -510,10 +498,10 @@ def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
         last_date=pd.Timestamp("2025-01-03"),
     )
 
-    add_check(results, "unit_exact_accounting", case_id, "single_and_portfolio_closeout_final_cash_match", single_state["current_capital_milli"], portfolio_cash_milli)
-    add_check(results, "unit_exact_accounting", case_id, "single_and_portfolio_closeout_trade_pnl_match", milli_to_money(single_state["total_profit_milli"]), closed_trades_stats[0]["pnl"], tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "portfolio_closeout_counts_normal_trade", 1, normal_trade_count)
-    add_check(results, "unit_exact_accounting", case_id, "portfolio_closeout_keeps_extended_trade_count_zero", 0, extended_trade_count)
+    check("single_and_portfolio_closeout_final_cash_match", single_state["current_capital_milli"], portfolio_cash_milli)
+    check("single_and_portfolio_closeout_trade_pnl_match", milli_to_money(single_state["total_profit_milli"]), closed_trades_stats[0]["pnl"], tol=1e-12)
+    check("portfolio_closeout_counts_normal_trade", 1, normal_trade_count)
+    check("portfolio_closeout_keeps_extended_trade_count_zero", 0, extended_trade_count)
 
     summary["final_cash_milli"] = portfolio_cash_milli
     return results, summary
@@ -588,6 +576,7 @@ def validate_independent_oracle_golden_case(_base_params):
     case_id = 'UNIT_INDEPENDENT_ORACLE_GOLDEN'
     results = []
     summary = {'ticker': case_id, 'synthetic': True}
+    check, check_true = bind_checks(results, 'unit_independent_oracle', case_id)
     params = V16StrategyParams()
 
     params.min_history_trades = 0
@@ -598,22 +587,22 @@ def validate_independent_oracle_golden_case(_base_params):
     try:
         oracle_net = _oracle_net_sell_price(100.0, 10, params)
         prod_net = calc_net_sell_price(100.0, 10, params)
-        add_check(results, 'unit_independent_oracle', case_id, 'oracle_net_sell_price_matches_production', oracle_net, prod_net, tol=1e-9)
+        check('oracle_net_sell_price_matches_production', oracle_net, prod_net, tol=1e-9)
 
         oracle_qty = _oracle_position_size(100.0, 95.0, 10_000.0, 0.02, params)
         prod_qty = calc_position_size(100.0, 95.0, 10_000.0, 0.02, params)
-        add_check(results, 'unit_independent_oracle', case_id, 'oracle_position_size_matches_production', oracle_qty, prod_qty)
+        check('oracle_position_size_matches_production', oracle_qty, prod_qty)
 
         training_policy.EV_CALC_METHOD = 'A'
         method_a = evaluate_history_candidate_metrics(4, 3, 2.0, 3.0, -1.0, params)
-        add_check(results, 'unit_independent_oracle', case_id, 'oracle_history_ev_method_a_matches_production', _oracle_history_expected_value('A', 4, 3, 2.0, 3.0, -1.0), method_a[1], tol=1e-9)
+        check('oracle_history_ev_method_a_matches_production', _oracle_history_expected_value('A', 4, 3, 2.0, 3.0, -1.0), method_a[1], tol=1e-9)
 
         training_policy.EV_CALC_METHOD = 'B'
         method_b = evaluate_history_candidate_metrics(4, 2, 0.0, 4.0, -1.0, params)
-        add_check(results, 'unit_independent_oracle', case_id, 'oracle_history_ev_method_b_matches_production', _oracle_history_expected_value('B', 4, 2, 0.0, 4.0, -1.0), method_b[1], tol=1e-9)
+        check('oracle_history_ev_method_b_matches_production', _oracle_history_expected_value('B', 4, 2, 0.0, 4.0, -1.0), method_b[1], tol=1e-9)
 
-        add_check(results, 'unit_independent_oracle', case_id, 'oracle_calc_sim_years_matches_production', 366.0 / 365.25, calc_sim_years(list(pd.to_datetime(['2024-12-31', '2025-12-31'])), start_idx=0), tol=1e-9)
-        add_check(results, 'unit_independent_oracle', case_id, 'oracle_annual_return_pct_matches_production', 10.0, calc_annual_return_pct(100.0, 121.0, 2.0), tol=1e-9)
+        check('oracle_calc_sim_years_matches_production', 366.0 / 365.25, calc_sim_years(list(pd.to_datetime(['2024-12-31', '2025-12-31'])), start_idx=0), tol=1e-9)
+        check('oracle_annual_return_pct_matches_production', 10.0, calc_annual_return_pct(100.0, 121.0, 2.0), tol=1e-9)
     finally:
         training_policy.EV_CALC_METHOD = original_ev_method
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import run_bound_checks
+
 from .synthetic_breakout_quality_support import (
     ACTIVE_MODEL_ARCHITECTURES,
     ADAMW_ONLY_EXPERIMENT_PROFILE,
@@ -200,28 +202,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 modules.add(str(node.module))
         return modules
 
-    check_true(
-        "breakout_quality_config_is_declarative_without_runtime_helpers_or_classes",
-        not any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            for node in config_tree.body
+    run_bound_checks(
+        check_true,
+        (
+            ('breakout_quality_config_is_declarative_without_runtime_helpers_or_classes', not any((isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in config_tree.body)),),
+            ('breakout_quality_registry_does_not_reverse_depend_on_user_breakout_config_or_policy', 'config.breakout_quality' not in imported_modules(registry_tree) and 'core.breakout_quality_policy' not in imported_modules(registry_tree),),
+            ('breakout_quality_policy_is_the_only_config_to_registry_runtime_resolution_layer', {'config.breakout_quality', 'core.breakout_quality_registry', 'core.breakout_quality_runtime'}.issubset(imported_modules(policy_tree)) and 'core.breakout_quality_policy' not in imported_modules(runtime_tree) and ('config.breakout_quality' not in imported_modules(runtime_tree)) and ('core.breakout_quality_registry' not in imported_modules(runtime_tree)),),
         ),
-    )
-    check_true(
-        "breakout_quality_registry_does_not_reverse_depend_on_user_breakout_config_or_policy",
-        "config.breakout_quality" not in imported_modules(registry_tree)
-        and "core.breakout_quality_policy" not in imported_modules(registry_tree),
-    )
-    check_true(
-        "breakout_quality_policy_is_the_only_config_to_registry_runtime_resolution_layer",
-        {
-            "config.breakout_quality",
-            "core.breakout_quality_registry",
-            "core.breakout_quality_runtime",
-        }.issubset(imported_modules(policy_tree))
-        and "core.breakout_quality_policy" not in imported_modules(runtime_tree)
-        and "config.breakout_quality" not in imported_modules(runtime_tree)
-        and "core.breakout_quality_registry" not in imported_modules(runtime_tree),
     )
 
     configured_seed = policy.resolve_breakout_quality_random_seed()
@@ -253,21 +240,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
 
     active = tuple(ACTIVE_MODEL_ARCHITECTURES)
     legacy = tuple(LEGACY_MODEL_ARCHITECTURES)
-    check_true(
-        "active_and_legacy_architecture_sets_are_disjoint",
-        bool(active) and bool(legacy) and not set(active).intersection(legacy),
-    )
-    check_true(
-        "configured_new_training_architecture_is_active",
-        cfg.BREAKOUT_QUALITY_MODEL_ARCHITECTURE in set(active),
-    )
-    check_true(
-        "all_active_architectures_resolve_through_active_factory",
-        all(get_active_model_spec(name).architecture == name for name in active),
-    )
-    check_true(
-        "all_legacy_architectures_resolve_only_through_compatibility_factory",
-        all(resolve_legacy_model_spec(architecture=name).architecture == name for name in legacy),
+    run_bound_checks(
+        check_true,
+        (
+            ('active_and_legacy_architecture_sets_are_disjoint', bool(active) and bool(legacy) and (not set(active).intersection(legacy)),),
+            ('configured_new_training_architecture_is_active', cfg.BREAKOUT_QUALITY_MODEL_ARCHITECTURE in set(active),),
+            ('all_active_architectures_resolve_through_active_factory', all((get_active_model_spec(name).architecture == name for name in active)),),
+            ('all_legacy_architectures_resolve_only_through_compatibility_factory', all((resolve_legacy_model_spec(architecture=name).architecture == name for name in legacy)),),
+        ),
     )
 
     profiles = tuple(registry.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
@@ -367,29 +347,13 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
         inner_validation_months=2,
         early_stopping_enabled=False,
     )
-    check(
-        "toggle_off_uses_full_selection",
-        (6, 0, 6, False, False),
+    run_bound_checks(
+        check,
         (
-                    len(train_off),
-                    len(validation_off),
-                    len(refit_off),
-                    report_off["inner_validation_used"],
-                    report_off["early_stopping_used"],
-                ),
-    )
-    check("toggle_off_selection_oos_embargo_rows", 2, report_off["selection_oos_embargo_row_count"])
-    check(
-        "toggle_off_role_counts",
-        {
-                    SELECTION_ROLE_TRAIN: 6,
-                    SELECTION_ROLE_VALIDATION: 0,
-                    SELECTION_ROLE_INNER_EMBARGO: 0,
-                    SELECTION_ROLE_EMBARGO: 2,
-                    SELECTION_ROLE_INVALID: 0,
-                    SELECTION_ROLE_NOT_APPLICABLE: 6,
-                },
-        report_off["selection_role_counts"],
+            ('toggle_off_uses_full_selection', (6, 0, 6, False, False), (len(train_off), len(validation_off), len(refit_off), report_off['inner_validation_used'], report_off['early_stopping_used']),),
+            ('toggle_off_selection_oos_embargo_rows', 2, report_off['selection_oos_embargo_row_count'],),
+            ('toggle_off_role_counts', {SELECTION_ROLE_TRAIN: 6, SELECTION_ROLE_VALIDATION: 0, SELECTION_ROLE_INNER_EMBARGO: 0, SELECTION_ROLE_EMBARGO: 2, SELECTION_ROLE_INVALID: 0, SELECTION_ROLE_NOT_APPLICABLE: 6}, report_off['selection_role_counts'],),
+        ),
     )
 
     (
@@ -444,26 +408,19 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
                 },
         report_on["selection_role_counts"],
     )
-    check_true(
-        "inner_train_label_information_before_validation",
-        pd.to_datetime(events.iloc[train_on]["label_eval_end_date"]).max()
-                < pd.Timestamp(report_on["inner_validation_start_date"]),
-    )
-    check_true(
-        "final_refit_label_information_before_oos",
-        pd.to_datetime(events.iloc[refit_on]["label_eval_end_date"]).max()
-                < pd.Timestamp(report_on["oos_start_date"]),
-    )
-    check("oos_evaluable_and_tail_rows", (2, 2), (len(oos_on), report_on["oos_label_after_end_row_count"]))
-    check(
-        "outer_and_inner_overlap_forbidden",
-        (0, 0, 0, 0),
+    run_bound_checks(
+        check_true,
         (
-                    report_on["overlap_group_count"],
-                    report_on["overlap_event_date_count"],
-                    report_on["inner_train_validation_overlap_group_count"],
-                    report_on["inner_train_validation_overlap_event_date_count"],
-                ),
+            ('inner_train_label_information_before_validation', pd.to_datetime(events.iloc[train_on]['label_eval_end_date']).max() < pd.Timestamp(report_on['inner_validation_start_date']),),
+            ('final_refit_label_information_before_oos', pd.to_datetime(events.iloc[refit_on]['label_eval_end_date']).max() < pd.Timestamp(report_on['oos_start_date']),),
+        ),
+    )
+    run_bound_checks(
+        check,
+        (
+            ('oos_evaluable_and_tail_rows', (2, 2), (len(oos_on), report_on['oos_label_after_end_row_count']),),
+            ('outer_and_inner_overlap_forbidden', (0, 0, 0, 0), (report_on['overlap_group_count'], report_on['overlap_event_date_count'], report_on['inner_train_validation_overlap_group_count'], report_on['inner_train_validation_overlap_event_date_count']),),
+        ),
     )
     check_true(
         "outside_selection_has_no_selection_role",
@@ -557,34 +514,13 @@ def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_
     continuous_train_source = read_source_text(
         project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
     )
-    check_true(
-        "active_model_factory_does_not_import_legacy_builders",
-        all(
-                    token not in active_factory_source
-                    for token in (
-                        "models.moment",
-                        "models.mantis_v2",
-                        "models.ts2vec",
-                        "models.tiny_cnn",
-                        "models.patch_transformer",
-                        "models.modern_tcn",
-                        "models.residual_tcn",
-                    )
-                ),
-    )
-    check_true(
-        "compatibility_factory_lazy_loads_historical_builder_owner",
-        "from filters.breakout_quality.models.legacy_compatibility import build_legacy_model"
-                in compatibility_factory_source,
-    )
-    check_true(
-        "formal_trainers_do_not_import_compatibility_model_factory",
-        "filters.breakout_quality.models.factory" not in binary_train_source
-                and "filters.breakout_quality.model import" not in binary_train_source
-                and "filters.breakout_quality.models.factory" not in continuous_train_source
-                and "filters.breakout_quality.model import" not in continuous_train_source
-                and "filters.breakout_quality.models.active" in binary_train_source
-                and "filters.breakout_quality.models.active" in continuous_train_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('active_model_factory_does_not_import_legacy_builders', all((token not in active_factory_source for token in ('models.moment', 'models.mantis_v2', 'models.ts2vec', 'models.tiny_cnn', 'models.patch_transformer', 'models.modern_tcn', 'models.residual_tcn'))),),
+            ('compatibility_factory_lazy_loads_historical_builder_owner', 'from filters.breakout_quality.models.legacy_compatibility import build_legacy_model' in compatibility_factory_source,),
+            ('formal_trainers_do_not_import_compatibility_model_factory', 'filters.breakout_quality.models.factory' not in binary_train_source and 'filters.breakout_quality.model import' not in binary_train_source and ('filters.breakout_quality.models.factory' not in continuous_train_source) and ('filters.breakout_quality.model import' not in continuous_train_source) and ('filters.breakout_quality.models.active' in binary_train_source) and ('filters.breakout_quality.models.active' in continuous_train_source),),
+        ),
     )
     return results, summary
 

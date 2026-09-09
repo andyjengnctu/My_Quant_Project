@@ -72,6 +72,33 @@ def bind_checks(results, module_name, ticker):
     return check, check_true
 
 
+def bind_synthetic_case(case_id, module_name, *, training_performed=None):
+    """Create standard synthetic result state and bind its stable check context."""
+
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    if training_performed is not None:
+        summary["training_performed"] = bool(training_performed)
+    check, check_true = bind_checks(results, module_name, case_id)
+    return results, summary, check, check_true
+
+
+def raises_expected(error_type, action):
+    """Return whether a zero-argument validation action raises the expected error type."""
+
+    try:
+        action()
+    except error_type:
+        return True
+    return False
+
+
+def run_bound_checks(bound_check, cases):
+    """Run a declarative sequence through one already-bound synthetic check function."""
+    for args in cases:
+        bound_check(*args)
+
+
 def add_skip_result(results, module_name, ticker, metric, note):
     results.append({
         "ticker": ticker,

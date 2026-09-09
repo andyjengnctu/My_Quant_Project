@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import run_bound_checks
+
 from .synthetic_breakout_quality_support import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BUY_LIMIT_OVERAGE_SORT_METHOD,
@@ -71,16 +73,12 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     from config import training_policy as training_policy_config
 
     configured_seed = breakout_quality_policy.resolve_breakout_quality_random_seed()
-    check_true(
-        "single_seed_contract_resolves_nonnegative_integer",
-        isinstance(configured_seed, int) and configured_seed >= 0,
-    )
-
-    check_true(
-        "single_seed_contract_model_and_optimizer_defaults_share_research_seed",
-        int(breakout_quality_config.BREAKOUT_QUALITY_RANDOM_SEED)
-        == int(training_policy_config.OPTIMIZER_RANDOM_SEED_DEFAULT)
-        == int(research_config.RESEARCH_SINGLE_SEED),
+    run_bound_checks(
+        check_true,
+        (
+            ('single_seed_contract_resolves_nonnegative_integer', isinstance(configured_seed, int) and configured_seed >= 0,),
+            ('single_seed_contract_model_and_optimizer_defaults_share_research_seed', int(breakout_quality_config.BREAKOUT_QUALITY_RANDOM_SEED) == int(training_policy_config.OPTIMIZER_RANDOM_SEED_DEFAULT) == int(research_config.RESEARCH_SINGLE_SEED),),
+        ),
     )
 
     with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", 7):
@@ -110,17 +108,12 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
             negative_seed_rejected = True
         else:
             negative_seed_rejected = False
-    check_true("single_seed_contract_rejects_negative_seed", negative_seed_rejected)
-
-    check_true(
-        "model_and_strategy_apps_are_separate_entries",
-        canonical_app_path.is_file()
-                and compatibility_app_path.is_file()
-                and strategy_app_path.is_file()
-                and strategy_config_path.is_file()
-                and '"strategy-compare"' not in canonical_app_source
-                and "apps/research.py compare" in canonical_app_source
-                and "services.research.breakout_quality_application" in compatibility_app_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('single_seed_contract_rejects_negative_seed', negative_seed_rejected,),
+            ('model_and_strategy_apps_are_separate_entries', canonical_app_path.is_file() and compatibility_app_path.is_file() and strategy_app_path.is_file() and strategy_config_path.is_file() and ('"strategy-compare"' not in canonical_app_source) and ('apps/research.py compare' in canonical_app_source) and ('services.research.breakout_quality_application' in compatibility_app_source),),
+        ),
     )
 
     strategy_compare_source = (
@@ -904,21 +897,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and resolved.get("safety_score_manifest_path_override")
                 == overrides[safety_dl_id]["manifest_path"]
             )
-    check_true(
-        "dual_model_robustness_keeps_explicit_same_seed_safety_override_over_production_fallback",
-        all(isolated_safety_override_checks)
-        and "if not safety_override" in execution_contract_source,
-    )
-    check_true(
-        "single_and_multi_seed_share_fitting_checkpoint_cache_root",
-        bool(str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT).strip())
-        and "multi_seed_robustness" not in str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT)
-        and all(
-            str(strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"])).checkpoint_cache_root)
-            == str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT)
-            for mode in modes
-        )
-        and "STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT" in application_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('dual_model_robustness_keeps_explicit_same_seed_safety_override_over_production_fallback', all(isolated_safety_override_checks) and 'if not safety_override' in execution_contract_source,),
+            ('single_and_multi_seed_share_fitting_checkpoint_cache_root', bool(str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT).strip()) and 'multi_seed_robustness' not in str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT) and all((str(strategy_config.get_strategy_multi_seed_robustness_settings(str(mode['robustness_id'])).checkpoint_cache_root) == str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT) for mode in modes)) and ('STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT' in application_source),),
+        ),
     )
 
     single_seed_pending = robustness_runtime.deque([
@@ -1121,41 +1105,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "int(item.execution_priority)" in comparison_source,
     )
 
-    check_true(
-        "robustness_seed_generation_has_one_training_policy_owner",
-        "resolve_robustness_benchmark_seeds(" in robustness_source
-        and "random.Random(" not in robustness_source
-        and "resolve_robustness_benchmark_seeds(" in runtime_gate_source
-        and "from services.research.strategy_multi_seed_robustness import (" not in runtime_gate_source,
-    )
-    check_true(
-        "single_and_multi_seed_share_arm_model_dependency_resolver",
-        "def resolve_arm_runtime_dl_source_ids(" in dl_artifact_source
-        and "def resolve_arm_artifact_dl_source_ids(" in dl_artifact_source
-        and "resolve_arm_artifact_dl_source_ids(settings, arm)" in dl_artifact_source
-        and "resolve_arm_runtime_dl_source_ids(settings, arm)" in robustness_source
-        and "def _arm_training_dl_ids(" not in robustness_source,
-    )
-    check_true(
-        "strategy_compare_pit_ready_contract_has_one_owner",
-        "def load_validated_selection_pit_strategy_compare_contract(" in pit_contract_source
-        and "def validate_selection_pit_score_period(" in pit_contract_source
-        and "strategy_compare_pit_contract import" in dl_artifact_source
-        and "strategy_compare_pit_contract import" in training_contract_source
-        and "def _validate_selection_pit_score_period(" not in training_contract_source
-        and "load_selection_point_in_time_ranking_contract(" not in training_contract_source,
-    )
-    check_true(
-        "pit_fold_schedule_is_shared_by_producer_and_robustness_workload",
-        "def build_point_in_time_fold_periods(" in pit_schedule_source
-        and "build_point_in_time_fold_periods" in pit_producer_source
-        and "build_point_in_time_fold_periods" in robustness_source
-        and "def _pit_fold_count_for_period(" not in robustness_source,
-    )
-    check_true(
-        "robustness_elapsed_display_reuses_common_formatter",
-        "from core.display_common import FixedProgressBlock, InlineProgress, format_elapsed" in robustness_source
-        and "def _format_elapsed(" not in robustness_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('robustness_seed_generation_has_one_training_policy_owner', 'resolve_robustness_benchmark_seeds(' in robustness_source and 'random.Random(' not in robustness_source and ('resolve_robustness_benchmark_seeds(' in runtime_gate_source) and ('from services.research.strategy_multi_seed_robustness import (' not in runtime_gate_source),),
+            ('single_and_multi_seed_share_arm_model_dependency_resolver', 'def resolve_arm_runtime_dl_source_ids(' in dl_artifact_source and 'def resolve_arm_artifact_dl_source_ids(' in dl_artifact_source and ('resolve_arm_artifact_dl_source_ids(settings, arm)' in dl_artifact_source) and ('resolve_arm_runtime_dl_source_ids(settings, arm)' in robustness_source) and ('def _arm_training_dl_ids(' not in robustness_source),),
+            ('strategy_compare_pit_ready_contract_has_one_owner', 'def load_validated_selection_pit_strategy_compare_contract(' in pit_contract_source and 'def validate_selection_pit_score_period(' in pit_contract_source and ('strategy_compare_pit_contract import' in dl_artifact_source) and ('strategy_compare_pit_contract import' in training_contract_source) and ('def _validate_selection_pit_score_period(' not in training_contract_source) and ('load_selection_point_in_time_ranking_contract(' not in training_contract_source),),
+            ('pit_fold_schedule_is_shared_by_producer_and_robustness_workload', 'def build_point_in_time_fold_periods(' in pit_schedule_source and 'build_point_in_time_fold_periods' in pit_producer_source and ('build_point_in_time_fold_periods' in robustness_source) and ('def _pit_fold_count_for_period(' not in robustness_source),),
+            ('robustness_elapsed_display_reuses_common_formatter', 'from core.display_common import FixedProgressBlock, InlineProgress, format_elapsed' in robustness_source and 'def _format_elapsed(' not in robustness_source,),
+        ),
     )
 
     pending_trainings = robustness_runtime.deque([
@@ -1327,17 +1285,12 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
         (source.get("experiment_profile"), source.get("model_architecture"), source.get("score_source")),
     )
     builder = dict(source.get("forward_scores_builder") or {})
-    check_true(
-        "strategy_compare_cannot_train_missing_mr13z_folds",
-        builder.get("enabled") is True
-        and builder.get("builder_type") == "selection_pit_from_existing_folds",
-    )
-
-    check_true(
-        "mr13z_pit_contract_can_preserve_raw_mfe_primary_and_joint_min_auxiliary",
-        "raw_safety_score" in PIT_OPTIONAL_SCORE_COLUMNS
-        and "raw_mfe_score" in PIT_OPTIONAL_SCORE_COLUMNS
-        and "joint_min_score" in PIT_OPTIONAL_SCORE_COLUMNS,
+    run_bound_checks(
+        check_true,
+        (
+            ('strategy_compare_cannot_train_missing_mr13z_folds', builder.get('enabled') is True and builder.get('builder_type') == 'selection_pit_from_existing_folds',),
+            ('mr13z_pit_contract_can_preserve_raw_mfe_primary_and_joint_min_auxiliary', 'raw_safety_score' in PIT_OPTIONAL_SCORE_COLUMNS and 'raw_mfe_score' in PIT_OPTIONAL_SCORE_COLUMNS and ('joint_min_score' in PIT_OPTIONAL_SCORE_COLUMNS),),
+        ),
     )
 
     c75 = dict(HISTORICAL_STRATEGY_COMPARE_ARMS.get("C75") or {})
@@ -2013,19 +1966,12 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         Path(__file__).resolve().parents[2]
         / "services" / "breakout_quality" / "export_scores.py"
     ).read_text(encoding="utf-8")
-    check_true(
-        "workflow_runtime_scores_are_separate_from_forward_oos_canonical_scores",
-        '"runtime"' in export_source
-                    and '"runtime_manifest.json"' in export_source
-                    and "if args.scope == RUNTIME_SCOPE_WORKFLOW" in export_source
-                    and "canonical Forward-OOS research score/manifest are not modified" in export_source,
-    )
-    check_true(
-        "workflow_runtime_mr13e_export_uses_daily_continuous_ranker_contract",
-        "load_daily_universal_ranker_data" in export_source
-                    and "load_continuous_ranker_oos_contract" in export_source
-                    and "ranker_api.predict_scores" in export_source
-                    and '"model_score"' in export_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('workflow_runtime_scores_are_separate_from_forward_oos_canonical_scores', '"runtime"' in export_source and '"runtime_manifest.json"' in export_source and ('if args.scope == RUNTIME_SCOPE_WORKFLOW' in export_source) and ('canonical Forward-OOS research score/manifest are not modified' in export_source),),
+            ('workflow_runtime_mr13e_export_uses_daily_continuous_ranker_contract', 'load_daily_universal_ranker_data' in export_source and 'load_continuous_ranker_oos_contract' in export_source and ('ranker_api.predict_scores' in export_source) and ('"model_score"' in export_source),),
+        ),
     )
 
     from filters.breakout_quality import workflow_runtime_score_store as runtime_store

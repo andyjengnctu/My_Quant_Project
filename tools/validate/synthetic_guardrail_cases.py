@@ -1,4 +1,4 @@
-from .checks import bind_checks
+from .checks import bind_synthetic_case, bind_checks
 from core.config import V16StrategyParams
 from core.backtest_core import run_v16_backtest
 from core.params_io import build_params_from_mapping, params_to_json_dict
@@ -156,9 +156,7 @@ def validate_synthetic_param_guardrail_case(base_params):
 def validate_use_compounding_failfast_guardrail_case(base_params):
     case = build_synthetic_param_guardrail_case(base_params)
     case_id = "USE_COMPOUNDING_FAILFAST_GUARDRAIL"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_param_guardrail", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_param_guardrail")
 
     invalid_payload = {**case["base_payload"], "use_compounding": False}
 

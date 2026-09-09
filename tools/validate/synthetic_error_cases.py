@@ -25,7 +25,7 @@ from tools.validate.preflight_env import (
     run_preflight,
 )
 
-from .checks import add_check
+from .checks import bind_synthetic_case, bind_checks, add_check
 
 
 def _write_json(path: Path, payload):
@@ -34,8 +34,7 @@ def _write_json(path: Path, payload):
 
 def validate_params_io_error_path_case(base_params):
     case_id = "PARAMS_IO_ERROR_PATHS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     valid_payload = params_to_json_dict(base_params)
     required_fields = list(valid_payload.keys())
@@ -46,31 +45,31 @@ def validate_params_io_error_path_case(base_params):
         missing_path = tmp_root / "missing_params.json"
         try:
             load_params_from_json(missing_path)
-            add_check(results, "synthetic_error_paths", case_id, "missing_file_rejected", True, False)
+            check("missing_file_rejected", True, False)
         except FileNotFoundError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "missing_file_contains_marker", True, "找不到參數檔" in message)
-            add_check(results, "synthetic_error_paths", case_id, "missing_file_contains_path", True, str(missing_path) in message)
+            check("missing_file_contains_marker", True, "找不到參數檔" in message)
+            check("missing_file_contains_path", True, str(missing_path) in message)
 
         invalid_json_path = tmp_root / "invalid_json.json"
         invalid_json_path.write_text('{"a": 1,}', encoding="utf-8")
         try:
             load_params_from_json(invalid_json_path)
-            add_check(results, "synthetic_error_paths", case_id, "invalid_json_rejected", True, False)
+            check("invalid_json_rejected", True, False)
         except RuntimeError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "invalid_json_contains_prefix", True, message.startswith(f"讀取參數檔 {invalid_json_path} 失敗:"))
-            add_check(results, "synthetic_error_paths", case_id, "invalid_json_contains_decoder", True, "JSONDecodeError" in message)
+            check("invalid_json_contains_prefix", True, message.startswith(f"讀取參數檔 {invalid_json_path} 失敗:"))
+            check("invalid_json_contains_decoder", True, "JSONDecodeError" in message)
 
         invalid_root_path = tmp_root / "invalid_root.json"
         invalid_root_path.write_text(json.dumps([1, 2, 3], ensure_ascii=False), encoding="utf-8")
         try:
             load_params_from_json(invalid_root_path)
-            add_check(results, "synthetic_error_paths", case_id, "invalid_root_rejected", True, False)
+            check("invalid_root_rejected", True, False)
         except RuntimeError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "invalid_root_contains_marker", True, "根層必須是 object/dict" in message)
-            add_check(results, "synthetic_error_paths", case_id, "invalid_root_contains_path", True, str(invalid_root_path) in message)
+            check("invalid_root_contains_marker", True, "根層必須是 object/dict" in message)
+            check("invalid_root_contains_path", True, str(invalid_root_path) in message)
 
         missing_key_payload = dict(valid_payload)
         dropped_field = required_fields[0]
@@ -79,11 +78,11 @@ def validate_params_io_error_path_case(base_params):
         _write_json(missing_key_path, missing_key_payload)
         try:
             load_params_from_json(missing_key_path)
-            add_check(results, "synthetic_error_paths", case_id, "missing_required_key_rejected", True, False)
+            check("missing_required_key_rejected", True, False)
         except RuntimeError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "missing_required_key_contains_field", True, dropped_field in message)
-            add_check(results, "synthetic_error_paths", case_id, "missing_required_key_contains_marker", True, "缺少必要欄位" in message)
+            check("missing_required_key_contains_field", True, dropped_field in message)
+            check("missing_required_key_contains_marker", True, "缺少必要欄位" in message)
 
         unknown_key_payload = dict(valid_payload)
         unknown_key_payload["tp_precent"] = 0.3
@@ -91,11 +90,11 @@ def validate_params_io_error_path_case(base_params):
         _write_json(unknown_key_path, unknown_key_payload)
         try:
             load_params_from_json(unknown_key_path)
-            add_check(results, "synthetic_error_paths", case_id, "unknown_key_rejected", True, False)
+            check("unknown_key_rejected", True, False)
         except RuntimeError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "unknown_key_contains_field", True, "tp_precent" in message)
-            add_check(results, "synthetic_error_paths", case_id, "unknown_key_contains_marker", True, "未知欄位" in message)
+            check("unknown_key_contains_field", True, "tp_precent" in message)
+            check("unknown_key_contains_marker", True, "未知欄位" in message)
 
     summary["params_error_cases"] = 5
     return results, summary
@@ -103,8 +102,7 @@ def validate_params_io_error_path_case(base_params):
 
 def validate_module_loader_error_path_case(base_params):
     case_id = "MODULE_LOADER_ERROR_PATHS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     runtime_root = _RUNTIME_CASE_DIR / "module_loader_error_case"
     runtime_root.mkdir(parents=True, exist_ok=True)
@@ -121,13 +119,13 @@ def validate_module_loader_error_path_case(base_params):
                 ["missing_file.py", "broken_module.py", "missing_attr.py"],
                 ["run"],
             )
-            add_check(results, "synthetic_error_paths", case_id, "module_loader_error_rejected", True, False)
+            check("module_loader_error_rejected", True, False)
         except FileNotFoundError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "module_loader_lists_checked_paths", True, "missing_file.py" in message and "broken_module.py" in message and "missing_attr.py" in message)
-            add_check(results, "synthetic_error_paths", case_id, "module_loader_reports_syntax_error", True, "SyntaxError" in message)
-            add_check(results, "synthetic_error_paths", case_id, "module_loader_reports_missing_attr", True, "缺少必要屬性" in message and "run" in message)
-            add_check(results, "synthetic_error_paths", case_id, "module_loader_preserves_chinese_prefix", True, message.startswith("找不到符合條件的模組"))
+            check("module_loader_lists_checked_paths", True, "missing_file.py" in message and "broken_module.py" in message and "missing_attr.py" in message)
+            check("module_loader_reports_syntax_error", True, "SyntaxError" in message)
+            check("module_loader_reports_missing_attr", True, "缺少必要屬性" in message and "run" in message)
+            check("module_loader_preserves_chinese_prefix", True, message.startswith("找不到符合條件的模組"))
         finally:
             module_loader.MODULE_CACHE.clear()
 
@@ -137,27 +135,26 @@ def validate_module_loader_error_path_case(base_params):
 
 def validate_preflight_error_path_case(base_params):
     case_id = "PREFLIGHT_ERROR_PATHS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     with tempfile.TemporaryDirectory(prefix="v16_preflight_error_") as tmp_dir:
         tmp_root = Path(tmp_dir)
         missing_requirements = tmp_root / "missing_requirements.txt"
         try:
             load_requirement_names(missing_requirements)
-            add_check(results, "synthetic_error_paths", case_id, "missing_requirements_file_rejected", True, False)
+            check("missing_requirements_file_rejected", True, False)
         except FileNotFoundError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "missing_requirements_contains_marker", True, "requirements 檔不存在" in message)
-            add_check(results, "synthetic_error_paths", case_id, "missing_requirements_contains_path", True, str(missing_requirements) in message)
+            check("missing_requirements_contains_marker", True, "requirements 檔不存在" in message)
+            check("missing_requirements_contains_path", True, str(missing_requirements) in message)
 
         try:
             _normalize_local_regression_steps(["meta_quality", "unknown_step"])
-            add_check(results, "synthetic_error_paths", case_id, "invalid_step_rejected", True, False)
+            check("invalid_step_rejected", True, False)
         except ValueError as exc:
             message = str(exc)
-            add_check(results, "synthetic_error_paths", case_id, "invalid_step_contains_bad_value", True, "unknown_step" in message)
-            add_check(results, "synthetic_error_paths", case_id, "invalid_step_lists_valid_steps", True, "quick_gate" in message and "meta_quality" in message)
+            check("invalid_step_contains_bad_value", True, "unknown_step" in message)
+            check("invalid_step_lists_valid_steps", True, "quick_gate" in message and "meta_quality" in message)
 
         requirements_path = tmp_root / "requirements.txt"
         requirements_path.write_text("demo-pkg==1.0\n", encoding="utf-8")
@@ -166,12 +163,12 @@ def validate_preflight_error_path_case(base_params):
             return_value=(False, "ImportError: demo import failed"),
         ):
             payload = run_preflight(requirements_path=requirements_path)
-        add_check(results, "synthetic_error_paths", case_id, "preflight_import_failure_status", "FAIL", payload["status"])
-        add_check(results, "synthetic_error_paths", case_id, "preflight_import_failure_failed_package", ["demo-pkg"], payload["failed_packages"])
+        check("preflight_import_failure_status", "FAIL", payload["status"])
+        check("preflight_import_failure_failed_package", ["demo-pkg"], payload["failed_packages"])
         checks = payload.get("checks", [])
         detail = checks[0]["detail"] if checks else ""
-        add_check(results, "synthetic_error_paths", case_id, "preflight_import_failure_detail", True, "ImportError: demo import failed" in detail)
-        add_check(results, "synthetic_error_paths", case_id, "preflight_import_failure_import_name", "demo_pkg", checks[0]["import_name"] if checks else None)
+        check("preflight_import_failure_detail", True, "ImportError: demo import failed" in detail)
+        check("preflight_import_failure_import_name", "demo_pkg", checks[0]["import_name"] if checks else None)
 
     summary["preflight_error_cases"] = 3
     return results, summary
@@ -182,8 +179,7 @@ def validate_downloader_finmind_token_resolution_case(base_params):
     from services.downloader import runtime
 
     case_id = "DOWNLOADER_FINMIND_TOKEN_RESOLUTION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -195,17 +191,17 @@ def validate_downloader_finmind_token_resolution_case(base_params):
         )
 
         file_token = runtime.resolve_finmind_api_token(project_root=root, environ={})
-        add_check(results, "synthetic_error_paths", case_id, "markdown_api_token_section_is_used_as_fallback", "synthetic-file-token", file_token)
+        check("markdown_api_token_section_is_used_as_fallback", "synthetic-file-token", file_token)
 
         env_token = runtime.resolve_finmind_api_token(
             project_root=root,
             environ={"FINMIND_API_TOKEN": "synthetic-env-token"},
         )
-        add_check(results, "synthetic_error_paths", case_id, "environment_variable_has_precedence_over_private_markdown", "synthetic-env-token", env_token)
+        check("environment_variable_has_precedence_over_private_markdown", "synthetic-env-token", env_token)
 
         token_path.write_text("# id:\nsynthetic-user\n", encoding="utf-8")
         missing_token = runtime.resolve_finmind_api_token(project_root=root, environ={})
-        add_check(results, "synthetic_error_paths", case_id, "missing_api_token_section_resolves_to_empty_without_reading_other_credentials", "", missing_token)
+        check("missing_api_token_section_resolves_to_empty_without_reading_other_credentials", "", missing_token)
 
     class _DummyLoader:
         def __init__(self):
@@ -218,10 +214,10 @@ def validate_downloader_finmind_token_resolution_case(base_params):
         runtime, "get_finmind_dataloader_class", return_value=_DummyLoader
     ), patch.object(runtime, "resolve_finmind_api_token", return_value="synthetic-runtime-token"):
         loader = runtime.get_finmind_loader()
-    add_check(results, "synthetic_error_paths", case_id, "finmind_loader_uses_canonical_token_resolver_at_initialization", "synthetic-runtime-token", loader.logged_token)
+    check("finmind_loader_uses_canonical_token_resolver_at_initialization", "synthetic-runtime-token", loader.logged_token)
 
     source = (PROJECT_ROOT / "services" / "downloader" / "runtime.py").read_text(encoding="utf-8")
-    add_check(results, "synthetic_error_paths", case_id, "runtime_keeps_env_then_private_markdown_precedence_in_single_owner", True, 'FINMIND_API_TOKEN_ENV_VAR = "FINMIND_API_TOKEN"' in source and 'Path("doc") / "FINMIND_API_TOKEN.md"' in source and "token = resolve_finmind_api_token()" in source)
+    check("runtime_keeps_env_then_private_markdown_precedence_in_single_owner", True, 'FINMIND_API_TOKEN_ENV_VAR = "FINMIND_API_TOKEN"' in source and 'Path("doc") / "FINMIND_API_TOKEN.md"' in source and "token = resolve_finmind_api_token()" in source)
 
     summary["finmind_token_resolution_cases"] = 1
     return results, summary
@@ -230,8 +226,7 @@ def validate_downloader_market_date_fallback_case(base_params):
     from services.downloader import universe
 
     case_id = "DOWNLOADER_MARKET_DATE_FALLBACK"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     issue_sections = []
 
@@ -262,11 +257,11 @@ def validate_downloader_market_date_fallback_case(base_params):
                 fail_closed_error = ""
 
     out = stdout.getvalue()
-    add_check(results, "synthetic_error_paths", case_id, "provider_failure_is_fail_closed", True, bool(fail_closed_error))
-    add_check(results, "synthetic_error_paths", case_id, "provider_failure_rejects_guessed_weekday", True, "不能把平日推算當成實際交易日" in fail_closed_error)
-    add_check(results, "synthetic_error_paths", case_id, "finmind_failure_logged", True, any(section == "最新交易日(FinMind)失敗" and "RequestException: finmind down" in "\n".join(lines) for section, lines in issue_sections))
-    add_check(results, "synthetic_error_paths", case_id, "yf_failure_logged", True, any(section == "最新交易日(YF備援)失敗" and "RequestException: yf down" in "\n".join(lines) for section, lines in issue_sections))
-    add_check(results, "synthetic_error_paths", case_id, "stdout_has_no_guessed_weekday_fallback", False, "使用智能推算平日備用日期" in out)
+    check("provider_failure_is_fail_closed", True, bool(fail_closed_error))
+    check("provider_failure_rejects_guessed_weekday", True, "不能把平日推算當成實際交易日" in fail_closed_error)
+    check("finmind_failure_logged", True, any(section == "最新交易日(FinMind)失敗" and "RequestException: finmind down" in "\n".join(lines) for section, lines in issue_sections))
+    check("yf_failure_logged", True, any(section == "最新交易日(YF備援)失敗" and "RequestException: yf down" in "\n".join(lines) for section, lines in issue_sections))
+    check("stdout_has_no_guessed_weekday_fallback", False, "使用智能推算平日備用日期" in out)
     summary["downloader_fallback_cases"] = 1
     return results, summary
 
@@ -275,8 +270,7 @@ def validate_downloader_sync_error_path_case(base_params):
     from services.downloader import sync
 
     case_id = "DOWNLOADER_SYNC_ERROR_PATHS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     issue_sections = []
 
@@ -299,12 +293,12 @@ def validate_downloader_sync_error_path_case(base_params):
              patch.object(sync.rt, "get_downloader_issue_log_path", return_value=issue_log_path):
             payload = sync.smart_download_vip_data(["1101", "1102"], market_last_date="2024-01-03", verbose=False)
 
-    add_check(results, "synthetic_error_paths", case_id, "all_failed_count_success", 0, payload["count_success"])
-    add_check(results, "synthetic_error_paths", case_id, "all_failed_download_error_count", 2, payload["download_error_count"])
-    add_check(results, "synthetic_error_paths", case_id, "issue_log_path_exposed", issue_log_path, payload["issue_log_path"])
+    check("all_failed_count_success", 0, payload["count_success"])
+    check("all_failed_download_error_count", 2, payload["download_error_count"])
+    check("issue_log_path_exposed", issue_log_path, payload["issue_log_path"])
     combined_issue_lines = "\n".join([f"{section}: {' | '.join(lines)}" for section, lines in issue_sections])
-    add_check(results, "synthetic_error_paths", case_id, "empty_df_valueerror_contains_ticker", True, "1101 -> ValueError: FinMind 回傳空資料" in combined_issue_lines)
-    add_check(results, "synthetic_error_paths", case_id, "request_exception_contains_ticker", True, "1102 -> RequestException: network timeout" in combined_issue_lines)
+    check("empty_df_valueerror_contains_ticker", True, "1101 -> ValueError: FinMind 回傳空資料" in combined_issue_lines)
+    check("request_exception_contains_ticker", True, "1102 -> RequestException: network timeout" in combined_issue_lines)
     summary["downloader_sync_error_cases"] = 1
     return results, summary
 
@@ -314,8 +308,7 @@ def validate_downloader_main_error_path_case(base_params):
     downloader_main = importlib.import_module("services.downloader.main")
 
     case_id = "DOWNLOADER_MAIN_ERROR_PATHS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     market_data_update = importlib.import_module("services.trading.market_data_update")
     stderr = io.StringIO()
@@ -331,10 +324,10 @@ def validate_downloader_main_error_path_case(base_params):
             rc = downloader_main.main(["services/downloader/main.py"])
 
     err = stderr.getvalue()
-    add_check(results, "synthetic_error_paths", case_id, "downloader_main_returns_failure", 1, rc)
-    add_check(results, "synthetic_error_paths", case_id, "downloader_main_reports_runtimeerror", True, "❌ RuntimeError:" in err)
-    add_check(results, "synthetic_error_paths", case_id, "downloader_main_reports_counts", True, "成功 0 檔、已最新跳過 0 檔、最後日期檢查失敗 1 檔、下載失敗 2 檔" in err)
-    add_check(results, "synthetic_error_paths", case_id, "downloader_main_reports_issue_log_path", True, "outputs/smart_downloader/downloader_issues_20260402.log" in err)
+    check("downloader_main_returns_failure", 1, rc)
+    check("downloader_main_reports_runtimeerror", True, "❌ RuntimeError:" in err)
+    check("downloader_main_reports_counts", True, "成功 0 檔、已最新跳過 0 檔、最後日期檢查失敗 1 檔、下載失敗 2 檔" in err)
+    check("downloader_main_reports_issue_log_path", True, "outputs/smart_downloader/downloader_issues_20260402.log" in err)
     summary["downloader_main_error_cases"] = 1
     return results, summary
 
@@ -343,8 +336,7 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
     from services.downloader import universe
 
     case_id = "DOWNLOADER_UNIVERSE_FETCH_ERROR_PATHS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     issue_sections = []
     with tempfile.TemporaryDirectory(prefix="v16_downloader_universe_fetch_") as tmp_dir:
@@ -356,11 +348,11 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
             try:
                 universe.get_or_update_universe(market_date="2026-04-03")
-                add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_rejected", True, False)
+                check("universe_fetch_failure_rejected", True, False)
             except RuntimeError as exc:
                 message = str(exc)
-                add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_reports_runtimeerror", True, "無法取得任何台股股票名單" in message)
-                add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_logs_issues", True, any(section == "名單來源失敗" and "twse down" in "\n".join(lines) for section, lines in issue_sections))
+                check("universe_fetch_failure_reports_runtimeerror", True, "無法取得任何台股股票名單" in message)
+                check("universe_fetch_failure_logs_issues", True, any(section == "名單來源失敗" and "twse down" in "\n".join(lines) for section, lines in issue_sections))
 
         partial_issue_sections = []
         table = pd.DataFrame({
@@ -389,10 +381,10 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
                 partial_rejected = True
                 partial_message = str(exc)
 
-        add_check(results, "synthetic_error_paths", case_id, "partial_twse_tpex_source_failure_is_fail_closed", True, partial_rejected)
-        add_check(results, "synthetic_error_paths", case_id, "partial_source_failure_reports_incomplete_universe", True, "universe 來源不完整" in partial_message)
-        add_check(results, "synthetic_error_paths", case_id, "partial_source_failure_never_publishes_cache", False, cache_path.exists())
-        add_check(results, "synthetic_error_paths", case_id, "partial_source_failure_logs_failed_source", True, any(section == "名單來源失敗" and "tpex down" in "\n".join(lines) for section, lines in partial_issue_sections))
+        check("partial_twse_tpex_source_failure_is_fail_closed", True, partial_rejected)
+        check("partial_source_failure_reports_incomplete_universe", True, "universe 來源不完整" in partial_message)
+        check("partial_source_failure_never_publishes_cache", False, cache_path.exists())
+        check("partial_source_failure_logs_failed_source", True, any(section == "名單來源失敗" and "tpex down" in "\n".join(lines) for section, lines in partial_issue_sections))
 
     summary["issue_section_count"] = len(issue_sections)
     return results, summary
@@ -402,8 +394,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
     from services.downloader import universe
 
     case_id = "DOWNLOADER_UNIVERSE_SCREENING_INIT_ERROR_PATHS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     issue_sections = []
 
@@ -468,10 +459,10 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
                 init_rejected = True
                 init_message = str(exc)
 
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_is_fail_closed", True, init_rejected)
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_reports_provider", True, "FinMind Backer 全市場快篩失敗" in init_message and "ModuleNotFoundError" in init_message)
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_logs_issue", True, any(section == "FinMind bulk快篩失敗" and "ModuleNotFoundError" in "\n".join(lines) for section, lines in issue_sections))
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_init_failure_never_publishes_cache", False, cache_path.exists())
+        check("finmind_bulk_screening_init_failure_is_fail_closed", True, init_rejected)
+        check("finmind_bulk_screening_init_failure_reports_provider", True, "FinMind Backer 全市場快篩失敗" in init_message and "ModuleNotFoundError" in init_message)
+        check("finmind_bulk_screening_init_failure_logs_issue", True, any(section == "FinMind bulk快篩失敗" and "ModuleNotFoundError" in "\n".join(lines) for section, lines in issue_sections))
+        check("finmind_bulk_screening_init_failure_never_publishes_cache", False, cache_path.exists())
 
         issue_sections.clear()
         failing_loader = _BulkLoader(fail_dataset=universe.rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET)
@@ -488,8 +479,8 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
                 dataset_failure_rejected = False
             except RuntimeError:
                 dataset_failure_rejected = True
-        add_check(results, "synthetic_error_paths", case_id, "either_finmind_bulk_dataset_failure_is_fail_closed", True, dataset_failure_rejected)
-        add_check(results, "synthetic_error_paths", case_id, "bulk_dataset_failure_never_publishes_cache", False, cache_path.exists())
+        check("either_finmind_bulk_dataset_failure_is_fail_closed", True, dataset_failure_rejected)
+        check("bulk_dataset_failure_never_publishes_cache", False, cache_path.exists())
 
         good_loader = _BulkLoader()
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
@@ -503,21 +494,21 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
             membership = universe.get_or_update_universe(market_date="2026-04-03")
 
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_uses_exact_market_date_not_future_row", ["2330", "0050"], membership)
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_does_not_call_yfinance", True, True)
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_screening_uses_exactly_two_dataset_requests", 2, len(good_loader.calls))
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_price_request_omits_data_id", False, "data_id" in good_loader.calls[0])
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_market_value_request_omits_data_id", False, "data_id" in good_loader.calls[1])
-        add_check(results, "synthetic_error_paths", case_id, "finmind_bulk_requests_use_requested_market_date", ["2026-04-03", "2026-04-03"], [call.get("start_date") for call in good_loader.calls])
-        add_check(results, "synthetic_error_paths", case_id, "etf_qualifies_from_volume_without_market_value_requirement", True, "0050" in membership)
-        add_check(results, "synthetic_error_paths", case_id, "listed_symbol_without_exact_price_is_conservatively_excluded", False, "9999" in membership)
-        add_check(results, "synthetic_error_paths", case_id, "universe_v3_cache_is_machine_readable_and_published", True, cache_path.is_file() and cache_path.read_text(encoding="utf-8").lstrip().startswith("{"))
+        check("finmind_bulk_screening_uses_exact_market_date_not_future_row", ["2330", "0050"], membership)
+        check("finmind_bulk_screening_does_not_call_yfinance", True, True)
+        check("finmind_bulk_screening_uses_exactly_two_dataset_requests", 2, len(good_loader.calls))
+        check("finmind_bulk_price_request_omits_data_id", False, "data_id" in good_loader.calls[0])
+        check("finmind_bulk_market_value_request_omits_data_id", False, "data_id" in good_loader.calls[1])
+        check("finmind_bulk_requests_use_requested_market_date", ["2026-04-03", "2026-04-03"], [call.get("start_date") for call in good_loader.calls])
+        check("etf_qualifies_from_volume_without_market_value_requirement", True, "0050" in membership)
+        check("listed_symbol_without_exact_price_is_conservatively_excluded", False, "9999" in membership)
+        check("universe_v3_cache_is_machine_readable_and_published", True, cache_path.is_file() and cache_path.read_text(encoding="utf-8").lstrip().startswith("{"))
 
         with patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()), \
              patch.object(universe.rt, "MIN_VOLUME", 1_000), \
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):
             cache_reused = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now(), market_date="2026-04-03")
-        add_check(results, "synthetic_error_paths", case_id, "matching_universe_v3_contract_can_reuse_cache", ["2330", "0050"], cache_reused)
+        check("matching_universe_v3_contract_can_reuse_cache", ["2330", "0050"], cache_reused)
 
         with patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()), \
              patch.object(universe.rt, "MIN_VOLUME", 1_000), \
@@ -525,9 +516,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
             wrong_date_cache = universe._load_reusable_universe_cache(
                 cache_path, now=universe.rt.get_taipei_now(), market_date="2026-04-06"
             )
-        add_check(
-            results, "synthetic_error_paths", case_id,
-            "universe_cache_market_date_mismatch_invalidates_membership",
+        check("universe_cache_market_date_mismatch_invalidates_membership",
             None, wrong_date_cache,
         )
 
@@ -535,7 +524,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000), \
              patch.object(universe.rt, "get_taipei_file_mtime", return_value=universe.rt.get_taipei_now()):
             stale_threshold_cache = universe._load_reusable_universe_cache(cache_path, now=universe.rt.get_taipei_now(), market_date="2026-04-03")
-        add_check(results, "synthetic_error_paths", case_id, "universe_threshold_change_invalidates_bulk_cache", None, stale_threshold_cache)
+        check("universe_threshold_change_invalidates_bulk_cache", None, stale_threshold_cache)
 
         cache_path.unlink(missing_ok=True)
         missing_cap_loader = _BulkLoader(missing_market_value=True)
@@ -554,9 +543,9 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
             except RuntimeError as exc:
                 missing_cap_rejected = True
                 missing_cap_message = str(exc)
-        add_check(results, "synthetic_error_paths", case_id, "high_volume_stock_missing_same_day_market_value_is_fail_closed", True, missing_cap_rejected)
-        add_check(results, "synthetic_error_paths", case_id, "missing_market_value_failure_names_missing_stock", True, "2330" in missing_cap_message)
-        add_check(results, "synthetic_error_paths", case_id, "missing_market_value_failure_never_publishes_cache", False, cache_path.exists())
+        check("high_volume_stock_missing_same_day_market_value_is_fail_closed", True, missing_cap_rejected)
+        check("missing_market_value_failure_names_missing_stock", True, "2330" in missing_cap_message)
+        check("missing_market_value_failure_never_publishes_cache", False, cache_path.exists())
 
         duplicate_price = pd.DataFrame({
             "date": ["2026-04-03", "2026-04-03"],
@@ -574,7 +563,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
             duplicate_rejected = False
         except ValueError:
             duplicate_rejected = True
-        add_check(results, "synthetic_error_paths", case_id, "duplicate_finmind_bulk_stock_id_is_rejected", True, duplicate_rejected)
+        check("duplicate_finmind_bulk_stock_id_is_rejected", True, duplicate_rejected)
 
     summary["bulk_screening_checks"] = len(results)
     return results, summary

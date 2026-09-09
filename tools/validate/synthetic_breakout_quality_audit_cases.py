@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from .checks import bind_checks
+from .checks import raises_expected, bind_synthetic_case, bind_checks
 
 from .synthetic_breakout_quality_support import add_check
 
@@ -31,9 +31,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from services.audit.runner import collect_audit_status
 
     case_id = "AUDIT_FRAMEWORK"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_breakout_quality")
 
     validate_audit_config()
     definitions = get_audit_definitions("breakout_quality")
@@ -306,13 +304,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         ("2025-01-01", "2025-01-31"),
         resolve_strategy_compare_period(period_source),
     )
-    missing_period_blocked = False
-    try:
-        resolve_strategy_compare_period(
+    missing_period_blocked = raises_expected(StrategyAuditSourceBlockedError, lambda: resolve_strategy_compare_period(
             SimpleNamespace(profile_id="synthetic_profile", result={})
-        )
-    except StrategyAuditSourceBlockedError:
-        missing_period_blocked = True
+        ))
     check_true(
         "canonical_reusable_audit_comparison_period_missing_evidence_still_blocks",
         missing_period_blocked,

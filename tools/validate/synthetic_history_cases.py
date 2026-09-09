@@ -1,4 +1,4 @@
-from .checks import bind_checks
+from .checks import bind_synthetic_case, bind_checks
 from datetime import datetime
 
 import numpy as np
@@ -22,9 +22,7 @@ def validate_synthetic_history_ev_threshold_case(base_params):
     params.min_history_win_rate = 0.5
 
     case_id = "SYNTH_HISTORY_EV_THRESHOLD"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_history_ev_threshold", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_history_ev_threshold")
 
     is_candidate, expected_value, win_rate, trade_count = evaluate_history_candidate_metrics(
         trade_count=1,
@@ -52,9 +50,7 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
     params.fixed_risk = 0.01
 
     case_id = "SYNTH_PROJ_COST_CASH_CAPPED_ORDER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_proj_cost_cash_capped", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_proj_cost_cash_capped")
 
     sizing_equity = 1_000_000.0
     available_cash = 50_000.0
@@ -127,9 +123,7 @@ def validate_synthetic_pit_same_day_exit_excluded_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
 
     case_id = "SYNTH_PIT_SAME_DAY_EXIT_EXCLUDED"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_pit_same_day_exit_excluded", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_pit_same_day_exit_excluded")
 
     exit_dates = [
         datetime(2024, 1, 2),
@@ -183,9 +177,7 @@ def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params
     params.min_history_win_rate = 0.8
 
     case_id = "SYNTH_SINGLE_BACKTEST_NOT_GATED_BY_OWN_HISTORY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_single_backtest_not_gated_by_own_history", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_single_backtest_not_gated_by_own_history")
 
     df = pd.DataFrame(
         {
@@ -231,9 +223,7 @@ def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params
     params.max_position_cap_pct = 1.0
 
     case_id = "SYNTH_SINGLE_BACKTEST_COMPOUNDING_CAPITAL"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_single_backtest_compounding_capital", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_single_backtest_compounding_capital")
 
     df = pd.DataFrame(
         {
@@ -281,9 +271,7 @@ def validate_synthetic_portfolio_history_filter_only_case(base_params):
     params.min_history_win_rate = 0.8
 
     case_id = "SYNTH_PORTFOLIO_HISTORY_FILTER_ONLY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_portfolio_history_filter_only", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_portfolio_history_filter_only")
 
     from .synthetic_portfolio_common import build_synthetic_half_tp_full_year_case
     from .synthetic_fixtures import write_synthetic_csv_bundle
@@ -338,9 +326,7 @@ def validate_synthetic_pit_multiple_same_day_exits_case(base_params):
     params.min_history_win_rate = 0.5
 
     case_id = "SYNTH_PIT_MULTIPLE_SAME_DAY_EXITS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_pit_multiple_same_day_exits", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_pit_multiple_same_day_exits")
 
     trade_logs = [
         {"exit_date": datetime(2024, 1, 3), "pnl": 120.0, "r_mult": 1.2},
@@ -396,9 +382,7 @@ def validate_synthetic_lookahead_prev_day_only_case(base_params):
     params.min_history_win_rate = 0.5
 
     case_id = "SYNTH_LOOKAHEAD_PREV_DAY_ONLY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_lookahead_prev_day_only", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_lookahead_prev_day_only")
 
     exit_dates = [
         datetime(2024, 1, 2),
@@ -447,9 +431,7 @@ def validate_synthetic_setup_index_prev_day_only_case(base_params):
     _params = make_synthetic_validation_params(base_params, tp_percent=0.0)
 
     case_id = "SYNTH_SETUP_INDEX_PREV_DAY_ONLY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_setup_index_prev_day_only", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_setup_index_prev_day_only")
 
     index = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
     packed_df = pd.DataFrame(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import core.breakout_quality_registry as breakout_quality_registry
 import core.breakout_quality_policy as breakout_quality_policy
-from .checks import bind_checks
+from .checks import raises_expected, bind_synthetic_case, bind_checks, run_bound_checks
 
 from config import breakout_quality as breakout_quality_config
 
@@ -85,9 +85,7 @@ from .source_index import read_source_ast, read_source_text
 
 
 def _start_case(case_id: str):
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_breakout_quality")
     return results, summary, check, check_true
 
 
@@ -191,11 +189,7 @@ def _direct_scalar_context_runtime_contract(
         and abs(float(logits[1, 1] - logits[0, 1]) - 0.6) < 1e-5
         and not hasattr(model, forbidden_network_attr)
     )
-    rejected_missing_context = False
-    try:
-        build_active_model(feature_count=10, context_count=0, architecture=architecture)
-    except ValueError:
-        rejected_missing_context = True
+    rejected_missing_context = raises_expected(ValueError, lambda: build_active_model(feature_count=10, context_count=0, architecture=architecture))
     return (
         _direct_scalar_context_spec_matches(architecture, pooling),
         runtime_matches,
@@ -439,16 +433,12 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
 
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
     contract = spec.contract_payload()
-    check("continuous_target_id_is_versioned", STRATEGY_ALIGNED_TARGET_ID, contract["target_id"])
-    check(
-        "continuous_target_uses_no_split_or_oos_parameters",
-        (False, False, "none", "none"),
+    run_bound_checks(
+        check,
         (
-                    contract["split_derived_parameters"],
-                    contract["oos_derived_parameters"],
-                    contract["normalization"],
-                    contract["clipping"],
-                ),
+            ('continuous_target_id_is_versioned', STRATEGY_ALIGNED_TARGET_ID, contract['target_id'],),
+            ('continuous_target_uses_no_split_or_oos_parameters', (False, False, 'none', 'none'), (contract['split_derived_parameters'], contract['oos_derived_parameters'], contract['normalization'], contract['clipping']),),
+        ),
     )
     check(
         "continuous_target_inherits_current_horizon_and_risk_budget",
@@ -625,25 +615,12 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
                     and "target_time_penalty_ablation" not in builder_source
                 ),
     )
-    check_true(
-        "prepare_continuous_target_routes_only_to_canonical_service_builder",
-        bool(
-                    "services.breakout_quality.continuous_target_builder" in prepare_source
-                    and "tools.audit.breakout_quality.continuous_target" not in prepare_source
-                    and "approved-workflow-rebuild" not in prepare_source
-                ),
-    )
-    check_true(
-        "retired_11c_to_11f_target_audit_implementations_are_not_runtime_or_catalog_commands",
-        bool(
-                    all(not path.exists() for path in retired_paths)
-                    and "audit-continuous-target" not in catalog_source
-                    and "audit-qualified-candidate-set" not in catalog_source
-                    and "audit-target-attribution" not in catalog_source
-                    and "audit-target-time-ablation" not in catalog_source
-                    and "audit-no-time-target" not in catalog_source
-                    and 'module="services.breakout_quality.point_in_time_audit"' in catalog_source
-                ),
+    run_bound_checks(
+        check_true,
+        (
+            ('prepare_continuous_target_routes_only_to_canonical_service_builder', bool('services.breakout_quality.continuous_target_builder' in prepare_source and 'tools.audit.breakout_quality.continuous_target' not in prepare_source and ('approved-workflow-rebuild' not in prepare_source)),),
+            ('retired_11c_to_11f_target_audit_implementations_are_not_runtime_or_catalog_commands', bool(all((not path.exists() for path in retired_paths)) and 'audit-continuous-target' not in catalog_source and ('audit-qualified-candidate-set' not in catalog_source) and ('audit-target-attribution' not in catalog_source) and ('audit-target-time-ablation' not in catalog_source) and ('audit-no-time-target' not in catalog_source) and ('module="services.breakout_quality.point_in_time_audit"' in catalog_source)),),
+        ),
     )
     check(
         "continuous_target_output_path_remains_target_version_scoped",
@@ -1180,15 +1157,12 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 f"{registered_profile_name}: " + "; ".join(reasons)
             )
 
-    check(
-        "continuous_ranker_all_registered_profiles_share_generic_runtime_contract",
-        [],
-        registered_runtime_failures,
-    )
-    check(
-        "continuous_ranker_generic_contract_covers_every_registered_profile",
-        len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES),
-        len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES) - len(registered_runtime_failures),
+    run_bound_checks(
+        check,
+        (
+            ('continuous_ranker_all_registered_profiles_share_generic_runtime_contract', [], registered_runtime_failures,),
+            ('continuous_ranker_generic_contract_covers_every_registered_profile', len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES), len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES) - len(registered_runtime_failures),),
+        ),
     )
 
     registry_source = read_source_text("core/breakout_quality_registry.py")
@@ -1685,20 +1659,12 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     research_app._append_pit_forward_checkpoint_import_args(
         synthetic_build_args, forward_checkpoint_source
     )
-    check_true(
-        "forward_checkpoint_import_bridge_passes_model_and_report_as_one_atomic_argument_pair",
-        synthetic_build_args[-4:] == [
-            "--checkpoint-import-model-dir", str(forward_checkpoint_source[0].resolve()),
-            "--checkpoint-import-report-path", str(forward_checkpoint_source[1].resolve()),
-        ],
-    )
-
-    check_true(
-        "model_robustness_restart_reports_ready_seed_reuse_and_completed_seed_done",
-        'seed_text = _seed_progress_text(seed, seed_index, len(seeds))' in app_source
-        and 'styled_workflow_status("[REUSE]")' in app_source
-        and 'styled_workflow_status("[DONE]")' in app_source
-        and 'f" | {mode_label} Standard SOP READY"' in app_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('forward_checkpoint_import_bridge_passes_model_and_report_as_one_atomic_argument_pair', synthetic_build_args[-4:] == ['--checkpoint-import-model-dir', str(forward_checkpoint_source[0].resolve()), '--checkpoint-import-report-path', str(forward_checkpoint_source[1].resolve())],),
+            ('model_robustness_restart_reports_ready_seed_reuse_and_completed_seed_done', 'seed_text = _seed_progress_text(seed, seed_index, len(seeds))' in app_source and 'styled_workflow_status("[REUSE]")' in app_source and ('styled_workflow_status("[DONE]")' in app_source) and ('f" | {mode_label} Standard SOP READY"' in app_source),),
+        ),
     )
 
 
@@ -1806,46 +1772,13 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             "daily_eligible_stock_days" in str(exc)
         )
 
-    check(
-        "event_scope_continuous_ranker_stays_out_of_binary_runtime_while_daily_runtime_export_is_separate",
-        (True, True, True, True),
+    run_bound_checks(
+        check,
         (
-                    "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in train_source,
-                    "research-only continuous ranker artifact不得載入正式binary runtime contract" in artifact_source,
-                    "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in app_source,
-                    event_scope_runtime_export_rejected,
-                ),
-    )
-
-    check(
-        "continuous_ranker_is_research_only_and_oos_follows_checkpoint_write",
-        (True, True, True, True, True, True),
-        (
-                    '"eligible": False' in ranker_source,
-                    "OOS target transformation and model inference occur only after" in ranker_source,
-                    "torch.save(" in ranker_source
-                    and ranker_source.index("torch.save(")
-                    < ranker_source.index("OOS target transformation and model inference occur only after"),
-                    'score_frame["group_index"].duplicated().any()' in ranker_source,
-                    'label_scope=profile.training_label_scope' in ranker_source,
-                    '"label_conditional": {}' in ranker_source,
-                ),
-    )
-
-    check(
-        "pass_conditional_ranker_is_cli_only_and_uses_existing_command",
-        (True, True, True, True),
-        (
-                    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
-                    in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
-                    get_continuous_ranker_research_spec(
-                        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
-                    ).trainer_family
-                    == CONTINUOUS_RANKER_TRAINER_EVENT,
-                    "11G" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
-                    command_modules.get("train-continuous-ranker")
-                    == "services.breakout_quality.ranker_cli",
-                ),
+            ('event_scope_continuous_ranker_stays_out_of_binary_runtime_while_daily_runtime_export_is_separate', (True, True, True, True), ('SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES' in train_source, 'research-only continuous ranker artifact不得載入正式binary runtime contract' in artifact_source, 'SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES' in app_source, event_scope_runtime_export_rejected),),
+            ('continuous_ranker_is_research_only_and_oos_follows_checkpoint_write', (True, True, True, True, True, True), ('"eligible": False' in ranker_source, 'OOS target transformation and model inference occur only after' in ranker_source, 'torch.save(' in ranker_source and ranker_source.index('torch.save(') < ranker_source.index('OOS target transformation and model inference occur only after'), 'score_frame["group_index"].duplicated().any()' in ranker_source, 'label_scope=profile.training_label_scope' in ranker_source, '"label_conditional": {}' in ranker_source),),
+            ('pass_conditional_ranker_is_cli_only_and_uses_existing_command', (True, True, True, True), (STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES, get_continuous_ranker_research_spec(STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE).trainer_family == CONTINUOUS_RANKER_TRAINER_EVENT, '11G' not in app_source[app_source.index('def _interactive_model_research'):app_source.index('def run_model_training_menu')], command_modules.get('train-continuous-ranker') == 'services.breakout_quality.ranker_cli'),),
+        ),
     )
 
     ranker_api_source = (
@@ -2564,25 +2497,12 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
         "training_label_scope",
         "training_sample_scope",
     )
-    check(
-        "mr13e_changes_only_pairwise_reduction_while_daily_profile_contract_stays_fixed",
-        tuple(getattr(profile_a, field) for field in fixed_fields),
-        tuple(getattr(profile_e, field) for field in fixed_fields),
-    )
-    check(
-        "mr13e_research_identity_and_full_list_delta_ndcg_reduction_are_explicit",
+    run_bound_checks(
+        check,
         (
-                    "MR-13E",
-                    spec_a.trainer_family,
-                    spec_a.score_semantic_id,
-                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-                ),
-        (
-                    spec_e.model_research_id,
-                    spec_e.trainer_family,
-                    spec_e.score_semantic_id,
-                    spec_e.pairwise_reduction,
-                ),
+            ('mr13e_changes_only_pairwise_reduction_while_daily_profile_contract_stays_fixed', tuple((getattr(profile_a, field) for field in fixed_fields)), tuple((getattr(profile_e, field) for field in fixed_fields)),),
+            ('mr13e_research_identity_and_full_list_delta_ndcg_reduction_are_explicit', ('MR-13E', spec_a.trainer_family, spec_a.score_semantic_id, CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG), (spec_e.model_research_id, spec_e.trainer_family, spec_e.score_semantic_id, spec_e.pairwise_reduction),),
+        ),
     )
     from services.breakout_quality.train_continuous_ranker import training_semantics
     check(
@@ -2736,11 +2656,7 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
         ]
         manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
         report_path.write_text(json.dumps(report_payload), encoding="utf-8")
-        wrong_weighting_rejected = False
-        try:
-            _load_contract()
-        except ValueError:
-            wrong_weighting_rejected = True
+        wrong_weighting_rejected = raises_expected(ValueError, lambda: _load_contract())
 
     check(
         "runtime_oos_contract_uses_same_profile_driven_pairwise_semantics_as_trainer",
@@ -3913,20 +3829,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 ):
                     context_roundtrip_errors.append(spec.source)
 
-    check(
-        "predicted_context_builder_uses_isolated_crossfit_selection_and_single_fixed_forward_behavior",
-        [],
-        context_orchestration_errors,
-    )
-    check(
-        "predicted_context_artifact_owner_and_stage1_provenance_are_registry_driven",
-        [],
-        context_owner_errors,
-    )
-    check(
-        "predicted_context_artifact_roundtrip_preserves_pit_and_ticker_identity",
-        [],
-        context_roundtrip_errors,
+    run_bound_checks(
+        check,
+        (
+            ('predicted_context_builder_uses_isolated_crossfit_selection_and_single_fixed_forward_behavior', [], context_orchestration_errors,),
+            ('predicted_context_artifact_owner_and_stage1_provenance_are_registry_driven', [], context_owner_errors,),
+            ('predicted_context_artifact_roundtrip_preserves_pit_and_ticker_identity', [], context_roundtrip_errors,),
+        ),
     )
 
     # Rows without a usable persistent context must be filtered before any daily target
@@ -4056,25 +3965,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             profile_name
         ).historical_pit_authorized
     ]
-    check(
-        "current_time_validation_never_bypasses_historical_pit_authorization",
-        [],
-        authorization_inversions,
-    )
-
-    check(
-        "active_and_legacy_model_architecture_sets_are_disjoint_and_exhaustive",
-        (set(), set(SUPPORTED_MODEL_ARCHITECTURES)),
+    run_bound_checks(
+        check,
         (
-            set(ACTIVE_MODEL_ARCHITECTURES).intersection(LEGACY_MODEL_ARCHITECTURES),
-            set(ACTIVE_MODEL_ARCHITECTURES).union(LEGACY_MODEL_ARCHITECTURES),
+            ('current_time_validation_never_bypasses_historical_pit_authorization', [], authorization_inversions,),
+            ('active_and_legacy_model_architecture_sets_are_disjoint_and_exhaustive', (set(), set(SUPPORTED_MODEL_ARCHITECTURES)), (set(ACTIVE_MODEL_ARCHITECTURES).intersection(LEGACY_MODEL_ARCHITECTURES), set(ACTIVE_MODEL_ARCHITECTURES).union(LEGACY_MODEL_ARCHITECTURES)),),
+            ('model_spec_registry_is_exhaustive_without_second_architecture_matrix', set(SUPPORTED_MODEL_ARCHITECTURES), set(MODEL_SPEC_BUILDERS),),
         ),
-    )
-
-    check(
-        "model_spec_registry_is_exhaustive_without_second_architecture_matrix",
-        set(SUPPORTED_MODEL_ARCHITECTURES),
-        set(MODEL_SPEC_BUILDERS),
     )
     model_spec_roundtrip_mismatches = []
     for architecture in SUPPORTED_MODEL_ARCHITECTURES:
@@ -4108,16 +4005,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         tuple(ACTIVE_MODEL_ARCHITECTURES),
         active_from_descriptors,
     )
-    check_true(
-        "architecture_descriptor_runtime_builder_keys_are_registered",
-        {descriptor.runtime_builder_key for descriptor in ARCHITECTURE_DESCRIPTORS.values()}
-        <= set(registered_runtime_builder_keys()),
-    )
-    check_true(
-        "active_descriptors_have_unique_explicit_active_order",
-        all(get_architecture_descriptor(name).active_order is not None for name in ACTIVE_MODEL_ARCHITECTURES)
-        and len({get_architecture_descriptor(name).active_order for name in ACTIVE_MODEL_ARCHITECTURES})
-        == len(ACTIVE_MODEL_ARCHITECTURES),
+    run_bound_checks(
+        check_true,
+        (
+            ('architecture_descriptor_runtime_builder_keys_are_registered', {descriptor.runtime_builder_key for descriptor in ARCHITECTURE_DESCRIPTORS.values()} <= set(registered_runtime_builder_keys()),),
+            ('active_descriptors_have_unique_explicit_active_order', all((get_architecture_descriptor(name).active_order is not None for name in ACTIVE_MODEL_ARCHITECTURES)) and len({get_architecture_descriptor(name).active_order for name in ACTIVE_MODEL_ARCHITECTURES}) == len(ACTIVE_MODEL_ARCHITECTURES),),
+        ),
     )
 
     recurrent_fp32_unidirectional = []
@@ -5907,24 +5800,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     k_proj = self_attn_model.safety_temporal_key
     v_proj = self_attn_model.safety_temporal_value
     expected_channels = int(self_attn_spec.inception_filters) * 4
-    check_true(
-        "safety_temporal_self_attention_is_parameter_minimal_single_head_full_width_qkv",
-        all(
-            _pointwise_conv1d_contract(
-                layer,
-                in_channels=expected_channels,
-                out_channels=expected_channels,
-                bias=False,
-            )
-            for layer in (q_proj, k_proj, v_proj)
-        )
-        and not hasattr(self_attn_model, "safety_temporal_ffn")
-        and not hasattr(self_attn_model, "safety_positional_embedding"),
-    )
-    check_true(
-        "safety_temporal_self_attention_preserves_ao_mfe_path_and_changes_only_safety_readout",
-        torch.equal(self_attn_probe.parent_mfe, self_attn_probe.mfe)
-        and not torch.equal(self_attn_probe.parent_safety, self_attn_probe.safety),
+    run_bound_checks(
+        check_true,
+        (
+            ('safety_temporal_self_attention_is_parameter_minimal_single_head_full_width_qkv', all((_pointwise_conv1d_contract(layer, in_channels=expected_channels, out_channels=expected_channels, bias=False) for layer in (q_proj, k_proj, v_proj))) and (not hasattr(self_attn_model, 'safety_temporal_ffn')) and (not hasattr(self_attn_model, 'safety_positional_embedding')),),
+            ('safety_temporal_self_attention_preserves_ao_mfe_path_and_changes_only_safety_readout', torch.equal(self_attn_probe.parent_mfe, self_attn_probe.mfe) and (not torch.equal(self_attn_probe.parent_safety, self_attn_probe.safety)),),
+        ),
     )
     safety_to_qkv_grad = self_attn_probe.safety_grad
     mfe_to_qkv_grad = self_attn_probe.mfe_grad
@@ -6000,33 +5881,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         relation_features
     ).squeeze(3)
     compact_relation_bias = relation_model.safety_temporal_relation_bias(relation_x)
-    check_true(
-        "pairwise_temporal_relation_primitives_are_signed_antisymmetric_and_pit_local",
-        tuple(relation_features.shape) == (2, 32, 32, 5)
-        and bool(torch.isfinite(relation_features).all())
-        and bool(
-            torch.allclose(
-                relation_features + relation_features.transpose(1, 2),
-                torch.zeros_like(relation_features),
-                atol=1e-6,
-                rtol=0.0,
-            )
-        )
-        and abs(float(relation_features[0, -1, 0, 4]) - 1.0) < 1e-6
-        and abs(float(relation_features[0, 0, -1, 4]) + 1.0) < 1e-6
-        and bool(
-            torch.allclose(
-                direct_relation_bias,
-                compact_relation_bias,
-                atol=1e-6,
-                rtol=1e-6,
-            )
+    run_bound_checks(
+        check_true,
+        (
+            ('pairwise_temporal_relation_primitives_are_signed_antisymmetric_and_pit_local', tuple(relation_features.shape) == (2, 32, 32, 5) and bool(torch.isfinite(relation_features).all()) and bool(torch.allclose(relation_features + relation_features.transpose(1, 2), torch.zeros_like(relation_features), atol=1e-06, rtol=0.0)) and (abs(float(relation_features[0, -1, 0, 4]) - 1.0) < 1e-06) and (abs(float(relation_features[0, 0, -1, 4]) + 1.0) < 1e-06) and bool(torch.allclose(direct_relation_bias, compact_relation_bias, atol=1e-06, rtol=1e-06)),),
+            ('pairwise_temporal_relation_preserves_ay_ao_mfe_path_and_changes_safety', torch.equal(relation_probe.parent_mfe, relation_probe.mfe) and (not torch.equal(relation_probe.parent_safety, relation_probe.safety)),),
         ),
-    )
-    check_true(
-        "pairwise_temporal_relation_preserves_ay_ao_mfe_path_and_changes_safety",
-        torch.equal(relation_probe.parent_mfe, relation_probe.mfe)
-        and not torch.equal(relation_probe.parent_safety, relation_probe.safety),
     )
     from filters.breakout_quality.models import pairwise_temporal_relation as relation_module
 
@@ -6391,25 +6251,11 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     )
     single_sem = dict(training_semantics(single).get("conditional_mfe_single_head_contract") or {})
     duo_sem = dict(training_semantics(duo).get("safety_conditional_mfe_duo_head_contract") or {})
-    check(
-        "reverse_conditional_ab_share_same_final_target_and_strategy_score_semantics",
+    run_bound_checks(
+        check,
         (
-            "same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile",
-            "conditional_mfe_pass_probability",
-            "same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile",
-            "conditional_mfe_pass_probability_only",
-        ),
-        (
-            single_sem.get("target"), single_sem.get("runtime_score"),
-            duo_sem.get("conditional_mfe_target"), duo_sem.get("runtime_score"),
-        ),
-    )
-    check(
-        "duo_head_uses_raw_safety_only_as_stop_gradient_condition",
-        ("same_date_low_adverse_safety_percentile", "stop_gradient_raw_safety_probability", False),
-        (
-            duo_sem.get("safety_target"), duo_sem.get("conditional_context"),
-            duo_sem.get("safety_head_gradient_from_conditional_loss"),
+            ('reverse_conditional_ab_share_same_final_target_and_strategy_score_semantics', ('same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile', 'conditional_mfe_pass_probability', 'same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile', 'conditional_mfe_pass_probability_only'), (single_sem.get('target'), single_sem.get('runtime_score'), duo_sem.get('conditional_mfe_target'), duo_sem.get('runtime_score')),),
+            ('duo_head_uses_raw_safety_only_as_stop_gradient_condition', ('same_date_low_adverse_safety_percentile', 'stop_gradient_raw_safety_probability', False), (duo_sem.get('safety_target'), duo_sem.get('conditional_context'), duo_sem.get('safety_head_gradient_from_conditional_loss')),),
         ),
     )
     check_true(
@@ -6459,17 +6305,19 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         }
     )
     targets = build_conditional_mfe_opportunity_targets(frame, np.ones(len(frame), dtype=bool))
-    check("single_head_training_target_is_one_final_j", (12,), targets.single_head_training_target.shape)
-    check("duo_head_training_target_is_raw_safety_plus_same_final_j", (12, 2), targets.duo_head_training_target.shape)
-    check_true(
-        "reverse_conditional_targets_are_finite_unit_interval",
-        bool(np.isfinite(targets.duo_head_training_target).all()
-             and (targets.duo_head_training_target >= 0).all()
-             and (targets.duo_head_training_target <= 1).all()),
+    run_bound_checks(
+        check,
+        (
+            ('single_head_training_target_is_one_final_j', (12,), targets.single_head_training_target.shape,),
+            ('duo_head_training_target_is_raw_safety_plus_same_final_j', (12, 2), targets.duo_head_training_target.shape,),
+        ),
     )
-    check_true(
-        "single_and_duo_final_conditional_mfe_targets_are_identical",
-        bool(np.allclose(targets.single_head_training_target, targets.duo_head_training_target[:, 1], atol=0, rtol=0)),
+    run_bound_checks(
+        check_true,
+        (
+            ('reverse_conditional_targets_are_finite_unit_interval', bool(np.isfinite(targets.duo_head_training_target).all() and (targets.duo_head_training_target >= 0).all() and (targets.duo_head_training_target <= 1).all()),),
+            ('single_and_duo_final_conditional_mfe_targets_are_identical', bool(np.allclose(targets.single_head_training_target, targets.duo_head_training_target[:, 1], atol=0, rtol=0)),),
+        ),
     )
     orthogonal = True
     for _date, day in frame.groupby("date", sort=True):
@@ -6537,34 +6385,11 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     spec = get_continuous_ranker_research_spec(profile.name)
-    check(
-        "mr13s_identity_is_preserved_as_model_only_controlled_contrast",
+    run_bound_checks(
+        check,
         (
-            DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            "MR-13S",
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-            "inception_time_safety_conditional_mfe_v1",
-            False,
-            False,
-        ),
-        (
-            profile.name,
-            spec.model_research_id,
-            profile.training_objective,
-            profile.model_architecture,
-            spec.selection_pit_authorized,
-            spec.current_time_validation_authorized,
-        ),
-    )
-    check(
-        "mr13s_changes_target_not_architecture_or_pairwise_reduction",
-        (
-            old_profile.model_architecture,
-            get_continuous_ranker_execution_recipe(old_profile.name).pairwise_reduction,
-        ),
-        (
-            profile.model_architecture,
-            get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
+            ('mr13s_identity_is_preserved_as_model_only_controlled_contrast', (DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE, 'MR-13S', TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING, 'inception_time_safety_conditional_mfe_v1', False, False), (profile.name, spec.model_research_id, profile.training_objective, profile.model_architecture, spec.selection_pit_authorized, spec.current_time_validation_authorized),),
+            ('mr13s_changes_target_not_architecture_or_pairwise_reduction', (old_profile.model_architecture, get_continuous_ranker_execution_recipe(old_profile.name).pairwise_reduction), (profile.model_architecture, get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction),),
         ),
     )
     sem = dict(training_semantics(profile).get("safety_raw_mfe_duo_head_contract") or {})
@@ -6604,15 +6429,11 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     new_target = targets.safety_raw_mfe_training_target
     old_target = targets.duo_head_training_target
     check("mr13s_training_target_shape", (20, 2), new_target.shape)
-    check_true(
-        "mr13s_safety_target_is_byte_identical_to_mr13r_safety_target",
-        bool(np.array_equal(new_target[:, 0], old_target[:, 0])),
-    )
-    check_true(
-        "mr13s_final_target_is_absolute_u_not_residual_j",
-        bool(
-            np.array_equal(new_target[:, 1], targets.primary_mfe_percentile)
-            and not np.array_equal(new_target[:, 1], old_target[:, 1])
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13s_safety_target_is_byte_identical_to_mr13r_safety_target', bool(np.array_equal(new_target[:, 0], old_target[:, 0])),),
+            ('mr13s_final_target_is_absolute_u_not_residual_j', bool(np.array_equal(new_target[:, 1], targets.primary_mfe_percentile) and (not np.array_equal(new_target[:, 1], old_target[:, 1]))),),
         ),
     )
 
@@ -6628,18 +6449,12 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     upper = dict(gate.get("upper_right_s5_m5") or {})
     geometry = list(gate.get("predicted_joint_geometry") or [])
     cohorts = list(gate.get("safety_cohorts") or [])
-    check_true(
-        "mr13s_model_gate_has_full_5x5_geometry_and_supported_upper_right",
-        len(geometry) == 5
-        and all(len(row) == 5 for row in geometry)
-        and int(upper.get("n", 0) or 0) > 0
-        and float(upper.get("actual_hmhs_pct") or 0.0) == 100.0,
-    )
-    check_true(
-        "mr13s_model_gate_reports_all_safety_cohorts_and_joint_rank",
-        len(cohorts) == 5
-        and all("raw_mfe_to_actual_mfe_mean_daily_spearman" in row for row in cohorts)
-        and gate.get("joint_product_to_actual_hmhs_mean_daily_spearman") is not None,
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13s_model_gate_has_full_5x5_geometry_and_supported_upper_right', len(geometry) == 5 and all((len(row) == 5 for row in geometry)) and (int(upper.get('n', 0) or 0) > 0) and (float(upper.get('actual_hmhs_pct') or 0.0) == 100.0),),
+            ('mr13s_model_gate_reports_all_safety_cohorts_and_joint_rank', len(cohorts) == 5 and all(('raw_mfe_to_actual_mfe_mean_daily_spearman' in row for row in cohorts)) and (gate.get('joint_product_to_actual_hmhs_mean_daily_spearman') is not None),),
+        ),
     )
     truth = dict(gate.get("actual_truth_geometry") or {})
     check_true(
@@ -7313,32 +7128,11 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     spec = get_continuous_ranker_research_spec(profile.name)
-    check(
-        "mr13t_historical_raw_input_model_only_controlled_contrast_remains_registered",
+    run_bound_checks(
+        check,
         (
-            "MR-13T",
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-            "inception_time_safety_raw_mfe_hmhs_v1",
-            False,
-            False,
-        ),
-        (
-            spec.model_research_id,
-            profile.training_objective,
-            profile.model_architecture,
-            spec.selection_pit_authorized,
-            spec.current_time_validation_authorized,
-        ),
-    )
-    check(
-        "mr13t_keeps_mr13s_raw_mfe_epoch_selection_and_pairwise_reduction",
-        (
-            control.epoch_selection_metric,
-            get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
-        ),
-        (
-            profile.epoch_selection_metric,
-            get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
+            ('mr13t_historical_raw_input_model_only_controlled_contrast_remains_registered', ('MR-13T', TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING, 'inception_time_safety_raw_mfe_hmhs_v1', False, False), (spec.model_research_id, profile.training_objective, profile.model_architecture, spec.selection_pit_authorized, spec.current_time_validation_authorized),),
+            ('mr13t_keeps_mr13s_raw_mfe_epoch_selection_and_pairwise_reduction', (control.epoch_selection_metric, get_continuous_ranker_execution_recipe(control.name).pairwise_reduction), (profile.epoch_selection_metric, get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction),),
         ),
     )
 
@@ -7558,18 +7352,12 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
     app_source = (
         project_root / "services" / "research" / "breakout_quality_application.py"
     ).read_text(encoding="utf-8")
-    check_true(
-        "mr13t_joint_result_is_model_specific_extension_and_oos_artifact_without_standard_sop_pollution",
-        'oos_frame["joint_hmhs_score"]' in daily_source
-        and 'oos_frame["target_direct_hmhs"]' in daily_source
-        and "Direct HM/HS Joint Retrieval" in daily_source
-        and "Model-specific Extension" in daily_source
-        and "Model-specific Extension" in app_source
-        and "標準模型 SOP｜3. Direct HM/HS Joint Retrieval" not in app_source,
-    )
-    check_true(
-        "mr13t_historical_model_remains_not_c75_source_after_mr13z_conversion",
-        not _strategy_c75_uses_experiment_profile(profile.name),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13t_joint_result_is_model_specific_extension_and_oos_artifact_without_standard_sop_pollution', 'oos_frame["joint_hmhs_score"]' in daily_source and 'oos_frame["target_direct_hmhs"]' in daily_source and ('Direct HM/HS Joint Retrieval' in daily_source) and ('Model-specific Extension' in daily_source) and ('Model-specific Extension' in app_source) and ('標準模型 SOP｜3. Direct HM/HS Joint Retrieval' not in app_source),),
+            ('mr13t_historical_model_remains_not_c75_source_after_mr13z_conversion', not _strategy_c75_uses_experiment_profile(profile.name),),
+        ),
     )
 
     return _finish_case(results, summary)
@@ -7614,29 +7402,12 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     spec = get_continuous_ranker_research_spec(profile.name)
-    check(
-        "mr13u_historical_h_only_model_gate_profile_remains_registered",
+    run_bound_checks(
+        check,
         (
-            "MR-13U",
-            TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-            "inception_time_v1",
-            "hmhs_pairwise_concordance",
-            False,
-            False,
+            ('mr13u_historical_h_only_model_gate_profile_remains_registered', ('MR-13U', TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING, 'inception_time_v1', 'hmhs_pairwise_concordance', False, False), (spec.model_research_id, profile.training_objective, profile.model_architecture or 'inception_time_v1', profile.epoch_selection_metric, spec.selection_pit_authorized, spec.current_time_validation_authorized),),
+            ('mr13u_keeps_mr13t_full_list_pairwise_reduction', get_continuous_ranker_execution_recipe(control.name).pairwise_reduction, get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,),
         ),
-        (
-            spec.model_research_id,
-            profile.training_objective,
-            profile.model_architecture or "inception_time_v1",
-            profile.epoch_selection_metric,
-            spec.selection_pit_authorized,
-            spec.current_time_validation_authorized,
-        ),
-    )
-    check(
-        "mr13u_keeps_mr13t_full_list_pairwise_reduction",
-        get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
-        get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
     )
 
     h_spec = get_model_spec(profile.model_architecture)
@@ -7743,25 +7514,13 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
     trainer_source = (project_root / "services" / "breakout_quality" / "train_continuous_ranker.py").read_text(encoding="utf-8")
     daily_source = (project_root / "services" / "breakout_quality" / "train_daily_ranker.py").read_text(encoding="utf-8")
     app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
-    check_true(
-        "mr13u_epoch_selection_is_validation_h_pair_then_pr_auc_without_oos_fit",
-        "best_hmhs_pairwise_concordance" in trainer_source
-        and "best_hmhs_global_average_precision" in trainer_source
-        and "Val HM/HS Pair" in trainer_source
-        and profile.epoch_selection_metric == "hmhs_pairwise_concordance",
-    )
-    check_true(
-        "mr13u_h_only_evidence_is_model_specific_extension_without_standard_generalization_override",
-        'oos_frame["target_direct_hmhs"]' in daily_source
-        and "Direct HM/HS H-only Learnability" in daily_source
-        and "Model-specific Extension" in daily_source
-        and "Model-specific Extension" in app_source
-        and "標準模型 SOP｜3. Direct HM/HS H-only Learnability" not in app_source
-        and '"Δ HM/HS Pair", "Δ PR-AUC", "Δ Top10×"' not in app_source,
-    )
-    check_true(
-        "mr13u_historical_model_remains_not_c75_source_after_mr13z_conversion",
-        not _strategy_c75_uses_experiment_profile(profile.name),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13u_epoch_selection_is_validation_h_pair_then_pr_auc_without_oos_fit', 'best_hmhs_pairwise_concordance' in trainer_source and 'best_hmhs_global_average_precision' in trainer_source and ('Val HM/HS Pair' in trainer_source) and (profile.epoch_selection_metric == 'hmhs_pairwise_concordance'),),
+            ('mr13u_h_only_evidence_is_model_specific_extension_without_standard_generalization_override', 'oos_frame["target_direct_hmhs"]' in daily_source and 'Direct HM/HS H-only Learnability' in daily_source and ('Model-specific Extension' in daily_source) and ('Model-specific Extension' in app_source) and ('標準模型 SOP｜3. Direct HM/HS H-only Learnability' not in app_source) and ('"Δ HM/HS Pair", "Δ PR-AUC", "Δ Top10×"' not in app_source),),
+            ('mr13u_historical_model_remains_not_c75_source_after_mr13z_conversion', not _strategy_c75_uses_experiment_profile(profile.name),),
+        ),
     )
 
     return _finish_case(results, summary)
@@ -7802,38 +7561,11 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     spec = get_continuous_ranker_research_spec(profile.name)
-    check(
-        "mr13v_historical_mr13t_nonlinear_head_only_contrast_remains_registered",
+    run_bound_checks(
+        check,
         (
-            "MR-13V",
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-            "inception_time_safety_raw_mfe_hmhs_mlp_v1",
-            "raw_mfe_mean_daily_spearman",
-            False,
-            False,
-        ),
-        (
-            spec.model_research_id,
-            profile.training_objective,
-            profile.model_architecture,
-            profile.epoch_selection_metric,
-            spec.selection_pit_authorized,
-            spec.current_time_validation_authorized,
-        ),
-    )
-    check(
-        "mr13v_keeps_mr13t_objective_loss_epoch_selection_and_pairwise_reduction",
-        (
-            control.training_objective,
-            control.loss_name,
-            control.epoch_selection_metric,
-            get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
-        ),
-        (
-            profile.training_objective,
-            profile.loss_name,
-            profile.epoch_selection_metric,
-            get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
+            ('mr13v_historical_mr13t_nonlinear_head_only_contrast_remains_registered', ('MR-13V', TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING, 'inception_time_safety_raw_mfe_hmhs_mlp_v1', 'raw_mfe_mean_daily_spearman', False, False), (spec.model_research_id, profile.training_objective, profile.model_architecture, profile.epoch_selection_metric, spec.selection_pit_authorized, spec.current_time_validation_authorized),),
+            ('mr13v_keeps_mr13t_objective_loss_epoch_selection_and_pairwise_reduction', (control.training_objective, control.loss_name, control.epoch_selection_metric, get_continuous_ranker_execution_recipe(control.name).pairwise_reduction), (profile.training_objective, profile.loss_name, profile.epoch_selection_metric, get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction),),
         ),
     )
 
@@ -7921,17 +7653,12 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
     model.zero_grad(set_to_none=True)
     model.forward_safety_raw_mfe_hmhs_heads(x, context)[2].sum().backward()
     joint_params = tuple(model.joint_hmhs_classifier.parameters())
-    check_true(
-        "mr13v_joint_loss_updates_nonlinear_joint_head_and_shared_trunk_only",
-        all(parameter.grad is not None for parameter in joint_params)
-        and shared_parameter.grad is not None
-        and model.raw_safety_classifier.weight.grad is None
-        and model.conditional_mfe_classifier.weight.grad is None,
-    )
-
-    check_true(
-        "mr13v_historical_model_remains_not_c75_source_after_mr13z_conversion",
-        not _strategy_c75_uses_experiment_profile(profile.name),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13v_joint_loss_updates_nonlinear_joint_head_and_shared_trunk_only', all((parameter.grad is not None for parameter in joint_params)) and shared_parameter.grad is not None and (model.raw_safety_classifier.weight.grad is None) and (model.conditional_mfe_classifier.weight.grad is None),),
+            ('mr13v_historical_model_remains_not_c75_source_after_mr13z_conversion', not _strategy_c75_uses_experiment_profile(profile.name),),
+        ),
     )
 
     return _finish_case(results, summary)
@@ -8091,14 +7818,12 @@ def validate_breakout_quality_joint_min_target_contract_case(_base_params):
     daily_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
     ).read_text(encoding="utf-8")
-    check_true(
-        "mr13w_oos_artifact_preserves_continuous_joint_truth_and_score",
-        'oos_frame["target_joint_min"]' in daily_source
-        and 'oos_frame["joint_min_score"]' in daily_source,
-    )
-    check_true(
-        "mr13w_historical_model_remains_not_c75_source_after_mr13z_conversion",
-        not _strategy_c75_uses_experiment_profile(profile.name),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13w_oos_artifact_preserves_continuous_joint_truth_and_score', 'oos_frame["target_joint_min"]' in daily_source and 'oos_frame["joint_min_score"]' in daily_source,),
+            ('mr13w_historical_model_remains_not_c75_source_after_mr13z_conversion', not _strategy_c75_uses_experiment_profile(profile.name),),
+        ),
     )
 
     return _finish_case(results, summary)
@@ -8381,25 +8106,15 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
         seed=17,
         shared_parameter_getter=lambda model: next(model.blocks[0].parameters()),
     )
-    check_true(
-        "mr13y_same_seed_reconstructs_historical_9b_trunk_weights_exactly", probe["trunk_exact"]
-    )
-    check_true(
-        "mr13y_head_and_attention_topology_matches_mr13x_semantics_at_96d_latent",
-        probe["topology"],
-    )
-    check_true(
-        "mr13y_attention_softmax_and_tri_head_output_surface_match_production_contract",
-        probe["output_surface"],
-    )
-    check_true(
-        "mr13y_joint_loss_updates_attention_joint_mlp_and_modern_tcn_trunk_not_marginal_classifiers",
-        probe["gradient_ownership"],
-    )
-
-    check_true(
-        "mr13y_historical_model_remains_not_c75_source_after_mr13z_conversion",
-        not _strategy_c75_uses_experiment_profile(profile.name),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13y_same_seed_reconstructs_historical_9b_trunk_weights_exactly', probe['trunk_exact'],),
+            ('mr13y_head_and_attention_topology_matches_mr13x_semantics_at_96d_latent', probe['topology'],),
+            ('mr13y_attention_softmax_and_tri_head_output_surface_match_production_contract', probe['output_surface'],),
+            ('mr13y_joint_loss_updates_attention_joint_mlp_and_modern_tcn_trunk_not_marginal_classifiers', probe['gradient_ownership'],),
+            ('mr13y_historical_model_remains_not_c75_source_after_mr13z_conversion', not _strategy_c75_uses_experiment_profile(profile.name),),
+        ),
     )
 
     return _finish_case(results, summary)
@@ -8506,11 +8221,7 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
         ),
     )
     validate_model_sequence_length(patch_spec, 300)
-    invalid_sequence_rejected = False
-    try:
-        validate_model_sequence_length(patch_spec, 295)
-    except ValueError:
-        invalid_sequence_rejected = True
+    invalid_sequence_rejected = raises_expected(ValueError, lambda: validate_model_sequence_length(patch_spec, 295))
     check_true(
         "mr13z_patch_sequence_contract_requires_historical_nonoverlap_divisibility",
         invalid_sequence_rejected,
@@ -8527,21 +8238,14 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
         shared_parameter_getter=lambda model: model.patch_projection.weight,
         token_shape=(4, 30, 128),
     )
-    check_true(
-        "mr13z_same_seed_reconstructs_historical_9f_patch_transformer_trunk_exactly",
-        probe["trunk_exact"],
-    )
-    check_true(
-        "mr13z_head_and_attention_topology_matches_mr13x_semantics_at_128d_latent",
-        probe["topology"],
-    )
-    check_true(
-        "mr13z_patch_token_attention_softmax_and_tri_head_output_surface_match_production_contract",
-        probe["output_surface"],
-    )
-    check_true(
-        "mr13z_joint_loss_updates_patch_trunk_attention_and_joint_mlp_not_marginal_classifiers",
-        probe["gradient_ownership"],
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13z_same_seed_reconstructs_historical_9f_patch_transformer_trunk_exactly', probe['trunk_exact'],),
+            ('mr13z_head_and_attention_topology_matches_mr13x_semantics_at_128d_latent', probe['topology'],),
+            ('mr13z_patch_token_attention_softmax_and_tri_head_output_surface_match_production_contract', probe['output_surface'],),
+            ('mr13z_joint_loss_updates_patch_trunk_attention_and_joint_mlp_not_marginal_classifiers', probe['gradient_ownership'],),
+        ),
     )
 
     from config.compatibility.strategy_compare_history import (
@@ -8620,18 +8324,12 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
             profile.epoch_selection_metric,
         ),
     )
-    check_true(
-        "mr13aa_keeps_exact_mr13h_training_target_universe_loss_and_selection_semantics",
-        _same_controlled_profile_recipe(profile, control)
-        and profile.continuous_target_id == control.continuous_target_id
-        and profile.model_architecture != control.model_architecture
-        and _pairwise_reduction(profile) == _pairwise_reduction(control),
-    )
-    check_true(
-        "mr13aa_model_gate_only_has_no_pit_or_current_strategy_authorization",
-        research_spec.reference_profile_name == control.name
-        and not bool(research_spec.selection_pit_authorized)
-        and not bool(research_spec.current_time_validation_authorized),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13aa_keeps_exact_mr13h_training_target_universe_loss_and_selection_semantics', _same_controlled_profile_recipe(profile, control) and profile.continuous_target_id == control.continuous_target_id and (profile.model_architecture != control.model_architecture) and (_pairwise_reduction(profile) == _pairwise_reduction(control)),),
+            ('mr13aa_model_gate_only_has_no_pit_or_current_strategy_authorization', research_spec.reference_profile_name == control.name and (not bool(research_spec.selection_pit_authorized)) and (not bool(research_spec.current_time_validation_authorized)),),
+        ),
     )
 
     patch_spec = get_model_spec(profile.model_architecture)
@@ -8681,11 +8379,7 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
         and len(FEATURE_COLUMNS) == 10,
     )
     validate_model_sequence_length(patch_spec, 300)
-    invalid_sequence_rejected = False
-    try:
-        validate_model_sequence_length(patch_spec, 295)
-    except ValueError:
-        invalid_sequence_rejected = True
+    invalid_sequence_rejected = raises_expected(ValueError, lambda: validate_model_sequence_length(patch_spec, 295))
     check_true(
         "mr13aa_patch_sequence_contract_is_300_bars_to_30_nonoverlap_tokens",
         invalid_sequence_rejected,
@@ -8720,28 +8414,12 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
     joint_state = joint_model.state_dict()
     state = model.state_dict()
     trunk_keys = sorted(key for key in legacy_state if key.startswith(trunk_prefixes))
-    check_true(
-        "mr13aa_same_seed_trunk_exactly_matches_legacy_9f_and_mr13z_frozen_trunk",
-        bool(trunk_keys)
-        and all(
-            key in state
-            and key in joint_state
-            and torch.equal(legacy_state[key], state[key])
-            and torch.equal(joint_state[key], state[key])
-            for key in trunk_keys
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13aa_same_seed_trunk_exactly_matches_legacy_9f_and_mr13z_frozen_trunk', bool(trunk_keys) and all((key in state and key in joint_state and torch.equal(legacy_state[key], state[key]) and torch.equal(joint_state[key], state[key]) for key in trunk_keys)),),
+            ('mr13aa_has_only_single_linear_rank_head_after_patch_encoder', isinstance(model.dropout, nn.Dropout) and abs(float(model.dropout.p) - 0.1) < 1e-12 and isinstance(model.classifier, nn.Linear) and (int(model.classifier.in_features) == 128) and (int(model.classifier.out_features) == 2) and (not hasattr(model, 'raw_safety_classifier')) and (not hasattr(model, 'conditional_mfe_classifier')) and (not hasattr(model, 'joint_hmhs_classifier')) and (not hasattr(model, 'joint_attention_scorer')),),
         ),
-    )
-    check_true(
-        "mr13aa_has_only_single_linear_rank_head_after_patch_encoder",
-        isinstance(model.dropout, nn.Dropout)
-        and abs(float(model.dropout.p) - 0.10) < 1e-12
-        and isinstance(model.classifier, nn.Linear)
-        and int(model.classifier.in_features) == 128
-        and int(model.classifier.out_features) == 2
-        and not hasattr(model, "raw_safety_classifier")
-        and not hasattr(model, "conditional_mfe_classifier")
-        and not hasattr(model, "joint_hmhs_classifier")
-        and not hasattr(model, "joint_attention_scorer"),
     )
 
     torch.manual_seed(23)
@@ -8818,18 +8496,12 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
             profile.epoch_selection_metric,
         ),
     )
-    check_true(
-        "mr13ab_keeps_mr13k_training_universe_loss_and_recipe_exact",
-        _same_controlled_profile_recipe(profile, control)
-        and profile.model_architecture == control.model_architecture
-        and profile.continuous_target_id != control.continuous_target_id
-        and _pairwise_reduction(profile) == _pairwise_reduction(control),
-    )
-    check_true(
-        "mr13ab_model_gate_only_has_no_pit_or_current_strategy_authorization",
-        research_spec.reference_profile_name == control.name
-        and not bool(research_spec.selection_pit_authorized)
-        and not bool(research_spec.current_time_validation_authorized),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13ab_keeps_mr13k_training_universe_loss_and_recipe_exact', _same_controlled_profile_recipe(profile, control) and profile.model_architecture == control.model_architecture and (profile.continuous_target_id != control.continuous_target_id) and (_pairwise_reduction(profile) == _pairwise_reduction(control)),),
+            ('mr13ab_model_gate_only_has_no_pit_or_current_strategy_authorization', research_spec.reference_profile_name == control.name and (not bool(research_spec.selection_pit_authorized)) and (not bool(research_spec.current_time_validation_authorized)),),
+        ),
     )
 
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
@@ -9076,18 +8748,12 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     valid = np.ones(len(frame), dtype=bool)
     targets = build_predicted_upside_conditional_low_adverse_targets(frame, valid, context)
     orthogonal = _same_date_residual_is_orthogonal(frame, context, targets.residual)
-    check_true(
-        "mr13ac_target_is_same_date_low_adverse_residual_orthogonal_to_predicted_upside_context",
-        orthogonal
-        and np.isfinite(targets.residual_percentile).all()
-        and bool((targets.residual_percentile >= 0.0).all())
-        and bool((targets.residual_percentile <= 1.0).all()),
-    )
-    check_true(
-        "mr13ac_training_target_is_same_date_residual_percentile_not_raw_residual",
-        np.array_equal(targets.training_target, targets.residual_percentile)
-        and bool((targets.training_target >= 0.0).all())
-        and bool((targets.training_target <= 1.0).all()),
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13ac_target_is_same_date_low_adverse_residual_orthogonal_to_predicted_upside_context', orthogonal and np.isfinite(targets.residual_percentile).all() and bool((targets.residual_percentile >= 0.0).all()) and bool((targets.residual_percentile <= 1.0).all()),),
+            ('mr13ac_training_target_is_same_date_residual_percentile_not_raw_residual', np.array_equal(targets.training_target, targets.residual_percentile) and bool((targets.training_target >= 0.0).all()) and bool((targets.training_target <= 1.0).all()),),
+        ),
     )
     check(
         "mr13ac_selection_stage2_universe_is_only_pit_context_covered_rows",
@@ -9117,15 +8783,14 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         seed=29,
         forbidden_network_attr="predicted_upside_context_network",
     )
-    check_true(
-        "mr13ac_backbone_is_mr13m_inceptiontime_plus_exactly_one_direct_scalar_context",
-        spec_ok,
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13ac_backbone_is_mr13m_inceptiontime_plus_exactly_one_direct_scalar_context', spec_ok,),
+            ('mr13ac_model_has_one_two_logit_head_and_context_enters_only_as_direct_scalar_concat', runtime_ok,),
+            ('mr13ac_model_rejects_missing_context_scalar', rejects_missing_context,),
+        ),
     )
-    check_true(
-        "mr13ac_model_has_one_two_logit_head_and_context_enters_only_as_direct_scalar_concat",
-        runtime_ok,
-    )
-    check_true("mr13ac_model_rejects_missing_context_scalar", rejects_missing_context)
 
     embedded = _embedded_predicted_context_contract(
         profile, "predicted_upside_context_contract"
@@ -9242,26 +8907,13 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
     manual_mfe = build_same_date_percentile_targets(
         frame["target_favorable_r"].to_numpy(dtype=np.float64), valid, frame["date"]
     )
-    check_true(
-        "mr13ad_target_is_same_date_pure_mfe_residual_orthogonal_to_predicted_safety_context",
-        orthogonal
-        and np.allclose(targets.pure_mfe_percentile, manual_mfe, atol=0.0, rtol=0.0)
-        and np.isfinite(targets.residual_percentile).all()
-        and bool((targets.residual_percentile >= 0.0).all())
-        and bool((targets.residual_percentile <= 1.0).all()),
-    )
-    check_true(
-        "mr13ad_training_target_is_same_date_residual_percentile_not_raw_residual",
-        np.array_equal(targets.training_target, targets.residual_percentile)
-        and bool((targets.training_target >= 0.0).all())
-        and bool((targets.training_target <= 1.0).all()),
-    )
-    check_true(
-        "mr13ad_reverse_control_uses_predicted_safety_context_not_true_future_safety_label",
-        "target_adverse_r" not in frame.columns
-        and context_contract.get("context_semantic")
-        == "same_date_average_rank_percentile_of_stage1_predicted_low_adverse_safety"
-        and context_contract.get("stage2_response") == "same_date_pure_mfe_percentile",
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13ad_target_is_same_date_pure_mfe_residual_orthogonal_to_predicted_safety_context', orthogonal and np.allclose(targets.pure_mfe_percentile, manual_mfe, atol=0.0, rtol=0.0) and np.isfinite(targets.residual_percentile).all() and bool((targets.residual_percentile >= 0.0).all()) and bool((targets.residual_percentile <= 1.0).all()),),
+            ('mr13ad_training_target_is_same_date_residual_percentile_not_raw_residual', np.array_equal(targets.training_target, targets.residual_percentile) and bool((targets.training_target >= 0.0).all()) and bool((targets.training_target <= 1.0).all()),),
+            ('mr13ad_reverse_control_uses_predicted_safety_context_not_true_future_safety_label', 'target_adverse_r' not in frame.columns and context_contract.get('context_semantic') == 'same_date_average_rank_percentile_of_stage1_predicted_low_adverse_safety' and (context_contract.get('stage2_response') == 'same_date_pure_mfe_percentile'),),
+        ),
     )
     check(
         "mr13ad_selection_stage2_universe_is_only_pit_context_covered_rows",
@@ -9275,15 +8927,14 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         seed=31,
         forbidden_network_attr="predicted_safety_context_network",
     )
-    check_true(
-        "mr13ad_backbone_is_mr13k_inceptiontime_plus_exactly_one_direct_scalar_context",
-        spec_ok,
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13ad_backbone_is_mr13k_inceptiontime_plus_exactly_one_direct_scalar_context', spec_ok,),
+            ('mr13ad_model_has_one_two_logit_head_and_context_enters_only_as_direct_scalar_concat', runtime_ok,),
+            ('mr13ad_model_rejects_missing_context_scalar', rejects_missing_context,),
+        ),
     )
-    check_true(
-        "mr13ad_model_has_one_two_logit_head_and_context_enters_only_as_direct_scalar_concat",
-        runtime_ok,
-    )
-    check_true("mr13ad_model_rejects_missing_context_scalar", rejects_missing_context)
 
     embedded = _embedded_predicted_context_contract(
         profile, "predicted_safety_context_contract"
@@ -9611,18 +9262,12 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
     recipe = get_continuous_ranker_execution_recipe(profile.name)
     k_recipe = get_continuous_ranker_execution_recipe(k_profile.name)
 
-    check_true(
-        "mr13af_keeps_mr13k_recipe_except_pair_weighting_and_context_coverage",
-        _same_controlled_profile_recipe(profile, k_profile)
-        and profile.continuous_target_id == k_profile.continuous_target_id
-        and str(profile.model_architecture) == "inception_time_v1"
-        and k_recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
-        and recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-    )
-    check_true(
-        "mr13af_same_target_control_does_not_enable_target_reference_or_checkpoint_reference_eval",
-        spec.reference_profile_name is None
-        and spec.evaluation_reference_profile_name is None,
+    run_bound_checks(
+        check_true,
+        (
+            ('mr13af_keeps_mr13k_recipe_except_pair_weighting_and_context_coverage', _same_controlled_profile_recipe(profile, k_profile) and profile.continuous_target_id == k_profile.continuous_target_id and (str(profile.model_architecture) == 'inception_time_v1') and (k_recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG) and (recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG),),
+            ('mr13af_same_target_control_does_not_enable_target_reference_or_checkpoint_reference_eval', spec.reference_profile_name is None and spec.evaluation_reference_profile_name is None,),
+        ),
     )
     contract = get_high_safety_weighted_pure_mfe_contract()
     check_true(
@@ -9760,16 +9405,12 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
         and recipe.objective_policy.pair_weight_policy == "none"
         and str(profile.model_architecture) == "inception_time_shared_safety_mfe_v1",
     )
-    check_true(
-        "true_hs_scope_has_same_gate_ak_attribution_reference_only",
-        research.model_gate_reference_profile_name
-        == DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-        and research.reference_profile_name is None
-        and research.evaluation_reference_profile_name is None,
-    )
-    check_true(
-        "true_hs_historical_forward_gate_follows_current_membership_ssot",
-        _historical_forward_gate_matches_current_membership(profile, research),
+    run_bound_checks(
+        check_true,
+        (
+            ('true_hs_scope_has_same_gate_ak_attribution_reference_only', research.model_gate_reference_profile_name == DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE and research.reference_profile_name is None and (research.evaluation_reference_profile_name is None),),
+            ('true_hs_historical_forward_gate_follows_current_membership_ssot', _historical_forward_gate_matches_current_membership(profile, research),),
+        ),
     )
     check_true(
         "true_hs_contract_is_non_compensatory_and_has_no_safety_context_or_pair_weight",
@@ -9928,29 +9569,13 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
         and float(recipe.objective_policy.secondary_pair_scope_threshold) == 0.50
         and recipe.objective_policy.pair_weight_policy == "none",
     )
-    check_true(
-        "hs_qualification_keeps_ao_architecture_epoch_selection_and_same_gate_reference",
-        str(profile.model_architecture) == str(ao_profile.model_architecture)
-        == "inception_time_shared_safety_mfe_v1"
-        and profile.epoch_selection_metric == ao_profile.epoch_selection_metric
-        == "hs_conditional_mfe_mean_daily_spearman"
-        and research.model_gate_reference_profile_name == ao_profile.name,
-    )
-    check_true(
-        "hs_qualification_contract_is_binary_boundary_plus_true_hs_upside",
-        contract.get("qualification_target")
-        == "indicator_of_same_date_low_adverse_safety_percentile_gte_0.50"
-        and contract.get("qualification_pair_scope")
-        == "same_date_hs_vs_ls_only_same_cohort_ties_excluded"
-        and contract.get("conditional_mfe_supervision_scope")
-        == "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg"
-        and contract.get("conditional_mfe_head_inputs")
-        == "shared_latent_only_no_predicted_safety_context"
-        and contract.get("conditional_mfe_pair_safety_weight") == "none",
-    )
-    check_true(
-        "hs_qualification_historical_forward_gate_follows_current_membership_ssot",
-        _historical_forward_gate_matches_current_membership(profile, research),
+    run_bound_checks(
+        check_true,
+        (
+            ('hs_qualification_keeps_ao_architecture_epoch_selection_and_same_gate_reference', str(profile.model_architecture) == str(ao_profile.model_architecture) == 'inception_time_shared_safety_mfe_v1' and profile.epoch_selection_metric == ao_profile.epoch_selection_metric == 'hs_conditional_mfe_mean_daily_spearman' and (research.model_gate_reference_profile_name == ao_profile.name),),
+            ('hs_qualification_contract_is_binary_boundary_plus_true_hs_upside', contract.get('qualification_target') == 'indicator_of_same_date_low_adverse_safety_percentile_gte_0.50' and contract.get('qualification_pair_scope') == 'same_date_hs_vs_ls_only_same_cohort_ties_excluded' and (contract.get('conditional_mfe_supervision_scope') == 'true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg') and (contract.get('conditional_mfe_head_inputs') == 'shared_latent_only_no_predicted_safety_context') and (contract.get('conditional_mfe_pair_safety_weight') == 'none'),),
+            ('hs_qualification_historical_forward_gate_follows_current_membership_ssot', _historical_forward_gate_matches_current_membership(profile, research),),
+        ),
     )
 
     group_table = _five_item_hs_group_table(include_label=True)
@@ -10144,23 +9769,11 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
             (*BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES, BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
         )
     )
-    check_true(
-        "hs_boundary_weighted_historical_identity_does_not_pin_current_membership",
-        research.model_research_id == "MR-13AS"
-        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-        and all(
-            pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-            for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
-        )
-        and tuple(BREAKOUT_QUALITY_MODEL_TEST_PROFILES) == expected_current_test_profiles,
-    )
-    check_true(
-        "hs_boundary_weighted_historical_forward_gate_does_not_pin_current_test_membership",
-        research.selection_pit_authorized is False
-        and research.current_time_validation_authorized is False
-        and not breakout_quality_policy.is_breakout_quality_model_test_profile(profile.name)
-        and breakout_quality_policy.is_breakout_quality_model_test_profile(
-            BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
+    run_bound_checks(
+        check_true,
+        (
+            ('hs_boundary_weighted_historical_identity_does_not_pin_current_membership', research.model_research_id == 'MR-13AS' and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES and all((pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)) and (tuple(BREAKOUT_QUALITY_MODEL_TEST_PROFILES) == expected_current_test_profiles),),
+            ('hs_boundary_weighted_historical_forward_gate_does_not_pin_current_test_membership', research.selection_pit_authorized is False and research.current_time_validation_authorized is False and (not breakout_quality_policy.is_breakout_quality_model_test_profile(profile.name)) and breakout_quality_policy.is_breakout_quality_model_test_profile(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]),),
         ),
     )
 
@@ -10281,37 +9894,23 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
         and recipe.objective_policy.pair_weight_policy == "none"
         and research.model_gate_reference_profile_name is None,
     )
-    check_true(
-        "hs_priority_reuses_independent_shared_architecture_and_direct_final_head",
-        str(profile.model_architecture) == "inception_time_shared_safety_mfe_v1"
-        and model_spec.final_mfe_topology_contract().get("mfe_head_inputs")
-        == "shared_latent_only_no_safety_prediction_input"
-        and contract.get("priority_head_inputs") == "shared_latent_only_no_predicted_safety_context"
-        and contract.get("priority_pair_safety_weight") == "none"
-        and contract.get("runtime_score") == "hs_priority_mfe_pass_probability_direct_all_daily_ranking",
-    )
-    check_true(
-        "hs_priority_historical_forward_gate_follows_current_membership_ssot",
-        _historical_forward_gate_matches_current_membership(profile, research),
+    run_bound_checks(
+        check_true,
+        (
+            ('hs_priority_reuses_independent_shared_architecture_and_direct_final_head', str(profile.model_architecture) == 'inception_time_shared_safety_mfe_v1' and model_spec.final_mfe_topology_contract().get('mfe_head_inputs') == 'shared_latent_only_no_safety_prediction_input' and (contract.get('priority_head_inputs') == 'shared_latent_only_no_predicted_safety_context') and (contract.get('priority_pair_safety_weight') == 'none') and (contract.get('runtime_score') == 'hs_priority_mfe_pass_probability_direct_all_daily_ranking'),),
+            ('hs_priority_historical_forward_gate_follows_current_membership_ssot', _historical_forward_gate_matches_current_membership(profile, research),),
+        ),
     )
 
     # First two rows are deliberately huge-MFE LS examples.
     group_table = _five_item_hs_group_table(include_label=True)
     targets = build_hs_priority_mfe_targets(group_table, np.ones(5, dtype=bool))
-    check_true(
-        "hs_priority_truth_puts_every_ls_at_zero_and_orders_only_hs_by_mfe",
-        np.array_equal(targets.true_hs_mask, np.asarray([False, False, True, True, True]))
-        and np.allclose(targets.low_adverse_safety_percentile, [0.0, 0.25, 0.5, 0.75, 1.0])
-        and np.isnan(targets.conditional_mfe_percentile[:2]).all()
-        and np.allclose(targets.conditional_mfe_percentile[2:], [1.0, 0.5, 0.0])
-        and np.allclose(targets.hs_priority_mfe_relevance, [0.0, 0.0, 1.0, 0.75, 0.5]),
-    )
-    check_true(
-        "hs_priority_truth_is_non_compensatory_even_for_extreme_hmls",
-        float(targets.hs_priority_mfe_relevance[0]) == 0.0
-        and float(targets.hs_priority_mfe_relevance[1]) == 0.0
-        and float(np.min(targets.hs_priority_mfe_relevance[targets.true_hs_mask]))
-        > float(np.max(targets.hs_priority_mfe_relevance[~targets.true_hs_mask])),
+    run_bound_checks(
+        check_true,
+        (
+            ('hs_priority_truth_puts_every_ls_at_zero_and_orders_only_hs_by_mfe', np.array_equal(targets.true_hs_mask, np.asarray([False, False, True, True, True])) and np.allclose(targets.low_adverse_safety_percentile, [0.0, 0.25, 0.5, 0.75, 1.0]) and np.isnan(targets.conditional_mfe_percentile[:2]).all() and np.allclose(targets.conditional_mfe_percentile[2:], [1.0, 0.5, 0.0]) and np.allclose(targets.hs_priority_mfe_relevance, [0.0, 0.0, 1.0, 0.75, 0.5]),),
+            ('hs_priority_truth_is_non_compensatory_even_for_extreme_hmls', float(targets.hs_priority_mfe_relevance[0]) == 0.0 and float(targets.hs_priority_mfe_relevance[1]) == 0.0 and (float(np.min(targets.hs_priority_mfe_relevance[targets.true_hs_mask])) > float(np.max(targets.hs_priority_mfe_relevance[~targets.true_hs_mask]))),),
+        ),
     )
 
     dates = group_table["date"].to_numpy()
@@ -10412,19 +10011,12 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
         and recipe.objective_policy.secondary_pair_scope_threshold is None
         and recipe.objective_policy.pair_weight_policy == "none",
     )
-    check_true(
-        "hs_priority_stratified_contract_keeps_ap_truth_and_full_list_geometry",
-        contract.get("priority_mfe_target")
-        == "mr13ap_truth_ls_equals_0_else_0.5_plus_0.5_times_same_date_mfe_percentile_within_true_hs"
-        and contract.get("priority_stratum_geometry")
-        == "same_full_list_predicted_rank_positions_idcg_and_delta_ndcg"
-        and contract.get("priority_stratum_normalization")
-        == "each_stratum_normalized_by_own_delta_ndcg_weight_sum_then_fixed_equal_mean"
-        and contract.get("priority_pair_safety_weight") == "none",
-    )
-    check_true(
-        "hs_priority_stratified_historical_forward_gate_follows_current_membership_ssot",
-        _historical_forward_gate_matches_current_membership(profile, research),
+    run_bound_checks(
+        check_true,
+        (
+            ('hs_priority_stratified_contract_keeps_ap_truth_and_full_list_geometry', contract.get('priority_mfe_target') == 'mr13ap_truth_ls_equals_0_else_0.5_plus_0.5_times_same_date_mfe_percentile_within_true_hs' and contract.get('priority_stratum_geometry') == 'same_full_list_predicted_rank_positions_idcg_and_delta_ndcg' and (contract.get('priority_stratum_normalization') == 'each_stratum_normalized_by_own_delta_ndcg_weight_sum_then_fixed_equal_mean') and (contract.get('priority_pair_safety_weight') == 'none'),),
+            ('hs_priority_stratified_historical_forward_gate_follows_current_membership_ssot', _historical_forward_gate_matches_current_membership(profile, research),),
+        ),
     )
 
     group_table = _five_item_hs_group_table(include_label=True)
@@ -10472,21 +10064,11 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
             reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         )
     )
-    check_true(
-        "hs_priority_stratified_pair_partition_is_six_boundary_plus_three_hs_within",
-        boundary_pairs == combined_boundary_pairs == 6
-        and within_hs_pairs == combined_within_pairs == 3,
-    )
-    check_true(
-        "hs_priority_stratified_loss_is_equal_mean_after_each_stratum_normalization",
-        boundary_loss is not None
-        and within_hs_loss is not None
-        and combined_loss is not None
-        and torch.allclose(
-            combined_loss.detach(),
-            (0.5 * (boundary_loss + within_hs_loss)).detach(),
-            atol=0.0,
-            rtol=0.0,
+    run_bound_checks(
+        check_true,
+        (
+            ('hs_priority_stratified_pair_partition_is_six_boundary_plus_three_hs_within', boundary_pairs == combined_boundary_pairs == 6 and within_hs_pairs == combined_within_pairs == 3,),
+            ('hs_priority_stratified_loss_is_equal_mean_after_each_stratum_normalization', boundary_loss is not None and within_hs_loss is not None and (combined_loss is not None) and torch.allclose(combined_loss.detach(), (0.5 * (boundary_loss + within_hs_loss)).detach(), atol=0.0, rtol=0.0),),
         ),
     )
 
@@ -10575,16 +10157,12 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         )
 
         model_path.write_bytes(b"synthetic-conflicting-checkpoint")
-        conflict_raised = False
-        try:
-            load_reusable_fitted_model_contract(
+        conflict_raised = raises_expected(FittedModelConflictError, lambda: load_reusable_fitted_model_contract(
                 model_dir=model_dir,
                 expected_identity=identity,
                 final_manifest_path=root / "missing_manifest.json",
                 report_path=root / "missing_report.json",
-            )
-        except FittedModelConflictError:
-            conflict_raised = True
+            ))
         check_true(
             "same_fitting_identity_with_different_checkpoint_bytes_fails_fast",
             conflict_raised,

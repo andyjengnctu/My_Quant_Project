@@ -1,10 +1,88 @@
 from __future__ import annotations
 
+from .checks import run_bound_checks
+
 from dataclasses import replace
 
 import pandas as pd
 
-from .checks import add_check
+from .checks import raises_expected, bind_synthetic_case, bind_checks, add_check
+
+
+def _publish_ready_provider_snapshot_fixture(
+    *,
+    root,
+    manifest,
+    manifest_fingerprint,
+    frame_by_request,
+    owner_id,
+    started_at,
+    finalized_at,
+    missing_columns_message,
+):
+    """Publish a synthetic completed provider snapshot and return its deterministic frame reader."""
+    from datetime import timedelta
+
+    from core.file_integrity import atomic_write_json, compute_file_sha256
+    from core.market_data_provider_snapshot import ProviderArtifactEvidence, build_provider_snapshot_payload
+    from core.market_data_storage_contract import (
+        resolve_market_data_provider_snapshot_path,
+        resolve_market_data_request_parquet_path,
+    )
+    from services.downloader.market_data_ledger import MarketDataJobLedger
+
+    ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
+    ledger = MarketDataJobLedger(ledger_path)
+    workload_id = ledger.seed_manifest(manifest, now=started_at)
+    evidence = []
+    current = started_at
+    while True:
+        job = ledger.claim_next_job(
+            workload_id,
+            owner_id=owner_id,
+            now=current,
+            lease_until=current + timedelta(minutes=5),
+        )
+        if job is None:
+            break
+        request = job.to_request()
+        path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((request.request_id + "\n").encode("utf-8"))
+        digest = compute_file_sha256(path)
+        frame = frame_by_request[request.request_id]
+        ledger.mark_done(
+            workload_id,
+            request.request_id,
+            row_count=len(frame),
+            content_sha256=digest,
+            now=current,
+        )
+        evidence.append(ProviderArtifactEvidence(
+            request_id=request.request_id,
+            dataset=request.dataset,
+            row_count=len(frame),
+            content_sha256=digest,
+        ))
+        current += timedelta(seconds=1)
+    ledger.set_workload_status(workload_id, status="DONE", now=current)
+    provider_payload = build_provider_snapshot_payload(
+        manifest=manifest,
+        artifacts=evidence,
+        finalized_at=finalized_at,
+    )
+    atomic_write_json(resolve_market_data_provider_snapshot_path(root, manifest_fingerprint), provider_payload)
+
+    def frame_reader(path, columns):
+        frame = frame_by_request[path.stem].copy()
+        if columns:
+            missing = [column for column in columns if column not in frame.columns]
+            if missing:
+                raise ValueError(f"{missing_columns_message}: {missing}")
+            frame = frame.loc[:, list(columns)]
+        return frame
+
+    return provider_payload, frame_reader
 
 
 def validate_market_data_v2_preflight_planner_contract_case(_base_params):
@@ -26,23 +104,22 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
     from services.downloader.market_data_preflight import _historical_instruments
 
     case_id = "MARKET_DATA_V2_PREFLIGHT_PLANNER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     registry_summary = validate_market_dataset_registry()
     specs = get_market_dataset_specs(included_only=True)
     excluded = tuple(spec for spec in get_market_dataset_specs() if not spec.included)
     datasets = {spec.dataset for spec in specs}
     excluded_ids = {spec.dataset for spec in excluded}
-    add_check(results, "market_data", case_id, "registry_has_included_datasets", True, bool(specs))
-    add_check(results, "market_data", case_id, "registry_has_explicit_exclusions", True, bool(excluded))
-    add_check(results, "market_data", case_id, "raw_price_is_archived", True, "TaiwanStockPrice" in datasets)
-    add_check(results, "market_data", case_id, "adjusted_price_is_archived", True, "TaiwanStockPriceAdj" in datasets)
-    add_check(results, "market_data", case_id, "sponsor_margin_maintenance_is_not_backer_required", True, "TaiwanStockMarginMaintenance" in excluded_ids)
-    add_check(results, "market_data", case_id, "industry_chain_classification_is_archived", True, "TaiwanStockIndustryChain" in datasets)
-    add_check(results, "market_data", case_id, "derivative_product_master_is_archived", True, "TaiwanFutOptDailyInfo" in datasets)
-    add_check(results, "market_data", case_id, "price_limit_bootstrap_is_per_instrument", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, get_market_dataset_spec("TaiwanStockPriceLimit").bootstrap_mode)
-    add_check(results, "market_data", case_id, "futures_large_trader_uses_dataset_product_code", ("TXF",), get_market_dataset_spec("TaiwanFuturesOpenInterestLargeTraders").fixed_data_ids)
+    check("registry_has_included_datasets", True, bool(specs))
+    check("registry_has_explicit_exclusions", True, bool(excluded))
+    check("raw_price_is_archived", True, "TaiwanStockPrice" in datasets)
+    check("adjusted_price_is_archived", True, "TaiwanStockPriceAdj" in datasets)
+    check("sponsor_margin_maintenance_is_not_backer_required", True, "TaiwanStockMarginMaintenance" in excluded_ids)
+    check("industry_chain_classification_is_archived", True, "TaiwanStockIndustryChain" in datasets)
+    check("derivative_product_master_is_archived", True, "TaiwanFutOptDailyInfo" in datasets)
+    check("price_limit_bootstrap_is_per_instrument", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, get_market_dataset_spec("TaiwanStockPriceLimit").bootstrap_mode)
+    check("futures_large_trader_uses_dataset_product_code", ("TXF",), get_market_dataset_spec("TaiwanFuturesOpenInterestLargeTraders").fixed_data_ids)
 
     stock_info = pd.DataFrame(
         [
@@ -58,9 +135,9 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
     )
     delisting = pd.DataFrame([{"stock_id": "1204"}])
     instruments = _historical_instruments(stock_info, delisting)
-    add_check(results, "market_data", case_id, "historical_universe_keeps_stock_etf_and_delisting", ("0050", "1204", "2330", "6488"), instruments)
-    add_check(results, "market_data", case_id, "historical_universe_excludes_index_aggregate_and_etn_rows", True, all(value not in instruments for value in ("TAIEX", "TPEx", "02001L", "ALL")))
-    add_check(results, "market_data", case_id, "historical_universe_contract_has_stable_fingerprint", 64, len(historical_stock_etf_universe_contract_fingerprint()))
+    check("historical_universe_keeps_stock_etf_and_delisting", ("0050", "1204", "2330", "6488"), instruments)
+    check("historical_universe_excludes_index_aggregate_and_etn_rows", True, all(value not in instruments for value in ("TAIEX", "TPEx", "02001L", "ALL")))
+    check("historical_universe_contract_has_stable_fingerprint", 64, len(historical_stock_etf_universe_contract_fingerprint()))
 
     evidence = {}
     for spec in specs:
@@ -106,8 +183,8 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
                 expected_total += len(spec.fixed_data_ids) * chunk_count
             else:
                 expected_total += len(spec.fixed_data_ids)
-    add_check(results, "market_data", case_id, "planner_total_is_registry_derived", expected_total, plan3.total_requests)
-    add_check(results, "market_data", case_id, "planner_uses_live_quota_limit", 1600, plan3.quota_limit)
+    check("planner_total_is_registry_derived", expected_total, plan3.total_requests)
+    check("planner_uses_live_quota_limit", 1600, plan3.quota_limit)
 
     plan4 = build_bootstrap_request_plan(
         specs=specs,
@@ -117,7 +194,7 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
         quota_limit=1600,
     )
     per_instrument_count = sum(spec.bootstrap_mode == BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE for spec in specs)
-    add_check(results, "market_data", case_id, "planner_has_no_hardcoded_instrument_count", per_instrument_count, plan4.total_requests - plan3.total_requests)
+    check("planner_has_no_hardcoded_instrument_count", per_instrument_count, plan4.total_requests - plan3.total_requests)
 
     first = specs[0]
     failed = dict(evidence)
@@ -134,7 +211,7 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
         failed_probe_blocks = True
     else:
         failed_probe_blocks = False
-    add_check(results, "market_data", case_id, "failed_probe_blocks_exact_plan", True, failed_probe_blocks)
+    check("failed_probe_blocks_exact_plan", True, failed_probe_blocks)
 
     class _Response:
         def __init__(self, payload, status_code=200):
@@ -169,11 +246,11 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
         denied_raised = True
     else:
         denied_raised = False
-    add_check(results, "market_data", case_id, "http_usage_reads_live_limit", 1600, usage.api_request_limit)
-    add_check(results, "market_data", case_id, "http_success_decodes_rows", 1, len(frame))
-    add_check(results, "market_data", case_id, "http_client_counts_data_attempts", 2, client.data_request_count)
-    add_check(results, "market_data", case_id, "http_4xx_is_not_hidden_retry", 3, len(session.calls))
-    add_check(results, "market_data", case_id, "http_4xx_fails_closed", True, denied_raised)
+    check("http_usage_reads_live_limit", 1600, usage.api_request_limit)
+    check("http_success_decodes_rows", 1, len(frame))
+    check("http_client_counts_data_attempts", 2, client.data_request_count)
+    check("http_4xx_is_not_hidden_retry", 3, len(session.calls))
+    check("http_4xx_fails_closed", True, denied_raised)
 
     summary.update(
         {
@@ -203,8 +280,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
     from services.downloader.market_data_ledger import JOB_PENDING, WORKLOAD_BLOCKED, WORKLOAD_DONE, MarketDataJobLedger
 
     case_id = "MARKET_DATA_V2_RESUMABLE_EXECUTOR"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     specs_all = get_market_dataset_specs(included_only=True)
     # One single request + one per-instrument dataset gives a compact manifest
@@ -238,9 +314,9 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         as_of_date="2026-09-04",
         quota_limit=1600,
     )
-    add_check(results, "market_data", case_id, "planner_and_executor_manifest_count_same", plan.total_requests, manifest.total_requests)
-    add_check(results, "market_data", case_id, "planner_and_executor_manifest_identity_same", plan.manifest_fingerprint, manifest.manifest_fingerprint)
-    add_check(results, "market_data", case_id, "logical_request_ids_unique", manifest.total_requests, len({item.request_id for item in manifest.requests}))
+    check("planner_and_executor_manifest_count_same", plan.total_requests, manifest.total_requests)
+    check("planner_and_executor_manifest_identity_same", plan.manifest_fingerprint, manifest.manifest_fingerprint)
+    check("logical_request_ids_unique", manifest.total_requests, len({item.request_id for item in manifest.requests}))
 
     class _Clock:
         def __init__(self):
@@ -283,9 +359,9 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             now=datetime(2026, 9, 6, 10, 0, 6, tzinfo=timezone.utc),
             lease_until=datetime(2026, 9, 6, 10, 0, 11, tzinfo=timezone.utc),
         )
-        add_check(results, "market_data", case_id, "expired_running_job_is_reclaimed", first.request_id, resumed.request_id)
-        add_check(results, "market_data", case_id, "resume_preserves_http_attempt_history", 1, resumed.http_attempt_count)
-        add_check(results, "market_data", case_id, "resume_increments_execution_attempt", 2, resumed.attempt_count)
+        check("expired_running_job_is_reclaimed", first.request_id, resumed.request_id)
+        check("resume_preserves_http_attempt_history", 1, resumed.http_attempt_count)
+        check("resume_increments_execution_attempt", 2, resumed.attempt_count)
 
     with TemporaryDirectory() as td:
         lock_ledger = MarketDataJobLedger(Path(td) / "lock.sqlite3")
@@ -307,14 +383,14 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             concurrent_blocked = True
         else:
             concurrent_blocked = False
-        add_check(results, "market_data", case_id, "active_executor_lock_blocks_concurrent_executor", True, concurrent_blocked)
+        check("active_executor_lock_blocks_concurrent_executor", True, concurrent_blocked)
         lock_ledger.acquire_executor_lock(
             lock_workload,
             owner_id="owner-b",
             now=datetime(2026, 9, 6, 10, 1, 1, tzinfo=timezone.utc),
             lease_until=datetime(2026, 9, 6, 10, 2, 1, tzinfo=timezone.utc),
         )
-        add_check(results, "market_data", case_id, "expired_executor_lock_can_be_taken_over", True, True)
+        check("expired_executor_lock_can_be_taken_over", True, True)
 
     class _QuotaThenSuccessClient:
         def __init__(self):
@@ -368,19 +444,19 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             quota_wait_observer=quota_wait_events.append,
         )
         execution_summary = executor.run(manifest=manifest, sink=_sink)
-        add_check(results, "market_data", case_id, "quota_402_waits_and_resumes_to_done", WORKLOAD_DONE, execution_summary.workload_status)
-        add_check(results, "market_data", case_id, "quota_resume_commits_every_logical_request", manifest.total_requests, execution_summary.done)
-        add_check(results, "market_data", case_id, "quota_402_is_counted_as_actual_http_attempt", manifest.total_requests + 1, execution_summary.http_attempts)
-        add_check(results, "market_data", case_id, "quota_wait_uses_injected_polling", True, bool(clock.sleeps))
-        add_check(results, "market_data", case_id, "quota_wait_emits_heartbeat_each_poll", True, len(quota_wait_events) >= 2)
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_does_not_add_usage_refresh", 4, quota_client.usage_request_count)
+        check("quota_402_waits_and_resumes_to_done", WORKLOAD_DONE, execution_summary.workload_status)
+        check("quota_resume_commits_every_logical_request", manifest.total_requests, execution_summary.done)
+        check("quota_402_is_counted_as_actual_http_attempt", manifest.total_requests + 1, execution_summary.http_attempts)
+        check("quota_wait_uses_injected_polling", True, bool(clock.sleeps))
+        check("quota_wait_emits_heartbeat_each_poll", True, len(quota_wait_events) >= 2)
+        check("quota_wait_heartbeat_does_not_add_usage_refresh", 4, quota_client.usage_request_count)
         last_wait = quota_wait_events[-1]
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_uses_live_limit", 4, last_wait.get("quota_limit"))
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_stop_threshold", 2, last_wait.get("quota_safe_used_max"))
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_resume_headroom", 1, last_wait.get("quota_resume_headroom"))
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_resume_threshold", 2, last_wait.get("quota_resume_used_max"))
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_reports_required_drop", 2, last_wait.get("quota_needed_drop"))
-        add_check(results, "market_data", case_id, "quota_wait_heartbeat_accumulates_wait_time", True, float(last_wait.get("waited_seconds") or 0.0) >= policy.quota_poll_seconds)
+        check("quota_wait_heartbeat_uses_live_limit", 4, last_wait.get("quota_limit"))
+        check("quota_wait_heartbeat_reports_stop_threshold", 2, last_wait.get("quota_safe_used_max"))
+        check("quota_wait_heartbeat_reports_resume_headroom", 1, last_wait.get("quota_resume_headroom"))
+        check("quota_wait_heartbeat_reports_resume_threshold", 2, last_wait.get("quota_resume_used_max"))
+        check("quota_wait_heartbeat_reports_required_drop", 2, last_wait.get("quota_needed_drop"))
+        check("quota_wait_heartbeat_accumulates_wait_time", True, float(last_wait.get("waited_seconds") or 0.0) >= policy.quota_poll_seconds)
 
         sponsor_policy = MarketDataExecutionPolicy(
             quota_reserve_requests=50,
@@ -404,10 +480,10 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
                 owner_id="sponsor-hysteresis-worker",
             )
             sponsor_executor._quota.usage = FinMindUsage(user_count=5968, api_request_limit=6000)
-            add_check(results, "market_data", case_id, "quota_hysteresis_stop_threshold_still_uses_reserve", False, sponsor_executor._quota_has_capacity())
-            add_check(results, "market_data", case_id, "quota_hysteresis_waits_until_500_safe_headroom", False, sponsor_executor._quota_has_resume_capacity())
+            check("quota_hysteresis_stop_threshold_still_uses_reserve", False, sponsor_executor._quota_has_capacity())
+            check("quota_hysteresis_waits_until_500_safe_headroom", False, sponsor_executor._quota_has_resume_capacity())
             sponsor_executor._quota.usage = FinMindUsage(user_count=5450, api_request_limit=6000)
-            add_check(results, "market_data", case_id, "quota_hysteresis_resumes_at_500_safe_headroom", True, sponsor_executor._quota_has_resume_capacity())
+            check("quota_hysteresis_resumes_at_500_safe_headroom", True, sponsor_executor._quota_has_resume_capacity())
 
         from services.downloader.main import _estimate_bootstrap_eta_seconds
 
@@ -431,8 +507,8 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             quota_reserve=50,
             observed_sample_floor=100,
         )
-        add_check(results, "market_data", case_id, "eta_early_resume_uses_sustainable_quota_not_tiny_sample", True, early_resume_eta is not None and early_resume_eta < 12 * 3600)
-        add_check(results, "market_data", case_id, "eta_excludes_quota_wait_from_active_throughput", True, rolling_wait_eta is not None and rolling_wait_eta < 12 * 3600)
+        check("eta_early_resume_uses_sustainable_quota_not_tiny_sample", True, early_resume_eta is not None and early_resume_eta < 12 * 3600)
+        check("eta_excludes_quota_wait_from_active_throughput", True, rolling_wait_eta is not None and rolling_wait_eta < 12 * 3600)
 
         class _NoCallClient:
             def __init__(self):
@@ -457,8 +533,8 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             owner_id="quota-worker-second-run",
         )
         second_summary = second_executor.run(manifest=manifest, sink=_sink)
-        add_check(results, "market_data", case_id, "restart_reuses_all_done_jobs_without_http", 0, no_call.data_request_count)
-        add_check(results, "market_data", case_id, "restart_done_summary_stays_done", WORKLOAD_DONE, second_summary.workload_status)
+        check("restart_reuses_all_done_jobs_without_http", 0, no_call.data_request_count)
+        check("restart_done_summary_stays_done", WORKLOAD_DONE, second_summary.workload_status)
 
     class _TransientClient:
         def __init__(self):
@@ -489,8 +565,8 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             owner_id="retry-worker",
         )
         retry_summary = executor.run(manifest=manifest, sink=_sink)
-        add_check(results, "market_data", case_id, "transient_error_retries_to_done", WORKLOAD_DONE, retry_summary.workload_status)
-        add_check(results, "market_data", case_id, "transient_retry_adds_one_http_attempt", manifest.total_requests + 1, retry_summary.http_attempts)
+        check("transient_error_retries_to_done", WORKLOAD_DONE, retry_summary.workload_status)
+        check("transient_retry_adds_one_http_attempt", manifest.total_requests + 1, retry_summary.http_attempts)
 
     one_spec = tuple(spec for spec in selected if spec.dataset == "TaiwanStockTradingDate")
     one_evidence = {"TaiwanStockTradingDate": evidence["TaiwanStockTradingDate"]}
@@ -529,13 +605,13 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             manifest=one_manifest,
             sink=lambda request, frame: MarketDataCommitReceipt(committed=False, row_count=len(frame)),
         )
-        add_check(results, "market_data", case_id, "http_success_without_commit_does_not_mark_done", 0, commit_blocked.done)
-        add_check(results, "market_data", case_id, "uncommitted_sink_blocks_workload", WORKLOAD_BLOCKED, commit_blocked.workload_status)
+        check("http_success_without_commit_does_not_mark_done", 0, commit_blocked.done)
+        check("uncommitted_sink_blocks_workload", WORKLOAD_BLOCKED, commit_blocked.workload_status)
         quota_snapshot = executor.quota_progress_snapshot()
-        add_check(results, "market_data", case_id, "progress_quota_snapshot_uses_live_limit", 100, quota_snapshot["quota_limit"])
-        add_check(results, "market_data", case_id, "progress_quota_snapshot_reports_effective_used", 1, quota_snapshot["quota_user_count"])
-        add_check(results, "market_data", case_id, "progress_quota_snapshot_deducts_local_attempt", 99, quota_snapshot["quota_remaining"])
-        add_check(results, "market_data", case_id, "progress_quota_snapshot_applies_reserve", 98, quota_snapshot["quota_usable_remaining"])
+        check("progress_quota_snapshot_uses_live_limit", 100, quota_snapshot["quota_limit"])
+        check("progress_quota_snapshot_reports_effective_used", 1, quota_snapshot["quota_user_count"])
+        check("progress_quota_snapshot_deducts_local_attempt", 99, quota_snapshot["quota_remaining"])
+        check("progress_quota_snapshot_applies_reserve", 98, quota_snapshot["quota_usable_remaining"])
 
         from services.downloader.main import _estimate_bootstrap_eta_seconds, _format_bootstrap_duration
         eta_seconds = _estimate_bootstrap_eta_seconds(
@@ -546,7 +622,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             quota_limit=6000,
             quota_reserve=50,
         )
-        add_check(results, "market_data", case_id, "bootstrap_eta_is_capped_by_safe_quota_rate", "11:00:06", _format_bootstrap_duration(eta_seconds))
+        check("bootstrap_eta_is_capped_by_safe_quota_rate", "11:00:06", _format_bootstrap_duration(eta_seconds))
 
     class _PermanentClient:
         def __init__(self):
@@ -586,8 +662,8 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             owner_id="retry-exhausted-worker",
         )
         exhausted_summary = executor.run(manifest=one_manifest, sink=_sink)
-        add_check(results, "market_data", case_id, "retry_budget_exhaustion_blocks_workload", WORKLOAD_BLOCKED, exhausted_summary.workload_status)
-        add_check(results, "market_data", case_id, "retry_budget_is_bounded_by_policy", policy.max_retryable_attempts, exhausted_summary.http_attempts)
+        check("retry_budget_exhaustion_blocks_workload", WORKLOAD_BLOCKED, exhausted_summary.workload_status)
+        check("retry_budget_is_bounded_by_policy", policy.max_retryable_attempts, exhausted_summary.http_attempts)
 
     permanent_clock = _Clock()
     with TemporaryDirectory() as td:
@@ -601,9 +677,9 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             owner_id="permanent-worker",
         )
         blocked_summary = executor.run(manifest=manifest, sink=_sink)
-        add_check(results, "market_data", case_id, "permanent_4xx_blocks_workload", WORKLOAD_BLOCKED, blocked_summary.workload_status)
-        add_check(results, "market_data", case_id, "permanent_4xx_no_hidden_retry", 1, blocked_summary.http_attempts)
-        add_check(results, "market_data", case_id, "permanent_block_leaves_unstarted_jobs_pending", True, blocked_summary.pending > 0)
+        check("permanent_4xx_blocks_workload", WORKLOAD_BLOCKED, blocked_summary.workload_status)
+        check("permanent_4xx_no_hidden_retry", 1, blocked_summary.http_attempts)
+        check("permanent_block_leaves_unstarted_jobs_pending", True, blocked_summary.pending > 0)
 
     summary.update(
         {
@@ -647,8 +723,7 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
     )
 
     case_id = "MARKET_DATA_V2_PARQUET_STORAGE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     trading_date_specs = tuple(
         spec for spec in get_market_dataset_specs(included_only=True)
@@ -721,28 +796,28 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
             disk_usage_fn=enough_disk,
         )
         archive_dir = resolve_market_data_bootstrap_archive_dir(root, manifest.manifest_fingerprint)
-        add_check(results, "market_data", case_id, "archive_root_is_neutral_market_data_v2_namespace", True, "data/market_data_v2/bootstrap" in archive_dir.as_posix())
+        check("archive_root_is_neutral_market_data_v2_namespace", True, "data/market_data_v2/bootstrap" in archive_dir.as_posix())
         bootstrap_payload = load_json_strict(archive_dir / MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME)
-        add_check(results, "market_data", case_id, "bootstrap_manifest_binds_request_manifest_fingerprint", manifest.manifest_fingerprint, bootstrap_payload["manifest_fingerprint"])
-        add_check(results, "market_data", case_id, "bootstrap_storage_format_is_parquet", "parquet", bootstrap_payload["format"])
-        add_check(results, "market_data", case_id, "bootstrap_storage_compression_is_zstd", "zstd", bootstrap_payload["compression"])
+        check("bootstrap_manifest_binds_request_manifest_fingerprint", manifest.manifest_fingerprint, bootstrap_payload["manifest_fingerprint"])
+        check("bootstrap_storage_format_is_parquet", "parquet", bootstrap_payload["format"])
+        check("bootstrap_storage_compression_is_zstd", "zstd", bootstrap_payload["compression"])
 
         frame = pd.DataFrame([{"date": "2026-09-03", "stock_id": "2330"}, {"date": "2026-09-04", "stock_id": "2330"}])
         receipt = sink(request, frame)
         parquet_path = resolve_market_data_request_parquet_path(root, manifest.manifest_fingerprint, request)
-        add_check(results, "market_data", case_id, "commit_receipt_true_after_atomic_publication", True, receipt.committed)
-        add_check(results, "market_data", case_id, "commit_receipt_row_count_matches_frame", len(frame), receipt.row_count)
-        add_check(results, "market_data", case_id, "commit_receipt_hash_matches_published_file", compute_file_sha256(parquet_path), receipt.content_sha256)
-        add_check(results, "market_data", case_id, "published_request_artifact_exists", True, parquet_path.is_file())
+        check("commit_receipt_true_after_atomic_publication", True, receipt.committed)
+        check("commit_receipt_row_count_matches_frame", len(frame), receipt.row_count)
+        check("commit_receipt_hash_matches_published_file", compute_file_sha256(parquet_path), receipt.content_sha256)
+        check("published_request_artifact_exists", True, parquet_path.is_file())
         temp_files = list(parquet_path.parent.glob("*.parquet.tmp")) + list(parquet_path.parent.glob(".*.parquet.tmp"))
-        add_check(results, "market_data", case_id, "atomic_commit_leaves_no_temp_file", 0, len(temp_files))
+        check("atomic_commit_leaves_no_temp_file", 0, len(temp_files))
         schema_payload = load_json_strict(parquet_path.parent / MARKET_DATA_DATASET_SCHEMA_FILENAME)
-        add_check(results, "market_data", case_id, "dataset_schema_preserves_provider_column_order", list(frame.columns), schema_payload["columns"])
+        check("dataset_schema_preserves_provider_column_order", list(frame.columns), schema_payload["columns"])
 
         recovered = sink.recover_committed(request)
-        add_check(results, "market_data", case_id, "committed_artifact_is_recoverable", True, recovered is not None and recovered.committed)
-        add_check(results, "market_data", case_id, "recovery_hash_matches_original_receipt", receipt.content_sha256, recovered.content_sha256)
-        add_check(results, "market_data", case_id, "recovery_does_not_rewrite_artifact", 1, codec.write_count)
+        check("committed_artifact_is_recoverable", True, recovered is not None and recovered.committed)
+        check("recovery_hash_matches_original_receipt", receipt.content_sha256, recovered.content_sha256)
+        check("recovery_does_not_rewrite_artifact", 1, codec.write_count)
 
         try:
             sink(second_request, pd.DataFrame([{"date": "2026-09-04", "new_column": 1}]))
@@ -750,7 +825,7 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
             drift_blocked = True
         else:
             drift_blocked = False
-        add_check(results, "market_data", case_id, "provider_schema_drift_fails_closed", True, drift_blocked)
+        check("provider_schema_drift_fails_closed", True, drift_blocked)
 
     with TemporaryDirectory() as td:
         low_disk = lambda _path: DiskUsage(100, 99, 1)
@@ -774,7 +849,7 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
             low_disk_blocked = "free-space gate" in str(exc)
         else:
             low_disk_blocked = False
-        add_check(results, "market_data", case_id, "low_disk_space_fails_before_publication", True, low_disk_blocked)
+        check("low_disk_space_fails_before_publication", True, low_disk_blocked)
 
     # Crash window regression: file is already atomically published but ledger
     # was not marked DONE.  Executor must recover storage before issuing data HTTP.
@@ -823,16 +898,16 @@ def validate_market_data_v2_parquet_storage_contract_case(_base_params):
             owner_id="recovery-worker",
         )
         execution_summary = executor.run(manifest=recovery_manifest, sink=sink)
-        add_check(results, "market_data", case_id, "post_commit_pre_ledger_crash_recovers_to_done", WORKLOAD_DONE, execution_summary.workload_status)
-        add_check(results, "market_data", case_id, "post_commit_recovery_uses_zero_data_http", 0, client.data_request_count)
-        add_check(results, "market_data", case_id, "post_commit_recovery_ledger_http_attempts_zero", 0, execution_summary.http_attempts)
+        check("post_commit_pre_ledger_crash_recovers_to_done", WORKLOAD_DONE, execution_summary.workload_status)
+        check("post_commit_recovery_uses_zero_data_http", 0, client.data_request_count)
+        check("post_commit_recovery_ledger_http_attempts_zero", 0, execution_summary.http_attempts)
 
     project_root = Path(__file__).resolve().parents[2]
     requirements = (project_root / "requirements" / "requirements.txt").read_text(encoding="utf-8")
     lock = (project_root / "requirements" / "requirements-lock.txt").read_text(encoding="utf-8")
-    add_check(results, "market_data", case_id, "pyarrow_declared_in_requirements", True, any(line.strip() == "pyarrow" for line in requirements.splitlines()))
-    add_check(results, "market_data", case_id, "pyarrow_exact_version_locked", True, any(line.strip().startswith("pyarrow==") for line in lock.splitlines()))
-    add_check(results, "market_data", case_id, "default_storage_policy_is_parquet_zstd", ("parquet", "zstd"), (get_market_data_storage_policy().format, get_market_data_storage_policy().compression))
+    check("pyarrow_declared_in_requirements", True, any(line.strip() == "pyarrow" for line in requirements.splitlines()))
+    check("pyarrow_exact_version_locked", True, any(line.strip().startswith("pyarrow==") for line in lock.splitlines()))
+    check("default_storage_policy_is_parquet_zstd", ("parquet", "zstd"), (get_market_data_storage_policy().format, get_market_data_storage_policy().compression))
 
     summary.update({"checks": len(results), "manifest_fingerprint": manifest.manifest_fingerprint})
     return results, summary
@@ -867,8 +942,7 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
     from services.downloader.market_data_ledger import WORKLOAD_DONE
 
     case_id = "MARKET_DATA_V2_BOOTSTRAP_ACTIVATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     # Full-history completeness may not depend on one reference stock's observed
     # dates. These historically sparse/periodic datasets therefore use the
@@ -881,26 +955,11 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
         "TaiwanStockMonthRevenue",
         "TaiwanStockMarketValueWeight",
     )
-    add_check(
-        results,
-        "market_data",
-        case_id,
-        "periodic_full_history_does_not_depend_on_probe_stock_date_union",
-        True,
-        all(
-            get_market_dataset_spec(dataset).bootstrap_mode == BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE
-            for dataset in correctness_first
-        ),
-    )
-    add_check(
-        results,
-        "market_data",
-        case_id,
-        "current_registry_has_no_probe_date_union_bootstrap_dependency",
-        0,
-        sum(
-            spec.bootstrap_mode == BOOTSTRAP_BULK_REFERENCE_DATES
-            for spec in get_market_dataset_specs(included_only=True)
+    run_bound_checks(
+        check,
+        (
+            ('periodic_full_history_does_not_depend_on_probe_stock_date_union', True, all((get_market_dataset_spec(dataset).bootstrap_mode == BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE for dataset in correctness_first)),),
+            ('current_registry_has_no_probe_date_union_bootstrap_dependency', 0, sum((spec.bootstrap_mode == BOOTSTRAP_BULK_REFERENCE_DATES for spec in get_market_dataset_specs(included_only=True))),),
         ),
     )
 
@@ -968,7 +1027,7 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
             newest_blocked_stops = True
         else:
             newest_blocked_stops = False
-        add_check(results, "market_data", case_id, "newest_blocked_preflight_cannot_fall_back_to_older_ready", True, newest_blocked_stops)
+        check("newest_blocked_preflight_cannot_fall_back_to_older_ready", True, newest_blocked_stops)
 
         newer.write_text(json.dumps(_payload(manifest_fingerprint="0" * 64), ensure_ascii=False), encoding="utf-8")
         try:
@@ -977,7 +1036,7 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
             drift_blocks = True
         else:
             drift_blocks = False
-        add_check(results, "market_data", case_id, "manifest_fingerprint_drift_blocks_activation", True, drift_blocks)
+        check("manifest_fingerprint_drift_blocks_activation", True, drift_blocks)
 
         stale_universe = _payload()
         stale_universe["historical_universe_contract_fingerprint"] = "0" * 64
@@ -988,13 +1047,13 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
             universe_drift_blocks = True
         else:
             universe_drift_blocks = False
-        add_check(results, "market_data", case_id, "historical_universe_contract_drift_blocks_activation", True, universe_drift_blocks)
+        check("historical_universe_contract_drift_blocks_activation", True, universe_drift_blocks)
 
         newer.write_text(json.dumps(_payload(), ensure_ascii=False), encoding="utf-8")
         activation = prepare_market_data_v2_bootstrap_activation(output_dir=output_dir)
-        add_check(results, "market_data", case_id, "ready_preflight_rederives_exact_manifest", plan.manifest_fingerprint, activation.manifest.manifest_fingerprint)
-        add_check(results, "market_data", case_id, "ready_preflight_request_count_matches_plan", plan.total_requests, activation.planned_total_requests)
-        add_check(results, "market_data", case_id, "no_ledger_is_created_by_read_only_activation_prepare", None, get_existing_bootstrap_summary(project_root=root, activation=activation))
+        check("ready_preflight_rederives_exact_manifest", plan.manifest_fingerprint, activation.manifest.manifest_fingerprint)
+        check("ready_preflight_request_count_matches_plan", plan.total_requests, activation.planned_total_requests)
+        check("no_ledger_is_created_by_read_only_activation_prepare", None, get_existing_bootstrap_summary(project_root=root, activation=activation))
 
         class _Client:
             def __init__(self):
@@ -1051,7 +1110,7 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
             startup_blocked = True
         else:
             startup_blocked = False
-        add_check(results, "market_data", case_id, "storage_runtime_gate_blocks_before_any_data_http", True, startup_blocked and blocked_client.data_request_count == 0)
+        check("storage_runtime_gate_blocks_before_any_data_http", True, startup_blocked and blocked_client.data_request_count == 0)
 
         progress = []
         client = _Client()
@@ -1067,14 +1126,14 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
             sleep_fn=lambda _seconds: None,
             progress_fn=progress.append,
         )
-        add_check(results, "market_data", case_id, "explicit_activation_executes_manifest_to_done", WORKLOAD_DONE, result["status"])
-        add_check(results, "market_data", case_id, "activation_done_count_equals_exact_plan", plan.total_requests, result["done"])
-        add_check(results, "market_data", case_id, "activation_first_run_data_http_equals_logical_requests", plan.total_requests, client.data_request_count)
-        add_check(results, "market_data", case_id, "activation_emits_bounded_progress_events", True, 0 < len(progress) <= (plan.total_requests // 10 + 1))
-        add_check(results, "market_data", case_id, "activation_status_paths_are_project_relative", True, not str(result["archive_dir"]).startswith(str(root)))
+        check("explicit_activation_executes_manifest_to_done", WORKLOAD_DONE, result["status"])
+        check("activation_done_count_equals_exact_plan", plan.total_requests, result["done"])
+        check("activation_first_run_data_http_equals_logical_requests", plan.total_requests, client.data_request_count)
+        check("activation_emits_bounded_progress_events", True, 0 < len(progress) <= (plan.total_requests // 10 + 1))
+        check("activation_status_paths_are_project_relative", True, not str(result["archive_dir"]).startswith(str(root)))
 
         resumed = get_existing_bootstrap_summary(project_root=root, activation=activation)
-        add_check(results, "market_data", case_id, "completed_ledger_is_visible_for_resume_preview", plan.total_requests, resumed.done if resumed else -1)
+        check("completed_ledger_is_visible_for_resume_preview", plan.total_requests, resumed.done if resumed else -1)
         second_client = _Client()
         second = execute_market_data_v2_bootstrap(
             activation=activation,
@@ -1087,8 +1146,8 @@ def validate_market_data_v2_bootstrap_activation_contract_case(_base_params):
             now_fn=fixed_now,
             sleep_fn=lambda _seconds: None,
         )
-        add_check(results, "market_data", case_id, "completed_resume_stays_done", WORKLOAD_DONE, second["status"])
-        add_check(results, "market_data", case_id, "completed_resume_uses_zero_data_http", 0, second_client.data_request_count)
+        check("completed_resume_stays_done", WORKLOAD_DONE, second["status"])
+        check("completed_resume_uses_zero_data_http", 0, second_client.data_request_count)
 
     summary.update(
         {
@@ -1140,23 +1199,22 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
     )
 
     case_id = "MARKET_DATA_V2_ADJUSTED_PRICE_REPRESENTATION_INVARIANCE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     contract = get_adjusted_price_representation_contract()
     stats = validate_adjusted_price_representation_contract(contract)
     payload = adjusted_price_representation_contract_payload(contract)
     rules = {row.representation_id: row for row in contract.rules}
 
-    add_check(results, "market_data", case_id, "round13_adjusted_price_representation_contract_is_versioned", True, ADJUSTED_PRICE_REPRESENTATION_SCHEMA_VERSION >= 1)
-    add_check(results, "market_data", case_id, "round13_corporate_action_restatement_proof_is_explicit", ADJUSTED_PRICE_PROOF_STATUS, contract.proof_status)
-    add_check(results, "market_data", case_id, "round13_arbitrary_vendor_corrections_are_not_claimed_invariant", ADJUSTED_PRICE_VENDOR_CORRECTION_STATUS, contract.vendor_correction_status)
-    add_check(results, "market_data", case_id, "round13_representation_fingerprint_is_deterministic", adjusted_price_representation_contract_fingerprint(contract), adjusted_price_representation_contract_fingerprint())
-    add_check(results, "market_data", case_id, "round13_raw_absolute_price_levels_remain_blocked", PRICE_REPRESENTATION_STATUS_BLOCKED, rules["absolute_adjusted_price_level_v1"].status)
-    add_check(results, "market_data", case_id, "round13_volume_field_is_outside_price_restatement_proof", PRICE_REPRESENTATION_STATUS_DEFERRED, rules["adjusted_dataset_volume_field_v1"].status)
-    add_check(results, "market_data", case_id, "round13_relative_price_primitives_are_proven_invariant", True, all(rules[key].status == PRICE_REPRESENTATION_STATUS_INVARIANT for key in ("predecision_price_order_relations_v1", "anchor_relative_ohlc_v1", "relative_price_context_v1", "matured_anchor_relative_future_path_v1")))
-    add_check(results, "market_data", case_id, "round13_never_authorizes_dataset_scope", False, bool(stats["scientific_input_authorized"]))
-    add_check(results, "market_data", case_id, "round13_payload_keeps_proof_and_vendor_revision_scope_separate", True, payload["proof_status"] == ADJUSTED_PRICE_PROOF_STATUS and payload["vendor_correction_status"] == ADJUSTED_PRICE_VENDOR_CORRECTION_STATUS)
+    check("round13_adjusted_price_representation_contract_is_versioned", True, ADJUSTED_PRICE_REPRESENTATION_SCHEMA_VERSION >= 1)
+    check("round13_corporate_action_restatement_proof_is_explicit", ADJUSTED_PRICE_PROOF_STATUS, contract.proof_status)
+    check("round13_arbitrary_vendor_corrections_are_not_claimed_invariant", ADJUSTED_PRICE_VENDOR_CORRECTION_STATUS, contract.vendor_correction_status)
+    check("round13_representation_fingerprint_is_deterministic", adjusted_price_representation_contract_fingerprint(contract), adjusted_price_representation_contract_fingerprint())
+    check("round13_raw_absolute_price_levels_remain_blocked", PRICE_REPRESENTATION_STATUS_BLOCKED, rules["absolute_adjusted_price_level_v1"].status)
+    check("round13_volume_field_is_outside_price_restatement_proof", PRICE_REPRESENTATION_STATUS_DEFERRED, rules["adjusted_dataset_volume_field_v1"].status)
+    check("round13_relative_price_primitives_are_proven_invariant", True, all(rules[key].status == PRICE_REPRESENTATION_STATUS_INVARIANT for key in ("predecision_price_order_relations_v1", "anchor_relative_ohlc_v1", "relative_price_context_v1", "matured_anchor_relative_future_path_v1")))
+    check("round13_never_authorizes_dataset_scope", False, bool(stats["scientific_input_authorized"]))
+    check("round13_payload_keeps_proof_and_vendor_revision_scope_separate", True, payload["proof_status"] == ADJUSTED_PRICE_PROOF_STATUS and payload["vendor_correction_status"] == ADJUSTED_PRICE_VENDOR_CORRECTION_STATUS)
 
     dates = pd.date_range("2026-01-01", periods=8, freq="D")
     base = pd.DataFrame(
@@ -1176,7 +1234,7 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
     restated_events = build_candidate_event_positions(restated, (3,))
     event_signature = [(int(row["pos"]), int(row["high_len"])) for row in base_events]
     restated_signature = [(int(row["pos"]), int(row["high_len"])) for row in restated_events]
-    add_check(results, "market_data", case_id, "predecision_candidate_membership_is_scale_invariant", event_signature, restated_signature)
+    check("predecision_candidate_membership_is_scale_invariant", event_signature, restated_signature)
 
     event = base_events[0]
     event_pos = int(event["pos"])
@@ -1184,7 +1242,7 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
     restated_window = restated.iloc[event_pos - 3:event_pos + 1][["Open", "High", "Low", "Close", "Volume"]].to_numpy(dtype=np.float64)
     normalized = normalize_ohlcv_array_window(feature_window, float(base["Close"].iloc[event_pos]))
     normalized_restated = normalize_ohlcv_array_window(restated_window, float(restated["Close"].iloc[event_pos]))
-    add_check(results, "market_data", case_id, "anchor_relative_ohlcv_feature_is_scale_invariant", True, bool(np.allclose(normalized, normalized_restated, rtol=0.0, atol=1e-7)))
+    check("anchor_relative_ohlcv_feature_is_scale_invariant", True, bool(np.allclose(normalized, normalized_restated, rtol=0.0, atol=1e-7)))
 
     benchmark_scale = 0.4
     benchmark = feature_window.copy()
@@ -1193,7 +1251,7 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
     benchmark_restated[:, :4] *= benchmark_scale
     benchmark_norm = normalize_ohlcv_array_window(benchmark, float(benchmark[-1, 3]))
     benchmark_norm_restated = normalize_ohlcv_array_window(benchmark_restated, float(benchmark_restated[-1, 3]))
-    add_check(results, "market_data", case_id, "benchmark_price_representation_allows_independent_positive_scale", True, bool(np.allclose(benchmark_norm, benchmark_norm_restated, rtol=0.0, atol=1e-7)))
+    check("benchmark_price_representation_allows_independent_positive_scale", True, bool(np.allclose(benchmark_norm, benchmark_norm_restated, rtol=0.0, atol=1e-7)))
 
     policy = BreakoutQualityLabelPolicy(
         feature_window_bars=4,
@@ -1206,7 +1264,7 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
     )
     context = build_breakout_quality_context(base, event_pos=event_pos, high_len=int(event["high_len"]), breakout_level=float(event["breakout_level"]), policy=policy)
     restated_context = build_breakout_quality_context(restated, event_pos=event_pos, high_len=int(restated_events[0]["high_len"]), breakout_level=float(restated_events[0]["breakout_level"]), policy=policy)
-    add_check(results, "market_data", case_id, "relative_price_context_is_scale_invariant", True, bool(np.allclose(context, restated_context, rtol=0.0, atol=1e-7)))
+    check("relative_price_context_is_scale_invariant", True, bool(np.allclose(context, restated_context, rtol=0.0, atol=1e-7)))
 
     anchor = 100.0
     highs = np.asarray([106.0, 108.0, 109.0], dtype=np.float64)
@@ -1216,16 +1274,16 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
     label_restated = label_from_cached_path(highs * later_restatement_scale, lows * later_restatement_scale, anchor_price=anchor * later_restatement_scale, available_bars=3, policy=policy)
     label_signature = (label.label, label.reason, label.max_upside_return, label.max_downside_return, label.decision_mfe_return, label.decision_mae_return, label.decision_reward_risk_ratio, label.first_hit_bar)
     restated_label_signature = (label_restated.label, label_restated.reason, label_restated.max_upside_return, label_restated.max_downside_return, label_restated.decision_mfe_return, label_restated.decision_mae_return, label_restated.decision_reward_risk_ratio, label_restated.first_hit_bar)
-    add_check(results, "market_data", case_id, "matured_ratio_target_and_hit_order_are_scale_invariant", True, bool(np.allclose(np.asarray(label_signature[2:7], dtype=float), np.asarray(restated_label_signature[2:7], dtype=float), equal_nan=True, rtol=0.0, atol=1e-12) and label_signature[:2] == restated_label_signature[:2] and label_signature[7] == restated_label_signature[7]))
-    add_check(results, "market_data", case_id, "raw_absolute_anchor_level_is_not_invariant", True, anchor != anchor * later_restatement_scale)
+    check("matured_ratio_target_and_hit_order_are_scale_invariant", True, bool(np.allclose(np.asarray(label_signature[2:7], dtype=float), np.asarray(restated_label_signature[2:7], dtype=float), equal_nan=True, rtol=0.0, atol=1e-12) and label_signature[:2] == restated_label_signature[:2] and label_signature[7] == restated_label_signature[7]))
+    check("raw_absolute_anchor_level_is_not_invariant", True, anchor != anchor * later_restatement_scale)
 
     pit_contracts = build_research_v2_pit_review_contracts()
     pit_stats = validate_research_v2_pit_review_contracts(pit_contracts)
     adjusted = next(row for row in pit_contracts if row.dataset == "TaiwanStockPriceAdj")
-    add_check(results, "market_data", case_id, "pit_review_binds_adjusted_price_representation_proof_identity", adjusted_price_representation_contract_fingerprint(), adjusted.representation_contract_fingerprint)
-    add_check(results, "market_data", case_id, "pit_review_keeps_raw_current_vintage_level_fail_closed", PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.pit_legality_status)
-    add_check(results, "market_data", case_id, "pit_review_exposes_proven_representation_status", ADJUSTED_PRICE_PROOF_STATUS, pit_stats["adjusted_price_representation_proof_status"])
-    add_check(results, "market_data", case_id, "candidate_identity_pins_adjusted_price_representation_proof", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 5 and "adjusted_price_representation_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    check("pit_review_binds_adjusted_price_representation_proof_identity", adjusted_price_representation_contract_fingerprint(), adjusted.representation_contract_fingerprint)
+    check("pit_review_keeps_raw_current_vintage_level_fail_closed", PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.pit_legality_status)
+    check("pit_review_exposes_proven_representation_status", ADJUSTED_PRICE_PROOF_STATUS, pit_stats["adjusted_price_representation_proof_status"])
+    check("candidate_identity_pins_adjusted_price_representation_proof", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 5 and "adjusted_price_representation_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
 
     scope_adjusted = next(
         row for row in build_research_v2_dataset_scope_contracts()
@@ -1241,9 +1299,9 @@ def validate_market_data_v2_adjusted_price_representation_invariance_contract_ca
         rule.representation_id for rule in contract.rules
         if rule.status == PRICE_REPRESENTATION_STATUS_INVARIANT
     }
-    add_check(results, "market_data", case_id, "round13_proof_owner_remains_separate_from_later_scope_authorization", False, bool(stats["scientific_input_authorized"]))
-    add_check(results, "market_data", case_id, "round14_scope_never_authorizes_raw_adjusted_price_fields_directly", set(), scope_direct_fields)
-    add_check(results, "market_data", case_id, "round14_scope_uses_exactly_round13_invariant_representations", invariant_ids, set(scope_adjusted.authorized_representation_ids))
+    check("round13_proof_owner_remains_separate_from_later_scope_authorization", False, bool(stats["scientific_input_authorized"]))
+    check("round14_scope_never_authorizes_raw_adjusted_price_fields_directly", set(), scope_direct_fields)
+    check("round14_scope_uses_exactly_round13_invariant_representations", invariant_ids, set(scope_adjusted.authorized_representation_ids))
 
     summary.update({
         "checks": len(results),
@@ -1286,8 +1344,7 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
     from services.downloader.market_data_ledger import MarketDataJobLedger, WORKLOAD_DONE
 
     case_id = "MARKET_DATA_V2_PROVIDER_SNAPSHOT_COMPLETION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     requests = (
         BootstrapHttpRequest("TaiwanStockPriceAdj", "per_instrument_full_range", "2330", "1900-01-01", "2026-09-07"),
@@ -1387,13 +1444,13 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
         )
         snapshot_path = resolve_market_data_provider_snapshot_path(root, manifest.manifest_fingerprint)
         payload = load_json_strict(snapshot_path)
-        add_check(results, "market_data", case_id, "done_archive_finalizes_ready_snapshot", "READY", result["status"])
-        add_check(results, "market_data", case_id, "all_requests_verified_before_ready", manifest.total_requests, result["verified_requests"])
-        add_check(results, "market_data", case_id, "provider_snapshot_total_rows_are_ledger_derived", 220, result["total_rows"])
-        add_check(results, "market_data", case_id, "provider_snapshot_manifest_is_persisted", True, snapshot_path.is_file())
-        add_check(results, "market_data", case_id, "provider_snapshot_identity_matches_report", result["snapshot_fingerprint"], payload["snapshot_fingerprint"])
-        add_check(results, "market_data", case_id, "provider_snapshot_path_is_project_relative", False, str(result["provider_snapshot_path"]).startswith(str(root)))
-        add_check(results, "market_data", case_id, "verification_progress_reaches_total", manifest.total_requests, progress[-1]["verified"])
+        check("done_archive_finalizes_ready_snapshot", "READY", result["status"])
+        check("all_requests_verified_before_ready", manifest.total_requests, result["verified_requests"])
+        check("provider_snapshot_total_rows_are_ledger_derived", 220, result["total_rows"])
+        check("provider_snapshot_manifest_is_persisted", True, snapshot_path.is_file())
+        check("provider_snapshot_identity_matches_report", result["snapshot_fingerprint"], payload["snapshot_fingerprint"])
+        check("provider_snapshot_path_is_project_relative", False, str(result["provider_snapshot_path"]).startswith(str(root)))
+        check("verification_progress_reaches_total", manifest.total_requests, progress[-1]["verified"])
 
         from core.market_data_storage_contract import (
             MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME,
@@ -1415,7 +1472,7 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
             missing_storage_manifest_blocks = True
         else:
             missing_storage_manifest_blocks = False
-        add_check(results, "market_data", case_id, "missing_storage_manifest_blocks_snapshot", True, missing_storage_manifest_blocks)
+        check("missing_storage_manifest_blocks_snapshot", True, missing_storage_manifest_blocks)
         _write_storage_manifest(root)
 
         reused = finalize_market_data_v2_provider_snapshot(
@@ -1426,8 +1483,8 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
             storage=_Storage(receipts),
             progress_every=10,
         )
-        add_check(results, "market_data", case_id, "immutable_snapshot_is_reused_after_reverification", True, reused["reused_existing_snapshot"])
-        add_check(results, "market_data", case_id, "reverify_keeps_same_snapshot_fingerprint", result["snapshot_fingerprint"], reused["snapshot_fingerprint"])
+        check("immutable_snapshot_is_reused_after_reverification", True, reused["reused_existing_snapshot"])
+        check("reverify_keeps_same_snapshot_fingerprint", result["snapshot_fingerprint"], reused["snapshot_fingerprint"])
 
         bad_receipts = dict(receipts)
         bad_receipts[requests[0].request_id] = MarketDataCommitReceipt(True, 100, "c" * 64)
@@ -1443,7 +1500,7 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
             sha_mismatch_blocks = True
         else:
             sha_mismatch_blocks = False
-        add_check(results, "market_data", case_id, "artifact_sha_mismatch_blocks_snapshot", True, sha_mismatch_blocks)
+        check("artifact_sha_mismatch_blocks_snapshot", True, sha_mismatch_blocks)
 
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1466,7 +1523,7 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
             incomplete_blocks = True
         else:
             incomplete_blocks = False
-        add_check(results, "market_data", case_id, "unfinished_ledger_cannot_publish_provider_snapshot", True, incomplete_blocks)
+        check("unfinished_ledger_cannot_publish_provider_snapshot", True, incomplete_blocks)
 
     summary.update({"checks": len(results), "manifest_fingerprint": manifest.manifest_fingerprint})
     return results, summary
@@ -1502,8 +1559,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     from services.downloader.market_data_trading_sync import sync_market_data_v2_trading_archive
 
     case_id = "MARKET_DATA_V2_TRADING_WORKBENCH_SIDECAR"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     registry = validate_market_dataset_registry()
     specs = get_market_dataset_specs(included_only=True)
@@ -1511,11 +1567,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     observed_bounds = MarketDataTradingStorageSink._frame_date_bounds(
         pd.DataFrame({"date": ["2026-09-05", "2026-09-07", "bad"]})
     )
-    add_check(results, "market_data", case_id, "trading_storage_observes_actual_frame_date_bounds", ("2026-09-05", "2026-09-07"), observed_bounds)
+    check("trading_storage_observes_actual_frame_date_bounds", ("2026-09-05", "2026-09-07"), observed_bounds)
     periodic = tuple(spec for spec in specs if spec.daily_mode == DAILY_PERIODIC_REPAIR)
-    add_check(results, "market_data", case_id, "registry_remains_valid_after_trading_query_contract", True, registry["included"] > 0)
-    add_check(results, "market_data", case_id, "periodic_datasets_have_explicit_query_policy", True, all(spec.trading_query_mode != TRADING_QUERY_AUTO for spec in periodic))
-    add_check(results, "market_data", case_id, "periodic_datasets_have_positive_lookback", True, all(spec.trading_lookback_periods > 0 for spec in periodic))
+    check("registry_remains_valid_after_trading_query_contract", True, registry["included"] > 0)
+    check("periodic_datasets_have_explicit_query_policy", True, all(spec.trading_query_mode != TRADING_QUERY_AUTO for spec in periodic))
+    check("periodic_datasets_have_positive_lookback", True, all(spec.trading_lookback_periods > 0 for spec in periodic))
 
     registry_fp = build_registry_fingerprint(specs)
     provider = {
@@ -1541,10 +1597,10 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         previous_sync_date=None,
         policy=policy,
     )
-    add_check(results, "market_data", case_id, "trading_manifest_is_deterministic", manifest_a.manifest_fingerprint, manifest_b.manifest_fingerprint)
-    add_check(results, "market_data", case_id, "trading_manifest_covers_every_included_dataset", {spec.dataset for spec in specs}, {request.dataset for request in manifest_a.requests})
-    add_check(results, "market_data", case_id, "trading_manifest_never_expands_to_historical_stock_universe", True, all(request.data_id is None or request.data_id in next(spec for spec in specs if spec.dataset == request.dataset).fixed_data_ids for request in manifest_a.requests))
-    add_check(results, "market_data", case_id, "trading_policy_is_non_blocking_for_current_execution", False, policy.execution_fail_closed)
+    check("trading_manifest_is_deterministic", manifest_a.manifest_fingerprint, manifest_b.manifest_fingerprint)
+    check("trading_manifest_covers_every_included_dataset", {spec.dataset for spec in specs}, {request.dataset for request in manifest_a.requests})
+    check("trading_manifest_never_expands_to_historical_stock_universe", True, all(request.data_id is None or request.data_id in next(spec for spec in specs if spec.dataset == request.dataset).fixed_data_ids for request in manifest_a.requests))
+    check("trading_policy_is_non_blocking_for_current_execution", False, policy.execution_fail_closed)
     selective_manifest = build_trading_sync_request_manifest(
         specs=specs,
         provider_snapshot=provider,
@@ -1554,9 +1610,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         selected_datasets={"TaiwanStockPrice", "TaiwanStockPER"},
         previous_ready_dates_by_dataset={"TaiwanStockPrice": "2026-09-04", "TaiwanStockPER": "2026-09-04"},
     )
-    add_check(results, "market_data", case_id, "selective_due_manifest_keeps_full_registry_identity", manifest_a.registry_fingerprint, selective_manifest.registry_fingerprint)
-    add_check(results, "market_data", case_id, "selective_due_manifest_only_contains_due_datasets", {"TaiwanStockPrice", "TaiwanStockPER"}, {request.dataset for request in selective_manifest.requests})
-    add_check(results, "market_data", case_id, "selective_due_manifest_is_smaller_than_full_daily_manifest", True, 0 < selective_manifest.total_requests < manifest_a.total_requests)
+    check("selective_due_manifest_keeps_full_registry_identity", manifest_a.registry_fingerprint, selective_manifest.registry_fingerprint)
+    check("selective_due_manifest_only_contains_due_datasets", {"TaiwanStockPrice", "TaiwanStockPER"}, {request.dataset for request in selective_manifest.requests})
+    check("selective_due_manifest_is_smaller_than_full_daily_manifest", True, 0 < selective_manifest.total_requests < manifest_a.total_requests)
 
     # Round 6 canonical provider fetch geometry.  Full-history current-vintage
     # PriceAdj semantics stay intact while one process-local cache is shared by
@@ -1577,8 +1633,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         end_date="2026-09-07",
         chunk_months=6,
     )
-    add_check(results, "market_data", case_id, "canonical_price_history_uses_74_six_month_ranges", 74, len(full_price_ranges))
-    add_check(results, "market_data", case_id, "canonical_price_dedup_normal_day_design_is_about_409_data_calls", 409, len(full_price_ranges) + manifest_a.total_requests - 7)
+    check("canonical_price_history_uses_74_six_month_ranges", 74, len(full_price_ranges))
+    check("canonical_price_dedup_normal_day_design_is_about_409_data_calls", 409, len(full_price_ranges) + manifest_a.total_requests - 7)
 
     class _SharedBaseClient:
         def __init__(self):
@@ -1597,14 +1653,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     shared = SharedFinMindRequestClient(shared_base)
     first = shared.get_data(dataset="Synthetic", start_date="2026-09-07", end_date="2026-09-07")
     second = shared.get_data(dataset="Synthetic", start_date="2026-09-07", end_date="2026-09-07")
-    add_check(results, "market_data", case_id, "shared_finmind_identical_request_hits_provider_once", 1, shared_base.data_request_count)
-    add_check(results, "market_data", case_id, "shared_finmind_identical_request_returns_same_payload", True, first.equals(second))
+    check("shared_finmind_identical_request_hits_provider_once", 1, shared_base.data_request_count)
+    check("shared_finmind_identical_request_returns_same_payload", True, first.equals(second))
     seeded_base = _SharedBaseClient()
     seeded = SharedFinMindRequestClient(seeded_base)
     seeded.seed_data(dataset="SyntheticSeed", start_date="2026-09-07", end_date="2026-09-07", frame=first)
     seeded_result = seeded.get_data(dataset="SyntheticSeed", start_date="2026-09-07", end_date="2026-09-07")
-    add_check(results, "market_data", case_id, "shared_finmind_seeded_exact_request_consumes_zero_provider_calls", 0, seeded_base.data_request_count)
-    add_check(results, "market_data", case_id, "shared_finmind_seeded_exact_request_preserves_provider_payload", True, first.equals(seeded_result))
+    check("shared_finmind_seeded_exact_request_consumes_zero_provider_calls", 0, seeded_base.data_request_count)
+    check("shared_finmind_seeded_exact_request_preserves_provider_payload", True, first.equals(seeded_result))
 
     from datetime import timezone
     from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
@@ -1647,9 +1703,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 committed=True, row_count=len(frame), content_sha256="e" * 64
             ),
         )
-    add_check(results, "market_data", case_id, "executor_cache_hit_consumes_zero_provider_data_calls", 0, executor_base.data_request_count)
-    add_check(results, "market_data", case_id, "executor_cache_hit_does_not_increment_http_attempts", 0, cached_summary.http_attempts)
-    add_check(results, "market_data", case_id, "executor_cache_hit_still_commits_logical_job", 1, cached_summary.done)
+    check("executor_cache_hit_consumes_zero_provider_data_calls", 0, executor_base.data_request_count)
+    check("executor_cache_hit_does_not_increment_http_attempts", 0, cached_summary.http_attempts)
+    check("executor_cache_hit_still_commits_logical_job", 1, cached_summary.done)
 
     class _BulkPriceBaseClient:
         def __init__(self, *, omit_current=()):
@@ -1711,14 +1767,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 start_date="2026-09-07",
                 end_date="2026-09-07",
             )
-        add_check(results, "market_data", case_id, "bulk_price_probe_and_history_use_two_provider_data_calls", 2, bulk_base.data_request_count)
-        add_check(results, "market_data", case_id, "bulk_price_refresh_uses_one_quota_capacity_probe", 1, bulk_base.usage_request_count)
-        add_check(results, "market_data", case_id, "bulk_price_refresh_preserves_full_current_vintage_history", 4, len(csv_2330))
-        add_check(results, "market_data", case_id, "bulk_price_refresh_reports_current_vintage_strategy", "full_market_range_current_vintage", bulk_summary.get("price_fetch_strategy"))
-        add_check(results, "market_data", case_id, "bulk_price_target_exact_request_reuses_same_response", calls_before_exact, bulk_base.data_request_count)
-        add_check(results, "market_data", case_id, "bulk_price_target_exact_cache_contains_full_market_rows", {"2317", "2330"}, set(exact_cached["stock_id"].astype(str)))
-        add_check(results, "market_data", case_id, "bulk_price_historical_raw_chunk_is_not_retained_in_shared_cache", False, bulk_shared.has_cached_data(dataset="TaiwanStockPriceAdj", start_date="2026-01-01", end_date="2026-06-30"))
-        add_check(results, "market_data", case_id, "bulk_price_reports_uncached_historical_fetch", 1, bulk_shared.snapshot().get("uncached_fetches"))
+        check("bulk_price_probe_and_history_use_two_provider_data_calls", 2, bulk_base.data_request_count)
+        check("bulk_price_refresh_uses_one_quota_capacity_probe", 1, bulk_base.usage_request_count)
+        check("bulk_price_refresh_preserves_full_current_vintage_history", 4, len(csv_2330))
+        check("bulk_price_refresh_reports_current_vintage_strategy", "full_market_range_current_vintage", bulk_summary.get("price_fetch_strategy"))
+        check("bulk_price_target_exact_request_reuses_same_response", calls_before_exact, bulk_base.data_request_count)
+        check("bulk_price_target_exact_cache_contains_full_market_rows", {"2317", "2330"}, set(exact_cached["stock_id"].astype(str)))
+        check("bulk_price_historical_raw_chunk_is_not_retained_in_shared_cache", False, bulk_shared.has_cached_data(dataset="TaiwanStockPriceAdj", start_date="2026-01-01", end_date="2026-06-30"))
+        check("bulk_price_reports_uncached_historical_fetch", 1, bulk_shared.snapshot().get("uncached_fetches"))
 
     with TemporaryDirectory() as suspended_temp_dir:
         from services.downloader import runtime as downloader_runtime
@@ -1741,8 +1797,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 verbose=False,
             )
             suspended_2317 = pd.read_csv(Path(downloader_runtime.SAVE_DIR) / "2317.csv", index_col=0)
-        add_check(results, "market_data", case_id, "bulk_price_preserves_legacy_suspended_ticker_semantic", "2026-07-01", str(pd.Timestamp(suspended_2317.index[-1]).date()))
-        add_check(results, "market_data", case_id, "bulk_price_reports_cached_universe_missing_target_row", 1, suspended_summary.get("current_universe_missing_price_row_count"))
+        check("bulk_price_preserves_legacy_suspended_ticker_semantic", "2026-07-01", str(pd.Timestamp(suspended_2317.index[-1]).date()))
+        check("bulk_price_reports_cached_universe_missing_target_row", 1, suspended_summary.get("current_universe_missing_price_row_count"))
 
     with TemporaryDirectory() as truncated_temp_dir:
         from services.downloader import runtime as downloader_runtime
@@ -1777,8 +1833,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 truncated_rejected = True
             else:
                 truncated_rejected = False
-        add_check(results, "market_data", case_id, "bulk_price_rejects_history_that_drops_existing_legacy_dates", True, truncated_rejected)
-        add_check(results, "market_data", case_id, "bulk_price_coverage_failure_publishes_no_partial_csv", truncated_original_bytes, (truncated_price_dir / "2330.csv").read_bytes())
+        check("bulk_price_rejects_history_that_drops_existing_legacy_dates", True, truncated_rejected)
+        check("bulk_price_coverage_failure_publishes_no_partial_csv", truncated_original_bytes, (truncated_price_dir / "2330.csv").read_bytes())
 
     # Repair windows are minimum re-query horizons.  A long scheduler outage
     # must not leave a silent hole between the Provider Snapshot and the recent
@@ -1794,17 +1850,17 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         previous_ready_dates_by_dataset={"TaiwanStockPriceAdj": "2026-08-01"},
     )
     long_gap_dates = tuple(request.start_date for request in long_gap_manifest.requests)
-    add_check(results, "market_data", case_id, "recent_repair_long_gap_starts_after_last_ready_date", "2026-08-02", min(long_gap_dates))
-    add_check(results, "market_data", case_id, "recent_repair_long_gap_remains_contiguous_through_target", "2026-09-07", max(long_gap_dates))
-    add_check(results, "market_data", case_id, "recent_repair_long_gap_has_no_silent_calendar_hole", 37, len(long_gap_manifest.requests))
+    check("recent_repair_long_gap_starts_after_last_ready_date", "2026-08-02", min(long_gap_dates))
+    check("recent_repair_long_gap_remains_contiguous_through_target", "2026-09-07", max(long_gap_dates))
+    check("recent_repair_long_gap_has_no_silent_calendar_hole", 37, len(long_gap_manifest.requests))
 
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         trading_root = resolve_trading_market_data_v2_root(root)
         state_path = resolve_trading_market_data_v2_state_path(root)
-        add_check(results, "market_data", case_id, "trading_archive_is_under_trading_data_domain", True, str(trading_root).replace("\\", "/").endswith("data/trading/market_data_v2"))
-        add_check(results, "market_data", case_id, "trading_state_is_under_trading_state_domain", True, str(state_path).replace("\\", "/").endswith("state/trading/market_data_v2/archive_state.json"))
-        add_check(results, "market_data", case_id, "trading_overlay_does_not_share_neutral_bootstrap_root", False, "/data/market_data_v2/bootstrap/" in str(trading_root).replace("\\", "/"))
+        check("trading_archive_is_under_trading_data_domain", True, str(trading_root).replace("\\", "/").endswith("data/trading/market_data_v2"))
+        check("trading_state_is_under_trading_state_domain", True, str(state_path).replace("\\", "/").endswith("state/trading/market_data_v2/archive_state.json"))
+        check("trading_overlay_does_not_share_neutral_bootstrap_root", False, "/data/market_data_v2/bootstrap/" in str(trading_root).replace("\\", "/"))
 
         class _NoCallClient:
             data_request_count = 0
@@ -1820,9 +1876,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             output_dir=root / "outputs",
             client=_NoCallClient(),
         )
-        add_check(results, "market_data", case_id, "no_provider_snapshot_reports_not_bootstrapped", "NOT_BOOTSTRAPPED", no_provider["status"])
-        add_check(results, "market_data", case_id, "no_provider_snapshot_consumes_zero_data_requests", 0, no_provider["request_count"])
-        add_check(results, "market_data", case_id, "no_provider_snapshot_is_non_blocking", False, no_provider["execution_blocking"])
+        check("no_provider_snapshot_reports_not_bootstrapped", "NOT_BOOTSTRAPPED", no_provider["status"])
+        check("no_provider_snapshot_consumes_zero_data_requests", 0, no_provider["request_count"])
+        check("no_provider_snapshot_is_non_blocking", False, no_provider["execution_blocking"])
 
         provider_identity = {
             "schema_version": MARKET_DATA_PROVIDER_SNAPSHOT_SCHEMA_VERSION,
@@ -1879,17 +1935,17 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             sink=_NoCommitSink(),
             sleep_fn=lambda seconds: sleep_calls.append(float(seconds)),
         )
-        add_check(results, "market_data", case_id, "quota_wait_returns_stale_without_sleeping_workbench", "STALE", quota_deferred["status"])
-        add_check(results, "market_data", case_id, "quota_wait_consumes_zero_data_requests", 0, quota_client.data_request_count)
-        add_check(results, "market_data", case_id, "quota_wait_does_not_sleep_in_workbench_sidecar", [], sleep_calls)
-        add_check(results, "market_data", case_id, "quota_wait_does_not_advance_done_jobs", 0, quota_deferred["done"])
-        add_check(results, "market_data", case_id, "quota_wait_is_reported_as_incomplete_sidecar", True, "WAIT_QUOTA" in str(quota_deferred.get("error") or ""))
-        add_check(results, "market_data", case_id, "trading_sync_exposes_last_observed_quota_used", 1590, quota_deferred.get("quota_user_count"))
-        add_check(results, "market_data", case_id, "trading_sync_exposes_last_observed_quota_limit", 1600, quota_deferred.get("quota_limit"))
+        check("quota_wait_returns_stale_without_sleeping_workbench", "STALE", quota_deferred["status"])
+        check("quota_wait_consumes_zero_data_requests", 0, quota_client.data_request_count)
+        check("quota_wait_does_not_sleep_in_workbench_sidecar", [], sleep_calls)
+        check("quota_wait_does_not_advance_done_jobs", 0, quota_deferred["done"])
+        check("quota_wait_is_reported_as_incomplete_sidecar", True, "WAIT_QUOTA" in str(quota_deferred.get("error") or ""))
+        check("trading_sync_exposes_last_observed_quota_used", 1590, quota_deferred.get("quota_user_count"))
+        check("trading_sync_exposes_last_observed_quota_limit", 1600, quota_deferred.get("quota_limit"))
         from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
         quota_read_model = build_trading_market_data_v2_read_model(root)
-        add_check(results, "market_data", case_id, "trading_v2_state_persists_last_observed_quota_used", 1590, quota_read_model.get("quota_user_count"))
-        add_check(results, "market_data", case_id, "trading_v2_state_persists_last_observed_quota_limit", 1600, quota_read_model.get("quota_limit"))
+        check("trading_v2_state_persists_last_observed_quota_used", 1590, quota_read_model.get("quota_user_count"))
+        check("trading_v2_state_persists_last_observed_quota_limit", 1600, quota_read_model.get("quota_limit"))
 
     from core.market_data_freshness_contract import (
         CADENCE_CURRENT_VINTAGE,
@@ -1913,19 +1969,19 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     static_contracts = [item for item in freshness_contracts if item.cadence == CADENCE_CURRENT_VINTAGE]
     event_contracts = [item for item in freshness_contracts if item.cadence == CADENCE_EVENT_DRIVEN]
     periodic_contracts = [item for item in freshness_contracts if item.cadence == CADENCE_PERIODIC]
-    add_check(results, "market_data", case_id, "freshness_contract_covers_all_included_datasets", len(specs), freshness_stats["contract_count"])
-    add_check(results, "market_data", case_id, "freshness_contract_dataset_identity_matches_registry", {spec.dataset for spec in specs}, set(by_dataset))
-    add_check(results, "market_data", case_id, "freshness_status_vocabulary_is_stable", {"READY", "DUE", "WAIT_PUBLISH", "WAIT_QUOTA", "STALE", "ERROR", "BLOCKED", "NOT_APPLICABLE"}, set(FRESHNESS_STATUSES))
-    add_check(results, "market_data", case_id, "event_datasets_allow_legal_no_row_window", True, bool(event_contracts) and all(item.row_expectation == ROW_EXPECTATION_OPTIONAL and item.completeness_mode == COMPLETENESS_EVENT_NO_ROW_VALID and item.expected_date_mode == EXPECTED_DATE_NONE for item in event_contracts))
-    add_check(results, "market_data", case_id, "static_datasets_use_current_vintage_semantics", True, bool(static_contracts) and all(item.expected_date_mode == EXPECTED_DATE_NONE for item in static_contracts))
-    add_check(results, "market_data", case_id, "periodic_datasets_use_due_period_semantics", True, bool(periodic_contracts) and all(item.expected_date_mode == EXPECTED_DATE_PERIOD_DUE for item in periodic_contracts))
-    add_check(results, "market_data", case_id, "publication_schedule_partition_is_complete", len(specs), freshness_stats["verified_schedule_count"] + freshness_stats["fallback_schedule_count"])
-    add_check(results, "market_data", case_id, "provider_verified_publication_schedule_exists", True, freshness_stats["verified_schedule_count"] > 0)
-    add_check(results, "market_data", case_id, "unknown_publication_times_use_conservative_fallback", True, freshness_stats["fallback_schedule_count"] > 0 and all(item.publication_schedule_source for item in freshness_contracts))
-    add_check(results, "market_data", case_id, "documented_price_schedule_uses_grace", ("17:45", 0, True), (by_dataset["TaiwanStockPrice"].publication_first_check_time, by_dataset["TaiwanStockPrice"].publication_day_offset, by_dataset["TaiwanStockPrice"].publication_schedule_verified))
-    add_check(results, "market_data", case_id, "documented_per_schedule_uses_grace", ("18:15", 0, True), (by_dataset["TaiwanStockPER"].publication_first_check_time, by_dataset["TaiwanStockPER"].publication_day_offset, by_dataset["TaiwanStockPER"].publication_schedule_verified))
-    add_check(results, "market_data", case_id, "documented_day_trading_schedule_waits_for_close_values", ("21:45", 0, True), (by_dataset["TaiwanStockDayTrading"].publication_first_check_time, by_dataset["TaiwanStockDayTrading"].publication_day_offset, by_dataset["TaiwanStockDayTrading"].publication_schedule_verified))
-    add_check(results, "market_data", case_id, "undocumented_schedule_uses_next_day_fallback", ("01:45", 1, False), (by_dataset["TaiwanStockHoldingSharesPer"].publication_first_check_time, by_dataset["TaiwanStockHoldingSharesPer"].publication_day_offset, by_dataset["TaiwanStockHoldingSharesPer"].publication_schedule_verified))
+    check("freshness_contract_covers_all_included_datasets", len(specs), freshness_stats["contract_count"])
+    check("freshness_contract_dataset_identity_matches_registry", {spec.dataset for spec in specs}, set(by_dataset))
+    check("freshness_status_vocabulary_is_stable", {"READY", "DUE", "WAIT_PUBLISH", "WAIT_QUOTA", "STALE", "ERROR", "BLOCKED", "NOT_APPLICABLE"}, set(FRESHNESS_STATUSES))
+    check("event_datasets_allow_legal_no_row_window", True, bool(event_contracts) and all(item.row_expectation == ROW_EXPECTATION_OPTIONAL and item.completeness_mode == COMPLETENESS_EVENT_NO_ROW_VALID and item.expected_date_mode == EXPECTED_DATE_NONE for item in event_contracts))
+    check("static_datasets_use_current_vintage_semantics", True, bool(static_contracts) and all(item.expected_date_mode == EXPECTED_DATE_NONE for item in static_contracts))
+    check("periodic_datasets_use_due_period_semantics", True, bool(periodic_contracts) and all(item.expected_date_mode == EXPECTED_DATE_PERIOD_DUE for item in periodic_contracts))
+    check("publication_schedule_partition_is_complete", len(specs), freshness_stats["verified_schedule_count"] + freshness_stats["fallback_schedule_count"])
+    check("provider_verified_publication_schedule_exists", True, freshness_stats["verified_schedule_count"] > 0)
+    check("unknown_publication_times_use_conservative_fallback", True, freshness_stats["fallback_schedule_count"] > 0 and all(item.publication_schedule_source for item in freshness_contracts))
+    check("documented_price_schedule_uses_grace", ("17:45", 0, True), (by_dataset["TaiwanStockPrice"].publication_first_check_time, by_dataset["TaiwanStockPrice"].publication_day_offset, by_dataset["TaiwanStockPrice"].publication_schedule_verified))
+    check("documented_per_schedule_uses_grace", ("18:15", 0, True), (by_dataset["TaiwanStockPER"].publication_first_check_time, by_dataset["TaiwanStockPER"].publication_day_offset, by_dataset["TaiwanStockPER"].publication_schedule_verified))
+    check("documented_day_trading_schedule_waits_for_close_values", ("21:45", 0, True), (by_dataset["TaiwanStockDayTrading"].publication_first_check_time, by_dataset["TaiwanStockDayTrading"].publication_day_offset, by_dataset["TaiwanStockDayTrading"].publication_schedule_verified))
+    check("undocumented_schedule_uses_next_day_fallback", ("01:45", 1, False), (by_dataset["TaiwanStockHoldingSharesPer"].publication_first_check_time, by_dataset["TaiwanStockHoldingSharesPer"].publication_day_offset, by_dataset["TaiwanStockHoldingSharesPer"].publication_schedule_verified))
 
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -1975,19 +2031,19 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             finished_at=state_now,
             observations=observations,
         )
-        add_check(results, "market_data", case_id, "dataset_state_is_persisted_under_trading_state_domain", True, str(state_path).replace("\\", "/").endswith("state/trading/market_data_v2/dataset_state.json") and state_path.is_file())
-        add_check(results, "market_data", case_id, "dataset_state_covers_all_freshness_contracts", len(freshness_contracts), len(dataset_state["datasets"]))
-        add_check(results, "market_data", case_id, "periodic_refresh_can_be_ready_with_older_real_data_date", "READY", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["status"])
-        add_check(results, "market_data", case_id, "periodic_state_preserves_actual_latest_data_date", "2026-06-30", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["latest_data_date"])
-        add_check(results, "market_data", case_id, "event_no_row_window_can_be_ready", "READY", dataset_state["datasets"]["TaiwanStockDelisting"]["status"])
+        check("dataset_state_is_persisted_under_trading_state_domain", True, str(state_path).replace("\\", "/").endswith("state/trading/market_data_v2/dataset_state.json") and state_path.is_file())
+        check("dataset_state_covers_all_freshness_contracts", len(freshness_contracts), len(dataset_state["datasets"]))
+        check("periodic_refresh_can_be_ready_with_older_real_data_date", "READY", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["status"])
+        check("periodic_state_preserves_actual_latest_data_date", "2026-06-30", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["latest_data_date"])
+        check("event_no_row_window_can_be_ready", "READY", dataset_state["datasets"]["TaiwanStockDelisting"]["status"])
         same_target_plan = plan_market_data_due_datasets(
             target_date="2026-09-07",
             now=datetime(2026, 9, 8, 2, 1, tzinfo=ZoneInfo("Asia/Taipei")),
             state=dataset_state,
             contracts=freshness_contracts,
         )
-        add_check(results, "market_data", case_id, "fully_ready_same_target_has_zero_due_datasets", (), same_target_plan.due_datasets)
-        add_check(results, "market_data", case_id, "fully_ready_same_target_requires_zero_provider_requests", False, same_target_plan.provider_requests_required)
+        check("fully_ready_same_target_has_zero_due_datasets", (), same_target_plan.due_datasets)
+        check("fully_ready_same_target_requires_zero_provider_requests", False, same_target_plan.provider_requests_required)
         price_contract = (by_dataset["TaiwanStockPrice"],)
         before_price = plan_market_data_due_datasets(
             target_date="2026-09-08",
@@ -2001,30 +2057,30 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             state=dataset_state,
             contracts=price_contract,
         )
-        add_check(results, "market_data", case_id, "due_planner_waits_until_dataset_publication_window", (), before_price.due_datasets)
-        add_check(results, "market_data", case_id, "due_planner_releases_dataset_after_publication_window", ("TaiwanStockPrice",), after_price.due_datasets)
+        check("due_planner_waits_until_dataset_publication_window", (), before_price.due_datasets)
+        check("due_planner_releases_dataset_after_publication_window", ("TaiwanStockPrice",), after_price.due_datasets)
         read_model = build_market_data_dataset_state_read_model(state_root)
-        add_check(results, "market_data", case_id, "dataset_state_read_model_joins_dynamic_state_with_contract", (True, len(freshness_contracts)), (read_model["state_ready"], read_model["dataset_count"]))
+        check("dataset_state_read_model_joins_dynamic_state_with_contract", (True, len(freshness_contracts)), (read_model["state_ready"], read_model["dataset_count"]))
         price_read_row = next(row for row in read_model["datasets"] if row["dataset"] == "TaiwanStockPrice")
-        add_check(results, "market_data", case_id, "dataset_read_model_exposes_publication_source", True, bool(price_read_row.get("publication_schedule_source")))
-        add_check(results, "market_data", case_id, "dataset_read_model_exposes_completeness_semantics", by_dataset["TaiwanStockPrice"].completeness_mode, price_read_row.get("completeness_mode"))
-        add_check(results, "market_data", case_id, "dataset_read_model_exposes_primary_key_hint", by_dataset["TaiwanStockPrice"].primary_key_hint, price_read_row.get("primary_key_hint"))
+        check("dataset_read_model_exposes_publication_source", True, bool(price_read_row.get("publication_schedule_source")))
+        check("dataset_read_model_exposes_completeness_semantics", by_dataset["TaiwanStockPrice"].completeness_mode, price_read_row.get("completeness_mode"))
+        check("dataset_read_model_exposes_primary_key_hint", by_dataset["TaiwanStockPrice"].primary_key_hint, price_read_row.get("primary_key_hint"))
         from services.trading.market_data_ops import build_market_data_ops_read_model
         ops_model = build_market_data_ops_read_model(state_root, now=state_now)
-        add_check(results, "market_data", case_id, "data_ops_local_refresh_uses_zero_provider_calls", 0, ops_model.get("provider_calls"))
-        add_check(results, "market_data", case_id, "data_ops_local_read_model_exposes_scheduler_status", True, bool(ops_model.get("scheduler_registration_status")))
-        add_check(results, "market_data", case_id, "data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
+        check("data_ops_local_refresh_uses_zero_provider_calls", 0, ops_model.get("provider_calls"))
+        check("data_ops_local_read_model_exposes_scheduler_status", True, bool(ops_model.get("scheduler_registration_status")))
+        check("data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
         loaded_state = load_market_data_dataset_state(state_root, required=True)
-        add_check(results, "market_data", case_id, "dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
+        check("dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
         projected_plan, projected_state = refresh_market_data_due_state(
             state_root,
             target_date="2026-09-08",
             now=datetime(2026, 9, 8, 17, 30, tzinfo=ZoneInfo("Asia/Taipei")),
         )
         price_projection = projected_state["datasets"]["TaiwanStockPrice"]
-        add_check(results, "market_data", case_id, "local_due_projection_persists_wait_publish_status", "WAIT_PUBLISH", price_projection["status"])
-        add_check(results, "market_data", case_id, "local_due_projection_persists_next_check_at", "2026-09-08T17:45:00+08:00", price_projection["next_check_at"])
-        add_check(results, "market_data", case_id, "local_due_projection_needs_no_provider_before_publication", False, "TaiwanStockPrice" in projected_plan.due_datasets)
+        check("local_due_projection_persists_wait_publish_status", "WAIT_PUBLISH", price_projection["status"])
+        check("local_due_projection_persists_next_check_at", "2026-09-08T17:45:00+08:00", price_projection["next_check_at"])
+        check("local_due_projection_needs_no_provider_before_publication", False, "TaiwanStockPrice" in projected_plan.due_datasets)
         tampered_state = dict(projected_state)
         tampered_datasets = {key: dict(value) for key, value in projected_state["datasets"].items()}
         tampered_datasets["TaiwanStockPrice"]["status"] = "ERROR"
@@ -2036,7 +2092,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             tamper_blocked = True
         else:
             tamper_blocked = False
-        add_check(results, "market_data", case_id, "dataset_state_fingerprint_blocks_manual_tamper", True, tamper_blocked)
+        check("dataset_state_fingerprint_blocks_manual_tamper", True, tamper_blocked)
 
     with TemporaryDirectory() as partial_temp_dir:
         partial_state = record_market_data_sync_success(
@@ -2052,8 +2108,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             },
             attempted_datasets={"TaiwanStockPrice"},
         )
-        add_check(results, "market_data", case_id, "partial_batch_only_advances_attempted_dataset", "READY", partial_state["datasets"]["TaiwanStockPrice"]["status"])
-        add_check(results, "market_data", case_id, "partial_batch_does_not_advance_unattempted_dataset", "NOT_APPLICABLE", partial_state["datasets"]["TaiwanStockPER"]["status"])
+        check("partial_batch_only_advances_attempted_dataset", "READY", partial_state["datasets"]["TaiwanStockPrice"]["status"])
+        check("partial_batch_does_not_advance_unattempted_dataset", "NOT_APPLICABLE", partial_state["datasets"]["TaiwanStockPER"]["status"])
 
     missing_obs = {dataset: dict(values) for dataset, values in observations.items()}
     missing_obs["TaiwanStockPrice"] = {"row_count": 1, "observed_min_date": "2026-09-06", "observed_max_date": "2026-09-06"}
@@ -2064,8 +2120,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             finished_at=state_now,
             observations=missing_obs,
         )
-        add_check(results, "market_data", case_id, "required_daily_missing_target_evidence_waits_publish", "WAIT_PUBLISH", stale_state["datasets"]["TaiwanStockPrice"]["status"])
-        add_check(results, "market_data", case_id, "required_daily_missing_target_does_not_advance_ready_target", None, stale_state["datasets"]["TaiwanStockPrice"]["last_ready_target_date"])
+        check("required_daily_missing_target_evidence_waits_publish", "WAIT_PUBLISH", stale_state["datasets"]["TaiwanStockPrice"]["status"])
+        check("required_daily_missing_target_does_not_advance_ready_target", None, stale_state["datasets"]["TaiwanStockPrice"]["last_ready_target_date"])
         from core.market_data_auto_update_policy import get_market_data_auto_update_policy
         auto_policy = get_market_data_auto_update_policy()
         retry_state = schedule_market_data_auto_update_outcomes(
@@ -2078,7 +2134,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             error_defer_minutes=auto_policy.error_defer_minutes,
             wait_publish_datasets={"TaiwanStockPrice"},
         )
-        add_check(results, "market_data", case_id, "publication_retry_uses_first_backoff_after_first_stale_attempt", "2026-09-08T02:15:00+08:00", retry_state["datasets"]["TaiwanStockPrice"]["next_check_at"])
+        check("publication_retry_uses_first_backoff_after_first_stale_attempt", "2026-09-08T02:15:00+08:00", retry_state["datasets"]["TaiwanStockPrice"]["next_check_at"])
         before_retry = plan_market_data_due_datasets(
             target_date="2026-09-07",
             now=datetime(2026, 9, 8, 2, 10, tzinfo=ZoneInfo("Asia/Taipei")),
@@ -2091,8 +2147,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             state=retry_state,
             contracts=(by_dataset["TaiwanStockPrice"],),
         )
-        add_check(results, "market_data", case_id, "publication_retry_backoff_suppresses_early_provider_call", (), before_retry.due_datasets)
-        add_check(results, "market_data", case_id, "publication_retry_becomes_due_after_next_check", ("TaiwanStockPrice",), after_retry.due_datasets)
+        check("publication_retry_backoff_suppresses_early_provider_call", (), before_retry.due_datasets)
+        check("publication_retry_becomes_due_after_next_check", ("TaiwanStockPrice",), after_retry.due_datasets)
 
     from services.trading.market_data_auto_update import run_trading_market_data_auto_update
     with TemporaryDirectory() as auto_no_due_dir:
@@ -2114,9 +2170,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             client=_AutoNoCallClient(),
             now_fn=lambda: datetime(2026, 9, 8, 2, 5, tzinfo=ZoneInfo("Asia/Taipei")),
         )
-        add_check(results, "market_data", case_id, "auto_updater_no_due_consumes_zero_data_requests", 0, auto_no_due["data_requests"])
-        add_check(results, "market_data", case_id, "auto_updater_no_due_consumes_zero_usage_requests", 0, auto_no_due["usage_requests"])
-        add_check(results, "market_data", case_id, "auto_updater_no_due_reports_provider_not_required", False, auto_no_due["provider_requests_required"])
+        check("auto_updater_no_due_consumes_zero_data_requests", 0, auto_no_due["data_requests"])
+        check("auto_updater_no_due_consumes_zero_usage_requests", 0, auto_no_due["usage_requests"])
+        check("auto_updater_no_due_reports_provider_not_required", False, auto_no_due["provider_requests_required"])
 
     from unittest.mock import patch
 
@@ -2139,15 +2195,15 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             now=datetime(2026, 9, 8, 4, 0, tzinfo=ZoneInfo("Asia/Taipei")),
             policy=discovery_policy,
         )
-        add_check(results, "market_data", case_id, "market_date_discovery_before_price_publication_is_local_only_not_due", False, before_window["due"])
-        add_check(results, "market_data", case_id, "market_date_discovery_first_probe_is_price_publication_window", "2026-09-08T17:45:00+08:00", before_window["next_probe_at"])
+        check("market_date_discovery_before_price_publication_is_local_only_not_due", False, before_window["due"])
+        check("market_date_discovery_first_probe_is_price_publication_window", "2026-09-08T17:45:00+08:00", before_window["next_probe_at"])
         due_window = plan_market_date_discovery(
             discovery_root,
             current_market_date="2026-09-07",
             now=datetime(2026, 9, 8, 17, 46, tzinfo=ZoneInfo("Asia/Taipei")),
             policy=discovery_policy,
         )
-        add_check(results, "market_data", case_id, "market_date_discovery_becomes_due_after_price_publication_window", True, due_window["due"])
+        check("market_date_discovery_becomes_due_after_price_publication_window", True, due_window["due"])
         deferred = record_market_date_probe_result(
             discovery_root,
             current_market_date="2026-09-07",
@@ -2156,8 +2212,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             policy=discovery_policy,
             result=DISCOVERY_RESULT_NO_NEW_DATE,
         )
-        add_check(results, "market_data", case_id, "market_date_discovery_no_new_date_uses_bounded_first_retry", "2026-09-08T18:01:00+08:00", deferred["next_probe_at"])
-        add_check(results, "market_data", case_id, "market_date_discovery_state_is_persisted_and_fingerprinted", "NO_NEW_DATE", load_market_date_discovery_state(discovery_root, required=True)["last_probe_result"])
+        check("market_date_discovery_no_new_date_uses_bounded_first_retry", "2026-09-08T18:01:00+08:00", deferred["next_probe_at"])
+        check("market_date_discovery_state_is_persisted_and_fingerprinted", "NO_NEW_DATE", load_market_date_discovery_state(discovery_root, required=True)["last_probe_result"])
 
     with TemporaryDirectory() as scheduler_local_dir:
         scheduler_root = Path(scheduler_local_dir)
@@ -2181,9 +2237,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 client=_SchedulerNoCallClient(),
                 now_fn=lambda: datetime(2026, 9, 8, 4, 0, tzinfo=ZoneInfo("Asia/Taipei")),
             )
-        add_check(results, "market_data", case_id, "default_auto_worker_pre_discovery_window_consumes_zero_data_requests", 0, scheduler_local["data_requests"])
-        add_check(results, "market_data", case_id, "default_auto_worker_pre_discovery_window_consumes_zero_usage_requests", 0, scheduler_local["usage_requests"])
-        add_check(results, "market_data", case_id, "default_auto_worker_exposes_next_market_date_probe", "2026-09-08T17:45:00+08:00", scheduler_local["market_date_discovery_next_check_at"])
+        check("default_auto_worker_pre_discovery_window_consumes_zero_data_requests", 0, scheduler_local["data_requests"])
+        check("default_auto_worker_pre_discovery_window_consumes_zero_usage_requests", 0, scheduler_local["usage_requests"])
+        check("default_auto_worker_exposes_next_market_date_probe", "2026-09-08T17:45:00+08:00", scheduler_local["market_date_discovery_next_check_at"])
 
     with TemporaryDirectory() as discovery_new_day_dir:
         discovery_root = Path(discovery_new_day_dir)
@@ -2247,11 +2303,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 client=discovery_base,
                 now_fn=lambda: datetime(2026, 9, 8, 17, 46, tzinfo=ZoneInfo("Asia/Taipei")),
             )
-        add_check(results, "market_data", case_id, "default_auto_worker_discovers_new_completed_trading_day", "2026-09-08", discovery_new_day["target_date"])
-        add_check(results, "market_data", case_id, "default_auto_worker_new_day_probe_costs_one_data_request_in_isolation", 1, discovery_new_day["data_requests"])
-        add_check(results, "market_data", case_id, "default_auto_worker_new_day_runs_execution_update", True, discovery_new_day["execution_data_updated"])
-        add_check(results, "market_data", case_id, "market_date_discovery_reuses_shared_client_for_canonical_execution_update", True, len(canonical_calls) == 1 and canonical_calls[0].get("provider_client") is not None)
-        add_check(results, "market_data", case_id, "market_date_discovery_defers_full_v2_to_publication_due_planner", False, canonical_calls[0].get("sync_v2_archive"))
+        check("default_auto_worker_discovers_new_completed_trading_day", "2026-09-08", discovery_new_day["target_date"])
+        check("default_auto_worker_new_day_probe_costs_one_data_request_in_isolation", 1, discovery_new_day["data_requests"])
+        check("default_auto_worker_new_day_runs_execution_update", True, discovery_new_day["execution_data_updated"])
+        check("market_date_discovery_reuses_shared_client_for_canonical_execution_update", True, len(canonical_calls) == 1 and canonical_calls[0].get("provider_client") is not None)
+        check("market_date_discovery_defers_full_v2_to_publication_due_planner", False, canonical_calls[0].get("sync_v2_archive"))
 
     with TemporaryDirectory() as auto_quota_dir:
         auto_root = Path(auto_quota_dir)
@@ -2268,11 +2324,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             sleep_fn=lambda seconds: auto_sleep_calls.append(float(seconds)),
         )
         quota_state = load_market_data_dataset_state(auto_root, required=True)
-        add_check(results, "market_data", case_id, "auto_updater_quota_defer_uses_one_usage_probe", 1, quota_client.usage_request_count)
-        add_check(results, "market_data", case_id, "auto_updater_quota_defer_consumes_zero_data_requests", 0, quota_client.data_request_count)
-        add_check(results, "market_data", case_id, "auto_updater_quota_defer_never_sleeps_scheduler_worker", [], auto_sleep_calls)
-        add_check(results, "market_data", case_id, "auto_updater_quota_defer_persists_wait_quota", "WAIT_QUOTA", quota_state["datasets"]["TaiwanStockPrice"]["status"])
-        add_check(results, "market_data", case_id, "auto_updater_quota_defer_schedules_next_check", "2026-09-08T02:15:00+08:00", quota_state["datasets"]["TaiwanStockPrice"]["next_check_at"])
+        check("auto_updater_quota_defer_uses_one_usage_probe", 1, quota_client.usage_request_count)
+        check("auto_updater_quota_defer_consumes_zero_data_requests", 0, quota_client.data_request_count)
+        check("auto_updater_quota_defer_never_sleeps_scheduler_worker", [], auto_sleep_calls)
+        check("auto_updater_quota_defer_persists_wait_quota", "WAIT_QUOTA", quota_state["datasets"]["TaiwanStockPrice"]["status"])
+        check("auto_updater_quota_defer_schedules_next_check", "2026-09-08T02:15:00+08:00", quota_state["datasets"]["TaiwanStockPrice"]["next_check_at"])
 
     with TemporaryDirectory() as auto_success_dir:
         auto_root = Path(auto_success_dir)
@@ -2346,11 +2402,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             now_fn=lambda: datetime(2026, 9, 7, 18, 20, tzinfo=ZoneInfo("Asia/Taipei")),
         )
         success_state = load_market_data_dataset_state(auto_root, required=True)
-        add_check(results, "market_data", case_id, "auto_updater_executes_only_single_due_dataset", ("TaiwanStockTradingDate",), success_result["due_datasets"])
-        add_check(results, "market_data", case_id, "auto_updater_single_due_dataset_uses_one_data_request", 1, success_client.data_request_count)
-        add_check(results, "market_data", case_id, "auto_updater_single_due_dataset_uses_one_usage_request", 1, success_client.usage_request_count)
-        add_check(results, "market_data", case_id, "auto_updater_success_advances_dataset_ready", "READY", success_state["datasets"]["TaiwanStockTradingDate"]["status"])
-        add_check(results, "market_data", case_id, "auto_updater_all_ready_rolls_archive_synced", "SYNCED", success_result["archive_status"])
+        check("auto_updater_executes_only_single_due_dataset", ("TaiwanStockTradingDate",), success_result["due_datasets"])
+        check("auto_updater_single_due_dataset_uses_one_data_request", 1, success_client.data_request_count)
+        check("auto_updater_single_due_dataset_uses_one_usage_request", 1, success_client.usage_request_count)
+        check("auto_updater_success_advances_dataset_ready", "READY", success_state["datasets"]["TaiwanStockTradingDate"]["status"])
+        check("auto_updater_all_ready_rolls_archive_synced", "SYNCED", success_result["archive_status"])
 
     from services.trading.market_data_scheduler import (
         SCHEDULER_STATUS_DRIFTED_ENABLED,
@@ -2365,10 +2421,10 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         set_market_data_scheduler_enabled,
     )
     scheduler_spec = build_market_data_scheduler_spec(Path.cwd())
-    add_check(results, "market_data", case_id, "scheduler_spec_targets_canonical_one_shot_app", "apps/market_data_auto_update.py", scheduler_spec["app_path"])
-    add_check(results, "market_data", case_id, "scheduler_spec_uses_hidden_powershell_launcher", "powershell.exe", scheduler_spec["execute"])
+    check("scheduler_spec_targets_canonical_one_shot_app", "apps/market_data_auto_update.py", scheduler_spec["app_path"])
+    check("scheduler_spec_uses_hidden_powershell_launcher", "powershell.exe", scheduler_spec["execute"])
     unsupported_scheduler = get_market_data_scheduler_status(Path.cwd(), platform_name="posix")
-    add_check(results, "market_data", case_id, "scheduler_non_windows_status_is_local_unsupported", SCHEDULER_STATUS_UNSUPPORTED, unsupported_scheduler["status"])
+    check("scheduler_non_windows_status_is_local_unsupported", SCHEDULER_STATUS_UNSUPPORTED, unsupported_scheduler["status"])
 
     fake_task = {"installed": False}
     def _fake_scheduler_runner(script, env):
@@ -2409,31 +2465,31 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     scheduler_missing = get_market_data_scheduler_status(
         Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
     )
-    add_check(results, "market_data", case_id, "scheduler_status_reports_not_installed_without_mutation", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_missing["status"])
+    check("scheduler_status_reports_not_installed_without_mutation", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_missing["status"])
     scheduler_installed = install_or_update_market_data_scheduler(
         Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
     )
-    add_check(results, "market_data", case_id, "scheduler_install_registers_enabled_canonical_task", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_installed["status"])
-    add_check(results, "market_data", case_id, "scheduler_install_has_logon_trigger", True, scheduler_installed["logon_trigger"])
-    add_check(results, "market_data", case_id, "scheduler_install_uses_configured_wake_interval", scheduler_spec["wake_minutes"], scheduler_installed["wake_minutes"])
+    check("scheduler_install_registers_enabled_canonical_task", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_installed["status"])
+    check("scheduler_install_has_logon_trigger", True, scheduler_installed["logon_trigger"])
+    check("scheduler_install_uses_configured_wake_interval", scheduler_spec["wake_minutes"], scheduler_installed["wake_minutes"])
     fake_task["interval_minutes"] = int(scheduler_spec["wake_minutes"]) + 1
     scheduler_drifted = get_market_data_scheduler_status(
         Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
     )
-    add_check(results, "market_data", case_id, "scheduler_status_detects_registration_drift", SCHEDULER_STATUS_DRIFTED_ENABLED, scheduler_drifted["status"])
+    check("scheduler_status_detects_registration_drift", SCHEDULER_STATUS_DRIFTED_ENABLED, scheduler_drifted["status"])
     fake_task["interval_minutes"] = int(scheduler_spec["wake_minutes"])
     scheduler_disabled = set_market_data_scheduler_enabled(
         Path.cwd(), enabled=False, runner=_fake_scheduler_runner, platform_name="nt"
     )
-    add_check(results, "market_data", case_id, "scheduler_can_be_disabled_without_deleting_task", SCHEDULER_STATUS_INSTALLED_DISABLED, scheduler_disabled["status"])
+    check("scheduler_can_be_disabled_without_deleting_task", SCHEDULER_STATUS_INSTALLED_DISABLED, scheduler_disabled["status"])
     scheduler_reenabled = set_market_data_scheduler_enabled(
         Path.cwd(), enabled=True, runner=_fake_scheduler_runner, platform_name="nt"
     )
-    add_check(results, "market_data", case_id, "scheduler_can_be_reenabled", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_reenabled["status"])
+    check("scheduler_can_be_reenabled", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_reenabled["status"])
     scheduler_removed = remove_market_data_scheduler(
         Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
     )
-    add_check(results, "market_data", case_id, "scheduler_remove_only_removes_os_registration", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_removed["status"])
+    check("scheduler_remove_only_removes_os_registration", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_removed["status"])
 
     from core.trading_data_dependencies import (
         TradingDataDependencySpec,
@@ -2447,16 +2503,16 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     )
     dependency_stats = validate_trading_data_dependency_registry()
     current_dependency = get_trading_data_dependency_spec("full_rule_based_no_dl")
-    add_check(results, "market_data", case_id, "trading_dependency_registry_has_current_strategy", 1, dependency_stats["strategy_count"])
-    add_check(results, "market_data", case_id, "current_rule_based_strategy_requires_execution_data", True, current_dependency.execution_market_data_required)
-    add_check(results, "market_data", case_id, "current_rule_based_strategy_requires_no_v2_dataset", (), current_dependency.required_v2_datasets)
+    check("trading_dependency_registry_has_current_strategy", 1, dependency_stats["strategy_count"])
+    check("current_rule_based_strategy_requires_execution_data", True, current_dependency.execution_market_data_required)
+    check("current_rule_based_strategy_requires_no_v2_dataset", (), current_dependency.required_v2_datasets)
     current_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
         strategy_id="full_rule_based_no_dl",
         target_date="2026-09-07",
         execution_market_data_ready=True,
         dataset_state=None,
     )
-    add_check(results, "market_data", case_id, "current_rule_based_strategy_is_not_blocked_by_optional_v2_state", True, current_ready["ready"])
+    check("current_rule_based_strategy_is_not_blocked_by_optional_v2_state", True, current_ready["ready"])
     current_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
         strategy_id="full_rule_based_no_dl",
         target_date="2026-09-07",
@@ -2464,7 +2520,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         execution_market_data_reason="execution missing",
         dataset_state=None,
     )
-    add_check(results, "market_data", case_id, "current_rule_based_strategy_fails_closed_without_execution_data", False, current_blocked["ready"])
+    check("current_rule_based_strategy_fails_closed_without_execution_data", False, current_blocked["ready"])
 
     future_dependency = TradingDataDependencySpec(
         strategy_id="synthetic_v2_strategy",
@@ -2491,7 +2547,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             execution_market_data_ready=True,
             dataset_state=synthetic_v2_state,
         )
-        add_check(results, "market_data", case_id, "future_v2_dependency_fails_closed_when_completeness_not_evaluated", False, future_blocked["ready"])
+        check("future_v2_dependency_fails_closed_when_completeness_not_evaluated", False, future_blocked["ready"])
         synthetic_v2_state["datasets"]["TaiwanStockPER"]["coverage_status"] = VALIDATION_STATUS_READY
         future_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
             strategy_id="synthetic_v2_strategy",
@@ -2499,7 +2555,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             execution_market_data_ready=True,
             dataset_state=synthetic_v2_state,
         )
-        add_check(results, "market_data", case_id, "future_v2_dependency_ready_only_after_fresh_schema_coverage_evidence", True, future_ready["ready"])
+        check("future_v2_dependency_ready_only_after_fresh_schema_coverage_evidence", True, future_ready["ready"])
         synthetic_v2_state["datasets"]["TaiwanStockPER"]["status"] = "ERROR"
         future_error = trading_data_readiness.build_trading_data_readiness_from_evidence(
             strategy_id="synthetic_v2_strategy",
@@ -2507,7 +2563,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             execution_market_data_ready=True,
             dataset_state=synthetic_v2_state,
         )
-        add_check(results, "market_data", case_id, "future_v2_dependency_fails_closed_on_same_target_error", False, future_error["ready"])
+        check("future_v2_dependency_fails_closed_on_same_target_error", False, future_error["ready"])
 
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
@@ -2525,14 +2581,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     legacy_pos = update_source.find("run_trading_dataset_update(")
     snapshot_pos = update_source.find("publish_trading_market_data_snapshot(")
     v2_pos = update_source.find("sync_market_data_v2_trading_archive(")
-    add_check(results, "market_data", case_id, "canonical_update_owner_preserves_execution_then_snapshot_then_v2_order", True, 0 <= legacy_pos < snapshot_pos < v2_pos)
+    check("canonical_update_owner_preserves_execution_then_snapshot_then_v2_order", True, 0 <= legacy_pos < snapshot_pos < v2_pos)
     executor_source = (project_root / "services" / "downloader" / "market_data_executor.py").read_text(encoding="utf-8")
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
-    add_check(results, "market_data", case_id, "canonical_update_shares_one_provider_client_across_legacy_and_v2", True, "provider_client=shared_client" in update_source and "client=shared_client" in update_source and "SharedFinMindRequestClient" in update_source)
-    add_check(results, "market_data", case_id, "executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
-    add_check(results, "market_data", case_id, "canonical_price_refresh_never_calculates_adjustment_locally", True, "TaiwanStockPriceAdj" in price_refresh_source and "adjusted-price calculator" in price_refresh_source and "full_market_range_current_vintage" in price_refresh_source)
-    add_check(results, "market_data", case_id, "daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
-    add_check(results, "market_data", case_id, "smart_downloader_reuses_canonical_market_data_update_owner", True, "from services.trading.market_data_update import run_trading_market_data_update" in downloader_source and "run_trading_market_data_update(project_root=PROJECT_ROOT)" in downloader_source)
+    check("canonical_update_shares_one_provider_client_across_legacy_and_v2", True, "provider_client=shared_client" in update_source and "client=shared_client" in update_source and "SharedFinMindRequestClient" in update_source)
+    check("executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
+    check("canonical_price_refresh_never_calculates_adjustment_locally", True, "TaiwanStockPriceAdj" in price_refresh_source and "adjusted-price calculator" in price_refresh_source and "full_market_range_current_vintage" in price_refresh_source)
+    check("daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
+    check("smart_downloader_reuses_canonical_market_data_update_owner", True, "from services.trading.market_data_update import run_trading_market_data_update" in downloader_source and "run_trading_market_data_update(project_root=PROJECT_ROOT)" in downloader_source)
     import importlib
     from unittest.mock import patch
     downloader_main = importlib.import_module("services.downloader.main")
@@ -2542,15 +2598,15 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         side_effect=lambda **kwargs: smart_calls.append(dict(kwargs)) or {"status": "READY"},
     ):
         smart_exit = downloader_main._run_trading_dataset_update()
-    add_check(results, "market_data", case_id, "smart_downloader_runtime_calls_canonical_market_data_update_owner", 0, smart_exit)
-    add_check(results, "market_data", case_id, "smart_downloader_runtime_passes_project_root_to_canonical_owner", [str(downloader_main.PROJECT_ROOT)], [str(item.get("project_root")) for item in smart_calls])
-    add_check(results, "market_data", case_id, "sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in update_source and "last_attempt_target_date" in state_source)
-    add_check(results, "market_data", case_id, "workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
-    add_check(results, "market_data", case_id, "scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
-    add_check(results, "market_data", case_id, "scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_execution_evidence" in scanner_source)
-    add_check(results, "market_data", case_id, "operations_status_uses_strategy_data_readiness_not_aggregate_v2_synced", True, "trading_data_ready" in operations_source and "overall_v2_ready" not in operations_source)
-    add_check(results, "market_data", case_id, "data_ops_reads_canonical_trading_data_readiness_without_provider_call", True, "build_trading_data_readiness" in data_ops_source and '"provider_calls": 0' in data_ops_source)
-    add_check(results, "market_data", case_id, "readiness_gate_requires_schema_and_coverage_for_v2_dependencies", True, "schema_status" in readiness_source and "coverage_status" in readiness_source and "VALIDATION_STATUS_NOT_EVALUATED" not in readiness_source)
+    check("smart_downloader_runtime_calls_canonical_market_data_update_owner", 0, smart_exit)
+    check("smart_downloader_runtime_passes_project_root_to_canonical_owner", [str(downloader_main.PROJECT_ROOT)], [str(item.get("project_root")) for item in smart_calls])
+    check("sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in update_source and "last_attempt_target_date" in state_source)
+    check("workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
+    check("scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
+    check("scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_execution_evidence" in scanner_source)
+    check("operations_status_uses_strategy_data_readiness_not_aggregate_v2_synced", True, "trading_data_ready" in operations_source and "overall_v2_ready" not in operations_source)
+    check("data_ops_reads_canonical_trading_data_readiness_without_provider_call", True, "build_trading_data_readiness" in data_ops_source and '"provider_calls": 0' in data_ops_source)
+    check("readiness_gate_requires_schema_and_coverage_for_v2_dependencies", True, "schema_status" in readiness_source and "coverage_status" in readiness_source and "VALIDATION_STATUS_NOT_EVALUATED" not in readiness_source)
 
     summary.update({
         "checks": len(results),
@@ -2603,13 +2659,12 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
     from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
 
     case_id = "MARKET_DATA_V2_RESEARCH_CANDIDATE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
     stats = validate_research_v2_candidate_contract()
-    add_check(results, "market_data", case_id, "research_v2_registry_assesses_all_51_datasets", 51, stats["dataset_count"])
-    add_check(results, "market_data", case_id, "research_v2_exact_candidate_count_is_registry_driven", 4, stats["exact_candidate_count"])
-    add_check(results, "market_data", case_id, "research_v2_review_required_datasets_remain_unpromoted", 46, stats["review_required_count"])
-    add_check(results, "market_data", case_id, "research_v2_current_vintage_adjusted_price_is_blocked", 1, stats["current_vintage_blocked_count"])
+    check("research_v2_registry_assesses_all_51_datasets", 51, stats["dataset_count"])
+    check("research_v2_exact_candidate_count_is_registry_driven", 4, stats["exact_candidate_count"])
+    check("research_v2_review_required_datasets_remain_unpromoted", 46, stats["review_required_count"])
+    check("research_v2_current_vintage_adjusted_price_is_blocked", 1, stats["current_vintage_blocked_count"])
 
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -2628,9 +2683,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             trading_dates=(before_cutoff, research_cutoff),
             provider_as_of_date=research_cutoff,
         )
-        add_check(
-            results, "market_data", case_id,
-            "canonical_daily_pit_universe_primitive_requires_date_specific_market_state",
+        check("canonical_daily_pit_universe_primitive_requires_date_specific_market_state",
             [(research_cutoff, "2330")],
             list(primitive_universe[["date", "stock_id"]].itertuples(index=False, name=None)),
         )
@@ -2671,112 +2724,57 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             requests[8].request_id: pd.DataFrame({"date": [before_cutoff, research_cutoff, after_cutoff], "stock_id": ["2330"] * 3}),
         }
 
-        ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
-        ledger = MarketDataJobLedger(ledger_path)
-        workload_id = ledger.seed_manifest(manifest, now=datetime(2026, 9, 4, tzinfo=timezone.utc))
-        evidence = []
-        now = datetime(2026, 9, 4, tzinfo=timezone.utc)
-        while True:
-            job = ledger.claim_next_job(
-                workload_id,
-                owner_id="synthetic",
-                now=now,
-                lease_until=now + timedelta(minutes=5),
-            )
-            if job is None:
-                break
-            request = job.to_request()
-            path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes((request.request_id + "\n").encode("utf-8"))
-            digest = compute_file_sha256(path)
-            frame = frame_by_request[request.request_id]
-            ledger.mark_done(
-                workload_id,
-                request.request_id,
-                row_count=len(frame),
-                content_sha256=digest,
-                now=now,
-            )
-            evidence.append(
-                ProviderArtifactEvidence(
-                    request_id=request.request_id,
-                    dataset=request.dataset,
-                    row_count=len(frame),
-                    content_sha256=digest,
-                )
-            )
-            now += timedelta(seconds=1)
-        ledger.set_workload_status(workload_id, status="DONE", now=now)
-        provider_payload = build_provider_snapshot_payload(
+        provider_payload, frame_reader = _publish_ready_provider_snapshot_fixture(
+            root=root,
             manifest=manifest,
-            artifacts=evidence,
+            manifest_fingerprint=manifest_fingerprint,
+            frame_by_request=frame_by_request,
+            owner_id="synthetic",
+            started_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
             finalized_at="2026-09-04T00:00:00+00:00",
+            missing_columns_message="synthetic frame missing columns",
         )
-        provider_path = resolve_market_data_provider_snapshot_path(root, manifest_fingerprint)
-        atomic_write_json(provider_path, provider_payload)
-
-        def frame_reader(path, columns):
-            frame = frame_by_request[path.stem].copy()
-            if columns:
-                missing = [column for column in columns if column not in frame.columns]
-                if missing:
-                    raise ValueError(f"synthetic frame missing columns: {missing}")
-                frame = frame.loc[:, list(columns)]
-            return frame
 
         archive = load_ready_provider_snapshot_archive(root)
-        add_check(results, "market_data", case_id, "research_provider_view_reuses_neutral_ready_snapshot", provider_payload["snapshot_fingerprint"], archive.snapshot_fingerprint)
+        check("research_provider_view_reuses_neutral_ready_snapshot", provider_payload["snapshot_fingerprint"], archive.snapshot_fingerprint)
         view = ResearchV2ProviderView(project_root=root, archive=archive, frame_reader=frame_reader)
-        adjusted_blocked = False
-        try:
-            next(view.iter_dataset_frames("TaiwanStockPriceAdj", columns=("date", "stock_id")))
-        except RuntimeError:
-            adjusted_blocked = True
-        add_check(results, "market_data", case_id, "current_vintage_adjusted_price_cannot_enter_exact_pit_audit", True, adjusted_blocked)
-        adjusted_contract_audit_blocked = False
-        try:
-            next(view.iter_dataset_contract_audit_frames("TaiwanStockPriceAdj", columns=("date",)))
-        except RuntimeError:
-            adjusted_contract_audit_blocked = True
-        add_check(results, "market_data", case_id, "current_vintage_adjusted_price_cannot_enter_review_contract_audit", True, adjusted_contract_audit_blocked)
-        per_exact_blocked = False
-        try:
-            next(view.iter_dataset_frames("TaiwanStockPER", columns=("date",)))
-        except RuntimeError:
-            per_exact_blocked = True
-        add_check(results, "market_data", case_id, "review_required_per_cannot_enter_exact_pit_reader", True, per_exact_blocked)
+        adjusted_blocked = raises_expected(RuntimeError, lambda: next(view.iter_dataset_frames("TaiwanStockPriceAdj", columns=("date", "stock_id"))))
+        check("current_vintage_adjusted_price_cannot_enter_exact_pit_audit", True, adjusted_blocked)
+        adjusted_contract_audit_blocked = raises_expected(RuntimeError, lambda: next(view.iter_dataset_contract_audit_frames("TaiwanStockPriceAdj", columns=("date",))))
+        check("current_vintage_adjusted_price_cannot_enter_review_contract_audit", True, adjusted_contract_audit_blocked)
+        per_exact_blocked = raises_expected(RuntimeError, lambda: next(view.iter_dataset_frames("TaiwanStockPER", columns=("date",))))
+        check("review_required_per_cannot_enter_exact_pit_reader", True, per_exact_blocked)
         per_audit_frame = next(view.iter_dataset_contract_audit_frames("TaiwanStockPER", columns=("date",)))
-        add_check(results, "market_data", case_id, "review_required_per_can_enter_contract_audit_reader_only", 3, len(per_audit_frame))
+        check("review_required_per_can_enter_contract_audit_reader_only", 3, len(per_audit_frame))
 
         candidate = build_research_v2_candidate(
             root,
             frame_reader=frame_reader,
             now=datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc),
         )
-        add_check(results, "market_data", case_id, "research_v2_candidate_never_promotes_itself", RESEARCH_V2_CANDIDATE_STATUS_NOT_READY, candidate["status"])
-        add_check(results, "market_data", case_id, "research_v2_candidate_has_no_frozen_cutoff", None, candidate["frozen_cutoff"])
-        add_check(results, "market_data", case_id, "research_v2_candidate_has_no_research_common_complete_cutoff", None, candidate["research_common_complete_cutoff"])
-        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
-        add_check(results, "market_data", case_id, "research_v2_candidate_build_consumes_zero_provider_calls", 0, candidate["provider_calls"])
-        add_check(results, "market_data", case_id, "research_v2_candidate_records_fixed_required_cutoff", research_cutoff, candidate["required_cutoff"])
-        add_check(results, "market_data", case_id, "exact_candidate_ceiling_retreats_before_incomplete_required_cutoff", before_cutoff, candidate["exact_candidate_ceiling_date"])
-        add_check(results, "market_data", case_id, "daily_universe_is_price_presence_based_market_state_guarded_and_cutoff_capped", 3, candidate["daily_universe_row_count"])
-        add_check(results, "market_data", case_id, "research_v2_candidate_pins_market_state_guard_identity", 64, len(str(candidate.get("historical_market_state_guard_fingerprint") or "")))
-        add_check(results, "market_data", case_id, "research_v2_transition_guard_detects_one_future_board_transition", 1, int(candidate.get("historical_market_state_transition_count") or 0))
+        check("research_v2_candidate_never_promotes_itself", RESEARCH_V2_CANDIDATE_STATUS_NOT_READY, candidate["status"])
+        check("research_v2_candidate_has_no_frozen_cutoff", None, candidate["frozen_cutoff"])
+        check("research_v2_candidate_has_no_research_common_complete_cutoff", None, candidate["research_common_complete_cutoff"])
+        check("research_v2_candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
+        check("research_v2_candidate_build_consumes_zero_provider_calls", 0, candidate["provider_calls"])
+        check("research_v2_candidate_records_fixed_required_cutoff", research_cutoff, candidate["required_cutoff"])
+        check("exact_candidate_ceiling_retreats_before_incomplete_required_cutoff", before_cutoff, candidate["exact_candidate_ceiling_date"])
+        check("daily_universe_is_price_presence_based_market_state_guarded_and_cutoff_capped", 3, candidate["daily_universe_row_count"])
+        check("research_v2_candidate_pins_market_state_guard_identity", 64, len(str(candidate.get("historical_market_state_guard_fingerprint") or "")))
+        check("research_v2_transition_guard_detects_one_future_board_transition", 1, int(candidate.get("historical_market_state_transition_count") or 0))
         blockers = {str(item.get("code")) for item in candidate["blockers"]}
-        add_check(results, "market_data", case_id, "research_v2_candidate_pins_authorized_required_dataset_scope", True, bool(candidate.get("research_scope_contract_fingerprint")) and bool(candidate.get("required_dataset_scope")))
+        check("research_v2_candidate_pins_authorized_required_dataset_scope", True, bool(candidate.get("research_scope_contract_fingerprint")) and bool(candidate.get("required_dataset_scope")))
         adjusted_scope = next(row for row in candidate["research_scope_contracts"] if row["dataset"] == "TaiwanStockPriceAdj")
-        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_raw_adjusted_price_levels_fail_closed_in_scope_contract", False, any(rule["direct_scientific_use_authorized"] for rule in adjusted_scope["field_authorizations"]))
-        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_REQUIRED_SCOPE_COMMON_COMPLETE_NOT_READY" in blockers)
-        add_check(results, "market_data", case_id, "research_v2_candidate_keeps_archive_wide_mechanical_audit_diagnostic_only", False, any(code.startswith("MECHANICAL_") for code in blockers))
-        add_check(results, "market_data", case_id, "research_v2_candidate_blocks_incomplete_required_cutoff_exact_coverage", True, "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY" in blockers)
-        add_check(results, "market_data", case_id, "research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
+        check("research_v2_candidate_keeps_raw_adjusted_price_levels_fail_closed_in_scope_contract", False, any(rule["direct_scientific_use_authorized"] for rule in adjusted_scope["field_authorizations"]))
+        check("research_v2_candidate_keeps_scientific_common_complete_blocked", True, "RESEARCH_REQUIRED_SCOPE_COMMON_COMPLETE_NOT_READY" in blockers)
+        check("research_v2_candidate_keeps_archive_wide_mechanical_audit_diagnostic_only", False, any(code.startswith("MECHANICAL_") for code in blockers))
+        check("research_v2_candidate_blocks_incomplete_required_cutoff_exact_coverage", True, "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY" in blockers)
+        check("research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
 
         universe_path = resolve_research_v2_daily_universe_path(root, provider_payload["snapshot_fingerprint"])
         manifest_path = resolve_research_v2_candidate_manifest_path(root, provider_payload["snapshot_fingerprint"])
-        add_check(results, "market_data", case_id, "research_v2_daily_universe_is_research_domain_artifact", True, universe_path.is_file() and "data/research/market_data_v2" in universe_path.as_posix())
-        add_check(results, "market_data", case_id, "research_v2_candidate_manifest_is_persisted", True, manifest_path.is_file())
+        check("research_v2_daily_universe_is_research_domain_artifact", True, universe_path.is_file() and "data/research/market_data_v2" in universe_path.as_posix())
+        check("research_v2_candidate_manifest_is_persisted", True, manifest_path.is_file())
         conn = sqlite3.connect(universe_path)
         try:
             universe_rows = int(conn.execute("SELECT COUNT(*) FROM daily_universe").fetchone()[0])
@@ -2792,14 +2790,14 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             last_coverage = conn.execute("SELECT date, missing_price_limit_count, exact_complete FROM exact_coverage ORDER BY date DESC LIMIT 1").fetchone()
         finally:
             conn.close()
-        add_check(results, "market_data", case_id, "research_v2_daily_universe_sqlite_preserves_only_date_eligible_membership_rows", 3, universe_rows)
-        add_check(results, "market_data", case_id, "research_v2_daily_universe_excludes_provider_rows_after_research_cutoff", research_cutoff, max_universe_date)
-        add_check(results, "market_data", case_id, "future_twse_transition_does_not_authorize_prior_emerging_row", 0, pre_transition_2330_count)
-        add_check(results, "market_data", case_id, "twse_transition_allows_rows_strictly_after_final_emerging_date", 1, post_transition_2330_count)
-        add_check(results, "market_data", case_id, "research_v2_exact_coverage_records_required_cutoff_missing_member", (research_cutoff, 1, 0), tuple(last_coverage))
+        check("research_v2_daily_universe_sqlite_preserves_only_date_eligible_membership_rows", 3, universe_rows)
+        check("research_v2_daily_universe_excludes_provider_rows_after_research_cutoff", research_cutoff, max_universe_date)
+        check("future_twse_transition_does_not_authorize_prior_emerging_row", 0, pre_transition_2330_count)
+        check("twse_transition_allows_rows_strictly_after_final_emerging_date", 1, post_transition_2330_count)
+        check("research_v2_exact_coverage_records_required_cutoff_missing_member", (research_cutoff, 1, 0), tuple(last_coverage))
 
         loaded = load_research_v2_candidate(root, required=True)
-        add_check(results, "market_data", case_id, "research_v2_candidate_fingerprint_roundtrips", candidate["candidate_fingerprint"], loaded["candidate_fingerprint"])
+        check("research_v2_candidate_fingerprint_roundtrips", candidate["candidate_fingerprint"], loaded["candidate_fingerprint"])
         original_universe_bytes = universe_path.read_bytes()
         universe_path.write_bytes(original_universe_bytes + b"\n")
         tamper_blocked = False
@@ -2807,13 +2805,13 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
             load_research_v2_candidate(root, required=True)
         except ValueError as exc:
             tamper_blocked = "SHA256 drift" in str(exc)
-        add_check(results, "market_data", case_id, "research_v2_candidate_rejects_daily_universe_file_tamper", True, tamper_blocked)
+        check("research_v2_candidate_rejects_daily_universe_file_tamper", True, tamper_blocked)
         universe_path.write_bytes(original_universe_bytes)
         persisted = load_json_strict(manifest_path)
-        add_check(results, "market_data", case_id, "research_v2_candidate_paths_are_project_relative", False, str(persisted["provider_snapshot_path"]).startswith(str(root)))
+        check("research_v2_candidate_paths_are_project_relative", False, str(persisted["provider_snapshot_path"]).startswith(str(root)))
 
         service_source = (Path(__file__).resolve().parents[2] / "services" / "research" / "market_data_v2.py").read_text(encoding="utf-8")
-        add_check(results, "market_data", case_id, "research_v2_builder_never_reads_trading_v2_overlay", False, "data/trading/market_data_v2" in service_source or "services.trading.market_data_v2_state" in service_source)
+        check("research_v2_builder_never_reads_trading_v2_overlay", False, "data/trading/market_data_v2" in service_source or "services.trading.market_data_v2_state" in service_source)
 
     summary.update(
         {
@@ -2862,8 +2860,7 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
     )
 
     case_id = "MARKET_DATA_V2_RESEARCH_PIT_REVIEW"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     specs = tuple(get_market_dataset_specs(included_only=True))
     freshness = {row.dataset: row for row in get_market_data_freshness_contracts()}
@@ -2871,10 +2868,10 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
     contract_by_dataset = {row.dataset: row for row in contracts}
     stats = validate_research_v2_pit_review_contracts(contracts)
 
-    add_check(results, "market_data", case_id, "pit_review_contract_covers_every_included_dataset", len(specs), len(contracts))
-    add_check(results, "market_data", case_id, "pit_review_contract_dataset_identity_is_unique", len(contracts), len(contract_by_dataset))
-    add_check(results, "market_data", case_id, "pit_review_never_auto_authorizes_model_input", 0, sum(row.scientific_input_authorized for row in contracts))
-    add_check(results, "market_data", case_id, "pit_review_contract_fingerprint_is_deterministic", research_v2_pit_review_contract_fingerprint(contracts), research_v2_pit_review_contract_fingerprint())
+    check("pit_review_contract_covers_every_included_dataset", len(specs), len(contracts))
+    check("pit_review_contract_dataset_identity_is_unique", len(contracts), len(contract_by_dataset))
+    check("pit_review_never_auto_authorizes_model_input", 0, sum(row.scientific_input_authorized for row in contracts))
+    check("pit_review_contract_fingerprint_is_deterministic", research_v2_pit_review_contract_fingerprint(contracts), research_v2_pit_review_contract_fingerprint())
 
     expected_modes = {}
     for spec in specs:
@@ -2897,15 +2894,15 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
             expected = "UNEXPECTED"
         expected_modes[spec.dataset] = expected
     actual_modes = {row.dataset: row.audit_mode for row in contracts}
-    add_check(results, "market_data", case_id, "pit_review_classification_is_registry_and_cadence_driven", expected_modes, actual_modes)
+    check("pit_review_classification_is_registry_and_cadence_driven", expected_modes, actual_modes)
 
     adjusted = contract_by_dataset["TaiwanStockPriceAdj"]
-    add_check(results, "market_data", case_id, "adjusted_price_remains_current_vintage_hard_block", PIT_REVIEW_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.review_status)
+    check("adjusted_price_remains_current_vintage_hard_block", PIT_REVIEW_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.review_status)
     review_daily_expected = sum(
         spec.pit_class == PIT_REVIEW_REQUIRED and freshness[spec.dataset].cadence in {CADENCE_TRADING_DAILY, CADENCE_CALENDAR_DAILY}
         for spec in specs
     )
-    add_check(results, "market_data", case_id, "only_review_daily_classes_get_automatic_date_presence_audit", review_daily_expected, stats["automatic_date_audit_count"])
+    check("only_review_daily_classes_get_automatic_date_presence_audit", review_daily_expected, stats["automatic_date_audit_count"])
 
     audits = (
         ResearchV2DatasetDateAudit("A", AUDIT_MODE_TRADING_DAILY_DATE_PRESENCE, DATE_AUDIT_STATUS_READY, 3, "2026-09-01", "2026-09-03", "synthetic"),
@@ -2921,10 +2918,10 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
         },
         participating_datasets=("A", "B"),
     )
-    add_check(results, "market_data", case_id, "mechanical_common_tail_retreats_to_latest_shared_date", "2026-09-02", mechanical.common_complete_ceiling_date)
-    add_check(results, "market_data", case_id, "mechanical_common_tail_keeps_contiguous_start", "2026-09-01", mechanical.common_complete_tail_start)
-    add_check(results, "market_data", case_id, "mechanical_common_tail_reports_two_shared_dates", 2, mechanical.common_complete_tail_date_count)
-    add_check(results, "market_data", case_id, "mechanical_common_tail_is_complete_only_when_all_participants_audited", True, mechanical.audit_complete)
+    check("mechanical_common_tail_retreats_to_latest_shared_date", "2026-09-02", mechanical.common_complete_ceiling_date)
+    check("mechanical_common_tail_keeps_contiguous_start", "2026-09-01", mechanical.common_complete_tail_start)
+    check("mechanical_common_tail_reports_two_shared_dates", 2, mechanical.common_complete_tail_date_count)
+    check("mechanical_common_tail_is_complete_only_when_all_participants_audited", True, mechanical.audit_complete)
 
     incomplete = summarize_mechanical_common_complete_tail(
         trading_dates=("2026-09-01", "2026-09-02"),
@@ -2936,8 +2933,8 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
         observed_dates_by_dataset={"A": ("2026-09-01", "2026-09-02"), "B": ()},
         participating_datasets=("A", "B"),
     )
-    add_check(results, "market_data", case_id, "missing_dataset_audit_clears_mechanical_ceiling", None, incomplete.common_complete_ceiling_date)
-    add_check(results, "market_data", case_id, "missing_dataset_audit_marks_mechanical_audit_incomplete", False, incomplete.audit_complete)
+    check("missing_dataset_audit_clears_mechanical_ceiling", None, incomplete.common_complete_ceiling_date)
+    check("missing_dataset_audit_marks_mechanical_audit_incomplete", False, incomplete.audit_complete)
 
     import sqlite3
     from pathlib import Path
@@ -2981,10 +2978,10 @@ def validate_market_data_v2_research_pit_review_contract_case(_base_params):
             persisted_common_dates = int(conn.execute("SELECT COUNT(*) FROM mechanical_common_complete").fetchone()[0])
         finally:
             conn.close()
-    add_check(results, "market_data", case_id, "service_persists_one_review_audit_row_per_dataset", len(contracts), persisted_audits)
-    add_check(results, "market_data", case_id, "service_success_path_audits_all_contract_rows", len(contracts), len(service_audits))
-    add_check(results, "market_data", case_id, "service_success_path_establishes_mechanical_ceiling", "2026-09-03", service_summary.common_complete_ceiling_date)
-    add_check(results, "market_data", case_id, "service_success_path_persists_common_complete_dates", 3, persisted_common_dates)
+    check("service_persists_one_review_audit_row_per_dataset", len(contracts), persisted_audits)
+    check("service_success_path_audits_all_contract_rows", len(contracts), len(service_audits))
+    check("service_success_path_establishes_mechanical_ceiling", "2026-09-03", service_summary.common_complete_ceiling_date)
+    check("service_success_path_persists_common_complete_dates", 3, persisted_common_dates)
 
     summary.update({
         "checks": len(results),
@@ -3014,31 +3011,22 @@ def validate_market_data_v2_research_required_cutoff_isolation_contract_case(_ba
     from services.research.market_data_v2 import _build_review_date_audits, _init_universe_db
 
     case_id = "MARKET_DATA_V2_RESEARCH_REQUIRED_CUTOFF_ISOLATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     v1 = get_research_data_generation(RESEARCH_DATA_GENERATION_V1)
     v2 = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
-    add_check(results, "market_data", case_id, "research_v1_cutoff_uses_required_cutoff_ssot", RESEARCH_REQUIRED_CUTOFF, v1.cutoff)
-    add_check(results, "market_data", case_id, "research_v1_required_cutoff_uses_ssot", RESEARCH_REQUIRED_CUTOFF, v1.required_cutoff)
-    add_check(results, "market_data", case_id, "research_v2_required_cutoff_uses_same_ssot", RESEARCH_REQUIRED_CUTOFF, v2.required_cutoff)
-    add_check(results, "market_data", case_id, "research_v2_remains_unfrozen_before_promotion", None, v2.cutoff)
-    add_check(results, "market_data", case_id, "research_v2_candidate_schema_still_carries_cutoff_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 3)
-    add_check(results, "market_data", case_id, "required_cutoff_participates_in_candidate_identity", True, "required_cutoff" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
-    add_check(
-        results,
-        "market_data",
-        case_id,
-        "provider_snapshot_may_extend_beyond_research_horizon",
+    check("research_v1_cutoff_uses_required_cutoff_ssot", RESEARCH_REQUIRED_CUTOFF, v1.cutoff)
+    check("research_v1_required_cutoff_uses_ssot", RESEARCH_REQUIRED_CUTOFF, v1.required_cutoff)
+    check("research_v2_required_cutoff_uses_same_ssot", RESEARCH_REQUIRED_CUTOFF, v2.required_cutoff)
+    check("research_v2_remains_unfrozen_before_promotion", None, v2.cutoff)
+    check("research_v2_candidate_schema_still_carries_cutoff_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 3)
+    check("required_cutoff_participates_in_candidate_identity", True, "required_cutoff" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    check("provider_snapshot_may_extend_beyond_research_horizon",
         "2030-01-15",
         validate_research_v2_required_cutoff(provider_as_of_date="2030-02-01", required_cutoff="2030-01-15"),
     )
-    provider_too_early_blocked = False
-    try:
-        validate_research_v2_required_cutoff(provider_as_of_date="2030-01-14", required_cutoff="2030-01-15")
-    except ValueError:
-        provider_too_early_blocked = True
-    add_check(results, "market_data", case_id, "provider_snapshot_before_required_cutoff_fails_closed", True, provider_too_early_blocked)
+    provider_too_early_blocked = raises_expected(ValueError, lambda: validate_research_v2_required_cutoff(provider_as_of_date="2030-01-14", required_cutoff="2030-01-15"))
+    check("provider_snapshot_before_required_cutoff_fails_closed", True, provider_too_early_blocked)
 
     class _SyntheticArchive:
         as_of_date = "2030-02-01"
@@ -3074,9 +3062,9 @@ def validate_market_data_v2_research_required_cutoff_isolation_contract_case(_ba
             max_presence_date = conn.execute("SELECT MAX(date) FROM dataset_date_presence").fetchone()[0]
         finally:
             conn.close()
-    add_check(results, "market_data", case_id, "review_date_presence_excludes_provider_rows_after_research_cutoff", "2030-01-15", max_presence_date)
-    add_check(results, "market_data", case_id, "mechanical_common_complete_cannot_extend_past_research_cutoff", "2030-01-15", mechanical.common_complete_ceiling_date)
-    add_check(results, "market_data", case_id, "round11_review_audit_still_covers_full_registry", 51, len(audits))
+    check("review_date_presence_excludes_provider_rows_after_research_cutoff", "2030-01-15", max_presence_date)
+    check("mechanical_common_complete_cannot_extend_past_research_cutoff", "2030-01-15", mechanical.common_complete_ceiling_date)
+    check("round11_review_audit_still_covers_full_registry", 51, len(audits))
 
     summary.update({"checks": len(results), "required_cutoff": v2.required_cutoff})
     return results, summary
@@ -3111,8 +3099,7 @@ def validate_market_data_v2_research_non_daily_pit_legality_contract_case(_base_
     )
 
     case_id = "MARKET_DATA_V2_RESEARCH_NON_DAILY_PIT_LEGALITY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     contracts = build_research_v2_pit_review_contracts()
     by_dataset = {row.dataset: row for row in contracts}
@@ -3130,39 +3117,39 @@ def validate_market_data_v2_research_non_daily_pit_legality_contract_case(_base_
         row for row in non_daily if row.cadence in {CADENCE_PERIODIC, CADENCE_CURRENT_VINTAGE}
     ]
 
-    add_check(results, "market_data", case_id, "round12_pit_contract_schema_is_versioned", True, RESEARCH_PIT_REVIEW_SCHEMA_VERSION >= 2)
-    add_check(results, "market_data", case_id, "round12_non_daily_policy_covers_registry_derived_review_datasets", len(non_daily), stats["non_daily_policy_count"])
-    add_check(results, "market_data", case_id, "round12_event_information_time_anchor_count_is_registry_driven", len(events), stats["event_information_time_anchor_ready_count"])
-    add_check(results, "market_data", case_id, "round12_periodic_static_historical_vintage_block_count_is_registry_driven", len(blocked_vintage), stats["historical_publication_vintage_blocked_count"])
-    add_check(results, "market_data", case_id, "event_contracts_are_anchor_ready_not_model_authorized", True, bool(events) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_EVENT_ANCHOR_READY and row.information_time_anchor_ready and row.field_scope_required and not row.scientific_input_authorized for row in events))
-    add_check(results, "market_data", case_id, "periodic_static_contracts_fail_closed_without_historical_vintage", True, bool(blocked_vintage) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED and not row.information_time_anchor_ready and row.field_scope_required and not row.scientific_input_authorized for row in blocked_vintage))
+    check("round12_pit_contract_schema_is_versioned", True, RESEARCH_PIT_REVIEW_SCHEMA_VERSION >= 2)
+    check("round12_non_daily_policy_covers_registry_derived_review_datasets", len(non_daily), stats["non_daily_policy_count"])
+    check("round12_event_information_time_anchor_count_is_registry_driven", len(events), stats["event_information_time_anchor_ready_count"])
+    check("round12_periodic_static_historical_vintage_block_count_is_registry_driven", len(blocked_vintage), stats["historical_publication_vintage_blocked_count"])
+    check("event_contracts_are_anchor_ready_not_model_authorized", True, bool(events) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_EVENT_ANCHOR_READY and row.information_time_anchor_ready and row.field_scope_required and not row.scientific_input_authorized for row in events))
+    check("periodic_static_contracts_fail_closed_without_historical_vintage", True, bool(blocked_vintage) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED and not row.information_time_anchor_ready and row.field_scope_required and not row.scientific_input_authorized for row in blocked_vintage))
 
     dividend = by_dataset["TaiwanStockDividend"]
-    add_check(results, "market_data", case_id, "dividend_uses_intrinsic_announcement_timestamp_anchor", ("AnnouncementDate", "AnnouncementTime"), dividend.information_time_columns)
-    add_check(results, "market_data", case_id, "dividend_disallows_same_day_assumption", "next_taiwan_trading_session_after_announcement_timestamp", dividend.information_time_rule)
+    check("dividend_uses_intrinsic_announcement_timestamp_anchor", ("AnnouncementDate", "AnnouncementTime"), dividend.information_time_columns)
+    check("dividend_disallows_same_day_assumption", "next_taiwan_trading_session_after_announcement_timestamp", dividend.information_time_rule)
     disposition = by_dataset["TaiwanStockDispositionSecuritiesPeriod"]
-    add_check(results, "market_data", case_id, "disposition_uses_documented_announcement_date_anchor", ("date",), disposition.information_time_columns)
-    add_check(results, "market_data", case_id, "disposition_missing_intraday_time_uses_next_session", "next_taiwan_trading_session_after_announcement_date", disposition.information_time_rule)
+    check("disposition_uses_documented_announcement_date_anchor", ("date",), disposition.information_time_columns)
+    check("disposition_missing_intraday_time_uses_next_session", "next_taiwan_trading_session_after_announcement_date", disposition.information_time_rule)
 
     month_revenue = by_dataset["TaiwanStockMonthRevenue"]
-    add_check(results, "market_data", case_id, "month_revenue_historical_create_time_gap_stays_blocked", PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED, month_revenue.pit_legality_status)
-    add_check(results, "market_data", case_id, "month_revenue_evidence_records_provider_schema_transition", True, "2026-04-21" in month_revenue.evidence_source)
+    check("month_revenue_historical_create_time_gap_stays_blocked", PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED, month_revenue.pit_legality_status)
+    check("month_revenue_evidence_records_provider_schema_transition", True, "2026-04-21" in month_revenue.evidence_source)
     static_rows = [row for row in non_daily if row.cadence == CADENCE_CURRENT_VINTAGE]
-    add_check(results, "market_data", case_id, "all_registry_static_current_vintage_review_datasets_fail_closed", True, bool(static_rows) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED for row in static_rows))
+    check("all_registry_static_current_vintage_review_datasets_fail_closed", True, bool(static_rows) and all(row.pit_legality_status == PIT_LEGALITY_STATUS_HISTORICAL_VINTAGE_BLOCKED for row in static_rows))
 
     adjusted = by_dataset["TaiwanStockPriceAdj"]
-    add_check(results, "market_data", case_id, "adjusted_price_retains_separate_current_vintage_hard_block", PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.pit_legality_status)
-    add_check(results, "market_data", case_id, "round12_never_auto_authorizes_any_model_input", 0, sum(row.scientific_input_authorized for row in contracts))
-    add_check(results, "market_data", case_id, "round14_demotes_archive_wide_pit_matrix_from_foundation_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 6 and "pit_review_contract_fingerprint" not in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS and "research_scope_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
-    add_check(results, "market_data", case_id, "pit_contract_fingerprint_is_deterministic_after_legality_extension", research_v2_pit_review_contract_fingerprint(contracts), research_v2_pit_review_contract_fingerprint())
+    check("adjusted_price_retains_separate_current_vintage_hard_block", PIT_LEGALITY_STATUS_CURRENT_VINTAGE_BLOCKED, adjusted.pit_legality_status)
+    check("round12_never_auto_authorizes_any_model_input", 0, sum(row.scientific_input_authorized for row in contracts))
+    check("round14_demotes_archive_wide_pit_matrix_from_foundation_identity", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 6 and "pit_review_contract_fingerprint" not in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS and "research_scope_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    check("pit_contract_fingerprint_is_deterministic_after_legality_extension", research_v2_pit_review_contract_fingerprint(contracts), research_v2_pit_review_contract_fingerprint())
 
     scope_rows = build_research_v2_dataset_scope_contracts()
     scope_by_dataset = {row.dataset: row for row in scope_rows}
     optional_events = [row for row in events if not scope_by_dataset[row.dataset].required_for_generation]
     optional_blocked = [row for row in blocked_vintage if not scope_by_dataset[row.dataset].required_for_generation]
-    add_check(results, "market_data", case_id, "round12_event_anchor_evidence_remains_available_after_scope_selection", len(events), stats["event_information_time_anchor_ready_count"])
-    add_check(results, "market_data", case_id, "round12_historical_vintage_blocks_remain_preserved_after_scope_selection", len(blocked_vintage), stats["historical_publication_vintage_blocked_count"])
-    add_check(results, "market_data", case_id, "round14_optional_non_daily_review_datasets_are_not_auto_selected", True, all(scope_by_dataset[row.dataset].scope_status == SCOPE_STATUS_OPTIONAL_NOT_SELECTED for row in optional_events + optional_blocked))
+    check("round12_event_anchor_evidence_remains_available_after_scope_selection", len(events), stats["event_information_time_anchor_ready_count"])
+    check("round12_historical_vintage_blocks_remain_preserved_after_scope_selection", len(blocked_vintage), stats["historical_publication_vintage_blocked_count"])
+    check("round14_optional_non_daily_review_datasets_are_not_auto_selected", True, all(scope_by_dataset[row.dataset].scope_status == SCOPE_STATUS_OPTIONAL_NOT_SELECTED for row in optional_events + optional_blocked))
 
     summary.update({
         "checks": len(results),
@@ -3208,35 +3195,34 @@ def validate_market_data_v2_research_scope_field_authorization_contract_case(_ba
     from services.research.market_data_v2 import _build_candidate_blockers
 
     case_id = "MARKET_DATA_V2_RESEARCH_SCOPE_FIELD_AUTHORIZATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     rows = build_research_v2_dataset_scope_contracts()
     stats = validate_research_v2_dataset_scope_contracts(rows)
     by_dataset = {row.dataset: row for row in rows}
     registry_count = len(tuple(get_market_dataset_specs(included_only=True)))
-    add_check(results, "market_data", case_id, "round14_scope_contract_is_versioned", True, RESEARCH_V2_SCOPE_SCHEMA_VERSION >= 1)
-    add_check(results, "market_data", case_id, "scope_covers_current_included_registry", registry_count, stats["dataset_count"])
-    add_check(results, "market_data", case_id, "required_dataset_scope_is_explicit", set(RESEARCH_V2_REQUIRED_DATASETS), {row.dataset for row in rows if row.required_for_generation})
-    add_check(results, "market_data", case_id, "optional_count_is_registry_driven", registry_count - len(RESEARCH_V2_REQUIRED_DATASETS), stats["optional_not_selected_count"])
-    add_check(results, "market_data", case_id, "common_complete_scope_is_explicit", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), {row.dataset for row in rows if row.contributes_to_common_complete})
-    add_check(results, "market_data", case_id, "delisting_event_is_not_daily_common_complete_denominator", False, by_dataset["TaiwanStockDelisting"].contributes_to_common_complete)
-    add_check(results, "market_data", case_id, "required_scope_authorization_is_complete", True, stats["required_scope_authorization_complete"])
-    add_check(results, "market_data", case_id, "scope_fingerprint_is_deterministic", research_v2_dataset_scope_contract_fingerprint(rows), research_v2_dataset_scope_contract_fingerprint())
+    check("round14_scope_contract_is_versioned", True, RESEARCH_V2_SCOPE_SCHEMA_VERSION >= 1)
+    check("scope_covers_current_included_registry", registry_count, stats["dataset_count"])
+    check("required_dataset_scope_is_explicit", set(RESEARCH_V2_REQUIRED_DATASETS), {row.dataset for row in rows if row.required_for_generation})
+    check("optional_count_is_registry_driven", registry_count - len(RESEARCH_V2_REQUIRED_DATASETS), stats["optional_not_selected_count"])
+    check("common_complete_scope_is_explicit", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), {row.dataset for row in rows if row.contributes_to_common_complete})
+    check("delisting_event_is_not_daily_common_complete_denominator", False, by_dataset["TaiwanStockDelisting"].contributes_to_common_complete)
+    check("required_scope_authorization_is_complete", True, stats["required_scope_authorization_complete"])
+    check("scope_fingerprint_is_deterministic", research_v2_dataset_scope_contract_fingerprint(rows), research_v2_dataset_scope_contract_fingerprint())
     from dataclasses import replace
     optional_index = next(index for index, row in enumerate(rows) if not row.required_for_generation)
     optional_mutated = list(rows)
     optional_mutated[optional_index] = replace(optional_mutated[optional_index], pit_contract_status="SYNTHETIC_OPTIONAL_DIAGNOSTIC_CHANGE")
-    add_check(results, "market_data", case_id, "optional_pit_diagnostic_does_not_pollute_foundation_fingerprint", research_v2_dataset_scope_contract_fingerprint(rows), research_v2_dataset_scope_contract_fingerprint(optional_mutated))
-    add_check(results, "market_data", case_id, "scope_payload_normalizes_tuple_fields_to_json_lists", True, isinstance(research_v2_dataset_scope_contract_payloads(rows)[0]["evidence_fields"], list))
+    check("optional_pit_diagnostic_does_not_pollute_foundation_fingerprint", research_v2_dataset_scope_contract_fingerprint(rows), research_v2_dataset_scope_contract_fingerprint(optional_mutated))
+    check("scope_payload_normalizes_tuple_fields_to_json_lists", True, isinstance(research_v2_dataset_scope_contract_payloads(rows)[0]["evidence_fields"], list))
 
     raw = by_dataset[RESEARCH_V2_RAW_VOLUME_DATASET]
     raw_direct = [rule for rule in raw.field_authorizations if rule.direct_scientific_use_authorized]
     raw_direct_fields = {field for rule in raw_direct for field in rule.fields}
-    add_check(results, "market_data", case_id, "raw_daily_price_authorizes_only_share_volume_directly", {PROVIDER_VOLUME_FIELD}, raw_direct_fields)
-    add_check(results, "market_data", case_id, "raw_daily_volume_has_next_session_availability", "next_taiwan_trading_session_after_market_date", raw_direct[0].availability_rule)
-    add_check(results, "market_data", case_id, "raw_ohlc_remains_prohibited_as_model_price_input", set(), set(PROVIDER_PRICE_FIELDS).intersection(raw_direct_fields))
-    add_check(results, "market_data", case_id, "raw_volume_rule_is_direct_input", FIELD_USE_DIRECT_INPUT, raw_direct[0].use_mode)
+    check("raw_daily_price_authorizes_only_share_volume_directly", {PROVIDER_VOLUME_FIELD}, raw_direct_fields)
+    check("raw_daily_volume_has_next_session_availability", "next_taiwan_trading_session_after_market_date", raw_direct[0].availability_rule)
+    check("raw_ohlc_remains_prohibited_as_model_price_input", set(), set(PROVIDER_PRICE_FIELDS).intersection(raw_direct_fields))
+    check("raw_volume_rule_is_direct_input", FIELD_USE_DIRECT_INPUT, raw_direct[0].use_mode)
 
     adjusted = by_dataset[RESEARCH_V2_ADJUSTED_PRICE_DATASET]
     adjusted_rules = list(adjusted.field_authorizations)
@@ -3246,21 +3232,21 @@ def validate_market_data_v2_research_scope_field_authorization_contract_case(_ba
     invariant_ids = {rule.representation_id for rule in representation.rules if rule.status == PRICE_REPRESENTATION_STATUS_INVARIANT}
     blocked_ids = {rule.representation_id for rule in representation.rules if rule.status == PRICE_REPRESENTATION_STATUS_BLOCKED}
     deferred_ids = {rule.representation_id for rule in representation.rules if rule.status == PRICE_REPRESENTATION_STATUS_DEFERRED}
-    add_check(results, "market_data", case_id, "adjusted_price_ohlc_are_transform_source_only", set(PROVIDER_PRICE_FIELDS), adjusted_transform_fields)
-    add_check(results, "market_data", case_id, "adjusted_price_has_no_direct_raw_fields", set(), adjusted_direct_fields)
-    add_check(results, "market_data", case_id, "adjusted_price_volume_is_not_authorized", False, any(PROVIDER_VOLUME_FIELD in rule.fields for rule in adjusted_rules))
-    add_check(results, "market_data", case_id, "adjusted_price_authorizes_exact_round13_invariant_representation_set", invariant_ids, set(adjusted.authorized_representation_ids))
-    add_check(results, "market_data", case_id, "blocked_absolute_representation_is_not_authorized", set(), blocked_ids.intersection(adjusted.authorized_representation_ids))
-    add_check(results, "market_data", case_id, "deferred_adjusted_volume_representation_is_not_authorized", set(), deferred_ids.intersection(adjusted.authorized_representation_ids))
+    check("adjusted_price_ohlc_are_transform_source_only", set(PROVIDER_PRICE_FIELDS), adjusted_transform_fields)
+    check("adjusted_price_has_no_direct_raw_fields", set(), adjusted_direct_fields)
+    check("adjusted_price_volume_is_not_authorized", False, any(PROVIDER_VOLUME_FIELD in rule.fields for rule in adjusted_rules))
+    check("adjusted_price_authorizes_exact_round13_invariant_representation_set", invariant_ids, set(adjusted.authorized_representation_ids))
+    check("blocked_absolute_representation_is_not_authorized", set(), blocked_ids.intersection(adjusted.authorized_representation_ids))
+    check("deferred_adjusted_volume_representation_is_not_authorized", set(), deferred_ids.intersection(adjusted.authorized_representation_ids))
 
     optional_dividend = by_dataset["TaiwanStockDividend"]
     optional_revenue = by_dataset["TaiwanStockMonthRevenue"]
-    add_check(results, "market_data", case_id, "event_archive_dataset_is_optional_until_experiment_selects_it", SCOPE_STATUS_OPTIONAL_NOT_SELECTED, optional_dividend.scope_status)
-    add_check(results, "market_data", case_id, "periodic_archive_dataset_is_optional_until_experiment_selects_it", SCOPE_STATUS_OPTIONAL_NOT_SELECTED, optional_revenue.scope_status)
-    add_check(results, "market_data", case_id, "optional_datasets_receive_no_implicit_fields", True, not optional_dividend.evidence_fields and not optional_dividend.field_authorizations and not optional_revenue.evidence_fields and not optional_revenue.field_authorizations)
+    check("event_archive_dataset_is_optional_until_experiment_selects_it", SCOPE_STATUS_OPTIONAL_NOT_SELECTED, optional_dividend.scope_status)
+    check("periodic_archive_dataset_is_optional_until_experiment_selects_it", SCOPE_STATUS_OPTIONAL_NOT_SELECTED, optional_revenue.scope_status)
+    check("optional_datasets_receive_no_implicit_fields", True, not optional_dividend.evidence_fields and not optional_dividend.field_authorizations and not optional_revenue.evidence_fields and not optional_revenue.field_authorizations)
 
-    add_check(results, "market_data", case_id, "candidate_schema_pins_scope_contract", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 6 and "research_scope_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
-    add_check(results, "market_data", case_id, "candidate_schema_pins_required_dataset_list", True, "required_dataset_scope" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    check("candidate_schema_pins_scope_contract", True, RESEARCH_V2_CANDIDATE_SCHEMA_VERSION >= 6 and "research_scope_contract_fingerprint" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
+    check("candidate_schema_pins_required_dataset_list", True, "required_dataset_scope" in RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS)
     pit_stats = validate_research_v2_pit_review_contracts()
     blockers = _build_candidate_blockers(
         {"latest_exact_complete_date": "2030-01-15"},
@@ -3268,10 +3254,10 @@ def validate_market_data_v2_research_scope_field_authorization_contract_case(_ba
         scope_stats=stats,
     )
     blocker_codes = {str(row.get("code")) for row in blockers}
-    add_check(results, "market_data", case_id, "archive_wide_pit_review_no_longer_blocks_unselected_datasets", False, "DATASET_SPECIFIC_PIT_REVIEW_REQUIRED" in blocker_codes)
-    add_check(results, "market_data", case_id, "archive_wide_mechanical_diagnostic_no_longer_blocks_foundation", False, any(code.startswith("MECHANICAL_") for code in blocker_codes))
-    add_check(results, "market_data", case_id, "scope_authorization_blocker_is_cleared", False, "REQUIRED_SCOPE_AUTHORIZATION_INCOMPLETE" in blocker_codes)
-    add_check(results, "market_data", case_id, "round15_common_complete_gate_remains", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blocker_codes)
+    check("archive_wide_pit_review_no_longer_blocks_unselected_datasets", False, "DATASET_SPECIFIC_PIT_REVIEW_REQUIRED" in blocker_codes)
+    check("archive_wide_mechanical_diagnostic_no_longer_blocks_foundation", False, any(code.startswith("MECHANICAL_") for code in blocker_codes))
+    check("scope_authorization_blocker_is_cleared", False, "REQUIRED_SCOPE_AUTHORIZATION_INCOMPLETE" in blocker_codes)
+    check("round15_common_complete_gate_remains", True, "RESEARCH_COMMON_COMPLETE_NOT_AUTHORIZED" in blocker_codes)
 
     summary.update({
         "checks": len(results),
@@ -3338,8 +3324,7 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
     from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
 
     case_id = "MARKET_DATA_V2_RESEARCH_REQUIRED_COMMON_COMPLETE_FREEZE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     scope_stats = validate_research_v2_dataset_scope_contracts()
     synthetic_dates = ("2030-01-13", "2030-01-14", "2030-01-15")
@@ -3350,11 +3335,11 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
         required_cutoff="2030-01-15",
         research_scope_contract_fingerprint=str(scope_stats["contract_fingerprint"]),
     )
-    add_check(results, "market_data", case_id, "round15_required_common_complete_contract_is_versioned", True, RESEARCH_V2_REQUIRED_COMMON_COMPLETE_SCHEMA_VERSION >= 1)
-    add_check(results, "market_data", case_id, "required_common_complete_uses_exact_round14_participant_scope", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), set(complete_summary.participating_datasets))
-    add_check(results, "market_data", case_id, "required_common_complete_reaches_fixed_cutoff_only_when_all_participants_complete", "2030-01-15", complete_summary.common_complete_cutoff)
-    add_check(results, "market_data", case_id, "required_common_complete_preserves_contiguous_tail_start", "2030-01-13", complete_summary.common_complete_tail_start)
-    add_check(results, "market_data", case_id, "required_common_complete_date_set_is_deterministic", synthetic_dates, common_dates)
+    check("round15_required_common_complete_contract_is_versioned", True, RESEARCH_V2_REQUIRED_COMMON_COMPLETE_SCHEMA_VERSION >= 1)
+    check("required_common_complete_uses_exact_round14_participant_scope", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), set(complete_summary.participating_datasets))
+    check("required_common_complete_reaches_fixed_cutoff_only_when_all_participants_complete", "2030-01-15", complete_summary.common_complete_cutoff)
+    check("required_common_complete_preserves_contiguous_tail_start", "2030-01-13", complete_summary.common_complete_tail_start)
+    check("required_common_complete_date_set_is_deterministic", synthetic_dates, common_dates)
     incomplete_map = dict(complete_map)
     incomplete_map["TaiwanStockPriceAdj"] = synthetic_dates[:-1]
     _incomplete_dates, incomplete_summary = build_research_v2_required_common_complete(
@@ -3363,7 +3348,7 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
         required_cutoff="2030-01-15",
         research_scope_contract_fingerprint=str(scope_stats["contract_fingerprint"]),
     )
-    add_check(results, "market_data", case_id, "missing_adjusted_price_operand_at_cutoff_fail_closes_freeze_readiness", None, incomplete_summary.common_complete_cutoff)
+    check("missing_adjusted_price_operand_at_cutoff_fail_closes_freeze_readiness", None, incomplete_summary.common_complete_cutoff)
     extra_optional_map = {**complete_map, "TaiwanStockDividend": synthetic_dates}
     _optional_dates, optional_summary = build_research_v2_required_common_complete(
         trading_dates=synthetic_dates,
@@ -3371,7 +3356,7 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
         required_cutoff="2030-01-15",
         research_scope_contract_fingerprint=str(scope_stats["contract_fingerprint"]),
     )
-    add_check(results, "market_data", case_id, "optional_archive_dates_do_not_pollute_required_common_complete_identity", complete_summary.coverage_fingerprint, optional_summary.coverage_fingerprint)
+    check("optional_archive_dates_do_not_pollute_required_common_complete_identity", complete_summary.coverage_fingerprint, optional_summary.coverage_fingerprint)
 
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -3445,88 +3430,41 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
                 "Volume": volume,
             }).to_csv(legacy_dir / f"{stock_id}.csv", index=False)
 
-        ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
-        ledger = MarketDataJobLedger(ledger_path)
-        workload_id = ledger.seed_manifest(manifest, now=datetime(2026, 9, 8, tzinfo=timezone.utc))
-        evidence = []
-        current = datetime(2026, 9, 8, tzinfo=timezone.utc)
-        while True:
-            job = ledger.claim_next_job(
-                workload_id,
-                owner_id="synthetic-round15",
-                now=current,
-                lease_until=current + timedelta(minutes=5),
-            )
-            if job is None:
-                break
-            request = job.to_request()
-            path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes((request.request_id + "\n").encode("utf-8"))
-            digest = compute_file_sha256(path)
-            frame = frame_by_request[request.request_id]
-            ledger.mark_done(
-                workload_id,
-                request.request_id,
-                row_count=len(frame),
-                content_sha256=digest,
-                now=current,
-            )
-            evidence.append(
-                ProviderArtifactEvidence(
-                    request_id=request.request_id,
-                    dataset=request.dataset,
-                    row_count=len(frame),
-                    content_sha256=digest,
-                )
-            )
-            current += timedelta(seconds=1)
-        ledger.set_workload_status(workload_id, status="DONE", now=current)
-        provider_payload = build_provider_snapshot_payload(
+        provider_payload, frame_reader = _publish_ready_provider_snapshot_fixture(
+            root=root,
             manifest=manifest,
-            artifacts=evidence,
+            manifest_fingerprint=manifest_fingerprint,
+            frame_by_request=frame_by_request,
+            owner_id="synthetic-round15",
+            started_at=datetime(2026, 9, 8, tzinfo=timezone.utc),
             finalized_at="2026-09-08T00:00:00+00:00",
+            missing_columns_message="synthetic round15 frame missing columns",
         )
-        provider_path = resolve_market_data_provider_snapshot_path(root, manifest_fingerprint)
-        atomic_write_json(provider_path, provider_payload)
-
-        def frame_reader(path, columns):
-            frame = frame_by_request[path.stem].copy()
-            if columns:
-                missing = [column for column in columns if column not in frame.columns]
-                if missing:
-                    raise ValueError(f"synthetic round15 frame missing columns: {missing}")
-                frame = frame.loc[:, list(columns)]
-            return frame
 
         archive = load_ready_provider_snapshot_archive(root)
         view = ResearchV2ProviderView(project_root=root, archive=archive, frame_reader=frame_reader)
         adjusted_scope_frame = next(view.iter_dataset_scope_frames("TaiwanStockPriceAdj", columns=("date", "stock_id", "open", "max", "min", "close")))
-        add_check(results, "market_data", case_id, "scope_reader_allows_only_authorized_adjusted_price_operands", 3, len(adjusted_scope_frame))
-        adjusted_volume_blocked = False
-        try:
-            next(view.iter_dataset_scope_frames("TaiwanStockPriceAdj", columns=("date", "stock_id", "Trading_Volume")))
-        except RuntimeError:
-            adjusted_volume_blocked = True
-        add_check(results, "market_data", case_id, "scope_reader_rejects_unlisted_adjusted_volume_field", True, adjusted_volume_blocked)
+        check("scope_reader_allows_only_authorized_adjusted_price_operands", 3, len(adjusted_scope_frame))
+        adjusted_volume_blocked = raises_expected(RuntimeError, lambda: next(view.iter_dataset_scope_frames("TaiwanStockPriceAdj", columns=("date", "stock_id", "Trading_Volume"))))
+        check("scope_reader_rejects_unlisted_adjusted_volume_field", True, adjusted_volume_blocked)
 
         candidate = build_research_v2_candidate(
             root,
             frame_reader=frame_reader,
             now=datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc),
         )
-        add_check(results, "market_data", case_id, "candidate_computes_true_required_scope_common_complete_cutoff", cutoff, candidate["research_common_complete_cutoff"])
-        add_check(results, "market_data", case_id, "candidate_common_complete_tail_starts_at_first_fully_usable_synthetic_date", d1, candidate["required_common_complete_start_date"])
-        add_check(results, "market_data", case_id, "candidate_required_common_complete_tail_count_matches_calendar", 3, candidate["required_common_complete_tail_date_count"])
-        add_check(results, "market_data", case_id, "candidate_has_no_foundation_blockers_when_required_scope_is_complete", [], candidate["blockers"])
-        add_check(results, "market_data", case_id, "candidate_remains_unfrozen_even_after_common_complete_proof", None, candidate["frozen_cutoff"])
-        add_check(results, "market_data", case_id, "candidate_never_authorizes_promotion", False, candidate["promotion_authorized"])
-        add_check(results, "market_data", case_id, "candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
-        add_check(results, "market_data", case_id, "candidate_required_scope_coverage_is_persisted_and_fingerprinted", True, int(candidate["required_scope_coverage_row_count"]) == 3 and len(str(candidate["required_scope_coverage_fingerprint"])) == 64)
-        add_check(results, "market_data", case_id, "candidate_required_common_complete_fingerprint_is_scientific_identity", str(candidate["required_common_complete"]["coverage_fingerprint"]), candidate["required_common_complete_fingerprint"])
-        add_check(results, "market_data", case_id, "candidate_required_source_projection_is_self_fingerprinted", candidate["required_source_projection_fingerprint"], canonical_json_sha256(candidate["required_source_projection"]))
-        add_check(results, "market_data", case_id, "candidate_pins_ready_adjusted_price_revision_proof", "REVISION_EQUIVALENCE_PROVEN", candidate["adjusted_price_revision_proof"]["status"])
-        add_check(results, "market_data", case_id, "candidate_adjusted_price_revision_proof_identity_roundtrips", candidate["adjusted_price_revision_proof_fingerprint"], candidate["adjusted_price_revision_proof"]["proof_fingerprint"])
+        check("candidate_computes_true_required_scope_common_complete_cutoff", cutoff, candidate["research_common_complete_cutoff"])
+        check("candidate_common_complete_tail_starts_at_first_fully_usable_synthetic_date", d1, candidate["required_common_complete_start_date"])
+        check("candidate_required_common_complete_tail_count_matches_calendar", 3, candidate["required_common_complete_tail_date_count"])
+        check("candidate_has_no_foundation_blockers_when_required_scope_is_complete", [], candidate["blockers"])
+        check("candidate_remains_unfrozen_even_after_common_complete_proof", None, candidate["frozen_cutoff"])
+        check("candidate_never_authorizes_promotion", False, candidate["promotion_authorized"])
+        check("candidate_keeps_active_research_v1", RESEARCH_DATA_GENERATION_V1, candidate["active_research_generation"])
+        check("candidate_required_scope_coverage_is_persisted_and_fingerprinted", True, int(candidate["required_scope_coverage_row_count"]) == 3 and len(str(candidate["required_scope_coverage_fingerprint"])) == 64)
+        check("candidate_required_common_complete_fingerprint_is_scientific_identity", str(candidate["required_common_complete"]["coverage_fingerprint"]), candidate["required_common_complete_fingerprint"])
+        check("candidate_required_source_projection_is_self_fingerprinted", candidate["required_source_projection_fingerprint"], canonical_json_sha256(candidate["required_source_projection"]))
+        check("candidate_pins_ready_adjusted_price_revision_proof", "REVISION_EQUIVALENCE_PROVEN", candidate["adjusted_price_revision_proof"]["status"])
+        check("candidate_adjusted_price_revision_proof_identity_roundtrips", candidate["adjusted_price_revision_proof_fingerprint"], candidate["adjusted_price_revision_proof"]["proof_fingerprint"])
 
         universe_path = resolve_research_v2_daily_universe_path(root, provider_payload["snapshot_fingerprint"])
         conn = sqlite3.connect(universe_path)
@@ -3543,51 +3481,51 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
             }
         finally:
             conn.close()
-        add_check(results, "market_data", case_id, "required_scope_coverage_cutoff_row_is_field_complete", (cutoff, 0, 0, 0, 1), tuple(last_required))
-        add_check(results, "market_data", case_id, "required_common_complete_sqlite_ceiling_equals_fixed_cutoff", cutoff, common_cutoff)
-        add_check(results, "market_data", case_id, "row_level_transient_completeness_evidence_is_not_duplicated_in_persistent_sqlite", set(), transient_tables)
+        check("required_scope_coverage_cutoff_row_is_field_complete", (cutoff, 0, 0, 0, 1), tuple(last_required))
+        check("required_common_complete_sqlite_ceiling_equals_fixed_cutoff", cutoff, common_cutoff)
+        check("row_level_transient_completeness_evidence_is_not_duplicated_in_persistent_sqlite", set(), transient_tables)
 
         loaded_candidate = load_research_v2_candidate(root, required=True)
-        add_check(results, "market_data", case_id, "round15_candidate_identity_roundtrips", candidate["candidate_fingerprint"], loaded_candidate["candidate_fingerprint"])
+        check("round15_candidate_identity_roundtrips", candidate["candidate_fingerprint"], loaded_candidate["candidate_fingerprint"])
         candidate_manifest_path = resolve_research_v2_candidate_manifest_path(root, provider_payload["snapshot_fingerprint"])
-        add_check(results, "market_data", case_id, "candidate_manifest_remains_candidate_namespace_before_promotion", True, candidate_manifest_path.is_file() and "/candidates/" in candidate_manifest_path.as_posix())
+        check("candidate_manifest_remains_candidate_namespace_before_promotion", True, candidate_manifest_path.is_file() and "/candidates/" in candidate_manifest_path.as_posix())
 
         freeze = build_research_v2_freeze_candidate(
             root,
             frame_reader=frame_reader,
             now=datetime(2026, 9, 8, 8, 5, tzinfo=timezone.utc),
         )
-        add_check(results, "market_data", case_id, "freeze_candidate_is_ready_artifact_not_active_generation", RESEARCH_V2_FREEZE_CANDIDATE_STATUS_READY, freeze["status"])
-        add_check(results, "market_data", case_id, "freeze_candidate_pins_fixed_frozen_cutoff", cutoff, freeze["frozen_cutoff"])
-        add_check(results, "market_data", case_id, "freeze_candidate_keeps_promotion_unauthorized", False, freeze["promotion_authorized"])
-        add_check(results, "market_data", case_id, "freeze_candidate_does_not_claim_active_generation_changed", False, freeze["active_research_generation_changed"])
-        add_check(results, "market_data", case_id, "freeze_candidate_pins_source_candidate_identity", candidate["candidate_fingerprint"], freeze["candidate_fingerprint"])
-        add_check(results, "market_data", case_id, "freeze_candidate_pins_required_common_complete_identity", candidate["required_common_complete_fingerprint"], freeze["required_common_complete_fingerprint"])
-        add_check(results, "market_data", case_id, "freeze_candidate_pins_required_source_projection_identity", candidate["required_source_projection_fingerprint"], freeze["required_source_projection_fingerprint"])
-        add_check(results, "market_data", case_id, "freeze_candidate_pins_adjusted_price_revision_proof_identity", candidate["adjusted_price_revision_proof_fingerprint"], freeze["adjusted_price_revision_proof_fingerprint"])
-        add_check(results, "market_data", case_id, "freeze_candidate_requires_exact_round14_required_scope", set(RESEARCH_V2_REQUIRED_DATASETS), set(freeze["required_dataset_scope"]))
-        add_check(results, "market_data", case_id, "freeze_candidate_requires_exact_round14_common_complete_scope", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), set(freeze["common_complete_dataset_scope"]))
+        check("freeze_candidate_is_ready_artifact_not_active_generation", RESEARCH_V2_FREEZE_CANDIDATE_STATUS_READY, freeze["status"])
+        check("freeze_candidate_pins_fixed_frozen_cutoff", cutoff, freeze["frozen_cutoff"])
+        check("freeze_candidate_keeps_promotion_unauthorized", False, freeze["promotion_authorized"])
+        check("freeze_candidate_does_not_claim_active_generation_changed", False, freeze["active_research_generation_changed"])
+        check("freeze_candidate_pins_source_candidate_identity", candidate["candidate_fingerprint"], freeze["candidate_fingerprint"])
+        check("freeze_candidate_pins_required_common_complete_identity", candidate["required_common_complete_fingerprint"], freeze["required_common_complete_fingerprint"])
+        check("freeze_candidate_pins_required_source_projection_identity", candidate["required_source_projection_fingerprint"], freeze["required_source_projection_fingerprint"])
+        check("freeze_candidate_pins_adjusted_price_revision_proof_identity", candidate["adjusted_price_revision_proof_fingerprint"], freeze["adjusted_price_revision_proof_fingerprint"])
+        check("freeze_candidate_requires_exact_round14_required_scope", set(RESEARCH_V2_REQUIRED_DATASETS), set(freeze["required_dataset_scope"]))
+        check("freeze_candidate_requires_exact_round14_common_complete_scope", set(RESEARCH_V2_COMMON_COMPLETE_DATASETS), set(freeze["common_complete_dataset_scope"]))
         freeze_manifest = resolve_research_v2_freeze_candidate_manifest_path(root, freeze["freeze_candidate_fingerprint"])
-        add_check(results, "market_data", case_id, "freeze_candidate_is_stored_under_fingerprint_namespace", True, freeze_manifest.is_file() and f"/freeze_candidates/{freeze['freeze_candidate_fingerprint']}/" in freeze_manifest.as_posix())
-        add_check(results, "market_data", case_id, "freeze_candidate_build_consumes_zero_provider_calls", 0, freeze["provider_calls"])
+        check("freeze_candidate_is_stored_under_fingerprint_namespace", True, freeze_manifest.is_file() and f"/freeze_candidates/{freeze['freeze_candidate_fingerprint']}/" in freeze_manifest.as_posix())
+        check("freeze_candidate_build_consumes_zero_provider_calls", 0, freeze["provider_calls"])
 
         reused = build_research_v2_freeze_candidate(
             root,
             frame_reader=frame_reader,
             now=datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc),
         )
-        add_check(results, "market_data", case_id, "freeze_candidate_rebuild_reuses_same_immutable_identity", freeze["freeze_candidate_fingerprint"], reused["freeze_candidate_fingerprint"])
-        add_check(results, "market_data", case_id, "freeze_candidate_rebuild_reports_reuse", True, reused["reused"])
+        check("freeze_candidate_rebuild_reuses_same_immutable_identity", freeze["freeze_candidate_fingerprint"], reused["freeze_candidate_fingerprint"])
+        check("freeze_candidate_rebuild_reports_reuse", True, reused["reused"])
         loaded_freeze = load_research_v2_freeze_candidate(
             root,
             freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
             required=True,
         )
-        add_check(results, "market_data", case_id, "freeze_candidate_loader_roundtrips_identity", freeze["freeze_candidate_fingerprint"], loaded_freeze["freeze_candidate_fingerprint"])
+        check("freeze_candidate_loader_roundtrips_identity", freeze["freeze_candidate_fingerprint"], loaded_freeze["freeze_candidate_fingerprint"])
         frozen_universe = resolve_research_v2_frozen_daily_universe_path(root, freeze["freeze_candidate_fingerprint"])
         frozen_candidate_manifest = resolve_research_v2_frozen_source_candidate_manifest_path(root, freeze["freeze_candidate_fingerprint"])
-        add_check(results, "market_data", case_id, "freeze_candidate_owns_fingerprint_addressed_daily_universe_copy", True, frozen_universe.is_file() and compute_file_sha256(frozen_universe) == freeze["daily_universe_file_sha256"])
-        add_check(results, "market_data", case_id, "freeze_candidate_owns_fingerprint_addressed_source_manifest_copy", True, frozen_candidate_manifest.is_file() and compute_file_sha256(frozen_candidate_manifest) == freeze["candidate_manifest_sha256"])
+        check("freeze_candidate_owns_fingerprint_addressed_daily_universe_copy", True, frozen_universe.is_file() and compute_file_sha256(frozen_universe) == freeze["daily_universe_file_sha256"])
+        check("freeze_candidate_owns_fingerprint_addressed_source_manifest_copy", True, frozen_candidate_manifest.is_file() and compute_file_sha256(frozen_candidate_manifest) == freeze["candidate_manifest_sha256"])
         original_universe_bytes = universe_path.read_bytes()
         original_candidate_manifest_bytes = candidate_manifest_path.read_bytes()
         universe_path.write_bytes(original_universe_bytes + b"candidate-slot-drift")
@@ -3597,17 +3535,17 @@ def validate_market_data_v2_research_required_common_complete_freeze_contract_ca
             freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
             required=True,
         )
-        add_check(results, "market_data", case_id, "freeze_loader_is_independent_of_mutable_candidate_physical_slot", freeze["freeze_candidate_fingerprint"], frozen_after_source_drift["freeze_candidate_fingerprint"])
+        check("freeze_loader_is_independent_of_mutable_candidate_physical_slot", freeze["freeze_candidate_fingerprint"], frozen_after_source_drift["freeze_candidate_fingerprint"])
         universe_path.write_bytes(original_universe_bytes)
         candidate_manifest_path.write_bytes(original_candidate_manifest_bytes)
 
         v2_generation = get_research_data_generation(RESEARCH_DATA_GENERATION_V2)
-        add_check(results, "market_data", case_id, "round15_does_not_change_configured_v2_status", RESEARCH_STATUS_AUTHORIZED_NOT_READY, v2_generation.status)
-        add_check(results, "market_data", case_id, "round15_does_not_change_configured_v2_cutoff", None, v2_generation.cutoff)
-        add_check(results, "market_data", case_id, "round15_does_not_change_active_research_generation", RESEARCH_DATA_GENERATION_V1, ACTIVE_RESEARCH_DATA_GENERATION)
+        check("round15_does_not_change_configured_v2_status", RESEARCH_STATUS_AUTHORIZED_NOT_READY, v2_generation.status)
+        check("round15_does_not_change_configured_v2_cutoff", None, v2_generation.cutoff)
+        check("round15_does_not_change_active_research_generation", RESEARCH_DATA_GENERATION_V1, ACTIVE_RESEARCH_DATA_GENERATION)
 
         persisted_freeze = load_json_strict(freeze_manifest)
-        add_check(results, "market_data", case_id, "freeze_candidate_manifest_paths_are_project_relative", False, str(persisted_freeze["candidate_manifest_path"]).startswith(str(root)))
+        check("freeze_candidate_manifest_paths_are_project_relative", False, str(persisted_freeze["candidate_manifest_path"]).startswith(str(root)))
 
     summary.update(
         {
@@ -3653,8 +3591,7 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
     from services.research.market_data_v2 import build_research_v2_candidate, build_research_v2_freeze_candidate
 
     case_id = "MARKET_DATA_V2_RESEARCH_PROMOTION_CONSUMER_INTEGRATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -3719,69 +3656,36 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
             "Volume": frame_by_request[requests[2].request_id].iloc[:3]["Trading_Volume"].tolist(),
         }).to_csv(legacy_dir / "0050.csv", index=False)
 
-        ledger_path = root / "data" / "market_data_v2" / "bootstrap" / manifest_fingerprint / "bootstrap_ledger.sqlite3"
-        ledger = MarketDataJobLedger(ledger_path)
-        workload_id = ledger.seed_manifest(manifest, now=datetime(2026, 9, 8, tzinfo=timezone.utc))
-        evidence = []
-        current = datetime(2026, 9, 8, tzinfo=timezone.utc)
-        while True:
-            job = ledger.claim_next_job(
-                workload_id,
-                owner_id="synthetic-round16",
-                now=current,
-                lease_until=current + timedelta(minutes=5),
-            )
-            if job is None:
-                break
-            request = job.to_request()
-            path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes((request.request_id + "\n").encode("utf-8"))
-            digest = compute_file_sha256(path)
-            frame = frame_by_request[request.request_id]
-            ledger.mark_done(workload_id, request.request_id, row_count=len(frame), content_sha256=digest, now=current)
-            evidence.append(ProviderArtifactEvidence(request_id=request.request_id, dataset=request.dataset, row_count=len(frame), content_sha256=digest))
-            current += timedelta(seconds=1)
-        ledger.set_workload_status(workload_id, status="DONE", now=current)
-        provider_payload = build_provider_snapshot_payload(
+        provider_payload, frame_reader = _publish_ready_provider_snapshot_fixture(
+            root=root,
             manifest=manifest,
-            artifacts=evidence,
+            manifest_fingerprint=manifest_fingerprint,
+            frame_by_request=frame_by_request,
+            owner_id="synthetic-round16",
+            started_at=datetime(2026, 9, 8, tzinfo=timezone.utc),
             finalized_at="2026-09-08T00:00:00+00:00",
+            missing_columns_message="synthetic round16 frame missing columns",
         )
-        atomic_write_json(resolve_market_data_provider_snapshot_path(root, manifest_fingerprint), provider_payload)
-
-        def frame_reader(path, columns):
-            frame = frame_by_request[path.stem].copy()
-            if columns:
-                missing = [column for column in columns if column not in frame.columns]
-                if missing:
-                    raise ValueError(f"synthetic round16 frame missing columns: {missing}")
-                frame = frame.loc[:, list(columns)]
-            return frame
 
         load_ready_provider_snapshot_archive(root)
         before = get_effective_research_data_generation(root)
-        add_check(results, "market_data", case_id, "promotion_starts_from_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, before.generation_id)
-        add_check(results, "market_data", case_id, "static_config_remains_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, ACTIVE_RESEARCH_DATA_GENERATION)
-        add_check(results, "market_data", case_id, "full_dataset_before_promotion_uses_legacy_v1_path", str((root / "data" / "tw_stock_data_vip").resolve()), str(Path(get_dataset_dir(root, "full")).resolve()))
+        check("promotion_starts_from_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, before.generation_id)
+        check("static_config_remains_safe_v1_fallback", RESEARCH_DATA_GENERATION_V1, ACTIVE_RESEARCH_DATA_GENERATION)
+        check("full_dataset_before_promotion_uses_legacy_v1_path", str((root / "data" / "tw_stock_data_vip").resolve()), str(Path(get_dataset_dir(root, "full")).resolve()))
 
         candidate = build_research_v2_candidate(root, frame_reader=frame_reader, now=datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc))
         freeze = build_research_v2_freeze_candidate(root, frame_reader=frame_reader, now=datetime(2026, 9, 8, 8, 5, tzinfo=timezone.utc))
-        add_check(results, "market_data", case_id, "promotion_fixture_candidate_reaches_fixed_common_complete_cutoff", cutoff, candidate["research_common_complete_cutoff"])
-        add_check(results, "market_data", case_id, "promotion_consumes_ready_freeze_candidate", cutoff, freeze["frozen_cutoff"])
+        check("promotion_fixture_candidate_reaches_fixed_common_complete_cutoff", cutoff, candidate["research_common_complete_cutoff"])
+        check("promotion_consumes_ready_freeze_candidate", cutoff, freeze["frozen_cutoff"])
 
-        permission_blocked = False
-        try:
-            promote_research_v2(
+        permission_blocked = raises_expected(PermissionError, lambda: promote_research_v2(
                 root,
                 freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
                 explicit_authorization=False,
                 frame_reader=frame_reader,
-            )
-        except PermissionError:
-            permission_blocked = True
-        add_check(results, "market_data", case_id, "promotion_requires_explicit_authorization", True, permission_blocked)
-        add_check(results, "market_data", case_id, "rejected_promotion_does_not_publish_active_pointer", False, resolve_active_research_generation_path(root).exists())
+            ))
+        check("promotion_requires_explicit_authorization", True, permission_blocked)
+        check("rejected_promotion_does_not_publish_active_pointer", False, resolve_active_research_generation_path(root).exists())
 
         promoted = promote_research_v2(
             root,
@@ -3791,30 +3695,30 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
             now=datetime(2026, 9, 8, 8, 10, tzinfo=timezone.utc),
         )
         materialization = dict(promoted["materialization"])
-        add_check(results, "market_data", case_id, "explicit_promotion_publishes_v2", RESEARCH_DATA_GENERATION_V2, promoted["generation_id"])
-        add_check(results, "market_data", case_id, "promotion_pins_fixed_cutoff", cutoff, promoted["frozen_cutoff"])
-        add_check(results, "market_data", case_id, "promotion_and_materialization_make_zero_provider_calls", 0, int(promoted["provider_calls"]) + int(materialization["provider_calls"]))
-        add_check(results, "market_data", case_id, "compatibility_materialization_has_one_ticker_file", 1, materialization["csv_file_count"])
-        add_check(results, "market_data", case_id, "compatibility_materialization_has_three_eligible_rows", 3, materialization["row_count"])
+        check("explicit_promotion_publishes_v2", RESEARCH_DATA_GENERATION_V2, promoted["generation_id"])
+        check("promotion_pins_fixed_cutoff", cutoff, promoted["frozen_cutoff"])
+        check("promotion_and_materialization_make_zero_provider_calls", 0, int(promoted["provider_calls"]) + int(materialization["provider_calls"]))
+        check("compatibility_materialization_has_one_ticker_file", 1, materialization["csv_file_count"])
+        check("compatibility_materialization_has_three_eligible_rows", 3, materialization["row_count"])
 
         promoted_dir = Path(get_dataset_dir(root, "full")).resolve()
         csv_path = promoted_dir / "0050.csv"
         csv_frame = pd.read_csv(csv_path)
-        add_check(results, "market_data", case_id, "legacy_compatibility_schema_is_exact_six_column_ohlcv", ["Date", "Open", "High", "Low", "Close", "Volume"], list(csv_frame.columns))
-        add_check(results, "market_data", case_id, "compatibility_ohlc_comes_from_canonical_price_adj", [100.0, 101.0, 102.0], csv_frame["Open"].tolist())
-        add_check(results, "market_data", case_id, "compatibility_volume_comes_from_raw_price", [1000, 1100, 1200], csv_frame["Volume"].tolist())
-        add_check(results, "market_data", case_id, "full_consumer_routes_to_promoted_immutable_materialization", True, "/materializations/" in promoted_dir.as_posix())
-        add_check(results, "market_data", case_id, "reduced_fixture_is_not_redirected_by_research_promotion", str((root / "data" / "tw_stock_data_vip_reduced").resolve()), str(Path(get_dataset_dir(root, "reduced")).resolve()))
+        check("legacy_compatibility_schema_is_exact_six_column_ohlcv", ["Date", "Open", "High", "Low", "Close", "Volume"], list(csv_frame.columns))
+        check("compatibility_ohlc_comes_from_canonical_price_adj", [100.0, 101.0, 102.0], csv_frame["Open"].tolist())
+        check("compatibility_volume_comes_from_raw_price", [1000, 1100, 1200], csv_frame["Volume"].tolist())
+        check("full_consumer_routes_to_promoted_immutable_materialization", True, "/materializations/" in promoted_dir.as_posix())
+        check("reduced_fixture_is_not_redirected_by_research_promotion", str((root / "data" / "tw_stock_data_vip_reduced").resolve()), str(Path(get_dataset_dir(root, "reduced")).resolve()))
 
         active = get_effective_research_data_generation(root)
-        add_check(results, "market_data", case_id, "effective_active_generation_switches_only_after_pointer", RESEARCH_DATA_GENERATION_V2, active.generation_id)
-        add_check(results, "market_data", case_id, "effective_active_contract_is_frozen", cutoff, active.cutoff)
+        check("effective_active_generation_switches_only_after_pointer", RESEARCH_DATA_GENERATION_V2, active.generation_id)
+        check("effective_active_contract_is_frozen", cutoff, active.cutoff)
         contract_snapshot = build_effective_market_data_contract_snapshot(root)
-        add_check(results, "market_data", case_id, "market_data_contract_snapshot_reports_effective_v2", RESEARCH_DATA_GENERATION_V2, contract_snapshot["active_research_generation"]["generation_id"])
+        check("market_data_contract_snapshot_reports_effective_v2", RESEARCH_DATA_GENERATION_V2, contract_snapshot["active_research_generation"]["generation_id"])
         runtime = build_runtime_domain_contract_snapshot(root)
-        add_check(results, "market_data", case_id, "runtime_domain_reports_research_v2", RESEARCH_DATA_GENERATION_V2, runtime["research"]["market_data_generation"])
-        add_check(results, "market_data", case_id, "runtime_domain_routes_research_data_dir_to_materialization", promoted_dir, Path(runtime["research"]["data_dir"]).resolve())
-        add_check(results, "market_data", case_id, "runtime_domain_keeps_trading_root_separate", True, Path(runtime["trading"]["data_dir"]).resolve() != promoted_dir)
+        check("runtime_domain_reports_research_v2", RESEARCH_DATA_GENERATION_V2, runtime["research"]["market_data_generation"])
+        check("runtime_domain_routes_research_data_dir_to_materialization", promoted_dir, Path(runtime["research"]["data_dir"]).resolve())
+        check("runtime_domain_keeps_trading_root_separate", True, Path(runtime["trading"]["data_dir"]).resolve() != promoted_dir)
         legacy_write_blocked = False
         promoted_write_blocked = False
         try:
@@ -3825,42 +3729,38 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
             assert_runtime_write_path_is_not_research_dataset(root, promoted_dir / "0050.csv")
         except RuntimeError:
             promoted_write_blocked = True
-        add_check(results, "market_data", case_id, "promotion_keeps_legacy_v1_research_root_write_protected", True, legacy_write_blocked)
-        add_check(results, "market_data", case_id, "promotion_keeps_v2_materialization_root_write_protected", True, promoted_write_blocked)
+        check("promotion_keeps_legacy_v1_research_root_write_protected", True, legacy_write_blocked)
+        check("promotion_keeps_v2_materialization_root_write_protected", True, promoted_write_blocked)
 
         from filters.breakout_quality.source_inventory import build_source_data_inventory
         source_inventory = build_source_data_inventory(root, "full")
         source_lineage = dict(source_inventory.get("research_market_data_lineage") or {})
-        add_check(results, "market_data", case_id, "full_research_source_inventory_pins_v2_generation", RESEARCH_DATA_GENERATION_V2, source_lineage.get("generation_id"))
-        add_check(results, "market_data", case_id, "full_research_source_inventory_pins_promotion_identity", promoted["promotion_fingerprint"], source_lineage.get("promotion_fingerprint"))
-        add_check(results, "market_data", case_id, "full_research_source_inventory_pins_materialization_identity", materialization["materialization_fingerprint"], source_lineage.get("materialization_fingerprint"))
+        check("full_research_source_inventory_pins_v2_generation", RESEARCH_DATA_GENERATION_V2, source_lineage.get("generation_id"))
+        check("full_research_source_inventory_pins_promotion_identity", promoted["promotion_fingerprint"], source_lineage.get("promotion_fingerprint"))
+        check("full_research_source_inventory_pins_materialization_identity", materialization["materialization_fingerprint"], source_lineage.get("materialization_fingerprint"))
 
         read_view = load_active_research_v2_read_view(root, frame_reader=frame_reader)
-        add_check(results, "market_data", case_id, "active_v2_read_view_pins_frozen_cutoff", cutoff, read_view.frozen_cutoff)
-        add_check(results, "market_data", case_id, "active_v2_read_view_uses_exact_daily_universe", ("0050",), read_view.eligible_stock_ids(cutoff))
-        post_cutoff_blocked = False
-        try:
-            read_view.eligible_stock_ids((cutoff_date + timedelta(days=1)).isoformat())
-        except ValueError:
-            post_cutoff_blocked = True
-        add_check(results, "market_data", case_id, "active_v2_read_view_rejects_post_cutoff_queries", True, post_cutoff_blocked)
+        check("active_v2_read_view_pins_frozen_cutoff", cutoff, read_view.frozen_cutoff)
+        check("active_v2_read_view_uses_exact_daily_universe", ("0050",), read_view.eligible_stock_ids(cutoff))
+        post_cutoff_blocked = raises_expected(ValueError, lambda: read_view.eligible_stock_ids((cutoff_date + timedelta(days=1)).isoformat()))
+        check("active_v2_read_view_rejects_post_cutoff_queries", True, post_cutoff_blocked)
         scoped_dates = []
         for frame in read_view.iter_dataset_scope_frames(
             "TaiwanStockPrice", columns=("date", "stock_id", "Trading_Volume")
         ):
             scoped_dates.extend(frame["date"].astype(str).tolist())
-        add_check(results, "market_data", case_id, "active_scope_reader_filters_provider_rows_after_frozen_cutoff", dates, scoped_dates)
+        check("active_scope_reader_filters_provider_rows_after_frozen_cutoff", dates, scoped_dates)
         scoped_without_date_rows = sum(
             len(frame)
             for frame in read_view.iter_dataset_scope_frames(
                 "TaiwanStockPrice", columns=("stock_id", "Trading_Volume")
             )
         )
-        add_check(results, "market_data", case_id, "active_scope_reader_enforces_cutoff_even_when_consumer_omits_date", 3, scoped_without_date_rows)
+        check("active_scope_reader_enforces_cutoff_even_when_consumer_omits_date", 3, scoped_without_date_rows)
 
         promotion_manifest = resolve_research_v2_promotion_manifest_path(root, promoted["promotion_fingerprint"])
-        add_check(results, "market_data", case_id, "promotion_manifest_is_immutable_fingerprint_addressed", True, promotion_manifest.is_file() and f"/promotions/{promoted['promotion_fingerprint']}/" in promotion_manifest.as_posix())
-        add_check(results, "market_data", case_id, "active_pointer_is_small_separate_state", True, resolve_active_research_generation_path(root).is_file() and resolve_active_research_generation_path(root) != promotion_manifest)
+        check("promotion_manifest_is_immutable_fingerprint_addressed", True, promotion_manifest.is_file() and f"/promotions/{promoted['promotion_fingerprint']}/" in promotion_manifest.as_posix())
+        check("active_pointer_is_small_separate_state", True, resolve_active_research_generation_path(root).is_file() and resolve_active_research_generation_path(root) != promotion_manifest)
 
         reused = promote_research_v2(
             root,
@@ -3868,16 +3768,12 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
             explicit_authorization=True,
             frame_reader=frame_reader,
         )
-        add_check(results, "market_data", case_id, "same_promotion_identity_reuses_existing_activation", True, reused["reused"])
-        add_check(results, "market_data", case_id, "same_promotion_identity_keeps_same_fingerprint", promoted["promotion_fingerprint"], reused["promotion_fingerprint"])
+        check("same_promotion_identity_reuses_existing_activation", True, reused["reused"])
+        check("same_promotion_identity_keeps_same_fingerprint", promoted["promotion_fingerprint"], reused["promotion_fingerprint"])
 
         resolve_active_research_generation_path(root).unlink()
-        pointer_loss_fail_closed = False
-        try:
-            get_effective_research_data_generation(root)
-        except RuntimeError:
-            pointer_loss_fail_closed = True
-        add_check(results, "market_data", case_id, "published_promotion_with_missing_pointer_fails_closed_instead_of_silent_v1_rollback", True, pointer_loss_fail_closed)
+        pointer_loss_fail_closed = raises_expected(RuntimeError, lambda: get_effective_research_data_generation(root))
+        check("published_promotion_with_missing_pointer_fails_closed_instead_of_silent_v1_rollback", True, pointer_loss_fail_closed)
         recovered = promote_research_v2(
             root,
             freeze_candidate_fingerprint=freeze["freeze_candidate_fingerprint"],
@@ -3885,42 +3781,30 @@ def validate_market_data_v2_research_promotion_consumer_integration_contract_cas
             frame_reader=frame_reader,
             now=datetime(2026, 9, 8, 8, 20, tzinfo=timezone.utc),
         )
-        add_check(results, "market_data", case_id, "explicit_same_freeze_promotion_recovers_missing_active_pointer", True, recovered.get("recovered_pointer"))
-        add_check(results, "market_data", case_id, "pointer_recovery_restores_v2_without_new_scientific_identity", promoted["promotion_fingerprint"], recovered["promotion_fingerprint"])
+        check("explicit_same_freeze_promotion_recovers_missing_active_pointer", True, recovered.get("recovered_pointer"))
+        check("pointer_recovery_restores_v2_without_new_scientific_identity", promoted["promotion_fingerprint"], recovered["promotion_fingerprint"])
 
-        candidate_after_promotion_blocked = False
-        try:
-            build_research_v2_candidate(root, frame_reader=frame_reader)
-        except RuntimeError:
-            candidate_after_promotion_blocked = True
-        add_check(results, "market_data", case_id, "active_v2_blocks_new_candidate_build_on_same_research_generation", True, candidate_after_promotion_blocked)
+        candidate_after_promotion_blocked = raises_expected(RuntimeError, lambda: build_research_v2_candidate(root, frame_reader=frame_reader))
+        check("active_v2_blocks_new_candidate_build_on_same_research_generation", True, candidate_after_promotion_blocked)
 
         deep = validate_research_v2_compatibility_materialization(
             root,
             materialization_fingerprint=materialization["materialization_fingerprint"],
             deep=True,
         )
-        add_check(results, "market_data", case_id, "deep_materialization_validation_roundtrips_inventory", materialization["dataset_inventory_sha256"], deep["dataset_inventory_sha256"])
+        check("deep_materialization_validation_roundtrips_inventory", materialization["dataset_inventory_sha256"], deep["dataset_inventory_sha256"])
         original = csv_path.read_bytes()
         csv_path.write_bytes(original + b"\n")
-        active_routing_tamper_blocked = False
-        try:
-            get_dataset_dir(root, "full")
-        except ValueError:
-            active_routing_tamper_blocked = True
-        add_check(results, "market_data", case_id, "normal_active_routing_detects_materialized_csv_tamper", True, active_routing_tamper_blocked)
-        tamper_blocked = False
-        try:
-            validate_research_v2_compatibility_materialization(
+        active_routing_tamper_blocked = raises_expected(ValueError, lambda: get_dataset_dir(root, "full"))
+        check("normal_active_routing_detects_materialized_csv_tamper", True, active_routing_tamper_blocked)
+        tamper_blocked = raises_expected(ValueError, lambda: validate_research_v2_compatibility_materialization(
                 root,
                 materialization_fingerprint=materialization["materialization_fingerprint"],
                 deep=True,
-            )
-        except ValueError:
-            tamper_blocked = True
-        add_check(results, "market_data", case_id, "deep_validation_detects_materialized_csv_tamper", True, tamper_blocked)
+            ))
+        check("deep_validation_detects_materialized_csv_tamper", True, tamper_blocked)
         csv_path.write_bytes(original)
-        add_check(results, "market_data", case_id, "active_routing_recovers_after_exact_materialized_bytes_are_restored", promoted_dir, Path(get_dataset_dir(root, "full")).resolve())
+        check("active_routing_recovers_after_exact_materialized_bytes_are_restored", promoted_dir, Path(get_dataset_dir(root, "full")).resolve())
 
     summary.update({"checks": len(results), "promotion_is_explicit": True, "active_generation": RESEARCH_DATA_GENERATION_V2})
     return results, summary
@@ -3948,8 +3832,7 @@ def validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_ca
     from services.research.adjusted_price_revision_proof import build_adjusted_price_revision_proof
 
     case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR2"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     identity_sets = (
         set(RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS),
@@ -3957,10 +3840,10 @@ def validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_ca
         set(RESEARCH_V2_COMPAT_MATERIALIZATION_IDENTITY_FIELDS),
         set(RESEARCH_V2_PROMOTION_IDENTITY_FIELDS),
     )
-    add_check(results, "market_data", case_id, "required_source_projection_propagates_across_candidate_freeze_materialization_promotion", True, all("required_source_projection_fingerprint" in fields for fields in identity_sets))
-    add_check(results, "market_data", case_id, "adjusted_revision_proof_propagates_across_candidate_freeze_materialization_promotion", True, all("adjusted_price_revision_proof_fingerprint" in fields for fields in identity_sets))
-    add_check(results, "market_data", case_id, "full_provider_snapshot_is_provenance_not_foundation_identity", True, all("provider_snapshot_fingerprint" not in fields for fields in identity_sets))
-    add_check(results, "market_data", case_id, "post_cutoff_provider_rebuild_date_is_explicit", "2026-09-01", ADJUSTED_PRICE_PROVIDER_CORRECTION_DATE)
+    check("required_source_projection_propagates_across_candidate_freeze_materialization_promotion", True, all("required_source_projection_fingerprint" in fields for fields in identity_sets))
+    check("adjusted_revision_proof_propagates_across_candidate_freeze_materialization_promotion", True, all("adjusted_price_revision_proof_fingerprint" in fields for fields in identity_sets))
+    check("full_provider_snapshot_is_provenance_not_foundation_identity", True, all("provider_snapshot_fingerprint" not in fields for fields in identity_sets))
+    check("post_cutoff_provider_rebuild_date_is_explicit", "2026-09-01", ADJUSTED_PRICE_PROVIDER_CORRECTION_DATE)
 
     synthetic_identity = {
         "schema_version": 1,
@@ -3982,8 +3865,8 @@ def validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_ca
         "finalized_at": "2030-01-16T00:00:00+00:00",
     }
     validated_snapshot = validate_provider_snapshot_payload(synthetic_snapshot)
-    add_check(results, "market_data", case_id, "historical_provider_snapshot_validates_from_persisted_self_identity", synthetic_snapshot["snapshot_fingerprint"], validated_snapshot["snapshot_fingerprint"])
-    add_check(results, "market_data", case_id, "provider_snapshot_self_identity_preserves_registry_provenance_without_current_registry_dependency", "1" * 64, provider_snapshot_identity_from_payload(validated_snapshot)["registry_fingerprint"])
+    check("historical_provider_snapshot_validates_from_persisted_self_identity", synthetic_snapshot["snapshot_fingerprint"], validated_snapshot["snapshot_fingerprint"])
+    check("provider_snapshot_self_identity_preserves_registry_provenance_without_current_registry_dependency", "1" * 64, provider_snapshot_identity_from_payload(validated_snapshot)["registry_fingerprint"])
 
     class _ProviderView:
         def __init__(self, frame):
@@ -4022,14 +3905,14 @@ def validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_ca
             "open": [50.0, 55.0], "max": [51.0, 56.0], "min": [49.5, 54.5], "close": [50.5, 55.5],
         })
         ready = build_adjusted_price_revision_proof(root, provider_view=_ProviderView(scalar_current), daily_universe_path=universe_path, required_cutoff="2030-01-15")
-        add_check(results, "market_data", case_id, "uniform_per_instrument_scalar_revision_is_proven_equivalent", ADJUSTED_PRICE_REVISION_STATUS_READY, ready["status"])
-        add_check(results, "market_data", case_id, "ready_revision_proof_is_content_addressed", 64, len(str(ready["proof_fingerprint"])))
+        check("uniform_per_instrument_scalar_revision_is_proven_equivalent", ADJUSTED_PRICE_REVISION_STATUS_READY, ready["status"])
+        check("ready_revision_proof_is_content_addressed", 64, len(str(ready["proof_fingerprint"])))
 
         non_scalar = scalar_current.copy()
         non_scalar.loc[1, "close"] = 55.0
         blocked = build_adjusted_price_revision_proof(root, provider_view=_ProviderView(non_scalar), daily_universe_path=universe_path, required_cutoff="2030-01-15")
-        add_check(results, "market_data", case_id, "non_uniform_historical_rebuild_fails_closed", ADJUSTED_PRICE_REVISION_STATUS_BLOCKED, blocked["status"])
-        add_check(results, "market_data", case_id, "non_uniform_revision_has_distinct_proof_identity", True, blocked["proof_fingerprint"] != ready["proof_fingerprint"])
+        check("non_uniform_historical_rebuild_fails_closed", ADJUSTED_PRICE_REVISION_STATUS_BLOCKED, blocked["status"])
+        check("non_uniform_revision_has_distinct_proof_identity", True, blocked["proof_fingerprint"] != ready["proof_fingerprint"])
 
     summary.update({"checks": len(results), "repair_contract": "research_pit_required_source_projection_v1"})
     return results, summary
@@ -4057,8 +3940,7 @@ def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
     from services.downloader.universe import _load_reusable_universe_cache, _publish_universe_cache
 
     case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR1"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     with TemporaryDirectory() as tmp:
         cache_path = Path(tmp) / "universe_cache_v3.json"
@@ -4066,8 +3948,8 @@ def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
         now = downloader_runtime.get_taipei_now()
         stale = _load_reusable_universe_cache(cache_path, now=now, market_date="2026-09-08")
         same_date = _load_reusable_universe_cache(cache_path, now=now, market_date="2026-09-01")
-        add_check(results, "market_data", case_id, "cache_reuse_is_bound_to_requested_market_date", None, stale)
-        add_check(results, "market_data", case_id, "same_market_date_cache_remains_reusable", ["2330"], same_date)
+        check("cache_reuse_is_bound_to_requested_market_date", None, stale)
+        check("same_market_date_cache_remains_reusable", ["2330"], same_date)
 
     from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET
     from core.market_data_dataset_registry import get_market_dataset_spec
@@ -4078,7 +3960,7 @@ def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
     expected_publish_time = tuple(
         int(part) for part in str(freshness.publication_first_check_time).split(":", 1)
     )
-    add_check(results, "market_data", case_id, "daily_completion_uses_provider_verified_publication_policy", expected_publish_time, publish_time)
+    check("daily_completion_uses_provider_verified_publication_policy", expected_publish_time, publish_time)
 
     stock_info = pd.DataFrame(
         [
@@ -4092,35 +3974,19 @@ def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
         stock_info, historical_instruments=("9999", "2330", "8888")
     )
     guard_fp = historical_market_state_guard_fingerprint(guard)
-    add_check(
-        results, "market_data", case_id, "transition_guard_covers_listed_and_delisting_only_archive_members",
-        {"8888": "2024-06-30", "9999": "2025-01-02"}, guard,
-    )
-    add_check(results, "market_data", case_id, "transition_guard_identity_is_content_addressed", 64, len(guard_fp))
-    add_check(
-        results,
-        "market_data",
-        case_id,
-        "future_board_transition_cannot_authorize_earlier_emerging_sample",
-        False,
-        is_historical_market_state_eligible(stock_id="9999", date_value="2024-12-31", transition_excluded_through=guard),
-    )
-    add_check(
-        results,
-        "market_data",
-        case_id,
-        "post_transition_date_can_be_eligible",
-        True,
-        is_historical_market_state_eligible(stock_id="9999", date_value="2025-01-03", transition_excluded_through=guard),
+    run_bound_checks(
+        check,
+        (
+            ('transition_guard_covers_listed_and_delisting_only_archive_members', {'8888': '2024-06-30', '9999': '2025-01-02'}, guard,),
+            ('transition_guard_identity_is_content_addressed', 64, len(guard_fp),),
+            ('future_board_transition_cannot_authorize_earlier_emerging_sample', False, is_historical_market_state_eligible(stock_id='9999', date_value='2024-12-31', transition_excluded_through=guard),),
+            ('post_transition_date_can_be_eligible', True, is_historical_market_state_eligible(stock_id='9999', date_value='2025-01-03', transition_excluded_through=guard),),
+        ),
     )
 
     price_contract = get_market_price_source_contract()
-    add_check(results, "market_data", case_id, "research_bar_clock_semantics_are_explicit", RESEARCH_DAILY_BAR_CLOCK, price_contract.research_daily_bar_clock)
-    add_check(
-        results,
-        "market_data",
-        case_id,
-        "no_price_day_policy_preserves_existing_provider_calendar_row_semantics",
+    check("research_bar_clock_semantics_are_explicit", RESEARCH_DAILY_BAR_CLOCK, price_contract.research_daily_bar_clock)
+    check("no_price_day_policy_preserves_existing_provider_calendar_row_semantics",
         ADJUSTED_PRICE_NO_PRICE_DAY_POLICY,
         price_contract.adjusted_price_no_price_day_policy,
     )
@@ -4149,8 +4015,7 @@ def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_
     from core.runtime_domains import assert_runtime_write_path_is_not_research_dataset
 
     case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR3"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -4167,29 +4032,25 @@ def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_
                 assert_runtime_write_path_is_not_research_dataset(root, path)
             except RuntimeError:
                 blocked.append(path)
-        add_check(results, "market_data", case_id, "write_guard_protects_all_legacy_and_v2_research_roots_independent_of_active_generation", 3, len(blocked))
+        check("write_guard_protects_all_legacy_and_v2_research_roots_independent_of_active_generation", 3, len(blocked))
         trading_allowed = True
         try:
             assert_runtime_write_path_is_not_research_dataset(root, trading_root / "x.csv")
         except RuntimeError:
             trading_allowed = False
-        add_check(results, "market_data", case_id, "write_guard_still_allows_trading_namespace", True, trading_allowed)
+        check("write_guard_still_allows_trading_namespace", True, trading_allowed)
 
         promotions_root = root / RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT / RESEARCH_MARKET_DATA_V2_PROMOTIONS_DIRNAME
         promotions_root.mkdir(parents=True, exist_ok=True)
         (promotions_root / ".staged-crash.tmp").mkdir()
-        add_check(results, "market_data", case_id, "hidden_stage_directory_is_not_published_promotion_truth", (), discover_published_research_v2_promotion_fingerprints(root))
-        add_check(results, "market_data", case_id, "stage_only_state_preserves_never_promoted_v1_fallback", RESEARCH_DATA_GENERATION_V1, get_effective_research_data_generation(root).generation_id)
+        check("hidden_stage_directory_is_not_published_promotion_truth", (), discover_published_research_v2_promotion_fingerprints(root))
+        check("stage_only_state_preserves_never_promoted_v1_fallback", RESEARCH_DATA_GENERATION_V1, get_effective_research_data_generation(root).generation_id)
 
         published_fp = "a" * 64
         (promotions_root / published_fp).mkdir()
-        add_check(results, "market_data", case_id, "final_fingerprint_directory_is_durable_promotion_state_evidence", (published_fp,), discover_published_research_v2_promotion_fingerprints(root))
-        missing_pointer_blocked = False
-        try:
-            get_effective_research_data_generation(root)
-        except RuntimeError:
-            missing_pointer_blocked = True
-        add_check(results, "market_data", case_id, "published_promotion_without_pointer_fails_closed", True, missing_pointer_blocked)
+        check("final_fingerprint_directory_is_durable_promotion_state_evidence", (published_fp,), discover_published_research_v2_promotion_fingerprints(root))
+        missing_pointer_blocked = raises_expected(RuntimeError, lambda: get_effective_research_data_generation(root))
+        check("published_promotion_without_pointer_fails_closed", True, missing_pointer_blocked)
         (promotions_root / published_fp).rmdir()
 
         materialization_fp = "b" * 64
@@ -4209,18 +4070,14 @@ def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_
         validated_dir = validate_research_v2_materialization_file_integrity(
             root, materialization_fingerprint=materialization_fp, payload=payload
         )
-        add_check(results, "market_data", case_id, "content_addressed_materialization_integrity_accepts_exact_bytes", dataset_dir, validated_dir)
+        check("content_addressed_materialization_integrity_accepts_exact_bytes", dataset_dir, validated_dir)
         tampered = original.replace(b",100\n", b",999\n")
-        add_check(results, "market_data", case_id, "same_length_tamper_fixture_preserves_size", len(original), len(tampered))
+        check("same_length_tamper_fixture_preserves_size", len(original), len(tampered))
         csv_path.write_bytes(tampered)
-        content_tamper_blocked = False
-        try:
-            validate_research_v2_materialization_file_integrity(
+        content_tamper_blocked = raises_expected(ValueError, lambda: validate_research_v2_materialization_file_integrity(
                 root, materialization_fingerprint=materialization_fp, payload=payload
-            )
-        except ValueError:
-            content_tamper_blocked = True
-        add_check(results, "market_data", case_id, "content_addressed_integrity_rejects_same_size_byte_tamper", True, content_tamper_blocked)
+            ))
+        check("content_addressed_integrity_rejects_same_size_byte_tamper", True, content_tamper_blocked)
 
     summary.update({"checks": len(results), "repair_round": 3})
     return results, summary
@@ -4274,8 +4131,7 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
     )
 
     case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR4"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     active = ResearchDataGenerationContract(
         generation_id=RESEARCH_DATA_GENERATION_V2,
@@ -4323,9 +4179,9 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
             identity_b = build_dataset_generation_identity(root, "full")
             namespace_b = get_dataset_generation_namespace(root, "full")
 
-        add_check(results, "market_data", case_id, "canonical_v2_generation_identity_changes_with_materialized_truth", False, identity_a["identity_fingerprint"] == identity_b["identity_fingerprint"])
-        add_check(results, "market_data", case_id, "canonical_v2_generation_namespace_changes_with_materialized_truth", False, namespace_a == namespace_b)
-        add_check(results, "market_data", case_id, "canonical_generation_namespace_uses_complete_sha_identity", 64, len(str(namespace_a).split("research_v2_", 1)[1]))
+        check("canonical_v2_generation_identity_changes_with_materialized_truth", False, identity_a["identity_fingerprint"] == identity_b["identity_fingerprint"])
+        check("canonical_v2_generation_namespace_changes_with_materialized_truth", False, namespace_a == namespace_b)
+        check("canonical_generation_namespace_uses_complete_sha_identity", 64, len(str(namespace_a).split("research_v2_", 1)[1]))
 
         base_policy = load_walk_forward_policy(Path(__file__).resolve().parents[2])
         runtime_policy = build_optimizer_runtime_policy(
@@ -4338,8 +4194,8 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         runtime_b["research_dataset_generation_identity"] = identity_b
         fp_a = build_optimizer_effective_policy_fingerprint(runtime_a)["fingerprint_sha256"]
         fp_b = build_optimizer_effective_policy_fingerprint(runtime_b)["fingerprint_sha256"]
-        add_check(results, "market_data", case_id, "optimizer_v2_policy_identity_differs_from_legacy_v1", False, fp_a == legacy_fp)
-        add_check(results, "market_data", case_id, "optimizer_different_v2_generations_cannot_share_policy_fingerprint", False, fp_a == fp_b)
+        check("optimizer_v2_policy_identity_differs_from_legacy_v1", False, fp_a == legacy_fp)
+        check("optimizer_different_v2_generations_cannot_share_policy_fingerprint", False, fp_a == fp_b)
 
         legacy_db = _build_optimizer_study_db_file_path(
             output_dir=str(root / "outputs" / "ml_optimizer"), dataset_profile_key="full", study_scope="full"
@@ -4350,8 +4206,8 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
             study_scope="full",
             dataset_generation_namespace=namespace_a,
         )
-        add_check(results, "market_data", case_id, "optimizer_v1_study_db_path_remains_legacy_compatible", "optimizer_study_full_full.db", Path(legacy_db).name)
-        add_check(results, "market_data", case_id, "optimizer_v2_study_db_is_generation_scoped", True, namespace_a in Path(v2_db).name)
+        check("optimizer_v1_study_db_path_remains_legacy_compatible", "optimizer_study_full_full.db", Path(legacy_db).name)
+        check("optimizer_v2_study_db_is_generation_scoped", True, namespace_a in Path(v2_db).name)
 
         settings_payload = {
             "dataset": "full",
@@ -4384,52 +4240,19 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         compare_legacy = _pair_cache_fingerprint_from_payload(**common)
         compare_a = _pair_cache_fingerprint_from_payload(**common, dataset_generation_identity=identity_a)
         compare_b = _pair_cache_fingerprint_from_payload(**common, dataset_generation_identity=identity_b)
-        add_check(results, "market_data", case_id, "strategy_compare_v2_pair_cache_cannot_reuse_legacy_v1_identity", False, compare_a == compare_legacy)
-        add_check(results, "market_data", case_id, "strategy_compare_different_v2_generations_cannot_share_pair_cache", False, compare_a == compare_b)
+        check("strategy_compare_v2_pair_cache_cannot_reuse_legacy_v1_identity", False, compare_a == compare_legacy)
+        check("strategy_compare_different_v2_generations_cannot_share_pair_cache", False, compare_a == compare_b)
 
         legacy_generation_status = {}
         v2_generation_status = {"research_dataset_generation_identity": identity_a}
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_legacy_generation_missing_on_both_sides_remains_reusable",
-            True,
-            _research_dataset_generation_identity_matches_current(
-                status=legacy_generation_status, run_payload={}
-            ),
-        )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_v2_rejects_legacy_completed_result_without_generation_identity",
-            False,
-            _research_dataset_generation_identity_matches_current(
-                status=v2_generation_status, run_payload={}
-            ),
-        )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_legacy_current_rejects_generation_scoped_completed_result",
-            False,
-            _research_dataset_generation_identity_matches_current(
-                status=legacy_generation_status,
-                run_payload={"research_dataset_generation_identity": identity_a},
-            ),
-        )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_same_v2_generation_result_is_reusable",
-            True,
-            _research_dataset_generation_identity_matches_current(
-                status=v2_generation_status,
-                run_payload={"research_dataset_generation_identity": identity_a},
-            ),
-        )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_different_v2_generation_result_is_not_reusable",
-            False,
-            _research_dataset_generation_identity_matches_current(
-                status=v2_generation_status,
-                run_payload={"research_dataset_generation_identity": identity_b},
+        run_bound_checks(
+            check,
+            (
+                ('strategy_compare_legacy_generation_missing_on_both_sides_remains_reusable', True, _research_dataset_generation_identity_matches_current(status=legacy_generation_status, run_payload={}),),
+                ('strategy_compare_v2_rejects_legacy_completed_result_without_generation_identity', False, _research_dataset_generation_identity_matches_current(status=v2_generation_status, run_payload={}),),
+                ('strategy_compare_legacy_current_rejects_generation_scoped_completed_result', False, _research_dataset_generation_identity_matches_current(status=legacy_generation_status, run_payload={'research_dataset_generation_identity': identity_a}),),
+                ('strategy_compare_same_v2_generation_result_is_reusable', True, _research_dataset_generation_identity_matches_current(status=v2_generation_status, run_payload={'research_dataset_generation_identity': identity_a}),),
+                ('strategy_compare_different_v2_generation_result_is_not_reusable', False, _research_dataset_generation_identity_matches_current(status=v2_generation_status, run_payload={'research_dataset_generation_identity': identity_b}),),
             ),
         )
 
@@ -4488,17 +4311,13 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
             root=baseline_root, settings=baseline_settings,
             status=baseline_status, off_arm=off_arm_obj,
         )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_legacy_shared_baseline_reuse_remains_compatible",
+        check("strategy_compare_legacy_shared_baseline_reuse_remains_compatible",
             baseline_pair, legacy_baseline,
         )
         v2_baseline_status = {
             **baseline_status, "research_dataset_generation_identity": identity_a,
         }
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_v2_shared_baseline_cannot_reuse_legacy_v1_pair",
+        check("strategy_compare_v2_shared_baseline_cannot_reuse_legacy_v1_pair",
             None,
             _find_reusable_baseline_source(
                 root=baseline_root, settings=baseline_settings,
@@ -4512,9 +4331,7 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
             }),
             encoding="utf-8",
         )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_same_v2_generation_shared_baseline_reuse_is_allowed",
+        check("strategy_compare_same_v2_generation_shared_baseline_reuse_is_allowed",
             baseline_pair,
             _find_reusable_baseline_source(
                 root=baseline_root, settings=baseline_settings,
@@ -4524,9 +4341,7 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         different_v2_status = {
             **baseline_status, "research_dataset_generation_identity": identity_b,
         }
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_different_v2_generation_shared_baseline_reuse_is_blocked",
+        check("strategy_compare_different_v2_generation_shared_baseline_reuse_is_blocked",
             None,
             _find_reusable_baseline_source(
                 root=baseline_root, settings=baseline_settings,
@@ -4545,9 +4360,7 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
                 run_payload={}, pair_dir=root, off_arm=off_arm_obj, on_arm=on_arm_obj,
                 stored_settings={}, stored_off={}, stored_on={}, pair_metadata={},
             )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_legacy_projection_fallback_rejects_cross_generation_before_score_equivalence",
+        check("strategy_compare_legacy_projection_fallback_rejects_cross_generation_before_score_equivalence",
             False, legacy_projection_allowed,
         )
 
@@ -4576,9 +4389,7 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
                 root=archived_root, settings=archived_settings, status=archived_status,
                 off_arm=off_arm_obj, on_arm=on_arm_obj,
             )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_archived_completed_pair_fallback_rejects_cross_generation_first",
+        check("strategy_compare_archived_completed_pair_fallback_rejects_cross_generation_first",
             None, archived_reuse,
         )
 
@@ -4612,9 +4423,7 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
                 root=normal_pair_root, settings=normal_pair_settings,
                 status=v2_generation_status, off_arm=off_arm_obj, on_arm=on_arm_obj,
             )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_normal_pair_scan_rejects_cross_generation_before_fallback_logic",
+        check("strategy_compare_normal_pair_scan_rejects_cross_generation_before_fallback_logic",
             None, normal_pair_reuse,
         )
 
@@ -4649,21 +4458,17 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
                 },
                 replay_cache={}, dl_id="dl", diagnostics=frozen_diagnostics,
             )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_frozen_score_recovery_rejects_cross_generation_completed_pair",
+        check("strategy_compare_frozen_score_recovery_rejects_cross_generation_completed_pair",
             None, frozen_binding,
         )
-        add_check(
-            results, "market_data", case_id,
-            "strategy_compare_frozen_score_recovery_reports_generation_mismatch",
+        check("strategy_compare_frozen_score_recovery_reports_generation_mismatch",
             True, "COMPLETED_PAIR_DATASET_GENERATION_MISMATCH" in frozen_diagnostics,
         )
 
         legacy_model = resolve_filter_model_dir(root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling")
         legacy_output = resolve_filter_output_dir(root, "breakout_quality_v1")
-        add_check(results, "market_data", case_id, "breakout_quality_v1_model_path_remains_legacy_namespace", False, "research_generations" in legacy_model.parts)
-        add_check(results, "market_data", case_id, "breakout_quality_v1_output_path_remains_legacy_namespace", False, "research_generations" in legacy_output.parts)
+        check("breakout_quality_v1_model_path_remains_legacy_namespace", False, "research_generations" in legacy_model.parts)
+        check("breakout_quality_v1_output_path_remains_legacy_namespace", False, "research_generations" in legacy_output.parts)
 
         with patch("filters.breakout_quality.paths._research_generation_namespace", return_value=namespace_a):
             v2_model_a = resolve_filter_model_dir(root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling")
@@ -4677,10 +4482,10 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         with patch("filters.breakout_quality.paths._research_generation_namespace", return_value=namespace_b):
             v2_model_b = resolve_filter_model_dir(root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling")
 
-        add_check(results, "market_data", case_id, "breakout_quality_v2_model_artifact_is_generation_scoped", True, namespace_a in v2_model_a.parts)
-        add_check(results, "market_data", case_id, "breakout_quality_v2_dataset_output_is_generation_scoped", True, namespace_a in v2_output_a.parts)
-        add_check(results, "market_data", case_id, "breakout_quality_different_v2_generations_have_distinct_paths", False, v2_model_a == v2_model_b)
-        add_check(results, "market_data", case_id, "breakout_quality_v2_never_falls_back_to_v1_artifact_path", v2_model_a, existing_v2.model_dir)
+        check("breakout_quality_v2_model_artifact_is_generation_scoped", True, namespace_a in v2_model_a.parts)
+        check("breakout_quality_v2_dataset_output_is_generation_scoped", True, namespace_a in v2_output_a.parts)
+        check("breakout_quality_different_v2_generations_have_distinct_paths", False, v2_model_a == v2_model_b)
+        check("breakout_quality_v2_never_falls_back_to_v1_artifact_path", v2_model_a, existing_v2.model_dir)
 
     summary.update({"checks": len(results), "repair_round": 4})
     return results, summary

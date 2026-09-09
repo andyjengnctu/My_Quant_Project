@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from .checks import add_check
+from .checks import bind_synthetic_case, bind_checks, add_check, run_bound_checks
 from core.file_integrity import atomic_write_json
 from core.exact_accounting import (
     allocate_cost_basis_milli,
@@ -73,39 +73,38 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
 
 def validate_trading_account_state_contract_case(base_params):
     case_id = "TRADING_ACCOUNT_STATE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_account')
 
     project_root = Path(__file__).resolve().parents[2]
     gitignore = (project_root / ".gitignore").read_text(encoding="utf-8")
-    add_check(results, "trading_account", case_id, "trading_market_data_is_gitignored", True, "/data/trading/" in gitignore)
-    add_check(results, "trading_account", case_id, "trading_operational_state_is_gitignored", True, "/state/trading/" in gitignore)
-    add_check(results, "trading_account", case_id, "trading_ticker_identity_uses_single_canonical_normalizer", "2330", normalize_trading_ticker(" 2330 "))
+    check("trading_market_data_is_gitignored", True, "/data/trading/" in gitignore)
+    check("trading_operational_state_is_gitignored", True, "/state/trading/" in gitignore)
+    check("trading_ticker_identity_uses_single_canonical_normalizer", "2330", normalize_trading_ticker(" 2330 "))
     try:
         normalize_trading_ticker("23 30")
     except ValueError:
         embedded_space_rejected = True
     else:
         embedded_space_rejected = False
-    add_check(results, "trading_account", case_id, "trading_ticker_identity_rejects_embedded_whitespace_everywhere", True, embedded_space_rejected)
+    check("trading_ticker_identity_rejects_embedded_whitespace_everywhere", True, embedded_space_rejected)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         state_path = resolve_trading_account_state_path(root)
-        add_check(results, "trading_account", case_id, "account_state_path_is_under_trading_state_root", str((root / "state" / "trading" / "account.json").resolve()), str(state_path.resolve()))
-        add_check(results, "trading_account", case_id, "account_service_path_reuses_core_state_path_owner", str(resolve_core_trading_account_state_path(root)), str(state_path))
-        add_check(results, "trading_account", case_id, "order_state_path_has_single_core_owner", str((root / "state" / "trading" / "orders.json").resolve()), str(resolve_core_trading_order_state_path(root).resolve()))
-        add_check(results, "trading_account", case_id, "fill_transaction_path_has_single_core_owner", str((root / "state" / "trading" / "fill_transaction.json").resolve()), str(resolve_core_trading_fill_transaction_path(root).resolve()))
+        check("account_state_path_is_under_trading_state_root", str((root / "state" / "trading" / "account.json").resolve()), str(state_path.resolve()))
+        check("account_service_path_reuses_core_state_path_owner", str(resolve_core_trading_account_state_path(root)), str(state_path))
+        check("order_state_path_has_single_core_owner", str((root / "state" / "trading" / "orders.json").resolve()), str(resolve_core_trading_order_state_path(root).resolve()))
+        check("fill_transaction_path_has_single_core_owner", str((root / "state" / "trading" / "fill_transaction.json").resolve()), str(resolve_core_trading_fill_transaction_path(root).resolve()))
 
         state = initialize_trading_account_state(root, cash=1_000_000)
         initial_cash_milli = money_to_milli(1_000_000)
-        add_check(results, "trading_account", case_id, "initialize_revision_zero", 0, state["revision"])
-        add_check(results, "trading_account", case_id, "initialize_cash_exact_milli", initial_cash_milli, state["cash_milli"])
-        add_check(results, "trading_account", case_id, "initialize_event_chain_starts_at_revision_zero", [0], [event["revision"] for event in state["events"]])
+        check("initialize_revision_zero", 0, state["revision"])
+        check("initialize_cash_exact_milli", initial_cash_milli, state["cash_milli"])
+        check("initialize_event_chain_starts_at_revision_zero", [0], [event["revision"] for event in state["events"]])
 
         state = set_trading_cash_balance(root, cash=1_100_000, expected_revision=state["revision"], note="synthetic reconciliation")
-        add_check(results, "trading_account", case_id, "cash_reconciliation_advances_one_revision", 1, state["revision"])
-        add_check(results, "trading_account", case_id, "cash_reconciliation_updates_exact_cash", money_to_milli(1_100_000), state["cash_milli"])
+        check("cash_reconciliation_advances_one_revision", 1, state["revision"])
+        check("cash_reconciliation_updates_exact_cash", money_to_milli(1_100_000), state["cash_milli"])
 
         try:
             set_trading_cash_balance(root, cash=1_200_000, expected_revision=0)
@@ -113,7 +112,7 @@ def validate_trading_account_state_contract_case(base_params):
             stale_rejected = True
         else:
             stale_rejected = False
-        add_check(results, "trading_account", case_id, "stale_revision_is_rejected", True, stale_rejected)
+        check("stale_revision_is_rejected", True, stale_rejected)
 
         cash_before_adoption = state["cash_milli"]
         state = adopt_existing_trading_position(
@@ -126,10 +125,10 @@ def validate_trading_account_state_contract_case(base_params):
             note="existing broker position",
         )
         adopted = state["positions"]["2330"]
-        add_check(results, "trading_account", case_id, "manual_adoption_does_not_change_cash", cash_before_adoption, state["cash_milli"])
-        add_check(results, "trading_account", case_id, "manual_adoption_source_is_explicit", "manual_adopted", adopted["source"])
-        add_check(results, "trading_account", case_id, "manual_adoption_does_not_forge_strategy_state", None, adopted["strategy_management"]["position_state"])
-        add_check(results, "trading_account", case_id, "manual_adoption_management_is_unmanaged", "unmanaged", adopted["strategy_management"]["status"])
+        check("manual_adoption_does_not_change_cash", cash_before_adoption, state["cash_milli"])
+        check("manual_adoption_source_is_explicit", "manual_adopted", adopted["source"])
+        check("manual_adoption_does_not_forge_strategy_state", None, adopted["strategy_management"]["position_state"])
+        check("manual_adoption_management_is_unmanaged", "unmanaged", adopted["strategy_management"]["status"])
 
         try:
             adopt_existing_trading_position(
@@ -143,7 +142,7 @@ def validate_trading_account_state_contract_case(base_params):
             duplicate_rejected = True
         else:
             duplicate_rejected = False
-        add_check(results, "trading_account", case_id, "duplicate_open_ticker_is_rejected", True, duplicate_rejected)
+        check("duplicate_open_ticker_is_rejected", True, duplicate_rejected)
 
         cash_before_correction = state["cash_milli"]
         state = correct_existing_trading_position(
@@ -156,10 +155,10 @@ def validate_trading_account_state_contract_case(base_params):
             note="synthetic broker correction",
         )
         corrected = state["positions"]["2330"]
-        add_check(results, "trading_account", case_id, "manual_correction_does_not_change_cash", cash_before_correction, state["cash_milli"])
-        add_check(results, "trading_account", case_id, "manual_correction_updates_broker_qty", 1200, corrected["broker"]["qty"])
-        add_check(results, "trading_account", case_id, "manual_correction_updates_broker_cost_basis", money_to_milli(540_000), corrected["broker"]["remaining_cost_basis_milli"])
-        add_check(results, "trading_account", case_id, "manual_correction_does_not_create_strategy_state", None, corrected["strategy_management"]["position_state"])
+        check("manual_correction_does_not_change_cash", cash_before_correction, state["cash_milli"])
+        check("manual_correction_updates_broker_qty", 1200, corrected["broker"]["qty"])
+        check("manual_correction_updates_broker_cost_basis", money_to_milli(540_000), corrected["broker"]["remaining_cost_basis_milli"])
+        check("manual_correction_does_not_create_strategy_state", None, corrected["strategy_management"]["position_state"])
 
         state = adopt_existing_trading_position(
             root,
@@ -176,8 +175,8 @@ def validate_trading_account_state_contract_case(base_params):
             expected_revision=state["revision"],
             note="synthetic erroneous manual row",
         )
-        add_check(results, "trading_account", case_id, "manual_remove_does_not_change_cash", cash_before_remove, state["cash_milli"])
-        add_check(results, "trading_account", case_id, "manual_remove_deletes_only_selected_position", False, "2454" in state["positions"])
+        check("manual_remove_does_not_change_cash", cash_before_remove, state["cash_milli"])
+        check("manual_remove_deletes_only_selected_position", False, "2454" in state["positions"])
 
         cash_before_buy = state["cash_milli"]
         expected_buy = build_buy_ledger_from_price(100, 1000, base_params)
@@ -190,9 +189,9 @@ def validate_trading_account_state_contract_case(base_params):
         )
         atomic_write_json(resolve_trading_account_state_path(root), state)
         strategy_record = state["positions"]["2317"]
-        add_check(results, "trading_account", case_id, "strategy_buy_uses_exact_accounting_cash", cash_before_buy - expected_buy["net_buy_total_milli"], state["cash_milli"])
-        add_check(results, "trading_account", case_id, "strategy_buy_broker_cost_matches_canonical_position", strategy_record["broker"]["remaining_cost_basis_milli"], strategy_record["strategy_management"]["position_state"]["remaining_cost_basis_milli"])
-        add_check(results, "trading_account", case_id, "strategy_buy_management_is_active", "active", strategy_record["strategy_management"]["status"])
+        check("strategy_buy_uses_exact_accounting_cash", cash_before_buy - expected_buy["net_buy_total_milli"], state["cash_milli"])
+        check("strategy_buy_broker_cost_matches_canonical_position", strategy_record["broker"]["remaining_cost_basis_milli"], strategy_record["strategy_management"]["position_state"]["remaining_cost_basis_milli"])
+        check("strategy_buy_management_is_active", "active", strategy_record["strategy_management"]["status"])
 
         pre_same_day = deepcopy(state)
         try:
@@ -205,8 +204,8 @@ def validate_trading_account_state_contract_case(base_params):
             same_day_rejected = True
         else:
             same_day_rejected = False
-        add_check(results, "trading_account", case_id, "same_day_buy_sell_is_rejected", True, same_day_rejected)
-        add_check(results, "trading_account", case_id, "rejected_sell_does_not_mutate_persisted_revision", pre_same_day["revision"], load_trading_account_state(root)["revision"])
+        check("same_day_buy_sell_is_rejected", True, same_day_rejected)
+        check("rejected_sell_does_not_mutate_persisted_revision", pre_same_day["revision"], load_trading_account_state(root)["revision"])
 
         try:
             apply_confirmed_sell_fill(
@@ -218,8 +217,8 @@ def validate_trading_account_state_contract_case(base_params):
             oversell_rejected = True
         else:
             oversell_rejected = False
-        add_check(results, "trading_account", case_id, "oversell_is_rejected", True, oversell_rejected)
-        add_check(results, "trading_account", case_id, "oversell_rejection_keeps_revision", state["revision"], load_trading_account_state(root)["revision"])
+        check("oversell_is_rejected", True, oversell_rejected)
+        check("oversell_rejection_keeps_revision", state["revision"], load_trading_account_state(root)["revision"])
 
         broker_before = deepcopy(state["positions"]["2317"]["broker"])
         cash_before_sell = state["cash_milli"]
@@ -233,10 +232,10 @@ def validate_trading_account_state_contract_case(base_params):
         atomic_write_json(resolve_trading_account_state_path(root), state)
         broker_after = state["positions"]["2317"]["broker"]
         strategy_after = state["positions"]["2317"]["strategy_management"]["position_state"]
-        add_check(results, "trading_account", case_id, "sell_cash_uses_canonical_net_proceeds", cash_before_sell + expected_sell["net_sell_total_milli"], state["cash_milli"])
-        add_check(results, "trading_account", case_id, "sell_cost_basis_uses_canonical_allocation", broker_before["remaining_cost_basis_milli"] - allocated, broker_after["remaining_cost_basis_milli"])
-        add_check(results, "trading_account", case_id, "strategy_and_broker_qty_remain_equal_after_sell", broker_after["qty"], strategy_after["qty"])
-        add_check(results, "trading_account", case_id, "strategy_and_broker_cost_remain_equal_after_sell", broker_after["remaining_cost_basis_milli"], strategy_after["remaining_cost_basis_milli"])
+        check("sell_cash_uses_canonical_net_proceeds", cash_before_sell + expected_sell["net_sell_total_milli"], state["cash_milli"])
+        check("sell_cost_basis_uses_canonical_allocation", broker_before["remaining_cost_basis_milli"] - allocated, broker_after["remaining_cost_basis_milli"])
+        check("strategy_and_broker_qty_remain_equal_after_sell", broker_after["qty"], strategy_after["qty"])
+        check("strategy_and_broker_cost_remain_equal_after_sell", broker_after["remaining_cost_basis_milli"], strategy_after["remaining_cost_basis_milli"])
 
         manual_before = deepcopy(state["positions"]["2330"]["broker"])
         cash_before_manual_sell = state["cash_milli"]
@@ -249,9 +248,9 @@ def validate_trading_account_state_contract_case(base_params):
         )
         atomic_write_json(resolve_trading_account_state_path(root), state)
         manual_after = state["positions"]["2330"]["broker"]
-        add_check(results, "trading_account", case_id, "manual_position_sell_uses_canonical_net_proceeds", cash_before_manual_sell + manual_sell["net_sell_total_milli"], state["cash_milli"])
-        add_check(results, "trading_account", case_id, "manual_position_partial_cost_basis_is_allocated_canonically", manual_before["remaining_cost_basis_milli"] - manual_allocated, manual_after["remaining_cost_basis_milli"])
-        add_check(results, "trading_account", case_id, "manual_position_remains_unmanaged_after_broker_sell", "unmanaged", state["positions"]["2330"]["strategy_management"]["status"])
+        check("manual_position_sell_uses_canonical_net_proceeds", cash_before_manual_sell + manual_sell["net_sell_total_milli"], state["cash_milli"])
+        check("manual_position_partial_cost_basis_is_allocated_canonically", manual_before["remaining_cost_basis_milli"] - manual_allocated, manual_after["remaining_cost_basis_milli"])
+        check("manual_position_remains_unmanaged_after_broker_sell", "unmanaged", state["positions"]["2330"]["strategy_management"]["status"])
         try:
             correct_existing_trading_position(
                 root,
@@ -265,13 +264,13 @@ def validate_trading_account_state_contract_case(base_params):
             sold_manual_correction_rejected = True
         else:
             sold_manual_correction_rejected = False
-        add_check(results, "trading_account", case_id, "manual_position_with_sell_history_cannot_be_corrected", True, sold_manual_correction_rejected)
-        add_check(results, "trading_account", case_id, "sold_manual_correction_reject_keeps_revision", state["revision"], load_trading_account_state(root)["revision"])
+        check("manual_position_with_sell_history_cannot_be_corrected", True, sold_manual_correction_rejected)
+        check("sold_manual_correction_reject_keeps_revision", state["revision"], load_trading_account_state(root)["revision"])
 
         validate_trading_account_state(state)
         expected_revisions = list(range(state["revision"] + 1))
-        add_check(results, "trading_account", case_id, "event_revisions_are_contiguous", expected_revisions, [event["revision"] for event in state["events"]])
-        add_check(results, "trading_account", case_id, "event_hash_chain_ends_at_current_revision", state["revision"], state["events"][-1]["revision"])
+        check("event_revisions_are_contiguous", expected_revisions, [event["revision"] for event in state["events"]])
+        check("event_hash_chain_ends_at_current_revision", state["revision"], state["events"][-1]["revision"])
 
         tampered = deepcopy(state)
         tampered["events"][1]["details"]["cash_milli"] += 1
@@ -281,13 +280,13 @@ def validate_trading_account_state_contract_case(base_params):
             tamper_rejected = True
         else:
             tamper_rejected = False
-        add_check(results, "trading_account", case_id, "event_history_tampering_is_rejected", True, tamper_rejected)
+        check("event_history_tampering_is_rejected", True, tamper_rejected)
 
         read_model = get_trading_account_read_model(root)
-        add_check(results, "trading_account", case_id, "read_model_revision_matches_state", state["revision"], read_model["revision"])
-        add_check(results, "trading_account", case_id, "read_model_position_count_matches_open_positions", len(state["positions"]), read_model["position_count"])
-        add_check(results, "trading_account", case_id, "persisted_state_is_single_account_file", True, state_path.is_file())
-        add_check(results, "trading_account", case_id, "separate_positions_truth_file_is_not_created", False, (state_path.parent / "positions.json").exists())
+        check("read_model_revision_matches_state", state["revision"], read_model["revision"])
+        check("read_model_position_count_matches_open_positions", len(state["positions"]), read_model["position_count"])
+        check("persisted_state_is_single_account_file", True, state_path.is_file())
+        check("separate_positions_truth_file_is_not_created", False, (state_path.parent / "positions.json").exists())
 
     summary["checks"] = len(results)
     return results, summary
@@ -296,8 +295,7 @@ def validate_trading_account_state_contract_case(base_params):
 
 def validate_trading_daily_workflow_contract_case(base_params):
     case_id = "TRADING_DAILY_WORKFLOW"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_daily')
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.params_io import params_to_json_dict
@@ -320,9 +318,9 @@ def validate_trading_daily_workflow_contract_case(base_params):
              "issue_log_path": None,
          }):
         downloader_result = downloader_application.run_trading_dataset_update()
-    add_check(results, "trading_daily", case_id, "downloader_application_returns_trading_domain", "trading", downloader_result.get("runtime_domain"))
-    add_check(results, "trading_daily", case_id, "downloader_application_returns_market_date", "2026-09-04", downloader_result.get("market_date"))
-    add_check(results, "trading_daily", case_id, "downloader_application_returns_ticker_count", 2, downloader_result.get("ticker_count"))
+    check("downloader_application_returns_trading_domain", "trading", downloader_result.get("runtime_domain"))
+    check("downloader_application_returns_market_date", "2026-09-04", downloader_result.get("market_date"))
+    check("downloader_application_returns_ticker_count", 2, downloader_result.get("ticker_count"))
     captured_required_download = {}
     def _capture_required_download(tickers, market_date):
         captured_required_download["tickers"] = list(tickers)
@@ -331,8 +329,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
          patch.object(downloader_application, "get_or_update_universe", return_value=["2330"]), \
          patch.object(downloader_application, "smart_download_vip_data", side_effect=_capture_required_download):
         required_result = downloader_application.run_trading_dataset_update(required_tickers=["9999", "2330"])
-    add_check(results, "trading_daily", case_id, "downloader_unions_required_account_ticker_outside_dynamic_universe", ["2330", "9999"], captured_required_download.get("tickers"))
-    add_check(results, "trading_daily", case_id, "downloader_reports_required_ticker_added_to_universe", ["9999"], required_result.get("required_position_tickers_added"))
+    check("downloader_unions_required_account_ticker_outside_dynamic_universe", ["2330", "9999"], captured_required_download.get("tickers"))
+    check("downloader_reports_required_ticker_added_to_universe", ["9999"], required_result.get("required_position_tickers_added"))
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -369,13 +367,13 @@ def validate_trading_daily_workflow_contract_case(base_params):
         _write_param_payload("2026-09-04", 1)
         _publish_synthetic_trading_input_lineage(root, market_date="2026-09-04")
         snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
-        add_check(results, "trading_daily", case_id, "workflow_snapshot_reads_latest_trading_data", "2026-09-04", snapshot.get("latest_data_date"))
-        add_check(results, "trading_daily", case_id, "workflow_snapshot_reads_param_latest_date", "2026-09-04", snapshot.get("param_latest_data_date"))
-        add_check(results, "trading_daily", case_id, "workflow_snapshot_requires_single_member", 1, snapshot.get("param_member_count"))
-        add_check(results, "trading_daily", case_id, "workflow_snapshot_ready_when_data_and_params_match", True, snapshot.get("params_ready_for_scan"))
-        add_check(results, "trading_daily", case_id, "workflow_snapshot_requires_canonical_market_data_snapshot", True, snapshot.get("market_data_ready"))
-        add_check(results, "trading_daily", case_id, "workflow_snapshot_exposes_dataset_content_identity", 64, len(str(snapshot.get("dataset_content_sha256") or "")))
-        add_check(results, "trading_daily", case_id, "workflow_scanner_output_is_trading_scoped", "outputs/trading/scanner", snapshot.get("scanner_output_dir"))
+        check("workflow_snapshot_reads_latest_trading_data", "2026-09-04", snapshot.get("latest_data_date"))
+        check("workflow_snapshot_reads_param_latest_date", "2026-09-04", snapshot.get("param_latest_data_date"))
+        check("workflow_snapshot_requires_single_member", 1, snapshot.get("param_member_count"))
+        check("workflow_snapshot_ready_when_data_and_params_match", True, snapshot.get("params_ready_for_scan"))
+        check("workflow_snapshot_requires_canonical_market_data_snapshot", True, snapshot.get("market_data_ready"))
+        check("workflow_snapshot_exposes_dataset_content_identity", 64, len(str(snapshot.get("dataset_content_sha256") or "")))
+        check("workflow_scanner_output_is_trading_scoped", "outputs/trading/scanner", snapshot.get("scanner_output_dir"))
 
         fake_scan = {
             "count_scanned": 1,
@@ -400,14 +398,14 @@ def validate_trading_daily_workflow_contract_case(base_params):
         with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan) as scanner_mock:
             scan_result = daily_workflow.run_trading_candidate_scan(project_root=root)
         scanner_args = scanner_mock.call_args
-        add_check(results, "trading_daily", case_id, "trading_scanner_uses_trading_data_dir", str(data_dir), str(scanner_args.args[0]))
-        add_check(results, "trading_daily", case_id, "trading_scanner_injects_trading_output_dir", str((root / "outputs" / "trading" / "scanner").resolve()), str(Path(scanner_args.kwargs["output_dir"]).resolve()))
-        add_check(results, "trading_daily", case_id, "trading_scanner_requests_execution_context_for_allocator", True, scanner_args.kwargs.get("include_execution_context"))
-        add_check(results, "trading_daily", case_id, "trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
-        add_check(results, "trading_daily", case_id, "trading_scanner_persists_candidate_snapshot", True, (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").is_file())
-        add_check(results, "trading_daily", case_id, "trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
-        add_check(results, "trading_daily", case_id, "trading_scanner_carries_market_data_snapshot_identity", 64, len(str(scan_result.get("market_data_snapshot_sha256") or "")))
-        add_check(results, "trading_daily", case_id, "trading_scanner_carries_param_binding_identity", 64, len(str(scan_result.get("param_binding_sha256") or "")))
+        check("trading_scanner_uses_trading_data_dir", str(data_dir), str(scanner_args.args[0]))
+        check("trading_scanner_injects_trading_output_dir", str((root / "outputs" / "trading" / "scanner").resolve()), str(Path(scanner_args.kwargs["output_dir"]).resolve()))
+        check("trading_scanner_requests_execution_context_for_allocator", True, scanner_args.kwargs.get("include_execution_context"))
+        check("trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
+        check("trading_scanner_persists_candidate_snapshot", True, (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").is_file())
+        check("trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
+        check("trading_scanner_carries_market_data_snapshot_identity", 64, len(str(scan_result.get("market_data_snapshot_sha256") or "")))
+        check("trading_scanner_carries_param_binding_identity", 64, len(str(scan_result.get("param_binding_sha256") or "")))
 
         _write_param_payload("2026-09-03", 1)
         try:
@@ -416,7 +414,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
             stale_rejected = "不是目前最新Trading資料" in str(exc)
         else:
             stale_rejected = False
-        add_check(results, "trading_daily", case_id, "stale_trading_params_are_rejected_before_scan", True, stale_rejected)
+        check("stale_trading_params_are_rejected_before_scan", True, stale_rejected)
 
         _write_param_payload("2026-09-04", 2)
         try:
@@ -425,7 +423,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
             multi_member_rejected = "禁止靜默只取第一組" in str(exc)
         else:
             multi_member_rejected = False
-        add_check(results, "trading_daily", case_id, "multi_member_selector_is_failfast_until_scanner_has_ensemble_semantics", True, multi_member_rejected)
+        check("multi_member_selector_is_failfast_until_scanner_has_ensemble_semantics", True, multi_member_rejected)
 
     call_order = []
     with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: call_order.append("data") or {"status": "READY"}), \
@@ -434,24 +432,23 @@ def validate_trading_daily_workflow_contract_case(base_params):
          patch.object(daily_workflow, "run_trading_strategy_param_training", side_effect=lambda **_kwargs: call_order.append("params") or {"status": "READY"}), \
          patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
         workflow_result = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
-    add_check(results, "trading_daily", case_id, "daily_workflow_executes_data_rollforward_indicator_params_scanner_in_order", ["data", "rollforward", "indicator", "params", "scanner"], call_order)
-    add_check(results, "trading_daily", case_id, "daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
+    check("daily_workflow_executes_data_rollforward_indicator_params_scanner_in_order", ["data", "rollforward", "indicator", "params", "scanner"], call_order)
+    check("daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results, "trading_daily", case_id, "workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
-    add_check(results, "trading_daily", case_id, "workbench_exposes_separate_param_button", True, '"2 更新 Params"' in panel_source)
-    add_check(results, "trading_daily", case_id, "workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
-    add_check(results, "trading_daily", case_id, "workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
-    add_check(results, "trading_daily", case_id, "workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
-    add_check(results, "trading_daily", case_id, "workbench_keeps_scanner_candidates_separate_from_proposed_orders", True, "今日 Scanner 候選" in panel_source and "建議掛單（尚未送單／尚未成交）" in panel_source)
+    check("workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
+    check("workbench_exposes_separate_param_button", True, '"2 更新 Params"' in panel_source)
+    check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
+    check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
+    check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
+    check("workbench_keeps_scanner_candidates_separate_from_proposed_orders", True, "今日 Scanner 候選" in panel_source and "建議掛單（尚未送單／尚未成交）" in panel_source)
 
     summary["checks"] = len(results)
     return results, summary
 
 def validate_trading_proposed_order_plan_contract_case(base_params):
     case_id = "TRADING_PROPOSED_ORDERS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_orders')
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.exact_accounting import build_sell_ledger_from_price
@@ -537,21 +534,21 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
         )
 
         plan = build_trading_proposed_order_plan(project_root=root)
-        add_check(results, "trading_orders", case_id, "proposed_plan_does_not_mutate_account_revision", starting_revision, load_trading_account_state(root)["revision"])
-        add_check(results, "trading_orders", case_id, "proposed_plan_does_not_mutate_account_cash", starting_cash_milli, load_trading_account_state(root)["cash_milli"])
-        add_check(results, "trading_orders", case_id, "held_ticker_is_not_proposed_again", ["2330"], plan.get("held_tickers_skipped"))
-        add_check(results, "trading_orders", case_id, "extended_tbd_is_resolved_against_actual_holdings", False, any(row.get("ticker") == "2330" for row in plan.get("orders") or []))
-        add_check(results, "trading_orders", case_id, "proposed_orders_are_not_confirmed", False, plan.get("confirmed"))
-        add_check(results, "trading_orders", case_id, "proposed_orders_do_not_claim_account_mutation", False, plan.get("account_mutated"))
-        add_check(results, "trading_orders", case_id, "reserved_total_equals_order_sum", int(plan["reserved_total_milli"]), sum(int(row["reserved_cost_milli"]) for row in plan["orders"]))
-        add_check(results, "trading_orders", case_id, "reservation_never_exceeds_cash", True, int(plan["reserved_total_milli"]) <= starting_cash_milli)
-        add_check(results, "trading_orders", case_id, "reserved_cash_is_locked_across_proposed_orders", starting_cash_milli - int(plan["reserved_total_milli"]), int(plan["cash_after_reservation_milli"]))
+        check("proposed_plan_does_not_mutate_account_revision", starting_revision, load_trading_account_state(root)["revision"])
+        check("proposed_plan_does_not_mutate_account_cash", starting_cash_milli, load_trading_account_state(root)["cash_milli"])
+        check("held_ticker_is_not_proposed_again", ["2330"], plan.get("held_tickers_skipped"))
+        check("extended_tbd_is_resolved_against_actual_holdings", False, any(row.get("ticker") == "2330" for row in plan.get("orders") or []))
+        check("proposed_orders_are_not_confirmed", False, plan.get("confirmed"))
+        check("proposed_orders_do_not_claim_account_mutation", False, plan.get("account_mutated"))
+        check("reserved_total_equals_order_sum", int(plan["reserved_total_milli"]), sum(int(row["reserved_cost_milli"]) for row in plan["orders"]))
+        check("reservation_never_exceeds_cash", True, int(plan["reserved_total_milli"]) <= starting_cash_milli)
+        check("reserved_cash_is_locked_across_proposed_orders", starting_cash_milli - int(plan["reserved_total_milli"]), int(plan["cash_after_reservation_milli"]))
         expected_liquidation = build_sell_ledger_from_price(adjust_long_sell_fill_price(100.0, ticker="2330"), 1000, base_params, ticker="2330", trade_date="2026-09-04")["net_sell_total_milli"]
-        add_check(results, "trading_orders", case_id, "sizing_equity_uses_mark_to_market_net_liquidation", starting_cash_milli + expected_liquidation, int(round(float(plan["sizing_equity"]) * 1000)))
-        add_check(results, "trading_orders", case_id, "proposed_plan_writes_machine_readable_output", True, (root / "outputs" / "trading" / "proposed_orders" / "proposed_orders.json").is_file())
-        add_check(results, "trading_orders", case_id, "proposed_plan_writes_human_readable_output", True, (root / "outputs" / "trading" / "proposed_orders" / "proposed_orders.txt").is_file())
-        add_check(results, "trading_orders", case_id, "proposed_plan_carries_account_revision", starting_revision, plan.get("account_revision"))
-        add_check(results, "trading_orders", case_id, "proposed_plan_carries_candidate_snapshot_identity", compute_file_sha256(candidate_snapshot_path), plan.get("candidate_snapshot_sha256"))
+        check("sizing_equity_uses_mark_to_market_net_liquidation", starting_cash_milli + expected_liquidation, int(round(float(plan["sizing_equity"]) * 1000)))
+        check("proposed_plan_writes_machine_readable_output", True, (root / "outputs" / "trading" / "proposed_orders" / "proposed_orders.json").is_file())
+        check("proposed_plan_writes_human_readable_output", True, (root / "outputs" / "trading" / "proposed_orders" / "proposed_orders.txt").is_file())
+        check("proposed_plan_carries_account_revision", starting_revision, plan.get("account_revision"))
+        check("proposed_plan_carries_candidate_snapshot_identity", compute_file_sha256(candidate_snapshot_path), plan.get("candidate_snapshot_sha256"))
 
         selected_path.write_text(selected_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
         try:
@@ -560,12 +557,12 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
             stale_snapshot_rejected = True
         else:
             stale_snapshot_rejected = False
-        add_check(results, "trading_orders", case_id, "candidate_snapshot_is_rejected_after_param_artifact_changes", True, stale_snapshot_rejected)
+        check("candidate_snapshot_is_rejected_after_param_artifact_changes", True, stale_snapshot_rejected)
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results, "trading_orders", case_id, "workbench_exposes_proposed_order_button", True, '"4 建議掛單"' in panel_source)
-    add_check(results, "trading_orders", case_id, "workbench_proposed_orders_use_background_thread", True, 'elif action == "orders"' in panel_source and "threading.Thread(" in panel_source)
-    add_check(results, "trading_orders", case_id, "workbench_does_not_confirm_fill_from_proposal_action", False, "confirm_trading_strategy_buy_fill" in panel_source)
+    check("workbench_exposes_proposed_order_button", True, '"4 建議掛單"' in panel_source)
+    check("workbench_proposed_orders_use_background_thread", True, 'elif action == "orders"' in panel_source and "threading.Thread(" in panel_source)
+    check("workbench_does_not_confirm_fill_from_proposal_action", False, "confirm_trading_strategy_buy_fill" in panel_source)
 
     summary["checks"] = len(results)
     return results, summary
@@ -574,8 +571,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
 
 def validate_trading_pending_order_state_contract_case(base_params):
     case_id = "TRADING_PENDING_ORDERS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_pending')
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.file_integrity import compute_file_sha256
@@ -660,10 +656,10 @@ def validate_trading_pending_order_state_contract_case(base_params):
 
         plan = build_trading_proposed_order_plan(project_root=root)
         order_path = resolve_trading_order_state_path(root)
-        add_check(results, "trading_pending", case_id, "proposal_only_does_not_create_order_state", False, order_path.exists())
-        add_check(results, "trading_pending", case_id, "order_state_path_is_operational_trading_state", str((root / "state" / "trading" / "orders.json").resolve()), str(order_path.resolve()))
-        add_check(results, "trading_pending", case_id, "proposed_schema_preserves_entry_type_for_future_fill", True, all(bool(row.get("entry_type")) for row in plan["orders"]))
-        add_check(results, "trading_pending", case_id, "proposed_schema_preserves_security_profile_for_future_fill", True, all(isinstance(row.get("security_profile"), dict) for row in plan["orders"]))
+        check("proposal_only_does_not_create_order_state", False, order_path.exists())
+        check("order_state_path_is_operational_trading_state", str((root / "state" / "trading" / "orders.json").resolve()), str(order_path.resolve()))
+        check("proposed_schema_preserves_entry_type_for_future_fill", True, all(bool(row.get("entry_type")) for row in plan["orders"]))
+        check("proposed_schema_preserves_security_profile_for_future_fill", True, all(isinstance(row.get("security_profile"), dict) for row in plan["orders"]))
 
         first = plan["orders"][0]
         blocked_submission_status = {
@@ -685,8 +681,8 @@ def validate_trading_pending_order_state_contract_case(base_params):
                 submission_guarded = "synthetic canonical Operations block" in str(exc)
             else:
                 submission_guarded = False
-        add_check(results, "trading_pending", case_id, "entry_submission_rechecks_canonical_operations_safety_before_ordered_mutation", True, submission_guarded)
-        add_check(results, "trading_pending", case_id, "blocked_entry_submission_does_not_create_order_state", False, order_path.exists())
+        check("entry_submission_rechecks_canonical_operations_safety_before_ordered_mutation", True, submission_guarded)
+        check("blocked_entry_submission_does_not_create_order_state", False, order_path.exists())
 
         ordered = confirm_trading_order_submission(
             root,
@@ -698,16 +694,16 @@ def validate_trading_pending_order_state_contract_case(base_params):
         )
         validate_trading_order_state(ordered)
         ordered_record = next(iter(ordered["orders"].values()))
-        add_check(results, "trading_pending", case_id, "first_confirmed_submission_creates_revision_one", 1, ordered["revision"])
-        add_check(results, "trading_pending", case_id, "confirmed_submission_status_is_ordered", "ORDERED", ordered_record["status"])
-        add_check(results, "trading_pending", case_id, "confirmed_submission_records_proposed_to_ordered_transition", ["PROPOSED", "ORDERED"], [ordered["events"][-1]["details"]["from_status"], ordered["events"][-1]["details"]["to_status"]])
-        add_check(results, "trading_pending", case_id, "broker_order_id_is_preserved", "SYN-001", ordered_record["broker_order_id"])
-        add_check(results, "trading_pending", case_id, "order_freezes_plan_fingerprint", plan["plan_fingerprint"], ordered_record["plan_fingerprint"])
-        add_check(results, "trading_pending", case_id, "order_freezes_account_revision", account_revision, ordered_record["account_revision"])
-        add_check(results, "trading_pending", case_id, "order_freezes_param_sha", plan["selected_params_sha256"], ordered_record["selected_params_sha256"])
-        add_check(results, "trading_pending", case_id, "order_freezes_candidate_sha", plan["candidate_snapshot_sha256"], ordered_record["candidate_snapshot_sha256"])
-        add_check(results, "trading_pending", case_id, "order_submission_does_not_mutate_account_revision", account_revision, load_trading_account_state(root)["revision"])
-        add_check(results, "trading_pending", case_id, "order_submission_does_not_mutate_account_cash", account_cash_milli, load_trading_account_state(root)["cash_milli"])
+        check("first_confirmed_submission_creates_revision_one", 1, ordered["revision"])
+        check("confirmed_submission_status_is_ordered", "ORDERED", ordered_record["status"])
+        check("confirmed_submission_records_proposed_to_ordered_transition", ["PROPOSED", "ORDERED"], [ordered["events"][-1]["details"]["from_status"], ordered["events"][-1]["details"]["to_status"]])
+        check("broker_order_id_is_preserved", "SYN-001", ordered_record["broker_order_id"])
+        check("order_freezes_plan_fingerprint", plan["plan_fingerprint"], ordered_record["plan_fingerprint"])
+        check("order_freezes_account_revision", account_revision, ordered_record["account_revision"])
+        check("order_freezes_param_sha", plan["selected_params_sha256"], ordered_record["selected_params_sha256"])
+        check("order_freezes_candidate_sha", plan["candidate_snapshot_sha256"], ordered_record["candidate_snapshot_sha256"])
+        check("order_submission_does_not_mutate_account_revision", account_revision, load_trading_account_state(root)["revision"])
+        check("order_submission_does_not_mutate_account_cash", account_cash_milli, load_trading_account_state(root)["cash_milli"])
 
         try:
             confirm_trading_order_submission(
@@ -720,8 +716,8 @@ def validate_trading_pending_order_state_contract_case(base_params):
             duplicate_rejected = True
         else:
             duplicate_rejected = False
-        add_check(results, "trading_pending", case_id, "same_proposal_cannot_be_marked_ordered_twice", True, duplicate_rejected)
-        add_check(results, "trading_pending", case_id, "duplicate_rejection_does_not_advance_order_revision", ordered["revision"], load_trading_order_state(root)["revision"])
+        check("same_proposal_cannot_be_marked_ordered_twice", True, duplicate_rejected)
+        check("duplicate_rejection_does_not_advance_order_revision", ordered["revision"], load_trading_order_state(root)["revision"])
 
         try:
             set_trading_cash_balance(root, cash=700_000, expected_revision=account_revision)
@@ -729,7 +725,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
             account_locked = "ORDERED pending orders" in str(exc)
         else:
             account_locked = False
-        add_check(results, "trading_pending", case_id, "active_order_blocks_account_reconciliation", True, account_locked)
+        check("active_order_blocks_account_reconciliation", True, account_locked)
 
         try:
             build_trading_proposed_order_plan(project_root=root)
@@ -737,7 +733,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
             replanning_blocked = True
         else:
             replanning_blocked = False
-        add_check(results, "trading_pending", case_id, "active_order_blocks_new_premarket_allocation", True, replanning_blocked)
+        check("active_order_blocks_new_premarket_allocation", True, replanning_blocked)
 
         order_id = ordered_record["order_id"]
         try:
@@ -746,7 +742,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
             stale_order_revision_rejected = True
         else:
             stale_order_revision_rejected = False
-        add_check(results, "trading_pending", case_id, "stale_order_revision_is_rejected", True, stale_order_revision_rejected)
+        check("stale_order_revision_is_rejected", True, stale_order_revision_rejected)
 
         cancelled = confirm_trading_order_cancellation(
             root,
@@ -755,10 +751,10 @@ def validate_trading_pending_order_state_contract_case(base_params):
             note="synthetic broker cancelled",
         )
         cancelled_record = cancelled["orders"][order_id]
-        add_check(results, "trading_pending", case_id, "cancel_transition_advances_one_revision", ordered["revision"] + 1, cancelled["revision"])
-        add_check(results, "trading_pending", case_id, "cancelled_order_status", "CANCELLED", cancelled_record["status"])
-        add_check(results, "trading_pending", case_id, "cancelled_order_has_timestamp", True, bool(cancelled_record["cancelled_at"]))
-        add_check(results, "trading_pending", case_id, "cancellation_does_not_mutate_account", [account_revision, account_cash_milli], [load_trading_account_state(root)["revision"], load_trading_account_state(root)["cash_milli"]])
+        check("cancel_transition_advances_one_revision", ordered["revision"] + 1, cancelled["revision"])
+        check("cancelled_order_status", "CANCELLED", cancelled_record["status"])
+        check("cancelled_order_has_timestamp", True, bool(cancelled_record["cancelled_at"]))
+        check("cancellation_does_not_mutate_account", [account_revision, account_cash_milli], [load_trading_account_state(root)["revision"], load_trading_account_state(root)["cash_milli"]])
 
         try:
             build_trading_proposed_order_plan(project_root=root)
@@ -766,10 +762,10 @@ def validate_trading_pending_order_state_contract_case(base_params):
             same_day_reallocation_blocked = True
         else:
             same_day_reallocation_blocked = False
-        add_check(results, "trading_pending", case_id, "cancelled_order_still_locks_same_information_date_allocation", True, same_day_reallocation_blocked)
+        check("cancelled_order_still_locks_same_information_date_allocation", True, same_day_reallocation_blocked)
 
         reconciled = set_trading_cash_balance(root, cash=700_000, expected_revision=account_revision)
-        add_check(results, "trading_pending", case_id, "account_mutation_is_reenabled_after_all_orders_cancelled", account_revision + 1, reconciled["revision"])
+        check("account_mutation_is_reenabled_after_all_orders_cancelled", account_revision + 1, reconciled["revision"])
 
         try:
             confirm_trading_order_cancellation(root, order_id=order_id, expected_revision=cancelled["revision"])
@@ -777,7 +773,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
             double_cancel_rejected = True
         else:
             double_cancel_rejected = False
-        add_check(results, "trading_pending", case_id, "cancelled_order_cannot_be_cancelled_twice", True, double_cancel_rejected)
+        check("cancelled_order_cannot_be_cancelled_twice", True, double_cancel_rejected)
 
         tampered = load_trading_order_state(root)
         tampered["events"][-1]["details"]["ticker"] = "TAMPER"
@@ -788,16 +784,16 @@ def validate_trading_pending_order_state_contract_case(base_params):
             tamper_rejected = True
         else:
             tamper_rejected = False
-        add_check(results, "trading_pending", case_id, "order_event_hash_tamper_is_rejected", True, tamper_rejected)
+        check("order_event_hash_tamper_is_rejected", True, tamper_rejected)
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     order_service_source = (project_root / "services" / "trading" / "order_state.py").read_text(encoding="utf-8")
     entry_submission_source = (project_root / "services" / "trading" / "entry_order_submission.py").read_text(encoding="utf-8")
-    add_check(results, "trading_pending", case_id, "workbench_requires_explicit_order_submission_confirmation", True, 'text="確認選取已送單"' in panel_source and "confirm_trading_order_submission(" in panel_source)
-    add_check(results, "trading_pending", case_id, "workbench_exposes_explicit_broker_cancellation_confirmation", True, 'text="確認選取剩餘委託已取消"' in panel_source and "confirm_trading_order_cancellation(" in panel_source)
-    add_check(results, "trading_pending", case_id, "submission_cancel_service_does_not_own_fill_reconciliation", False, "confirm_trading_buy_order_fill(" in order_service_source or "apply_confirmed_strategy_buy_fill(" in order_service_source)
-    add_check(results, "trading_pending", case_id, "generic_order_state_no_longer_owns_entry_submission_orchestration", False, "def confirm_trading_order_submission(" in order_service_source)
-    add_check(results, "trading_pending", case_id, "entry_submission_consumes_operations_canonical_guard", True, "assert_trading_proposed_submission_allowed" in entry_submission_source and "build_trading_operations_status" in entry_submission_source)
+    check("workbench_requires_explicit_order_submission_confirmation", True, 'text="確認選取已送單"' in panel_source and "confirm_trading_order_submission(" in panel_source)
+    check("workbench_exposes_explicit_broker_cancellation_confirmation", True, 'text="確認選取剩餘委託已取消"' in panel_source and "confirm_trading_order_cancellation(" in panel_source)
+    check("submission_cancel_service_does_not_own_fill_reconciliation", False, "confirm_trading_buy_order_fill(" in order_service_source or "apply_confirmed_strategy_buy_fill(" in order_service_source)
+    check("generic_order_state_no_longer_owns_entry_submission_orchestration", False, "def confirm_trading_order_submission(" in order_service_source)
+    check("entry_submission_consumes_operations_canonical_guard", True, "assert_trading_proposed_submission_allowed" in entry_submission_source and "build_trading_operations_status" in entry_submission_source)
 
     summary["checks"] = len(results)
     return results, summary
@@ -805,8 +801,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
 
 def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
     case_id = "TRADING_CONFIRMED_FILLS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_fill')
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256
@@ -878,8 +873,8 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
         root = Path(temp_dir)
         selected_path, account, plan, proposal, ordered, order_id = prepare(root)
         ordered_record = ordered["orders"][order_id]
-        add_check(results, "trading_fill", case_id, "ordered_freezes_param_payload", params_to_json_dict(base_params), ordered_record.get("frozen_params"))
-        add_check(results, "trading_fill", case_id, "ordered_freezes_param_payload_hash", canonical_json_sha256(params_to_json_dict(base_params)), ordered_record.get("frozen_params_sha256"))
+        check("ordered_freezes_param_payload", params_to_json_dict(base_params), ordered_record.get("frozen_params"))
+        check("ordered_freezes_param_payload_hash", canonical_json_sha256(params_to_json_dict(base_params)), ordered_record.get("frozen_params_sha256"))
 
         changed = deepcopy(base_params)
         changed.high_len = int(getattr(changed, "high_len")) + 5
@@ -918,22 +913,22 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
                 interrupted = "synthetic crash" in str(exc)
             else:
                 interrupted = False
-        add_check(results, "trading_fill", case_id, "two_state_fill_commit_interruption_is_observable", True, interrupted)
-        add_check(results, "trading_fill", case_id, "fill_transaction_journal_persists_after_interruption", True, tx_path.is_file())
-        add_check(results, "trading_fill", case_id, "fill_transaction_recovery_completes_prepared_targets", True, recover_trading_fill_transaction(root))
-        add_check(results, "trading_fill", case_id, "fill_transaction_journal_removed_after_recovery", False, tx_path.exists())
+        check("two_state_fill_commit_interruption_is_observable", True, interrupted)
+        check("fill_transaction_journal_persists_after_interruption", True, tx_path.is_file())
+        check("fill_transaction_recovery_completes_prepared_targets", True, recover_trading_fill_transaction(root))
+        check("fill_transaction_journal_removed_after_recovery", False, tx_path.exists())
 
         partial_account = load_trading_account_state(root)
         partial_orders = load_trading_order_state(root)
         partial_record = partial_orders["orders"][order_id]
-        add_check(results, "trading_fill", case_id, "first_fill_transitions_to_partial", "PARTIAL", partial_record["status"])
-        add_check(results, "trading_fill", case_id, "partial_fill_updates_filled_qty", first_qty, partial_record["filled_qty"])
-        add_check(results, "trading_fill", case_id, "partial_fill_keeps_remaining_qty_active", order_qty - first_qty, partial_record["remaining_qty"])
-        add_check(results, "trading_fill", case_id, "partial_status_remains_active_order", True, partial_record["status"] in TRADING_ACTIVE_ORDER_STATUSES)
-        add_check(results, "trading_fill", case_id, "partial_fill_debits_exact_cash", initial_cash - int(first_ledger["net_buy_total_milli"]), partial_account["cash_milli"])
-        add_check(results, "trading_fill", case_id, "partial_fill_creates_actual_position", first_qty, partial_account["positions"]["2454"]["broker"]["qty"])
-        add_check(results, "trading_fill", case_id, "partial_fill_binds_position_to_order", order_id, partial_account["positions"]["2454"]["broker"].get("entry_order_id"))
-        add_check(results, "trading_fill", case_id, "fill_uses_frozen_params_after_current_artifact_changes", int(getattr(base_params, "high_len")), int(partial_record["frozen_params"]["high_len"]))
+        check("first_fill_transitions_to_partial", "PARTIAL", partial_record["status"])
+        check("partial_fill_updates_filled_qty", first_qty, partial_record["filled_qty"])
+        check("partial_fill_keeps_remaining_qty_active", order_qty - first_qty, partial_record["remaining_qty"])
+        check("partial_status_remains_active_order", True, partial_record["status"] in TRADING_ACTIVE_ORDER_STATUSES)
+        check("partial_fill_debits_exact_cash", initial_cash - int(first_ledger["net_buy_total_milli"]), partial_account["cash_milli"])
+        check("partial_fill_creates_actual_position", first_qty, partial_account["positions"]["2454"]["broker"]["qty"])
+        check("partial_fill_binds_position_to_order", order_id, partial_account["positions"]["2454"]["broker"].get("entry_order_id"))
+        check("fill_uses_frozen_params_after_current_artifact_changes", int(getattr(base_params, "high_len")), int(partial_record["frozen_params"]["high_len"]))
 
         before_order_rev = int(partial_orders["revision"])
         before_account_rev = int(partial_account["revision"])
@@ -951,8 +946,8 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
             above_limit_rejected = True
         else:
             above_limit_rejected = False
-        add_check(results, "trading_fill", case_id, "broker_fill_above_buy_limit_is_rejected", True, above_limit_rejected)
-        add_check(results, "trading_fill", case_id, "rejected_fill_does_not_advance_revisions", [before_account_rev, before_order_rev], [load_trading_account_state(root)["revision"], load_trading_order_state(root)["revision"]])
+        check("broker_fill_above_buy_limit_is_rejected", True, above_limit_rejected)
+        check("rejected_fill_does_not_advance_revisions", [before_account_rev, before_order_rev], [load_trading_account_state(root)["revision"], load_trading_order_state(root)["revision"]])
 
         try:
             confirm_trading_buy_order_fill(
@@ -968,7 +963,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
             cross_day_partial_rejected = True
         else:
             cross_day_partial_rejected = False
-        add_check(results, "trading_fill", case_id, "partial_fills_for_one_order_cannot_cross_trade_dates", True, cross_day_partial_rejected)
+        check("partial_fills_for_one_order_cannot_cross_trade_dates", True, cross_day_partial_rejected)
 
         remaining = int(partial_record["remaining_qty"])
         second_ledger = build_buy_ledger_from_price(198.0, remaining, base_params)
@@ -981,11 +976,11 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
             expected_order_revision=before_order_rev,
             expected_account_revision=before_account_rev,
         )
-        add_check(results, "trading_fill", case_id, "final_fill_transitions_to_filled", "FILLED", final["status"])
-        add_check(results, "trading_fill", case_id, "filled_order_has_zero_remaining_qty", 0, final["remaining_qty"])
-        add_check(results, "trading_fill", case_id, "all_partial_fills_accumulate_position_qty", order_qty, final["account"]["positions"]["2454"]["broker"]["qty"])
-        add_check(results, "trading_fill", case_id, "all_partial_fills_debit_sum_of_exact_ledgers", initial_cash - int(first_ledger["net_buy_total_milli"]) - int(second_ledger["net_buy_total_milli"]), final["account"]["cash_milli"])
-        add_check(results, "trading_fill", case_id, "filled_order_is_no_longer_active", False, final["orders"]["orders"][order_id]["status"] in TRADING_ACTIVE_ORDER_STATUSES)
+        check("final_fill_transitions_to_filled", "FILLED", final["status"])
+        check("filled_order_has_zero_remaining_qty", 0, final["remaining_qty"])
+        check("all_partial_fills_accumulate_position_qty", order_qty, final["account"]["positions"]["2454"]["broker"]["qty"])
+        check("all_partial_fills_debit_sum_of_exact_ledgers", initial_cash - int(first_ledger["net_buy_total_milli"]) - int(second_ledger["net_buy_total_milli"]), final["account"]["cash_milli"])
+        check("filled_order_is_no_longer_active", False, final["orders"]["orders"][order_id]["status"] in TRADING_ACTIVE_ORDER_STATUSES)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -1010,22 +1005,21 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
             note="cancel remaining synthetic qty",
         )
         cancelled_record = cancelled["orders"][order_id]
-        add_check(results, "trading_fill", case_id, "partial_order_can_cancel_unfilled_remainder", "CANCELLED", cancelled_record["status"])
-        add_check(results, "trading_fill", case_id, "partial_cancel_preserves_filled_qty", first_qty, cancelled_record["filled_qty"])
-        add_check(results, "trading_fill", case_id, "partial_cancel_preserves_position_and_cash", [first_qty, partial_cash], [load_trading_account_state(root)["positions"]["2454"]["broker"]["qty"], load_trading_account_state(root)["cash_milli"]])
+        check("partial_order_can_cancel_unfilled_remainder", "CANCELLED", cancelled_record["status"])
+        check("partial_cancel_preserves_filled_qty", first_qty, cancelled_record["filled_qty"])
+        check("partial_cancel_preserves_position_and_cash", [first_qty, partial_cash], [load_trading_account_state(root)["positions"]["2454"]["broker"]["qty"], load_trading_account_state(root)["cash_milli"]])
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results, "trading_fill", case_id, "workbench_requires_explicit_broker_fill_confirmation", True, 'text="確認選取成交"' in panel_source and "confirm_trading_buy_order_fill" in panel_source and "confirm_trading_protection_sell_order_fill" in panel_source)
-    add_check(results, "trading_fill", case_id, "workbench_fill_inputs_are_actual_qty_price_and_date", True, all(token in panel_source for token in ("本次成交股數", "本次成交價", "成交日 YYYY-MM-DD")))
-    add_check(results, "trading_fill", case_id, "workbench_does_not_auto_infer_fill_from_market_bar", False, "t_low" in panel_source or "t_high" in panel_source or "execute_pre_market_entry_plan" in panel_source)
+    check("workbench_requires_explicit_broker_fill_confirmation", True, 'text="確認選取成交"' in panel_source and "confirm_trading_buy_order_fill" in panel_source and "confirm_trading_protection_sell_order_fill" in panel_source)
+    check("workbench_fill_inputs_are_actual_qty_price_and_date", True, all(token in panel_source for token in ("本次成交股數", "本次成交價", "成交日 YYYY-MM-DD")))
+    check("workbench_does_not_auto_infer_fill_from_market_bar", False, "t_low" in panel_source or "t_high" in panel_source or "execute_pre_market_entry_plan" in panel_source)
 
     summary["checks"] = len(results)
     return results, summary
 
 def validate_trading_protection_plan_contract_case(base_params):
     case_id = "TRADING_PROTECTION_PLAN"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_protection')
 
     from core.file_integrity import atomic_write_json, canonical_json_sha256
     from core.params_io import params_to_json_dict
@@ -1130,24 +1124,24 @@ def validate_trading_protection_plan_contract_case(base_params):
         tp_leg = next(leg for leg in row["legs"] if leg["action"] == "TP_HALF")
         expected_tp_qty = calc_half_take_profit_sell_qty(first_fill_qty, base_params.tp_percent)
 
-        add_check(results, "trading_protection", case_id, "protection_plan_status_is_proposed_only", PROTECTION_PLAN_STATUS, protection["status"])
-        add_check(results, "trading_protection", case_id, "protection_plan_never_claims_broker_submission", PROTECTION_BROKER_STATUS, protection["broker_status"])
-        add_check(results, "trading_protection", case_id, "protection_plan_does_not_mutate_account_revision", account_revision, load_trading_account_state(root)["revision"])
-        add_check(results, "trading_protection", case_id, "protection_plan_does_not_mutate_order_revision", order_revision, load_trading_order_state(root)["revision"])
-        add_check(results, "trading_protection", case_id, "manual_adopted_position_is_not_auto_managed", ["2330"], protection["manual_positions_skipped"])
-        add_check(results, "trading_protection", case_id, "partial_fill_protects_only_confirmed_held_qty", first_fill_qty, row["position_qty"])
-        add_check(results, "trading_protection", case_id, "stop_leg_covers_full_current_position", first_fill_qty, stop_leg["qty"])
-        add_check(results, "trading_protection", case_id, "stop_leg_uses_canonical_effective_position_stop", int(canonical_position["sl_milli"]), int(stop_leg["trigger_price_milli"]))
-        add_check(results, "trading_protection", case_id, "stop_leg_uses_stop_market_gap_semantics", "STOP_MARKET", stop_leg["order_type"])
-        add_check(results, "trading_protection", case_id, "tp_leg_qty_uses_canonical_half_take_profit_rule", expected_tp_qty, tp_leg["qty"])
-        add_check(results, "trading_protection", case_id, "tp_leg_uses_canonical_position_target", int(canonical_position["tp_half_milli"]), int(tp_leg["limit_price_milli"]))
-        add_check(results, "trading_protection", case_id, "same_bar_stop_has_priority_over_tp", PROTECTION_SAME_BAR_PRIORITY, row["same_bar_priority"])
-        add_check(results, "trading_protection", case_id, "protection_plan_uses_no_post_fill_market_data", False, protection["market_data_used"])
-        add_check(results, "trading_protection", case_id, "protection_plan_uses_no_discretionary_input", False, protection["discretionary_input_used"])
-        add_check(results, "trading_protection", case_id, "protection_json_is_output_not_operational_state", str((root / "outputs" / "trading" / "protection_orders" / "protection_plan.json").resolve()), str(resolve_trading_protection_plan_json_path(root).resolve()))
-        add_check(results, "trading_protection", case_id, "protection_human_summary_is_persisted", True, resolve_trading_protection_plan_text_path(root).is_file())
+        check("protection_plan_status_is_proposed_only", PROTECTION_PLAN_STATUS, protection["status"])
+        check("protection_plan_never_claims_broker_submission", PROTECTION_BROKER_STATUS, protection["broker_status"])
+        check("protection_plan_does_not_mutate_account_revision", account_revision, load_trading_account_state(root)["revision"])
+        check("protection_plan_does_not_mutate_order_revision", order_revision, load_trading_order_state(root)["revision"])
+        check("manual_adopted_position_is_not_auto_managed", ["2330"], protection["manual_positions_skipped"])
+        check("partial_fill_protects_only_confirmed_held_qty", first_fill_qty, row["position_qty"])
+        check("stop_leg_covers_full_current_position", first_fill_qty, stop_leg["qty"])
+        check("stop_leg_uses_canonical_effective_position_stop", int(canonical_position["sl_milli"]), int(stop_leg["trigger_price_milli"]))
+        check("stop_leg_uses_stop_market_gap_semantics", "STOP_MARKET", stop_leg["order_type"])
+        check("tp_leg_qty_uses_canonical_half_take_profit_rule", expected_tp_qty, tp_leg["qty"])
+        check("tp_leg_uses_canonical_position_target", int(canonical_position["tp_half_milli"]), int(tp_leg["limit_price_milli"]))
+        check("same_bar_stop_has_priority_over_tp", PROTECTION_SAME_BAR_PRIORITY, row["same_bar_priority"])
+        check("protection_plan_uses_no_post_fill_market_data", False, protection["market_data_used"])
+        check("protection_plan_uses_no_discretionary_input", False, protection["discretionary_input_used"])
+        check("protection_json_is_output_not_operational_state", str((root / "outputs" / "trading" / "protection_orders" / "protection_plan.json").resolve()), str(resolve_trading_protection_plan_json_path(root).resolve()))
+        check("protection_human_summary_is_persisted", True, resolve_trading_protection_plan_text_path(root).is_file())
         first_read = get_trading_protection_plan_read_model(root)
-        add_check(results, "trading_protection", case_id, "newly_built_protection_plan_is_fresh", True, first_read["fresh"])
+        check("newly_built_protection_plan_is_fresh", True, first_read["fresh"])
 
         remaining = int(partial["remaining_qty"])
         final = confirm_trading_buy_order_fill(
@@ -1160,22 +1154,22 @@ def validate_trading_protection_plan_contract_case(base_params):
             expected_account_revision=int(partial["account_revision"]),
         )
         stale_read = get_trading_protection_plan_read_model(root)
-        add_check(results, "trading_protection", case_id, "additional_partial_fill_invalidates_old_protection_source_binding", False, stale_read["fresh"])
+        check("additional_partial_fill_invalidates_old_protection_source_binding", False, stale_read["fresh"])
         rebuilt = build_trading_protection_plan(root)
         rebuilt_row = rebuilt["positions"][0]
         rebuilt_position = final["account"]["positions"]["2454"]["strategy_management"]["position_state"]
-        add_check(results, "trading_protection", case_id, "final_fill_rebuilds_stop_for_full_confirmed_position", qty, rebuilt_row["position_qty"])
-        add_check(results, "trading_protection", case_id, "rebuilt_stop_follows_weighted_average_fill_position_state", int(rebuilt_position["sl_milli"]), int(rebuilt_row["effective_stop_milli"]))
-        add_check(results, "trading_protection", case_id, "rebuilt_target_follows_weighted_average_fill_position_state", int(rebuilt_position["tp_half_milli"]), int(rebuilt_row["target_price_milli"]))
-        add_check(results, "trading_protection", case_id, "source_change_produces_new_protection_fingerprint", True, rebuilt["plan_fingerprint"] != protection["plan_fingerprint"])
-        add_check(results, "trading_protection", case_id, "rebuilt_plan_returns_to_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
+        check("final_fill_rebuilds_stop_for_full_confirmed_position", qty, rebuilt_row["position_qty"])
+        check("rebuilt_stop_follows_weighted_average_fill_position_state", int(rebuilt_position["sl_milli"]), int(rebuilt_row["effective_stop_milli"]))
+        check("rebuilt_target_follows_weighted_average_fill_position_state", int(rebuilt_position["tp_half_milli"]), int(rebuilt_row["target_price_milli"]))
+        check("source_change_produces_new_protection_fingerprint", True, rebuilt["plan_fingerprint"] != protection["plan_fingerprint"])
+        check("rebuilt_plan_returns_to_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     service_source = (project_root / "services" / "trading" / "protection_planning.py").read_text(encoding="utf-8")
-    add_check(results, "trading_protection", case_id, "workbench_exposes_post_fill_protection_plan", True, "成交後 Stop / TP 保護單計畫" in panel_source and "build_trading_protection_plan(" in panel_source)
-    add_check(results, "trading_protection", case_id, "workbench_explicitly_marks_protection_as_not_submitted", True, "尚未送券商" in panel_source)
-    add_check(results, "trading_protection", case_id, "protection_planner_does_not_own_broker_submission", False, "confirm_trading_order_submission(" in service_source or "append_ordered_trading_proposal(" in service_source)
-    add_check(results, "trading_protection", case_id, "protection_planner_does_not_use_market_bar_fill_inference", False, any(token in service_source for token in ("t_high", "t_low", "execute_pre_market_entry_plan")))
+    check("workbench_exposes_post_fill_protection_plan", True, "成交後 Stop / TP 保護單計畫" in panel_source and "build_trading_protection_plan(" in panel_source)
+    check("workbench_explicitly_marks_protection_as_not_submitted", True, "尚未送券商" in panel_source)
+    check("protection_planner_does_not_own_broker_submission", False, "confirm_trading_order_submission(" in service_source or "append_ordered_trading_proposal(" in service_source)
+    check("protection_planner_does_not_use_market_bar_fill_inference", False, any(token in service_source for token in ("t_high", "t_low", "execute_pre_market_entry_plan")))
 
     summary["checks"] = len(results)
     return results, summary
@@ -1184,8 +1178,7 @@ def validate_trading_protection_plan_contract_case(base_params):
 
 def validate_trading_protection_order_submission_contract_case(base_params):
     case_id = "TRADING_PROTECTION_ORDER_SUBMISSION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_protection_orders')
 
     from core.exact_accounting import build_buy_ledger_from_price
     from core.file_integrity import atomic_write_json, canonical_json_sha256
@@ -1249,19 +1242,19 @@ def validate_trading_protection_order_submission_contract_case(base_params):
         )
         account_revision = int(filled["account_revision"])
         protection = build_trading_protection_plan(root)
-        add_check(results, "trading_protection_orders", case_id, "protection_plan_starts_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
+        check("protection_plan_starts_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
 
         stop_only = confirm_trading_protection_leg_submission(
             root, ticker="2454", action="STOP_FULL", expected_order_revision=int(filled["order_revision"]),
             broker_order_id="R11-STOP-1",
         )
         stop_record = next(row for row in stop_only["orders"].values() if row.get("side") == TRADING_ORDER_SIDE_SELL)
-        add_check(results, "trading_protection_orders", case_id, "single_stop_submission_is_sell_ordered", ["SELL", "PROTECTION_STOP", "ORDERED"], [stop_record["side"], stop_record["purpose"], stop_record["status"]])
-        add_check(results, "trading_protection_orders", case_id, "single_stop_uses_canonical_stop_market", "STOP_MARKET", stop_record["order_type"])
-        add_check(results, "trading_protection_orders", case_id, "single_stop_covers_full_held_qty", qty, stop_record["qty"])
-        add_check(results, "trading_protection_orders", case_id, "protection_submission_does_not_mutate_account", account_revision, load_trading_account_state(root)["revision"])
-        add_check(results, "trading_protection_orders", case_id, "broker_order_id_is_preserved_for_protection_sell", "R11-STOP-1", stop_record["broker_order_id"])
-        add_check(results, "trading_protection_orders", case_id, "protection_plan_remains_fresh_after_sell_submission", True, get_trading_protection_plan_read_model(root)["fresh"])
+        check("single_stop_submission_is_sell_ordered", ["SELL", "PROTECTION_STOP", "ORDERED"], [stop_record["side"], stop_record["purpose"], stop_record["status"]])
+        check("single_stop_uses_canonical_stop_market", "STOP_MARKET", stop_record["order_type"])
+        check("single_stop_covers_full_held_qty", qty, stop_record["qty"])
+        check("protection_submission_does_not_mutate_account", account_revision, load_trading_account_state(root)["revision"])
+        check("broker_order_id_is_preserved_for_protection_sell", "R11-STOP-1", stop_record["broker_order_id"])
+        check("protection_plan_remains_fresh_after_sell_submission", True, get_trading_protection_plan_read_model(root)["fresh"])
 
         before_reject_revision = int(stop_only["revision"])
         try:
@@ -1273,8 +1266,8 @@ def validate_trading_protection_order_submission_contract_case(base_params):
             tp_overcommit_rejected = "超過實際持股" in str(exc)
         else:
             tp_overcommit_rejected = False
-        add_check(results, "trading_protection_orders", case_id, "non_oco_stop_plus_tp_cannot_overcommit_position_qty", True, tp_overcommit_rejected)
-        add_check(results, "trading_protection_orders", case_id, "rejected_overcommit_does_not_advance_order_revision", before_reject_revision, load_trading_order_state(root)["revision"])
+        check("non_oco_stop_plus_tp_cannot_overcommit_position_qty", True, tp_overcommit_rejected)
+        check("rejected_overcommit_does_not_advance_order_revision", before_reject_revision, load_trading_order_state(root)["revision"])
 
         stop_order_id = str(stop_record["order_id"])
         cancelled = confirm_trading_order_cancellation(root, order_id=stop_order_id, expected_revision=before_reject_revision)
@@ -1286,7 +1279,7 @@ def validate_trading_protection_order_submission_contract_case(base_params):
             oco_requires_explicit_group = True
         else:
             oco_requires_explicit_group = False
-        add_check(results, "trading_protection_orders", case_id, "oco_is_never_assumed_without_explicit_broker_group", True, oco_requires_explicit_group)
+        check("oco_is_never_assumed_without_explicit_broker_group", True, oco_requires_explicit_group)
 
         oco = confirm_trading_protection_oco_submission(
             root, ticker="2454", expected_order_revision=int(cancelled["revision"]), broker_oco_group_id="R11-OCO-1",
@@ -1294,14 +1287,14 @@ def validate_trading_protection_order_submission_contract_case(base_params):
         )
         active_sell = active_trading_protection_orders(oco)
         purposes = {str(row.get("purpose")) for row in active_sell}
-        add_check(results, "trading_protection_orders", case_id, "explicit_oco_creates_stop_and_tp_sell_orders", {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP}, purposes)
-        add_check(results, "trading_protection_orders", case_id, "oco_group_submission_is_single_revision_mutation", int(cancelled["revision"]) + 1, int(oco["revision"]))
-        add_check(results, "trading_protection_orders", case_id, "all_oco_legs_preserve_user_confirmed_group", {"R11-OCO-1"}, {row.get("broker_oco_group_id") for row in active_sell})
-        add_check(results, "trading_protection_orders", case_id, "all_oco_legs_require_explicit_native_oco_confirmation", {True}, {bool(row.get("broker_native_oco_confirmed")) for row in active_sell})
-        add_check(results, "trading_protection_orders", case_id, "oco_effective_exposure_is_max_leg_not_sum", qty, max(int(row["qty"]) for row in active_sell))
-        add_check(results, "trading_protection_orders", case_id, "protection_sell_does_not_become_entry_buy_pending", 0, len(active_trading_entry_orders(oco)))
-        add_check(results, "trading_protection_orders", case_id, "two_oco_protection_legs_are_active", 2, len(active_sell))
-        add_check(results, "trading_protection_orders", case_id, "oco_submission_still_does_not_mutate_account", account_revision, load_trading_account_state(root)["revision"])
+        check("explicit_oco_creates_stop_and_tp_sell_orders", {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP}, purposes)
+        check("oco_group_submission_is_single_revision_mutation", int(cancelled["revision"]) + 1, int(oco["revision"]))
+        check("all_oco_legs_preserve_user_confirmed_group", {"R11-OCO-1"}, {row.get("broker_oco_group_id") for row in active_sell})
+        check("all_oco_legs_require_explicit_native_oco_confirmation", {True}, {bool(row.get("broker_native_oco_confirmed")) for row in active_sell})
+        check("oco_effective_exposure_is_max_leg_not_sum", qty, max(int(row["qty"]) for row in active_sell))
+        check("protection_sell_does_not_become_entry_buy_pending", 0, len(active_trading_entry_orders(oco)))
+        check("two_oco_protection_legs_are_active", 2, len(active_sell))
+        check("oco_submission_still_does_not_mutate_account", account_revision, load_trading_account_state(root)["revision"])
 
         current_account_model = {"initialized": True, **get_trading_account_read_model(root)}
         current_order_model = get_trading_order_read_model(root)
@@ -1316,7 +1309,7 @@ def validate_trading_protection_order_submission_contract_case(base_params):
             indicator_exit={"exists": True, "fresh": True, "exit_count": 0, "exits": []},
             position_rollforward={"due_tickers": []},
         )
-        add_check(results, "trading_protection_orders", case_id, "long_lived_protection_sell_does_not_block_next_day_premarket_allocation", True, next_day_status["workflow_action_availability"]["orders"])
+        check("long_lived_protection_sell_does_not_block_next_day_premarket_allocation", True, next_day_status["workflow_action_availability"]["orders"])
 
         entry_only_rows = [row for row in current_order_model["orders"] if row.get("side") == "BUY"]
         same_day_status = derive_trading_operations_status(
@@ -1329,13 +1322,13 @@ def validate_trading_protection_order_submission_contract_case(base_params):
             indicator_exit={"exists": False, "fresh": False, "exit_count": 0, "exits": []},
             position_rollforward={"due_tickers": []},
         )
-        add_check(results, "trading_protection_orders", case_id, "historical_entry_buy_still_locks_same_information_date_allocation", False, same_day_status["workflow_action_availability"]["orders"])
+        check("historical_entry_buy_still_locks_same_information_date_allocation", False, same_day_status["workflow_action_availability"]["orders"])
 
         read_model = get_trading_order_read_model(root)
         sell_rows = [row for row in read_model["orders"] if row.get("side") == "SELL"]
-        add_check(results, "trading_protection_orders", case_id, "order_read_model_exposes_protection_sell_side_and_purpose", True, all(row.get("purpose") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP} for row in sell_rows))
-        add_check(results, "trading_protection_orders", case_id, "read_model_counts_active_protection_separately", 2, read_model["active_protection_order_count"])
-        add_check(results, "trading_protection_orders", case_id, "read_model_has_no_active_entry_buy_after_entry_filled", 0, read_model["active_entry_order_count"])
+        check("order_read_model_exposes_protection_sell_side_and_purpose", True, all(row.get("purpose") in {TRADING_ORDER_PURPOSE_PROTECTION_STOP, TRADING_ORDER_PURPOSE_PROTECTION_TP} for row in sell_rows))
+        check("read_model_counts_active_protection_separately", 2, read_model["active_protection_order_count"])
+        check("read_model_has_no_active_entry_buy_after_entry_filled", 0, read_model["active_entry_order_count"])
 
         one_sell_id = next(row["order_id"] for row in active_sell)
         try:
@@ -1347,7 +1340,7 @@ def validate_trading_protection_order_submission_contract_case(base_params):
             sell_fill_rejected_by_buy_path = True
         else:
             sell_fill_rejected_by_buy_path = False
-        add_check(results, "trading_protection_orders", case_id, "protection_sell_cannot_use_buy_fill_reconciliation", True, sell_fill_rejected_by_buy_path)
+        check("protection_sell_cannot_use_buy_fill_reconciliation", True, sell_fill_rejected_by_buy_path)
 
         tampered = json.loads(json.dumps(oco))
         tamper_row = next(row for row in tampered["orders"].values() if row.get("side") == "SELL" and row.get("broker_native_oco_confirmed"))
@@ -1358,13 +1351,13 @@ def validate_trading_protection_order_submission_contract_case(base_params):
             oco_binding_tamper_rejected = True
         else:
             oco_binding_tamper_rejected = False
-        add_check(results, "trading_protection_orders", case_id, "oco_confirmed_group_binding_tamper_is_rejected", True, oco_binding_tamper_rejected)
+        check("oco_confirmed_group_binding_tamper_is_rejected", True, oco_binding_tamper_rejected)
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     service_source = (project_root / "services" / "trading" / "protection_order_submission.py").read_text(encoding="utf-8")
-    add_check(results, "trading_protection_orders", case_id, "workbench_requires_explicit_stop_or_tp_submission_confirmation", True, "確認 Stop 已送單" in panel_source and "確認 TP 已送單" in panel_source)
-    add_check(results, "trading_protection_orders", case_id, "workbench_requires_explicit_broker_oco_group_confirmation", True, "確認 Stop+TP 已以券商 OCO 送單" in panel_source and "券商 OCO/互斥群組 ID" in panel_source)
-    add_check(results, "trading_protection_orders", case_id, "protection_submission_service_does_not_infer_market_fill_or_sell_execution", False, any(token in service_source for token in ("t_high", "t_low", "apply_confirmed_sell_fill", "confirm_trading_sell_fill")))
+    check("workbench_requires_explicit_stop_or_tp_submission_confirmation", True, "確認 Stop 已送單" in panel_source and "確認 TP 已送單" in panel_source)
+    check("workbench_requires_explicit_broker_oco_group_confirmation", True, "確認 Stop+TP 已以券商 OCO 送單" in panel_source and "券商 OCO/互斥群組 ID" in panel_source)
+    check("protection_submission_service_does_not_infer_market_fill_or_sell_execution", False, any(token in service_source for token in ("t_high", "t_low", "apply_confirmed_sell_fill", "confirm_trading_sell_fill")))
 
     summary["checks"] = len(results)
     return results, summary
@@ -1372,8 +1365,7 @@ def validate_trading_protection_order_submission_contract_case(base_params):
 
 def validate_trading_protection_sell_fill_reconciliation_contract_case(base_params):
     case_id = "TRADING_PROTECTION_SELL_FILL"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_protection_sell_fill')
 
     from core.file_integrity import atomic_write_json, canonical_json_sha256
     from core.params_io import params_to_json_dict
@@ -1437,15 +1429,15 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
         first_record = first["orders"]["orders"][tp["order_id"]]
         peer = first["orders"]["orders"][stop["order_id"]]
         expected_first_ledger = build_sell_ledger_from_price(111.0, first_qty, base_params, ticker="2454", security_profile={}, trade_date="2026-09-05")
-        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_fill_sets_partial", "PARTIAL", first_record["status"])
-        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_fill_reduces_remaining_qty", int(tp["qty"]) - first_qty, first_record["remaining_qty"])
-        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_fill_reduces_real_held_qty", qty - first_qty, first["account"]["positions"]["2454"]["broker"]["qty"])
-        add_check(results, "trading_protection_sell_fill", case_id, "partial_tp_does_not_mark_sold_half_complete", False, first["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
-        add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_cash_credit_uses_canonical_exact_ledger", cash_before + int(expected_first_ledger["net_sell_total_milli"]), first["account"]["cash_milli"])
-        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_peer_remains_broker_truth_until_explicit_reconciliation", "ORDERED", peer["status"])
-        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_fill_reports_peer_that_requires_broker_reconciliation", [stop["order_id"]], first["oco_peer_reconciliation_order_ids"])
-        add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_advances_account_once", int(bought["account_revision"]) + 1, first["account_revision"])
-        add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_advances_orders_once", int(oco["revision"]) + 1, first["order_revision"])
+        check("partial_tp_fill_sets_partial", "PARTIAL", first_record["status"])
+        check("partial_tp_fill_reduces_remaining_qty", int(tp["qty"]) - first_qty, first_record["remaining_qty"])
+        check("partial_tp_fill_reduces_real_held_qty", qty - first_qty, first["account"]["positions"]["2454"]["broker"]["qty"])
+        check("partial_tp_does_not_mark_sold_half_complete", False, first["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
+        check("sell_fill_cash_credit_uses_canonical_exact_ledger", cash_before + int(expected_first_ledger["net_sell_total_milli"]), first["account"]["cash_milli"])
+        check("native_oco_peer_remains_broker_truth_until_explicit_reconciliation", "ORDERED", peer["status"])
+        check("native_oco_fill_reports_peer_that_requires_broker_reconciliation", [stop["order_id"]], first["oco_peer_reconciliation_order_ids"])
+        check("sell_fill_advances_account_once", int(bought["account_revision"]) + 1, first["account_revision"])
+        check("sell_fill_advances_orders_once", int(oco["revision"]) + 1, first["order_revision"])
 
         final_qty = int(first_record["remaining_qty"])
         second = confirm_trading_protection_sell_order_fill(
@@ -1453,17 +1445,17 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
             expected_order_revision=int(first["order_revision"]), expected_account_revision=int(first["account_revision"]),
         )
         final_record = second["orders"]["orders"][tp["order_id"]]
-        add_check(results, "trading_protection_sell_fill", case_id, "protection_sell_partial_fills_may_span_days", {"2026-09-05", "2026-09-06"}, {row["trade_date"] for row in final_record["fills"]})
-        add_check(results, "trading_protection_sell_fill", case_id, "final_tp_fill_sets_filled", "FILLED", final_record["status"])
-        add_check(results, "trading_protection_sell_fill", case_id, "final_tp_fill_zero_remaining", 0, final_record["remaining_qty"])
-        add_check(results, "trading_protection_sell_fill", case_id, "completed_tp_marks_canonical_sold_half", True, second["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
-        add_check(results, "trading_protection_sell_fill", case_id, "completed_tp_leaves_half_position", qty - int(tp["qty"]), second["account"]["positions"]["2454"]["broker"]["qty"])
-        add_check(results, "trading_protection_sell_fill", case_id, "native_oco_peer_still_not_inferred_cancelled_after_final_fill", "ORDERED", second["orders"]["orders"][stop["order_id"]]["status"])
+        check("protection_sell_partial_fills_may_span_days", {"2026-09-05", "2026-09-06"}, {row["trade_date"] for row in final_record["fills"]})
+        check("final_tp_fill_sets_filled", "FILLED", final_record["status"])
+        check("final_tp_fill_zero_remaining", 0, final_record["remaining_qty"])
+        check("completed_tp_marks_canonical_sold_half", True, second["account"]["positions"]["2454"]["strategy_management"]["position_state"]["sold_half"])
+        check("completed_tp_leaves_half_position", qty - int(tp["qty"]), second["account"]["positions"]["2454"]["broker"]["qty"])
+        check("native_oco_peer_still_not_inferred_cancelled_after_final_fill", "ORDERED", second["orders"]["orders"][stop["order_id"]]["status"])
         reconciled_peer = confirm_trading_order_cancellation(
             root, order_id=stop["order_id"], expected_revision=int(second["order_revision"]),
             note="synthetic explicit broker OCO peer cancellation reconciliation",
         )
-        add_check(results, "trading_protection_sell_fill", case_id, "explicit_broker_peer_cancellation_is_separate_order_mutation", "CANCELLED", reconciled_peer["orders"][stop["order_id"]]["status"])
+        check("explicit_broker_peer_cancellation_is_separate_order_mutation", "CANCELLED", reconciled_peer["orders"][stop["order_id"]]["status"])
         validate_trading_order_state(reconciled_peer)
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -1481,13 +1473,13 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
         stop_state = confirm_trading_protection_leg_submission(root,ticker="2330",action="STOP_FULL",expected_order_revision=bought["order_revision"],broker_order_id="R12S-STOP")
         stop = next(row for row in stop_state["orders"].values() if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP)
         stopped = confirm_trading_protection_sell_order_fill(root,order_id=stop["order_id"],fill_qty=qty,fill_price=85.0,trade_date="2026-09-05",expected_order_revision=stop_state["revision"],expected_account_revision=bought["account_revision"])
-        add_check(results, "trading_protection_sell_fill", case_id, "stop_market_actual_fill_may_gap_below_trigger", "FILLED", stopped["status"])
-        add_check(results, "trading_protection_sell_fill", case_id, "full_stop_fill_closes_position", False, "2330" in stopped["account"]["positions"])
+        check("stop_market_actual_fill_may_gap_below_trigger", "FILLED", stopped["status"])
+        check("full_stop_fill_closes_position", False, "2330" in stopped["account"]["positions"])
 
     service_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "fill_reconciliation.py").read_text(encoding="utf-8")
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results, "trading_protection_sell_fill", case_id, "sell_fill_service_does_not_infer_market_high_low", False, any(token in service_source for token in ("t_high", "t_low", "shadow_fill")))
-    add_check(results, "trading_protection_sell_fill", case_id, "workbench_routes_sell_fill_to_sell_reconciliation", True, "confirm_trading_protection_sell_order_fill" in panel_source)
+    check("sell_fill_service_does_not_infer_market_high_low", False, any(token in service_source for token in ("t_high", "t_low", "shadow_fill")))
+    check("workbench_routes_sell_fill_to_sell_reconciliation", True, "confirm_trading_protection_sell_order_fill" in panel_source)
     summary["checks"] = len(results)
     return results, summary
 
@@ -1495,8 +1487,7 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
 
 def validate_trading_position_rollforward_contract_case(base_params):
     case_id = "TRADING_POSITION_ROLLFORWARD"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_rollforward')
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
@@ -1611,7 +1602,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
             broker_order_id="ROLL-SYN-STOP",
         )
         protection_before = get_trading_protection_plan_read_model(root)
-        add_check(results, "trading_rollforward", case_id, "pre_rollforward_active_stop_matches_current_position_plan", [], protection_before.get("stale_active_protection_order_ids"))
+        check("pre_rollforward_active_stop_matches_current_position_plan", [], protection_before.get("stale_active_protection_order_ids"))
 
         changed = deepcopy(base_params)
         changed.atr_times_trail = float(base_params.atr_times_trail) + 5.0
@@ -1634,7 +1625,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
 
         with patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-04"):
             due = build_trading_position_rollforward_snapshot(root)
-            add_check(results, "trading_rollforward", case_id, "confirmed_position_is_due_through_latest_completed_bar", ["2454"], due["due_tickers"])
+            check("confirmed_position_is_due_through_latest_completed_bar", ["2454"], due["due_tickers"])
             rolled = run_trading_position_rollforward(root)
             revision_after_first = int(rolled["account_revision"])
             second = run_trading_position_rollforward(root)
@@ -1642,17 +1633,17 @@ def validate_trading_position_rollforward_contract_case(base_params):
         account_after = load_trading_account_state(root)
         management_after = account_after["positions"]["2454"]["strategy_management"]
         position_after = management_after["position_state"]
-        add_check(results, "trading_rollforward", case_id, "rollforward_uses_source_entry_order_frozen_params_not_current_selected_params", int(expected_position["sl_milli"]), int(position_after["sl_milli"]))
-        add_check(results, "trading_rollforward", case_id, "rollforward_advances_highest_high_from_completed_bar", int(expected_position["highest_high_since_entry_milli"]), int(position_after["highest_high_since_entry_milli"]))
-        add_check(results, "trading_rollforward", case_id, "rollforward_records_processed_completed_date", "2026-09-04", management_after.get("last_rollforward_date"))
-        add_check(results, "trading_rollforward", case_id, "rollforward_does_not_change_broker_qty", qty_before, int(account_after["positions"]["2454"]["broker"]["qty"]))
-        add_check(results, "trading_rollforward", case_id, "rollforward_does_not_change_cash", cash_before, int(account_after["cash_milli"]))
-        add_check(results, "trading_rollforward", case_id, "rollforward_is_idempotent_after_completed_date_consumed", "UP_TO_DATE", second["status"])
-        add_check(results, "trading_rollforward", case_id, "idempotent_second_run_does_not_advance_revision", revision_after_first, int(second["account_revision"]))
+        check("rollforward_uses_source_entry_order_frozen_params_not_current_selected_params", int(expected_position["sl_milli"]), int(position_after["sl_milli"]))
+        check("rollforward_advances_highest_high_from_completed_bar", int(expected_position["highest_high_since_entry_milli"]), int(position_after["highest_high_since_entry_milli"]))
+        check("rollforward_records_processed_completed_date", "2026-09-04", management_after.get("last_rollforward_date"))
+        check("rollforward_does_not_change_broker_qty", qty_before, int(account_after["positions"]["2454"]["broker"]["qty"]))
+        check("rollforward_does_not_change_cash", cash_before, int(account_after["cash_milli"]))
+        check("rollforward_is_idempotent_after_completed_date_consumed", "UP_TO_DATE", second["status"])
+        check("idempotent_second_run_does_not_advance_revision", revision_after_first, int(second["account_revision"]))
 
         protection_after = get_trading_protection_plan_read_model(root)
-        add_check(results, "trading_rollforward", case_id, "old_active_stop_is_flagged_stale_after_trailing_state_changes", ["2454"], protection_after.get("stale_active_protection_tickers"))
-        add_check(results, "trading_rollforward", case_id, "active_protection_order_is_not_silently_cancelled_or_rewritten", 1, len([row for row in load_trading_order_state(root)["orders"].values() if row.get("status") == "ORDERED" and row.get("side") == "SELL"]))
+        check("old_active_stop_is_flagged_stale_after_trailing_state_changes", ["2454"], protection_after.get("stale_active_protection_tickers"))
+        check("active_protection_order_is_not_silently_cancelled_or_rewritten", 1, len([row for row in load_trading_order_state(root)["orders"].values() if row.get("status") == "ORDERED" and row.get("side") == "SELL"]))
 
         future = pd.concat([completed_next_day, pd.DataFrame([{
             "Date": "2026-09-05", "Open": 251.0, "High": 270.0, "Low": 250.0, "Close": 265.0, "Volume": 1_000_000,
@@ -1665,28 +1656,27 @@ def validate_trading_position_rollforward_contract_case(base_params):
                 provisional_rejected = "尚未完成日K" in str(exc)
             else:
                 provisional_rejected = False
-        add_check(results, "trading_rollforward", case_id, "rollforward_rejects_dataset_containing_uncompleted_future_daily_bar", True, provisional_rejected)
+        check("rollforward_rejects_dataset_containing_uncompleted_future_daily_bar", True, provisional_rejected)
 
     capability = build_trading_capability_snapshot()
-    add_check(results, "trading_rollforward", case_id, "daily_position_rollforward_capability_is_implemented", True, bool(capability["capabilities"]["daily_position_rollforward"]["implemented"]))
-    add_check(results, "trading_rollforward", case_id, "indicator_sell_execution_capability_is_implemented", True, bool(capability["capabilities"]["indicator_sell_execution"]["implemented"]))
+    check("daily_position_rollforward_capability_is_implemented", True, bool(capability["capabilities"]["daily_position_rollforward"]["implemented"]))
+    check("indicator_sell_execution_capability_is_implemented", True, bool(capability["capabilities"]["indicator_sell_execution"]["implemented"]))
 
     service_source = (project_root / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     daily_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
     snapshot_body = service_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
-    add_check(results, "trading_rollforward", case_id, "read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
-    add_check(results, "trading_rollforward", case_id, "rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
-    add_check(results, "trading_rollforward", case_id, "workbench_exposes_explicit_position_rollforward_action", True, '"持股日終推進", "rollforward"' in panel_source and 'elif action == "rollforward"' in panel_source)
-    add_check(results, "trading_rollforward", case_id, "daily_workflow_orders_rollforward_and_indicator_after_data_before_param_training", True, daily_source.index("data_result = run_trading_market_data_update") < daily_source.index("rollforward_result = run_trading_position_rollforward") < daily_source.index("indicator_result = build_trading_indicator_exit_plan") < daily_source.index("param_result = run_trading_strategy_param_training"))
+    check("read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
+    check("rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
+    check("workbench_exposes_explicit_position_rollforward_action", True, '"持股日終推進", "rollforward"' in panel_source and 'elif action == "rollforward"' in panel_source)
+    check("daily_workflow_orders_rollforward_and_indicator_after_data_before_param_training", True, daily_source.index("data_result = run_trading_market_data_update") < daily_source.index("rollforward_result = run_trading_position_rollforward") < daily_source.index("indicator_result = build_trading_indicator_exit_plan") < daily_source.index("param_result = run_trading_strategy_param_training"))
 
     summary["checks"] = len(results)
     return results, summary
 
 def validate_trading_indicator_sell_execution_contract_case(base_params):
     case_id = "TRADING_INDICATOR_SELL_EXECUTION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_indicator_sell')
 
     from core.trading_capabilities import build_trading_capability_snapshot
     from core.trading_order_state import (
@@ -1704,38 +1694,37 @@ def validate_trading_indicator_sell_execution_contract_case(base_params):
     plan={"plan_fingerprint":"plan-fp", "account_revision":1}
     ordered = append_ordered_trading_indicator_exit(state, order_id="IND-1", exit_plan=exit_row, plan=plan, timestamp="2026-09-05T08:01:00+08:00", mutation_id="submit", broker_order_id="BROKER-1")
     row=ordered["orders"]["IND-1"]
-    add_check(results,"trading_indicator_sell",case_id,"indicator_order_purpose_is_distinct",TRADING_ORDER_PURPOSE_INDICATOR_EXIT,row["purpose"] )
-    add_check(results,"trading_indicator_sell",case_id,"indicator_order_is_market",TRADING_INDICATOR_ORDER_TYPE_MARKET,row["order_type"] )
-    add_check(results,"trading_indicator_sell",case_id,"indicator_order_is_full_position",row["position_qty_at_submission"],row["qty"] )
-    add_check(results,"trading_indicator_sell",case_id,"indicator_order_has_no_trigger",None,row["trigger_price_milli"] )
-    add_check(results,"trading_indicator_sell",case_id,"indicator_order_has_no_limit",None,row["limit_price_milli"] )
-    add_check(results,"trading_indicator_sell",case_id,"active_indicator_order_is_explicit",1,len(active_trading_indicator_exit_orders(ordered)) )
+    check("indicator_order_purpose_is_distinct",TRADING_ORDER_PURPOSE_INDICATOR_EXIT,row["purpose"] )
+    check("indicator_order_is_market",TRADING_INDICATOR_ORDER_TYPE_MARKET,row["order_type"] )
+    check("indicator_order_is_full_position",row["position_qty_at_submission"],row["qty"] )
+    check("indicator_order_has_no_trigger",None,row["trigger_price_milli"] )
+    check("indicator_order_has_no_limit",None,row["limit_price_milli"] )
+    check("active_indicator_order_is_explicit",1,len(active_trading_indicator_exit_orders(ordered)) )
     cancelled=cancel_ordered_trading_order(ordered,order_id="IND-1",timestamp="2026-09-05T08:02:00+08:00",mutation_id="cancel")
-    add_check(results,"trading_indicator_sell",case_id,"cancelled_indicator_can_leave_active_set",0,len(active_trading_indicator_exit_orders(cancelled)) )
+    check("cancelled_indicator_can_leave_active_set",0,len(active_trading_indicator_exit_orders(cancelled)) )
     retry=append_ordered_trading_indicator_exit(cancelled,order_id="IND-2",exit_plan=exit_row,plan=plan,timestamp="2026-09-05T08:03:00+08:00",mutation_id="retry")
-    add_check(results,"trading_indicator_sell",case_id,"cancelled_signal_retry_advances_attempt",2,retry["orders"]["IND-2"]["signal_attempt"] )
+    check("cancelled_signal_retry_advances_attempt",2,retry["orders"]["IND-2"]["signal_attempt"] )
     capability=build_trading_capability_snapshot()
-    add_check(results,"trading_indicator_sell",case_id,"all_required_live_capabilities_are_implemented",True,bool(capability.get("all_required_live_capabilities_ready")) )
-    add_check(results,"trading_indicator_sell",case_id,"no_implementation_live_blocker_remains",[],list(capability.get("live_blocking_capabilities") or []) )
+    check("all_required_live_capabilities_are_implemented",True,bool(capability.get("all_required_live_capabilities_ready")) )
+    check("no_implementation_live_blocker_remains",[],list(capability.get("live_blocking_capabilities") or []) )
     project_root=Path(__file__).resolve().parents[2]
     planning=(project_root/"services/trading/indicator_exit_planning.py").read_text(encoding="utf-8")
     submit=(project_root/"services/trading/indicator_exit_order_submission.py").read_text(encoding="utf-8")
     fill=(project_root/"services/trading/fill_reconciliation.py").read_text(encoding="utf-8")
     protection=(project_root/"services/trading/protection_order_submission.py").read_text(encoding="utf-8")
     panel=(project_root/"services/workbench_ui/trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results,"trading_indicator_sell",case_id,"planning_does_not_infer_broker_fill",False,"confirm_trading_indicator_sell_order_fill(" in planning )
-    add_check(results,"trading_indicator_sell",case_id,"submission_requires_protection_cancellation",True,"active Stop/TP protection SELL" in submit )
-    add_check(results,"trading_indicator_sell",case_id,"fill_reconciliation_uses_canonical_ind_sell_event",True,'event = "IND_SELL"' in fill )
-    add_check(results,"trading_indicator_sell",case_id,"protection_submission_blocks_active_indicator_sell",True,"active Indicator MARKET SELL" in protection )
-    add_check(results,"trading_indicator_sell",case_id,"workbench_exposes_indicator_market_sell_confirmation",True,"Indicator SELL 計畫" in panel and "確認選取 MARKET SELL 已送單" in panel and "confirm_trading_indicator_sell_order_fill" in panel )
+    check("planning_does_not_infer_broker_fill",False,"confirm_trading_indicator_sell_order_fill(" in planning )
+    check("submission_requires_protection_cancellation",True,"active Stop/TP protection SELL" in submit )
+    check("fill_reconciliation_uses_canonical_ind_sell_event",True,'event = "IND_SELL"' in fill )
+    check("protection_submission_blocks_active_indicator_sell",True,"active Indicator MARKET SELL" in protection )
+    check("workbench_exposes_indicator_market_sell_confirmation",True,"Indicator SELL 計畫" in panel and "確認選取 MARKET SELL 已送單" in panel and "confirm_trading_indicator_sell_order_fill" in panel )
 
     summary["checks"] = len(results)
     return results, summary
 
 def validate_trading_operations_status_contract_case(base_params):
     case_id = "TRADING_OPERATIONS_STATUS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_operations')
 
     from services.trading.operations_status import (
         NEXT_BUILD_PROPOSED,
@@ -1788,16 +1777,16 @@ def validate_trading_operations_status_contract_case(base_params):
         return derive_trading_operations_status(**inputs)
 
     recovery = derive(fill_transaction_pending=True)
-    add_check(results, "trading_operations", case_id, "pending_fill_transaction_is_top_priority_blocker", NEXT_RECOVER_FILL, recovery["next_action_code"])
-    add_check(results, "trading_operations", case_id, "pending_fill_transaction_status_is_blocked", OPERATIONS_STATUS_BLOCKED, recovery["overall_status"])
-    add_check(results, "trading_operations", case_id, "pending_fill_transaction_disables_all_workflow_actions", {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}, recovery["workflow_action_availability"])
+    check("pending_fill_transaction_is_top_priority_blocker", NEXT_RECOVER_FILL, recovery["next_action_code"])
+    check("pending_fill_transaction_status_is_blocked", OPERATIONS_STATUS_BLOCKED, recovery["overall_status"])
+    check("pending_fill_transaction_disables_all_workflow_actions", {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}, recovery["workflow_action_availability"])
 
     uninitialized = derive(account={"initialized": False, "revision": None, "cash": None, "positions": []})
-    add_check(results, "trading_operations", case_id, "uninitialized_account_next_action", NEXT_INITIALIZE_ACCOUNT, uninitialized["next_action_code"])
+    check("uninitialized_account_next_action", NEXT_INITIALIZE_ACCOUNT, uninitialized["next_action_code"])
 
     no_cash = derive(account={"initialized": True, "revision": 0, "cash": None, "positions": []})
-    add_check(results, "trading_operations", case_id, "initialized_account_without_cash_next_action", NEXT_SET_CASH, no_cash["next_action_code"])
-    add_check(results, "trading_operations", case_id, "allocation_disabled_without_cash", False, no_cash["workflow_action_availability"]["orders"])
+    check("initialized_account_without_cash_next_action", NEXT_SET_CASH, no_cash["next_action_code"])
+    check("allocation_disabled_without_cash", False, no_cash["workflow_action_availability"]["orders"])
 
     strategy_account = {
         "initialized": True,
@@ -1806,18 +1795,18 @@ def validate_trading_operations_status_contract_case(base_params):
         "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "entry_order_id": "ENTRY-2317", "management_status": "active"}],
     }
     rollforward_due = derive(account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
-    add_check(results, "trading_operations", case_id, "due_strategy_position_requires_rollforward_before_protection_or_allocation", NEXT_ROLLFORWARD_POSITIONS, rollforward_due["next_action_code"])
-    add_check(results, "trading_operations", case_id, "due_strategy_position_enables_explicit_rollforward_action", True, rollforward_due["workflow_action_availability"]["rollforward"])
-    add_check(results, "trading_operations", case_id, "due_strategy_position_blocks_new_allocation_until_advanced", False, rollforward_due["workflow_action_availability"]["orders"])
+    check("due_strategy_position_requires_rollforward_before_protection_or_allocation", NEXT_ROLLFORWARD_POSITIONS, rollforward_due["next_action_code"])
+    check("due_strategy_position_enables_explicit_rollforward_action", True, rollforward_due["workflow_action_availability"]["rollforward"])
+    check("due_strategy_position_blocks_new_allocation_until_advanced", False, rollforward_due["workflow_action_availability"]["orders"])
 
     missing_stop = derive(account=strategy_account)
-    add_check(results, "trading_operations", case_id, "strategy_position_without_stop_is_reported", ["2317"], missing_stop["missing_stop_tickers"])
-    add_check(results, "trading_operations", case_id, "missing_stop_without_fresh_plan_requires_plan_refresh", NEXT_REFRESH_PROTECTION, missing_stop["next_action_code"])
+    check("strategy_position_without_stop_is_reported", ["2317"], missing_stop["missing_stop_tickers"])
+    check("missing_stop_without_fresh_plan_requires_plan_refresh", NEXT_REFRESH_PROTECTION, missing_stop["next_action_code"])
 
     fresh_protection = {"exists": True, "fresh": True, "positions": [{"ticker": "2317"}]}
     missing_stop_fresh_plan = derive(account=strategy_account, protection=fresh_protection)
-    add_check(results, "trading_operations", case_id, "fresh_plan_without_active_stop_requires_submission", NEXT_SUBMIT_PROTECTION_STOP, missing_stop_fresh_plan["next_action_code"])
-    add_check(results, "trading_operations", case_id, "missing_stop_blocks_step4_allocation", False, missing_stop_fresh_plan["workflow_action_availability"]["orders"])
+    check("fresh_plan_without_active_stop_requires_submission", NEXT_SUBMIT_PROTECTION_STOP, missing_stop_fresh_plan["next_action_code"])
+    check("missing_stop_blocks_step4_allocation", False, missing_stop_fresh_plan["workflow_action_availability"]["orders"])
 
     active_stop_orders = {
         "revision": 5,
@@ -1827,8 +1816,8 @@ def validate_trading_operations_status_contract_case(base_params):
         }],
     }
     protected = derive(account=strategy_account, orders=active_stop_orders, protection=fresh_protection)
-    add_check(results, "trading_operations", case_id, "active_stop_clears_missing_stop_gap", [], protected["missing_stop_tickers"])
-    add_check(results, "trading_operations", case_id, "long_lived_protection_sell_does_not_block_new_allocation", True, protected["workflow_action_availability"]["orders"])
+    check("active_stop_clears_missing_stop_gap", [], protected["missing_stop_tickers"])
+    check("long_lived_protection_sell_does_not_block_new_allocation", True, protected["workflow_action_availability"]["orders"])
 
     old_lineage_stop_history = {
         "revision": 6,
@@ -1839,26 +1828,26 @@ def validate_trading_operations_status_contract_case(base_params):
         }],
     }
     old_lineage = derive(account=strategy_account, orders=old_lineage_stop_history)
-    add_check(results, "trading_operations", case_id, "historical_stop_fill_from_old_entry_lineage_never_forces_new_position_exit", [], old_lineage["forced_stop_exit_tickers"])
-    add_check(results, "trading_operations", case_id, "new_entry_lineage_without_stop_still_reports_missing_protection", ["2317"], old_lineage["missing_stop_tickers"])
+    check("historical_stop_fill_from_old_entry_lineage_never_forces_new_position_exit", [], old_lineage["forced_stop_exit_tickers"])
+    check("new_entry_lineage_without_stop_still_reports_missing_protection", ["2317"], old_lineage["missing_stop_tickers"])
 
     stale_protection = derive(
         account=strategy_account,
         orders=active_stop_orders,
         protection={**fresh_protection, "stale_active_protection_order_ids": ["stop1"], "stale_active_protection_tickers": ["2317"]},
     )
-    add_check(results, "trading_operations", case_id, "stale_active_protection_requires_explicit_cancel_resubmit_sequence", NEXT_REPLACE_PROTECTION, stale_protection["next_action_code"])
-    add_check(results, "trading_operations", case_id, "stale_active_protection_blocks_new_allocation", False, stale_protection["workflow_action_availability"]["orders"])
+    check("stale_active_protection_requires_explicit_cancel_resubmit_sequence", NEXT_REPLACE_PROTECTION, stale_protection["next_action_code"])
+    check("stale_active_protection_blocks_new_allocation", False, stale_protection["workflow_action_availability"]["orders"])
 
     indicator_due = {"exists": True, "fresh": True, "exit_count": 1, "exits": [{"ticker": "2317", "entry_order_id": "ENTRY-2317", "signal_key": "sig-1"}], "active_indicator_exit_order_count": 0, "active_indicator_exit_tickers": []}
     due_with_stop = derive(account=strategy_account, orders=active_stop_orders, protection=fresh_protection, indicator_exit=indicator_due)
-    add_check(results, "trading_operations", case_id, "indicator_due_with_active_protection_requires_cancel_first", NEXT_CANCEL_PROTECTION_FOR_INDICATOR, due_with_stop["next_action_code"])
+    check("indicator_due_with_active_protection_requires_cancel_first", NEXT_CANCEL_PROTECTION_FOR_INDICATOR, due_with_stop["next_action_code"])
     due_without_stop = derive(account=strategy_account, protection=fresh_protection, indicator_exit=indicator_due)
-    add_check(results, "trading_operations", case_id, "indicator_due_without_protection_requires_market_submission", NEXT_SUBMIT_INDICATOR_EXIT, due_without_stop["next_action_code"])
-    add_check(results, "trading_operations", case_id, "indicator_due_blocks_step4_allocation", False, due_without_stop["workflow_action_availability"]["orders"])
+    check("indicator_due_without_protection_requires_market_submission", NEXT_SUBMIT_INDICATOR_EXIT, due_without_stop["next_action_code"])
+    check("indicator_due_blocks_step4_allocation", False, due_without_stop["workflow_action_availability"]["orders"])
     active_indicator_orders = {"revision": 6, "orders": [{"order_id":"ind1","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","entry_order_id":"ENTRY-2317","status":"ORDERED","information_date":"2026-09-04"}]}
     active_indicator = derive(account=strategy_account, orders=active_indicator_orders, protection=fresh_protection, indicator_exit=indicator_due)
-    add_check(results, "trading_operations", case_id, "active_indicator_order_requires_reconciliation", NEXT_RECONCILE_INDICATOR_EXIT, active_indicator["next_action_code"])
+    check("active_indicator_order_requires_reconciliation", NEXT_RECONCILE_INDICATOR_EXIT, active_indicator["next_action_code"])
 
     active_entry_orders = {
         "revision": 6,
@@ -1868,25 +1857,25 @@ def validate_trading_operations_status_contract_case(base_params):
         }],
     }
     active_entry = derive(orders=active_entry_orders)
-    add_check(results, "trading_operations", case_id, "active_entry_buy_requires_reconciliation", NEXT_RECONCILE_ENTRY, active_entry["next_action_code"])
-    add_check(results, "trading_operations", case_id, "active_entry_buy_disables_new_allocation", False, active_entry["workflow_action_availability"]["orders"])
+    check("active_entry_buy_requires_reconciliation", NEXT_RECONCILE_ENTRY, active_entry["next_action_code"])
+    check("active_entry_buy_disables_new_allocation", False, active_entry["workflow_action_availability"]["orders"])
     active_entry_with_due = derive(orders=active_entry_orders, account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
-    add_check(results, "trading_operations", case_id, "active_entry_reconciliation_precedes_rollforward_that_cannot_mutate_while_entry_is_active", NEXT_RECONCILE_ENTRY, active_entry_with_due["next_action_code"])
-    add_check(results, "trading_operations", case_id, "active_entry_disables_rollforward_action", False, active_entry_with_due["workflow_action_availability"]["rollforward"])
+    check("active_entry_reconciliation_precedes_rollforward_that_cannot_mutate_while_entry_is_active", NEXT_RECONCILE_ENTRY, active_entry_with_due["next_action_code"])
+    check("active_entry_disables_rollforward_action", False, active_entry_with_due["workflow_action_availability"]["rollforward"])
 
     stale_params = derive(workflow={"latest_data_date": "2026-09-04", "params_ready_for_scan": False})
-    add_check(results, "trading_operations", case_id, "stale_params_require_update_params", NEXT_UPDATE_PARAMS, stale_params["next_action_code"])
-    add_check(results, "trading_operations", case_id, "scanner_disabled_until_params_ready", False, stale_params["workflow_action_availability"]["scanner"])
+    check("stale_params_require_update_params", NEXT_UPDATE_PARAMS, stale_params["next_action_code"])
+    check("scanner_disabled_until_params_ready", False, stale_params["workflow_action_availability"]["scanner"])
 
     workflow_error = derive(component_errors={"workflow": "RuntimeError: broken workflow read model"})
-    add_check(results, "trading_operations", case_id, "workflow_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, workflow_error["overall_status"])
-    add_check(results, "trading_operations", case_id, "workflow_read_error_disables_all_workflow_actions", False, any(workflow_error["workflow_action_availability"].values()))
+    check("workflow_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, workflow_error["overall_status"])
+    check("workflow_read_error_disables_all_workflow_actions", False, any(workflow_error["workflow_action_availability"].values()))
     rollforward_error = derive(component_errors={"position_rollforward": "RuntimeError: broken rollforward snapshot"})
-    add_check(results, "trading_operations", case_id, "rollforward_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, rollforward_error["overall_status"])
-    add_check(results, "trading_operations", case_id, "rollforward_read_error_blocks_allocation_and_daily_all", [False, False], [rollforward_error["workflow_action_availability"]["orders"], rollforward_error["workflow_action_availability"]["all"]])
+    check("rollforward_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, rollforward_error["overall_status"])
+    check("rollforward_read_error_blocks_allocation_and_daily_all", [False, False], [rollforward_error["workflow_action_availability"]["orders"], rollforward_error["workflow_action_availability"]["all"]])
 
     stale_candidate = derive(candidate={"exists": True, "valid": True, "fresh": False, "candidate_count": 3})
-    add_check(results, "trading_operations", case_id, "stale_candidate_requires_scanner", NEXT_RUN_SCANNER, stale_candidate["next_action_code"])
+    check("stale_candidate_requires_scanner", NEXT_RUN_SCANNER, stale_candidate["next_action_code"])
 
     same_day_history = {
         "revision": 7,
@@ -1896,19 +1885,19 @@ def validate_trading_operations_status_contract_case(base_params):
         }],
     }
     locked = derive(orders=same_day_history)
-    add_check(results, "trading_operations", case_id, "same_information_day_entry_history_locks_reallocation", NEXT_DAY_LOCKED, locked["next_action_code"])
-    add_check(results, "trading_operations", case_id, "same_day_lock_has_explicit_status", OPERATIONS_STATUS_LOCKED_TODAY, locked["overall_status"])
-    add_check(results, "trading_operations", case_id, "same_day_lock_disables_step4_only", False, locked["workflow_action_availability"]["orders"])
-    add_check(results, "trading_operations", case_id, "same_day_lock_keeps_scanner_available", True, locked["workflow_action_availability"]["scanner"])
+    check("same_information_day_entry_history_locks_reallocation", NEXT_DAY_LOCKED, locked["next_action_code"])
+    check("same_day_lock_has_explicit_status", OPERATIONS_STATUS_LOCKED_TODAY, locked["overall_status"])
+    check("same_day_lock_disables_step4_only", False, locked["workflow_action_availability"]["orders"])
+    check("same_day_lock_keeps_scanner_available", True, locked["workflow_action_availability"]["scanner"])
 
     sell_fill_history = {"revision": 8, "orders": [{"order_id":"selldone","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","status":"FILLED","information_date":"2026-09-04","latest_fill_trade_date":"2026-09-05"}]}
     sell_locked = derive(orders=sell_fill_history)
-    add_check(results, "trading_operations", case_id, "sell_fill_after_latest_completed_date_locks_same_session_reallocation", NEXT_DAY_LOCKED, sell_locked["next_action_code"])
-    add_check(results, "trading_operations", case_id, "sell_session_lock_disables_step4", False, sell_locked["workflow_action_availability"]["orders"])
-    add_check(results, "trading_operations", case_id, "sell_session_lock_is_explicit", True, sell_locked["same_session_sell_locked"])
+    check("sell_fill_after_latest_completed_date_locks_same_session_reallocation", NEXT_DAY_LOCKED, sell_locked["next_action_code"])
+    check("sell_session_lock_disables_step4", False, sell_locked["workflow_action_availability"]["orders"])
+    check("sell_session_lock_is_explicit", True, sell_locked["same_session_sell_locked"])
 
     account_error = derive(component_errors={"account": "synthetic unreadable account"})
-    add_check(results, "trading_operations", case_id, "account_read_error_blocks_step4_allocation", False, account_error["workflow_action_availability"]["orders"])
+    check("account_read_error_blocks_step4_allocation", False, account_error["workflow_action_availability"]["orders"])
 
     orphan_sell_orders = {
         "revision": 9,
@@ -1918,20 +1907,20 @@ def validate_trading_operations_status_contract_case(base_params):
         }],
     }
     orphan_sell = derive(account=strategy_account, orders=orphan_sell_orders, protection=fresh_protection)
-    add_check(results, "trading_operations", case_id, "old_lineage_active_sell_is_reported_as_orphan_not_current_indicator", 0, orphan_sell["active_indicator_exit_order_count"])
-    add_check(results, "trading_operations", case_id, "orphan_active_sell_blocks_step4_allocation", False, orphan_sell["workflow_action_availability"]["orders"])
-    add_check(results, "trading_operations", case_id, "orphan_active_sell_has_explicit_reconciliation_action", "RECONCILE_ORPHAN_SELL_ORDER", orphan_sell["next_action_code"])
+    check("old_lineage_active_sell_is_reported_as_orphan_not_current_indicator", 0, orphan_sell["active_indicator_exit_order_count"])
+    check("orphan_active_sell_blocks_step4_allocation", False, orphan_sell["workflow_action_availability"]["orders"])
+    check("orphan_active_sell_has_explicit_reconciliation_action", "RECONCILE_ORPHAN_SELL_ORDER", orphan_sell["next_action_code"])
 
     build_proposed = derive()
-    add_check(results, "trading_operations", case_id, "fresh_candidate_without_fresh_proposal_requires_step4", NEXT_BUILD_PROPOSED, build_proposed["next_action_code"])
+    check("fresh_candidate_without_fresh_proposal_requires_step4", NEXT_BUILD_PROPOSED, build_proposed["next_action_code"])
 
     fresh_proposed = {"exists": True, "valid": True, "fresh": True, "order_count": 2, "information_date": "2026-09-04"}
     submit = derive(proposed=fresh_proposed)
-    add_check(results, "trading_operations", case_id, "fresh_proposal_with_orders_requires_explicit_submission", NEXT_SUBMIT_PROPOSED, submit["next_action_code"])
-    add_check(results, "trading_operations", case_id, "fresh_proposal_does_not_create_active_broker_order", 0, submit["active_entry_order_count"])
+    check("fresh_proposal_with_orders_requires_explicit_submission", NEXT_SUBMIT_PROPOSED, submit["next_action_code"])
+    check("fresh_proposal_does_not_create_active_broker_order", 0, submit["active_entry_order_count"])
 
     no_orders = derive(proposed={"exists": True, "valid": True, "fresh": True, "order_count": 0, "information_date": "2026-09-04"})
-    add_check(results, "trading_operations", case_id, "fresh_zero_order_plan_marks_no_entry_today", NEXT_NO_ENTRY, no_orders["next_action_code"])
+    check("fresh_zero_order_plan_marks_no_entry_today", NEXT_NO_ENTRY, no_orders["next_action_code"])
 
     manual_account = {
         "initialized": True,
@@ -1940,20 +1929,20 @@ def validate_trading_operations_status_contract_case(base_params):
         "positions": [{"ticker": "0050", "source": "manual_adopted", "qty": 1000, "management_status": "unmanaged"}],
     }
     manual_only = derive(account=manual_account)
-    add_check(results, "trading_operations", case_id, "manual_adopted_is_not_treated_as_strategy_stop_gap", [], manual_only["missing_stop_tickers"])
-    add_check(results, "trading_operations", case_id, "manual_adopted_is_reported_separately", ["0050"], manual_only["manual_tickers"])
+    check("manual_adopted_is_not_treated_as_strategy_stop_gap", [], manual_only["missing_stop_tickers"])
+    check("manual_adopted_is_reported_separately", ["0050"], manual_only["manual_tickers"])
 
     source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "operations_status.py").read_text(encoding="utf-8")
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results, "trading_operations", case_id, "operations_status_is_read_only_composition", False, any(token in source for token in ("atomic_write_json(", "confirm_trading_", "run_trading_market_data_update(")))
-    add_check(results, "trading_operations", case_id, "operations_status_disables_hidden_protection_recovery", True, "get_trading_protection_plan_read_model(root, recover_pending_fill=False)" in source)
-    add_check(results, "trading_operations", case_id, "operations_status_disables_hidden_indicator_recovery", True, "get_trading_indicator_exit_plan_read_model(root, recover_pending_fill=False)" in source)
+    check("operations_status_is_read_only_composition", False, any(token in source for token in ("atomic_write_json(", "confirm_trading_", "run_trading_market_data_update(")))
+    check("operations_status_disables_hidden_protection_recovery", True, "get_trading_protection_plan_read_model(root, recover_pending_fill=False)" in source)
+    check("operations_status_disables_hidden_indicator_recovery", True, "get_trading_indicator_exit_plan_read_model(root, recover_pending_fill=False)" in source)
     rollforward_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
     rollforward_snapshot_body = rollforward_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
-    add_check(results, "trading_operations", case_id, "operations_rollforward_snapshot_has_no_hidden_fill_recovery", False, "recover_trading_fill_transaction(" in rollforward_snapshot_body)
-    add_check(results, "trading_operations", case_id, "workbench_has_operations_overview", True, "Trading 操作總覽" in panel_source)
-    add_check(results, "trading_operations", case_id, "workbench_consumes_operations_status_owner", True, "build_trading_operations_status" in panel_source)
-    add_check(results, "trading_operations", case_id, "workbench_exposes_full_state_refresh", True, "全狀態刷新" in panel_source)
+    check("operations_rollforward_snapshot_has_no_hidden_fill_recovery", False, "recover_trading_fill_transaction(" in rollforward_snapshot_body)
+    check("workbench_has_operations_overview", True, "Trading 操作總覽" in panel_source)
+    check("workbench_consumes_operations_status_owner", True, "build_trading_operations_status" in panel_source)
+    check("workbench_exposes_full_state_refresh", True, "全狀態刷新" in panel_source)
 
     summary["checks"] = len(results)
     return results, summary
@@ -1961,8 +1950,7 @@ def validate_trading_operations_status_contract_case(base_params):
 
 def validate_trading_workbench_account_panel_contract_case(base_params):
     case_id = "TRADING_WORKBENCH_ACCOUNT_PANEL"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_workbench')
 
     from services.workbench_ui.trading_account_panel import (
         build_trading_account_panel_snapshot,
@@ -1973,41 +1961,31 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     workbench_spec = build_workbench_spec()
     panel_specs = {row["panel_id"]: row for row in workbench_spec.get("panels", [])}
-    add_check(results, "trading_workbench", case_id, "actual_trading_panel_is_registered", True, "trading_account" in panel_specs)
+    check("actual_trading_panel_is_registered", True, "trading_account" in panel_specs)
     trading_panel = panel_specs.get("trading_account", {})
-    add_check(results, "trading_workbench", case_id, "actual_trading_panel_label", "實際交易", trading_panel.get("tab_label"))
-    add_check(
-        results,
-        "trading_workbench",
-        case_id,
-        "actual_trading_panel_uses_account_state_backend",
-        "services.trading.account_state.get_trading_account_read_model",
-        trading_panel.get("backend_runner"),
+    run_bound_checks(
+        check,
+        (
+            ('actual_trading_panel_label', '實際交易', trading_panel.get('tab_label'),),
+            ('actual_trading_panel_uses_account_state_backend', 'services.trading.account_state.get_trading_account_read_model', trading_panel.get('backend_runner'),),
+            ('actual_trading_panel_uses_dedicated_factory', 'services.workbench_ui.trading_account_panel:TradingAccountPanel', next((row.get('panel_factory_path') for row in PANEL_SPECS if row.get('panel_id') == 'trading_account'), None),),
+            ('money_parser_accepts_grouping_and_decimal', '1234567.89', str(parse_trading_money_text('1,234,567.89', 'cash')),),
+            ('qty_parser_accepts_grouping', 1000, parse_trading_qty_text('1,000'),),
+        ),
     )
-    add_check(
-        results,
-        "trading_workbench",
-        case_id,
-        "actual_trading_panel_uses_dedicated_factory",
-        "services.workbench_ui.trading_account_panel:TradingAccountPanel",
-        next((row.get("panel_factory_path") for row in PANEL_SPECS if row.get("panel_id") == "trading_account"), None),
-    )
-
-    add_check(results, "trading_workbench", case_id, "money_parser_accepts_grouping_and_decimal", "1234567.89", str(parse_trading_money_text("1,234,567.89", "cash")))
-    add_check(results, "trading_workbench", case_id, "qty_parser_accepts_grouping", 1000, parse_trading_qty_text("1,000"))
     try:
         parse_trading_qty_text("1.5")
     except ValueError:
         fractional_qty_rejected = True
     else:
         fractional_qty_rejected = False
-    add_check(results, "trading_workbench", case_id, "fractional_share_qty_is_rejected", True, fractional_qty_rejected)
+    check("fractional_share_qty_is_rejected", True, fractional_qty_rejected)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         empty_snapshot = build_trading_account_panel_snapshot(root)
-        add_check(results, "trading_workbench", case_id, "workbench_snapshot_handles_uninitialized_account", False, empty_snapshot["initialized"])
-        add_check(results, "trading_workbench", case_id, "workbench_snapshot_uses_project_relative_state_path", "state/trading/account.json", empty_snapshot["state_path"])
+        check("workbench_snapshot_handles_uninitialized_account", False, empty_snapshot["initialized"])
+        check("workbench_snapshot_uses_project_relative_state_path", "state/trading/account.json", empty_snapshot["state_path"])
 
         state = initialize_trading_account_state(root, cash=900_000)
         state = adopt_existing_trading_position(
@@ -2019,13 +1997,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             expected_revision=state["revision"],
         )
         snapshot = build_trading_account_panel_snapshot(root)
-        add_check(results, "trading_workbench", case_id, "workbench_snapshot_reads_current_revision", state["revision"], snapshot["revision"])
-        add_check(results, "trading_workbench", case_id, "workbench_snapshot_reads_cash", 900_000.0, snapshot["cash"])
-        add_check(results, "trading_workbench", case_id, "workbench_snapshot_reads_manual_position", "2330", snapshot["positions"][0]["ticker"])
+        check("workbench_snapshot_reads_current_revision", state["revision"], snapshot["revision"])
+        check("workbench_snapshot_reads_cash", 900_000.0, snapshot["cash"])
+        check("workbench_snapshot_reads_manual_position", "2330", snapshot["positions"][0]["ticker"])
         from core.trading_policy import get_trading_policy_snapshot
         expected_policy = get_trading_policy_snapshot()
-        add_check(results, "trading_workbench", case_id, "workbench_snapshot_uses_current_trading_strategy_config", expected_policy["strategy_id"], snapshot["policy"]["strategy_id"])
-        add_check(results, "trading_workbench", case_id, "workbench_snapshot_uses_current_param_selector_config", expected_policy["param_selector"], snapshot["policy"]["param_selector"])
+        check("workbench_snapshot_uses_current_trading_strategy_config", expected_policy["strategy_id"], snapshot["policy"]["strategy_id"])
+        check("workbench_snapshot_uses_current_param_selector_config", expected_policy["param_selector"], snapshot["policy"]["param_selector"])
 
     summary["checks"] = len(results)
     return results, summary
@@ -2049,8 +2027,7 @@ __all__ = [
 
 def validate_trading_prelive_operational_audit_contract_case(_base_params):
     case_id = "TRADING_PRELIVE_OPERATIONAL_AUDIT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_prelive')
 
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
@@ -2077,19 +2054,19 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
     after_close = datetime(2026, 9, 5, publish_hour, publish_minute, tzinfo=tz)
     before_provider_publish = after_close - timedelta(minutes=1)
     morning = datetime(2026, 9, 5, 10, 0, tzinfo=tz)
-    add_check(results, "trading_prelive", case_id, "morning_completed_daily_cutoff_excludes_today", "2026-09-04", latest_allowed_completed_daily_date(now=morning))
-    add_check(results, "trading_prelive", case_id, "before_provider_publication_cutoff_excludes_today", "2026-09-04", latest_allowed_completed_daily_date(now=before_provider_publish))
-    add_check(results, "trading_prelive", case_id, "after_provider_publication_grace_allows_today", "2026-09-05", latest_allowed_completed_daily_date(now=after_close))
-    add_check(results, "trading_prelive", case_id, "provider_provisional_today_row_is_ignored_before_cutoff", "2026-09-04", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=morning))
-    add_check(results, "trading_prelive", case_id, "provider_today_row_is_ignored_before_documented_publish", "2026-09-04", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=before_provider_publish))
-    add_check(results, "trading_prelive", case_id, "provider_today_row_is_eligible_after_documented_publish_grace", "2026-09-05", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=after_close))
+    check("morning_completed_daily_cutoff_excludes_today", "2026-09-04", latest_allowed_completed_daily_date(now=morning))
+    check("before_provider_publication_cutoff_excludes_today", "2026-09-04", latest_allowed_completed_daily_date(now=before_provider_publish))
+    check("after_provider_publication_grace_allows_today", "2026-09-05", latest_allowed_completed_daily_date(now=after_close))
+    check("provider_provisional_today_row_is_ignored_before_cutoff", "2026-09-04", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=morning))
+    check("provider_today_row_is_ignored_before_documented_publish", "2026-09-04", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=before_provider_publish))
+    check("provider_today_row_is_eligible_after_documented_publish_grace", "2026-09-05", select_latest_completed_daily_date(["2026-09-04", "2026-09-05"], now=after_close))
     try:
         assert_completed_daily_information_date("2026-09-05", now=morning)
     except RuntimeError:
         provisional_rejected = True
     else:
         provisional_rejected = False
-    add_check(results, "trading_prelive", case_id, "intraday_today_information_date_is_rejected", True, provisional_rejected)
+    check("intraday_today_information_date_is_rejected", True, provisional_rejected)
 
     class _FakeLoader:
         def get_data(self, **_kwargs):
@@ -2119,8 +2096,8 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
             sync_summary = downloader_sync.smart_download_vip_data(["2330"], "2026-09-04", verbose=False)
         saved = pd.read_csv(data_dir / "2330.csv")
         saved_dates = pd.to_datetime(saved["Date"]).dt.strftime("%Y-%m-%d").tolist()
-        add_check(results, "trading_prelive", case_id, "downloader_physically_seals_rows_to_confirmed_market_date", ["2026-09-04"], saved_dates)
-        add_check(results, "trading_prelive", case_id, "downloader_reports_trimmed_future_rows", 1, int(sync_summary.get("trimmed_future_row_count") or 0))
+        check("downloader_physically_seals_rows_to_confirmed_market_date", ["2026-09-04"], saved_dates)
+        check("downloader_reports_trimmed_future_rows", 1, int(sync_summary.get("trimmed_future_row_count") or 0))
 
     with (
         patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"),
@@ -2141,17 +2118,17 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
             incomplete_download_rejected = True
         else:
             incomplete_download_rejected = False
-    add_check(results, "trading_prelive", case_id, "trading_update_rejects_known_ticker_download_failure", True, incomplete_download_rejected)
+    check("trading_update_rejects_known_ticker_download_failure", True, incomplete_download_rejected)
 
     with patch.object(downloader_runtime, "get_taipei_now", return_value=morning), patch.object(downloader_runtime, "get_finmind_loader", return_value=_FakeLoader()):
         safe_market_date = downloader_universe.get_market_last_date()
-    add_check(results, "trading_prelive", case_id, "market_date_resolver_ignores_provisional_today_row", "2026-09-04", safe_market_date)
+    check("market_date_resolver_ignores_provisional_today_row", "2026-09-04", safe_market_date)
 
     capability = build_trading_capability_snapshot()
     blockers = set(capability.get("live_blocking_capabilities") or [])
-    add_check(results, "trading_prelive", case_id, "daily_position_rollforward_is_implemented_and_no_longer_live_blocker", False, "daily_position_rollforward" in blockers)
-    add_check(results, "trading_prelive", case_id, "indicator_sell_execution_is_implemented_and_no_longer_live_blocker", False, "indicator_sell_execution" in blockers)
-    add_check(results, "trading_prelive", case_id, "completed_daily_bar_seal_is_implemented", True, bool((capability["capabilities"]["completed_daily_bar_seal"]["implemented"])))
+    check("daily_position_rollforward_is_implemented_and_no_longer_live_blocker", False, "daily_position_rollforward" in blockers)
+    check("indicator_sell_execution_is_implemented_and_no_longer_live_blocker", False, "indicator_sell_execution" in blockers)
+    check("completed_daily_bar_seal_is_implemented", True, bool((capability["capabilities"]["completed_daily_bar_seal"]["implemented"])))
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -2164,17 +2141,17 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
             }
         ).to_csv(reduced / "2330.csv", index=False)
         audit = build_trading_operational_audit(root)
-        add_check(results, "trading_prelive", case_id, "research_cutoff_breach_blocks_live_readiness", TRADING_OPERATIONAL_AUDIT_STATUS_LIVE_BLOCKED, audit["status"])
-        add_check(results, "trading_prelive", case_id, "research_cutoff_breach_is_reported", True, any("Research reduced dataset 超過 cutoff" in item for item in audit["blockers"]))
+        check("research_cutoff_breach_blocks_live_readiness", TRADING_OPERATIONAL_AUDIT_STATUS_LIVE_BLOCKED, audit["status"])
+        check("research_cutoff_breach_is_reported", True, any("Research reduced dataset 超過 cutoff" in item for item in audit["blockers"]))
         report = run_trading_operational_audit(root)
-        add_check(results, "trading_prelive", case_id, "operational_audit_writes_human_readable_report", True, (root / report["markdown_path"]).is_file())
-        add_check(results, "trading_prelive", case_id, "operational_audit_writes_machine_readable_report", True, (root / report["json_path"]).is_file())
+        check("operational_audit_writes_human_readable_report", True, (root / report["markdown_path"]).is_file())
+        check("operational_audit_writes_machine_readable_report", True, (root / report["json_path"]).is_file())
 
     project_root = Path(__file__).resolve().parents[2]
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
-    add_check(results, "trading_prelive", case_id, "workbench_exposes_explicit_prelive_audit_action", True, "實盤就緒檢查" in panel_source)
-    add_check(results, "trading_prelive", case_id, "operational_audit_does_not_mutate_trading_state", False, any(token in audit_source for token in ("confirm_trading_", "mutate_trading_", "set_trading_cash_balance(")))
+    check("workbench_exposes_explicit_prelive_audit_action", True, "實盤就緒檢查" in panel_source)
+    check("operational_audit_does_not_mutate_trading_state", False, any(token in audit_source for token in ("confirm_trading_", "mutate_trading_", "set_trading_cash_balance(")))
 
     summary["checks"] = len(results)
     return results, summary
@@ -2183,8 +2160,7 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
 def validate_trading_live_readiness_hardening_contract_case(base_params):
     """Audit-derived guards for actionable signal date and TP retry integrity."""
     case_id = "TRADING_LIVE_READINESS_HARDENING"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_live_readiness')
 
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -2230,8 +2206,8 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
     current, stale = partition_trading_candidate_rows_for_information_date(
         [current_row, stale_row], information_date="2026-09-04"
     )
-    add_check(results, "trading_live_readiness", case_id, "old_ticker_signal_is_not_actionable_on_dataset_latest_date", ["2330"], [row["ticker"] for row in current])
-    add_check(results, "trading_live_readiness", case_id, "stale_signal_is_explicitly_reported", [{"ticker": "2454", "trade_date": "2026-09-03"}], stale)
+    check("old_ticker_signal_is_not_actionable_on_dataset_latest_date", ["2330"], [row["ticker"] for row in current])
+    check("stale_signal_is_explicitly_reported", [{"ticker": "2454", "trade_date": "2026-09-03"}], stale)
     try:
         partition_trading_candidate_rows_for_information_date(
             [{**current_row, "execution_plan_seed": {"ticker": "2330", "trade_date": "2026-09-03"}}],
@@ -2241,7 +2217,7 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
         seed_mismatch_rejected = True
     else:
         seed_mismatch_rejected = False
-    add_check(results, "trading_live_readiness", case_id, "candidate_and_execution_seed_date_mismatch_is_fail_fast", True, seed_mismatch_rejected)
+    check("candidate_and_execution_seed_date_mismatch_is_fail_fast", True, seed_mismatch_rejected)
 
     class _FailLoader:
         def get_data(self, **_kwargs):
@@ -2269,7 +2245,7 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
             guessed_weekday_rejected = True
         else:
             guessed_weekday_rejected = False
-    add_check(results, "trading_live_readiness", case_id, "market_date_provider_failure_never_falls_back_to_guessed_weekday", True, guessed_weekday_rejected)
+    check("market_date_provider_failure_never_falls_back_to_guessed_weekday", True, guessed_weekday_rejected)
 
     frozen_params = params_to_json_dict(base_params)
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -2327,7 +2303,7 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
         )
         first_plan = build_trading_protection_plan(root)
         first_row = first_plan["positions"][0]
-        add_check(results, "trading_live_readiness", case_id, "tp_target_is_bound_to_original_entry_qty", tp_target, int(first_row["tp_target_qty"]))
+        check("tp_target_is_bound_to_original_entry_qty", tp_target, int(first_row["tp_target_qty"]))
         oco = confirm_trading_protection_oco_submission(
             root,
             ticker="2454",
@@ -2369,10 +2345,10 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
         retry_plan = build_trading_protection_plan(root)
         retry_row = retry_plan["positions"][0]
         expected_remaining = tp_target - partial_qty
-        add_check(results, "trading_live_readiness", case_id, "tp_retry_keeps_original_target_after_partial_cancel", expected_remaining, int(retry_row["tp_sell_qty"]))
-        add_check(results, "trading_live_readiness", case_id, "tp_retry_reports_cumulative_confirmed_qty", partial_qty, int(retry_row["tp_confirmed_qty"]))
+        check("tp_retry_keeps_original_target_after_partial_cancel", expected_remaining, int(retry_row["tp_sell_qty"]))
+        check("tp_retry_reports_cumulative_confirmed_qty", partial_qty, int(retry_row["tp_confirmed_qty"]))
         wrong_rederived = calc_half_take_profit_sell_qty(qty - partial_qty, base_params.tp_percent)
-        add_check(results, "trading_live_readiness", case_id, "tp_retry_is_not_rederived_from_reduced_position", False, int(retry_row["tp_sell_qty"]) == int(wrong_rederived) and int(wrong_rederived) != expected_remaining)
+        check("tp_retry_is_not_rederived_from_reduced_position", False, int(retry_row["tp_sell_qty"]) == int(wrong_rederived) and int(wrong_rederived) != expected_remaining)
 
         retry_order_state = confirm_trading_protection_leg_submission(
             root,
@@ -2396,8 +2372,8 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
             expected_account_revision=int(partial["account_revision"]),
         )
         final_position = completed["account"]["positions"]["2454"]
-        add_check(results, "trading_live_readiness", case_id, "fragmented_tp_attempts_complete_canonical_sold_half_once", True, bool(final_position["strategy_management"]["position_state"]["sold_half"]))
-        add_check(results, "trading_live_readiness", case_id, "fragmented_tp_attempts_sell_exact_original_target", qty - tp_target, int(final_position["broker"]["qty"]))
+        check("fragmented_tp_attempts_complete_canonical_sold_half_once", True, bool(final_position["strategy_management"]["position_state"]["sold_half"]))
+        check("fragmented_tp_attempts_sell_exact_original_target", qty - tp_target, int(final_position["broker"]["qty"]))
 
     summary["checks"] = len(results)
     return results, summary
@@ -2406,8 +2382,7 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
 def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
     """A triggered STOP remains a persistent full-exit obligation until flat."""
     case_id = "TRADING_STOP_REMAINDER_FORCED_EXIT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_stop_remainder')
 
     from core.file_integrity import atomic_write_json, canonical_json_sha256
     from core.params_io import params_to_json_dict
@@ -2492,25 +2467,25 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
             expected_account_revision=int(bought["account_revision"]),
         )
         partial_stop = partial["orders"]["orders"][stop_order["order_id"]]
-        add_check(results, "trading_stop_remainder", case_id, "original_stop_partial_fill_stays_active_for_broker_reconciliation", TRADING_ORDER_STATUS_PARTIAL, partial_stop["status"])
-        add_check(results, "trading_stop_remainder", case_id, "first_stop_fill_reduces_real_position", qty - first_stop_qty, int(partial["account"]["positions"]["2454"]["broker"]["qty"]))
+        check("original_stop_partial_fill_stays_active_for_broker_reconciliation", TRADING_ORDER_STATUS_PARTIAL, partial_stop["status"])
+        check("first_stop_fill_reduces_real_position", qty - first_stop_qty, int(partial["account"]["positions"]["2454"]["broker"]["qty"]))
 
         progress = build_trading_stop_exit_progress(
             partial["orders"], ticker="2454", entry_order_id="stop-rem-entry"
         )
         forced_key = str(progress.get("forced_exit_key") or "")
-        add_check(results, "trading_stop_remainder", case_id, "any_confirmed_original_stop_fill_latches_forced_exit", True, bool(progress.get("triggered")))
-        add_check(results, "trading_stop_remainder", case_id, "forced_exit_identity_is_persistent_and_nonempty", True, bool(forced_key))
-        add_check(results, "trading_stop_remainder", case_id, "active_original_stop_remaining_matches_current_position", qty - first_stop_qty, int(progress.get("active_exit_remaining_qty") or 0))
+        check("any_confirmed_original_stop_fill_latches_forced_exit", True, bool(progress.get("triggered")))
+        check("forced_exit_identity_is_persistent_and_nonempty", True, bool(forced_key))
+        check("active_original_stop_remaining_matches_current_position", qty - first_stop_qty, int(progress.get("active_exit_remaining_qty") or 0))
 
         forced_plan_while_active = build_trading_protection_plan(root)
         forced_row = forced_plan_while_active["positions"][0]
         forced_leg = forced_row["legs"][0]
-        add_check(results, "trading_stop_remainder", case_id, "triggered_stop_plan_never_returns_to_waiting_stop", PROTECTION_STOP_REMAINDER_ACTION, forced_leg["action"])
-        add_check(results, "trading_stop_remainder", case_id, "triggered_stop_plan_is_market_full_remainder", ["MARKET", qty - first_stop_qty], [forced_leg["order_type"], int(forced_leg["qty"])])
-        add_check(results, "trading_stop_remainder", case_id, "triggered_stop_plan_removes_take_profit", 1, len(forced_row["legs"]))
+        check("triggered_stop_plan_never_returns_to_waiting_stop", PROTECTION_STOP_REMAINDER_ACTION, forced_leg["action"])
+        check("triggered_stop_plan_is_market_full_remainder", ["MARKET", qty - first_stop_qty], [forced_leg["order_type"], int(forced_leg["qty"])])
+        check("triggered_stop_plan_removes_take_profit", 1, len(forced_row["legs"]))
         protection_rm = get_trading_protection_plan_read_model(root, recover_pending_fill=False)
-        add_check(results, "trading_stop_remainder", case_id, "active_partial_original_stop_is_not_false_stale_after_position_qty_reduces", [], protection_rm["stale_active_protection_order_ids"])
+        check("active_partial_original_stop_is_not_false_stale_after_position_qty_reduces", [], protection_rm["stale_active_protection_order_ids"])
 
         def operation_status(order_state, protection_model):
             return derive_trading_operations_status(
@@ -2525,7 +2500,7 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
             )
 
         active_ops = operation_status(partial["orders"], protection_rm)
-        add_check(results, "trading_stop_remainder", case_id, "active_triggered_stop_requires_reconciliation_not_resubmission", NEXT_RECONCILE_STOP_REMAINDER, active_ops["next_action_code"])
+        check("active_triggered_stop_requires_reconciliation_not_resubmission", NEXT_RECONCILE_STOP_REMAINDER, active_ops["next_action_code"])
 
         try:
             confirm_trading_protection_leg_submission(
@@ -2536,7 +2511,7 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
             active_original_blocks_duplicate = True
         else:
             active_original_blocks_duplicate = False
-        add_check(results, "trading_stop_remainder", case_id, "forced_market_cannot_duplicate_active_original_stop", True, active_original_blocks_duplicate)
+        check("forced_market_cannot_duplicate_active_original_stop", True, active_original_blocks_duplicate)
 
         cancelled = confirm_trading_order_cancellation(
             root, order_id=stop_order["order_id"], expected_revision=int(partial["order_revision"]),
@@ -2545,11 +2520,11 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
         retry_plan = build_trading_protection_plan(root)
         retry_row = retry_plan["positions"][0]
         retry_leg = retry_row["legs"][0]
-        add_check(results, "trading_stop_remainder", case_id, "cancelled_original_stop_rebuilds_market_remainder_not_stop_market", [PROTECTION_STOP_REMAINDER_ACTION, "MARKET"], [retry_leg["action"], retry_leg["order_type"]])
-        add_check(results, "trading_stop_remainder", case_id, "first_forced_market_qty_is_all_current_remaining_position", qty - first_stop_qty, int(retry_leg["qty"]))
+        check("cancelled_original_stop_rebuilds_market_remainder_not_stop_market", [PROTECTION_STOP_REMAINDER_ACTION, "MARKET"], [retry_leg["action"], retry_leg["order_type"]])
+        check("first_forced_market_qty_is_all_current_remaining_position", qty - first_stop_qty, int(retry_leg["qty"]))
         after_cancel_rm = get_trading_protection_plan_read_model(root, recover_pending_fill=False)
         cancelled_ops = operation_status(cancelled, after_cancel_rm)
-        add_check(results, "trading_stop_remainder", case_id, "cancelled_triggered_stop_requires_forced_market_submission", NEXT_SUBMIT_STOP_REMAINDER, cancelled_ops["next_action_code"])
+        check("cancelled_triggered_stop_requires_forced_market_submission", NEXT_SUBMIT_STOP_REMAINDER, cancelled_ops["next_action_code"])
 
         forced_state = confirm_trading_protection_leg_submission(
             root, ticker="2454", action=PROTECTION_STOP_REMAINDER_ACTION,
@@ -2560,15 +2535,15 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
             if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
             and row.get("broker_order_id") == "FORCED-1"
         )
-        add_check(results, "trading_stop_remainder", case_id, "forced_remainder_order_is_market", "MARKET", forced_order["order_type"])
-        add_check(results, "trading_stop_remainder", case_id, "forced_remainder_order_binds_original_trigger_identity", forced_key, forced_order["stop_forced_exit_key"])
-        add_check(results, "trading_stop_remainder", case_id, "first_forced_remainder_attempt_is_one", 1, int(forced_order["stop_forced_exit_attempt"]))
+        check("forced_remainder_order_is_market", "MARKET", forced_order["order_type"])
+        check("forced_remainder_order_binds_original_trigger_identity", forced_key, forced_order["stop_forced_exit_key"])
+        check("first_forced_remainder_attempt_is_one", 1, int(forced_order["stop_forced_exit_attempt"]))
 
         reloaded = load_trading_order_state(root, required=True)
         restarted_progress = build_trading_stop_exit_progress(
             reloaded, ticker="2454", entry_order_id="stop-rem-entry"
         )
-        add_check(results, "trading_stop_remainder", case_id, "restart_reconstructs_same_forced_exit_obligation_from_order_history", forced_key, restarted_progress["forced_exit_key"])
+        check("restart_reconstructs_same_forced_exit_obligation_from_order_history", forced_key, restarted_progress["forced_exit_key"])
 
         forced_partial_qty = 30
         forced_partial = confirm_trading_protection_sell_order_fill(
@@ -2577,7 +2552,7 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
             expected_account_revision=int(partial["account_revision"]),
         )
         remaining_after_two_fills = qty - first_stop_qty - forced_partial_qty
-        add_check(results, "trading_stop_remainder", case_id, "forced_market_partial_fill_keeps_same_stop_accounting_lineage", remaining_after_two_fills, int(forced_partial["account"]["positions"]["2454"]["broker"]["qty"]))
+        check("forced_market_partial_fill_keeps_same_stop_accounting_lineage", remaining_after_two_fills, int(forced_partial["account"]["positions"]["2454"]["broker"]["qty"]))
         cancelled_forced = confirm_trading_order_cancellation(
             root, order_id=forced_order["order_id"], expected_revision=int(forced_partial["order_revision"]),
             note="synthetic broker cancelled forced remainder",
@@ -2585,7 +2560,7 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
         second_plan = build_trading_protection_plan(root)
         second_row = second_plan["positions"][0]
         second_leg = second_row["legs"][0]
-        add_check(results, "trading_stop_remainder", case_id, "forced_retry_qty_rebinds_to_entire_current_remaining_position", remaining_after_two_fills, int(second_leg["qty"]))
+        check("forced_retry_qty_rebinds_to_entire_current_remaining_position", remaining_after_two_fills, int(second_leg["qty"]))
         second_state = confirm_trading_protection_leg_submission(
             root, ticker="2454", action=PROTECTION_STOP_REMAINDER_ACTION,
             expected_order_revision=int(cancelled_forced["revision"]), broker_order_id="FORCED-2",
@@ -2595,23 +2570,23 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
             if row.get("purpose") == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER
             and row.get("broker_order_id") == "FORCED-2"
         )
-        add_check(results, "trading_stop_remainder", case_id, "forced_retry_increments_attempt_without_changing_obligation_key", [forced_key, 2], [second_order["stop_forced_exit_key"], int(second_order["stop_forced_exit_attempt"])])
+        check("forced_retry_increments_attempt_without_changing_obligation_key", [forced_key, 2], [second_order["stop_forced_exit_key"], int(second_order["stop_forced_exit_attempt"])])
         completed = confirm_trading_protection_sell_order_fill(
             root, order_id=second_order["order_id"], fill_qty=remaining_after_two_fills, fill_price=87.0,
             trade_date="2026-09-04", expected_order_revision=int(second_state["revision"]),
             expected_account_revision=int(forced_partial["account_revision"]),
         )
-        add_check(results, "trading_stop_remainder", case_id, "forced_exit_retries_continue_until_position_is_flat", False, "2454" in completed["account"]["positions"])
+        check("forced_exit_retries_continue_until_position_is_flat", False, "2454" in completed["account"]["positions"])
 
     project_root = Path(__file__).resolve().parents[2]
     planner_source = (project_root / "services" / "trading" / "indicator_exit_planning.py").read_text(encoding="utf-8")
     submit_source = (project_root / "services" / "trading" / "indicator_exit_order_submission.py").read_text(encoding="utf-8")
     audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    add_check(results, "trading_stop_remainder", case_id, "indicator_plan_explicitly_skips_stop_forced_exit_lineage", True, "stop_forced_exit_skipped" in planner_source and "build_trading_stop_exit_progress" in planner_source)
-    add_check(results, "trading_stop_remainder", case_id, "indicator_submission_defensively_rejects_already_triggered_stop_lineage", True, "剩餘持股必須沿 STOP forced-exit obligation" in submit_source)
-    add_check(results, "trading_stop_remainder", case_id, "prelive_audit_has_explicit_forced_stop_continuity_gate", True, "trading_stop_forced_exit_continuity" in audit_source)
-    add_check(results, "trading_stop_remainder", case_id, "workbench_exposes_explicit_stop_remainder_market_submission", True, "確認 Stop 剩餘 MARKET 已送單" in panel_source)
+    check("indicator_plan_explicitly_skips_stop_forced_exit_lineage", True, "stop_forced_exit_skipped" in planner_source and "build_trading_stop_exit_progress" in planner_source)
+    check("indicator_submission_defensively_rejects_already_triggered_stop_lineage", True, "剩餘持股必須沿 STOP forced-exit obligation" in submit_source)
+    check("prelive_audit_has_explicit_forced_stop_continuity_gate", True, "trading_stop_forced_exit_continuity" in audit_source)
+    check("workbench_exposes_explicit_stop_remainder_market_submission", True, "確認 Stop 剩餘 MARKET 已送單" in panel_source)
 
     summary["checks"] = len(results)
     return results, summary
@@ -2619,8 +2594,7 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
 def validate_trading_ssot_identity_path_scale_contract_case(base_params):
     """Trading identity, current-state paths, and milli scale have one canonical owner."""
     case_id = "TRADING_SSOT_IDENTITY_PATH_SCALE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_ssot')
 
     import ast
     import tempfile
@@ -2644,17 +2618,17 @@ def validate_trading_ssot_identity_path_scale_contract_case(base_params):
     from services.trading.scanner_state import partition_trading_candidate_rows_for_information_date
 
     sample_event = {"revision": 1, "details": {"x": 2}, "event_hash": "must-not-self-hash"}
-    add_check(results, "trading_ssot", case_id, "account_and_order_event_chain_share_canonical_hash_primitive", compute_event_hash({"revision": 1, "details": {"x": 2}}), compute_event_hash(sample_event))
-    add_check(results, "trading_ssot", case_id, "same_bar_stop_tp_priority_has_single_identity", "STOP_OVER_TP", EXIT_SAME_BAR_PRIORITY_STOP_OVER_TP)
-    add_check(results, "trading_ssot", case_id, "same_bar_stop_dominates_tp_in_canonical_helper", (True, False), resolve_stop_tp_hits(stop_hit=True, tp_hit=True))
-    add_check(results, "trading_ssot", case_id, "ticker_identity_strips_outer_space_and_uppercases", "2330", normalize_trading_ticker(" 2330 "))
+    check("account_and_order_event_chain_share_canonical_hash_primitive", compute_event_hash({"revision": 1, "details": {"x": 2}}), compute_event_hash(sample_event))
+    check("same_bar_stop_tp_priority_has_single_identity", "STOP_OVER_TP", EXIT_SAME_BAR_PRIORITY_STOP_OVER_TP)
+    check("same_bar_stop_dominates_tp_in_canonical_helper", (True, False), resolve_stop_tp_hits(stop_hit=True, tp_hit=True))
+    check("ticker_identity_strips_outer_space_and_uppercases", "2330", normalize_trading_ticker(" 2330 "))
     try:
         normalize_trading_ticker("23 30")
     except ValueError:
         embedded_space_rejected = True
     else:
         embedded_space_rejected = False
-    add_check(results, "trading_ssot", case_id, "ticker_identity_rejects_embedded_whitespace", True, embedded_space_rejected)
+    check("ticker_identity_rejects_embedded_whitespace", True, embedded_space_rejected)
 
     try:
         partition_trading_candidate_rows_for_information_date(
@@ -2665,24 +2639,24 @@ def validate_trading_ssot_identity_path_scale_contract_case(base_params):
         scanner_uses_identity_contract = True
     else:
         scanner_uses_identity_contract = False
-    add_check(results, "trading_ssot", case_id, "scanner_consumes_same_ticker_identity_contract", True, scanner_uses_identity_contract)
-    add_check(results, "trading_ssot", case_id, "canonical_trading_date_normalizer_accepts_iso_date", "2026-09-05", normalize_trading_date("2026-09-05", allow_none=False))
+    check("scanner_consumes_same_ticker_identity_contract", True, scanner_uses_identity_contract)
+    check("canonical_trading_date_normalizer_accepts_iso_date", "2026-09-05", normalize_trading_date("2026-09-05", allow_none=False))
     try:
         require_trading_date_after("2026-09-05", after="2026-09-05", field_name="fill", after_field_name="information")
     except ValueError:
         same_day_chronology_rejected = True
     else:
         same_day_chronology_rejected = False
-    add_check(results, "trading_ssot", case_id, "canonical_trading_chronology_rejects_same_day_signal_and_fill", True, same_day_chronology_rejected)
+    check("canonical_trading_chronology_rejects_same_day_signal_and_fill", True, same_day_chronology_rejected)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
-        add_check(results, "trading_ssot", case_id, "account_service_path_delegates_to_core_owner", core_account_path(root), service_account_path(root))
-        add_check(results, "trading_ssot", case_id, "order_service_path_delegates_to_core_owner", core_order_path(root), service_order_path(root))
-        add_check(results, "trading_ssot", case_id, "fill_journal_service_path_delegates_to_core_owner", core_fill_path(root), service_fill_path(root))
-        add_check(results, "trading_ssot", case_id, "account_current_truth_path_is_canonical", root / "state" / "trading" / "account.json", core_account_path(root))
-        add_check(results, "trading_ssot", case_id, "order_current_truth_path_is_canonical", root / "state" / "trading" / "orders.json", core_order_path(root))
-        add_check(results, "trading_ssot", case_id, "fill_journal_path_is_canonical", root / "state" / "trading" / "fill_transaction.json", core_fill_path(root))
+        check("account_service_path_delegates_to_core_owner", core_account_path(root), service_account_path(root))
+        check("order_service_path_delegates_to_core_owner", core_order_path(root), service_order_path(root))
+        check("fill_journal_service_path_delegates_to_core_owner", core_fill_path(root), service_fill_path(root))
+        check("account_current_truth_path_is_canonical", root / "state" / "trading" / "account.json", core_account_path(root))
+        check("order_current_truth_path_is_canonical", root / "state" / "trading" / "orders.json", core_order_path(root))
+        check("fill_journal_path_is_canonical", root / "state" / "trading" / "fill_transaction.json", core_fill_path(root))
 
     project_root = Path(__file__).resolve().parents[2]
     scale_modules = [
@@ -2706,7 +2680,7 @@ def validate_trading_ssot_identity_path_scale_contract_case(base_params):
                 values = [node.value]
             if any(isinstance(v, ast.Constant) and isinstance(v.value, (int, float)) and float(v.value) == 1000.0 for v in values):
                 raw_scale_sites.append(f"{path.relative_to(project_root)}:{getattr(node, 'lineno', '?')}")
-    add_check(results, "trading_ssot", case_id, "execution_consumers_do_not_rederive_milli_scale_with_raw_1000_arithmetic", [], raw_scale_sites)
+    check("execution_consumers_do_not_rederive_milli_scale_with_raw_1000_arithmetic", [], raw_scale_sites)
 
     order_planning_source = (project_root / "services" / "trading" / "order_planning.py").read_text(encoding="utf-8")
     position_step_source = (project_root / "core" / "position_step.py").read_text(encoding="utf-8")
@@ -2719,19 +2693,19 @@ def validate_trading_ssot_identity_path_scale_contract_case(base_params):
     audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
     entry_submission_source = (project_root / "services" / "trading" / "entry_order_submission.py").read_text(encoding="utf-8")
     proposed_state_source = (project_root / "services" / "trading" / "proposed_order_state.py").read_text(encoding="utf-8")
-    add_check(results, "trading_ssot", case_id, "order_planning_has_no_private_duplicate_order_state_path_resolver", False, "def _resolve_trading_order_state_path" in order_planning_source)
-    add_check(results, "trading_ssot", case_id, "account_and_order_state_do_not_duplicate_event_hash_payload_logic", False, "def _event_hash_payload" in account_state_source or "def _event_hash_payload" in order_state_source)
-    add_check(results, "trading_ssot", case_id, "price_state_display_uses_price_semantic_helper_not_money_alias", True, all(fragment in position_step_source for fragment in (
+    check("order_planning_has_no_private_duplicate_order_state_path_resolver", False, "def _resolve_trading_order_state_path" in order_planning_source)
+    check("account_and_order_state_do_not_duplicate_event_hash_payload_logic", False, "def _event_hash_payload" in account_state_source or "def _event_hash_payload" in order_state_source)
+    check("price_state_display_uses_price_semantic_helper_not_money_alias", True, all(fragment in position_step_source for fragment in (
         "milli_to_price(position['highest_high_since_entry_milli'])",
         "milli_to_price(position['trailing_stop_milli'])",
         "milli_to_price(position['sl_milli'])",
     )))
-    add_check(results, "trading_ssot", case_id, "scanner_and_position_market_context_do_not_define_private_trading_date_normalizers", False, "def _normalize_candidate_date" in scanner_state_source or "def normalize_trading_date" in position_market_source)
-    add_check(results, "trading_ssot", case_id, "runtime_account_service_has_no_direct_fill_mutation_bypass", False, "def confirm_trading_strategy_buy_fill(" in account_service_source or "def confirm_trading_sell_fill(" in account_service_source)
-    add_check(results, "trading_ssot", case_id, "operations_reads_proposed_artifact_from_state_contract_not_allocation_producer", True, "from services.trading.proposed_order_state import" in operations_source and "from services.trading.order_planning import" not in operations_source)
-    add_check(results, "trading_ssot", case_id, "prelive_audit_consumes_operations_sell_coverage_ssot", True, "open_position_sell_coverage_safe" in audit_source and "open_position_sell_coverage_blockers" in audit_source)
-    add_check(results, "trading_ssot", case_id, "entry_submission_rechecks_operations_guard_at_broker_submission_boundary", True, "assert_trading_proposed_submission_allowed" in entry_submission_source)
-    add_check(results, "trading_ssot", case_id, "proposed_artifact_contract_is_separate_from_allocation_producer", True, "def load_current_trading_proposed_order_plan" in proposed_state_source and "def build_trading_proposed_order_plan" not in proposed_state_source)
+    check("scanner_and_position_market_context_do_not_define_private_trading_date_normalizers", False, "def _normalize_candidate_date" in scanner_state_source or "def normalize_trading_date" in position_market_source)
+    check("runtime_account_service_has_no_direct_fill_mutation_bypass", False, "def confirm_trading_strategy_buy_fill(" in account_service_source or "def confirm_trading_sell_fill(" in account_service_source)
+    check("operations_reads_proposed_artifact_from_state_contract_not_allocation_producer", True, "from services.trading.proposed_order_state import" in operations_source and "from services.trading.order_planning import" not in operations_source)
+    check("prelive_audit_consumes_operations_sell_coverage_ssot", True, "open_position_sell_coverage_safe" in audit_source and "open_position_sell_coverage_blockers" in audit_source)
+    check("entry_submission_rechecks_operations_guard_at_broker_submission_boundary", True, "assert_trading_proposed_submission_allowed" in entry_submission_source)
+    check("proposed_artifact_contract_is_separate_from_allocation_producer", True, "def load_current_trading_proposed_order_plan" in proposed_state_source and "def build_trading_proposed_order_plan" not in proposed_state_source)
 
     summary["checks"] = len(results)
     return results, summary
@@ -2741,12 +2715,11 @@ def validate_trading_ssot_identity_path_scale_contract_case(base_params):
 def validate_trading_operational_safety_ssot_contract_case(base_params):
     """Trading allocation/submission/chronology safety must have canonical owners."""
     case_id = "TRADING_OPERATIONAL_SAFETY_SSOT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_safety_ssot')
 
     from core.trading_identity import normalize_trading_date, require_trading_date_after
 
-    add_check(results, "trading_safety_ssot", case_id, "canonical_trading_date_normalizes_iso_date", "2026-09-04", normalize_trading_date("2026-09-04", allow_none=False))
+    check("canonical_trading_date_normalizes_iso_date", "2026-09-04", normalize_trading_date("2026-09-04", allow_none=False))
     try:
         require_trading_date_after(
             "2026-09-04",
@@ -2758,7 +2731,7 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
         same_day_rejected = True
     else:
         same_day_rejected = False
-    add_check(results, "trading_safety_ssot", case_id, "canonical_chronology_rejects_same_day_completed_bar_fill", True, same_day_rejected)
+    check("canonical_chronology_rejects_same_day_completed_bar_fill", True, same_day_rejected)
 
     project_root = Path(__file__).resolve().parents[2]
     order_core = (project_root / "core" / "trading_order_state.py").read_text(encoding="utf-8")
@@ -2772,18 +2745,18 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
     panel = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     coverage = (project_root / "tools" / "local_regression" / "meta_quality_targets.py").read_text(encoding="utf-8")
 
-    add_check(results, "trading_safety_ssot", case_id, "core_order_state_consumes_canonical_date_chronology_helpers", True, "require_trading_date_after" in order_core and "require_trading_date_not_before" in order_core)
-    add_check(results, "trading_safety_ssot", case_id, "operations_reads_proposed_state_contract_not_allocation_producer", True, "from services.trading.proposed_order_state import" in operations and "from services.trading.order_planning import" not in operations)
-    add_check(results, "trading_safety_ssot", case_id, "proposed_artifact_contract_has_independent_state_owner", True, "PROPOSED_ORDER_SCHEMA_VERSION" in proposed_state and "def load_current_trading_proposed_order_plan" in proposed_state)
-    add_check(results, "trading_safety_ssot", case_id, "allocation_producer_consumes_operations_canonical_guard_before_and_after_compute", True, planning.count("assert_trading_new_allocation_allowed(") >= 2 and "build_trading_operations_status" in planning)
-    add_check(results, "trading_safety_ssot", case_id, "entry_submission_rechecks_operations_safety_at_ordered_boundary", True, entry_submission.count("assert_trading_proposed_submission_allowed(") >= 2 and "pre_persist_guard=source_guard" in entry_submission)
-    add_check(results, "trading_safety_ssot", case_id, "entry_submission_revalidates_account_proposed_and_param_sources", True, "account_sha_before" in entry_submission and "proposed_sha_before" in entry_submission and "selected_params_sha256" in entry_submission)
-    add_check(results, "trading_safety_ssot", case_id, "generic_order_state_no_longer_owns_entry_submission_orchestration", False, "def confirm_trading_order_submission(" in generic_order_state)
-    add_check(results, "trading_safety_ssot", case_id, "runtime_account_service_has_no_direct_fill_mutation_bypass", False, "def confirm_trading_strategy_buy_fill(" in account_service or "def confirm_trading_sell_fill(" in account_service)
-    add_check(results, "trading_safety_ssot", case_id, "operations_consumes_canonical_stop_progress_owner", True, "is_trading_stop_exit_triggered_from_order_rows" in operations)
-    add_check(results, "trading_safety_ssot", case_id, "prelive_audit_consumes_operations_sell_coverage_instead_of_recomputing", True, "open_position_sell_coverage_safe" in audit and "open_position_sell_coverage_blockers" in audit)
-    add_check(results, "trading_safety_ssot", case_id, "workbench_routes_entry_submission_through_dedicated_safety_service", True, "from services.trading.entry_order_submission import confirm_trading_order_submission" in panel)
-    add_check(results, "trading_safety_ssot", case_id, "new_operational_state_and_submission_modules_are_coverage_targets", True, '"services/trading/entry_order_submission.py"' in coverage and '"services/trading/proposed_order_state.py"' in coverage)
+    check("core_order_state_consumes_canonical_date_chronology_helpers", True, "require_trading_date_after" in order_core and "require_trading_date_not_before" in order_core)
+    check("operations_reads_proposed_state_contract_not_allocation_producer", True, "from services.trading.proposed_order_state import" in operations and "from services.trading.order_planning import" not in operations)
+    check("proposed_artifact_contract_has_independent_state_owner", True, "PROPOSED_ORDER_SCHEMA_VERSION" in proposed_state and "def load_current_trading_proposed_order_plan" in proposed_state)
+    check("allocation_producer_consumes_operations_canonical_guard_before_and_after_compute", True, planning.count("assert_trading_new_allocation_allowed(") >= 2 and "build_trading_operations_status" in planning)
+    check("entry_submission_rechecks_operations_safety_at_ordered_boundary", True, entry_submission.count("assert_trading_proposed_submission_allowed(") >= 2 and "pre_persist_guard=source_guard" in entry_submission)
+    check("entry_submission_revalidates_account_proposed_and_param_sources", True, "account_sha_before" in entry_submission and "proposed_sha_before" in entry_submission and "selected_params_sha256" in entry_submission)
+    check("generic_order_state_no_longer_owns_entry_submission_orchestration", False, "def confirm_trading_order_submission(" in generic_order_state)
+    check("runtime_account_service_has_no_direct_fill_mutation_bypass", False, "def confirm_trading_strategy_buy_fill(" in account_service or "def confirm_trading_sell_fill(" in account_service)
+    check("operations_consumes_canonical_stop_progress_owner", True, "is_trading_stop_exit_triggered_from_order_rows" in operations)
+    check("prelive_audit_consumes_operations_sell_coverage_instead_of_recomputing", True, "open_position_sell_coverage_safe" in audit and "open_position_sell_coverage_blockers" in audit)
+    check("workbench_routes_entry_submission_through_dedicated_safety_service", True, "from services.trading.entry_order_submission import confirm_trading_order_submission" in panel)
+    check("new_operational_state_and_submission_modules_are_coverage_targets", True, '"services/trading/entry_order_submission.py"' in coverage and '"services/trading/proposed_order_state.py"' in coverage)
 
     summary["checks"] = len(results)
     return results, summary
@@ -2791,8 +2764,7 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
 def validate_trading_market_data_lineage_contract_case(base_params):
     """Trading Data→Params→Scanner lineage is content-bound and fail-closed."""
     case_id = "TRADING_MARKET_DATA_LINEAGE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_data_lineage')
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.params_io import params_to_json_dict
@@ -2834,8 +2806,8 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         first_market = publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=[])
         binding = publish_trading_strategy_param_binding(root)
         runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
-        add_check(results, "trading_data_lineage", case_id, "params_bind_exact_dataset_content_hash", first_market["dataset_fingerprint"]["csv_content_sha256"], binding["dataset_content_sha256"])
-        add_check(results, "trading_data_lineage", case_id, "scanner_runtime_consumes_same_dataset_content_hash", binding["dataset_content_sha256"], runtime["dataset_content_sha256"])
+        check("params_bind_exact_dataset_content_hash", first_market["dataset_fingerprint"]["csv_content_sha256"], binding["dataset_content_sha256"])
+        check("scanner_runtime_consumes_same_dataset_content_hash", binding["dataset_content_sha256"], runtime["dataset_content_sha256"])
 
         from core.trading_dataset_identity import build_trading_dataset_fingerprint
         canonical_fp = build_trading_dataset_fingerprint(data_dir)
@@ -2843,7 +2815,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         nested_dir.mkdir()
         (nested_dir / "diagnostic.csv").write_text("Date,Close\n2026-09-04,999\n", encoding="utf-8")
         nested_fp = build_trading_dataset_fingerprint(data_dir)
-        add_check(results, "trading_data_lineage", case_id, "dataset_identity_hashes_only_canonical_consumed_top_level_csv_inputs", canonical_fp["csv_content_sha256"], nested_fp["csv_content_sha256"])
+        check("dataset_identity_hashes_only_canonical_consumed_top_level_csv_inputs", canonical_fp["csv_content_sha256"], nested_fp["csv_content_sha256"])
         duplicate_path = data_dir / "TV_Data_Full_2330.csv"
         duplicate_path.write_bytes(csv_path.read_bytes())
         try:
@@ -2852,14 +2824,14 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             duplicate_rejected = True
         else:
             duplicate_rejected = False
-        add_check(results, "trading_data_lineage", case_id, "duplicate_ticker_csv_is_fail_closed_in_dataset_identity", True, duplicate_rejected)
+        check("duplicate_ticker_csv_is_fail_closed_in_dataset_identity", True, duplicate_rejected)
         duplicate_path.unlink()
         (nested_dir / "diagnostic.csv").unlink(); nested_dir.rmdir()
 
         metadata_only = publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
-        add_check(results, "trading_data_lineage", case_id, "market_snapshot_operational_metadata_can_change_without_data_content_change", first_market["dataset_fingerprint"]["csv_content_sha256"], metadata_only["dataset_fingerprint"]["csv_content_sha256"])
+        check("market_snapshot_operational_metadata_can_change_without_data_content_change", first_market["dataset_fingerprint"]["csv_content_sha256"], metadata_only["dataset_fingerprint"]["csv_content_sha256"])
         metadata_binding = load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
-        add_check(results, "trading_data_lineage", case_id, "params_freshness_uses_content_identity_not_snapshot_metadata_sha", binding["binding_fingerprint"], metadata_binding["binding_fingerprint"])
+        check("params_freshness_uses_content_identity_not_snapshot_metadata_sha", binding["binding_fingerprint"], metadata_binding["binding_fingerprint"])
 
         changed_frame = base_frame.copy()
         changed_frame.loc[1, "Close"] = 102.5
@@ -2870,7 +2842,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             out_of_band_change_rejected = True
         else:
             out_of_band_change_rejected = False
-        add_check(results, "trading_data_lineage", case_id, "same_date_dataset_content_change_is_detected_even_when_latest_date_is_unchanged", True, out_of_band_change_rejected)
+        check("same_date_dataset_content_change_is_detected_even_when_latest_date_is_unchanged", True, out_of_band_change_rejected)
 
         publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
         try:
@@ -2879,7 +2851,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             old_params_rejected = True
         else:
             old_params_rejected = False
-        add_check(results, "trading_data_lineage", case_id, "canonical_data_update_invalidates_params_when_content_changes_same_date", True, old_params_rejected)
+        check("canonical_data_update_invalidates_params_when_content_changes_same_date", True, old_params_rejected)
 
         csv_path.write_bytes(original_bytes)
         publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
@@ -2904,7 +2876,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
                 scan_toctou_rejected = True
             else:
                 scan_toctou_rejected = False
-        add_check(results, "trading_data_lineage", case_id, "scanner_refuses_publish_when_dataset_changes_during_scan", True, scan_toctou_rejected)
+        check("scanner_refuses_publish_when_dataset_changes_during_scan", True, scan_toctou_rejected)
 
         csv_path.write_bytes(original_bytes)
         publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
@@ -2918,7 +2890,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
                 params_toctou_rejected = True
             else:
                 params_toctou_rejected = False
-        add_check(results, "trading_data_lineage", case_id, "params_producer_refuses_publish_binding_when_dataset_changes_during_training", True, params_toctou_rejected)
+        check("params_producer_refuses_publish_binding_when_dataset_changes_during_training", True, params_toctou_rejected)
 
         csv_path.write_bytes(original_bytes)
         publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
@@ -2957,14 +2929,14 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             candidate_same_date_drift_rejected = True
         else:
             candidate_same_date_drift_rejected = False
-        add_check(results, "trading_data_lineage", case_id, "candidate_currentness_rehashes_actual_csv_content", True, candidate_same_date_drift_rejected)
+        check("candidate_currentness_rehashes_actual_csv_content", True, candidate_same_date_drift_rejected)
         try:
             load_current_trading_proposed_order_plan(root, require_current=True)
         except RuntimeError:
             proposed_same_date_drift_rejected = True
         else:
             proposed_same_date_drift_rejected = False
-        add_check(results, "trading_data_lineage", case_id, "proposed_order_currentness_rehashes_actual_csv_content", True, proposed_same_date_drift_rejected)
+        check("proposed_order_currentness_rehashes_actual_csv_content", True, proposed_same_date_drift_rejected)
 
         csv_path.write_bytes(original_bytes)
         publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
@@ -2979,7 +2951,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
              patch.object(market_data_update, "run_trading_dataset_update", side_effect=_capture_update), \
              patch.object(market_data_update, "publish_trading_market_data_snapshot", return_value={"snapshot_fingerprint": "s", "dataset_fingerprint": {"csv_content_sha256": "c"}}):
             market_data_update.run_trading_market_data_update(project_root=root)
-        add_check(results, "trading_data_lineage", case_id, "daily_data_update_forces_all_current_account_positions_into_downloader_targets", ["9999"], captured.get("required"))
+        check("daily_data_update_forces_all_current_account_positions_into_downloader_targets", ["9999"], captured.get("required"))
 
     summary["checks"] = len(results)
     return results, summary

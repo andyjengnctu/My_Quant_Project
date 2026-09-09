@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import run_bound_checks
+
 from .synthetic_breakout_quality_support import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BUY_LIMIT_OVERAGE_SORT_METHOD,
@@ -329,19 +331,12 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         pd.Timestamp("2021-01-01"), pd.Timestamp("2026-03-02"),
         fold_months=12, single_score_block=False,
     )
-    check(
-        "pit_oos_is_single_block_and_rolling_is_annual_with_partial_tail",
-        (1, 6, "2021-01-01", "2026-03-02"),
+    run_bound_checks(
+        check,
         (
-            len(oos), len(rolling),
-            str(rolling[0]["score_start"].date()),
-            str(rolling[-1]["score_end"].date()),
+            ('pit_oos_is_single_block_and_rolling_is_annual_with_partial_tail', (1, 6, '2021-01-01', '2026-03-02'), (len(oos), len(rolling), str(rolling[0]['score_start'].date()), str(rolling[-1]['score_end'].date())),),
+            ('pit_fold_identity_is_date_stable', 'fold_20140101_20141231', _stable_fold_id(pd.Timestamp('2014-01-01'), pd.Timestamp('2014-12-31')),),
         ),
-    )
-    check(
-        "pit_fold_identity_is_date_stable",
-        "fold_20140101_20141231",
-        _stable_fold_id(pd.Timestamp("2014-01-01"), pd.Timestamp("2014-12-31")),
     )
 
     expected_contract = {
@@ -939,16 +934,12 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     audit_cache_clear = audit_source.index(
         "clear_selection_point_in_time_ranking_contract_cache()", audit_json_write
     )
-    check_true(
-        "pit_score_and_audit_producers_invalidate_cached_ranking_contract_after_artifact_rewrite",
-        "def clear_selection_point_in_time_ranking_contract_cache()" in ranking_store_source
-        and pit_manifest_write < pit_cache_clear
-        and audit_json_write < audit_cache_clear,
-    )
-    check_true(
-        "rolling_standard_sop_validation_sidecar_reader_ignores_non_sop_ticker_dtype",
-        'usecols=sorted(required)' in audit_source
-        and 'dtype={"fold_id": "string"}' in audit_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('pit_score_and_audit_producers_invalidate_cached_ranking_contract_after_artifact_rewrite', 'def clear_selection_point_in_time_ranking_contract_cache()' in ranking_store_source and pit_manifest_write < pit_cache_clear and (audit_json_write < audit_cache_clear),),
+            ('rolling_standard_sop_validation_sidecar_reader_ignores_non_sop_ticker_dtype', 'usecols=sorted(required)' in audit_source and 'dtype={"fold_id": "string"}' in audit_source,),
+        ),
     )
 
     summary.update({

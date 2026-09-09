@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import run_bound_checks
+
 from .synthetic_breakout_quality_support import (
     BREAKOUT_OPTIMIZER_SEARCH_SPACE,
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
@@ -240,30 +242,11 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
             fixed_risk=None,
         )
-    check(
-        "rolling_schedule_preserves_effective_dates_and_only_toggles_filter",
-        (["2021-01-01", "2022-01-01"], False, True, 205),
+    run_bound_checks(
+        check,
         (
-            sorted(rolling_pair[1]["params_by_effective_date"]),
-            rolling_pair[1]["params_by_effective_date"]["2022-01-01"]["use_breakout_quality_filter"],
-            rolling_pair[2]["params_by_effective_date"]["2022-01-01"]["use_breakout_quality_filter"],
-            rolling_pair[2]["params_by_effective_date"]["2022-01-01"]["high_len"],
-        ),
-    )
-
-    check(
-        "comparison_output_identity_separates_policy_and_ranking_mode",
-        True,
-        _comparison_output_dir_name(
-            COMPARISON_MODE_SCORE_RANKING,
-            _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
-            param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
-            ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
-        )
-        != _comparison_output_dir_name(
-            COMPARISON_MODE_HARD_FILTER,
-            _comparison_labels(COMPARISON_MODE_HARD_FILTER),
-            param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+            ('rolling_schedule_preserves_effective_dates_and_only_toggles_filter', (['2021-01-01', '2022-01-01'], False, True, 205), (sorted(rolling_pair[1]['params_by_effective_date']), rolling_pair[1]['params_by_effective_date']['2022-01-01']['use_breakout_quality_filter'], rolling_pair[2]['params_by_effective_date']['2022-01-01']['use_breakout_quality_filter'], rolling_pair[2]['params_by_effective_date']['2022-01-01']['high_len']),),
+            ('comparison_output_identity_separates_policy_and_ranking_mode', True, _comparison_output_dir_name(COMPARISON_MODE_SCORE_RANKING, _comparison_labels(COMPARISON_MODE_SCORE_RANKING), param_policy=PARAM_POLICY_BASE_FINALIST_BEST, ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED) != _comparison_output_dir_name(COMPARISON_MODE_HARD_FILTER, _comparison_labels(COMPARISON_MODE_HARD_FILTER), param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE),),
         ),
     )
 
@@ -1052,55 +1035,13 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     binary_pit_source = (
         project_root / "services" / "breakout_quality" / "binary_point_in_time_scores.py"
     ).read_text(encoding="utf-8")
-    check_true(
-        "trade_path_menu_completes_model_artifacts_and_strategy_comparison_stays_separate",
-        _source_has_render_menu_item_call(
-                    app_source,
-                    index=1,
-                    label="建立新Label → 重新訓練 → 模型預測報表",
-                    default=True,
-                )
-                and _source_has_render_menu_item_call(
-                    app_source,
-                    index=2,
-                    label="使用既有模型 → 更新Scores → 模型預測報表",
-                )
-                and _source_has_render_menu_item_call(
-                    app_source,
-                    index=3,
-                    label="查看Label與事件生命週期摘要",
-                )
-                and all(
-                    token in app_source
-                    for token in (
-                        '"build-trade-path-labels"',
-                        "本流程不執行策略績效比較",
-                        "apps/research.py compare",
-                    )
-                )
-                and "strategy-trade-path-label-gate" not in app_source,
-    )
-    check_true(
-        "trade_path_builder_reuses_formal_lifecycle_and_never_overwrites_9a",
-        all(
-                    token in builder_source
-                    for token in (
-                        "source_filter_id == target_filter_id",
-                        "TRADE_PATH_RESEARCH_FILTER_ID",
-                        "derived_feature_bank_trade_path_relabel",
-                        "initial_miss_buy_status",
-                        "formal_single_stock_forced_closeout",
-                        "same_explicit_single_stock_sizing_capital",
-                        "exclude_from_binary_training",
-                        "build_signal_cache",
-                        "simulate_realized_trade_path_label",
-                    )
-                ),
-    )
-    check_true(
-        "trade_path_binary_pit_uses_filter_specific_label_policy",
-        "expected_label_policy_for_filter_id(str(args.filter_id))" in binary_pit_source
-                and "expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload()" not in binary_pit_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('trade_path_menu_completes_model_artifacts_and_strategy_comparison_stays_separate', _source_has_render_menu_item_call(app_source, index=1, label='建立新Label → 重新訓練 → 模型預測報表', default=True) and _source_has_render_menu_item_call(app_source, index=2, label='使用既有模型 → 更新Scores → 模型預測報表') and _source_has_render_menu_item_call(app_source, index=3, label='查看Label與事件生命週期摘要') and all((token in app_source for token in ('"build-trade-path-labels"', '本流程不執行策略績效比較', 'apps/research.py compare'))) and ('strategy-trade-path-label-gate' not in app_source),),
+            ('trade_path_builder_reuses_formal_lifecycle_and_never_overwrites_9a', all((token in builder_source for token in ('source_filter_id == target_filter_id', 'TRADE_PATH_RESEARCH_FILTER_ID', 'derived_feature_bank_trade_path_relabel', 'initial_miss_buy_status', 'formal_single_stock_forced_closeout', 'same_explicit_single_stock_sizing_capital', 'exclude_from_binary_training', 'build_signal_cache', 'simulate_realized_trade_path_label'))),),
+            ('trade_path_binary_pit_uses_filter_specific_label_policy', 'expected_label_policy_for_filter_id(str(args.filter_id))' in binary_pit_source and 'expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload()' not in binary_pit_source,),
+        ),
     )
 
     summary["label_id"] = TRADE_PATH_LABEL_ID
@@ -1301,13 +1242,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 "core.console_report" in source,
             )
         )
-    check_true(
-        "all_formal_strategy_results_have_persistent_markdown_simple_report",
-        all(row[1] for row in contract_rows),
-    )
-    check_true(
-        "all_formal_strategy_results_have_console_readable_renderer",
-        all(row[2] and row[3] for row in contract_rows),
+    run_bound_checks(
+        check_true,
+        (
+            ('all_formal_strategy_results_have_persistent_markdown_simple_report', all((row[1] for row in contract_rows)),),
+            ('all_formal_strategy_results_have_console_readable_renderer', all((row[2] and row[3] for row in contract_rows)),),
+        ),
     )
 
     comparison_source = (
@@ -1474,31 +1414,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         strategy_param_source_identity_sha256,
     )
 
-    check(
-        "robustness_strategy_only_completed_result_without_pending_model_context_is_true_reuse",
-        "REUSE",
-        _strategy_only_baseline_action(
-            scientific_result_exists=True,
-            baseline_context_required=False,
-            baseline_context_available=False,
-        ),
-    )
-    check(
-        "robustness_strategy_only_missing_transient_baseline_context_rebuilds_context_only",
-        "REBUILD_CONTEXT",
-        _strategy_only_baseline_action(
-            scientific_result_exists=True,
-            baseline_context_required=True,
-            baseline_context_available=False,
-        ),
-    )
-    check(
-        "robustness_strategy_only_missing_scientific_result_runs_scientific_replay",
-        "RUN_SCIENTIFIC",
-        _strategy_only_baseline_action(
-            scientific_result_exists=False,
-            baseline_context_required=True,
-            baseline_context_available=False,
+    run_bound_checks(
+        check,
+        (
+            ('robustness_strategy_only_completed_result_without_pending_model_context_is_true_reuse', 'REUSE', _strategy_only_baseline_action(scientific_result_exists=True, baseline_context_required=False, baseline_context_available=False),),
+            ('robustness_strategy_only_missing_transient_baseline_context_rebuilds_context_only', 'REBUILD_CONTEXT', _strategy_only_baseline_action(scientific_result_exists=True, baseline_context_required=True, baseline_context_available=False),),
+            ('robustness_strategy_only_missing_scientific_result_runs_scientific_replay', 'RUN_SCIENTIFIC', _strategy_only_baseline_action(scientific_result_exists=False, baseline_context_required=True, baseline_context_available=False),),
         ),
     )
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -1585,17 +1506,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "manifest_sha256": "manifest-b",
         }
     }
-    check_true(
-        "robustness_benchmark_manifest_publication_sha_does_not_change_scientific_param_identity",
-        _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_a))
-        == _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_b)),
-    )
-    check_true(
-        "robustness_cross_fingerprint_completed_result_migration_is_intentionally_unsupported",
-        "_import_seed_expansion_results(" not in multi_seed_source
-        and "_seed_expansion_source_run(" not in multi_seed_source
-        and "[COMPATIBLE RESULT REUSE]" not in multi_seed_source
-        and "[SEED EXPANSION REUSE]" not in multi_seed_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('robustness_benchmark_manifest_publication_sha_does_not_change_scientific_param_identity', _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_a)) == _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_b)),),
+            ('robustness_cross_fingerprint_completed_result_migration_is_intentionally_unsupported', '_import_seed_expansion_results(' not in multi_seed_source and '_seed_expansion_source_run(' not in multi_seed_source and ('[COMPATIBLE RESULT REUSE]' not in multi_seed_source) and ('[SEED EXPANSION REUSE]' not in multi_seed_source),),
+        ),
     )
 
     benchmark = get_robustness_benchmark_policy_snapshot()
@@ -1871,15 +1787,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             and compute_strategy_param_scientific_sha256(fast_target)
             == compute_strategy_param_scientific_sha256(fast_source)
         )
-    check_true(
-        "robustness_benchmark_publication_only_stale_uses_fast_repair_not_optimizer_resume",
-        publication_only_repair == fast_source.resolve()
-        and scientific_change_not_repairable is None,
-    )
-
-    check_true(
-        "strategy_param_runtime_identity_ignores_created_at_and_diagnostic_metadata",
-        publication_raw_differs_but_scientific_matches,
+    run_bound_checks(
+        check_true,
+        (
+            ('robustness_benchmark_publication_only_stale_uses_fast_repair_not_optimizer_resume', publication_only_repair == fast_source.resolve() and scientific_change_not_repairable is None,),
+            ('strategy_param_runtime_identity_ignores_created_at_and_diagnostic_metadata', publication_raw_differs_but_scientific_matches,),
+        ),
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -2095,15 +2008,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             durable_manifest,
             keys=SCIENTIFIC_DURABLE_RESULT_KEYS,
         )
-    check_true(
-        "robustness_completed_run_reuse_requires_durable_result_sha_integrity",
-        durable_before and not durable_after,
-    )
-    check_true(
-        "robustness_scientific_observation_integrity_is_independent_of_derived_report_refresh",
-        scientific_after_report_refresh
-        and "SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME" in multi_seed_source
-        and "_validate_scientific_observation_manifest(" in multi_seed_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('robustness_completed_run_reuse_requires_durable_result_sha_integrity', durable_before and (not durable_after),),
+            ('robustness_scientific_observation_integrity_is_independent_of_derived_report_refresh', scientific_after_report_refresh and 'SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME' in multi_seed_source and ('_validate_scientific_observation_manifest(' in multi_seed_source),),
+        ),
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -2185,20 +2095,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "expected_param_evaluation_mode=str(param_evaluation_mode)" in strategy_engine_source,
     )
 
-    check_true(
-        "robustness_attribution_progress_separates_missing_observation_from_attribution_rebuild",
-        "expected_model_units =" in multi_seed_source
-        and "scientific observation pending=" in multi_seed_source
-        and "attribution rebuild=" in multi_seed_source
-        and "scientific_completed - attribution_ready" not in multi_seed_source,
-    )
-
-    check_true(
-        "robustness_report_surfaces_run_pinned_seed_and_optimizer_budget_identity",
-        '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_reporting_source
-        and '("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-"))' in multi_seed_reporting_source
-        and '("Seed generator", str(contract.get("seed_generator_seed") or "-"))' in multi_seed_reporting_source
-        and "非same-seed配對勝率" in multi_seed_reporting_source,
+    run_bound_checks(
+        check_true,
+        (
+            ('robustness_attribution_progress_separates_missing_observation_from_attribution_rebuild', 'expected_model_units =' in multi_seed_source and 'scientific observation pending=' in multi_seed_source and ('attribution rebuild=' in multi_seed_source) and ('scientific_completed - attribution_ready' not in multi_seed_source),),
+            ('robustness_report_surfaces_run_pinned_seed_and_optimizer_budget_identity', '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_reporting_source and '("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-"))' in multi_seed_reporting_source and ('("Seed generator", str(contract.get("seed_generator_seed") or "-"))' in multi_seed_reporting_source) and ('非same-seed配對勝率' in multi_seed_reporting_source),),
+        ),
     )
 
     oos_robustness = get_strategy_multi_seed_robustness_settings("extending_window_oos")

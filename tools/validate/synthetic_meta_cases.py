@@ -10,7 +10,7 @@ import shutil
 import tempfile
 from unittest.mock import patch
 
-from .checks import add_check
+from .checks import raises_expected, bind_synthetic_case, bind_checks, add_check, run_bound_checks
 from core.model_paths import (
     RUN_BEST_PARAMS_PATH_ENV_VAR,
     resolve_default_primary_param_source_path,
@@ -1181,9 +1181,10 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
     results = []
     summary = {}
     case_id = "META_CHECKLIST_GENERATED_VIEW_SSOT"
+    check, check_true = bind_checks(results, 'meta_checklist', case_id)
 
     live_view = compare_persisted_views(CHECKLIST_PATH)
-    add_check(results, "meta_checklist", case_id, "live_markdown_views_match_canonical_contract", True, bool(live_view.get("ok")))
+    check("live_markdown_views_match_canonical_contract", True, bool(live_view.get("ok")))
     summary["live_view_mismatches"] = live_view.get("mismatches", {})
 
     with tempfile.TemporaryDirectory(prefix="meta_checklist_ssot_") as temp_dir:
@@ -1236,11 +1237,11 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
         )
 
         mutated_view = compare_persisted_views(temp_checklist)
-        add_check(results, "meta_checklist", case_id, "single_transaction_keeps_all_generated_views_in_sync", True, bool(mutated_view.get("ok")))
+        check("single_transaction_keeps_all_generated_views_in_sync", True, bool(mutated_view.get("ok")))
         tables = load_checklist_tables(temp_checklist)
-        add_check(results, "meta_checklist", case_id, "single_transaction_generates_b_view", True, any(row and row[0] == "B999" for row in tables["B2"]))
-        add_check(results, "meta_checklist", case_id, "single_transaction_generates_t_view", True, any(row and row[0] == "T999" for row in tables["T"]))
-        add_check(results, "meta_checklist", case_id, "single_transaction_appends_b_and_t_convergence_events", 2, sum(1 for row in tables["G"] if len(row) > 1 and row[1] in {"B999", "T999"}))
+        check("single_transaction_generates_b_view", True, any(row and row[0] == "B999" for row in tables["B2"]))
+        check("single_transaction_generates_t_view", True, any(row and row[0] == "T999" for row in tables["T"]))
+        check("single_transaction_appends_b_and_t_convergence_events", 2, sum(1 for row in tables["G"] if len(row) > 1 and row[1] in {"B999", "T999"}))
 
         invalid_contract = load_checklist_contract(temp_checklist)
         invalid_contract["transitions"].append(
@@ -1253,12 +1254,8 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
                 "note": "synthetic invalid chain",
             }
         )
-        rejected = False
-        try:
-            _validate_checklist_contract(invalid_contract)
-        except ValueError:
-            rejected = True
-        add_check(results, "meta_checklist", case_id, "invalid_transition_chain_fails_fast", True, rejected)
+        rejected = raises_expected(ValueError, lambda: _validate_checklist_contract(invalid_contract))
+        check("invalid_transition_chain_fails_fast", True, rejected)
 
         drift_text = _replace_markdown_table_row(
             temp_checklist.read_text(encoding="utf-8"),
@@ -1269,7 +1266,7 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
         )
         temp_checklist.write_text(drift_text, encoding="utf-8")
         drift_view = compare_persisted_views(temp_checklist)
-        add_check(results, "meta_checklist", case_id, "manual_generated_view_drift_is_detected", False, bool(drift_view.get("ok")))
+        check("manual_generated_view_drift_is_detected", False, bool(drift_view.get("ok")))
 
         non_new_rejected = False
         try:
@@ -1290,7 +1287,7 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
             )
         except ValueError:
             non_new_rejected = True
-        add_check(results, "meta_checklist", case_id, "new_definitions_cannot_bypass_transition_chain", True, non_new_rejected)
+        check("new_definitions_cannot_bypass_transition_chain", True, non_new_rejected)
 
     summary["canonical_owner"] = "doc/TEST_SUITE_CHECKLIST_CONTRACT.json"
     summary["generated_views"] = ["B", "T", "G"]
@@ -2399,8 +2396,7 @@ def validate_market_data_governance_contract_case(_base_params):
     )
 
     case_id = "META_MARKET_DATA_GOVERNANCE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True, "training_performed": False}
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
     price = get_market_price_source_contract()
     active = get_active_research_data_generation()
@@ -2411,13 +2407,13 @@ def validate_market_data_governance_contract_case(_base_params):
     trading = get_trading_market_data_lifecycle()
     snapshot = build_market_data_contract_snapshot()
 
-    add_check(results, "market_data", case_id, "finmind_adjusted_price_is_canonical_source", FINMIND_ADJUSTED_PRICE_DATASET, price.adjusted_dataset)
-    add_check(results, "market_data", case_id, "raw_price_archive_identity_is_distinct", True, price.raw_archive_dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET and price.raw_archive_dataset != price.adjusted_dataset)
-    add_check(results, "market_data", case_id, "raw_price_direct_consumption_remains_disabled", False, price.raw_direct_consumption_enabled)
-    add_check(results, "market_data", case_id, "project_adjusted_price_engine_remains_disabled", False, price.project_adjusted_price_engine_enabled)
-    add_check(results, "market_data", case_id, "retrospective_adjustment_requires_invariant_representation", True, price.retrospective_adjustment_invariance_required)
-    add_check(results, "market_data", case_id, "research_daily_bar_clock_preserves_finmind_adjusted_price_calendar_rows", RESEARCH_DAILY_BAR_CLOCK, price.research_daily_bar_clock)
-    add_check(results, "market_data", case_id, "no_price_day_policy_preserves_provider_carry_forward_when_adjusted_ohlc_valid", ADJUSTED_PRICE_NO_PRICE_DAY_POLICY, price.adjusted_price_no_price_day_policy)
+    check("finmind_adjusted_price_is_canonical_source", FINMIND_ADJUSTED_PRICE_DATASET, price.adjusted_dataset)
+    check("raw_price_archive_identity_is_distinct", True, price.raw_archive_dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET and price.raw_archive_dataset != price.adjusted_dataset)
+    check("raw_price_direct_consumption_remains_disabled", False, price.raw_direct_consumption_enabled)
+    check("project_adjusted_price_engine_remains_disabled", False, price.project_adjusted_price_engine_enabled)
+    check("retrospective_adjustment_requires_invariant_representation", True, price.retrospective_adjustment_invariance_required)
+    check("research_daily_bar_clock_preserves_finmind_adjusted_price_calendar_rows", RESEARCH_DAILY_BAR_CLOCK, price.research_daily_bar_clock)
+    check("no_price_day_policy_preserves_provider_carry_forward_when_adjusted_ohlc_valid", ADJUSTED_PRICE_NO_PRICE_DAY_POLICY, price.adjusted_price_no_price_day_policy)
 
     from core.data_utils import sanitize_ohlcv_dataframe
     from services.research.market_data_generation import _normalize_adjusted_rows, _normalize_volume_rows
@@ -2442,36 +2438,36 @@ def validate_market_data_governance_contract_case(_base_params):
         pd.DataFrame({"date": ["2026-03-02"], "stock_id": ["SYNTH"], "Trading_Volume": [451.0]}),
         cutoff="2026-03-02",
     )
-    add_check(results, "market_data", case_id, "v1_existing_loader_preserves_positive_provider_carry_forward_bar", 2, len(v1_calendar_rows))
-    add_check(results, "market_data", case_id, "v2_compatibility_primitives_preserve_same_calendar_bar_semantic", True, len(v2_adjusted) == 1 and len(v2_volume) == 1)
+    check("v1_existing_loader_preserves_positive_provider_carry_forward_bar", 2, len(v1_calendar_rows))
+    check("v2_compatibility_primitives_preserve_same_calendar_bar_semantic", True, len(v2_adjusted) == 1 and len(v2_volume) == 1)
 
     configured_active = RESEARCH_DATA_GENERATIONS[ACTIVE_RESEARCH_DATA_GENERATION]
-    add_check(results, "market_data", case_id, "active_research_generation_follows_config", ACTIVE_RESEARCH_DATA_GENERATION, active.generation_id)
-    add_check(results, "market_data", case_id, "active_research_cutoff_follows_config", str(configured_active.get("cutoff")), str(active.cutoff))
-    add_check(results, "market_data", case_id, "research_compatibility_cutoff_alias_matches_active_generation", str(active.cutoff), str(RESEARCH_MARKET_DATA_CUTOFF))
-    add_check(results, "market_data", case_id, "active_research_generation_is_not_not_ready", False, active.status == RESEARCH_STATUS_AUTHORIZED_NOT_READY)
-    add_check(results, "market_data", case_id, "all_declared_research_generations_resolve", set(RESEARCH_DATA_GENERATIONS), set(resolved_generations))
+    check("active_research_generation_follows_config", ACTIVE_RESEARCH_DATA_GENERATION, active.generation_id)
+    check("active_research_cutoff_follows_config", str(configured_active.get("cutoff")), str(active.cutoff))
+    check("research_compatibility_cutoff_alias_matches_active_generation", str(active.cutoff), str(RESEARCH_MARKET_DATA_CUTOFF))
+    check("active_research_generation_is_not_not_ready", False, active.status == RESEARCH_STATUS_AUTHORIZED_NOT_READY)
+    check("all_declared_research_generations_resolve", set(RESEARCH_DATA_GENERATIONS), set(resolved_generations))
 
     not_ready_cutoffs_are_unclaimed = all(
         contract.cutoff is None
         for contract in resolved_generations.values()
         if contract.status == RESEARCH_STATUS_AUTHORIZED_NOT_READY
     )
-    add_check(results, "market_data", case_id, "not_ready_research_generation_does_not_preclaim_cutoff", True, not_ready_cutoffs_are_unclaimed)
+    check("not_ready_research_generation_does_not_preclaim_cutoff", True, not_ready_cutoffs_are_unclaimed)
 
-    add_check(results, "market_data", case_id, "trading_lifecycle_mode_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("mode")), trading.mode)
-    add_check(results, "market_data", case_id, "trading_bootstrap_generation_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("bootstrap_source_generation")), trading.bootstrap_source_generation)
-    add_check(results, "market_data", case_id, "trading_bootstrap_generation_is_declared", True, trading.bootstrap_source_generation in resolved_generations)
+    check("trading_lifecycle_mode_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("mode")), trading.mode)
+    check("trading_bootstrap_generation_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("bootstrap_source_generation")), trading.bootstrap_source_generation)
+    check("trading_bootstrap_generation_is_declared", True, trading.bootstrap_source_generation in resolved_generations)
 
     downloader_runtime = importlib.import_module("services.downloader.runtime")
-    add_check(results, "market_data", case_id, "downloader_adjusted_price_identity_consumes_canonical_owner", FINMIND_ADJUSTED_PRICE_DATASET, downloader_runtime.FINMIND_PRICE_DATASET)
-    add_check(results, "market_data", case_id, "downloader_universe_volume_identity_consumes_canonical_owner", FINMIND_ADJUSTED_PRICE_DATASET, downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET)
+    check("downloader_adjusted_price_identity_consumes_canonical_owner", FINMIND_ADJUSTED_PRICE_DATASET, downloader_runtime.FINMIND_PRICE_DATASET)
+    check("downloader_universe_volume_identity_consumes_canonical_owner", FINMIND_ADJUSTED_PRICE_DATASET, downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET)
     runtime_source = (PROJECT_ROOT / "services/downloader/runtime.py").read_text(encoding="utf-8")
     adjusted_literals = {f'"{FINMIND_ADJUSTED_PRICE_DATASET}"', f"'{FINMIND_ADJUSTED_PRICE_DATASET}'"}
-    add_check(results, "market_data", case_id, "downloader_runtime_does_not_redeclare_adjusted_dataset_literal", False, any(item in runtime_source for item in adjusted_literals))
+    check("downloader_runtime_does_not_redeclare_adjusted_dataset_literal", False, any(item in runtime_source for item in adjusted_literals))
 
-    add_check(results, "market_data", case_id, "market_data_snapshot_exposes_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, snapshot["active_research_generation"]["generation_id"])
-    add_check(results, "market_data", case_id, "market_data_snapshot_covers_all_declared_generations", set(RESEARCH_DATA_GENERATIONS), set(snapshot["research_generations"]))
+    check("market_data_snapshot_exposes_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, snapshot["active_research_generation"]["generation_id"])
+    check("market_data_snapshot_covers_all_declared_generations", set(RESEARCH_DATA_GENERATIONS), set(snapshot["research_generations"]))
 
     summary["active_research_generation"] = active.generation_id
     summary["active_research_cutoff"] = active.cutoff
@@ -3499,26 +3495,12 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     multi = comparison_extension_contract("multi_head_learnability")
     hs = comparison_extension_contract("hs_conditional_mfe_gate")
-    check_true(
-        "multi_head_learnability_is_model_extension_with_semantic_head_columns_and_scope_split",
-        all(table.table_id != "head_learnability" for section in MODEL_STANDARD_SOP.sections for table in section.tables)
-        and multi.comparison_scope_key == "split"
-        and multi.comparison_population == "all_models"
-        and multi.tables[0].headers[:4] == ("Model", "Raw Safety Daily", "Raw Safety Global", "Raw Safety Pair")
-        and "Raw MFE Daily" in multi.tables[0].headers
-        and "Conditional MFE Daily" in multi.tables[0].headers
-        and "Split" not in multi.tables[0].headers,
-    )
-    check_true(
-        "hs_quality_extension_is_compact_decision_surface_without_duplicate_head_learnability",
-        hs.comparison_scope_key == "split"
-        and hs.tables[0].headers == (
-            "Model", "Pred-HS true-LS", "True-HS recall", "P45–P55 Pair",
-            "Pred-HS HM/HS", "Pred-HS High-MFE", "Pred-HS MFE", "Δ MFE vs Oracle",
-        )
-        and "HS-only rho" not in hs.tables[0].headers
-        and "HS-only Pair" not in hs.tables[0].headers
-        and "P40–P60 Pair" not in hs.tables[0].headers,
+    run_bound_checks(
+        check_true,
+        (
+            ('multi_head_learnability_is_model_extension_with_semantic_head_columns_and_scope_split', all((table.table_id != 'head_learnability' for section in MODEL_STANDARD_SOP.sections for table in section.tables)) and multi.comparison_scope_key == 'split' and (multi.comparison_population == 'all_models') and (multi.tables[0].headers[:4] == ('Model', 'Raw Safety Daily', 'Raw Safety Global', 'Raw Safety Pair')) and ('Raw MFE Daily' in multi.tables[0].headers) and ('Conditional MFE Daily' in multi.tables[0].headers) and ('Split' not in multi.tables[0].headers),),
+            ('hs_quality_extension_is_compact_decision_surface_without_duplicate_head_learnability', hs.comparison_scope_key == 'split' and hs.tables[0].headers == ('Model', 'Pred-HS true-LS', 'True-HS recall', 'P45–P55 Pair', 'Pred-HS HM/HS', 'Pred-HS High-MFE', 'Pred-HS MFE', 'Δ MFE vs Oracle') and ('HS-only rho' not in hs.tables[0].headers) and ('HS-only Pair' not in hs.tables[0].headers) and ('P40–P60 Pair' not in hs.tables[0].headers),),
+        ),
     )
 
     check_true(
@@ -3922,26 +3904,12 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=f"covered={sorted(extension_expectations)}, registered={sorted(MODEL_EXTENSION_SCHEMAS)}",
     )
     conditional_markdown = "\n".join(app._render_continuous_ranker_simple_markdown(conditional_payload))
-    check_true(
-        "hs_conditional_extension_renders_compact_qualification_and_oracle_gap_surface",
-        "P45–P55 Pair" in rendered["hs_conditional"]
-        and "Pred-HS true-LS" in rendered["hs_conditional"]
-        and "True-HS recall" in rendered["hs_conditional"]
-        and "Pred-HS HM/HS" in rendered["hs_conditional"]
-        and "Δ MFE vs Oracle" in rendered["hs_conditional"]
-        and "HS-only rho" not in rendered["hs_conditional"]
-        and "True-HS Oracle HM/HS" not in rendered["hs_conditional"]
-        and "P45–P55 Pair" in conditional_markdown
-        and "Δ MFE vs Oracle" in conditional_markdown,
-    )
-    check_true(
-        "model_extensions_cannot_mutate_standard_model_sop_namespace",
-        all(
-            extension_contract(extension_id).title not in standard_lines[render_key]
-            and expected_heading in rendered[render_key]
-            for extension_id, (render_key, expected_heading) in extension_expectations.items()
-        )
-        and "Δ HM/HS Pair" not in standard_lines["h_only"],
+    run_bound_checks(
+        check_true,
+        (
+            ('hs_conditional_extension_renders_compact_qualification_and_oracle_gap_surface', 'P45–P55 Pair' in rendered['hs_conditional'] and 'Pred-HS true-LS' in rendered['hs_conditional'] and ('True-HS recall' in rendered['hs_conditional']) and ('Pred-HS HM/HS' in rendered['hs_conditional']) and ('Δ MFE vs Oracle' in rendered['hs_conditional']) and ('HS-only rho' not in rendered['hs_conditional']) and ('True-HS Oracle HM/HS' not in rendered['hs_conditional']) and ('P45–P55 Pair' in conditional_markdown) and ('Δ MFE vs Oracle' in conditional_markdown),),
+            ('model_extensions_cannot_mutate_standard_model_sop_namespace', all((extension_contract(extension_id).title not in standard_lines[render_key] and expected_heading in rendered[render_key] for extension_id, (render_key, expected_heading) in extension_expectations.items())) and 'Δ HM/HS Pair' not in standard_lines['h_only'],),
+        ),
     )
     check_true(
         "cross_profile_standard_v6_common_headers_and_section_order_are_invariant",

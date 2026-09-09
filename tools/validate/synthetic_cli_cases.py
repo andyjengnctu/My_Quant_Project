@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import run_bound_checks
+
 from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -29,7 +31,7 @@ from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
 )
-from .checks import bind_checks
+from .checks import bind_synthetic_case, bind_checks
 
 
 def _capture_stdout(func, *args, **kwargs):
@@ -59,9 +61,7 @@ def _assert_value_error(results, category, case_id, metric_name, func, expected_
 def validate_dataset_cli_contract_case(_base_params):
     """Validate generic CLI routing without replaying every historical workflow."""
     case_id = "CLI_DATASET_WRAPPER_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "cli_contract", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
     app = importlib.import_module("tools.filters.breakout_quality.application")
     rc, help_text = _capture_stdout(app.main, ["apps/research.py model", "--help"])
@@ -158,9 +158,7 @@ def validate_dataset_cli_contract_case(_base_params):
 
 def validate_local_regression_cli_contract_case(_base_params):
     case_id = "CLI_LOCAL_REGRESSION_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "cli_contract", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
     app_package_zip = importlib.import_module("apps.package_zip")
     app_smart_downloader = importlib.import_module("apps.smart_downloader")
@@ -224,9 +222,7 @@ def validate_local_regression_cli_contract_case(_base_params):
 
 def validate_run_all_cli_error_usage_contract_case(_base_params):
     case_id = "RUN_ALL_CLI_ERROR_USAGE_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "cli_contract", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
     run_all = importlib.import_module("tools.local_regression.run_all")
 
@@ -244,9 +240,7 @@ def validate_run_all_cli_error_usage_contract_case(_base_params):
 
 def validate_package_zip_runtime_contract_case(_base_params):
     case_id = "PACKAGE_ZIP_RUNTIME_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "cli_contract", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
     app_package_zip = importlib.import_module("apps.package_zip")
 
@@ -308,15 +302,12 @@ def validate_package_zip_runtime_contract_case(_base_params):
         archived_root_zips = sorted(path.name for path in (project_root / "arch").glob("*.zip"))
         check("package_zip_main_rc", 0, rc)
         check_true("package_zip_output_exists", new_zip_path.exists())
-        check(
-            "package_zip_archives_non_bundle_root_zips_only",
-            ["main_20250101_deadbeef.zip", "other_branch_20250102_cafebabe.zip"],
-            archived_root_zips,
-        )
-        check(
-            "package_zip_root_old_zip_removed",
-            False,
-            (project_root / "other_branch_20250102_cafebabe.zip").exists(),
+        run_bound_checks(
+            check,
+            (
+                ('package_zip_archives_non_bundle_root_zips_only', ['main_20250101_deadbeef.zip', 'other_branch_20250102_cafebabe.zip'], archived_root_zips,),
+                ('package_zip_root_old_zip_removed', False, (project_root / 'other_branch_20250102_cafebabe.zip').exists(),),
+            ),
         )
         check_true(
             "package_zip_root_bundle_preserved",
@@ -328,15 +319,12 @@ def validate_package_zip_runtime_contract_case(_base_params):
             (project_root / "arch" / "to_chatgpt_bundle_20250103_deadbeef.zip").exists(),
         )
         check("package_zip_cache_dir_removed", False, transient_cache_dir.exists())
-        check_true(
-            "package_zip_cache_cleanup_retries_transient_winerror_145",
-            rmtree_attempts[transient_cache_dir] >= 2,
-        )
-        check_true(
-            "package_zip_cache_cleanup_persistent_winerror_145_does_not_abort",
-            busy_cache_dir.exists()
-            and "warning=python_cache_cleanup_incomplete" in stdout_text
-            and "package exclusion remains enforced" in stdout_text,
+        run_bound_checks(
+            check_true,
+            (
+                ('package_zip_cache_cleanup_retries_transient_winerror_145', rmtree_attempts[transient_cache_dir] >= 2,),
+                ('package_zip_cache_cleanup_persistent_winerror_145_does_not_abort', busy_cache_dir.exists() and 'warning=python_cache_cleanup_incomplete' in stdout_text and ('package exclusion remains enforced' in stdout_text),),
+            ),
         )
         check("package_zip_orphan_pyc_removed", False, (project_root / "orphan.pyc").exists())
         check_true(
@@ -355,9 +343,7 @@ def validate_package_zip_runtime_contract_case(_base_params):
 
 def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
     case_id = "PACKAGE_ZIP_COMMIT_TEST_SUITE_ORCHESTRATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "cli_contract", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
     app_package_zip = importlib.import_module("apps.package_zip")
 
@@ -417,21 +403,14 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
             python_commands,
         )
         relative_zip_output = f"[package_zip] output={new_zip_path.name}"
-        check_true(
-            "package_zip_orchestration_output_is_project_relative",
-            relative_zip_output in stdout_text and str(project_root).replace("\\", "/") not in stdout_text,
-        )
-        check_true(
-            "package_zip_orchestration_test_suite_after_zip",
-            stdout_text.index(relative_zip_output) < stdout_text.index("[package_zip] test_suite=pass"),
-        )
-        check_true(
-            "package_zip_orchestration_commit_headline_reported",
-            "[package_zip] commit=[feature/workflow fedcba9] feat: package workflow" in stdout_text,
-        )
-        check_true(
-            "package_zip_orchestration_bundle_preserved",
-            (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists(),
+        run_bound_checks(
+            check_true,
+            (
+                ('package_zip_orchestration_output_is_project_relative', relative_zip_output in stdout_text and str(project_root).replace('\\', '/') not in stdout_text,),
+                ('package_zip_orchestration_test_suite_after_zip', stdout_text.index(relative_zip_output) < stdout_text.index('[package_zip] test_suite=pass'),),
+                ('package_zip_orchestration_commit_headline_reported', '[package_zip] commit=[feature/workflow fedcba9] feat: package workflow' in stdout_text,),
+                ('package_zip_orchestration_bundle_preserved', (project_root / 'to_chatgpt_bundle_20250103_deadbeef.zip').exists(),),
+            ),
         )
 
     run_bundle_source = (Path(__file__).resolve().parents[2] / "apps" / "run_bundle.py").read_text(encoding="utf-8")
@@ -446,15 +425,12 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
         < run_bundle_source.index(package_marker)
         < run_bundle_source.index(test_marker)
     )
-    check_true("run_bundle_commits_and_packages_before_formal_test", delivery_first_order)
-    check_true(
-        "run_bundle_formal_failure_keeps_prebuilt_delivery_snapshot",
-        'run_cmd(["git", "commit", "-m", message]' in run_bundle_source
-                and 'run_cmd([sys.executable, "apps/package_zip.py"]' in run_bundle_source
-                and 'run_cmd([sys.executable, "apps/test_suite.py"]' in run_bundle_source
-                and run_bundle_source.index('run_cmd(["git", "commit", "-m", message]')
-                < run_bundle_source.index('run_cmd([sys.executable, "apps/package_zip.py"]')
-                < run_bundle_source.index('run_cmd([sys.executable, "apps/test_suite.py"]'),
+    run_bound_checks(
+        check_true,
+        (
+            ('run_bundle_commits_and_packages_before_formal_test', delivery_first_order,),
+            ('run_bundle_formal_failure_keeps_prebuilt_delivery_snapshot', 'run_cmd(["git", "commit", "-m", message]' in run_bundle_source and 'run_cmd([sys.executable, "apps/package_zip.py"]' in run_bundle_source and ('run_cmd([sys.executable, "apps/test_suite.py"]' in run_bundle_source) and (run_bundle_source.index('run_cmd(["git", "commit", "-m", message]') < run_bundle_source.index('run_cmd([sys.executable, "apps/package_zip.py"]') < run_bundle_source.index('run_cmd([sys.executable, "apps/test_suite.py"]')),),
+        ),
     )
 
     summary["checks"] = len(results)
@@ -463,9 +439,7 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
 
 def validate_breakout_quality_app_simple_report_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_APP_SIMPLE_REPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "output_contract", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "output_contract")
     app_breakout_quality = importlib.import_module("tools.filters.breakout_quality.application")
 
     with TemporaryDirectory() as tmp_dir:
@@ -479,24 +453,14 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 elapsed_sec=1.25,
             )
         markdown = report_path.read_text(encoding="utf-8")
-        check_true(
-            "breakout_quality_app_console_simple_report",
-            "Breakout Quality 簡易報表" in console_text and "狀態" in console_text,
-        )
-        check_true(
-            "breakout_quality_app_persistent_markdown_simple_report",
-            report_path.is_file()
-            and "Breakout Quality 簡易報表" in markdown
-            and "#42A5F5" in markdown,
-        )
-        check_true(
-            "breakout_quality_app_simple_report_paths_are_project_relative",
-            "outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md" in console_text
-                        and str(simple_root) not in console_text,
-        )
-        check_true(
-            "breakout_quality_app_simple_report_contains_active_identity",
-            "synthetic_quality" in markdown and "Objective" in markdown,
+        run_bound_checks(
+            check_true,
+            (
+                ('breakout_quality_app_console_simple_report', 'Breakout Quality 簡易報表' in console_text and '狀態' in console_text,),
+                ('breakout_quality_app_persistent_markdown_simple_report', report_path.is_file() and 'Breakout Quality 簡易報表' in markdown and ('#42A5F5' in markdown),),
+                ('breakout_quality_app_simple_report_paths_are_project_relative', 'outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md' in console_text and str(simple_root) not in console_text,),
+                ('breakout_quality_app_simple_report_contains_active_identity', 'synthetic_quality' in markdown and 'Objective' in markdown,),
+            ),
         )
 
         pit_manifest_path = app_breakout_quality.resolve_selection_point_in_time_manifest_path(
@@ -531,16 +495,12 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 elapsed_sec=0.5,
             )
         pit_markdown = pit_report_path.read_text(encoding="utf-8")
-        check_true(
-            "breakout_quality_pit_build_simple_report_uses_manifest_coverage_before_audit_exists",
-            "Score coverage" in pit_console
-                        and "100.00%" in pit_console
-                        and "778532" in pit_console
-                        and "100.00%" in pit_markdown,
-        )
-        check_true(
-            "breakout_quality_pit_build_simple_report_omits_audit_only_metrics",
-            "Daily rho" not in pit_console and "Global rho" not in pit_console,
+        run_bound_checks(
+            check_true,
+            (
+                ('breakout_quality_pit_build_simple_report_uses_manifest_coverage_before_audit_exists', 'Score coverage' in pit_console and '100.00%' in pit_console and ('778532' in pit_console) and ('100.00%' in pit_markdown),),
+                ('breakout_quality_pit_build_simple_report_omits_audit_only_metrics', 'Daily rho' not in pit_console and 'Global rho' not in pit_console,),
+            ),
         )
 
         pit_override = simple_root / "models" / "synthetic_pit_override"
@@ -735,18 +695,12 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             colored_model_console = app_breakout_quality._render_continuous_ranker_simple_console(
                 conditional_payload
             )
-        check_true(
-            "breakout_quality_model_sop_uses_shared_color_palette_for_sections_generalization_and_evidence",
-            "\x1b[96m" in colored_model_console
-            and "\x1b[91m" in colored_model_console
-            and "\x1b[92m" in colored_model_console
-            and "標準模型 SOP｜1. Learnability" in colored_model_console
-            and "標準模型 SOP｜2. Generalization" in colored_model_console,
-        )
-        check_true(
-            "breakout_quality_model_sop_markdown_uses_shared_blue_and_semantic_colors",
-            "#42A5F5" in conditional_markdown
-            and "標準模型 SOP｜1. Learnability" in conditional_markdown,
+        run_bound_checks(
+            check_true,
+            (
+                ('breakout_quality_model_sop_uses_shared_color_palette_for_sections_generalization_and_evidence', '\x1b[96m' in colored_model_console and '\x1b[91m' in colored_model_console and ('\x1b[92m' in colored_model_console) and ('標準模型 SOP｜1. Learnability' in colored_model_console) and ('標準模型 SOP｜2. Generalization' in colored_model_console),),
+                ('breakout_quality_model_sop_markdown_uses_shared_blue_and_semantic_colors', '#42A5F5' in conditional_markdown and '標準模型 SOP｜1. Learnability' in conditional_markdown,),
+            ),
         )
 
         compare_dir = (
@@ -927,9 +881,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
 
 def validate_extended_tool_cli_contract_case(_base_params):
     case_id = "CLI_EXTENDED_TOOL_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "cli_contract", case_id)
+    results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
     app_test_suite = importlib.import_module("apps.test_suite")
     app_workbench = importlib.import_module("apps.workbench")
