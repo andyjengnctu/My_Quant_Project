@@ -3512,6 +3512,27 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             if parameter.requires_grad
         )
 
+    def _architectures_with_capabilities(*required, forbidden=()):
+        matches = []
+        for architecture in ACTIVE_MODEL_ARCHITECTURES:
+            descriptor = get_architecture_descriptor(architecture)
+            if all(descriptor.has_capability(name) for name in required) and not any(
+                descriptor.has_capability(name) for name in forbidden
+            ):
+                matches.append(architecture)
+        return matches
+
+    def _pointwise_conv1d_contract(layer, *, in_channels, out_channels, bias):
+        return bool(
+            isinstance(layer, torch.nn.Conv1d)
+            and int(layer.in_channels) == int(in_channels)
+            and int(layer.out_channels) == int(out_channels)
+            and tuple(layer.kernel_size) == (1,)
+            and tuple(layer.stride) == (1,)
+            and tuple(layer.padding) == (0,)
+            and (layer.bias is not None) is bool(bias)
+        )
+
     def _safety_only_extension_probe(
         parent_architecture,
         architecture,
@@ -3548,6 +3569,24 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             mfe_grad=grads["mfe"]["extension"],
             parent_params=_trainable_parameter_count(parent_model),
             model_params=_trainable_parameter_count(model),
+        )
+
+    def _safety_only_extension_contract(probe, *, max_parameter_growth):
+        return bool(
+            probe.common_exact
+            and torch.equal(probe.parent_mfe, probe.mfe)
+            and not torch.equal(probe.parent_safety, probe.safety)
+            and probe.mfe_grad == 0.0
+            and probe.safety_grad > 0.0
+            and probe.model_params > probe.parent_params
+            and (probe.model_params - probe.parent_params) / probe.parent_params
+            < max_parameter_growth
+        )
+
+    def _gradient_ownership_contract(grads, *, positive=(), zero=()):
+        return bool(
+            all(grads[head][group] > 0.0 for head, group in positive)
+            and all(grads[head][group] == 0.0 for head, group in zero)
         )
 
     def _price_volume_fixture(
@@ -4317,100 +4356,87 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and all(bool(torch.isfinite(p).all().item()) for p in scaled_model.parameters()),
         )
 
-    full_window_descriptor = get_architecture_descriptor(
-        INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1
-    )
-    full_window_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1)
     ao_shared_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    ao_params = _trainable_parameter_count(
+        build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    )
+    variant_cases = {
+        INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1: dict(
+            capability="full_window_receptive_field",
+            expected={"receptive_field_bars": 305, "inception_module_dilations": (1, 1, 1, 1, 2, 2)},
+            reference_expected={"inception_kernel_sizes": (39, 19, 9), "inception_module_dilations": (), "receptive_field_bars": 229},
+            same_fields=("inception_kernel_sizes", "inception_depth", "inception_filters", "inception_bottleneck_channels", "inception_residual_every", "pooling"),
+        ),
+        INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1: dict(
+            capability="wide_capacity",
+            expected={"inception_filters": 64, "inception_bottleneck_channels": 64},
+            reference_expected={"inception_filters": 32, "inception_bottleneck_channels": 32, "receptive_field_bars": 229, "inception_kernel_sizes": (39, 19, 9), "inception_module_dilations": (), "inception_depth": 6, "inception_residual_every": 3},
+            same_fields=("receptive_field_bars", "inception_kernel_sizes", "inception_module_dilations", "inception_depth", "inception_residual_every", "pooling"),
+        ),
+        INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1: dict(
+            capability="long_horizon_input",
+            expected={"input_window_bars": 600, "receptive_field_bars": 609, "inception_module_dilations": (1, 1, 1, 1, 6, 6)},
+            reference_expected={"inception_kernel_sizes": (39, 19, 9), "inception_depth": 6, "inception_filters": 32, "inception_bottleneck_channels": 32, "inception_residual_every": 3},
+            same_fields=("inception_kernel_sizes", "inception_depth", "inception_filters", "inception_bottleneck_channels", "inception_residual_every", "pooling"),
+        ),
+        INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1: dict(
+            capability="deep_hierarchy_capacity_matched",
+            expected={"input_window_bars": None, "inception_depth": 12, "inception_bottleneck_channels": 24, "inception_kernel_sizes": (21, 11, 5), "inception_module_dilations": (), "receptive_field_bars": 241},
+            reference_expected={"inception_filters": 32, "inception_residual_every": 3},
+            same_fields=("inception_filters", "inception_residual_every", "pooling"),
+        ),
+    }
+    variant_specs = {}
+    variant_matches = {}
+    variant_params = {}
+    parameterized_variants = {
+        INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1,
+    }
+    for architecture, contract in variant_cases.items():
+        descriptor = get_architecture_descriptor(architecture)
+        spec = get_model_spec(architecture)
+        variant_specs[architecture] = spec
+        variant_matches[architecture] = bool(
+            descriptor.has_capability(contract["capability"])
+            and all(getattr(spec, field) == value for field, value in contract["expected"].items())
+            and all(getattr(ao_shared_spec, field) == value for field, value in contract["reference_expected"].items())
+            and _same_fields(spec, ao_shared_spec, contract["same_fields"])
+        )
+        if architecture in parameterized_variants:
+            variant_params[architecture] = _trainable_parameter_count(
+                build_active_model(10, 0, architecture=architecture)
+            )
+
+    full_window_spec = variant_specs[INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1]
     check_true(
         "full_window_receptive_field_capability_covers_300_bar_input_without_capacity_change",
-        full_window_descriptor.has_capability("full_window_receptive_field")
-        and int(full_window_spec.receptive_field_bars) >= 300
-        and tuple(full_window_spec.inception_kernel_sizes) == tuple(ao_shared_spec.inception_kernel_sizes) == (39, 19, 9)
-        and tuple(full_window_spec.inception_module_dilations) == (1, 1, 1, 1, 2, 2)
-        and int(full_window_spec.receptive_field_bars) == 305
-        and int(full_window_spec.inception_depth) == int(ao_shared_spec.inception_depth)
-        and int(full_window_spec.inception_filters) == int(ao_shared_spec.inception_filters)
-        and int(full_window_spec.inception_bottleneck_channels) == int(ao_shared_spec.inception_bottleneck_channels)
-        and int(full_window_spec.inception_residual_every) == int(ao_shared_spec.inception_residual_every)
-        and tuple(full_window_spec.pooling) == tuple(ao_shared_spec.pooling)
-        and tuple(ao_shared_spec.inception_module_dilations) == ()
-        and int(ao_shared_spec.receptive_field_bars) == 229,
+        variant_matches[INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1]
+        and int(full_window_spec.receptive_field_bars) >= 300,
     )
-
-    wide_descriptor = get_architecture_descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
-    wide_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
-    ao_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
-    wide_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
-    ao_params = _trainable_parameter_count(ao_model)
-    wide_params = _trainable_parameter_count(wide_model)
+    wide_params = variant_params[INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1]
     check_true(
         "wide_capacity_capability_scales_channels_without_rf_or_topology_change",
-        wide_descriptor.has_capability("wide_capacity")
-        and int(wide_spec.inception_filters) == 64
-        and int(wide_spec.inception_bottleneck_channels) == 64
-        and int(ao_shared_spec.inception_filters) == 32
-        and int(ao_shared_spec.inception_bottleneck_channels) == 32
-        and int(wide_spec.receptive_field_bars) == int(ao_shared_spec.receptive_field_bars) == 229
-        and tuple(wide_spec.inception_kernel_sizes) == tuple(ao_shared_spec.inception_kernel_sizes) == (39, 19, 9)
-        and tuple(wide_spec.inception_module_dilations) == tuple(ao_shared_spec.inception_module_dilations) == ()
-        and int(wide_spec.inception_depth) == int(ao_shared_spec.inception_depth) == 6
-        and int(wide_spec.inception_residual_every) == int(ao_shared_spec.inception_residual_every) == 3
-        and tuple(wide_spec.pooling) == tuple(ao_shared_spec.pooling)
-        and ao_params == 473734
-        and wide_params == 1885446
-        and wide_params > ao_params,
+        variant_matches[INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1]
+        and ao_params == 473734 and wide_params == 1885446 and wide_params > ao_params,
     )
-
-    long_horizon_descriptor = get_architecture_descriptor(
-        INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1
-    )
-    long_horizon_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1)
-    long_horizon_model = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1
-    )
-    long_horizon_params = _trainable_parameter_count(long_horizon_model)
+    long_horizon_params = variant_params[INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1]
     check_true(
         "long_horizon_input_capability_doubles_history_with_parameter_neutral_full_window_rf",
-        long_horizon_descriptor.has_capability("long_horizon_input")
-        and int(long_horizon_spec.input_window_bars) == 600
-        and int(long_horizon_spec.receptive_field_bars) == 609
-        and tuple(long_horizon_spec.inception_kernel_sizes)
-        == tuple(ao_shared_spec.inception_kernel_sizes)
-        == (39, 19, 9)
-        and tuple(long_horizon_spec.inception_module_dilations) == (1, 1, 1, 1, 6, 6)
-        and int(long_horizon_spec.inception_depth) == int(ao_shared_spec.inception_depth) == 6
-        and int(long_horizon_spec.inception_filters) == int(ao_shared_spec.inception_filters) == 32
-        and int(long_horizon_spec.inception_bottleneck_channels)
-        == int(ao_shared_spec.inception_bottleneck_channels)
-        == 32
-        and int(long_horizon_spec.inception_residual_every)
-        == int(ao_shared_spec.inception_residual_every)
-        == 3
-        and tuple(long_horizon_spec.pooling) == tuple(ao_shared_spec.pooling)
+        variant_matches[INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1]
         and ao_params == long_horizon_params == 473734,
     )
-
-    deep_descriptor = get_architecture_descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
-    deep_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
-    deep_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
-    deep_params = _trainable_parameter_count(deep_model)
+    deep_spec = variant_specs[INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1]
+    deep_params = variant_params[INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1]
     check_true(
         "deep_hierarchy_capability_doubles_depth_at_matched_parameter_and_rf_scale",
-        deep_descriptor.has_capability("deep_hierarchy_capacity_matched")
-        and deep_spec.input_window_bars is None
-        and int(deep_spec.inception_depth) == 12
-        and int(deep_spec.inception_filters) == int(ao_shared_spec.inception_filters) == 32
-        and int(deep_spec.inception_bottleneck_channels) == 24
-        and tuple(deep_spec.inception_kernel_sizes) == (21, 11, 5)
-        and tuple(deep_spec.inception_module_dilations) == ()
-        and int(deep_spec.inception_residual_every) == int(ao_shared_spec.inception_residual_every) == 3
-        and int(deep_spec.receptive_field_bars) == 241
-        and tuple(deep_spec.pooling) == tuple(ao_shared_spec.pooling)
+        variant_matches[INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1]
         and ao_params == 473734
         and deep_params == 475702
         and abs(deep_params - ao_params) / ao_params < 0.01
-        and abs(int(deep_spec.receptive_field_bars) - int(ao_shared_spec.receptive_field_bars)) / int(ao_shared_spec.receptive_field_bars) < 0.06,
+        and abs(int(deep_spec.receptive_field_bars) - int(ao_shared_spec.receptive_field_bars))
+        / int(ao_shared_spec.receptive_field_bars) < 0.06,
     )
 
     project_root = Path(__file__).resolve().parents[2]
@@ -5298,19 +5324,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # Price/Volume structural Safety representation is a reusable InceptionTime
     # primitive.  It must preserve every AO-common parameter and the complete MFE
     # path at the same seed; only Safety loss may update the new structural branch.
-    structure_architectures = [
-        architecture
-        for architecture in ACTIVE_MODEL_ARCHITECTURES
-        if get_architecture_descriptor(architecture).has_capability(
-            "price_volume_structure_safety"
-        )
-        and not get_architecture_descriptor(architecture).has_capability(
-            "price_volume_local_structure_safety"
-        )
-        and not get_architecture_descriptor(architecture).has_capability(
-            "price_volume_multiscale_local_safety"
-        )
-    ]
+    structure_architectures = _architectures_with_capabilities(
+        "price_volume_structure_safety",
+        forbidden=("price_volume_local_structure_safety", "price_volume_multiscale_local_safety"),
+    )
     structure_contracts = []
     for architecture in structure_architectures:
         structure_spec = get_model_spec(architecture)
@@ -5378,11 +5395,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and int(structure_spec.price_volume_structure_geometry_channels or 0) == 4
             and int(structure_spec.price_volume_structure_geometry_latent_dim or 0) == 32
             and int(structure_spec.price_volume_structure_vap_latent_dim or 0) == 16
-            and structure_probe.common_exact
+            and _safety_only_extension_contract(
+                structure_probe, max_parameter_growth=0.05
+            )
             and bool(structure_probe.extra_keys)
             and all(key.startswith("price_volume_structure_encoder.") for key in structure_probe.extra_keys)
-            and torch.equal(structure_probe.parent_mfe, structure_probe.mfe)
-            and not torch.equal(structure_probe.parent_safety, structure_probe.safety)
             and tuple(geometry_map.shape) == (2, 4, 128, 64)
             and tuple(vap.shape) == (2, 64)
             and bool(torch.isfinite(geometry_map).all().item())
@@ -5396,10 +5413,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 )
             )
             and local_volume_mass_high > local_volume_mass_base
-            and structure_probe.mfe_grad == 0.0
-            and structure_probe.safety_grad > 0.0
-            and structure_probe.model_params > structure_probe.parent_params
-            and (structure_probe.model_params - structure_probe.parent_params) / structure_probe.parent_params < 0.05
             and ao_structure_reference.family == "inception_time_shared_safety_mfe"
         )
     check_true(
@@ -5411,29 +5424,16 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # The local branch reuses the exact BL raster, sees only +/-4 ATR price-zone
     # tokens, is conditioned by the globally augmented Safety latent, and remains
     # completely outside the MFE gradient path.
-    local_structure_architectures = [
-        architecture
-        for architecture in ACTIVE_MODEL_ARCHITECTURES
-        if get_architecture_descriptor(architecture).has_capability(
-            "price_volume_local_structure_safety"
-        )
-    ]
+    local_structure_architectures = _architectures_with_capabilities(
+        "price_volume_local_structure_safety"
+    )
     local_structure_contracts = []
     for architecture in local_structure_architectures:
         local_spec = get_model_spec(architecture)
-        parent_architectures = [
-            candidate
-            for candidate in ACTIVE_MODEL_ARCHITECTURES
-            if get_architecture_descriptor(candidate).has_capability(
-                "price_volume_structure_safety"
-            )
-            and not get_architecture_descriptor(candidate).has_capability(
-                "price_volume_local_structure_safety"
-            )
-            and not get_architecture_descriptor(candidate).has_capability(
-                "price_volume_multiscale_local_safety"
-            )
-        ]
+        parent_architectures = _architectures_with_capabilities(
+            "price_volume_structure_safety",
+            forbidden=("price_volume_local_structure_safety", "price_volume_multiscale_local_safety"),
+        )
         if len(parent_architectures) != 1:
             local_structure_contracts.append(False)
             continue
@@ -5506,14 +5506,14 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 local_spec.price_volume_local_structure_recent_fraction or 0.0
             )
             == 0.25
-            and local_probe.common_exact
+            and _safety_only_extension_contract(
+                local_probe, max_parameter_growth=0.03
+            )
             and bool(local_probe.extra_keys)
             and all(
                 key.startswith("price_volume_local_structure_encoder.")
                 for key in local_probe.extra_keys
             )
-            and torch.equal(local_probe.parent_mfe, local_probe.mfe)
-            and not torch.equal(local_probe.parent_safety, local_probe.safety)
             and tuple(local_tokens.shape) == (2, 16, 11)
             and tuple(local_mask.shape) == (2, 16)
             and tuple(local_weights.shape) == (2, 16)
@@ -5533,10 +5533,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                     torch.zeros_like(zero_local_residual),
                 )
             )
-            and local_probe.mfe_grad == 0.0
-            and local_probe.safety_grad > 0.0
-            and local_probe.model_params > local_probe.parent_params
-            and (local_probe.model_params - local_probe.parent_params) / local_probe.parent_params < 0.03
         )
     check_true(
         "price_volume_global_and_local_structure_are_additive_safety_only_capabilities",
@@ -5546,29 +5542,16 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # BN keeps BL's exact global field and adds a second high-resolution local
     # 2D field rather than aggregating away time geometry.  The local residual
     # includes an explicit local×global interaction and remains Safety-only.
-    multiscale_architectures = [
-        architecture
-        for architecture in ACTIVE_MODEL_ARCHITECTURES
-        if get_architecture_descriptor(architecture).has_capability(
-            "price_volume_multiscale_local_safety"
-        )
-    ]
+    multiscale_architectures = _architectures_with_capabilities(
+        "price_volume_multiscale_local_safety"
+    )
     multiscale_contracts = []
     for architecture in multiscale_architectures:
         multiscale_spec = get_model_spec(architecture)
-        parent_architectures = [
-            candidate
-            for candidate in ACTIVE_MODEL_ARCHITECTURES
-            if get_architecture_descriptor(candidate).has_capability(
-                "price_volume_structure_safety"
-            )
-            and not get_architecture_descriptor(candidate).has_capability(
-                "price_volume_local_structure_safety"
-            )
-            and not get_architecture_descriptor(candidate).has_capability(
-                "price_volume_multiscale_local_safety"
-            )
-        ]
+        parent_architectures = _architectures_with_capabilities(
+            "price_volume_structure_safety",
+            forbidden=("price_volume_local_structure_safety", "price_volume_multiscale_local_safety"),
+        )
         if len(parent_architectures) != 1:
             multiscale_contracts.append(False)
             continue
@@ -5625,23 +5608,19 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and int(multiscale_spec.price_volume_local_map_price_bins or 0) == 64
             and float(multiscale_spec.price_volume_local_map_price_span_atr or 0.0) == 4.0
             and int(multiscale_spec.price_volume_local_map_geometry_latent_dim or 0) == 32
-            and multiscale_probe.common_exact
+            and _safety_only_extension_contract(
+                multiscale_probe, max_parameter_growth=0.05
+            )
             and bool(multiscale_probe.extra_keys)
             and all(
                 key.startswith("price_volume_multiscale_local_encoder.")
                 for key in multiscale_probe.extra_keys
             )
-            and torch.equal(multiscale_probe.parent_mfe, multiscale_probe.mfe)
-            and not torch.equal(multiscale_probe.parent_safety, multiscale_probe.safety)
             and tuple(local_map.shape) == (2, 4, 96, 64)
             and bool(torch.isfinite(local_map).all().item())
             and float(local_map[1, 2:, -24:, :].sum().item())
             > float(local_map[0, 2:, -24:, :].sum().item())
             and bool(torch.equal(zero_local_residual, torch.zeros_like(zero_local_residual)))
-            and multiscale_probe.mfe_grad == 0.0
-            and multiscale_probe.safety_grad > 0.0
-            and multiscale_probe.model_params > multiscale_probe.parent_params
-            and (multiscale_probe.model_params - multiscale_probe.parent_params) / multiscale_probe.parent_params < 0.05
         )
     check_true(
         "price_volume_multiscale_global_plus_high_resolution_local_2d_is_safety_only",
@@ -5653,23 +5632,15 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # signed price runs -1..+1 across price bins, time age runs -1..+1 oldest
     # to newest, and VAP receives the same signed-price coordinate.  MFE remains
     # the exact shared AO/BN path and must not update the position-aware branch.
-    position_aware_architectures = [
-        architecture
-        for architecture in ACTIVE_MODEL_ARCHITECTURES
-        if get_architecture_descriptor(architecture).has_capability(
-            "price_volume_position_aware_multiscale_safety"
-        )
-    ]
+    position_aware_architectures = _architectures_with_capabilities(
+        "price_volume_position_aware_multiscale_safety"
+    )
     position_aware_contracts = []
     for architecture in position_aware_architectures:
         position_spec = get_model_spec(architecture)
-        parent_architectures = [
-            candidate
-            for candidate in ACTIVE_MODEL_ARCHITECTURES
-            if get_architecture_descriptor(candidate).has_capability(
-                "price_volume_multiscale_local_safety"
-            )
-        ]
+        parent_architectures = _architectures_with_capabilities(
+            "price_volume_multiscale_local_safety"
+        )
         if len(parent_architectures) != 1:
             position_aware_contracts.append(False)
             continue
@@ -5728,9 +5699,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and int(position_spec.price_volume_local_map_history_bars or 0) == 80
             and int(position_spec.price_volume_local_map_time_bins or 0) == 96
             and int(position_spec.price_volume_local_map_price_bins or 0) == 64
-            and position_probe.common_exact
-            and torch.equal(position_probe.parent_mfe, position_probe.mfe)
-            and not torch.equal(position_probe.parent_safety, position_probe.safety)
+            and _safety_only_extension_contract(
+                position_probe, max_parameter_growth=0.01
+            )
             and tuple(global_map.shape) == (2, 6, 128, 64)
             and tuple(position_vap.shape) == (2, 2, 64)
             and tuple(local_map.shape) == (2, 6, 96, 64)
@@ -5738,10 +5709,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and bool(torch.isfinite(position_vap).all().item())
             and bool(torch.isfinite(local_map).all().item())
             and coordinates_exact
-            and position_probe.mfe_grad == 0.0
-            and position_probe.safety_grad > 0.0
-            and position_probe.model_params > position_probe.parent_params
-            and (position_probe.model_params - position_probe.parent_params) / position_probe.parent_params < 0.01
         )
     check_true(
         "price_volume_position_aware_multiscale_preserves_coordinates_and_mfe_path",
@@ -5757,20 +5724,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             "mfe_branch": task_model.mfe_inception_modules.parameters(),
         },
     )
-    safety_shared_grad = task_grads["safety"]["shared"]
-    safety_branch_grad = task_grads["safety"]["safety_branch"]
-    safety_to_mfe_grad = task_grads["safety"]["mfe_branch"]
-    mfe_shared_grad = task_grads["mfe"]["shared"]
-    mfe_branch_grad = task_grads["mfe"]["mfe_branch"]
-    mfe_to_safety_grad = task_grads["mfe"]["safety_branch"]
     check_true(
         "task_specific_safety_mfe_gradient_ownership_is_shared_stem_plus_own_final_group",
-        safety_shared_grad > 0.0
-        and safety_branch_grad > 0.0
-        and safety_to_mfe_grad == 0.0
-        and mfe_shared_grad > 0.0
-        and mfe_branch_grad > 0.0
-        and mfe_to_safety_grad == 0.0,
+        _gradient_ownership_contract(
+            task_grads,
+            positive=(("safety", "shared"), ("safety", "safety_branch"), ("mfe", "shared"), ("mfe", "mfe_branch")),
+            zero=(("safety", "mfe_branch"), ("mfe", "safety_branch")),
+        ),
     )
 
     # Safety-specific temporal attention pooling is another reusable InceptionTime
@@ -5810,12 +5770,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     scorer = safety_attn_model.safety_attention_scorer
     check_true(
         "safety_attention_pool_is_single_scalar_1x1_scorer_without_attention_hyperparameters",
-        isinstance(scorer, torch.nn.Conv1d)
-        and int(scorer.in_channels) == int(safety_attn_spec.inception_filters) * 4
-        and int(scorer.out_channels) == 1
-        and tuple(scorer.kernel_size) == (1,)
-        and tuple(scorer.stride) == (1,)
-        and tuple(scorer.padding) == (0,),
+        _pointwise_conv1d_contract(
+            scorer,
+            in_channels=int(safety_attn_spec.inception_filters) * 4,
+            out_channels=1,
+            bias=True,
+        ),
     )
     with torch.no_grad():
         safety_weights = safety_attn_model.safety_attention_weights(attention_x)
@@ -5890,20 +5850,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             "mfe_branch": task_attn_model.mfe_inception_modules.parameters(),
         },
     )
-    task_safety_scorer_grad = task_attention_grads["safety"]["scorer"]
-    task_safety_branch_grad = task_attention_grads["safety"]["safety_branch"]
-    task_safety_to_mfe_grad = task_attention_grads["safety"]["mfe_branch"]
-    task_mfe_to_scorer_grad = task_attention_grads["mfe"]["scorer"]
-    task_mfe_to_safety_branch_grad = task_attention_grads["mfe"]["safety_branch"]
-    task_mfe_branch_grad = task_attention_grads["mfe"]["mfe_branch"]
     check_true(
         "task_specific_safety_attention_gradient_ownership_remains_task_isolated",
-        task_safety_scorer_grad > 0.0
-        and task_safety_branch_grad > 0.0
-        and task_safety_to_mfe_grad == 0.0
-        and task_mfe_to_scorer_grad == 0.0
-        and task_mfe_to_safety_branch_grad == 0.0
-        and task_mfe_branch_grad > 0.0,
+        _gradient_ownership_contract(
+            task_attention_grads,
+            positive=(("safety", "scorer"), ("safety", "safety_branch"), ("mfe", "mfe_branch")),
+            zero=(("safety", "mfe_branch"), ("mfe", "scorer"), ("mfe", "safety_branch")),
+        ),
     )
 
     # Safety temporal self-attention is a distinct interaction primitive, not another
@@ -5957,11 +5910,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     check_true(
         "safety_temporal_self_attention_is_parameter_minimal_single_head_full_width_qkv",
         all(
-            isinstance(layer, torch.nn.Conv1d)
-            and int(layer.in_channels) == expected_channels
-            and int(layer.out_channels) == expected_channels
-            and tuple(layer.kernel_size) == (1,)
-            and layer.bias is None
+            _pointwise_conv1d_contract(
+                layer,
+                in_channels=expected_channels,
+                out_channels=expected_channels,
+                bias=False,
+            )
             for layer in (q_proj, k_proj, v_proj)
         )
         and not hasattr(self_attn_model, "safety_temporal_ffn")
@@ -6181,16 +6135,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             "mfe_encoder": hybrid_model.mfe_model.parameters(),
         },
     )
-    safety_patch_grad = hybrid_grads["safety"]["patch"]
-    safety_to_mfe_encoder_grad = hybrid_grads["safety"]["mfe_encoder"]
-    mfe_to_patch_grad = hybrid_grads["mfe"]["patch"]
-    mfe_encoder_grad = hybrid_grads["mfe"]["mfe_encoder"]
     check_true(
         "safety_patch_mfe_inception_gradient_ownership_is_encoder_isolated",
-        safety_patch_grad > 0.0
-        and safety_to_mfe_encoder_grad == 0.0
-        and mfe_to_patch_grad == 0.0
-        and mfe_encoder_grad > 0.0,
+        _gradient_ownership_contract(
+            hybrid_grads,
+            positive=(("safety", "patch"), ("mfe", "mfe_encoder")),
+            zero=(("safety", "mfe_encoder"), ("mfe", "patch")),
+        ),
     )
 
     daily_trainer_source = read_source_text(
