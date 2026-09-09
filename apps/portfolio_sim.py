@@ -9,7 +9,7 @@ if PROJECT_ROOT not in sys.path:
 from core.log_utils import format_exception_summary
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, should_auto_open_browser, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整；非互動模式會自動套用預設輸入。資料路徑會先嘗試 /data/tw_stock_data_vip，找不到時再回退到 <repo>/data/tw_stock_data_vip。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整；非互動模式會自動套用預設輸入。full 由 current Research dataset-generation router 解析；reduced 使用固定 reduced dataset path。"
 LAZY_EXPORTS = {
     "ensure_runtime_dirs",
     "is_insufficient_data_error",

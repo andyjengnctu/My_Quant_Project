@@ -340,127 +340,7 @@ def _continuous_ranker_simple_report_payload(
     return load_json_object_or_none(output_dir / CONTINUOUS_RANKER_REPORT_FILENAME) or {}
 
 
-def _print_existing_continuous_ranker_report(settings) -> bool:
-    """Print the current persisted model summary without retraining."""
 
-    payload = _continuous_ranker_simple_report_payload(
-        filter_id=settings.filter_id,
-        architecture=settings.model_architecture,
-        profile=settings.experiment_profile,
-    )
-    if not payload:
-        return False
-    console = _render_continuous_ranker_simple_console(payload)
-    if not console:
-        return False
-    print("\n" + render_section("目前模型報表摘要"))
-    print(console)
-    detail_report = (
-        resolve_filter_model_output_dir(
-            PROJECT_ROOT,
-            settings.filter_id,
-            settings.model_architecture,
-            settings.experiment_profile,
-        )
-        / "continuous_ranker_report.md"
-    )
-    print(
-        render_status_paths(
-            (("詳細模型報表", detail_report, detail_report.is_file()),),
-            project_root=PROJECT_ROOT,
-        )
-    )
-    return True
-
-
-def _render_mr13s_truth_geometry_console(payload: dict) -> str:
-    def fmt(value, *, digits: int = 4) -> str:
-        return "-" if value is None else f"{float(value):.{digits}f}"
-
-    def support(cell: dict) -> str:
-        return (
-            f"N={int(cell.get('n', 0) or 0):,} / "
-            f"{fmt(cell.get('population_pct'), digits=2)}% / "
-            f"{fmt(cell.get('independence_enrichment'), digits=2)}×"
-        )
-
-    lines = [render_section("MR-13S Actual MFE×Safety Truth Geometry Control")]
-    summary_rows = []
-    for label, key in (
-        ("Daily universal OOS", "daily_universal_oos"),
-        ("Breakout candidate OOS", "breakout_candidate_oos"),
-    ):
-        scope = dict(payload.get(key) or {})
-        actual = dict(scope.get("actual") or {})
-        summary_rows.append((
-            label,
-            f"{int(scope.get('population_n', 0) or 0):,}",
-            fmt(actual.get("safety_to_mfe_mean_daily_spearman")),
-            fmt(scope.get("predicted_safety_to_raw_mfe_mean_daily_spearman")),
-            support(dict(actual.get("s5_m5") or {})),
-            support(dict(actual.get("s4plus_m4plus") or {})),
-        ))
-    lines.append(
-        render_table(
-            ("Scope", "N", "Actual S↔MFE rho", "Pred S↔MFE rho", "S5×M5 N/Pop/×Exp", "S4+×M4+ N/Pop/×Exp"),
-            summary_rows,
-            alignments=("left", "right", "right", "right", "right", "right"),
-        )
-    )
-    for label, key in (
-        ("Daily universal OOS actual 5×5", "daily_universal_oos"),
-        ("Breakout candidate OOS actual 5×5", "breakout_candidate_oos"),
-    ):
-        scope = dict(payload.get(key) or {})
-        actual = dict(scope.get("actual") or {})
-        rows = []
-        for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
-            cells = []
-            for cell in row:
-                cell = dict(cell or {})
-                cells.append(
-                    f"{int(cell.get('n', 0) or 0):,} / "
-                    f"{fmt(cell.get('population_pct'), digits=2)}% / "
-                    f"{fmt(cell.get('independence_enrichment'), digits=2)}×"
-                )
-            rows.append((f"S{s_idx}", *cells))
-        lines.extend([
-            label,
-            "cell = N / population% / independence enrichment×",
-            render_table(
-                ("Actual Safety \\ Pure-MFE", "M1", "M2", "M3", "M4", "M5"),
-                rows,
-                alignments=("left", "right", "right", "right", "right", "right"),
-            ),
-        ])
-    lines.append(
-        "Breakout percentile口徑：沿用Daily universal同日percentile，只filter candidate membership，不在subset內重新排名。"
-    )
-    return "\n".join(lines)
-
-
-def _run_mr13s_truth_geometry_control(settings) -> bool:
-    from services.breakout_quality.train_daily_ranker import (
-        build_mr13s_truth_geometry_control,
-    )
-
-    payload, json_path, markdown_path = build_mr13s_truth_geometry_control(
-        filter_id=settings.filter_id,
-        model_architecture=settings.model_architecture,
-        experiment_profile=settings.experiment_profile,
-        project_root=PROJECT_ROOT,
-    )
-    print("\n" + _render_mr13s_truth_geometry_console(payload))
-    print(
-        render_status_paths(
-            (
-                ("Truth Geometry JSON", json_path, json_path.is_file()),
-                ("Truth Geometry Markdown", markdown_path, markdown_path.is_file()),
-            ),
-            project_root=PROJECT_ROOT,
-        )
-    )
-    return True
 
 
 def _model_sop_section_title(section_id: str, *, suffix: str = "") -> str:
@@ -3776,15 +3656,6 @@ def _rolling_mode_point_in_time_dir(settings, mode) -> Path | None:
         return None
     return model_output_dir / str(mode.point_in_time_dirname)
 
-def _rolling_mode_display_label(mode) -> str:
-    end_label = "最新" if str(mode.score_end_date).strip().lower() == "auto" else str(mode.score_end_date)
-    if bool(mode.single_score_block):
-        return f"{mode.label} | {mode.score_start_date}→{end_label}"
-    return f"{mode.label} | {mode.score_start_date}→{end_label} | {int(mode.fold_months)}M"
-
-
-def _render_rolling_mode_line(index: int, mode, *, default: bool = False) -> str:
-    return render_menu_item(index, _rolling_mode_display_label(mode), default=default)
 
 
 def _interactive_continuous_rolling_test(program_name: str, settings) -> int:

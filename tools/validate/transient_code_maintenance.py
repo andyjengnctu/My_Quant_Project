@@ -181,6 +181,38 @@ def _catalog_modes_by_module() -> dict[str, list[str]]:
     return {key: sorted(set(values)) for key, values in modes.items()}
 
 
+def _is_explicit_compatibility_alias(path: Path) -> bool:
+    """Return True only for modules whose source explicitly aliases another module.
+
+    Compatibility aliases are retained API boundaries rather than disposable runtime
+    implementations.  Detect the canonical ``sys.modules[__name__] = _impl`` shape so
+    the maintenance scan does not need a second hard-coded module allowlist.
+    """
+
+    try:
+        tree = read_source_ast(path)
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return False
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Attribute)
+            and isinstance(target.value.value, ast.Name)
+            and target.value.value.id == "sys"
+            and target.value.attr == "modules"
+        ):
+            continue
+        slice_node = target.slice
+        if not (isinstance(slice_node, ast.Name) and slice_node.id == "__name__"):
+            continue
+        if isinstance(node.value, ast.Name) and node.value.id == "_impl":
+            return True
+    return False
+
+
 def _retired_dedicated_test_candidates(
     project_root: Path,
     index: dict[str, Path],
@@ -482,7 +514,7 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
             continue
         if module in reachable:
             continue
-        if path.name == "__init__.py":
+        if path.name == "__init__.py" or _is_explicit_compatibility_alias(path):
             continue
         rel = path.relative_to(root).as_posix()
         stale_modules.append(

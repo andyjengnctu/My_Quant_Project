@@ -438,17 +438,6 @@ def _normalize_required_field_values(
     return list(rows.values())
 
 
-def _normalize_required_field_evidence(
-    frame: pd.DataFrame,
-    *,
-    dataset: str,
-    value_fields: tuple[str, ...],
-) -> list[tuple[str, str]]:
-    return [
-        (row[0], row[1])
-        for row in _normalize_required_field_values(frame, dataset=dataset, value_fields=value_fields)
-    ]
-
 
 def _normalize_date_values(frame: pd.DataFrame, *, dataset: str, as_of_date: str) -> tuple[str, ...]:
     if "date" not in frame.columns:
