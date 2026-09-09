@@ -4408,6 +4408,17 @@
       "entry": "`services/scanner/scan_runner.py`, `services/trading/daily_workflow.py`, `services/trading/scanner_state.py`, `tools/local_regression/meta_quality_targets.py`",
       "initial_status": "NEW",
       "order": 397
+    },
+    {
+      "id": "B410",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading retained dataset current-vintage alignment / Optimizer membership consistency",
+      "item": "Every retained Trading CSV that remains part of the canonical dataset fingerprint and Optimizer input must be refreshed to the same FinMind TaiwanStockPriceAdj current vintage even when it is outside today actionable universe and not a current holding",
+      "gap": "Final Downloader audit found a cross-layer membership mismatch after B409: physical historical CSVs are intentionally retained and the canonical Trading Optimizer scans the entire data_dir, but run_trading_dataset_update refreshed only current_universe + required holdings. A retained non-actionable ticker could therefore keep an older FinMind adjusted-price vintage while still participating in parameter training and dataset fingerprinting. Repair must derive retained updater membership from the same canonical Trading CSV membership SSOT, include those members in current-vintage refresh without granting them target-date/actionable status, and keep Scanner membership restricted to current_universe_tickers.",
+      "entry": "`core/trading_dataset_identity.py`, `services/downloader/application.py`, `services/optimizer/raw_cache.py`, `services/trading/strategy_param_training.py`",
+      "initial_status": "NEW",
+      "order": 398
     }
   ],
   "tests": [
@@ -8107,6 +8118,13 @@
       "description": "`validate_trading_actionable_universe_scanner_membership_contract_case` 驗 generic Scanner 預設仍掃完整 dataset、optional ticker membership 只掃指定且缺檔 fail-closed、Trading Scanner 只接 current_universe_tickers、不把 universe 外 required holding 當新買 candidate、candidate snapshot schema v3 保存 exact scanned membership 並拒絕 membership 外 candidate／過期 membership。",
       "initial_status": "NEW",
       "order": 519
+    },
+    {
+      "id": "T530",
+      "b_id": "B410",
+      "description": "`validate_trading_retained_dataset_current_vintage_contract_case` 對抗驗證 canonical physical CSV membership 同時是 dataset fingerprint／Optimizer retention membership，Trading updater 必須把 universe 外 retained ticker 納入 current-vintage refresh target，但只有 current_universe_tickers 具有 target-date/actionable freshness requirement。",
+      "initial_status": "NEW",
+      "order": 520
     }
   ],
   "transitions": [
@@ -26093,6 +26111,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "validate_trading_actionable_universe_scanner_membership_contract_case"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "B410",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "修正 Trading retained dataset current-vintage 對齊：Updater target 改為 actionable universe + required holdings + canonical retained CSV membership，避免 Optimizer 混用不同 FinMind adjusted-price vintage。",
+      "note": "Trading retained dataset current-vintage alignment"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "T530",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增 retained Trading dataset current-vintage / Optimizer membership alignment regression 並納入正式 DONE 測試摘要。",
+      "note": "`validate_trading_retained_dataset_current_vintage_contract_case`"
     }
   ]
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 from core.console_report import project_relative_display_path
 from core.trading_market_clock import assert_completed_daily_information_date
 from core.trading_identity import normalize_trading_ticker
+from core.trading_dataset_identity import resolve_trading_dataset_member_tickers
 from services.downloader import runtime as rt
 from services.downloader.sync import smart_download_vip_data
 from services.downloader.universe import get_market_last_date, get_or_update_universe
@@ -54,7 +55,15 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
         for item in get_or_update_universe(market_date=market_date, client=provider_client)
     ]
     required = sorted({normalize_trading_ticker(item) for item in list(required_tickers or [])})
-    target_tickers = list(dict.fromkeys([*universe_tickers, *required]))
+    retained = [
+        normalize_trading_ticker(item)
+        for item in resolve_trading_dataset_member_tickers(rt.SAVE_DIR, required=False)
+    ]
+    # Physical retention is intentionally broader than today's actionable
+    # universe because the canonical Trading Optimizer consumes the complete
+    # data_dir.  Refresh every retained member to the same FinMind current
+    # vintage; only actionable universe members require a target-date row.
+    target_tickers = list(dict.fromkeys([*universe_tickers, *required, *retained]))
     if not target_tickers:
         raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
 
@@ -137,6 +146,9 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
         "required_position_tickers": required,
         "required_position_ticker_count": int(len(required)),
         "required_position_tickers_added": sorted(set(required) - set(universe_tickers)),
+        "retained_history_ticker_count": int(len(retained)),
+        "retained_history_tickers": list(retained),
+        "retained_history_tickers_added": sorted(set(retained) - set(universe_tickers) - set(required)),
         "data_dir": project_relative_display_path(rt.SAVE_DIR, project_root=rt.PROJECT_ROOT),
         "output_dir": project_relative_display_path(rt.OUTPUT_DIR, project_root=rt.PROJECT_ROOT),
         "issue_log_path": (

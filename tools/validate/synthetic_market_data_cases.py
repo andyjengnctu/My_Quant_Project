@@ -2658,6 +2658,135 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     return results, summary
 
 
+def validate_trading_retained_dataset_current_vintage_contract_case(_base_params):
+    """Retained Optimizer members must share one current FinMind adjusted-price vintage."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import pandas as pd
+
+    from core.trading_dataset_identity import (
+        build_trading_dataset_fingerprint,
+        resolve_trading_dataset_member_tickers,
+    )
+    from services.downloader import application as downloader_application
+    from services.downloader import runtime as downloader_runtime
+    from services.downloader.trading_price_refresh import PriceRange, TradingPriceProbe
+    from services.optimizer.raw_cache import load_all_raw_data
+
+    case_id = "TRADING_RETAINED_DATASET_CURRENT_VINTAGE"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
+
+    def _legacy(path: Path, close: float, trade_date: str) -> None:
+        frame = pd.DataFrame(
+            {
+                "Open": [close],
+                "High": [close + 1.0],
+                "Low": [close - 1.0],
+                "Close": [close],
+                "Volume": [1000],
+            },
+            index=pd.to_datetime([trade_date]),
+        )
+        frame.index.name = "Date"
+        frame.to_csv(path)
+
+    class _Client:
+        pass
+
+    with TemporaryDirectory(prefix="trading_retained_vintage_") as temp_dir:
+        root = Path(temp_dir)
+        price_dir = root / "prices"
+        output_dir = root / "outputs"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        _legacy(price_dir / "2330.csv", 100.0, "2026-09-09")
+        _legacy(price_dir / "2454.csv", 50.0, "2026-09-08")
+
+        check(
+            "retained_membership_resolver_matches_physical_dataset_membership",
+            ["2330", "2454"],
+            resolve_trading_dataset_member_tickers(price_dir, required=True),
+        )
+        check(
+            "dataset_fingerprint_includes_retained_optimizer_member",
+            2,
+            build_trading_dataset_fingerprint(price_dir).get("csv_count"),
+        )
+        optimizer_raw = load_all_raw_data(
+            str(price_dir),
+            required_min_rows=1,
+            output_dir=str(output_dir / "optimizer"),
+            verbose=False,
+        )
+        check(
+            "optimizer_raw_loader_consumes_all_retained_physical_members",
+            ["2330", "2454"],
+            sorted(optimizer_raw),
+        )
+
+        probe = TradingPriceProbe(
+            candidate_date="2026-09-09",
+            market_date="2026-09-09",
+            current_range=PriceRange("2026-07-01", "2026-09-09"),
+            current_frame=pd.DataFrame(),
+        )
+        captured = {}
+
+        def _refresh(tickers, market_date, **kwargs):
+            captured["tickers"] = list(tickers)
+            captured["universe_tickers"] = list(kwargs.get("universe_tickers") or [])
+            return {
+                "total": len(list(tickers)),
+                "count_success": len(list(tickers)),
+                "count_skipped_latest": 0,
+                "last_date_check_error_count": 0,
+                "download_error_count": 0,
+                "trimmed_future_row_count": 0,
+                "issue_log_path": None,
+            }
+
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(output_dir)), \
+             patch("services.downloader.application.probe_latest_adjusted_price_market_date", return_value=probe), \
+             patch("services.downloader.application.assert_completed_daily_information_date", side_effect=lambda value, now: value), \
+             patch("services.downloader.application.get_or_update_universe", return_value=["2330"]), \
+             patch("services.downloader.application.refresh_trading_adjusted_price_dataset", side_effect=_refresh), \
+             patch("services.downloader.application.inspect_local_price_freshness", return_value=SimpleNamespace(stale=(), unreadable=())):
+            update = downloader_application.run_trading_dataset_update(provider_client=_Client())
+
+        check(
+            "canonical_update_refreshes_actionable_and_retained_optimizer_members",
+            ["2330", "2454"],
+            captured.get("tickers"),
+        )
+        check(
+            "retained_non_actionable_member_does_not_gain_target_date_requirement",
+            ["2330"],
+            captured.get("universe_tickers"),
+        )
+        check(
+            "update_reports_exact_retained_physical_membership",
+            ["2330", "2454"],
+            update.get("retained_history_tickers"),
+        )
+        check(
+            "update_reports_only_non_actionable_retained_member_as_added",
+            ["2454"],
+            update.get("retained_history_tickers_added"),
+        )
+        check(
+            "missing_dataset_directory_has_empty_optional_retained_membership",
+            [],
+            resolve_trading_dataset_member_tickers(root / "missing", required=False),
+        )
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
 def validate_market_data_v2_research_candidate_contract_case(_base_params):
     """Round-9 Research V2 stays pinned, PIT-audited and explicitly NOT_READY."""
 

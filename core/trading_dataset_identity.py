@@ -56,6 +56,36 @@ def inspect_trading_dataset_member_date_evidence(
         )
 
 
+def resolve_trading_dataset_member_tickers(
+    data_dir: str | Path,
+    *,
+    required: bool = False,
+) -> list[str]:
+    """Return the canonical retained Trading CSV membership.
+
+    Physical Trading retention is broader than today's actionable universe.
+    The same retained membership feeds dataset fingerprinting / Optimizer input,
+    so the downloader must refresh these members to one FinMind current vintage
+    instead of leaving historical members on older provider vintages.
+    """
+
+    root = Path(data_dir).resolve()
+    if not root.is_dir():
+        if required:
+            raise FileNotFoundError(f"Trading dataset directory 不存在: {root}")
+        return []
+    csv_inputs, duplicate_issue_lines = discover_unique_csv_inputs(root)
+    if duplicate_issue_lines:
+        raise RuntimeError(
+            "Trading dataset 存在同 ticker 重複 CSV，canonical retained membership 不得分叉："
+            + " | ".join(duplicate_issue_lines)
+        )
+    tickers = sorted({str(ticker).strip() for ticker, _path in csv_inputs if str(ticker).strip()})
+    if required and not tickers:
+        raise FileNotFoundError(f"Trading dataset 沒有 canonical CSV: {root}")
+    return tickers
+
+
 def resolve_trading_dataset_member_latest_dates(
     data_dir: str | Path,
     tickers,
@@ -193,6 +223,7 @@ def assert_trading_dataset_fingerprint_matches(
 __all__ = [
     "TradingDatasetMemberDateEvidence",
     "inspect_trading_dataset_member_date_evidence",
+    "resolve_trading_dataset_member_tickers",
     "build_trading_dataset_fingerprint",
     "assert_trading_dataset_fingerprint_matches",
     "resolve_trading_dataset_member_latest_dates",
