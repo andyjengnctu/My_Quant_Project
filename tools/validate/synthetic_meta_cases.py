@@ -156,6 +156,101 @@ def _read_summary_value(result: dict, key: str, default=None):
     return default
 
 
+def _new_synthetic_case(case_id: str):
+    return [], {"ticker": case_id, "synthetic": True}
+
+
+def _summarize_mutated_checklist(meta_quality_module, mutated_text: str, *, temp_prefix: str):
+    with tempfile.TemporaryDirectory(prefix=temp_prefix) as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            return meta_quality_module._summarize_checklist_consistency()
+
+
+def _checklist_guard_result(consistency: dict, *, result_name: str, invalid_key: str):
+    result = {item.get("name"): item for item in consistency.get("results", [])}.get(result_name, {})
+    invalid_rows = result.get(invalid_key)
+    if invalid_rows is None:
+        invalid_rows = _read_summary_value(result, invalid_key, [])
+    return result, invalid_rows
+
+
+def _probe_module_symbols(expectations: dict, *, from_all: bool = False):
+    import_failures = []
+    symbol_failures = []
+    reloaded_modules = []
+    for module_name, expected_symbols in expectations.items():
+        try:
+            module = importlib.reload(importlib.import_module(module_name))
+        except Exception as exc:
+            import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        available = set(getattr(module, "__all__", ())) if from_all else set(dir(module))
+        missing_symbols = sorted(set(expected_symbols) - available)
+        if missing_symbols:
+            symbol_failures.append(f"{module_name}: {missing_symbols}")
+        reloaded_modules.append(module_name)
+    return import_failures, symbol_failures, reloaded_modules
+
+
+def _run_checklist_row_mutation_guard(
+    case_id: str,
+    *,
+    heading: str,
+    row_id: str,
+    id_col_idx: int,
+    update_cols,
+    temp_prefix: str,
+    result_name: str,
+    invalid_key: str,
+    status_metric: str,
+    expected_status: str,
+    row_metric: str,
+    expected_invalid_row_presence: bool,
+    target_missing_metric: str,
+    match_index: int = 0,
+    results=None,
+    summary=None,
+):
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
+    if results is None or summary is None:
+        results, summary = _new_synthetic_case(case_id)
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading=heading,
+            row_id=row_id,
+            id_col_idx=id_col_idx,
+            update_cols=update_cols,
+            match_index=match_index,
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, target_missing_metric, True, False)
+        return results, summary
+    consistency = _summarize_mutated_checklist(
+        meta_quality_module, mutated_text, temp_prefix=temp_prefix
+    )
+    guard_result, invalid_rows = _checklist_guard_result(
+        consistency, result_name=result_name, invalid_key=invalid_key
+    )
+    add_check(
+        results, "meta_checklist", case_id, status_metric, expected_status, guard_result.get("status")
+    )
+    add_check(
+        results,
+        "meta_checklist",
+        case_id,
+        row_metric,
+        expected_invalid_row_presence,
+        any(row.get("id") == row_id for row in invalid_rows),
+    )
+    summary["guard_status"] = guard_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
 
 
 
@@ -168,8 +263,7 @@ def validate_cmd_document_contract_case(_base_params):
     from tools.validate.preflight_env import _LOCAL_REGRESSION_STEP_ORDER
 
     case_id = "META_CMD_DOCUMENT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     commands = _extract_cmd_python_commands()
     unique_commands = list(dict.fromkeys(commands))
@@ -225,8 +319,7 @@ def validate_cmd_document_contract_case(_base_params):
 
 def validate_gui_workbench_documentation_sync_case(_base_params):
     case_id = "META_GUI_WORKBENCH_DOCUMENTATION_SYNC"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
@@ -256,8 +349,7 @@ def validate_gui_workbench_documentation_sync_case(_base_params):
 
 def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
     case_id = "META_ARCHITECTURE_WORKBENCH_ENTRY_FILE_TREE_SYNC"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     workbench_source = (PROJECT_ROOT / "apps" / "workbench.py").read_text(encoding="utf-8")
@@ -289,8 +381,7 @@ def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
 
 def validate_model_param_source_resolution_contract_case(_base_params):
     case_id = "META_MODEL_PARAM_SOURCE_RESOLUTION_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     models_dir = Path(resolve_models_dir(PROJECT_ROOT, environ={}))
@@ -406,8 +497,7 @@ def validate_model_param_source_resolution_contract_case(_base_params):
 
 def validate_architecture_local_regression_meta_quality_file_tree_sync_case(_base_params):
     case_id = "META_ARCHITECTURE_LOCAL_REGRESSION_META_QUALITY_FILE_TREE_SYNC"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     required_tree_fragment = "├── run_meta_quality.py"
@@ -426,8 +516,7 @@ def validate_architecture_local_regression_meta_quality_file_tree_sync_case(_bas
 
 def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_params):
     case_id = "META_TRADE_ANALYSIS_LEGACY_NAMING_DOCUMENTATION_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
@@ -467,8 +556,7 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
 
 def validate_validate_runtime_tmp_output_staging_contract_case(_base_params):
     case_id = "META_VALIDATE_RUNTIME_TMP_OUTPUT_STAGING_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     error_cases_text = (PROJECT_ROOT / "tools" / "validate" / "synthetic_error_cases.py").read_text(encoding="utf-8")
     regression_cases_text = (PROJECT_ROOT / "tools" / "validate" / "synthetic_regression_cases.py").read_text(encoding="utf-8")
@@ -498,8 +586,7 @@ def validate_validate_runtime_tmp_output_staging_contract_case(_base_params):
 
 def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
     case_id = "META_TRADE_ANALYSIS_CANONICAL_ALIAS_EXPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     package_text = (PROJECT_ROOT / "services" / "trade_analysis" / "__init__.py").read_text(encoding="utf-8")
     trade_log_text = (PROJECT_ROOT / "services" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
@@ -533,8 +620,7 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
 
 def validate_no_reverse_app_layer_dependencies_case(_base_params):
     case_id = "META_NO_REVERSE_APP_LAYER_DEPENDENCIES"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     reverse_contract = summarize_no_reverse_app_import_contract(PROJECT_ROOT)
     reverse_violations = [
@@ -556,8 +642,7 @@ def validate_no_reverse_app_layer_dependencies_case(_base_params):
 
 def validate_critical_helper_single_source_contract_case(_base_params):
     case_id = "META_CRITICAL_HELPER_SINGLE_SOURCE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     contract = summarize_critical_helper_single_source_contract(PROJECT_ROOT)
     add_check(results, "meta_entry_contract", case_id, "critical_helpers_defined_in_canonical_modules", [], contract["missing_definitions"])
@@ -571,8 +656,7 @@ def validate_critical_helper_single_source_contract_case(_base_params):
 
 def validate_no_top_level_import_cycles_case(_base_params):
     case_id = "META_NO_TOP_LEVEL_IMPORT_CYCLES"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     contract = summarize_no_top_level_import_cycles_contract(PROJECT_ROOT)
     violations = [
@@ -628,8 +712,7 @@ def validate_no_top_level_import_cycles_case(_base_params):
 
 def validate_single_formal_test_entry_contract_case(_base_params):
     case_id = "META_SINGLE_FORMAL_TEST_ENTRY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     contract = summarize_single_formal_test_entry_contract(PROJECT_ROOT)
     add_check(results, "meta_entry_contract", case_id, "test_suite_entry_file_exists", True, contract["test_suite_exists"])
@@ -647,8 +730,7 @@ def validate_single_formal_test_entry_contract_case(_base_params):
 
 def validate_checklist_physical_trading_principles_contract_case(_base_params):
     case_id = "META_CHECKLIST_PHYSICAL_TRADING_PRINCIPLES_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     checklist_text = (PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md").read_text(encoding="utf-8")
 
@@ -717,8 +799,7 @@ def _scan_exception_handlers(paths, *, accepted_names=None, pass_only=False, exe
 
 
 def _exception_traceability_result(case_id, paths, accepted_names, parse_metric, failure_metric, *, pass_only=False, target_metric=None, exempt_synthetic=False):
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
     syntax_errors, failures, scanned = _scan_exception_handlers(
         paths, accepted_names=None if accepted_names is None else set(accepted_names), pass_only=pass_only, exempt_synthetic=exempt_synthetic,
     )
@@ -771,8 +852,7 @@ def validate_broad_exception_traceability_contract_case(_base_params):
 
 def validate_no_legacy_app_entry_doc_references_case(_base_params):
     case_id = "META_NO_LEGACY_APP_ENTRY_DOC_REFERENCES"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     contract = summarize_legacy_app_entry_doc_reference_contract(PROJECT_ROOT)
     add_check(results, "meta_entry_contract", case_id, "cmd_and_architecture_have_no_legacy_app_entry_references", [], contract["legacy_doc_reference_lines"])
@@ -785,8 +865,7 @@ def validate_no_legacy_app_entry_doc_references_case(_base_params):
 
 def validate_app_thin_wrapper_export_contract_case(_base_params):
     case_id = "META_APP_THIN_WRAPPER_EXPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     module_names = [
         "apps.portfolio_sim",
@@ -838,8 +917,7 @@ def validate_app_thin_wrapper_export_contract_case(_base_params):
 
 def validate_synthetic_registry_metadata_contract_case(_base_params):
     case_id = "META_SYNTHETIC_REGISTRY_METADATA"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     entries = load_synthetic_registry_entries_from_source(PROJECT_ROOT)
     entry_names = [entry["name"] for entry in entries]
@@ -1220,54 +1298,30 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
 
 
 def validate_checklist_t_formal_command_single_entry_case(_base_params):
-    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
-
     case_id = "META_CHECKLIST_T_FORMAL_COMMAND_SINGLE_ENTRY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
+    results, summary = _new_synthetic_case(case_id)
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
     command_entry = "tools/validate/cli.py --dataset reduced"
     parsed_entries = meta_quality_module._extract_checklist_test_entries(f"`{command_entry}`")
     add_check(results, "meta_checklist", case_id, "formal_command_entry_parses_as_single_entry", [command_entry], parsed_entries)
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="T. 目前所有 `DONE` 的建議測試項目摘要",
-            row_id="T108",
-            id_col_idx=0,
-            update_cols=lambda cols: [cols[0], f"`{command_entry}`", cols[2]],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_t_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_t_formal_command_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    t_result = result_by_name.get("checklist_t_rows_use_single_test_entry", {})
-    invalid_rows = t_result.get("invalid_entries")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(t_result, "invalid_entries", [])
-
-    add_check(results, "meta_checklist", case_id, "mutated_t_formal_command_single_entry_guard_passes", "PASS", t_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_t_formal_command_not_reported_invalid", False, any(row.get("id") == "T108" for row in invalid_rows))
-
-    summary["guard_status"] = t_result.get("status")
+    results, summary = _run_checklist_row_mutation_guard(
+        case_id,
+        heading="T. 目前所有 `DONE` 的建議測試項目摘要", row_id="T108", id_col_idx=0,
+        update_cols=lambda cols: [cols[0], f"`{command_entry}`", cols[2]],
+        temp_prefix="meta_checklist_t_formal_command_",
+        result_name="checklist_t_rows_use_single_test_entry", invalid_key="invalid_entries",
+        status_metric="mutated_t_formal_command_single_entry_guard_passes", expected_status="PASS",
+        row_metric="mutated_t_formal_command_not_reported_invalid", expected_invalid_row_presence=False,
+        target_missing_metric="target_t_row_exists_for_mutation",
+        results=results, summary=summary,
+    )
     summary["parsed_entries"] = parsed_entries
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     return results, summary
 
 
 def validate_checklist_done_test_summary_markdown_structure_case(_base_params):
     case_id = "META_CHECKLIST_DONE_TEST_SUMMARY_MARKDOWN_STRUCTURE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     lines = CHECKLIST_PATH.read_text(encoding="utf-8").splitlines()
     heading = "### T. 目前所有 `DONE` 的建議測試項目摘要"
@@ -1305,182 +1359,76 @@ def validate_checklist_done_test_summary_markdown_structure_case(_base_params):
 
 
 def validate_checklist_t_single_entry_delimiter_case(_base_params):
-    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
-
-    case_id = "META_CHECKLIST_T_SINGLE_ENTRY_DELIMITER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="T. 目前所有 `DONE` 的建議測試項目摘要",
-            row_id="T108",
-            id_col_idx=0,
-            update_cols=lambda cols: [cols[0], "`tools/local_regression/run_meta_quality.py` / `tools/validate/meta_contracts.py`", cols[2]],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_t_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_t_entry_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    t_result = result_by_name.get("checklist_t_rows_use_single_test_entry", {})
-    invalid_rows = t_result.get("invalid_entries")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(t_result, "invalid_entries", [])
-
-    add_check(results, "meta_checklist", case_id, "mutated_t_single_entry_guard_fails", "FAIL", t_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_t_reports_multiple_entries", True, any(row.get("id") == "T108" for row in invalid_rows))
-
-    summary["guard_status"] = t_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
-    return results, summary
+    return _run_checklist_row_mutation_guard(
+        "META_CHECKLIST_T_SINGLE_ENTRY_DELIMITER",
+        heading="T. 目前所有 `DONE` 的建議測試項目摘要", row_id="T108", id_col_idx=0,
+        update_cols=lambda cols: [cols[0], "`tools/local_regression/run_meta_quality.py` / `tools/validate/meta_contracts.py`", cols[2]],
+        temp_prefix="meta_checklist_t_entry_",
+        result_name="checklist_t_rows_use_single_test_entry", invalid_key="invalid_entries",
+        status_metric="mutated_t_single_entry_guard_fails", expected_status="FAIL",
+        row_metric="mutated_t_reports_multiple_entries", expected_invalid_row_presence=True,
+        target_missing_metric="target_t_row_exists_for_mutation",
+    )
 
 
 
 def validate_checklist_g_transition_format_case(_base_params):
-    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
-
-    case_id = "META_CHECKLIST_G_TRANSITION_FORMAT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="B38",
-            id_col_idx=1,
-            update_cols=lambda cols: cols[:3] + ["DONE"] + cols[4:],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_transition_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_transition_result = result_by_name.get("checklist_g_rows_have_valid_status_transition", {})
-    invalid_rows = g_transition_result.get("invalid_transition_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_transition_result, "invalid_transition_rows", [])
-
-    add_check(results, "meta_checklist", case_id, "mutated_g_transition_guard_fails", "FAIL", g_transition_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_transition_reports_invalid_row", True, any(row.get("id") == "B38" for row in invalid_rows))
-
-    summary["guard_status"] = g_transition_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
-    return results, summary
+    return _run_checklist_row_mutation_guard(
+        "META_CHECKLIST_G_TRANSITION_FORMAT",
+        heading="G. 逐項收斂紀錄", row_id="B38", id_col_idx=1,
+        update_cols=lambda cols: cols[:3] + ["DONE"] + cols[4:],
+        temp_prefix="meta_checklist_g_transition_",
+        result_name="checklist_g_rows_have_valid_status_transition", invalid_key="invalid_transition_rows",
+        status_metric="mutated_g_transition_guard_fails", expected_status="FAIL",
+        row_metric="mutated_g_transition_reports_invalid_row", expected_invalid_row_presence=True,
+        target_missing_metric="target_g_row_exists_for_mutation",
+    )
 
 
 def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
-    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
-
     case_id = "META_CHECKLIST_G_NEW_TRANSITION_FIRST_OCCURRENCE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    g_rows = extract_markdown_table_rows(original_text, "G. 逐項收斂紀錄")
+    results, summary = _new_synthetic_case(case_id)
+    g_rows = extract_markdown_table_rows(CHECKLIST_PATH.read_text(encoding="utf-8"), "G. 逐項收斂紀錄")
     b26_occurrence_count = sum(1 for cols in g_rows if len(cols) > 1 and cols[1].strip() == "B26")
     target_match_index = 1 if b26_occurrence_count >= 2 else None
     add_check(results, "meta_checklist", case_id, "target_g_row_has_nonfirst_occurrence_for_mutation", True, target_match_index is not None)
     if target_match_index is None:
         return results, summary
-
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="B26",
-            id_col_idx=1,
-            update_cols=lambda cols: cols[:3] + ["NEW -> DONE"] + cols[4:],
-            match_index=target_match_index,
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_new_transition_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_new_result = result_by_name.get("checklist_g_new_transition_only_on_first_occurrence", {})
-    invalid_rows = g_new_result.get("invalid_new_transition_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_new_result, "invalid_new_transition_rows", [])
-
-    add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_guard_fails", "FAIL", g_new_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_reports_target_row", True, any(row.get("id") == "B26" for row in invalid_rows))
-
+    results, summary = _run_checklist_row_mutation_guard(
+        case_id, heading="G. 逐項收斂紀錄", row_id="B26", id_col_idx=1,
+        update_cols=lambda cols: cols[:3] + ["NEW -> DONE"] + cols[4:],
+        temp_prefix="meta_checklist_g_new_transition_",
+        result_name="checklist_g_new_transition_only_on_first_occurrence", invalid_key="invalid_new_transition_rows",
+        status_metric="mutated_g_new_transition_guard_fails", expected_status="FAIL",
+        row_metric="mutated_g_new_transition_reports_target_row", expected_invalid_row_presence=True,
+        target_missing_metric="target_g_row_exists_for_mutation", match_index=target_match_index,
+        results=results, summary=summary,
+    )
     summary["b26_occurrence_count"] = b26_occurrence_count
-    summary["guard_status"] = g_new_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     summary["target_match_index"] = target_match_index
     return results, summary
 
 
 def validate_checklist_g_transition_sequence_case(_base_params):
-    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
-
     case_id = "META_CHECKLIST_G_TRANSITION_SEQUENCE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    g_rows = extract_markdown_table_rows(original_text, "G. 逐項收斂紀錄")
+    results, summary = _new_synthetic_case(case_id)
+    g_rows = extract_markdown_table_rows(CHECKLIST_PATH.read_text(encoding="utf-8"), "G. 逐項收斂紀錄")
     b26_occurrence_count = sum(1 for cols in g_rows if len(cols) > 1 and cols[1].strip() == "B26")
     target_match_index = 2 if b26_occurrence_count >= 3 else None
     add_check(results, "meta_checklist", case_id, "target_g_row_has_followup_occurrence_for_mutation", True, target_match_index is not None)
     if target_match_index is None:
         return results, summary
-
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="B26",
-            id_col_idx=1,
-            update_cols=lambda cols: cols[:3] + ["PARTIAL -> DONE"] + cols[4:],
-            match_index=target_match_index,
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_chain_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_chain_result = result_by_name.get("checklist_g_rows_follow_previous_status_chain", {})
-    invalid_rows = g_chain_result.get("invalid_transition_sequence_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_chain_result, "invalid_transition_sequence_rows", [])
-
-    add_check(results, "meta_checklist", case_id, "mutated_g_transition_sequence_guard_fails", "FAIL", g_chain_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_transition_sequence_reports_target_row", True, any(row.get("id") == "B26" for row in invalid_rows))
-
+    results, summary = _run_checklist_row_mutation_guard(
+        case_id, heading="G. 逐項收斂紀錄", row_id="B26", id_col_idx=1,
+        update_cols=lambda cols: cols[:3] + ["PARTIAL -> DONE"] + cols[4:],
+        temp_prefix="meta_checklist_g_chain_",
+        result_name="checklist_g_rows_follow_previous_status_chain", invalid_key="invalid_transition_sequence_rows",
+        status_metric="mutated_g_transition_sequence_guard_fails", expected_status="FAIL",
+        row_metric="mutated_g_transition_sequence_reports_target_row", expected_invalid_row_presence=True,
+        target_missing_metric="target_g_row_exists_for_mutation", match_index=target_match_index,
+        results=results, summary=summary,
+    )
     summary["b26_occurrence_count"] = b26_occurrence_count
-    summary["guard_status"] = g_chain_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     summary["target_match_index"] = target_match_index
     return results, summary
 
@@ -1488,8 +1436,7 @@ def validate_checklist_g_ordering_case(_base_params):
     meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_G_ORDERING"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
     try:
@@ -1547,8 +1494,7 @@ def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
     meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_SUMMARY_TABLE_ORDER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
     mutated_text = _swap_markdown_table_rows(
@@ -1637,8 +1583,7 @@ def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
 
 def validate_synthetic_cases_import_target_resolution_contract_case(_base_params):
     case_id = "META_SYNTHETIC_CASES_IMPORT_TARGET_RESOLUTION_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     contract = summarize_synthetic_cases_import_target_resolution_contract(PROJECT_ROOT)
     invalid_imports = contract["invalid_imports"]
@@ -1660,8 +1605,7 @@ def validate_synthetic_cases_import_target_resolution_contract_case(_base_params
 
 def validate_quick_gate_synthetic_registry_import_targets_contract_case(_base_params):
     case_id = "META_QUICK_GATE_SYNTHETIC_REGISTRY_IMPORT_TARGETS_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     quick_gate_path = PROJECT_ROOT / "tools" / "local_regression" / "run_quick_gate.py"
     source_text = quick_gate_path.read_text(encoding="utf-8")
@@ -1693,8 +1637,7 @@ def validate_quick_gate_synthetic_registry_import_targets_contract_case(_base_pa
 
 def validate_registry_checklist_entry_consistency_case(_base_params):
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     validator_entries = load_synthetic_registry_entries_from_source(PROJECT_ROOT)
     validator_names = [entry["name"] for entry in validator_entries]
@@ -1932,8 +1875,7 @@ def _write_meta_quality_coverage_reuse_artifacts(
 
 def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params):
     case_id = "META_QUALITY_COVERAGE_THRESHOLD_USES_TARGET_SCOPE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     with tempfile.TemporaryDirectory(prefix="meta_cov_target_scope_") as temp_dir:
         run_dir = Path(temp_dir)
@@ -2099,8 +2041,7 @@ def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params
 
 def validate_portfolio_core_module_boundary_contract_case(_base_params):
     case_id = "META_PORTFOLIO_CORE_MODULE_BOUNDARY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     import ast as _ast
     from core import portfolio_engine as engine
@@ -2193,8 +2134,7 @@ def validate_portfolio_core_module_boundary_contract_case(_base_params):
 
 def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     case_id = "META_CORE_TRADING_MODULES_IN_COVERAGE_TARGETS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     expected_targets = list(CORE_TRADING_COVERAGE_TARGETS)
     declared_targets = list(COVERAGE_TARGETS)
@@ -2205,21 +2145,9 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
         "core.portfolio_ops": {"execute_reserved_entries_for_day", "settle_portfolio_positions", "closeout_open_positions"},
         "core.trade_plans": {"build_normal_candidate_plan", "execute_pre_market_entry_plan", "evaluate_history_candidate_metrics"},
     }
-    module_import_failures = []
-    module_export_failures = []
-    reloaded_modules = []
-    for module_name, expected_exports in module_export_expectations.items():
-        try:
-            module = importlib.import_module(module_name)
-            module = importlib.reload(module)
-        except Exception as exc:
-            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-            continue
-        exported_names = set(getattr(module, "__all__", []))
-        missing_exports = sorted(expected_exports - exported_names)
-        if missing_exports:
-            module_export_failures.append(f"{module_name}: {missing_exports}")
-        reloaded_modules.append(module_name)
+    module_import_failures, module_export_failures, reloaded_modules = _probe_module_symbols(
+        module_export_expectations, from_all=True
+    )
 
     add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_declared", [], missing_targets)
@@ -2235,8 +2163,7 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
 
 def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
     case_id = "META_POLICY_CONTRACT_MODULES_IN_COVERAGE_TARGETS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     expected_targets = list(POLICY_CONTRACT_COVERAGE_TARGETS)
     declared_targets = list(COVERAGE_TARGETS)
@@ -2404,20 +2331,9 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_breakout_optimizer_high_len_values",
         },
     }
-    module_import_failures = []
-    module_symbol_failures = []
-    reloaded_modules = []
-    for module_name, expected_symbols in module_symbol_expectations.items():
-        try:
-            module = importlib.import_module(module_name)
-            module = importlib.reload(module)
-        except Exception as exc:
-            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-            continue
-        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
-        if missing_symbols:
-            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
-        reloaded_modules.append(module_name)
+    module_import_failures, module_symbol_failures, reloaded_modules = _probe_module_symbols(
+        module_symbol_expectations
+    )
 
     add_check(results, "meta_coverage", case_id, "policy_contract_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "policy_contract_coverage_targets_declared", [], missing_targets)
@@ -2565,8 +2481,7 @@ def validate_market_data_governance_contract_case(_base_params):
 
 def validate_runtime_domain_isolation_contract_case(_base_params):
     case_id = "META_RUNTIME_DOMAIN_ISOLATION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     from config.research import RESEARCH_MARKET_DATA_CUTOFF
     from core.dataset_profiles import DATASET_PROFILE_FULL, DATASET_PROFILE_REDUCED, get_dataset_dir
@@ -2648,8 +2563,7 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
 
 def validate_trading_strategy_param_producer_contract_case(_base_params):
     case_id = "META_TRADING_STRATEGY_PARAM_PRODUCER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     from core.file_integrity import load_json_strict
     from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
@@ -2879,8 +2793,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
 
 def validate_peak_process_memory_tracker_context_management_case(_base_params):
     case_id = "META_PEAK_PROCESS_MEMORY_TRACKER_CONTEXT_MANAGEMENT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     tracked_files = [
         PROJECT_ROOT / "tools/local_regression/run_chain_checks.py",
@@ -2940,8 +2853,7 @@ def validate_peak_process_memory_tracker_context_management_case(_base_params):
 
 def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
     case_id = "META_SINGLE_BACKTEST_STATS_LEGACY_SCHEMA_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     source_path = build_project_absolute_path("core", "backtest_finalize.py")
     source_text = source_path.read_text(encoding="utf-8")
@@ -3009,8 +2921,7 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
 
 def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
     case_id = "META_DEBUG_BACKTEST_ENTRY_CASH_PATH_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     def _get_function_source(rel_path, func_name):
         source_path = build_project_absolute_path(*rel_path.split('/'))
@@ -3051,8 +2962,7 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
 
 def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     case_id = "META_PRICE_UTILS_ARRAY_TICK_NORMALIZATION_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     price_path = build_project_absolute_path("core", "price_utils.py")
     price_source = price_path.read_text(encoding="utf-8")
@@ -3123,8 +3033,7 @@ def _capture_test_suite_help_output():
 
 def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params):
     case_id = "META_TEST_SUITE_HELP_TEXT_MENTIONS_STABLE_THEME_TOKENS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     exit_code, help_text, help_line = _capture_test_suite_help_output()
@@ -3143,8 +3052,7 @@ def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params
 
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     expected_step_scripts = [spec.command.split()[0] for spec in FORMAL_STEP_SPECS]
     declared_entry_targets = list(FORMAL_STEP_ENTRY_COVERAGE_TARGETS)
@@ -3157,20 +3065,9 @@ def validate_formal_step_entry_coverage_targets_case(_base_params):
         "tools.local_regression.run_quick_gate": {"HELP_TARGETS", "main", "run_static_checks"},
         "tools.validate.cli": {"main"},
     }
-    module_import_failures = []
-    module_symbol_failures = []
-    reloaded_modules = []
-    for module_name, expected_symbols in module_symbol_expectations.items():
-        try:
-            module = importlib.import_module(module_name)
-            module = importlib.reload(module)
-        except Exception as exc:
-            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-            continue
-        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
-        if missing_symbols:
-            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
-        reloaded_modules.append(module_name)
+    module_import_failures, module_symbol_failures, reloaded_modules = _probe_module_symbols(
+        module_symbol_expectations
+    )
 
     add_check(results, "meta_coverage", case_id, "formal_step_entry_coverage_targets_exist", [], missing_entry_files)
     add_check(results, "meta_coverage", case_id, "formal_step_entry_coverage_targets_declared", [], missing_declared_entry_targets)
@@ -3187,8 +3084,7 @@ def validate_formal_step_entry_coverage_targets_case(_base_params):
 
 def validate_formal_step_implementation_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     expected_targets = list(FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS)
     declared_targets = list(COVERAGE_TARGETS)
@@ -3202,20 +3098,9 @@ def validate_formal_step_implementation_coverage_targets_case(_base_params):
             "resolve_validate_dataset_profile_key",
         },
     }
-    module_import_failures = []
-    module_symbol_failures = []
-    reloaded_modules = []
-    for module_name, expected_symbols in module_symbol_expectations.items():
-        try:
-            module = importlib.import_module(module_name)
-            module = importlib.reload(module)
-        except Exception as exc:
-            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-            continue
-        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
-        if missing_symbols:
-            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
-        reloaded_modules.append(module_name)
+    module_import_failures, module_symbol_failures, reloaded_modules = _probe_module_symbols(
+        module_symbol_expectations
+    )
 
     add_check(results, "meta_coverage", case_id, "formal_step_implementation_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "formal_step_implementation_coverage_targets_declared", [], missing_targets)
@@ -3230,8 +3115,7 @@ def validate_formal_step_implementation_coverage_targets_case(_base_params):
 
 def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
     case_id = "META_TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     expected_targets = list(TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS)
     declared_targets = list(COVERAGE_TARGETS)
@@ -3248,20 +3132,9 @@ def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
         "tools.validate.preflight_env": {"REQUIREMENTS_PATH", "format_preflight_summary", "run_preflight"},
         "core.test_suite_reporting": {"print_test_suite_human_summary", "TEST_SUITE_STEP_LABELS"},
     }
-    module_import_failures = []
-    module_symbol_failures = []
-    reloaded_modules = []
-    for module_name, expected_symbols in module_symbol_expectations.items():
-        try:
-            module = importlib.import_module(module_name)
-            module = importlib.reload(module)
-        except Exception as exc:
-            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-            continue
-        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
-        if missing_symbols:
-            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
-        reloaded_modules.append(module_name)
+    module_import_failures, module_symbol_failures, reloaded_modules = _probe_module_symbols(
+        module_symbol_expectations
+    )
 
     add_check(results, "meta_coverage", case_id, "test_suite_orchestrator_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "test_suite_orchestrator_coverage_targets_declared", [], missing_targets)
@@ -3276,8 +3149,7 @@ def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
 
 def validate_critical_file_coverage_minimum_gate_case(_base_params):
     case_id = "META_CRITICAL_FILE_COVERAGE_MINIMUM_GATE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     with tempfile.TemporaryDirectory(prefix="meta_critical_cov_") as temp_dir:
         run_dir = Path(temp_dir)
@@ -3314,8 +3186,7 @@ def validate_coverage_threshold_floor_case(_base_params):
     import tools.local_regression.common as common_module
 
     case_id = "META_COVERAGE_THRESHOLD_FLOOR"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     loaded_manifest = common_module.load_manifest()
     expected_line_floor = int(COVERAGE_LINE_MIN_FLOOR)
@@ -3351,8 +3222,7 @@ def validate_critical_coverage_threshold_floor_case(_base_params):
     import tools.local_regression.common as common_module
 
     case_id = "META_CRITICAL_COVERAGE_THRESHOLD_FLOOR"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     loaded_manifest = common_module.load_manifest()
     expected_line_floor = int(CRITICAL_COVERAGE_LINE_MIN_FLOOR)
@@ -3386,8 +3256,7 @@ def validate_critical_coverage_threshold_floor_case(_base_params):
 
 def validate_entry_path_critical_coverage_gate_case(_base_params):
     case_id = "META_ENTRY_PATH_CRITICAL_COVERAGE_GATE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     expected_targets = list(ENTRY_PATH_CRITICAL_COVERAGE_TARGETS)
     declared_targets = list(CRITICAL_COVERAGE_TARGETS)
@@ -3398,20 +3267,9 @@ def validate_entry_path_critical_coverage_gate_case(_base_params):
         "core.portfolio_entries": {"execute_reserved_entries_for_day", "cleanup_extended_signals_for_day"},
         "core.entry_plans": {"build_cash_capped_entry_plan", "execute_pre_market_entry_plan", "should_count_miss_buy"},
     }
-    module_import_failures = []
-    module_symbol_failures = []
-    reloaded_modules = []
-    for module_name, expected_symbols in module_expectations.items():
-        try:
-            module = importlib.import_module(module_name)
-            module = importlib.reload(module)
-        except Exception as exc:
-            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-            continue
-        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
-        if missing_symbols:
-            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
-        reloaded_modules.append(module_name)
+    module_import_failures, module_symbol_failures, reloaded_modules = _probe_module_symbols(
+        module_expectations
+    )
 
     add_check(results, "meta_coverage", case_id, "entry_path_critical_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "entry_path_critical_coverage_targets_declared", [], missing_targets)
@@ -3426,8 +3284,7 @@ def validate_entry_path_critical_coverage_gate_case(_base_params):
 
 def validate_known_bad_fault_injection_case(base_params):
     case_id = "META_KNOWN_BAD_FAULT_INJECTION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     from tools.validate.synthetic_flow_cases import validate_synthetic_same_day_buy_sell_forbidden_case
     from tools.validate.synthetic_history_cases import validate_synthetic_portfolio_history_filter_only_case
@@ -3510,8 +3367,7 @@ def validate_known_bad_fault_injection_case(base_params):
 
 def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params):
     case_id = "META_PORTFOLIO_ROTATION_MARK_TO_MARKET_RETURN"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+    results, summary = _new_synthetic_case(case_id)
 
     source_path = PROJECT_ROOT / "core" / "portfolio_exits.py"
     source_text = source_path.read_text(encoding="utf-8")
