@@ -3333,6 +3333,141 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         ),
     )
     torch, _nn = require_torch()
+    def _gradient_total(parameters):
+        total = 0.0
+        for parameter in parameters:
+            if parameter.grad is not None:
+                total += float(parameter.grad.detach().abs().sum().item())
+        return total
+
+    def _same_seed_extension_models(
+        parent_architecture,
+        architecture,
+        *,
+        seed,
+        shared_key_filter=None,
+    ):
+        torch.manual_seed(seed)
+        parent_model = build_active_model(10, 0, architecture=parent_architecture)
+        torch.manual_seed(seed)
+        model = build_active_model(10, 0, architecture=architecture)
+        parent_state = parent_model.state_dict()
+        state = model.state_dict()
+        if shared_key_filter is None:
+            shared_keys = sorted(set(parent_state).intersection(state))
+            common_exact = (
+                not (set(parent_state) - set(state))
+                and all(torch.equal(parent_state[key], state[key]) for key in shared_keys)
+            )
+        else:
+            shared_keys = sorted(
+                key
+                for key in parent_state
+                if key in state and shared_key_filter(key)
+            )
+            common_exact = bool(shared_keys) and all(
+                torch.equal(parent_state[key], state[key]) for key in shared_keys
+            )
+        return (
+            parent_model,
+            model,
+            common_exact,
+            sorted(set(state) - set(parent_state)),
+        )
+
+    def _forward_safety_mfe_pair(parent_model, model, x):
+        parent_model.eval()
+        model.eval()
+        with torch.no_grad():
+            parent_safety, parent_mfe = parent_model.forward_safety_mfe_heads(x, None)
+            safety, mfe = model.forward_safety_mfe_heads(x, None)
+        return parent_safety, parent_mfe, safety, mfe
+
+    def _head_gradient_totals(model, x, parameter_groups):
+        groups = {
+            name: list(parameters)
+            for name, parameters in parameter_groups.items()
+        }
+        totals = {}
+        for head_index, head_name in ((0, "safety"), (1, "mfe")):
+            model.zero_grad(set_to_none=True)
+            logits = model.forward_safety_mfe_heads(x, None)[head_index]
+            logits[:, 1].sum().backward()
+            totals[head_name] = {
+                name: _gradient_total(parameters)
+                for name, parameters in groups.items()
+            }
+        return totals
+
+    def _trainable_parameter_count(model):
+        return sum(
+            parameter.numel()
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        )
+
+    def _safety_only_extension_probe(
+        parent_architecture,
+        architecture,
+        *,
+        seed,
+        x,
+        parameter_getter,
+        shared_key_filter=None,
+    ):
+        parent_model, model, common_exact, extra_keys = _same_seed_extension_models(
+            parent_architecture,
+            architecture,
+            seed=seed,
+            shared_key_filter=shared_key_filter,
+        )
+        parent_safety, parent_mfe, safety, mfe = _forward_safety_mfe_pair(
+            parent_model, model, x
+        )
+        grads = _head_gradient_totals(
+            model,
+            x,
+            {"extension": parameter_getter(model)},
+        )
+        return SimpleNamespace(
+            parent_model=parent_model,
+            model=model,
+            common_exact=common_exact,
+            extra_keys=extra_keys,
+            parent_safety=parent_safety,
+            parent_mfe=parent_mfe,
+            safety=safety,
+            mfe=mfe,
+            safety_grad=grads["safety"]["extension"],
+            mfe_grad=grads["mfe"]["extension"],
+            parent_params=_trainable_parameter_count(parent_model),
+            model_params=_trainable_parameter_count(model),
+        )
+
+    def _price_volume_fixture(
+        *,
+        close_start,
+        price_pad,
+        volume_selector,
+        volume_value,
+        bars=300,
+    ):
+        close = torch.linspace(close_start, 0.0, steps=bars, dtype=torch.float32)
+        open_price = close - 0.002
+        high = torch.maximum(open_price, close) + price_pad
+        low = torch.minimum(open_price, close) - price_pad
+        x = torch.zeros((2, bars, 10), dtype=torch.float32)
+        for row in range(2):
+            x[row, :, 0] = open_price
+            x[row, :, 1] = high
+            x[row, :, 2] = low
+            x[row, :, 3] = close
+            x[row, :, 5] = open_price
+            x[row, :, 6] = high
+            x[row, :, 7] = low
+            x[row, :, 8] = close
+        x[1, volume_selector, 4] = volume_value
+        return x
     sequence_model = build_active_model(10, 0, architecture=INCEPTION_TIME_V1)
     context_model = build_active_model(
         10, len(RISK_GEOMETRY_CONTEXT_FEATURES), architecture=INCEPTION_TIME_RISK_CONTEXT_V1
@@ -4074,8 +4209,8 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             guarded_safety, guarded_mfe = guarded_model.forward_safety_mfe_heads(recurrent_x, None)
         check_true(
             "gated_recurrent_precision_controls_keep_topology_matched_but_execution_distinct",
-            sum(p.numel() for p in fp32_model.parameters() if p.requires_grad) == 474287
-            and sum(p.numel() for p in guarded_model.parameters() if p.requires_grad) == 474287
+            _trainable_parameter_count(fp32_model) == 474287
+            and _trainable_parameter_count(guarded_model) == 474287
             and fp32_safety.dtype == torch.float32
             and fp32_mfe.dtype == torch.float32
             and guarded_safety.dtype == torch.bfloat16
@@ -4271,8 +4406,8 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     wide_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
     ao_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
     wide_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1)
-    ao_params = sum(int(parameter.numel()) for parameter in ao_model.parameters() if parameter.requires_grad)
-    wide_params = sum(int(parameter.numel()) for parameter in wide_model.parameters() if parameter.requires_grad)
+    ao_params = _trainable_parameter_count(ao_model)
+    wide_params = _trainable_parameter_count(wide_model)
     check_true(
         "wide_capacity_capability_scales_channels_without_rf_or_topology_change",
         wide_descriptor.has_capability("wide_capacity")
@@ -4298,9 +4433,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     long_horizon_model = build_active_model(
         10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1
     )
-    long_horizon_params = sum(
-        int(parameter.numel()) for parameter in long_horizon_model.parameters() if parameter.requires_grad
-    )
+    long_horizon_params = _trainable_parameter_count(long_horizon_model)
     check_true(
         "long_horizon_input_capability_doubles_history_with_parameter_neutral_full_window_rf",
         long_horizon_descriptor.has_capability("long_horizon_input")
@@ -4325,9 +4458,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     deep_descriptor = get_architecture_descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
     deep_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
     deep_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_DEEP_V1)
-    deep_params = sum(
-        int(parameter.numel()) for parameter in deep_model.parameters() if parameter.requires_grad
-    )
+    deep_params = _trainable_parameter_count(deep_model)
     check_true(
         "deep_hierarchy_capability_doubles_depth_at_matched_parameter_and_rf_scale",
         deep_descriptor.has_capability("deep_hierarchy_capacity_matched")
@@ -4400,12 +4531,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     torch.manual_seed(20260902)
     task_x = torch.randn((2, 64, 10), dtype=torch.float32)
 
-    def _gradient_total(parameters):
-        total = 0.0
-        for parameter in parameters:
-            if parameter.grad is not None:
-                total += float(parameter.grad.detach().abs().sum().item())
-        return total
 
     # BV tests adaptive past context as a Safety-only correction while keeping
     # AO's canonical 300-bar latent as the only Conditional-MFE input.
@@ -4436,26 +4561,19 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             adaptive_input_profile.continuous_target_id,
         ),
     )
-    torch.manual_seed(20260906)
-    adaptive_input_ao = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
-    )
-    torch.manual_seed(20260906)
-    adaptive_input_model = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1
-    )
-    adaptive_input_ao_state = adaptive_input_ao.state_dict()
-    adaptive_input_state = adaptive_input_model.state_dict()
-    adaptive_input_extra = sorted(
-        set(adaptive_input_state).difference(adaptive_input_ao_state)
+    (
+        adaptive_input_ao,
+        adaptive_input_model,
+        adaptive_input_common_exact,
+        adaptive_input_extra,
+    ) = _same_seed_extension_models(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1,
+        seed=20260906,
     )
     check_true(
         "adaptive_input_context_same_seed_preserves_all_ao_parameters",
-        not (set(adaptive_input_ao_state) - set(adaptive_input_state))
-        and all(
-            torch.equal(adaptive_input_ao_state[key], adaptive_input_state[key])
-            for key in adaptive_input_ao_state
-        )
+        adaptive_input_common_exact
         and adaptive_input_extra
         == [
             "adaptive_input_context_safety_branch.gate.bias",
@@ -4505,11 +4623,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     )
 
     # Short look-back views must not add encoder gradients or BatchNorm updates.
-    torch.manual_seed(20260907)
-    bn_ao = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
-    torch.manual_seed(20260907)
-    bn_adaptive = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1
+    bn_ao, bn_adaptive, _bn_common_exact, _bn_extra_keys = (
+        _same_seed_extension_models(
+            INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+            INCEPTION_TIME_SHARED_ADAPTIVE_INPUT_CONTEXT_SAFETY_MFE_V1,
+            seed=20260907,
+        )
     )
     bn_ao.train()
     bn_adaptive.train()
@@ -4580,24 +4699,16 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             adaptive_profile.continuous_target_id,
         ),
     )
-    torch.manual_seed(20260905)
-    adaptive_ao = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
+    adaptive_ao, adaptive_model, adaptive_common_exact, adaptive_extra_keys = (
+        _same_seed_extension_models(
+            INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+            INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1,
+            seed=20260905,
+        )
     )
-    torch.manual_seed(20260905)
-    adaptive_model = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_ADAPTIVE_HORIZON_SAFETY_MFE_V1
-    )
-    adaptive_ao_state = adaptive_ao.state_dict()
-    adaptive_state = adaptive_model.state_dict()
-    adaptive_extra_keys = sorted(set(adaptive_state).difference(adaptive_ao_state))
     check_true(
         "adaptive_horizon_same_seed_preserves_all_ao_parameters_and_only_adds_horizon_branch",
-        not (set(adaptive_ao_state) - set(adaptive_state))
-        and all(
-            torch.equal(adaptive_ao_state[key], adaptive_state[key])
-            for key in adaptive_ao_state
-        )
+        adaptive_common_exact
         and adaptive_extra_keys
         == [
             "adaptive_horizon_safety_branch.horizon_classifier.bias",
@@ -4952,21 +5063,19 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             bool(hypergraph_spec.same_date_relation_zero_init_residual),
         ),
     )
-    torch.manual_seed(20260905)
-    hypergraph_ao = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
+    (
+        hypergraph_ao,
+        hypergraph_model,
+        hypergraph_common_exact,
+        extra_hypergraph_keys,
+    ) = _same_seed_extension_models(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1,
+        seed=20260905,
     )
-    torch.manual_seed(20260905)
-    hypergraph_model = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1
-    )
-    ao_state = hypergraph_ao.state_dict()
-    hypergraph_state = hypergraph_model.state_dict()
-    extra_hypergraph_keys = sorted(set(hypergraph_state).difference(ao_state))
     check_true(
         "dynamic_hypergraph_same_seed_preserves_all_ao_parameters_and_adds_only_relational_branch",
-        not (set(ao_state) - set(hypergraph_state))
-        and all(torch.equal(ao_state[key], hypergraph_state[key]) for key in ao_state)
+        hypergraph_common_exact
         and extra_hypergraph_keys
         == [
             "same_date_dynamic_hypergraph_safety_residual.gate.bias",
@@ -5087,22 +5196,19 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             int(relation_change_spec.same_date_relation_history_steps),
         ),
     )
-    torch.manual_seed(20260905)
-    relation_change_bs = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1
+    (
+        relation_change_bs,
+        relation_change_model,
+        relation_change_common_exact,
+        extra_bt_keys,
+    ) = _same_seed_extension_models(
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
+        seed=20260905,
     )
-    torch.manual_seed(20260905)
-    relation_change_model = build_active_model(
-        10, 0,
-        architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
-    )
-    bs_state = relation_change_bs.state_dict()
-    bt_state = relation_change_model.state_dict()
-    extra_bt_keys = sorted(set(bt_state).difference(bs_state))
     check_true(
         "dynamic_hypergraph_relation_change_same_seed_preserves_every_bs_parameter",
-        not (set(bs_state) - set(bt_state))
-        and all(torch.equal(bs_state[key], bt_state[key]) for key in bs_state)
+        relation_change_common_exact
         and extra_bt_keys
         == [
             "same_date_dynamic_hypergraph_safety_residual.relation_change_gate.bias",
@@ -5187,14 +5293,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # Relation-only current/previous encodes must not mutate the AO BatchNorm
     # running state.  After one train-mode forward, all BS-common buffers remain
     # bitwise equal to the same-seed BS control.
-    torch.manual_seed(20260906)
-    bn_bs = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1
-    )
-    torch.manual_seed(20260906)
-    bn_bt = build_active_model(
-        10, 0,
-        architecture=INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
+    bn_bs, bn_bt, _bn_relation_common_exact, _bn_relation_extra_keys = (
+        _same_seed_extension_models(
+            INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1,
+            INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_RELATION_CHANGE_MFE_V1,
+            seed=20260906,
+        )
     )
     bn_bs.train()
     bn_bt.train()
@@ -5275,55 +5379,26 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     for architecture in structure_architectures:
         structure_spec = get_model_spec(architecture)
         ao_structure_reference = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
-        torch.manual_seed(20260904)
-        ao_structure_model = build_active_model(
-            10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1
-        )
-        torch.manual_seed(20260904)
-        structure_model = build_active_model(10, 0, architecture=architecture)
-
-        ao_state = ao_structure_model.state_dict()
-        structure_state = structure_model.state_dict()
-        common_exact = (
-            not (set(ao_state) - set(structure_state))
-            and all(
-                torch.equal(ao_state[key], structure_state[key])
-                for key in ao_state
-            )
-        )
-        extra_keys = sorted(set(structure_state) - set(ao_state))
-
         # Canonical normalized OHLCV-like synthetic input.  The second row has one
         # materially higher relative-volume bar but identical price geometry.
         bars = 300
-        close = torch.linspace(-0.12, 0.0, steps=bars, dtype=torch.float32)
-        open_price = close - 0.002
-        high = torch.maximum(open_price, close) + 0.006
-        low = torch.minimum(open_price, close) - 0.006
-        x0 = torch.zeros((bars, 10), dtype=torch.float32)
-        x0[:, 0] = open_price
-        x0[:, 1] = high
-        x0[:, 2] = low
-        x0[:, 3] = close
-        x0[:, 4] = 0.0
-        x0[:, 5] = open_price
-        x0[:, 6] = high
-        x0[:, 7] = low
-        x0[:, 8] = close
-        x0[:, 9] = 0.0
-        structure_x = torch.stack((x0, x0.clone()), dim=0)
         high_volume_bar = 150
-        structure_x[1, high_volume_bar, 4] = 4.0
-
-        ao_structure_model.eval()
-        structure_model.eval()
+        structure_x = _price_volume_fixture(
+            close_start=-0.12,
+            price_pad=0.006,
+            volume_selector=high_volume_bar,
+            volume_value=4.0,
+            bars=bars,
+        )
+        structure_probe = _safety_only_extension_probe(
+            INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+            architecture,
+            seed=20260904,
+            x=structure_x,
+            parameter_getter=lambda model: model.price_volume_structure_encoder.parameters(),
+        )
+        structure_model = structure_probe.model
         with torch.no_grad():
-            ao_safety, ao_mfe = ao_structure_model.forward_safety_mfe_heads(
-                structure_x, None
-            )
-            structure_safety, structure_mfe = structure_model.forward_safety_mfe_heads(
-                structure_x, None
-            )
             geometry_map, vap = (
                 structure_model.price_volume_structure_encoder.build_structure_inputs(
                     structure_x
@@ -5345,25 +5420,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             geometry_map[1, 2:, time_bin, :].sum().item()
         )
 
-        structure_model.zero_grad(set_to_none=True)
-        _safety_logits, mfe_logits = structure_model.forward_safety_mfe_heads(
-            structure_x, None
-        )
-        mfe_logits[:, 1].sum().backward()
-        structure_from_mfe_grad = _gradient_total(
-            structure_model.price_volume_structure_encoder.parameters()
-        )
-        structure_model.zero_grad(set_to_none=True)
-        safety_logits, _mfe_logits = structure_model.forward_safety_mfe_heads(
-            structure_x, None
-        )
-        safety_logits[:, 1].sum().backward()
-        structure_from_safety_grad = _gradient_total(
-            structure_model.price_volume_structure_encoder.parameters()
-        )
-
-        ao_params = sum(p.numel() for p in ao_structure_model.parameters() if p.requires_grad)
-        structure_params = sum(p.numel() for p in structure_model.parameters() if p.requires_grad)
         structure_contracts.append(
             tuple(structure_spec.pooling)
             == (
@@ -5386,11 +5442,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and int(structure_spec.price_volume_structure_geometry_channels or 0) == 4
             and int(structure_spec.price_volume_structure_geometry_latent_dim or 0) == 32
             and int(structure_spec.price_volume_structure_vap_latent_dim or 0) == 16
-            and common_exact
-            and bool(extra_keys)
-            and all(key.startswith("price_volume_structure_encoder.") for key in extra_keys)
-            and torch.equal(ao_mfe, structure_mfe)
-            and not torch.equal(ao_safety, structure_safety)
+            and structure_probe.common_exact
+            and bool(structure_probe.extra_keys)
+            and all(key.startswith("price_volume_structure_encoder.") for key in structure_probe.extra_keys)
+            and torch.equal(structure_probe.parent_mfe, structure_probe.mfe)
+            and not torch.equal(structure_probe.parent_safety, structure_probe.safety)
             and tuple(geometry_map.shape) == (2, 4, 128, 64)
             and tuple(vap.shape) == (2, 64)
             and bool(torch.isfinite(geometry_map).all().item())
@@ -5404,10 +5460,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 )
             )
             and local_volume_mass_high > local_volume_mass_base
-            and structure_from_mfe_grad == 0.0
-            and structure_from_safety_grad > 0.0
-            and structure_params > ao_params
-            and (structure_params - ao_params) / ao_params < 0.05
+            and structure_probe.mfe_grad == 0.0
+            and structure_probe.safety_grad > 0.0
+            and structure_probe.model_params > structure_probe.parent_params
+            and (structure_probe.model_params - structure_probe.parent_params) / structure_probe.parent_params < 0.05
             and ao_structure_reference.family == "inception_time_shared_safety_mfe"
         )
     check_true(
@@ -5447,50 +5503,21 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             continue
         parent_architecture = parent_architectures[0]
 
-        torch.manual_seed(20260904)
-        parent_model = build_active_model(10, 0, architecture=parent_architecture)
-        torch.manual_seed(20260904)
-        local_model = build_active_model(10, 0, architecture=architecture)
-
-        parent_state = parent_model.state_dict()
-        local_state = local_model.state_dict()
-        common_exact = (
-            not (set(parent_state) - set(local_state))
-            and all(
-                torch.equal(parent_state[key], local_state[key])
-                for key in parent_state
-            )
+        local_x = _price_volume_fixture(
+            close_start=-0.18,
+            price_pad=0.007,
+            volume_selector=slice(-40, None),
+            volume_value=3.0,
         )
-        extra_keys = sorted(set(local_state) - set(parent_state))
-
-        bars = 300
-        close = torch.linspace(-0.18, 0.0, steps=bars, dtype=torch.float32)
-        open_price = close - 0.002
-        high = torch.maximum(open_price, close) + 0.007
-        low = torch.minimum(open_price, close) - 0.007
-        local_x = torch.zeros((2, bars, 10), dtype=torch.float32)
-        for row in range(2):
-            local_x[row, :, 0] = open_price
-            local_x[row, :, 1] = high
-            local_x[row, :, 2] = low
-            local_x[row, :, 3] = close
-            local_x[row, :, 4] = 0.0
-            local_x[row, :, 5] = open_price
-            local_x[row, :, 6] = high
-            local_x[row, :, 7] = low
-            local_x[row, :, 8] = close
-            local_x[row, :, 9] = 0.0
-        local_x[1, -40:, 4] = 3.0
-
-        parent_model.eval()
-        local_model.eval()
+        local_probe = _safety_only_extension_probe(
+            parent_architecture,
+            architecture,
+            seed=20260904,
+            x=local_x,
+            parameter_getter=lambda model: model.price_volume_local_structure_encoder.parameters(),
+        )
+        local_model = local_probe.model
         with torch.no_grad():
-            parent_safety, parent_mfe = parent_model.forward_safety_mfe_heads(
-                local_x, None
-            )
-            local_safety, local_mfe = local_model.forward_safety_mfe_heads(
-                local_x, None
-            )
             geometry_map, vap = (
                 local_model.price_volume_structure_encoder.build_structure_inputs(
                     local_x
@@ -5521,29 +5548,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 )
             )
 
-        local_model.zero_grad(set_to_none=True)
-        _safety_logits, mfe_logits = local_model.forward_safety_mfe_heads(
-            local_x, None
-        )
-        mfe_logits[:, 1].sum().backward()
-        local_from_mfe_grad = _gradient_total(
-            local_model.price_volume_local_structure_encoder.parameters()
-        )
-        local_model.zero_grad(set_to_none=True)
-        safety_logits, _mfe_logits = local_model.forward_safety_mfe_heads(
-            local_x, None
-        )
-        safety_logits[:, 1].sum().backward()
-        local_from_safety_grad = _gradient_total(
-            local_model.price_volume_local_structure_encoder.parameters()
-        )
-
-        parent_params = sum(
-            p.numel() for p in parent_model.parameters() if p.requires_grad
-        )
-        local_params = sum(
-            p.numel() for p in local_model.parameters() if p.requires_grad
-        )
         local_structure_contracts.append(
             tuple(local_spec.pooling)
             == (
@@ -5566,14 +5570,14 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 local_spec.price_volume_local_structure_recent_fraction or 0.0
             )
             == 0.25
-            and common_exact
-            and bool(extra_keys)
+            and local_probe.common_exact
+            and bool(local_probe.extra_keys)
             and all(
                 key.startswith("price_volume_local_structure_encoder.")
-                for key in extra_keys
+                for key in local_probe.extra_keys
             )
-            and torch.equal(parent_mfe, local_mfe)
-            and not torch.equal(parent_safety, local_safety)
+            and torch.equal(local_probe.parent_mfe, local_probe.mfe)
+            and not torch.equal(local_probe.parent_safety, local_probe.safety)
             and tuple(local_tokens.shape) == (2, 16, 11)
             and tuple(local_mask.shape) == (2, 16)
             and tuple(local_weights.shape) == (2, 16)
@@ -5593,10 +5597,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                     torch.zeros_like(zero_local_residual),
                 )
             )
-            and local_from_mfe_grad == 0.0
-            and local_from_safety_grad > 0.0
-            and local_params > parent_params
-            and (local_params - parent_params) / parent_params < 0.03
+            and local_probe.mfe_grad == 0.0
+            and local_probe.safety_grad > 0.0
+            and local_probe.model_params > local_probe.parent_params
+            and (local_probe.model_params - local_probe.parent_params) / local_probe.parent_params < 0.03
         )
     check_true(
         "price_volume_global_and_local_structure_are_additive_safety_only_capabilities",
@@ -5634,50 +5638,22 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             continue
         parent_architecture = parent_architectures[0]
 
-        torch.manual_seed(20260905)
-        parent_model = build_active_model(10, 0, architecture=parent_architecture)
-        torch.manual_seed(20260905)
-        multiscale_model = build_active_model(10, 0, architecture=architecture)
-        parent_state = parent_model.state_dict()
-        multiscale_state = multiscale_model.state_dict()
-        common_exact = (
-            not (set(parent_state) - set(multiscale_state))
-            and all(
-                torch.equal(parent_state[key], multiscale_state[key])
-                for key in parent_state
-            )
-        )
-        extra_keys = sorted(set(multiscale_state) - set(parent_state))
-
-        bars = 300
-        close = torch.linspace(-0.16, 0.0, steps=bars, dtype=torch.float32)
-        open_price = close - 0.002
-        high = torch.maximum(open_price, close) + 0.007
-        low = torch.minimum(open_price, close) - 0.007
-        multiscale_x = torch.zeros((2, bars, 10), dtype=torch.float32)
-        for row in range(2):
-            multiscale_x[row, :, 0] = open_price
-            multiscale_x[row, :, 1] = high
-            multiscale_x[row, :, 2] = low
-            multiscale_x[row, :, 3] = close
-            multiscale_x[row, :, 4] = 0.0
-            multiscale_x[row, :, 5] = open_price
-            multiscale_x[row, :, 6] = high
-            multiscale_x[row, :, 7] = low
-            multiscale_x[row, :, 8] = close
-            multiscale_x[row, :, 9] = 0.0
         # Same recent price path, different local relative-volume evidence.
-        multiscale_x[1, -20:, 4] = 3.0
-
-        parent_model.eval()
-        multiscale_model.eval()
+        multiscale_x = _price_volume_fixture(
+            close_start=-0.16,
+            price_pad=0.007,
+            volume_selector=slice(-20, None),
+            volume_value=3.0,
+        )
+        multiscale_probe = _safety_only_extension_probe(
+            parent_architecture,
+            architecture,
+            seed=20260905,
+            x=multiscale_x,
+            parameter_getter=lambda model: model.price_volume_multiscale_local_encoder.parameters(),
+        )
+        multiscale_model = multiscale_probe.model
         with torch.no_grad():
-            parent_safety, parent_mfe = parent_model.forward_safety_mfe_heads(
-                multiscale_x, None
-            )
-            multiscale_safety, multiscale_mfe = (
-                multiscale_model.forward_safety_mfe_heads(multiscale_x, None)
-            )
             local_map = (
                 multiscale_model.price_volume_multiscale_local_encoder
                 .build_local_geometry_map(multiscale_x)
@@ -5693,29 +5669,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 )
             )
 
-        multiscale_model.zero_grad(set_to_none=True)
-        _safety_logits, mfe_logits = multiscale_model.forward_safety_mfe_heads(
-            multiscale_x, None
-        )
-        mfe_logits[:, 1].sum().backward()
-        local_from_mfe_grad = _gradient_total(
-            multiscale_model.price_volume_multiscale_local_encoder.parameters()
-        )
-        multiscale_model.zero_grad(set_to_none=True)
-        safety_logits, _mfe_logits = multiscale_model.forward_safety_mfe_heads(
-            multiscale_x, None
-        )
-        safety_logits[:, 1].sum().backward()
-        local_from_safety_grad = _gradient_total(
-            multiscale_model.price_volume_multiscale_local_encoder.parameters()
-        )
-
-        parent_params = sum(
-            p.numel() for p in parent_model.parameters() if p.requires_grad
-        )
-        multiscale_params = sum(
-            p.numel() for p in multiscale_model.parameters() if p.requires_grad
-        )
         multiscale_contracts.append(
             tuple(multiscale_spec.pooling)
             == (
@@ -5736,23 +5689,23 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and int(multiscale_spec.price_volume_local_map_price_bins or 0) == 64
             and float(multiscale_spec.price_volume_local_map_price_span_atr or 0.0) == 4.0
             and int(multiscale_spec.price_volume_local_map_geometry_latent_dim or 0) == 32
-            and common_exact
-            and bool(extra_keys)
+            and multiscale_probe.common_exact
+            and bool(multiscale_probe.extra_keys)
             and all(
                 key.startswith("price_volume_multiscale_local_encoder.")
-                for key in extra_keys
+                for key in multiscale_probe.extra_keys
             )
-            and torch.equal(parent_mfe, multiscale_mfe)
-            and not torch.equal(parent_safety, multiscale_safety)
+            and torch.equal(multiscale_probe.parent_mfe, multiscale_probe.mfe)
+            and not torch.equal(multiscale_probe.parent_safety, multiscale_probe.safety)
             and tuple(local_map.shape) == (2, 4, 96, 64)
             and bool(torch.isfinite(local_map).all().item())
             and float(local_map[1, 2:, -24:, :].sum().item())
             > float(local_map[0, 2:, -24:, :].sum().item())
             and bool(torch.equal(zero_local_residual, torch.zeros_like(zero_local_residual)))
-            and local_from_mfe_grad == 0.0
-            and local_from_safety_grad > 0.0
-            and multiscale_params > parent_params
-            and (multiscale_params - parent_params) / parent_params < 0.05
+            and multiscale_probe.mfe_grad == 0.0
+            and multiscale_probe.safety_grad > 0.0
+            and multiscale_probe.model_params > multiscale_probe.parent_params
+            and (multiscale_probe.model_params - multiscale_probe.parent_params) / multiscale_probe.parent_params < 0.05
         )
     check_true(
         "price_volume_multiscale_global_plus_high_resolution_local_2d_is_safety_only",
@@ -5786,51 +5739,23 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             continue
         parent_architecture = parent_architectures[0]
 
-        torch.manual_seed(20260905)
-        parent_model = build_active_model(10, 0, architecture=parent_architecture)
-        torch.manual_seed(20260905)
-        position_model = build_active_model(10, 0, architecture=architecture)
-        parent_state = parent_model.state_dict()
-        position_state = position_model.state_dict()
-        shared_non_structure_keys = sorted(
-            key
-            for key in parent_state
-            if key in position_state and not key.startswith("price_volume_")
+        position_x = _price_volume_fixture(
+            close_start=-0.16,
+            price_pad=0.007,
+            volume_selector=slice(-20, None),
+            volume_value=3.0,
         )
-        common_exact = bool(shared_non_structure_keys) and all(
-            torch.equal(parent_state[key], position_state[key])
-            for key in shared_non_structure_keys
+        position_probe = _safety_only_extension_probe(
+            parent_architecture,
+            architecture,
+            seed=20260905,
+            x=position_x,
+            parameter_getter=lambda model: model.price_volume_position_aware_multiscale_encoder.parameters(),
+            shared_key_filter=lambda key: not key.startswith("price_volume_"),
         )
-
-        bars = 300
-        close = torch.linspace(-0.16, 0.0, steps=bars, dtype=torch.float32)
-        open_price = close - 0.002
-        high = torch.maximum(open_price, close) + 0.007
-        low = torch.minimum(open_price, close) - 0.007
-        position_x = torch.zeros((2, bars, 10), dtype=torch.float32)
-        for row in range(2):
-            position_x[row, :, 0] = open_price
-            position_x[row, :, 1] = high
-            position_x[row, :, 2] = low
-            position_x[row, :, 3] = close
-            position_x[row, :, 4] = 0.0
-            position_x[row, :, 5] = open_price
-            position_x[row, :, 6] = high
-            position_x[row, :, 7] = low
-            position_x[row, :, 8] = close
-            position_x[row, :, 9] = 0.0
-        position_x[1, -20:, 4] = 3.0
-
-        parent_model.eval()
-        position_model.eval()
+        position_model = position_probe.model
         encoder = position_model.price_volume_position_aware_multiscale_encoder
         with torch.no_grad():
-            parent_safety, parent_mfe = parent_model.forward_safety_mfe_heads(
-                position_x, None
-            )
-            position_safety, position_mfe = position_model.forward_safety_mfe_heads(
-                position_x, None
-            )
             global_map, position_vap = encoder.build_global_position_aware_inputs(
                 position_x
             )
@@ -5849,29 +5774,6 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and torch.equal(local_map[0, 5, :, 0].cpu(), expected_local_time)
         )
 
-        position_model.zero_grad(set_to_none=True)
-        _safety_logits, mfe_logits = position_model.forward_safety_mfe_heads(
-            position_x, None
-        )
-        mfe_logits[:, 1].sum().backward()
-        position_from_mfe_grad = _gradient_total(encoder.parameters())
-        position_model.zero_grad(set_to_none=True)
-        safety_logits, _mfe_logits = position_model.forward_safety_mfe_heads(
-            position_x, None
-        )
-        safety_logits[:, 1].sum().backward()
-        position_from_safety_grad = _gradient_total(encoder.parameters())
-
-        parent_params = sum(
-            parameter.numel()
-            for parameter in parent_model.parameters()
-            if parameter.requires_grad
-        )
-        position_params = sum(
-            parameter.numel()
-            for parameter in position_model.parameters()
-            if parameter.requires_grad
-        )
         position_aware_contracts.append(
             tuple(position_spec.pooling)
             == (
@@ -5890,9 +5792,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and int(position_spec.price_volume_local_map_history_bars or 0) == 80
             and int(position_spec.price_volume_local_map_time_bins or 0) == 96
             and int(position_spec.price_volume_local_map_price_bins or 0) == 64
-            and common_exact
-            and torch.equal(parent_mfe, position_mfe)
-            and not torch.equal(parent_safety, position_safety)
+            and position_probe.common_exact
+            and torch.equal(position_probe.parent_mfe, position_probe.mfe)
+            and not torch.equal(position_probe.parent_safety, position_probe.safety)
             and tuple(global_map.shape) == (2, 6, 128, 64)
             and tuple(position_vap.shape) == (2, 2, 64)
             and tuple(local_map.shape) == (2, 6, 96, 64)
@@ -5900,29 +5802,31 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             and bool(torch.isfinite(position_vap).all().item())
             and bool(torch.isfinite(local_map).all().item())
             and coordinates_exact
-            and position_from_mfe_grad == 0.0
-            and position_from_safety_grad > 0.0
-            and position_params > parent_params
-            and (position_params - parent_params) / parent_params < 0.01
+            and position_probe.mfe_grad == 0.0
+            and position_probe.safety_grad > 0.0
+            and position_probe.model_params > position_probe.parent_params
+            and (position_probe.model_params - position_probe.parent_params) / position_probe.parent_params < 0.01
         )
     check_true(
         "price_volume_position_aware_multiscale_preserves_coordinates_and_mfe_path",
         len(position_aware_contracts) == 1 and all(position_aware_contracts),
     )
 
-    task_model.zero_grad(set_to_none=True)
-    safety_logits, _mfe_logits = task_model.forward_safety_mfe_heads(task_x, None)
-    safety_logits[:, 1].sum().backward()
-    safety_shared_grad = _gradient_total(task_model.inception_modules.parameters())
-    safety_branch_grad = _gradient_total(task_model.safety_inception_modules.parameters())
-    safety_to_mfe_grad = _gradient_total(task_model.mfe_inception_modules.parameters())
-
-    task_model.zero_grad(set_to_none=True)
-    _safety_logits, mfe_logits = task_model.forward_safety_mfe_heads(task_x, None)
-    mfe_logits[:, 1].sum().backward()
-    mfe_shared_grad = _gradient_total(task_model.inception_modules.parameters())
-    mfe_branch_grad = _gradient_total(task_model.mfe_inception_modules.parameters())
-    mfe_to_safety_grad = _gradient_total(task_model.safety_inception_modules.parameters())
+    task_grads = _head_gradient_totals(
+        task_model,
+        task_x,
+        {
+            "shared": task_model.inception_modules.parameters(),
+            "safety_branch": task_model.safety_inception_modules.parameters(),
+            "mfe_branch": task_model.mfe_inception_modules.parameters(),
+        },
+    )
+    safety_shared_grad = task_grads["safety"]["shared"]
+    safety_branch_grad = task_grads["safety"]["safety_branch"]
+    safety_to_mfe_grad = task_grads["safety"]["mfe_branch"]
+    mfe_shared_grad = task_grads["mfe"]["shared"]
+    mfe_branch_grad = task_grads["mfe"]["mfe_branch"]
+    mfe_to_safety_grad = task_grads["mfe"]["safety_branch"]
     check_true(
         "task_specific_safety_mfe_gradient_ownership_is_shared_stem_plus_own_final_group",
         safety_shared_grad > 0.0
@@ -5956,20 +5860,21 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             "raw_mfe_head",
         ),
     )
-    torch.manual_seed(20260902)
-    ao_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
-    torch.manual_seed(20260902)
-    safety_attn_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1)
-    ao_state = ao_model.state_dict()
-    attn_state = safety_attn_model.state_dict()
-    shared_keys = sorted(set(ao_state).intersection(attn_state))
-    extra_keys = sorted(set(attn_state).difference(ao_state))
+    torch.manual_seed(20260903)
+    attention_x = torch.randn((3, 64, 10), dtype=torch.float32)
+    attention_probe = _safety_only_extension_probe(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
+        seed=20260902,
+        x=attention_x,
+        parameter_getter=lambda model: model.safety_attention_scorer.parameters(),
+    )
+    safety_attn_model = attention_probe.model
     check_true(
         "safety_attention_pool_same_seed_adds_only_scalar_scorer_parameters",
-        not (set(ao_state) - set(attn_state))
-        and extra_keys
-        == ["safety_attention_scorer.bias", "safety_attention_scorer.weight"]
-        and all(torch.equal(ao_state[key], attn_state[key]) for key in shared_keys),
+        attention_probe.common_exact
+        and attention_probe.extra_keys
+        == ["safety_attention_scorer.bias", "safety_attention_scorer.weight"],
     )
     scorer = safety_attn_model.safety_attention_scorer
     check_true(
@@ -5981,30 +5886,18 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and tuple(scorer.stride) == (1,)
         and tuple(scorer.padding) == (0,),
     )
-    torch.manual_seed(20260903)
-    attention_x = torch.randn((3, 64, 10), dtype=torch.float32)
-    ao_model.eval()
-    safety_attn_model.eval()
     with torch.no_grad():
-        ao_safety_logits, ao_mfe_logits = ao_model.forward_safety_mfe_heads(attention_x, None)
-        attn_safety_logits, attn_mfe_logits = safety_attn_model.forward_safety_mfe_heads(attention_x, None)
         safety_weights = safety_attn_model.safety_attention_weights(attention_x)
     check_true(
         "safety_attention_pool_preserves_ao_mfe_path_and_normalizes_temporal_weights",
-        torch.equal(ao_mfe_logits, attn_mfe_logits)
+        torch.equal(attention_probe.parent_mfe, attention_probe.mfe)
         and tuple(safety_weights.shape) == (3, 64)
         and bool(torch.allclose(safety_weights.sum(dim=1), torch.ones(3), atol=1e-6, rtol=0.0))
         and bool(torch.isfinite(safety_weights).all())
-        and not torch.equal(ao_safety_logits, attn_safety_logits),
+        and not torch.equal(attention_probe.parent_safety, attention_probe.safety),
     )
-    safety_attn_model.zero_grad(set_to_none=True)
-    safety_logits, _mfe_logits = safety_attn_model.forward_safety_mfe_heads(attention_x, None)
-    safety_logits[:, 1].sum().backward()
-    scorer_from_safety_grad = _gradient_total(safety_attn_model.safety_attention_scorer.parameters())
-    safety_attn_model.zero_grad(set_to_none=True)
-    _safety_logits, mfe_logits = safety_attn_model.forward_safety_mfe_heads(attention_x, None)
-    mfe_logits[:, 1].sum().backward()
-    scorer_from_mfe_grad = _gradient_total(safety_attn_model.safety_attention_scorer.parameters())
+    scorer_from_safety_grad = attention_probe.safety_grad
+    scorer_from_mfe_grad = attention_probe.mfe_grad
     check_true(
         "safety_attention_pool_gradient_is_safety_only_while_mfe_keeps_shared_gap",
         scorer_from_safety_grad > 0.0 and scorer_from_mfe_grad == 0.0,
@@ -6032,26 +5925,23 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             "raw_mfe_head",
         ),
     )
-    torch.manual_seed(20260902)
-    task_gap_model = build_active_model(10, 0, architecture=INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1)
-    torch.manual_seed(20260902)
-    task_attn_model = build_active_model(10, 0, architecture=INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1)
-    task_gap_state = task_gap_model.state_dict()
-    task_attn_state = task_attn_model.state_dict()
-    task_shared_keys = sorted(set(task_gap_state).intersection(task_attn_state))
-    task_extra_keys = sorted(set(task_attn_state).difference(task_gap_state))
+    task_gap_model, task_attn_model, task_attn_common_exact, task_extra_keys = (
+        _same_seed_extension_models(
+            INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
+            INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
+            seed=20260902,
+        )
+    )
     check_true(
         "task_specific_safety_attention_same_seed_adds_only_scalar_scorer",
-        not (set(task_gap_state) - set(task_attn_state))
+        task_attn_common_exact
         and task_extra_keys
-        == ["safety_attention_scorer.bias", "safety_attention_scorer.weight"]
-        and all(torch.equal(task_gap_state[key], task_attn_state[key]) for key in task_shared_keys),
+        == ["safety_attention_scorer.bias", "safety_attention_scorer.weight"],
     )
-    task_gap_model.eval()
-    task_attn_model.eval()
+    gap_safety_logits, gap_mfe_logits, task_attn_safety_logits, task_attn_mfe_logits = (
+        _forward_safety_mfe_pair(task_gap_model, task_attn_model, attention_x)
+    )
     with torch.no_grad():
-        gap_safety_logits, gap_mfe_logits = task_gap_model.forward_safety_mfe_heads(attention_x, None)
-        task_attn_safety_logits, task_attn_mfe_logits = task_attn_model.forward_safety_mfe_heads(attention_x, None)
         task_safety_weights = task_attn_model.safety_attention_weights(attention_x)
         safety_map, _mfe_map = task_attn_model.encode_task_specific_feature_maps(attention_x)
         expected_task_weights = torch.softmax(
@@ -6064,18 +5954,21 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and bool(torch.allclose(task_safety_weights.sum(dim=1), torch.ones(3), atol=1e-6, rtol=0.0))
         and not torch.equal(gap_safety_logits, task_attn_safety_logits),
     )
-    task_attn_model.zero_grad(set_to_none=True)
-    task_attn_safety_logits, _task_attn_mfe_logits = task_attn_model.forward_safety_mfe_heads(attention_x, None)
-    task_attn_safety_logits[:, 1].sum().backward()
-    task_safety_scorer_grad = _gradient_total(task_attn_model.safety_attention_scorer.parameters())
-    task_safety_branch_grad = _gradient_total(task_attn_model.safety_inception_modules.parameters())
-    task_safety_to_mfe_grad = _gradient_total(task_attn_model.mfe_inception_modules.parameters())
-    task_attn_model.zero_grad(set_to_none=True)
-    _task_attn_safety_logits, task_attn_mfe_logits = task_attn_model.forward_safety_mfe_heads(attention_x, None)
-    task_attn_mfe_logits[:, 1].sum().backward()
-    task_mfe_to_scorer_grad = _gradient_total(task_attn_model.safety_attention_scorer.parameters())
-    task_mfe_to_safety_branch_grad = _gradient_total(task_attn_model.safety_inception_modules.parameters())
-    task_mfe_branch_grad = _gradient_total(task_attn_model.mfe_inception_modules.parameters())
+    task_attention_grads = _head_gradient_totals(
+        task_attn_model,
+        attention_x,
+        {
+            "scorer": task_attn_model.safety_attention_scorer.parameters(),
+            "safety_branch": task_attn_model.safety_inception_modules.parameters(),
+            "mfe_branch": task_attn_model.mfe_inception_modules.parameters(),
+        },
+    )
+    task_safety_scorer_grad = task_attention_grads["safety"]["scorer"]
+    task_safety_branch_grad = task_attention_grads["safety"]["safety_branch"]
+    task_safety_to_mfe_grad = task_attention_grads["safety"]["mfe_branch"]
+    task_mfe_to_scorer_grad = task_attention_grads["mfe"]["scorer"]
+    task_mfe_to_safety_branch_grad = task_attention_grads["mfe"]["safety_branch"]
+    task_mfe_branch_grad = task_attention_grads["mfe"]["mfe_branch"]
     check_true(
         "task_specific_safety_attention_gradient_ownership_remains_task_isolated",
         task_safety_scorer_grad > 0.0
@@ -6107,24 +6000,31 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             "raw_mfe_head",
         ),
     )
-    torch.manual_seed(20260902)
-    ao_self_control = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
-    torch.manual_seed(20260902)
-    self_attn_model = build_active_model(10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1)
-    ao_self_state = ao_self_control.state_dict()
-    self_attn_state = self_attn_model.state_dict()
-    self_attn_shared_keys = sorted(set(ao_self_state).intersection(self_attn_state))
-    self_attn_extra_keys = sorted(set(self_attn_state).difference(ao_self_state))
+    self_attn_probe = _safety_only_extension_probe(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
+        seed=20260902,
+        x=attention_x,
+        parameter_getter=lambda model: [
+            parameter
+            for layer in (
+                model.safety_temporal_query,
+                model.safety_temporal_key,
+                model.safety_temporal_value,
+            )
+            for parameter in layer.parameters()
+        ],
+    )
+    self_attn_model = self_attn_probe.model
     check_true(
         "safety_temporal_self_attention_same_seed_adds_only_qkv_projections",
-        not (set(ao_self_state) - set(self_attn_state))
-        and self_attn_extra_keys
+        self_attn_probe.common_exact
+        and self_attn_probe.extra_keys
         == [
             "safety_temporal_key.weight",
             "safety_temporal_query.weight",
             "safety_temporal_value.weight",
-        ]
-        and all(torch.equal(ao_self_state[key], self_attn_state[key]) for key in self_attn_shared_keys),
+        ],
     )
     q_proj = self_attn_model.safety_temporal_query
     k_proj = self_attn_model.safety_temporal_key
@@ -6143,28 +6043,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and not hasattr(self_attn_model, "safety_temporal_ffn")
         and not hasattr(self_attn_model, "safety_positional_embedding"),
     )
-    ao_self_control.eval()
-    self_attn_model.eval()
-    with torch.no_grad():
-        ao_self_safety, ao_self_mfe = ao_self_control.forward_safety_mfe_heads(attention_x, None)
-        self_attn_safety, self_attn_mfe = self_attn_model.forward_safety_mfe_heads(attention_x, None)
     check_true(
         "safety_temporal_self_attention_preserves_ao_mfe_path_and_changes_only_safety_readout",
-        torch.equal(ao_self_mfe, self_attn_mfe)
-        and not torch.equal(ao_self_safety, self_attn_safety),
+        torch.equal(self_attn_probe.parent_mfe, self_attn_probe.mfe)
+        and not torch.equal(self_attn_probe.parent_safety, self_attn_probe.safety),
     )
-    self_attn_model.zero_grad(set_to_none=True)
-    self_attn_safety, _self_attn_mfe = self_attn_model.forward_safety_mfe_heads(attention_x, None)
-    self_attn_safety[:, 1].sum().backward()
-    safety_to_qkv_grad = sum(
-        _gradient_total(layer.parameters()) for layer in (q_proj, k_proj, v_proj)
-    )
-    self_attn_model.zero_grad(set_to_none=True)
-    _self_attn_safety, self_attn_mfe = self_attn_model.forward_safety_mfe_heads(attention_x, None)
-    self_attn_mfe[:, 1].sum().backward()
-    mfe_to_qkv_grad = sum(
-        _gradient_total(layer.parameters()) for layer in (q_proj, k_proj, v_proj)
-    )
+    safety_to_qkv_grad = self_attn_probe.safety_grad
+    mfe_to_qkv_grad = self_attn_probe.mfe_grad
     check_true(
         "safety_temporal_self_attention_gradient_is_safety_only",
         safety_to_qkv_grad > 0.0 and mfe_to_qkv_grad == 0.0,
@@ -6201,33 +6086,25 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         )
         and model_spec_from_manifest(relation_manifest) == relation_spec,
     )
-    torch.manual_seed(20260905)
-    relation_ay_control = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1
+    relation_probe = _safety_only_extension_probe(
+        INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1,
+        seed=20260905,
+        x=relation_x,
+        parameter_getter=lambda model: model.safety_temporal_relation_bias.parameters(),
     )
-    torch.manual_seed(20260905)
-    relation_model = build_active_model(
-        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_PAIRWISE_RELATION_MFE_V1
-    )
-    relation_ay_state = relation_ay_control.state_dict()
-    relation_state = relation_model.state_dict()
-    relation_extra_keys = sorted(set(relation_state).difference(relation_ay_state))
+    relation_model = relation_probe.model
     check_true(
         "pairwise_temporal_relation_same_seed_adds_only_relation_mlp_after_ay",
-        not (set(relation_ay_state) - set(relation_state))
-        and relation_extra_keys
+        relation_probe.common_exact
+        and relation_probe.extra_keys
         == [
             "safety_temporal_relation_bias.relation_mlp.0.bias",
             "safety_temporal_relation_bias.relation_mlp.0.weight",
             "safety_temporal_relation_bias.relation_mlp.2.weight",
         ]
-        and all(
-            torch.equal(relation_ay_state[key], relation_state[key])
-            for key in relation_ay_state
-        )
         and (
-            sum(parameter.numel() for parameter in relation_model.parameters())
-            - sum(parameter.numel() for parameter in relation_ay_control.parameters())
+            relation_probe.model_params - relation_probe.parent_params
         )
         == 56,
     )
@@ -6268,19 +6145,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             )
         ),
     )
-    relation_ay_control.eval()
-    relation_model.eval()
-    with torch.no_grad():
-        relation_ay_safety, relation_ay_mfe = relation_ay_control.forward_safety_mfe_heads(
-            relation_x, None
-        )
-        relation_safety, relation_mfe = relation_model.forward_safety_mfe_heads(
-            relation_x, None
-        )
     check_true(
         "pairwise_temporal_relation_preserves_ay_ao_mfe_path_and_changes_safety",
-        torch.equal(relation_ay_mfe, relation_mfe)
-        and not torch.equal(relation_ay_safety, relation_safety),
+        torch.equal(relation_probe.parent_mfe, relation_probe.mfe)
+        and not torch.equal(relation_probe.parent_safety, relation_probe.safety),
     )
     from filters.breakout_quality.models import pairwise_temporal_relation as relation_module
 
@@ -6297,30 +6165,16 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         "pairwise_temporal_relation_execution_chunking_preserves_model_semantics",
         bool(
             torch.allclose(
-                relation_safety,
+                relation_probe.safety,
                 chunked_relation_safety,
                 atol=1e-6,
                 rtol=1e-6,
             )
         )
-        and torch.equal(relation_mfe, chunked_relation_mfe),
+        and torch.equal(relation_probe.mfe, chunked_relation_mfe),
     )
-    relation_model.zero_grad(set_to_none=True)
-    relation_safety, _relation_mfe = relation_model.forward_safety_mfe_heads(
-        relation_x, None
-    )
-    relation_safety[:, 1].sum().backward()
-    safety_to_relation_grad = _gradient_total(
-        relation_model.safety_temporal_relation_bias.parameters()
-    )
-    relation_model.zero_grad(set_to_none=True)
-    _relation_safety, relation_mfe = relation_model.forward_safety_mfe_heads(
-        relation_x, None
-    )
-    relation_mfe[:, 1].sum().backward()
-    mfe_to_relation_grad = _gradient_total(
-        relation_model.safety_temporal_relation_bias.parameters()
-    )
+    safety_to_relation_grad = relation_probe.safety_grad
+    mfe_to_relation_grad = relation_probe.mfe_grad
     check_true(
         "pairwise_temporal_relation_gradient_is_safety_only",
         safety_to_relation_grad > 0.0 and mfe_to_relation_grad == 0.0,
@@ -6391,20 +6245,22 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and bool(torch.isfinite(hybrid_mfe).all()),
     )
     hybrid_model.train()
-    hybrid_model.zero_grad(set_to_none=True)
-    hybrid_safety, _hybrid_mfe = hybrid_model.forward_safety_mfe_heads(hybrid_x, None)
-    hybrid_safety[:, 1].sum().backward()
-    safety_patch_grad = _gradient_total(hybrid_model.safety_encoder.parameters()) + _gradient_total(
-        hybrid_model.raw_safety_classifier.parameters()
+    hybrid_patch_parameters = [
+        *hybrid_model.safety_encoder.parameters(),
+        *hybrid_model.raw_safety_classifier.parameters(),
+    ]
+    hybrid_grads = _head_gradient_totals(
+        hybrid_model,
+        hybrid_x,
+        {
+            "patch": hybrid_patch_parameters,
+            "mfe_encoder": hybrid_model.mfe_model.parameters(),
+        },
     )
-    safety_to_mfe_encoder_grad = _gradient_total(hybrid_model.mfe_model.parameters())
-    hybrid_model.zero_grad(set_to_none=True)
-    _hybrid_safety, hybrid_mfe = hybrid_model.forward_safety_mfe_heads(hybrid_x, None)
-    hybrid_mfe[:, 1].sum().backward()
-    mfe_to_patch_grad = _gradient_total(hybrid_model.safety_encoder.parameters()) + _gradient_total(
-        hybrid_model.raw_safety_classifier.parameters()
-    )
-    mfe_encoder_grad = _gradient_total(hybrid_model.mfe_model.parameters())
+    safety_patch_grad = hybrid_grads["safety"]["patch"]
+    safety_to_mfe_encoder_grad = hybrid_grads["safety"]["mfe_encoder"]
+    mfe_to_patch_grad = hybrid_grads["mfe"]["patch"]
+    mfe_encoder_grad = hybrid_grads["mfe"]["mfe_encoder"]
     check_true(
         "safety_patch_mfe_inception_gradient_ownership_is_encoder_isolated",
         safety_patch_grad > 0.0
