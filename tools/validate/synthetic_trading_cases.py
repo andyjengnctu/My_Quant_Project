@@ -42,12 +42,26 @@ def _publish_synthetic_trading_input_lineage(
     *,
     market_date: str,
     required_position_tickers=(),
-    current_universe_tickers=("2330",),
+    current_universe_tickers=None,
 ):
     """Publish canonical Trading data/param lineage for isolated synthetic fixtures."""
+    from core.data_utils import discover_unique_csv_inputs
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from services.trading.market_data_state import publish_trading_market_data_snapshot
     from services.trading.strategy_param_state import publish_trading_strategy_param_binding
     from services.trading.scanner_state import load_trading_scanner_runtime
+
+    if current_universe_tickers is None:
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
+        csv_inputs, duplicate_issue_lines = discover_unique_csv_inputs(Path(paths.data_dir))
+        if duplicate_issue_lines:
+            raise RuntimeError(
+                "Synthetic Trading fixture 存在同 ticker 重複 CSV："
+                + " | ".join(duplicate_issue_lines)
+            )
+        current_universe_tickers = [str(ticker) for ticker, _path in csv_inputs]
+        if not current_universe_tickers:
+            raise RuntimeError("Synthetic Trading fixture 必須先建立至少一個 canonical Trading CSV")
 
     publish_trading_market_data_snapshot(
         root,
