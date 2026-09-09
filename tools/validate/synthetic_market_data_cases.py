@@ -5101,3 +5101,207 @@ def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
 
     summary.update({"checks": len(results), "repair": "end_to_end_price_completeness_fail_closed"})
     return results, summary
+
+
+def validate_trading_execution_finmind_retry_contract_case(_base_params):
+    """Execution-critical Trading FinMind reads share one explicit bounded retry contract."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from unittest.mock import patch
+
+    from services.downloader import runtime as downloader_runtime
+    from services.downloader import sync as downloader_sync
+    from services.downloader.finmind_http import FinMindHttpError, request_finmind_data_with_retry
+    from services.downloader.finmind_shared_client import SharedFinMindRequestClient
+
+    case_id = "TRADING_EXECUTION_FINMIND_RETRY"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
+
+    class _Policy:
+        max_retryable_attempts = 3
+
+        @staticmethod
+        def retry_delay_seconds(failure_count):
+            return float(failure_count)
+
+    class _SequenceClient:
+        def __init__(self, outcomes, *, uncached=False):
+            self.outcomes = list(outcomes)
+            self.calls = 0
+            self.uncached_calls = 0
+            self.use_uncached = bool(uncached)
+
+        def _next(self):
+            self.calls += 1
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        def get_data(self, **_kwargs):
+            return self._next()
+
+        def get_data_uncached(self, **_kwargs):
+            self.uncached_calls += 1
+            return self._next()
+
+    success_frame = pd.DataFrame({"date": ["2026-09-09"]})
+    sleeps = []
+    transient = _SequenceClient([
+        FinMindHttpError("temporary", retryable=True),
+        success_frame,
+    ])
+    observed = request_finmind_data_with_retry(
+        transient,
+        dataset="Synthetic",
+        policy=_Policy(),
+        sleep_fn=sleeps.append,
+    )
+    check("retryable_error_retries_then_returns_payload", True, observed.equals(success_frame))
+    check("retryable_error_uses_exact_attempt_count", 2, transient.calls)
+    check("retryable_error_uses_policy_backoff", [1.0], sleeps)
+
+    quota = _SequenceClient([
+        FinMindHttpError("quota", retryable=True, quota_exhausted=True),
+        success_frame,
+    ])
+    try:
+        request_finmind_data_with_retry(quota, dataset="Synthetic", policy=_Policy(), sleep_fn=lambda _x: None)
+    except FinMindHttpError:
+        quota_raised = True
+    else:
+        quota_raised = False
+    check("quota_exhaustion_is_never_retried", True, quota_raised)
+    check("quota_exhaustion_stops_after_one_attempt", 1, quota.calls)
+
+    permanent = _SequenceClient([
+        FinMindHttpError("permanent", retryable=False),
+        success_frame,
+    ])
+    try:
+        request_finmind_data_with_retry(permanent, dataset="Synthetic", policy=_Policy(), sleep_fn=lambda _x: None)
+    except FinMindHttpError:
+        permanent_raised = True
+    else:
+        permanent_raised = False
+    check("permanent_error_is_never_retried", True, permanent_raised)
+    check("permanent_error_stops_after_one_attempt", 1, permanent.calls)
+
+    exhausted = _SequenceClient([
+        FinMindHttpError("temporary-1", retryable=True),
+        FinMindHttpError("temporary-2", retryable=True),
+        FinMindHttpError("temporary-3", retryable=True),
+    ])
+    exhausted_sleeps = []
+    try:
+        request_finmind_data_with_retry(
+            exhausted,
+            dataset="Synthetic",
+            policy=_Policy(),
+            sleep_fn=exhausted_sleeps.append,
+        )
+    except FinMindHttpError:
+        exhausted_raised = True
+    else:
+        exhausted_raised = False
+    check("retry_budget_exhaustion_fails_closed", True, exhausted_raised)
+    check("retry_budget_is_bounded", 3, exhausted.calls)
+    check("retry_budget_sleeps_only_between_attempts", [1.0, 2.0], exhausted_sleeps)
+
+    uncached = _SequenceClient([success_frame], uncached=True)
+    request_finmind_data_with_retry(
+        uncached,
+        dataset="Synthetic",
+        retain_cache=False,
+        policy=_Policy(),
+        sleep_fn=lambda _x: None,
+    )
+    check("historical_bulk_can_preserve_uncached_fetch_semantics", 1, uncached.uncached_calls)
+
+    class _TransientPerTickerBase:
+        def __init__(self):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            if self.data_request_count == 1:
+                raise FinMindHttpError("temporary", retryable=True)
+            return pd.DataFrame({
+                "date": ["2026-09-08", "2026-09-09"],
+                "stock_id": ["2330", "2330"],
+                "open": [100.0, 101.0],
+                "max": [102.0, 103.0],
+                "min": [99.0, 100.0],
+                "close": [101.0, 102.0],
+                "Trading_Volume": [1000, 1100],
+            })
+
+    with TemporaryDirectory(prefix="trading_retry_sync_") as temp_dir:
+        price_dir = Path(temp_dir) / "prices"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        baseline = pd.DataFrame({
+            "Open": [100.0], "High": [102.0], "Low": [99.0], "Close": [101.0], "Volume": [1000],
+        }, index=pd.to_datetime(["2026-09-08"]))
+        baseline.index.name = "Date"
+        baseline.to_csv(price_dir / "2330.csv")
+        base = _TransientPerTickerBase()
+        shared = SharedFinMindRequestClient(base)
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-09-08"), \
+             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
+             patch("services.downloader.finmind_http.time.sleep", return_value=None):
+            payload = downloader_sync.smart_download_vip_data(
+                ["2330"],
+                "2026-09-09",
+                verbose=False,
+                client=shared,
+                require_target_date_tickers=["2330"],
+            )
+        check("real_per_ticker_fallback_reuses_bounded_retry_contract", 1, payload.get("count_success"))
+        check("real_per_ticker_retry_consumes_two_provider_attempts", 2, base.data_request_count)
+
+    class _TransientUniverseBase:
+        def __init__(self):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+            self.price_attempts = 0
+
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            dataset = kwargs.get("dataset")
+            if dataset == downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET:
+                self.price_attempts += 1
+                if self.price_attempts == 1:
+                    raise FinMindHttpError("temporary", retryable=True)
+                return pd.DataFrame({
+                    "date": ["2026-09-09"],
+                    "stock_id": ["2330"],
+                    "Trading_Volume": [2_000_000],
+                })
+            if dataset == "TaiwanStockPrice":
+                return pd.DataFrame({"date": ["2026-09-09"], "stock_id": ["2330"]})
+            if dataset == downloader_runtime.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-09-09"],
+                    "stock_id": ["2330"],
+                    "market_value": [1e12],
+                })
+            raise AssertionError(f"unexpected universe request: {kwargs}")
+
+    from services.downloader import universe as downloader_universe
+    universe_base = _TransientUniverseBase()
+    universe_shared = SharedFinMindRequestClient(universe_base)
+    with patch("services.downloader.finmind_http.time.sleep", return_value=None):
+        price_frame, market_value_frame = downloader_universe._load_finmind_bulk_screening_data(
+            market_date="2026-09-09",
+            client=universe_shared,
+        )
+    check("universe_exact_date_reuses_bounded_retry_contract", ["2330"], price_frame["stock_id"].astype(str).tolist())
+    check("universe_retry_preserves_market_value_payload", ["2330"], market_value_frame["stock_id"].astype(str).tolist())
+    check("universe_transient_retry_consumes_one_extra_provider_attempt", 4, universe_base.data_request_count)
+
+    summary.update({"checks": len(results), "retry_owner": "explicit_execution_critical_finmind_wrapper"})
+    return results, summary

@@ -8,10 +8,13 @@ introducing hidden SDK retries.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Mapping
 
 import pandas as pd
 import requests
+
+from core.market_data_execution_policy import get_market_data_execution_policy
 
 FINMIND_DATA_URL = "https://api.finmindtrade.com/api/v4/data"
 FINMIND_USER_INFO_URL = "https://api.web.finmindtrade.com/v2/user_info"
@@ -184,10 +187,55 @@ class FinMindHttpClient:
         return pd.DataFrame(raw_data)
 
 
+def request_finmind_data_with_retry(
+    client,
+    *,
+    dataset: str,
+    data_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    retain_cache: bool = True,
+    policy=None,
+    sleep_fn=None,
+) -> pd.DataFrame:
+    """Explicit bounded retry wrapper for execution-critical FinMind reads.
+
+    ``FinMindHttpClient`` and ``SharedFinMindRequestClient`` remain single-call
+    primitives.  This helper is intentionally opt-in so V2 preflight/executor
+    can continue owning their own retry/ledger semantics.  Quota exhaustion and
+    permanent errors are never retried.
+    """
+
+    execution_policy = get_market_data_execution_policy() if policy is None else policy
+    sleeper = time.sleep if sleep_fn is None else sleep_fn
+    failure_count = 0
+    while True:
+        try:
+            fetch = client.get_data
+            if not retain_cache:
+                uncached = getattr(client, "get_data_uncached", None)
+                if callable(uncached):
+                    fetch = uncached
+            return fetch(
+                dataset=dataset,
+                data_id=data_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except FinMindHttpError as exc:
+            if exc.quota_exhausted or not exc.retryable:
+                raise
+            failure_count += 1
+            if failure_count >= int(execution_policy.max_retryable_attempts):
+                raise
+            sleeper(float(execution_policy.retry_delay_seconds(failure_count)))
+
+
 __all__ = [
     "FINMIND_DATA_URL",
     "FINMIND_USER_INFO_URL",
     "FinMindHttpError",
     "FinMindUsage",
     "FinMindHttpClient",
+    "request_finmind_data_with_retry",
 ]

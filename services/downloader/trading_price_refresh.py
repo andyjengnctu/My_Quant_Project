@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-import time
 from typing import Iterable
 
 import pandas as pd
@@ -22,7 +21,7 @@ from core.market_data_execution_policy import get_market_data_execution_policy
 from core.trading_dataset_identity import inspect_trading_dataset_member_date_evidence
 from core.trading_market_clock import latest_allowed_completed_daily_date, select_latest_completed_daily_date
 from services.downloader import runtime as rt
-from services.downloader.finmind_http import FinMindHttpError
+from services.downloader.finmind_http import request_finmind_data_with_retry
 
 
 _TRADING_CALENDAR_DATASET = "TaiwanStockTradingDate"
@@ -120,39 +119,6 @@ def normalize_adjusted_price_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
-def _request_with_retry(
-    client,
-    *,
-    dataset: str,
-    data_id=None,
-    start_date=None,
-    end_date=None,
-    retain_cache: bool = True,
-) -> pd.DataFrame:
-    policy = get_market_data_execution_policy()
-    failure_count = 0
-    while True:
-        try:
-            fetch = client.get_data
-            if not retain_cache:
-                uncached = getattr(client, "get_data_uncached", None)
-                if callable(uncached):
-                    fetch = uncached
-            return fetch(
-                dataset=dataset,
-                data_id=data_id,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        except FinMindHttpError as exc:
-            if exc.quota_exhausted or not exc.retryable:
-                raise
-            failure_count += 1
-            if failure_count >= policy.max_retryable_attempts:
-                raise
-            time.sleep(policy.retry_delay_seconds(failure_count))
-
-
 def _ensure_quota_capacity(client, planned_data_requests: int) -> None:
     planned = int(planned_data_requests)
     if planned <= 0 or not hasattr(client, "get_usage"):
@@ -197,7 +163,7 @@ def _seed_exact_date_cache(
 
 
 def _load_trading_calendar_dates(client) -> tuple[str, ...]:
-    frame = _request_with_retry(client, dataset=_TRADING_CALENDAR_DATASET)
+    frame = request_finmind_data_with_retry(client, dataset=_TRADING_CALENDAR_DATASET)
     if frame is None or not isinstance(frame, pd.DataFrame):
         raise TradingBulkPriceUnsupported("TaiwanStockTradingDate provider payload 不是 DataFrame")
     columns = _provider_columns(frame)
@@ -264,7 +230,7 @@ def probe_latest_adjusted_price_market_date(*, client, now: datetime | None = No
         chunk_months=rt.CANONICAL_PRICE_BULK_CHUNK_MONTHS,
     )
     current_range = ranges[-1]
-    frame = _request_with_retry(
+    frame = request_finmind_data_with_retry(
         client,
         dataset=rt.FINMIND_PRICE_DATASET,
         start_date=current_range.start_date,
@@ -503,7 +469,7 @@ def refresh_trading_adjusted_price_dataset(
             f"range requests={bulk_request_count} (current range REUSE)"
         )
     for index, price_range in enumerate(remaining, start=1):
-        raw = _request_with_retry(
+        raw = request_finmind_data_with_retry(
             client,
             dataset=rt.FINMIND_PRICE_DATASET,
             start_date=price_range.start_date,

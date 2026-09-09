@@ -7,13 +7,19 @@ from core.file_integrity import atomic_write_text
 from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
 from core.trading_dataset_identity import inspect_trading_dataset_member_date_evidence
 from services.downloader import runtime as rt
+from services.downloader.finmind_http import request_finmind_data_with_retry
 
 
 def _provider_get_data(*, client, dataset: str, data_id: str, start_date: str):
     if client is None:
         loader = rt.get_finmind_loader()
         return loader.get_data(dataset=dataset, data_id=data_id, start_date=start_date)
-    return client.get_data(dataset=dataset, data_id=data_id, start_date=start_date)
+    return request_finmind_data_with_retry(
+        client,
+        dataset=dataset,
+        data_id=data_id,
+        start_date=start_date,
+    )
 
 
 def _normalize_adjusted_ticker_history(df: pd.DataFrame, *, market_last_date: str) -> tuple[pd.DataFrame, int]:

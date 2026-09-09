@@ -12,6 +12,7 @@ from core.trading_market_clock import (
     select_latest_completed_daily_date,
 )
 from services.downloader import runtime as rt
+from services.downloader.finmind_http import FinMindHttpError, request_finmind_data_with_retry
 
 
 def get_market_last_date(*, client=None):
@@ -22,14 +23,16 @@ def get_market_last_date(*, client=None):
             loader = rt.get_finmind_loader()
             df = loader.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start)
         else:
-            df = client.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start)
+            df = request_finmind_data_with_retry(
+                client, dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start
+            )
         if df is not None and not df.empty:
             df.columns = [c.lower() for c in df.columns]
             actual_date = select_latest_completed_daily_date(df['date'].tolist(), now=rt.get_taipei_now())
             if actual_date:
                 print(f"📅 台股最新完整交易日 (FinMind) 為: {actual_date}")
                 return actual_date
-    except rt.EXPECTED_MARKET_DATE_EXCEPTIONS as e:
+    except rt.EXPECTED_MARKET_DATE_EXCEPTIONS + (FinMindHttpError,) as e:
         rt.append_downloader_issues("最新交易日(FinMind)失敗", [f"{type(e).__name__}: {e}"])
         print(f"注意：FinMind 日期獲取異常: {type(e).__name__}: {e}")
 
@@ -211,17 +214,20 @@ def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple
                 timeout=rt.REQUEST_TIMEOUT_SEC,
             )
         else:
-            price_raw = client.get_data(
+            price_raw = request_finmind_data_with_retry(
+                client,
                 dataset=rt.FINMIND_UNIVERSE_VOLUME_DATASET,
                 start_date=target_date,
                 end_date=target_date,
             )
-            raw_price_evidence = client.get_data(
+            raw_price_evidence = request_finmind_data_with_retry(
+                client,
                 dataset=FINMIND_RAW_PRICE_ARCHIVE_DATASET,
                 start_date=target_date,
                 end_date=target_date,
             )
-            market_value_raw = client.get_data(
+            market_value_raw = request_finmind_data_with_retry(
+                client,
                 dataset=rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET,
                 start_date=target_date,
                 end_date=target_date,
