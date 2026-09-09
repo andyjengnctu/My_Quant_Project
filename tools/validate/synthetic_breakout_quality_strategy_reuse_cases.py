@@ -22,6 +22,9 @@ def append_completed_pair_score_reuse_contract_checks(
     """Validate archived frozen-score provenance independently of profile membership."""
 
     from core import strategy_compare_policy as strategy_config
+    from core.strategy_comparison import (
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    )
     from services.research import strategy_comparison as score_reuse_module
 
     reuse_source = (
@@ -30,9 +33,10 @@ def append_completed_pair_score_reuse_contract_checks(
     orchestration_source = (
         project_root / "services" / "research" / "strategy_comparison.py"
     ).read_text(encoding="utf-8")
-    engine_source = (
-        project_root / "services" / "research" / "strategy_compare_engine.py"
-    ).read_text(encoding="utf-8")
+    forward_score_reuse_base = strategy_config.get_strategy_comparison_settings(
+        "forward_oos"
+    )
+    c44_contract = forward_score_reuse_base.arms["C44"]
 
     add_check(
         results,
@@ -67,13 +71,12 @@ def append_completed_pair_score_reuse_contract_checks(
                 "_apply_completed_pair_frozen_score_reuse",
             )
         )
-        and "BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL"
-        in engine_source,
+        and c44_contract.dl_runtime_mode
+        == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
+        and dict(c44_contract.dl_runtime_options).get("constrained_solver")
+        == "exact_branch_and_bound_v1",
     )
 
-    forward_score_reuse_base = strategy_config.get_strategy_comparison_settings(
-        "forward_oos"
-    )
     forward_score_reuse_arms = dict(forward_score_reuse_base.arms)
     forward_score_reuse_arms["C36"] = replace(
         forward_score_reuse_arms["C36"], enabled=True
