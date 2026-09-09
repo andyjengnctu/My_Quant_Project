@@ -1054,6 +1054,67 @@ def _render_markdown(payload: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+
+def _forward_slice_positions(
+    forward_position_by_group: dict[int, int], group_ids: np.ndarray
+) -> np.ndarray:
+    return np.asarray(
+        [forward_position_by_group[int(group_id)] for group_id in group_ids],
+        dtype=np.int64,
+    )
+
+
+def _slice_head_scores(
+    heads: dict[str, np.ndarray],
+    positions: np.ndarray,
+    *,
+    keys: set[str] | frozenset[str] | None = None,
+) -> dict[str, np.ndarray]:
+    return {
+        key: values[positions]
+        for key, values in heads.items()
+        if keys is None or key in keys
+    }
+
+
+def _evaluate_head_metric_slices(
+    metric_fn,
+    *,
+    metric_args: tuple,
+    group_table: pd.DataFrame,
+    validation_ids: np.ndarray,
+    validation_heads: dict[str, np.ndarray],
+    forward_heads: dict[str, np.ndarray],
+    forward_position_by_group: dict[int, int],
+    oos_ids: np.ndarray,
+    candidate_ids: np.ndarray,
+    empty_candidate: dict,
+    head_keys: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    def evaluate(group_ids, heads):
+        return metric_fn(
+            group_ids, group_table, *metric_args, heads, include_top_k_quality=True
+        )
+
+    oos_positions = _forward_slice_positions(forward_position_by_group, oos_ids)
+    result = {
+        "validation": evaluate(validation_ids, validation_heads),
+        "oos": evaluate(
+            oos_ids, _slice_head_scores(forward_heads, oos_positions, keys=head_keys)
+        ),
+    }
+    if len(candidate_ids) >= 2:
+        candidate_positions = _forward_slice_positions(
+            forward_position_by_group, candidate_ids
+        )
+        result["breakout_candidate_oos"] = evaluate(
+            candidate_ids,
+            _slice_head_scores(forward_heads, candidate_positions, keys=head_keys),
+        )
+    else:
+        result["breakout_candidate_oos"] = empty_candidate
+    return result
+
 def run(args) -> int:
     started = time.perf_counter()
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -1135,6 +1196,9 @@ def run(args) -> int:
     direct_hmhs_only = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
     forward_score_ids = resolve_forward_oos_score_group_ids(bundle)
+    forward_position_by_group = {
+        int(group_id): pos for pos, group_id in enumerate(forward_score_ids)
+    }
 
     percentile_target = np.full(bundle.raw_target.shape, np.nan, dtype=np.float32)
     selection_mask = np.zeros(bundle.raw_target.shape, dtype=bool)
@@ -1280,20 +1344,27 @@ def run(args) -> int:
         else None
     )
     conditional_mfe_safety_evaluation = {}
-    conditional_validation_heads = None
-    conditional_forward_heads = None
     reverse_conditional_mfe_targets = (
         ranker_api.build_conditional_mfe_opportunity_targets_for_training(
             bundle.group_table, percentile_target
         )
-        if conditional_mfe_single or safety_conditional_mfe_duo or safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri or safety_raw_mfe_joint_min_tri or direct_hmhs_only
+        if target_builder in {
+            CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
+            CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
+            CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+            CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+            CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
+            CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
+        }
         else None
     )
     hs_conditional_mfe_targets = (
         ranker_api.build_hs_conditional_mfe_targets(
             bundle.group_table,
             np.isfinite(np.asarray(bundle.raw_target, dtype=np.float32)),
-            true_hs_percentile_cutoff=float(execution_recipe.objective_policy.secondary_pair_scope_threshold),
+            true_hs_percentile_cutoff=float(
+                execution_recipe.objective_policy.secondary_pair_scope_threshold
+            ),
         )
         if hs_conditional_mfe_duo
         else None
@@ -1305,8 +1376,6 @@ def run(args) -> int:
         if hs_qualification_conditional_mfe_duo
         else {}
     )
-    hs_conditional_validation_heads = None
-    hs_conditional_forward_heads = None
     hs_priority_mfe_targets = (
         ranker_api.build_hs_priority_mfe_targets(
             bundle.group_table,
@@ -1316,11 +1385,7 @@ def run(args) -> int:
         else None
     )
     hs_priority_mfe_evaluation = {}
-    hs_priority_validation_heads = None
-    hs_priority_forward_heads = None
     reverse_conditional_mfe_evaluation = {}
-    reverse_validation_heads = None
-    reverse_forward_heads = None
     safety_raw_mfe_evaluation = {}
     safety_primary_evaluation = {}
     safety_primary_targets = (
@@ -1328,39 +1393,44 @@ def run(args) -> int:
         if safety_primary_duo
         else None
     )
-    safety_primary_validation_heads = None
-    safety_primary_forward_heads = None
     safety_raw_mfe_hmhs_evaluation = {}
     safety_raw_mfe_joint_min_evaluation = {}
-    raw_mfe_validation_heads = None
-    raw_mfe_forward_heads = None
-
     dual_component_evaluation = {}
+    validation_heads = None
+    forward_heads = None
     validation_components = None
     forward_components = None
-    if safety_raw_mfe_joint_min_tri:
-        raw_mfe_validation_heads = ranker_api.predict_safety_raw_mfe_joint_min_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
+
+    direct_head_spec = {
+        CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN: (
+            ranker_api.predict_safety_raw_mfe_joint_min_scores, "raw_mfe", {},
+        ),
+        CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS: (
+            ranker_api.predict_safety_raw_mfe_hmhs_scores, "raw_mfe", {},
+        ),
+        CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE: (
+            ranker_api.predict_safety_raw_mfe_scores, "raw_mfe", {},
+        ),
+        CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE: (
+            ranker_api.predict_safety_conditional_mfe_scores,
+            "conditional_mfe", {"group_dates": bundle.group_table["date"]},
+        ),
+        CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY: (
+            ranker_api.predict_conditional_mfe_safety_scores, "primary_mfe", {},
+        ),
+    }.get(target_builder)
+    if direct_head_spec is not None:
+        predictor, score_key, predictor_kwargs = direct_head_spec
+        common = {"batch_size": int(args.evaluation_batch_size), "plan": plan, **predictor_kwargs}
+        validation_heads = predictor(
+            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids, **common
         )
-        raw_mfe_forward_heads = ranker_api.predict_safety_raw_mfe_joint_min_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
+        forward_heads = predictor(
+            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids, **common
         )
-        validation_scores = raw_mfe_validation_heads["raw_mfe"]
-        forward_scores = raw_mfe_forward_heads["raw_mfe"]
-    elif safety_raw_mfe_hmhs_tri:
-        raw_mfe_validation_heads = ranker_api.predict_safety_raw_mfe_hmhs_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        raw_mfe_forward_heads = ranker_api.predict_safety_raw_mfe_hmhs_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        validation_scores = raw_mfe_validation_heads["raw_mfe"]
-        forward_scores = raw_mfe_forward_heads["raw_mfe"]
-    elif safety_primary_duo:
+        validation_scores = validation_heads[score_key]
+        forward_scores = forward_heads[score_key]
+    elif safety_primary_duo or hs_conditional_mfe_duo or hs_priority_mfe_duo:
         validation_scores, validation_sidecars = predict_score_output_payload(
             torch, model, bundle, split.validation_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -1369,122 +1439,50 @@ def run(args) -> int:
             torch, model, bundle, forward_score_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
         )
-        safety_primary_validation_heads = {
+        secondary_key = "primary_target" if safety_primary_duo else "conditional_mfe"
+        validation_heads = {
             "raw_safety": validation_sidecars["raw_safety_score"],
-            "primary_target": validation_scores,
+            secondary_key: validation_scores,
         }
-        safety_primary_forward_heads = {
+        forward_heads = {
             "raw_safety": forward_sidecars["raw_safety_score"],
-            "primary_target": forward_scores,
+            secondary_key: forward_scores,
         }
-    elif hs_conditional_mfe_duo:
-        validation_scores, validation_sidecars = predict_score_output_payload(
-            torch, model, bundle, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        forward_scores, forward_sidecars = predict_score_output_payload(
-            torch, model, bundle, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        hs_conditional_validation_heads = {
-            "raw_safety": validation_sidecars["raw_safety_score"],
-            "conditional_mfe": validation_scores,
-        }
-        hs_conditional_forward_heads = {
-            "raw_safety": forward_sidecars["raw_safety_score"],
-            "conditional_mfe": forward_scores,
-        }
-    elif hs_priority_mfe_duo:
-        validation_scores, validation_sidecars = predict_score_output_payload(
-            torch, model, bundle, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        forward_scores, forward_sidecars = predict_score_output_payload(
-            torch, model, bundle, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        hs_priority_validation_heads = {
-            "raw_safety": validation_sidecars["raw_safety_score"],
-            "conditional_mfe": validation_scores,
-        }
-        hs_priority_forward_heads = {
-            "raw_safety": forward_sidecars["raw_safety_score"],
-            "conditional_mfe": forward_scores,
-        }
-    elif safety_raw_mfe_duo:
-        raw_mfe_validation_heads = ranker_api.predict_safety_raw_mfe_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        raw_mfe_forward_heads = ranker_api.predict_safety_raw_mfe_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        validation_scores = raw_mfe_validation_heads["raw_mfe"]
-        forward_scores = raw_mfe_forward_heads["raw_mfe"]
-    elif safety_conditional_mfe_duo:
-        reverse_validation_heads = ranker_api.predict_safety_conditional_mfe_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-            group_dates=bundle.group_table["date"],
-        )
-        reverse_forward_heads = ranker_api.predict_safety_conditional_mfe_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-            group_dates=bundle.group_table["date"],
-        )
-        validation_scores = reverse_validation_heads["conditional_mfe"]
-        forward_scores = reverse_forward_heads["conditional_mfe"]
-    elif conditional_mfe_safety:
-        conditional_validation_heads = ranker_api.predict_conditional_mfe_safety_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        conditional_forward_heads = ranker_api.predict_conditional_mfe_safety_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        validation_scores = conditional_validation_heads["primary_mfe"]
-        forward_scores = conditional_forward_heads["primary_mfe"]
     elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R:
+        common = {"batch_size": int(args.evaluation_batch_size), "plan": plan}
         validation_components = ranker_api.predict_dual_component_r(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
+            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids, **common
         )
         forward_components = ranker_api.predict_dual_component_r(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
+            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids, **common
         )
         validation_scores = validation_components["model_score"]
         forward_scores = forward_components["model_score"]
         dual_component_evaluation["validation"] = _dual_component_metrics(
-            bundle.group_table,
-            split.validation_ids,
+            bundle.group_table, split.validation_ids,
             validation_components["predicted_favorable_r"],
             validation_components["predicted_adverse_r"],
         )
-        oos_positions = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
-        oos_component_positions = np.asarray(
-            [oos_positions[int(group_id)] for group_id in split.oos_ids], dtype=np.int64
+        oos_component_positions = _forward_slice_positions(
+            forward_position_by_group, split.oos_ids
         )
         dual_component_evaluation["oos"] = _dual_component_metrics(
-            bundle.group_table,
-            split.oos_ids,
+            bundle.group_table, split.oos_ids,
             forward_components["predicted_favorable_r"][oos_component_positions],
             forward_components["predicted_adverse_r"][oos_component_positions],
         )
     else:
+        common = {
+            "batch_size": int(args.evaluation_batch_size),
+            "plan": plan,
+            "training_objective": bundle.profile.training_objective,
+            "group_dates": bundle.group_table["date"],
+        }
         validation_scores = ranker_api.predict_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-            training_objective=bundle.profile.training_objective,
-            group_dates=bundle.group_table["date"],
+            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids, **common
         )
         forward_scores = ranker_api.predict_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-            training_objective=bundle.profile.training_objective,
-            group_dates=bundle.group_table["date"],
+            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids, **common
         )
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[forward_score_ids] = forward_scores
@@ -1501,19 +1499,18 @@ def run(args) -> int:
         )
     elif hs_conditional_mfe_duo:
         assert hs_conditional_mfe_targets is not None
-        assert hs_conditional_validation_heads is not None and hs_conditional_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        assert validation_heads is not None and forward_heads is not None
         oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
         forward_safety_pct = ranker_api.build_daily_percentile_targets(
-            np.asarray(hs_conditional_forward_heads["raw_safety"], dtype=np.float32),
+            np.asarray(forward_heads["raw_safety"], dtype=np.float32),
             np.ones(len(forward_score_ids), dtype=bool),
             bundle.group_table.iloc[forward_score_ids]["date"].reset_index(drop=True),
         )
         validation_eval = ranker_api.hs_conditional_mfe_metrics(
             split.validation_ids, bundle.group_table, hs_conditional_mfe_targets,
-            hs_conditional_validation_heads, include_top_k_quality=True,
+            validation_heads, include_top_k_quality=True,
         )
-        oos_heads = {key: values[oos_positions] for key, values in hs_conditional_forward_heads.items()}
+        oos_heads = {key: values[oos_positions] for key, values in forward_heads.items()}
         oos_eval = ranker_api.hs_conditional_mfe_metrics(
             split.oos_ids, bundle.group_table, hs_conditional_mfe_targets,
             oos_heads, include_top_k_quality=True,
@@ -1525,16 +1522,15 @@ def run(args) -> int:
         oos_metrics = oos_eval["conditional_mfe_true_hs"]
     elif hs_priority_mfe_duo:
         assert hs_priority_mfe_targets is not None
-        assert hs_priority_validation_heads is not None and hs_priority_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        assert validation_heads is not None and forward_heads is not None
         oos_positions = np.asarray(
             [forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64
         )
         validation_eval = ranker_api.hs_priority_mfe_metrics(
             split.validation_ids, bundle.group_table, hs_priority_mfe_targets,
-            hs_priority_validation_heads, include_top_k_quality=True,
+            validation_heads, include_top_k_quality=True,
         )
-        oos_heads = {key: values[oos_positions] for key, values in hs_priority_forward_heads.items()}
+        oos_heads = {key: values[oos_positions] for key, values in forward_heads.items()}
         oos_eval = ranker_api.hs_priority_mfe_metrics(
             split.oos_ids, bundle.group_table, hs_priority_mfe_targets,
             oos_heads, include_top_k_quality=True,
@@ -1562,11 +1558,10 @@ def run(args) -> int:
 
     if hs_conditional_mfe_duo:
         assert hs_conditional_mfe_targets is not None
-        assert hs_conditional_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        assert forward_heads is not None
         if len(candidate_ids) >= 2:
             candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
-            candidate_heads = {key: values[candidate_positions] for key, values in hs_conditional_forward_heads.items()}
+            candidate_heads = {key: values[candidate_positions] for key, values in forward_heads.items()}
             hs_conditional_mfe_evaluation["breakout_candidate_oos"] = ranker_api.hs_conditional_mfe_metrics(
                 candidate_ids, bundle.group_table, hs_conditional_mfe_targets, candidate_heads,
                 include_top_k_quality=True,
@@ -1592,13 +1587,12 @@ def run(args) -> int:
 
     if hs_priority_mfe_duo:
         assert hs_priority_mfe_targets is not None
-        assert hs_priority_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        assert forward_heads is not None
         if len(candidate_ids) >= 2:
             candidate_positions = np.asarray(
                 [forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64
             )
-            candidate_heads = {key: values[candidate_positions] for key, values in hs_priority_forward_heads.items()}
+            candidate_heads = {key: values[candidate_positions] for key, values in forward_heads.items()}
             hs_priority_mfe_evaluation["breakout_candidate_oos"] = ranker_api.hs_priority_mfe_metrics(
                 candidate_ids, bundle.group_table, hs_priority_mfe_targets, candidate_heads,
                 include_top_k_quality=True,
@@ -1625,9 +1619,6 @@ def run(args) -> int:
         ),
     }
     if forward_components is not None:
-        forward_position_by_group = {
-            int(group_id): pos for pos, group_id in enumerate(forward_score_ids)
-        }
         candidate_positions = np.asarray(
             [forward_position_by_group[int(group_id)] for group_id in candidate_ids],
             dtype=np.int64,
@@ -1638,230 +1629,129 @@ def run(args) -> int:
             forward_components["predicted_favorable_r"][candidate_positions],
             forward_components["predicted_adverse_r"][candidate_positions],
         )
+    head_metric_spec = None
     if safety_raw_mfe_joint_min_tri:
-        assert reverse_conditional_mfe_targets is not None
-        assert raw_mfe_validation_heads is not None and raw_mfe_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
-        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
-        safety_raw_mfe_joint_min_evaluation["validation"] = ranker_api.safety_raw_mfe_joint_min_metrics(
-            split.validation_ids, bundle.group_table, reverse_conditional_mfe_targets,
-            raw_mfe_validation_heads, include_top_k_quality=True,
-        )
-        oos_heads = {key: values[oos_positions] for key, values in raw_mfe_forward_heads.items()}
-        safety_raw_mfe_joint_min_evaluation["oos"] = ranker_api.safety_raw_mfe_joint_min_metrics(
-            split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets,
-            oos_heads, include_top_k_quality=True,
-        )
-        if len(candidate_ids) >= 2:
-            candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
-            candidate_heads = {key: values[candidate_positions] for key, values in raw_mfe_forward_heads.items()}
-            safety_raw_mfe_joint_min_evaluation["breakout_candidate_oos"] = ranker_api.safety_raw_mfe_joint_min_metrics(
-                candidate_ids, bundle.group_table, reverse_conditional_mfe_targets,
-                candidate_heads, include_top_k_quality=True,
-            )
-        else:
-            safety_raw_mfe_joint_min_evaluation["breakout_candidate_oos"] = {
+        head_metric_spec = (
+            safety_raw_mfe_joint_min_evaluation,
+            ranker_api.safety_raw_mfe_joint_min_metrics,
+            (reverse_conditional_mfe_targets,),
+            validation_heads, forward_heads, None,
+            {
                 "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                 "raw_mfe": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                 "joint_min": {"group_count": int(len(candidate_ids)), "not_evaluated_reason": "breakout candidate OOS slice有效sample不足"},
                 "model_gate": {"status": "not_evaluated_insufficient_sample"},
-            }
+            },
+        )
     elif safety_raw_mfe_hmhs_tri:
-        assert reverse_conditional_mfe_targets is not None
-        assert raw_mfe_validation_heads is not None and raw_mfe_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
-        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
-        safety_raw_mfe_hmhs_evaluation["validation"] = ranker_api.safety_raw_mfe_hmhs_metrics(
-            split.validation_ids, bundle.group_table, reverse_conditional_mfe_targets,
-            raw_mfe_validation_heads, include_top_k_quality=True,
-        )
-        oos_heads = {key: values[oos_positions] for key, values in raw_mfe_forward_heads.items()}
-        safety_raw_mfe_hmhs_evaluation["oos"] = ranker_api.safety_raw_mfe_hmhs_metrics(
-            split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets,
-            oos_heads, include_top_k_quality=True,
-        )
-        if len(candidate_ids) >= 2:
-            candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
-            candidate_heads = {key: values[candidate_positions] for key, values in raw_mfe_forward_heads.items()}
-            safety_raw_mfe_hmhs_evaluation["breakout_candidate_oos"] = ranker_api.safety_raw_mfe_hmhs_metrics(
-                candidate_ids, bundle.group_table, reverse_conditional_mfe_targets,
-                candidate_heads, include_top_k_quality=True,
-            )
-        else:
-            safety_raw_mfe_hmhs_evaluation["breakout_candidate_oos"] = {
+        head_metric_spec = (
+            safety_raw_mfe_hmhs_evaluation,
+            ranker_api.safety_raw_mfe_hmhs_metrics,
+            (reverse_conditional_mfe_targets,),
+            validation_heads, forward_heads, None,
+            {
                 "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                 "raw_mfe": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                 "joint_hmhs": {"group_count": int(len(candidate_ids)), "not_evaluated_reason": "breakout candidate OOS slice有效sample不足"},
                 "joint_product_control": {},
                 "model_gate": {"status": "not_evaluated_insufficient_sample"},
-            }
+            },
+        )
     elif safety_primary_duo:
-        assert safety_primary_targets is not None
-        assert safety_primary_validation_heads is not None and safety_primary_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
-        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
-        safety_primary_evaluation["validation"] = ranker_api.safety_primary_metrics(
-            split.validation_ids, bundle.group_table, bundle.raw_target, safety_primary_targets,
-            safety_primary_validation_heads, include_top_k_quality=True,
-        )
-        oos_heads = {
-            key: values[oos_positions]
-            for key, values in safety_primary_forward_heads.items()
-            if key in {"raw_safety", "primary_target"}
-        }
-        safety_primary_evaluation["oos"] = ranker_api.safety_primary_metrics(
-            split.oos_ids, bundle.group_table, bundle.raw_target, safety_primary_targets,
-            oos_heads, include_top_k_quality=True,
-        )
-        if len(candidate_ids) >= 2:
-            candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
-            candidate_heads = {
-                key: values[candidate_positions]
-                for key, values in safety_primary_forward_heads.items()
-                if key in {"raw_safety", "primary_target"}
-            }
-            safety_primary_evaluation["breakout_candidate_oos"] = ranker_api.safety_primary_metrics(
-                candidate_ids, bundle.group_table, bundle.raw_target, safety_primary_targets,
-                candidate_heads, include_top_k_quality=True,
-            )
-        else:
-            safety_primary_evaluation["breakout_candidate_oos"] = {
+        head_metric_spec = (
+            safety_primary_evaluation, ranker_api.safety_primary_metrics,
+            (bundle.raw_target, safety_primary_targets),
+            validation_heads, forward_heads,
+            frozenset({"raw_safety", "primary_target"}),
+            {
                 "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                 "primary_target": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
-            }
+            },
+        )
     elif safety_raw_mfe_duo:
-        assert reverse_conditional_mfe_targets is not None
-        assert raw_mfe_validation_heads is not None and raw_mfe_forward_heads is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
-        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
-        safety_raw_mfe_evaluation["validation"] = ranker_api.safety_raw_mfe_metrics(
-            split.validation_ids, bundle.group_table, reverse_conditional_mfe_targets,
-            raw_mfe_validation_heads, include_top_k_quality=True,
-        )
-        oos_heads = {key: values[oos_positions] for key, values in raw_mfe_forward_heads.items()}
-        safety_raw_mfe_evaluation["oos"] = ranker_api.safety_raw_mfe_metrics(
-            split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets,
-            oos_heads, include_top_k_quality=True,
-        )
-        if len(candidate_ids) >= 2:
-            candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
-            candidate_heads = {key: values[candidate_positions] for key, values in raw_mfe_forward_heads.items()}
-            safety_raw_mfe_evaluation["breakout_candidate_oos"] = ranker_api.safety_raw_mfe_metrics(
-                candidate_ids, bundle.group_table, reverse_conditional_mfe_targets,
-                candidate_heads, include_top_k_quality=True,
-            )
-        else:
-            safety_raw_mfe_evaluation["breakout_candidate_oos"] = {
+        head_metric_spec = (
+            safety_raw_mfe_evaluation, ranker_api.safety_raw_mfe_metrics,
+            (reverse_conditional_mfe_targets,),
+            validation_heads, forward_heads, None,
+            {
                 "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                 "raw_mfe": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                 "model_gate": {"status": "not_evaluated_insufficient_sample"},
-            }
+            },
+        )
+    if head_metric_spec is not None:
+        (
+            evaluation, metric_fn, metric_args, validation_heads, forward_heads,
+            head_keys, empty_candidate,
+        ) = head_metric_spec
+        assert all(value is not None for value in (validation_heads, forward_heads, *metric_args))
+        evaluation.update(
+            _evaluate_head_metric_slices(
+                metric_fn, metric_args=metric_args, group_table=bundle.group_table,
+                validation_ids=split.validation_ids, validation_heads=validation_heads,
+                forward_heads=forward_heads, forward_position_by_group=forward_position_by_group,
+                oos_ids=split.oos_ids, candidate_ids=candidate_ids,
+                empty_candidate=empty_candidate, head_keys=head_keys,
+            )
+        )
 
-    if conditional_mfe_single or safety_conditional_mfe_duo:
+    if safety_conditional_mfe_duo:
         assert reverse_conditional_mfe_targets is not None
-        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
-        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
-        if safety_conditional_mfe_duo:
-            assert reverse_validation_heads is not None and reverse_forward_heads is not None
-            reverse_conditional_mfe_evaluation["validation"] = ranker_api.safety_conditional_mfe_metrics(
-                split.validation_ids, bundle.group_table, reverse_conditional_mfe_targets, reverse_validation_heads, include_top_k_quality=True
-            )
-            oos_heads = {key: values[oos_positions] for key, values in reverse_forward_heads.items()}
-            reverse_conditional_mfe_evaluation["oos"] = ranker_api.safety_conditional_mfe_metrics(
-                split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets, oos_heads, include_top_k_quality=True
-            )
-            if len(candidate_ids) >= 2:
-                candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
-                candidate_heads = {key: values[candidate_positions] for key, values in reverse_forward_heads.items()}
-                reverse_conditional_mfe_evaluation["breakout_candidate_oos"] = ranker_api.safety_conditional_mfe_metrics(
-                    candidate_ids, bundle.group_table, reverse_conditional_mfe_targets, candidate_heads, include_top_k_quality=True
-                )
-            else:
-                reverse_conditional_mfe_evaluation["breakout_candidate_oos"] = {
+        assert validation_heads is not None and forward_heads is not None
+        reverse_conditional_mfe_evaluation.update(
+            _evaluate_head_metric_slices(
+                ranker_api.safety_conditional_mfe_metrics,
+                metric_args=(reverse_conditional_mfe_targets,),
+                group_table=bundle.group_table,
+                validation_ids=split.validation_ids, validation_heads=validation_heads,
+                forward_heads=forward_heads, forward_position_by_group=forward_position_by_group,
+                oos_ids=split.oos_ids, candidate_ids=candidate_ids,
+                empty_candidate={
                     "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
                     "conditional_mfe": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
-                }
-        else:
-            reverse_conditional_mfe_evaluation["validation"] = {
+                },
+            )
+        )
+    elif conditional_mfe_single:
+        assert reverse_conditional_mfe_targets is not None
+        split_args = (
+            bundle.group_table,
+            reverse_conditional_mfe_targets.conditional_mfe_residual,
+            reverse_conditional_mfe_targets.conditional_mfe_percentile,
+        )
+        reverse_conditional_mfe_evaluation.update({
+            "validation": {"conditional_mfe": ranker_api.split_metrics(
+                split.validation_ids, *split_args, validation_scores, include_top_k_quality=True
+            )},
+            "oos": {"conditional_mfe": ranker_api.split_metrics(
+                split.oos_ids, *split_args, oos_scores, include_top_k_quality=True
+            )},
+            "breakout_candidate_oos": {
                 "conditional_mfe": ranker_api.split_metrics(
-                    split.validation_ids, bundle.group_table, reverse_conditional_mfe_targets.conditional_mfe_residual,
-                    reverse_conditional_mfe_targets.conditional_mfe_percentile, validation_scores, include_top_k_quality=True
+                    candidate_ids, *split_args, score_by_group[candidate_ids], include_top_k_quality=True
+                ) if len(candidate_ids) >= 2 else _empty_split_metrics(
+                    len(candidate_ids), "breakout candidate OOS slice有效sample不足"
                 )
-            }
-            reverse_conditional_mfe_evaluation["oos"] = {
-                "conditional_mfe": ranker_api.split_metrics(
-                    split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets.conditional_mfe_residual,
-                    reverse_conditional_mfe_targets.conditional_mfe_percentile, oos_scores, include_top_k_quality=True
-                )
-            }
-            reverse_conditional_mfe_evaluation["breakout_candidate_oos"] = {
-                "conditional_mfe": (
-                    ranker_api.split_metrics(
-                        candidate_ids, bundle.group_table, reverse_conditional_mfe_targets.conditional_mfe_residual,
-                        reverse_conditional_mfe_targets.conditional_mfe_percentile, score_by_group[candidate_ids], include_top_k_quality=True
-                    ) if len(candidate_ids) >= 2 else _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足")
-                )
-            }
+            },
+        })
 
     if conditional_mfe_safety:
         assert conditional_targets is not None
-        assert conditional_validation_heads is not None
-        assert conditional_forward_heads is not None
-        conditional_mfe_safety_evaluation["validation"] = ranker_api.conditional_mfe_safety_metrics(
-            split.validation_ids,
-            bundle.group_table,
-            bundle.raw_target,
-            conditional_targets,
-            conditional_validation_heads,
-            include_top_k_quality=True,
-        )
-        forward_position_by_group = {
-            int(group_id): pos for pos, group_id in enumerate(forward_score_ids)
-        }
-        oos_positions = np.asarray(
-            [forward_position_by_group[int(group_id)] for group_id in split.oos_ids],
-            dtype=np.int64,
-        )
-        oos_head_scores = {
-            key: values[oos_positions]
-            for key, values in conditional_forward_heads.items()
-        }
-        conditional_mfe_safety_evaluation["oos"] = ranker_api.conditional_mfe_safety_metrics(
-            split.oos_ids,
-            bundle.group_table,
-            bundle.raw_target,
-            conditional_targets,
-            oos_head_scores,
-            include_top_k_quality=True,
-        )
-        if len(candidate_ids) >= 2:
-            candidate_positions = np.asarray(
-                [forward_position_by_group[int(group_id)] for group_id in candidate_ids],
-                dtype=np.int64,
+        assert validation_heads is not None and forward_heads is not None
+        conditional_mfe_safety_evaluation.update(
+            _evaluate_head_metric_slices(
+                ranker_api.conditional_mfe_safety_metrics,
+                metric_args=(bundle.raw_target, conditional_targets),
+                group_table=bundle.group_table,
+                validation_ids=split.validation_ids, validation_heads=validation_heads,
+                forward_heads=forward_heads, forward_position_by_group=forward_position_by_group,
+                oos_ids=split.oos_ids, candidate_ids=candidate_ids,
+                empty_candidate={
+                    "primary_mfe": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                    "conditional_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                },
             )
-            candidate_head_scores = {
-                key: values[candidate_positions]
-                for key, values in conditional_forward_heads.items()
-            }
-            conditional_mfe_safety_evaluation["breakout_candidate_oos"] = (
-                ranker_api.conditional_mfe_safety_metrics(
-                    candidate_ids,
-                    bundle.group_table,
-                    bundle.raw_target,
-                    conditional_targets,
-                    candidate_head_scores,
-                    include_top_k_quality=True,
-                )
-            )
-        else:
-            conditional_mfe_safety_evaluation["breakout_candidate_oos"] = {
-                "primary_mfe": _empty_split_metrics(
-                    len(candidate_ids), "breakout candidate OOS slice有效sample不足"
-                ),
-                "conditional_safety": _empty_split_metrics(
-                    len(candidate_ids), "breakout candidate OOS slice有效sample不足"
-                ),
-            }
+        )
 
     candidate_metrics = (
         (
@@ -2060,30 +1950,28 @@ def run(args) -> int:
             forward_score_ids[evaluable_forward_mask]
         ]
     oos_frame["model_score"] = forward_scores
-    if safety_primary_forward_heads is not None:
-        oos_frame["raw_safety_score"] = safety_primary_forward_heads["raw_safety"]
-        oos_frame["primary_target_score"] = safety_primary_forward_heads["primary_target"]
-    if hs_conditional_forward_heads is not None:
-        oos_frame["raw_safety_score"] = hs_conditional_forward_heads["raw_safety"]
-        oos_frame["conditional_mfe_score"] = hs_conditional_forward_heads["conditional_mfe"]
-    if hs_priority_forward_heads is not None:
-        oos_frame["raw_safety_score"] = hs_priority_forward_heads["raw_safety"]
-        oos_frame["hs_priority_mfe_score"] = hs_priority_forward_heads["conditional_mfe"]
-    if raw_mfe_forward_heads is not None:
-        oos_frame["raw_safety_score"] = raw_mfe_forward_heads["raw_safety"]
-        oos_frame["raw_mfe_score"] = raw_mfe_forward_heads["raw_mfe"]
-        if "joint_hmhs" in raw_mfe_forward_heads:
-            oos_frame["joint_hmhs_score"] = raw_mfe_forward_heads["joint_hmhs"]
-        if "joint_min" in raw_mfe_forward_heads:
-            oos_frame["joint_min_score"] = raw_mfe_forward_heads["joint_min"]
-    elif reverse_forward_heads is not None:
-        oos_frame["raw_safety_score"] = reverse_forward_heads["raw_safety"]
-        oos_frame["conditional_mfe_score"] = reverse_forward_heads["conditional_mfe"]
+    if forward_heads is not None:
+        if safety_primary_duo:
+            oos_frame["raw_safety_score"] = forward_heads["raw_safety"]
+            oos_frame["primary_target_score"] = forward_heads["primary_target"]
+        elif hs_priority_mfe_duo:
+            oos_frame["raw_safety_score"] = forward_heads["raw_safety"]
+            oos_frame["hs_priority_mfe_score"] = forward_heads["conditional_mfe"]
+        elif hs_conditional_mfe_duo or safety_conditional_mfe_duo:
+            oos_frame["raw_safety_score"] = forward_heads["raw_safety"]
+            oos_frame["conditional_mfe_score"] = forward_heads["conditional_mfe"]
+        elif safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri or safety_raw_mfe_joint_min_tri:
+            oos_frame["raw_safety_score"] = forward_heads["raw_safety"]
+            oos_frame["raw_mfe_score"] = forward_heads["raw_mfe"]
+            if "joint_hmhs" in forward_heads:
+                oos_frame["joint_hmhs_score"] = forward_heads["joint_hmhs"]
+            if "joint_min" in forward_heads:
+                oos_frame["joint_min_score"] = forward_heads["joint_min"]
+        elif conditional_mfe_safety:
+            oos_frame["primary_mfe_score"] = forward_heads["primary_mfe"]
+            oos_frame["conditional_safety_score"] = forward_heads["conditional_safety"]
     elif conditional_mfe_single:
         oos_frame["conditional_mfe_score"] = forward_scores
-    if conditional_forward_heads is not None:
-        oos_frame["primary_mfe_score"] = conditional_forward_heads["primary_mfe"]
-        oos_frame["conditional_safety_score"] = conditional_forward_heads["conditional_safety"]
     if forward_components is not None:
         oos_frame["predicted_favorable_r"] = forward_components["predicted_favorable_r"]
         oos_frame["predicted_adverse_r"] = forward_components["predicted_adverse_r"]
