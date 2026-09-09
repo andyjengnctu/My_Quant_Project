@@ -4252,7 +4252,26 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         resolve_filter_output_dir,
     )
     from services.optimizer.application import _build_optimizer_study_db_file_path
-    from services.research.strategy_compare_reuse import _pair_cache_fingerprint_from_payload
+    from services.research.strategy_compare_reuse import (
+        _find_reusable_baseline_source,
+        _find_reusable_pair,
+        _find_reusable_pair_with_archived_source,
+        _legacy_pair_score_projection_matches_current,
+        _pair_cache_fingerprint_from_payload,
+        _research_dataset_generation_identity_matches_current,
+        _resolve_completed_pair_continuous_score_binding,
+    )
+    from core.strategy_comparison import StrategyComparisonArm
+    from filters.breakout_quality.ranking_score_store import (
+        SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+        SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    )
+    from filters.breakout_quality.strategy_compare_sources import (
+        OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+    )
+    from filters.breakout_quality.strategy_rule_policies import (
+        ALL_RULE_FILTERS_OFF_OVERRIDES,
+    )
 
     case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR4"
     results = []
@@ -4367,6 +4386,279 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         compare_b = _pair_cache_fingerprint_from_payload(**common, dataset_generation_identity=identity_b)
         add_check(results, "market_data", case_id, "strategy_compare_v2_pair_cache_cannot_reuse_legacy_v1_identity", False, compare_a == compare_legacy)
         add_check(results, "market_data", case_id, "strategy_compare_different_v2_generations_cannot_share_pair_cache", False, compare_a == compare_b)
+
+        legacy_generation_status = {}
+        v2_generation_status = {"research_dataset_generation_identity": identity_a}
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_legacy_generation_missing_on_both_sides_remains_reusable",
+            True,
+            _research_dataset_generation_identity_matches_current(
+                status=legacy_generation_status, run_payload={}
+            ),
+        )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_v2_rejects_legacy_completed_result_without_generation_identity",
+            False,
+            _research_dataset_generation_identity_matches_current(
+                status=v2_generation_status, run_payload={}
+            ),
+        )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_legacy_current_rejects_generation_scoped_completed_result",
+            False,
+            _research_dataset_generation_identity_matches_current(
+                status=legacy_generation_status,
+                run_payload={"research_dataset_generation_identity": identity_a},
+            ),
+        )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_same_v2_generation_result_is_reusable",
+            True,
+            _research_dataset_generation_identity_matches_current(
+                status=v2_generation_status,
+                run_payload={"research_dataset_generation_identity": identity_a},
+            ),
+        )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_different_v2_generation_result_is_not_reusable",
+            False,
+            _research_dataset_generation_identity_matches_current(
+                status=v2_generation_status,
+                run_payload={"research_dataset_generation_identity": identity_b},
+            ),
+        )
+
+        off_arm_obj = StrategyComparisonArm(
+            arm_id="off", enabled=True, name="OFF", description="synthetic",
+            param_source="p", param_policy="base-finalist-best", rule_policy="all_off",
+            dl_enabled=False, dl_id=None, dl_runtime_mode=None,
+        )
+        on_arm_obj = StrategyComparisonArm(
+            arm_id="on", enabled=True, name="ON", description="synthetic",
+            param_source="p", param_policy="base-finalist-best", rule_policy="all_off",
+            dl_enabled=True, dl_id="dl", dl_runtime_mode="filter",
+        )
+        period = {"start": "2021-01-01", "end": RESEARCH_REQUIRED_CUTOFF}
+        param_sha = "f" * 64
+        baseline_root = root / "baseline_reuse_generation_guard"
+        baseline_run = baseline_root / "outputs" / "strategy_compare" / "runs" / "legacy_run"
+        baseline_pair = baseline_run / "pairs" / "baseline"
+        baseline_pair.mkdir(parents=True)
+        baseline_metadata = {
+            "dataset": "full",
+            "params_file_sha256": param_sha,
+            "requested_param_policy": "base-finalist-best",
+            "param_evaluation_mode": "rolling",
+            "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+            "shared_param_overrides": dict(ALL_RULE_FILTERS_OFF_OVERRIDES),
+            "max_positions": 10,
+            "enable_rotation": False,
+            "comparison_period": period,
+        }
+        (baseline_pair / "strategy_comparison.json").write_text(
+            __import__("json").dumps({"no_filter": {"total_return_pct": 1.0}, "metadata": baseline_metadata}),
+            encoding="utf-8",
+        )
+        for name in (
+            "strategy_comparison.md", "yearly_returns_comparison.csv",
+            "no_filter_equity.csv", "no_filter_trades.csv",
+            "no_filter_daily_capacity.csv", "no_filter_orderable_candidates.csv",
+        ):
+            (baseline_pair / name).write_text("synthetic\n", encoding="utf-8")
+        baseline_settings = SimpleNamespace(
+            preparation=SimpleNamespace(reuse_completed_results=True),
+            output_root="outputs/strategy_compare", reuse_output_roots=(),
+            dataset="full", param_policy="base-finalist-best",
+            max_positions=10, rotation="off",
+            parameter_sources={"p": SimpleNamespace(canonical_evaluation_mode="rolling")},
+        )
+        baseline_status = {
+            "resolved_arm_parameter_identities": {"off": {"sha256": param_sha}},
+            "comparison_period": period,
+        }
+        (baseline_run / "strategy_comparison.json").write_text(
+            __import__("json").dumps({"status": "COMPLETED"}), encoding="utf-8"
+        )
+        legacy_baseline = _find_reusable_baseline_source(
+            root=baseline_root, settings=baseline_settings,
+            status=baseline_status, off_arm=off_arm_obj,
+        )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_legacy_shared_baseline_reuse_remains_compatible",
+            baseline_pair, legacy_baseline,
+        )
+        v2_baseline_status = {
+            **baseline_status, "research_dataset_generation_identity": identity_a,
+        }
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_v2_shared_baseline_cannot_reuse_legacy_v1_pair",
+            None,
+            _find_reusable_baseline_source(
+                root=baseline_root, settings=baseline_settings,
+                status=v2_baseline_status, off_arm=off_arm_obj,
+            ),
+        )
+        (baseline_run / "strategy_comparison.json").write_text(
+            __import__("json").dumps({
+                "status": "COMPLETED",
+                "research_dataset_generation_identity": identity_a,
+            }),
+            encoding="utf-8",
+        )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_same_v2_generation_shared_baseline_reuse_is_allowed",
+            baseline_pair,
+            _find_reusable_baseline_source(
+                root=baseline_root, settings=baseline_settings,
+                status=v2_baseline_status, off_arm=off_arm_obj,
+            ),
+        )
+        different_v2_status = {
+            **baseline_status, "research_dataset_generation_identity": identity_b,
+        }
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_different_v2_generation_shared_baseline_reuse_is_blocked",
+            None,
+            _find_reusable_baseline_source(
+                root=baseline_root, settings=baseline_settings,
+                status=different_v2_status, off_arm=off_arm_obj,
+            ),
+        )
+
+        # All completed-result fallback consumers must short-circuit on generation
+        # mismatch before score equivalence or archived provenance can authorize reuse.
+        with patch(
+            "services.research.strategy_compare_reuse._settings_core_matches_archived_pair",
+            side_effect=AssertionError("generation guard did not short-circuit legacy projection"),
+        ):
+            legacy_projection_allowed = _legacy_pair_score_projection_matches_current(
+                root=root, settings=baseline_settings, status=v2_generation_status,
+                run_payload={}, pair_dir=root, off_arm=off_arm_obj, on_arm=on_arm_obj,
+                stored_settings={}, stored_off={}, stored_on={}, pair_metadata={},
+            )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_legacy_projection_fallback_rejects_cross_generation_before_score_equivalence",
+            False, legacy_projection_allowed,
+        )
+
+        archived_root = root / "archived_pair_generation_guard"
+        archived_run = archived_root / "outputs" / "strategy_compare" / "runs" / "legacy_run"
+        archived_run.mkdir(parents=True)
+        (archived_run / "strategy_comparison.json").write_text(
+            __import__("json").dumps({"status": "COMPLETED"}), encoding="utf-8"
+        )
+        archived_settings = SimpleNamespace(
+            preparation=SimpleNamespace(reuse_completed_results=True),
+            output_root="outputs/strategy_compare", reuse_output_roots=(),
+            dl_sources={"dl": SimpleNamespace(score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME)},
+        )
+        archived_status = {
+            "dl_sources": {"dl": {"ready": False}},
+            "resolved_arm_parameter_identities": {"on": {"sha256": param_sha}},
+            "comparison_period": period,
+            "research_dataset_generation_identity": identity_a,
+        }
+        with patch(
+            "services.research.strategy_compare_reuse._settings_core_matches_archived_pair",
+            side_effect=AssertionError("generation guard did not short-circuit archived fallback"),
+        ):
+            archived_reuse = _find_reusable_pair_with_archived_source(
+                root=archived_root, settings=archived_settings, status=archived_status,
+                off_arm=off_arm_obj, on_arm=on_arm_obj,
+            )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_archived_completed_pair_fallback_rejects_cross_generation_first",
+            None, archived_reuse,
+        )
+
+        normal_pair_settings = SimpleNamespace(
+            preparation=SimpleNamespace(reuse_completed_results=True),
+            output_root="outputs/strategy_compare", reuse_output_roots=(),
+        )
+        normal_pair_run = root / "normal_pair_generation_guard" / "outputs" / "strategy_compare" / "runs" / "legacy_run"
+        normal_pair_run.mkdir(parents=True)
+        (normal_pair_run / "strategy_comparison.json").write_text(
+            __import__("json").dumps({
+                "status": "COMPLETED",
+                "settings": {"arms": {"off": off_arm_obj.as_dict(), "on": on_arm_obj.as_dict()}},
+                "pairs": {},
+            }),
+            encoding="utf-8",
+        )
+        normal_pair_settings.output_root = "outputs/strategy_compare"
+        normal_pair_root = root / "normal_pair_generation_guard"
+        with patch(
+            "services.research.strategy_compare_reuse._current_pair_cache_fingerprint",
+            return_value="expected",
+        ), patch(
+            "services.research.strategy_compare_reuse._stored_pair_group_id",
+            side_effect=AssertionError("generation guard did not short-circuit normal pair reuse"),
+        ), patch(
+            "services.research.strategy_compare_reuse._find_reusable_pair_with_archived_source",
+            return_value=None,
+        ):
+            normal_pair_reuse = _find_reusable_pair(
+                root=normal_pair_root, settings=normal_pair_settings,
+                status=v2_generation_status, off_arm=off_arm_obj, on_arm=on_arm_obj,
+            )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_normal_pair_scan_rejects_cross_generation_before_fallback_logic",
+            None, normal_pair_reuse,
+        )
+
+        frozen_score_run = root / "frozen_score_generation_guard"
+        frozen_score_run.mkdir(parents=True)
+        (frozen_score_run / "strategy_comparison.json").write_text(
+            __import__("json").dumps({"status": "COMPLETED"}), encoding="utf-8"
+        )
+        continuous_source = SimpleNamespace(
+            score_source=SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+            as_dict=lambda: {
+                "filter_id": "f", "model_architecture": "a",
+                "experiment_profile": "p", "threshold": None,
+                "score_source": SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+            },
+        )
+        frozen_settings = SimpleNamespace(dl_sources={"dl": continuous_source})
+        frozen_diagnostics = []
+        with patch(
+            "services.research.strategy_compare_reuse._continuous_score_provenance_entries",
+            return_value=({
+                "source_run_dir": frozen_score_run,
+                "source_group_id": "legacy",
+            },),
+        ):
+            frozen_binding = _resolve_completed_pair_continuous_score_binding(
+                root=root, settings=frozen_settings,
+                status={
+                    "research_dataset_generation_identity": identity_a,
+                    "dl_sources": {"dl": {"files": {}}},
+                    "comparison_period": period,
+                },
+                replay_cache={}, dl_id="dl", diagnostics=frozen_diagnostics,
+            )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_frozen_score_recovery_rejects_cross_generation_completed_pair",
+            None, frozen_binding,
+        )
+        add_check(
+            results, "market_data", case_id,
+            "strategy_compare_frozen_score_recovery_reports_generation_mismatch",
+            True, "COMPLETED_PAIR_DATASET_GENERATION_MISMATCH" in frozen_diagnostics,
+        )
 
         legacy_model = resolve_filter_model_dir(root, "breakout_quality_v1", "inception_time_v1", "unique_group_sampling")
         legacy_output = resolve_filter_output_dir(root, "breakout_quality_v1")

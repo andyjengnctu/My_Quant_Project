@@ -12004,5 +12004,6 @@ Decision：`MR13BV_IMPLEMENTED_RESULT_PENDING / ADAPTIVE_30_60_120_300BAR_PAST_C
 - **Fix**：新增canonical dataset-generation identity owner於`core/dataset_profiles.py`。V1/reduced保留既有fingerprint與physical paths；只有validated promoted V2才由promotion/materialization/source-projection/revision-proof lineage建立generation namespace。Optimizer effective-policy/Study DB、Strategy Compare status/run/pair-cache、Breakout Quality models/outputs共用此identity。
 - **Breakout Quality semantics**：不建立新MR/ARCH/PROFILE、不改target/loss/model topology/seed/split/PIT/metrics或current research decision。V1既有MR artifacts留在原路徑；promoted V2使用`research_generations/<generation>/`獨立namespace，且不得read-only fallback至V1。
 - **Research status**：`MR-13BV`仍為`IMPLEMENTED / RESULT_PENDING`；本工程修補不構成模型結果、promotion或重訓授權。
+- **Closure supplement**：交付前獨立重查發現Strategy Compare completed-result fallback仍有generation旁路；normal pair、legacy score-projection migration、archived completed pair、shared baseline與continuous-OOS frozen-score recovery現統一先驗證同一canonical Research dataset-generation identity。V1/reduced歷史結果在current亦無generation identity時維持相容；任一側進入generation-scoped identity後，missing或不同identity一律fail closed。Repair-4 synthetic已加入上述實際旁路regression。
 
-Decision：`ENGINEERING_ONLY / DOWNSTREAM_DATASET_GENERATION_IDENTITY_CLOSED / V1_EVIDENCE_PRESERVED / V2_NAMESPACE_ISOLATED / MR13BV_RESULT_PENDING_UNCHANGED`。
+Decision：`ENGINEERING_ONLY / DOWNSTREAM_DATASET_GENERATION_IDENTITY_CLOSED / COMPLETED_RESULT_FALLBACK_GENERATION_GUARD_CLOSED / V1_EVIDENCE_PRESERVED / V2_NAMESPACE_ISOLATED / MR13BV_RESULT_PENDING_UNCHANGED`。

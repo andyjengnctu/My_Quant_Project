@@ -476,6 +476,30 @@ def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings) 
             roots.append(candidate)
     return tuple(roots)
 
+
+def _research_dataset_generation_identity_matches_current(
+    *, status: dict[str, Any], run_payload: dict[str, Any] | None
+) -> bool:
+    """Require exact Research dataset-generation identity for completed-result reuse.
+
+    Historical Research V1/reduced Strategy Compare results predate the explicit
+    generation field, so missing-on-both-sides remains legacy-compatible.  Once a
+    generation-scoped identity is present (currently promoted Research V2), a missing
+    or different identity must fail closed; no score/provenance fallback may bridge it.
+    """
+
+    current_identity = dict(
+        status.get("research_dataset_generation_identity") or {}
+    )
+    stored_identity = dict(
+        (run_payload or {}).get("research_dataset_generation_identity") or {}
+    )
+    if not current_identity and not stored_identity:
+        return True
+    if not current_identity or not stored_identity:
+        return False
+    return stored_identity == current_identity
+
 def _find_reusable_pair_with_archived_source(
     *,
     root: Path,
@@ -543,6 +567,10 @@ def _find_reusable_pair_with_archived_source(
     for run_dir in run_dirs:
         run_payload = _read_json(run_dir / "strategy_comparison.json")
         if not isinstance(run_payload, dict) or str(run_payload.get("status") or "") != "COMPLETED":
+            continue
+        if not _research_dataset_generation_identity_matches_current(
+            status=status, run_payload=run_payload
+        ):
             continue
         stored_settings = dict(run_payload.get("settings") or {})
         if not _settings_core_matches_archived_pair(
@@ -675,6 +703,10 @@ def _legacy_pair_score_projection_matches_current(
     arm consumes.
     """
 
+    if not _research_dataset_generation_identity_matches_current(
+        status=status, run_payload=run_payload
+    ):
+        return False
     if not _settings_core_matches_archived_pair(
         settings=settings, stored_settings=stored_settings, on_arm=on_arm
     ):
@@ -860,6 +892,10 @@ def _find_reusable_pair(
         if not isinstance(run_payload, dict):
             continue
         if str(run_payload.get("status") or "") != "COMPLETED":
+            continue
+        if not _research_dataset_generation_identity_matches_current(
+            status=status, run_payload=run_payload
+        ):
             continue
         stored_settings = dict(run_payload.get("settings") or {})
         stored_arms = dict(stored_settings.get("arms") or {})
@@ -1295,6 +1331,11 @@ def _resolve_completed_pair_continuous_score_binding(
         if not isinstance(payload, dict) or str(payload.get("status") or "") != "COMPLETED":
             note("COMPLETED_PAIR_REPORT_INVALID")
             continue
+        if not _research_dataset_generation_identity_matches_current(
+            status=status, run_payload=payload
+        ):
+            note("COMPLETED_PAIR_DATASET_GENERATION_MISMATCH")
+            continue
         stored_settings = dict(payload.get("settings") or {})
         stored_source = dict((stored_settings.get("dl_sources") or {}).get(str(dl_id)) or {})
         if not stored_source:
@@ -1722,6 +1763,12 @@ def _find_reusable_baseline_source(
         "no_filter_orderable_candidates.csv",
     )
     for run_dir in run_dirs:
+        run_payload = _read_json(run_dir / "strategy_comparison.json")
+        if not _research_dataset_generation_identity_matches_current(
+            status=status,
+            run_payload=run_payload if isinstance(run_payload, dict) else None,
+        ):
+            continue
         pairs_root = run_dir / "pairs"
         if not pairs_root.is_dir():
             continue

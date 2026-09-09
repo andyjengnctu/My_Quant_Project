@@ -193,4 +193,4 @@
 
 ### 2026-09-09 engineering note — Audit Repair 4
 
-Research dataset-generation identity已從單一`full` profile字串收斂為canonical lineage。V1/reduced沿用既有artifacts；只有promoted Research V2進新的generation namespace。Optimizer Study、Strategy Compare pair cache、Breakout Quality model/output不得跨generation REUSE或覆寫。此為engineering-only修復，**不改Research Queue優先順序、不新增MR identity、不改`MR-13BV = RESULT_PENDING`**；Final Closure通過且Research V2正式promotion前，不因本修補開始BV重訓。
+Research dataset-generation identity已從單一`full` profile字串收斂為canonical lineage。V1/reduced沿用既有artifacts；只有promoted Research V2進新的generation namespace。Optimizer Study、Strategy Compare pair cache／completed-result fallback（normal／legacy projection／archived／shared baseline／frozen-score recovery）、Breakout Quality model/output不得跨generation REUSE或覆寫。此為engineering-only修復，**不改Research Queue優先順序、不新增MR identity、不改`MR-13BV = RESULT_PENDING`**；Final Closure通過且Research V2正式promotion前，不因本修補開始BV重訓。
