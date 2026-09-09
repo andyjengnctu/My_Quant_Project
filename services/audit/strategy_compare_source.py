@@ -35,6 +35,22 @@ class StrategyCompareAuditSource:
     config_fingerprint: str
 
 
+def resolve_strategy_compare_period(source: StrategyCompareAuditSource) -> tuple[str, str]:
+    """Return the persisted canonical Strategy Compare comparison period.
+
+    Reusable Audits consume the completed result's period as evidence.  Audits that
+    additionally require current-config equality keep their stricter local validation
+    on top of this source contract rather than weakening that requirement here.
+    """
+
+    period = dict(source.result.get("comparison_period") or {})
+    start = str(period.get("start") or "")[:10]
+    end = str(period.get("end") or "")[:10]
+    if not start or not end:
+        raise AuditSourceBlockedError(f"{source.profile_id}缺少comparison_period")
+    return start, end
+
+
 def _read_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))

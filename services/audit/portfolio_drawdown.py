@@ -35,6 +35,7 @@ from services.audit.strategy_compare_source import (
     AuditSourceBlockedError,
     load_strategy_arm_path_sidecars,
     load_strategy_compare_source,
+    resolve_strategy_compare_period,
 )
 
 SUPPORTED_AUDIT_TYPE = "portfolio_drawdown_attribution"
@@ -99,21 +100,12 @@ def _capital_summary(evidence: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _period(source) -> tuple[str, str]:
-    period = dict(source.result.get("comparison_period") or {})
-    start = str(period.get("start") or "")[:10]
-    end = str(period.get("end") or "")[:10]
-    if not start or not end:
-        raise AuditSourceBlockedError(f"{source.profile_id}缺少comparison_period")
-    return start, end
-
-
 def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str, Any]:
     source_cfg = dict(definition.source)
     fingerprint = str(dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or "")
     source = load_strategy_compare_source(project_root, profile_id=profile_id, pinned_config_fingerprint=fingerprint or None)
     control = str(source_cfg["control_arm_id"]); treatment = str(source_cfg["treatment_arm_id"])
-    start, end = _period(source)
+    start, end = resolve_strategy_compare_period(source)
     truth, truth_source = build_truth_geometry(
         project_root=project_root,
         filter_id=str(source_cfg["filter_id"]),

@@ -34,23 +34,17 @@ from services.audit.reusable_report import (
 )
 from services.audit.selection_membership import (
     build_planned_membership,
+    event_key_series,
     pair_membership_cohorts,
 )
 from services.audit.strategy_compare_source import (
     AuditSourceBlockedError,
     load_strategy_arm_path_sidecars,
     load_strategy_compare_source,
+    resolve_strategy_compare_period,
 )
 
 SUPPORTED_AUDIT_TYPE = "trade_outcome_path_attribution"
-
-
-def _event_key(frame: pd.DataFrame) -> pd.Series:
-    return (
-        frame["ticker"].astype(str)
-        + "|" + frame["trade_date"].astype(str)
-        + "|" + frame["signal_date"].astype(str)
-    )
 
 
 def normalize_path(frame: pd.DataFrame, *, thresholds: Sequence[float]) -> pd.DataFrame:
@@ -76,7 +70,7 @@ def normalize_path(frame: pd.DataFrame, *, thresholds: Sequence[float]) -> pd.Da
     table["score_event_date"] = table["score_event_date"].where(
         table["score_event_date"].ne(""), table["signal_date"]
     )
-    table["event_key"] = _event_key(table)
+    table["event_key"] = event_key_series(table)
     if bool(table["event_key"].duplicated().any()):
         raise AuditBlockedError("upside realization event_key不唯一")
     table["path_target_available_bool"] = table["path_target_available"].fillna(False).astype(str).str.lower().isin({"true", "1", "yes"})
@@ -164,15 +158,6 @@ def truth_outcome_cohorts(
     return out
 
 
-def _period(source) -> tuple[str, str]:
-    period = dict(source.result.get("comparison_period") or {})
-    start = str(period.get("start") or "")[:10]
-    end = str(period.get("end") or "")[:10]
-    if not start or not end:
-        raise AuditSourceBlockedError(f"{source.profile_id}缺少comparison_period")
-    return start, end
-
-
 def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str, Any]:
     source_cfg = dict(definition.source)
     fingerprint = str(dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or "")
@@ -185,7 +170,7 @@ def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str
             f"config={configured_thresholds}"
         )
     thresholds = TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R
-    start, end = _period(source)
+    start, end = resolve_strategy_compare_period(source)
     truth, truth_source = build_truth_geometry(
         project_root=project_root,
         filter_id=str(source_cfg["filter_id"]),

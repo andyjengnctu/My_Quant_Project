@@ -48,18 +48,10 @@ from services.audit.strategy_compare_source import (
     AuditSourceBlockedError,
     load_strategy_arm_planned_sidecars,
     load_strategy_compare_source,
+    resolve_strategy_compare_period,
 )
 
 SUPPORTED_AUDIT_TYPE = "opportunity_selection_attribution"
-
-
-def _period(source) -> tuple[str, str]:
-    period = dict(source.result.get("comparison_period") or {})
-    start = str(period.get("start") or "")[:10]
-    end = str(period.get("end") or "")[:10]
-    if not start or not end:
-        raise AuditSourceBlockedError(f"{source.profile_id}缺少comparison_period")
-    return start, end
 
 
 def _truth_summary(geometry: Mapping[str, Any]) -> dict[str, Any]:
@@ -112,7 +104,7 @@ def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str
     control_id = str(source_cfg["control_arm_id"])
     treatment_id = str(source_cfg["treatment_arm_id"])
     cutoff = float(definition.dimensions.get("truth_high_cutoff", 0.5))
-    start, end = _period(source)
+    start, end = resolve_strategy_compare_period(source)
     truth, truth_source = build_truth_geometry(
         project_root=project_root,
         filter_id=str(source_cfg["filter_id"]),

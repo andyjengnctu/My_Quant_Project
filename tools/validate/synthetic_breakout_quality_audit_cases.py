@@ -276,6 +276,74 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and set(reusable_planned["stage"]) == {"planned_execution"},
     )
 
+    from services.audit.selection_membership import event_key_series
+    canonical_event_keys = event_key_series(pd.DataFrame({
+        "ticker": ["A", "B"],
+        "trade_date": ["2025-01-02", "2025-01-03"],
+        "signal_date": ["2025-01-01", "2025-01-02"],
+    }))
+    check_true(
+        "reusable_audit_event_identity_has_one_canonical_composition_helper",
+        list(canonical_event_keys)
+        == ["A|2025-01-02|2025-01-01", "B|2025-01-03|2025-01-02"],
+    )
+
+    from services.audit.strategy_compare_source import (
+        AuditSourceBlockedError as StrategyAuditSourceBlockedError,
+        resolve_strategy_compare_period,
+    )
+    period_source = SimpleNamespace(
+        profile_id="synthetic_profile",
+        result={
+            "comparison_period": {
+                "start": "2025-01-01T12:34:56",
+                "end": "2025-01-31T23:59:59",
+            }
+        },
+    )
+    check(
+        "reusable_audit_comparison_period_uses_one_canonical_source_helper",
+        ("2025-01-01", "2025-01-31"),
+        resolve_strategy_compare_period(period_source),
+    )
+    missing_period_blocked = False
+    try:
+        resolve_strategy_compare_period(
+            SimpleNamespace(profile_id="synthetic_profile", result={})
+        )
+    except StrategyAuditSourceBlockedError:
+        missing_period_blocked = True
+    check_true(
+        "canonical_reusable_audit_comparison_period_missing_evidence_still_blocks",
+        missing_period_blocked,
+    )
+
+    audit_root = Path(__file__).resolve().parents[2] / "services" / "audit"
+    reusable_period_sources = [
+        (audit_root / name).read_text(encoding="utf-8")
+        for name in (
+            "opportunity_selection.py",
+            "trade_outcome_path.py",
+            "portfolio_drawdown.py",
+        )
+    ]
+    check_true(
+        "reusable_audit_period_consumers_do_not_reimplement_identical_private_period_helpers",
+        all(
+            "resolve_strategy_compare_period(source)" in source_text
+            and "def _period(source)" not in source_text
+            for source_text in reusable_period_sources
+        ),
+    )
+    trade_path_source = (audit_root / "trade_outcome_path.py").read_text(encoding="utf-8")
+    membership_source = (audit_root / "selection_membership.py").read_text(encoding="utf-8")
+    check_true(
+        "trade_path_consumes_membership_event_identity_without_duplicate_event_key_builder",
+        "event_key_series(table)" in trade_path_source
+        and "def _event_key(" not in trade_path_source
+        and membership_source.count("def event_key_series(") == 1,
+    )
+
     opportunity_source = (
         Path(__file__).resolve().parents[2]
         / "services"

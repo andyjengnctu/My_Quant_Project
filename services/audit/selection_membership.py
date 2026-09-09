@@ -18,7 +18,7 @@ def _as_bool_series(frame: pd.DataFrame, column: str, *, default: bool = False) 
     return raw.fillna(str(default)).astype(str).str.strip().str.lower().isin({"true", "1", "yes", "y"})
 
 
-def _event_key(frame: pd.DataFrame) -> pd.Series:
+def event_key_series(frame: pd.DataFrame) -> pd.Series:
     return (
         frame["ticker"].astype(str)
         + "|"
@@ -56,7 +56,7 @@ def normalize_orderable_membership(frame: pd.DataFrame) -> pd.DataFrame:
         & table["signal_date"].ne("")
         & table["score_event_date"].ne("")
     ].copy()
-    table["event_key"] = _event_key(table)
+    table["event_key"] = event_key_series(table)
     return table.drop_duplicates(["trade_date", "event_key"], keep="first").reset_index(drop=True)
 
 
@@ -86,7 +86,7 @@ def normalize_final_selector_trace(frame: pd.DataFrame, *, final_stage: str) -> 
     table["score_percentile"] = pd.to_numeric(
         table["breakout_quality_daily_score_percentile"], errors="coerce"
     )
-    table["event_key"] = _event_key(table)
+    table["event_key"] = event_key_series(table)
     if bool(table["event_key"].duplicated().any()):
         raise AuditBlockedError("final selector trace event_key不唯一")
     return table.sort_values(["trade_date", "stage_rank", "ticker"], kind="stable").reset_index(drop=True)
@@ -106,7 +106,7 @@ def normalize_planned_execution(frame: pd.DataFrame) -> pd.DataFrame:
         raise AuditBlockedError("execution chosen_qty含無效值")
     table = table.loc[chosen > 0].copy()
     table["entry_filled_bool"] = _as_bool_series(table, "entry_filled")
-    table["event_key"] = _event_key(table)
+    table["event_key"] = event_key_series(table)
     if bool(table["event_key"].duplicated().any()):
         raise AuditBlockedError("planned execution event_key不唯一")
     return table.sort_values(["trade_date", "execution_order", "ticker"], kind="stable").reset_index(drop=True)
