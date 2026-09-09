@@ -24,6 +24,9 @@ from services.downloader import runtime as rt
 from services.downloader.finmind_http import FinMindHttpError
 
 
+_TRADING_CALENDAR_DATASET = "TaiwanStockTradingDate"
+
+
 class TradingBulkPriceUnsupported(RuntimeError):
     """Provider response does not support the required full-market range contract."""
 
@@ -192,6 +195,56 @@ def _seed_exact_date_cache(
         )
 
 
+def _load_trading_calendar_dates(client) -> tuple[str, ...]:
+    frame = _request_with_retry(client, dataset=_TRADING_CALENDAR_DATASET)
+    if frame is None or not isinstance(frame, pd.DataFrame):
+        raise TradingBulkPriceUnsupported("TaiwanStockTradingDate provider payload 不是 DataFrame")
+    columns = _provider_columns(frame)
+    date_column = columns.get("date")
+    if date_column is None:
+        raise TradingBulkPriceUnsupported("TaiwanStockTradingDate 缺少 date 欄")
+    parsed = pd.to_datetime(frame[date_column], errors="coerce").dropna().dt.strftime("%Y-%m-%d")
+    dates = tuple(sorted(set(parsed.tolist())))
+    if not dates:
+        raise TradingBulkPriceUnsupported("TaiwanStockTradingDate 沒有可用交易日 evidence")
+    return dates
+
+
+def _validate_bulk_range_calendar_coverage(
+    normalized: pd.DataFrame,
+    *,
+    price_range: PriceRange,
+    trading_dates: tuple[str, ...],
+    market_date: str,
+) -> None:
+    start = str(pd.Timestamp(price_range.start_date).date())
+    range_end = str(pd.Timestamp(price_range.end_date).date())
+    proof_end = min(range_end, str(pd.Timestamp(market_date).date()))
+    actual_dates = set(normalized["Date"].dt.strftime("%Y-%m-%d").tolist())
+    outside = sorted(value for value in actual_dates if value < start or value > range_end)
+    if outside:
+        raise TradingBulkPriceUnsupported(
+            "TaiwanStockPriceAdj bulk range 回傳超出 request boundary 的日期；"
+            f"range={start}~{range_end} sample={outside[:20]}"
+        )
+    expected = {value for value in trading_dates if start <= value <= proof_end}
+    if not expected:
+        return
+    missing = sorted(expected - actual_dates)
+    if missing:
+        raise TradingBulkPriceUnsupported(
+            "TaiwanStockPriceAdj bulk range 缺少 TaiwanStockTradingDate 已確認交易日；"
+            f"range={start}~{proof_end} missing={missing[:20]} count={len(missing)}"
+        )
+
+
+def _missing_local_price_files(target_tickers: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        sid for sid in target_tickers
+        if not (Path(rt.SAVE_DIR) / f"{sid}.csv").is_file()
+    )
+
+
 def probe_latest_adjusted_price_market_date(*, client, now: datetime | None = None) -> TradingPriceProbe:
     resolved_now = rt.get_taipei_now() if now is None else now
     candidate = latest_allowed_completed_daily_date(now=resolved_now)
@@ -287,30 +340,35 @@ def _write_bulk_history(
     for sid in target_tickers:
         rows = _legacy_frame_for_ticker(combined, sid, market_date=market_date)
         path = Path(rt.SAVE_DIR) / f"{sid}.csv"
-        if path.is_file():
-            try:
-                existing = pd.read_csv(path, index_col=0)
-                existing_dates = pd.to_datetime(existing.index, errors="coerce")
-                existing_dates = {
-                    item.date().isoformat()
-                    for item in existing_dates
-                    if not pd.isna(item) and item.normalize() <= target_ts
-                }
-                refreshed_dates = {item.date().isoformat() for item in rows.index}
-                missing_existing = sorted(existing_dates - refreshed_dates)
-                if missing_existing:
-                    raise TradingBulkPriceUnsupported(
-                        f"TaiwanStockPriceAdj bulk history 對 {sid} 遺失既有日期；"
-                        f"missing={missing_existing[:20]} count={len(missing_existing)}"
-                    )
-            except TradingBulkPriceUnsupported:
-                raise
-            except (OSError, ValueError, TypeError, pd.errors.EmptyDataError, pd.errors.ParserError):
-                # An unreadable legacy file is already classified as stale and
-                # should be recoverable from provider truth; no prior coverage
-                # assertion can be made for that file.  Keep the control flow
-                # explicit rather than silently swallowing the exception.
-                existing_dates = set()
+        if not path.is_file():
+            raise TradingBulkPriceUnsupported(
+                f"TaiwanStockPriceAdj bulk history 缺少 {sid} 的可讀 legacy baseline；"
+                "新檔必須改走 per-ticker full-history producer"
+            )
+        try:
+            existing = pd.read_csv(path, index_col=0)
+            if existing.empty:
+                raise ValueError("empty csv")
+            existing_dates = pd.to_datetime(existing.index, errors="coerce")
+            existing_dates = {
+                item.date().isoformat()
+                for item in existing_dates
+                if not pd.isna(item) and item.normalize() <= target_ts
+            }
+            if not existing_dates:
+                raise ValueError("no valid historical dates")
+        except (OSError, ValueError, TypeError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+            raise TradingBulkPriceUnsupported(
+                f"TaiwanStockPriceAdj bulk history 無法驗證 {sid} 的 legacy baseline；"
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        refreshed_dates = {item.date().isoformat() for item in rows.index}
+        missing_existing = sorted(existing_dates - refreshed_dates)
+        if missing_existing:
+            raise TradingBulkPriceUnsupported(
+                f"TaiwanStockPriceAdj bulk history 對 {sid} 遺失既有日期；"
+                f"missing={missing_existing[:20]} count={len(missing_existing)}"
+            )
         prepared[sid] = rows
 
     for sid in target_tickers:
@@ -368,9 +426,20 @@ def refresh_trading_adjusted_price_dataset(
             end_date=probe.current_range.end_date,
         )
     )
-    bulk_provider_plan = bulk_request_count - (1 if current_key_cached else 0)
+    calendar_key_cached = bool(
+        getattr(client, "has_cached_data", lambda **_kwargs: False)(
+            dataset=_TRADING_CALENDAR_DATASET,
+        )
+    )
+    bulk_provider_plan = (
+        bulk_request_count
+        - (1 if current_key_cached else 0)
+        + (0 if calendar_key_cached else 1)
+    )
+    missing_local = _missing_local_price_files(target_tickers)
+    bulk_baseline_unavailable = bool(missing_local or freshness.unreadable)
 
-    if per_ticker_request_count < bulk_provider_plan:
+    if bulk_baseline_unavailable or per_ticker_request_count < bulk_provider_plan:
         _ensure_quota_capacity(client, per_ticker_request_count)
         # Reuse the legacy function through its explicit shared-client seam; it
         # refreshes only stale files and preserves current full-history semantics.
@@ -392,6 +461,7 @@ def refresh_trading_adjusted_price_dataset(
         }
 
     _ensure_quota_capacity(client, bulk_provider_plan)
+    trading_dates = _load_trading_calendar_dates(client)
     by_range = {(item.start_date, item.end_date): item for item in ranges}
     current_key = (probe.current_range.start_date, probe.current_range.end_date)
     if current_key not in by_range:
@@ -402,6 +472,12 @@ def refresh_trading_adjusted_price_dataset(
     # universe members may legitimately lack a target-date row (suspension or
     # temporary halt); full-history existence is validated before publication.
     current_normalized = normalize_adjusted_price_frame(probe.current_frame)
+    _validate_bulk_range_calendar_coverage(
+        current_normalized,
+        price_range=probe.current_range,
+        trading_dates=trading_dates,
+        market_date=str(market_date),
+    )
     target_rows = current_normalized.loc[
         current_normalized["Date"].dt.strftime("%Y-%m-%d") == str(market_date), "stock_id"
     ].astype(str)
@@ -446,6 +522,12 @@ def refresh_trading_adjusted_price_dataset(
             coverage_end=price_range.end_date,
         )
         normalized = normalize_adjusted_price_frame(raw)
+        _validate_bulk_range_calendar_coverage(
+            normalized,
+            price_range=price_range,
+            trading_dates=trading_dates,
+            market_date=str(market_date),
+        )
         normalized_chunks.append(normalized.loc[normalized["stock_id"].isin(target_set)].copy())
         if verbose and (index == len(remaining) or index % 10 == 0):
             print(f"\r[PriceAdj Bulk] {index}/{len(remaining)} historical ranges", end="", flush=True)

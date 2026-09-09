@@ -1318,6 +1318,7 @@ __all__ = [
     "validate_market_data_v2_bootstrap_activation_contract_case",
     "validate_market_data_v2_provider_snapshot_completion_contract_case",
     "validate_market_data_v2_trading_workbench_sidecar_contract_case",
+    "validate_trading_price_bulk_completeness_contract_case",
     "validate_market_data_v2_research_candidate_contract_case",
     "validate_market_data_v2_research_pit_review_contract_case",
     "validate_market_data_v2_research_required_cutoff_isolation_contract_case",
@@ -1634,7 +1635,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         chunk_months=6,
     )
     check("canonical_price_history_uses_74_six_month_ranges", 74, len(full_price_ranges))
-    check("canonical_price_dedup_normal_day_design_is_about_409_data_calls", 409, len(full_price_ranges) + manifest_a.total_requests - 7)
+    check("canonical_price_dedup_normal_day_design_remains_about_409_data_calls", 409, len(full_price_ranges) + 1 + manifest_a.total_requests - 8)
 
     class _SharedBaseClient:
         def __init__(self):
@@ -1719,9 +1720,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         def get_data(self, **kwargs):
             self.data_request_count += 1
             self.calls.append(dict(kwargs))
+            dataset = kwargs.get("dataset")
+            if dataset == "TaiwanStockTradingDate":
+                if kwargs.get("data_id") is not None or kwargs.get("start_date") is not None or kwargs.get("end_date") is not None:
+                    raise AssertionError(f"unexpected synthetic trading-calendar request: {kwargs}")
+                return pd.DataFrame({"date": ["2026-01-02", "2026-06-30", "2026-07-01", "2026-09-07"]})
             start = kwargs.get("start_date")
             end = kwargs.get("end_date")
-            if kwargs.get("dataset") != "TaiwanStockPriceAdj" or kwargs.get("data_id") is not None:
+            if dataset != "TaiwanStockPriceAdj" or kwargs.get("data_id") is not None:
                 raise AssertionError(f"unexpected synthetic bulk request: {kwargs}")
             if start == "2026-07-01" and end == "2026-09-07":
                 dates = ["2026-07-01", "2026-09-07"]
@@ -1740,11 +1746,27 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                     })
             return pd.DataFrame(rows)
 
+    def _seed_bulk_price_baseline(price_dir: Path) -> None:
+        price_dir.mkdir(parents=True, exist_ok=True)
+        for sid, base in (("2330", 100.0), ("2317", 80.0)):
+            pd.DataFrame(
+                {
+                    "Open": [base, base, base],
+                    "High": [base + 2, base + 2, base + 2],
+                    "Low": [base - 1, base - 1, base - 1],
+                    "Close": [base + 1, base + 1, base + 1],
+                    "Volume": [1000, 1000, 1000],
+                },
+                index=pd.to_datetime(["2026-01-02", "2026-06-30", "2026-07-01"]),
+            ).to_csv(price_dir / f"{sid}.csv")
+
     with TemporaryDirectory() as bulk_temp_dir:
         from services.downloader import runtime as downloader_runtime
         bulk_base = _BulkPriceBaseClient()
         bulk_shared = SharedFinMindRequestClient(bulk_base)
-        with patch.object(downloader_runtime, "SAVE_DIR", str(Path(bulk_temp_dir) / "prices")), \
+        bulk_price_dir = Path(bulk_temp_dir) / "prices"
+        _seed_bulk_price_baseline(bulk_price_dir)
+        with patch.object(downloader_runtime, "SAVE_DIR", str(bulk_price_dir)), \
              patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(bulk_temp_dir) / "outputs")), \
              patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
              patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
@@ -1767,7 +1789,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 start_date="2026-09-07",
                 end_date="2026-09-07",
             )
-        check("bulk_price_probe_and_history_use_two_provider_data_calls", 2, bulk_base.data_request_count)
+        check("bulk_price_probe_history_and_calendar_use_three_provider_data_calls", 3, bulk_base.data_request_count)
         check("bulk_price_refresh_uses_one_quota_capacity_probe", 1, bulk_base.usage_request_count)
         check("bulk_price_refresh_preserves_full_current_vintage_history", 4, len(csv_2330))
         check("bulk_price_refresh_reports_current_vintage_strategy", "full_market_range_current_vintage", bulk_summary.get("price_fetch_strategy"))
@@ -1780,7 +1802,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         from services.downloader import runtime as downloader_runtime
         suspended_base = _BulkPriceBaseClient(omit_current={"2317"})
         suspended_shared = SharedFinMindRequestClient(suspended_base)
-        with patch.object(downloader_runtime, "SAVE_DIR", str(Path(suspended_temp_dir) / "prices")), \
+        suspended_price_dir = Path(suspended_temp_dir) / "prices"
+        _seed_bulk_price_baseline(suspended_price_dir)
+        with patch.object(downloader_runtime, "SAVE_DIR", str(suspended_price_dir)), \
              patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(suspended_temp_dir) / "outputs")), \
              patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
              patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
@@ -1809,6 +1833,10 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             {"Open": [90.0], "High": [91.0], "Low": [89.0], "Close": [90.5], "Volume": [100]},
             index=[pd.Timestamp("2026-03-01")],
         ).to_csv(truncated_price_dir / "2330.csv")
+        pd.DataFrame(
+            {"Open": [80.0], "High": [82.0], "Low": [79.0], "Close": [81.0], "Volume": [1000]},
+            index=[pd.Timestamp("2026-01-02")],
+        ).to_csv(truncated_price_dir / "2317.csv")
         truncated_original_bytes = (truncated_price_dir / "2330.csv").read_bytes()
         truncated_base = _BulkPriceBaseClient()
         truncated_shared = SharedFinMindRequestClient(truncated_base)
@@ -4488,4 +4516,274 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         check("breakout_quality_v2_never_falls_back_to_v1_artifact_path", v2_model_a, existing_v2.model_dir)
 
     summary.update({"checks": len(results), "repair_round": 4})
+    return results, summary
+
+
+
+def validate_trading_price_bulk_completeness_contract_case(_base_params):
+    """Regression for canonical PriceAdj bulk completeness and formal coverage ownership."""
+
+    from datetime import datetime
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+
+    from services.downloader import runtime as downloader_runtime
+    from services.downloader.finmind_http import FinMindUsage
+    from services.downloader.finmind_shared_client import SharedFinMindRequestClient
+    from services.downloader.trading_price_refresh import (
+        PriceRange,
+        TradingBulkPriceUnsupported,
+        TradingPriceProbe,
+        refresh_trading_adjusted_price_dataset,
+    )
+    from tools.local_regression.meta_quality_targets import COVERAGE_TARGETS
+
+    case_id = "TRADING_PRICE_BULK_COMPLETENESS"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
+
+    required_coverage = {
+        "services/downloader/finmind_shared_client.py",
+        "services/downloader/trading_price_refresh.py",
+        "services/trading/market_data_update.py",
+        "services/trading/market_data_auto_update.py",
+        "services/trading/market_data_market_date_discovery.py",
+    }
+    check("round6_execution_owners_are_formal_coverage_targets", set(), required_coverage - set(COVERAGE_TARGETS))
+
+    def _price_frame(*dates: str) -> pd.DataFrame:
+        rows = []
+        for value in dates:
+            for sid, base in (("2330", 100.0), ("2317", 80.0)):
+                rows.append({
+                    "date": value,
+                    "stock_id": sid,
+                    "open": base,
+                    "max": base + 2,
+                    "min": base - 1,
+                    "close": base + 1,
+                    "Trading_Volume": 1000,
+                })
+        return pd.DataFrame(rows)
+
+    def _legacy_frame(base: float, dates: tuple[str, ...]) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "Open": [base] * len(dates),
+                "High": [base + 2] * len(dates),
+                "Low": [base - 1] * len(dates),
+                "Close": [base + 1] * len(dates),
+                "Volume": [1000] * len(dates),
+            },
+            index=pd.to_datetime(list(dates)),
+        )
+
+    class _NoUnexpectedProviderCalls:
+        def __init__(self):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+        def get_usage(self):
+            self.usage_request_count += 1
+            return FinMindUsage(user_count=0, api_request_limit=6000)
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            raise AssertionError(f"unexpected provider call: {kwargs}")
+
+    current_range = PriceRange("2026-01-01", "2026-09-07")
+    current_frame = _price_frame("2026-01-02", "2026-06-30", "2026-07-01", "2026-09-07")
+    probe = TradingPriceProbe(
+        candidate_date="2026-09-07",
+        market_date="2026-09-07",
+        current_range=current_range,
+        current_frame=current_frame,
+    )
+    fallback_summary = {
+        "total": 2,
+        "count_success": 2,
+        "count_skipped_latest": 0,
+        "last_date_check_error_count": 0,
+        "download_error_count": 0,
+        "trimmed_future_row_count": 0,
+        "issue_log_path": None,
+    }
+
+    with TemporaryDirectory() as missing_temp:
+        base = _NoUnexpectedProviderCalls()
+        shared = SharedFinMindRequestClient(base)
+        shared.seed_data(
+            dataset="TaiwanStockPriceAdj",
+            start_date=current_range.start_date,
+            end_date=current_range.end_date,
+            frame=current_frame,
+        )
+        with patch.object(downloader_runtime, "SAVE_DIR", str(Path(missing_temp) / "prices")), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(missing_temp) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 12), \
+             patch("services.downloader.sync.smart_download_vip_data", return_value=dict(fallback_summary)) as fallback:
+            missing_summary = refresh_trading_adjusted_price_dataset(
+                ["2330", "2317"],
+                "2026-09-07",
+                client=shared,
+                probe=probe,
+                universe_tickers=["2330", "2317"],
+                verbose=False,
+            )
+        check("missing_legacy_baseline_forces_per_ticker_full_history", "per_ticker_full_history", missing_summary.get("price_fetch_strategy"))
+        check("missing_legacy_baseline_calls_canonical_per_ticker_producer_once", 1, fallback.call_count)
+        check("missing_legacy_baseline_avoids_bulk_or_calendar_provider_calls", 0, base.data_request_count)
+
+    with TemporaryDirectory() as unreadable_temp:
+        price_dir = Path(unreadable_temp) / "prices"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        (price_dir / "2330.csv").write_text("not,a,valid,legacy,csv\n", encoding="utf-8")
+        _legacy_frame(80.0, ("2026-07-01",)).to_csv(price_dir / "2317.csv")
+        base = _NoUnexpectedProviderCalls()
+        shared = SharedFinMindRequestClient(base)
+        shared.seed_data(
+            dataset="TaiwanStockPriceAdj",
+            start_date=current_range.start_date,
+            end_date=current_range.end_date,
+            frame=current_frame,
+        )
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(unreadable_temp) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 12), \
+             patch("services.downloader.sync.smart_download_vip_data", return_value=dict(fallback_summary)) as fallback:
+            unreadable_summary = refresh_trading_adjusted_price_dataset(
+                ["2330", "2317"],
+                "2026-09-07",
+                client=shared,
+                probe=probe,
+                universe_tickers=["2330", "2317"],
+                verbose=False,
+            )
+        check("unreadable_legacy_baseline_forces_per_ticker_full_history", "per_ticker_full_history", unreadable_summary.get("price_fetch_strategy"))
+        check("unreadable_legacy_baseline_calls_canonical_per_ticker_producer_once", 1, fallback.call_count)
+        check("unreadable_legacy_baseline_avoids_bulk_or_calendar_provider_calls", 0, base.data_request_count)
+
+    class _SparseBulkProvider:
+        def __init__(self):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+            self.calls = []
+        def get_usage(self):
+            self.usage_request_count += 1
+            return FinMindUsage(user_count=0, api_request_limit=6000)
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            self.calls.append(dict(kwargs))
+            dataset = kwargs.get("dataset")
+            if dataset == "TaiwanStockTradingDate":
+                return pd.DataFrame({"date": [
+                    "2026-01-02", "2026-06-30", "2026-07-01", "2026-08-03", "2026-09-07"
+                ]})
+            if dataset == "TaiwanStockPriceAdj" and kwargs.get("start_date") == "2026-01-01" and kwargs.get("end_date") == "2026-06-30":
+                return _price_frame("2026-01-02", "2026-06-30")
+            raise AssertionError(f"unexpected sparse bulk provider request: {kwargs}")
+
+    with TemporaryDirectory() as sparse_temp:
+        price_dir = Path(sparse_temp) / "prices"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        for sid, base_value in (("2330", 100.0), ("2317", 80.0)):
+            _legacy_frame(base_value, ("2026-01-02", "2026-06-30", "2026-07-01")).to_csv(price_dir / f"{sid}.csv")
+        original = {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")}
+        sparse_base = _SparseBulkProvider()
+        sparse_shared = SharedFinMindRequestClient(sparse_base)
+        sparse_current_range = PriceRange("2026-07-01", "2026-09-07")
+        sparse_current_frame = _price_frame("2026-07-01", "2026-09-07")
+        sparse_shared.seed_data(
+            dataset="TaiwanStockPriceAdj",
+            start_date=sparse_current_range.start_date,
+            end_date=sparse_current_range.end_date,
+            frame=sparse_current_frame,
+        )
+        sparse_probe = TradingPriceProbe(
+            candidate_date="2026-09-07",
+            market_date="2026-09-07",
+            current_range=sparse_current_range,
+            current_frame=sparse_current_frame,
+        )
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(sparse_temp) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
+            try:
+                refresh_trading_adjusted_price_dataset(
+                    ["2330", "2317"],
+                    "2026-09-07",
+                    client=sparse_shared,
+                    probe=sparse_probe,
+                    universe_tickers=["2330", "2317"],
+                    verbose=False,
+                )
+            except TradingBulkPriceUnsupported as exc:
+                sparse_rejected = True
+                sparse_reason = str(exc)
+            else:
+                sparse_rejected = False
+                sparse_reason = ""
+        check("sparse_bulk_range_is_rejected_by_trading_calendar_coverage", True, sparse_rejected)
+        check("sparse_bulk_rejection_names_calendar_coverage", True, "TaiwanStockTradingDate" in sparse_reason)
+        check("sparse_bulk_failure_publishes_no_partial_price_csv", original, {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")})
+        check("sparse_current_range_rejects_before_historical_bulk_fetch", 1, sparse_base.data_request_count)
+
+    class _LaggingCalendarProvider:
+        def __init__(self):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+        def get_usage(self):
+            self.usage_request_count += 1
+            return FinMindUsage(user_count=0, api_request_limit=6000)
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            dataset = kwargs.get("dataset")
+            if dataset == "TaiwanStockTradingDate":
+                return pd.DataFrame({"date": [
+                    "2026-01-02", "2026-06-30", "2026-07-01", "2026-08-03"
+                ]})
+            if dataset == "TaiwanStockPriceAdj" and kwargs.get("start_date") == "2026-01-01" and kwargs.get("end_date") == "2026-06-30":
+                return _price_frame("2026-01-02", "2026-06-30")
+            raise AssertionError(f"unexpected lagging-calendar provider request: {kwargs}")
+
+    with TemporaryDirectory() as lagging_temp:
+        price_dir = Path(lagging_temp) / "prices"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        baseline_dates = ("2026-01-02", "2026-06-30", "2026-07-01", "2026-08-03")
+        for sid, base_value in (("2330", 100.0), ("2317", 80.0)):
+            _legacy_frame(base_value, baseline_dates).to_csv(price_dir / f"{sid}.csv")
+        lagging_base = _LaggingCalendarProvider()
+        lagging_shared = SharedFinMindRequestClient(lagging_base)
+        lagging_range = PriceRange("2026-07-01", "2026-09-07")
+        lagging_current = _price_frame("2026-07-01", "2026-08-03", "2026-09-07")
+        lagging_shared.seed_data(
+            dataset="TaiwanStockPriceAdj",
+            start_date=lagging_range.start_date,
+            end_date=lagging_range.end_date,
+            frame=lagging_current,
+        )
+        lagging_probe = TradingPriceProbe(
+            candidate_date="2026-09-07",
+            market_date="2026-09-07",
+            current_range=lagging_range,
+            current_frame=lagging_current,
+        )
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(lagging_temp) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
+            lagging_summary = refresh_trading_adjusted_price_dataset(
+                ["2330", "2317"],
+                "2026-09-07",
+                client=lagging_shared,
+                probe=lagging_probe,
+                universe_tickers=["2330", "2317"],
+                verbose=False,
+            )
+        check("calendar_lag_does_not_override_priceadj_completed_market_date", "full_market_range_current_vintage", lagging_summary.get("price_fetch_strategy"))
+        check("calendar_lag_bulk_path_still_uses_calendar_plus_one_historical_fetch", 2, lagging_base.data_request_count)
+
+    summary.update({"checks": len(results), "repair": "bulk_completeness_fail_closed"})
     return results, summary

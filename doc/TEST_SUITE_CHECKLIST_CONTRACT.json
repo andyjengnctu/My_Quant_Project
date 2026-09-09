@@ -4364,6 +4364,17 @@
       "entry": "`services/optimizer/raw_cache.py`, `services/portfolio_replay.py`, `core/market_data_contract.py`, `core/market_data_dataset_registry.py`, `core/market_data_research_scope.py`, `core/market_data_research_v2.py`, `tools/validate/synthetic_regression_cases.py`",
       "initial_status": "NEW",
       "order": 393
+    },
+    {
+      "id": "B406",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading canonical PriceAdj bulk completeness / fail-closed provider coverage",
+      "item": "Execution-critical TaiwanStockPriceAdj bulk refresh may publish only from readable legacy baselines and calendar-proven complete market ranges; missing/unreadable ticker history must use the canonical per-ticker full-history producer",
+      "gap": "Round 6 bulk request geometry could accept sparse or provider-truncated full-market range payloads as complete history when a target ticker had no readable legacy CSV. Repair must keep the low-request bulk path only for established readable baselines, prove each calendar-covered range against TaiwanStockTradingDate before publication, preserve every existing ticker date, publish nothing on coverage failure, and keep the missing/unreadable bootstrap path on the existing per-ticker current-vintage producer. The Round 6 execution owners must also be instrumented by formal coverage.",
+      "entry": "`services/downloader/trading_price_refresh.py`, `services/downloader/finmind_shared_client.py`, `services/trading/market_data_update.py`, `services/trading/market_data_auto_update.py`, `services/trading/market_data_market_date_discovery.py`, `tools/local_regression/meta_quality_targets.py`",
+      "initial_status": "NEW",
+      "order": 394
     }
   ],
   "tests": [
@@ -8035,6 +8046,13 @@
       "b_id": "B405",
       "initial_status": "NEW",
       "order": 515
+    },
+    {
+      "id": "T526",
+      "b_id": "B406",
+      "description": "`validate_trading_price_bulk_completeness_contract_case` 對抗驗證 missing/unreadable legacy baseline 必須改走 canonical per-ticker full-history、TaiwanStockTradingDate 可偵測 sparse/truncated bulk range 並在寫檔前 fail-closed，且 Round 6 execution owners 全數納入 formal coverage targets。",
+      "initial_status": "NEW",
+      "order": 516
     }
   ],
   "transitions": [
@@ -25957,6 +25975,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_research_generation_execution_cache_isolation_case`"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "B406",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "修正 Trading canonical PriceAdj bulk completeness：新／缺／不可讀歷史回退 per-ticker，bulk 以交易日 coverage proof fail-closed，並補正式 coverage owners。",
+      "note": "Trading PriceAdj bulk completeness closure"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "T526",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增 Trading PriceAdj sparse-bulk / missing-baseline / formal-coverage 對抗 regression 並納入正式 DONE 測試摘要。",
+      "note": "`validate_trading_price_bulk_completeness_contract_case`"
     }
   ]
 }
