@@ -85,6 +85,7 @@ def run_trading_market_data_update(
         root,
         market_date=result.get("market_date"),
         required_position_tickers=required_position_tickers,
+        current_universe_tickers=list(result.get("universe_tickers") or []),
     )
 
     if sync_v2_archive:

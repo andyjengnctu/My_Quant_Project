@@ -19,6 +19,7 @@ import pandas as pd
 
 from core.file_integrity import atomic_write_text
 from core.market_data_execution_policy import get_market_data_execution_policy
+from core.trading_dataset_identity import inspect_trading_dataset_member_date_evidence
 from core.trading_market_clock import latest_allowed_completed_daily_date, select_latest_completed_daily_date
 from services.downloader import runtime as rt
 from services.downloader.finmind_http import FinMindHttpError
@@ -245,6 +246,15 @@ def _missing_local_price_files(target_tickers: tuple[str, ...]) -> tuple[str, ..
     )
 
 
+def inspect_legacy_price_baseline(sid: str, *, market_date: str):
+    """Downloader wrapper around the canonical Trading CSV date-evidence inspector."""
+
+    return inspect_trading_dataset_member_date_evidence(
+        Path(rt.SAVE_DIR) / f"{sid}.csv",
+        through_date=market_date,
+    )
+
+
 def probe_latest_adjusted_price_market_date(*, client, now: datetime | None = None) -> TradingPriceProbe:
     resolved_now = rt.get_taipei_now() if now is None else now
     candidate = latest_allowed_completed_daily_date(now=resolved_now)
@@ -289,20 +299,15 @@ def inspect_local_price_freshness(tickers: Iterable[str], *, market_date: str) -
     unreadable: list[str] = []
     target = str(pd.Timestamp(market_date).date())
     for sid in [str(item) for item in tickers]:
-        path = Path(rt.SAVE_DIR) / f"{sid}.csv"
-        if not path.is_file():
+        baseline = inspect_legacy_price_baseline(sid, market_date=target)
+        if not baseline.exists:
             stale.append(sid)
             continue
-        try:
-            frame = pd.read_csv(path, index_col=0)
-            if frame.empty:
-                raise ValueError("empty csv")
-            last_date = str(pd.Timestamp(frame.tail(1).index[0]).date())
-        except (OSError, ValueError, KeyError, IndexError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        if not baseline.readable:
             unreadable.append(sid)
             stale.append(sid)
             continue
-        if last_date == target:
+        if baseline.last_date == target:
             latest.append(sid)
         else:
             stale.append(sid)
@@ -336,34 +341,21 @@ def _write_bulk_history(
     # coverage failure therefore falls back to the legacy per-ticker producer
     # without leaving a partially bulk-refreshed execution dataset behind.
     prepared: dict[str, pd.DataFrame] = {}
-    target_ts = pd.Timestamp(market_date).normalize()
     for sid in target_tickers:
         rows = _legacy_frame_for_ticker(combined, sid, market_date=market_date)
-        path = Path(rt.SAVE_DIR) / f"{sid}.csv"
-        if not path.is_file():
+        baseline = inspect_legacy_price_baseline(sid, market_date=market_date)
+        if not baseline.exists:
             raise TradingBulkPriceUnsupported(
                 f"TaiwanStockPriceAdj bulk history 缺少 {sid} 的可讀 legacy baseline；"
                 "新檔必須改走 per-ticker full-history producer"
             )
-        try:
-            existing = pd.read_csv(path, index_col=0)
-            if existing.empty:
-                raise ValueError("empty csv")
-            existing_dates = pd.to_datetime(existing.index, errors="coerce")
-            existing_dates = {
-                item.date().isoformat()
-                for item in existing_dates
-                if not pd.isna(item) and item.normalize() <= target_ts
-            }
-            if not existing_dates:
-                raise ValueError("no valid historical dates")
-        except (OSError, ValueError, TypeError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+        if not baseline.readable:
             raise TradingBulkPriceUnsupported(
                 f"TaiwanStockPriceAdj bulk history 無法驗證 {sid} 的 legacy baseline；"
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
+                f"{baseline.error}"
+            )
         refreshed_dates = {item.date().isoformat() for item in rows.index}
-        missing_existing = sorted(existing_dates - refreshed_dates)
+        missing_existing = sorted(set(baseline.dates) - refreshed_dates)
         if missing_existing:
             raise TradingBulkPriceUnsupported(
                 f"TaiwanStockPriceAdj bulk history 對 {sid} 遺失既有日期；"
@@ -438,9 +430,11 @@ def refresh_trading_adjusted_price_dataset(
     )
     missing_local = _missing_local_price_files(target_tickers)
     bulk_baseline_unavailable = bool(missing_local or freshness.unreadable)
+    raw_evidence_tickers = set(missing_local) | set(freshness.unreadable)
+    per_ticker_provider_plan = per_ticker_request_count + len(raw_evidence_tickers)
 
     if bulk_baseline_unavailable or per_ticker_request_count < bulk_provider_plan:
-        _ensure_quota_capacity(client, per_ticker_request_count)
+        _ensure_quota_capacity(client, per_ticker_provider_plan)
         # Reuse the legacy function through its explicit shared-client seam; it
         # refreshes only stale files and preserves current full-history semantics.
         from services.downloader.sync import smart_download_vip_data
@@ -450,11 +444,12 @@ def refresh_trading_adjusted_price_dataset(
             market_date,
             verbose=verbose,
             client=client,
+            require_target_date_tickers=universe_set,
         )
         return {
             **summary,
             "price_fetch_strategy": "per_ticker_full_history",
-            "planned_price_data_requests": per_ticker_request_count,
+            "planned_price_data_requests": per_ticker_provider_plan,
             "actual_price_provider_requests": int(getattr(client, "data_request_count", 0)) - before_requests,
             "bulk_range_count": bulk_request_count,
             "stale_ticker_count": per_ticker_request_count,
@@ -488,6 +483,11 @@ def refresh_trading_adjusted_price_dataset(
             "無法證明 bulk payload 可作 canonical producer"
         )
     missing_current = sorted(universe_set - current_target_ids)
+    if missing_current:
+        raise TradingBulkPriceUnsupported(
+            "TaiwanStockPriceAdj full-market current range 缺少已確認 actionable universe ticker；"
+            f"missing={missing_current[:20]} count={len(missing_current)}"
+        )
 
     target_set = set(target_tickers)
     normalized_chunks: list[pd.DataFrame] = [
@@ -557,7 +557,7 @@ def refresh_trading_adjusted_price_dataset(
         "actual_price_provider_requests": int(getattr(client, "data_request_count", 0)) - before_requests,
         "bulk_range_count": bulk_request_count,
         "stale_ticker_count": per_ticker_request_count,
-        "current_universe_missing_price_row_count": len(missing_current),
+        "current_universe_missing_price_row_count": 0,
     }
 
 
@@ -569,6 +569,7 @@ __all__ = [
     "build_price_history_ranges",
     "normalize_adjusted_price_frame",
     "probe_latest_adjusted_price_market_date",
+    "inspect_legacy_price_baseline",
     "inspect_local_price_freshness",
     "refresh_trading_adjusted_price_dataset",
 ]

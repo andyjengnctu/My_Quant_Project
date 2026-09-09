@@ -10,6 +10,7 @@ from services.downloader.universe import get_market_last_date, get_or_update_uni
 from services.downloader.finmind_http import FinMindHttpError
 from services.downloader.trading_price_refresh import (
     TradingBulkPriceUnsupported,
+    inspect_local_price_freshness,
     probe_latest_adjusted_price_market_date,
     refresh_trading_adjusted_price_dataset,
 )
@@ -58,7 +59,13 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
         raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
 
     if provider_client is None:
-        summary = dict(smart_download_vip_data(target_tickers, market_date))
+        summary = dict(
+            smart_download_vip_data(
+                target_tickers,
+                market_date,
+                require_target_date_tickers=universe_tickers,
+            )
+        )
     else:
         try:
             if probe is None:
@@ -82,6 +89,7 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
                     target_tickers,
                     market_date,
                     client=provider_client,
+                    require_target_date_tickers=universe_tickers,
                 )
             )
             summary.update(
@@ -107,6 +115,17 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
             f"{issue_log_suffix}"
         )
 
+    actionable_freshness = inspect_local_price_freshness(
+        universe_tickers,
+        market_date=market_date,
+    )
+    if actionable_freshness.stale or actionable_freshness.unreadable:
+        raise RuntimeError(
+            "Trading downloader 完成後仍有 actionable universe ticker 未到確認 market date；"
+            f"market_date={market_date} stale={list(actionable_freshness.stale)[:20]} "
+            f"count={len(actionable_freshness.stale)}"
+        )
+
     return {
         **summary,
         "status": "READY",
@@ -114,6 +133,7 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
         "market_date": str(market_date),
         "ticker_count": int(len(target_tickers)),
         "universe_ticker_count": int(len(universe_tickers)),
+        "universe_tickers": list(universe_tickers),
         "required_position_tickers": required,
         "required_position_ticker_count": int(len(required)),
         "required_position_tickers_added": sorted(set(required) - set(universe_tickers)),

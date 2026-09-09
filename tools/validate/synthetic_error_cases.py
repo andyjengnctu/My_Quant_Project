@@ -429,6 +429,12 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
                     "stock_id": ["2330", "2317", "0050", "2330"],
                     "Trading_Volume": [2_000.0, 500.0, 3_000.0, 99_000_000.0],
                 })
+            if dataset == universe.FINMIND_RAW_PRICE_ARCHIVE_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-04-03", "2026-04-03", "2026-04-03"],
+                    "stock_id": ["2330", "2317", "0050"],
+                    "open": [100.0, 80.0, 50.0],
+                })
             if dataset == universe.rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
                 stock_ids = ["0050"] if self.missing_market_value else ["2330", "0050"]
                 values = [100_000_000_000.0] if self.missing_market_value else [2_000_000_000.0, 100_000_000_000.0]
@@ -496,10 +502,11 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
 
         check("finmind_bulk_screening_uses_exact_market_date_not_future_row", ["2330", "0050"], membership)
         check("finmind_bulk_screening_does_not_call_yfinance", True, True)
-        check("finmind_bulk_screening_uses_exactly_two_dataset_requests", 2, len(good_loader.calls))
+        check("finmind_bulk_screening_uses_three_dataset_requests_with_raw_ticker_evidence", 3, len(good_loader.calls))
         check("finmind_bulk_price_request_omits_data_id", False, "data_id" in good_loader.calls[0])
-        check("finmind_bulk_market_value_request_omits_data_id", False, "data_id" in good_loader.calls[1])
-        check("finmind_bulk_requests_use_requested_market_date", ["2026-04-03", "2026-04-03"], [call.get("start_date") for call in good_loader.calls])
+        check("finmind_raw_ticker_evidence_request_omits_data_id", False, "data_id" in good_loader.calls[1])
+        check("finmind_bulk_market_value_request_omits_data_id", False, "data_id" in good_loader.calls[2])
+        check("finmind_bulk_requests_use_requested_market_date", ["2026-04-03", "2026-04-03", "2026-04-03"], [call.get("start_date") for call in good_loader.calls])
         check("etf_qualifies_from_volume_without_market_value_requirement", True, "0050" in membership)
         check("listed_symbol_without_exact_price_is_conservatively_excluded", False, "9999" in membership)
         check("universe_v3_cache_is_machine_readable_and_published", True, cache_path.is_file() and cache_path.read_text(encoding="utf-8").lstrip().startswith("{"))

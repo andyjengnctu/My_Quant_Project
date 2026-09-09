@@ -37,14 +37,23 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 
-def _publish_synthetic_trading_input_lineage(root: Path, *, market_date: str, required_position_tickers=()):
+def _publish_synthetic_trading_input_lineage(
+    root: Path,
+    *,
+    market_date: str,
+    required_position_tickers=(),
+    current_universe_tickers=("2330",),
+):
     """Publish canonical Trading data/param lineage for isolated synthetic fixtures."""
     from services.trading.market_data_state import publish_trading_market_data_snapshot
     from services.trading.strategy_param_state import publish_trading_strategy_param_binding
     from services.trading.scanner_state import load_trading_scanner_runtime
 
     publish_trading_market_data_snapshot(
-        root, market_date=market_date, required_position_tickers=list(required_position_tickers)
+        root,
+        market_date=market_date,
+        required_position_tickers=list(required_position_tickers),
+        current_universe_tickers=list(current_universe_tickers),
     )
     publish_trading_strategy_param_binding(root)
     return load_trading_scanner_runtime(root, verify_dataset_content=True)
@@ -309,6 +318,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
 
     with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
          patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2454"]), \
+         patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
          patch.object(downloader_application, "smart_download_vip_data", return_value={
              "total": 2,
              "count_success": 1,
@@ -322,11 +332,12 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("downloader_application_returns_market_date", "2026-09-04", downloader_result.get("market_date"))
     check("downloader_application_returns_ticker_count", 2, downloader_result.get("ticker_count"))
     captured_required_download = {}
-    def _capture_required_download(tickers, market_date):
+    def _capture_required_download(tickers, market_date, **_kwargs):
         captured_required_download["tickers"] = list(tickers)
         return {"total": len(tickers), "count_success": len(tickers), "count_skipped_latest": 0, "last_date_check_error_count": 0, "download_error_count": 0, "issue_log_path": None}
     with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
          patch.object(downloader_application, "get_or_update_universe", return_value=["2330"]), \
+         patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
          patch.object(downloader_application, "smart_download_vip_data", side_effect=_capture_required_download):
         required_result = downloader_application.run_trading_dataset_update(required_tickers=["9999", "2330"])
     check("downloader_unions_required_account_ticker_outside_dynamic_universe", ["2330", "9999"], captured_required_download.get("tickers"))
@@ -2803,7 +2814,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
         ), ensure_ascii=False), encoding="utf-8")
 
-        first_market = publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=[])
+        first_market = publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            required_position_tickers=[],
+            current_universe_tickers=["2330"],
+        )
         binding = publish_trading_strategy_param_binding(root)
         runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
         check("params_bind_exact_dataset_content_hash", first_market["dataset_fingerprint"]["csv_content_sha256"], binding["dataset_content_sha256"])
@@ -2828,7 +2844,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         duplicate_path.unlink()
         (nested_dir / "diagnostic.csv").unlink(); nested_dir.rmdir()
 
-        metadata_only = publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        metadata_only = publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            required_position_tickers=["2330"],
+            current_universe_tickers=["2330"],
+        )
         check("market_snapshot_operational_metadata_can_change_without_data_content_change", first_market["dataset_fingerprint"]["csv_content_sha256"], metadata_only["dataset_fingerprint"]["csv_content_sha256"])
         metadata_binding = load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
         check("params_freshness_uses_content_identity_not_snapshot_metadata_sha", binding["binding_fingerprint"], metadata_binding["binding_fingerprint"])
@@ -2844,7 +2865,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             out_of_band_change_rejected = False
         check("same_date_dataset_content_change_is_detected_even_when_latest_date_is_unchanged", True, out_of_band_change_rejected)
 
-        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            required_position_tickers=["2330"],
+            current_universe_tickers=["2330"],
+        )
         try:
             load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
         except RuntimeError:
@@ -2854,7 +2880,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         check("canonical_data_update_invalidates_params_when_content_changes_same_date", True, old_params_rejected)
 
         csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            required_position_tickers=["2330"],
+            current_universe_tickers=["2330"],
+        )
         publish_trading_strategy_param_binding(root)
         fake_scan = {
             "count_scanned": 1, "elapsed_time": 0.01, "count_history_qualified": 1,
@@ -2879,7 +2910,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         check("scanner_refuses_publish_when_dataset_changes_during_scan", True, scan_toctou_rejected)
 
         csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            required_position_tickers=["2330"],
+            current_universe_tickers=["2330"],
+        )
         def _optimizer_and_mutate(**_kwargs):
             mutated = base_frame.copy(); mutated.loc[1, "Close"] = 104.0; mutated.to_csv(csv_path, index=False)
             return {"selected_params_path": str(selected_path), "manifest_path": str(selected_path.parent / "manifest.json")}
@@ -2893,7 +2929,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         check("params_producer_refuses_publish_binding_when_dataset_changes_during_training", True, params_toctou_rejected)
 
         csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            required_position_tickers=["2330"],
+            current_universe_tickers=["2330"],
+        )
         publish_trading_strategy_param_binding(root)
         with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan):
             daily_workflow.run_trading_candidate_scan(project_root=root)
@@ -2939,7 +2980,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         check("proposed_order_currentness_rehashes_actual_csv_content", True, proposed_same_date_drift_rejected)
 
         csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(root, market_date="2026-09-04", required_position_tickers=["2330"])
+        publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-04",
+            required_position_tickers=["2330"],
+            current_universe_tickers=["2330"],
+        )
         publish_trading_strategy_param_binding(root)
         account = adopt_existing_trading_position(root, ticker="9999", qty=100, cost_basis_total=10_000, entry_date="2026-01-01", expected_revision=account["revision"])
         captured = {}

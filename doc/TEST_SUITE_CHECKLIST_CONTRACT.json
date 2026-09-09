@@ -4375,6 +4375,17 @@
       "entry": "`services/downloader/trading_price_refresh.py`, `services/downloader/finmind_shared_client.py`, `services/trading/market_data_update.py`, `services/trading/market_data_auto_update.py`, `services/trading/market_data_market_date_discovery.py`, `tools/local_regression/meta_quality_targets.py`",
       "initial_status": "NEW",
       "order": 394
+    },
+    {
+      "id": "B407",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading canonical PriceAdj end-to-end completeness / actionable-universe freshness",
+      "item": "Per-ticker fallback, current-universe screening and Trading snapshot must share one fail-closed completeness contract; actionable universe members must be current to the confirmed market date while non-actionable required holdings may remain stale during suspension",
+      "gap": "Independent adversarial inspection after B406 reproduced three deeper gaps: the real per-ticker full-history fallback could overwrite readable history with a truncated provider payload or publish a new actionable ticker without the target-date row; a partial exact-date/full-market PriceAdj payload could shrink the fresh universe because missing symbols were interpreted as non-traded; and market-data snapshot publication used only aggregate dataset MAX date, allowing one current ticker to mask another stale actionable member. Repair must preserve readable baseline dates, require raw TaiwanStockPrice date evidence when no readable adjusted-price baseline exists, cross-check exact-date traded ticker evidence against PriceAdj, require every cached/current actionable universe member in the PriceAdj target-date payload, and persist/revalidate per-member universe freshness in the Trading market-data snapshot.",
+      "entry": "`services/downloader/sync.py`, `services/downloader/universe.py`, `services/downloader/trading_price_refresh.py`, `services/downloader/application.py`, `core/trading_dataset_identity.py`, `services/trading/market_data_state.py`, `services/trading/market_data_update.py`",
+      "initial_status": "NEW",
+      "order": 395
     }
   ],
   "tests": [
@@ -8053,6 +8064,13 @@
       "description": "`validate_trading_price_bulk_completeness_contract_case` 對抗驗證 missing/unreadable legacy baseline 必須改走 canonical per-ticker full-history、TaiwanStockTradingDate 可偵測 sparse/truncated bulk range 並在寫檔前 fail-closed，且 Round 6 execution owners 全數納入 formal coverage targets。",
       "initial_status": "NEW",
       "order": 516
+    },
+    {
+      "id": "T527",
+      "description": "`validate_trading_price_end_to_end_completeness_contract_case` 對抗驗證 real per-ticker producer 不得遺失既有日期、無 readable baseline 時必須通過 raw-price date evidence、actionable ticker 必須含 target-date row、partial exact-date PriceAdj ticker set 必須 fail-closed、cached universe current bulk 不得缺 member、application 不得對 stale actionable ticker 回 READY，且 snapshot 不得以 aggregate MAX date 掩蓋 stale universe member，同時允許 universe 外停牌持倉維持較舊日期。",
+      "b_id": "B407",
+      "initial_status": "NEW",
+      "order": 517
     }
   ],
   "transitions": [
@@ -25991,6 +26009,22 @@
       "to_status": "DONE",
       "description": "新增 Trading PriceAdj sparse-bulk / missing-baseline / formal-coverage 對抗 regression 並納入正式 DONE 測試摘要。",
       "note": "`validate_trading_price_bulk_completeness_contract_case`"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "B407",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "修正 Trading canonical PriceAdj end-to-end completeness：real per-ticker fallback、exact-date ticker-set、application READY 與 snapshot per-member freshness 全部改為 fail-closed。",
+      "note": "Trading PriceAdj end-to-end completeness closure"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "T527",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增 Trading PriceAdj real fallback / partial-universe / snapshot-member-freshness 對抗 regression 並納入正式 DONE 測試摘要。",
+      "note": "`validate_trading_price_end_to_end_completeness_contract_case`"
     }
   ]
 }

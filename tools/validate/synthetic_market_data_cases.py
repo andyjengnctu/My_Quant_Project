@@ -1817,12 +1817,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 "2026-09-07",
                 client=suspended_shared,
                 probe=suspended_probe,
-                universe_tickers=["2330", "2317"],
+                # 2317 is a required/history target outside the exact-date actionable universe.
+                # It may legitimately have no target-date PriceAdj row (for example, suspension).
+                universe_tickers=["2330"],
                 verbose=False,
             )
             suspended_2317 = pd.read_csv(Path(downloader_runtime.SAVE_DIR) / "2317.csv", index_col=0)
-        check("bulk_price_preserves_legacy_suspended_ticker_semantic", "2026-07-01", str(pd.Timestamp(suspended_2317.index[-1]).date()))
-        check("bulk_price_reports_cached_universe_missing_target_row", 1, suspended_summary.get("current_universe_missing_price_row_count"))
+        check("bulk_price_preserves_nonactionable_required_ticker_history_without_fabricating_target_row", "2026-07-01", str(pd.Timestamp(suspended_2317.index[-1]).date()))
+        check("bulk_price_reports_zero_missing_rows_for_validated_actionable_universe", 0, suspended_summary.get("current_universe_missing_price_row_count"))
 
     with TemporaryDirectory() as truncated_temp_dir:
         from services.downloader import runtime as downloader_runtime
@@ -4786,4 +4788,316 @@ def validate_trading_price_bulk_completeness_contract_case(_base_params):
         check("calendar_lag_bulk_path_still_uses_calendar_plus_one_historical_fetch", 2, lagging_base.data_request_count)
 
     summary.update({"checks": len(results), "repair": "bulk_completeness_fail_closed"})
+    return results, summary
+
+
+def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
+    """Historical regression for per-ticker, universe, application and snapshot completeness."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from unittest.mock import patch
+
+    from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+    from services.downloader import application as downloader_application
+    from services.downloader import runtime as downloader_runtime
+    from services.downloader import sync as downloader_sync
+    from services.downloader import universe as downloader_universe
+    from services.downloader.finmind_http import FinMindUsage
+    from services.downloader.finmind_shared_client import SharedFinMindRequestClient
+    from services.downloader.trading_price_refresh import (
+        PriceRange,
+        TradingBulkPriceUnsupported,
+        TradingPriceProbe,
+        refresh_trading_adjusted_price_dataset,
+    )
+    from services.trading.market_data_state import (
+        publish_trading_market_data_snapshot,
+        resolve_trading_market_data_snapshot_path,
+    )
+
+    case_id = "TRADING_PRICE_END_TO_END_COMPLETENESS"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
+
+    def _legacy_frame(base: float, dates: tuple[str, ...]) -> pd.DataFrame:
+        frame = pd.DataFrame(
+            {
+                "Open": [base] * len(dates),
+                "High": [base + 2] * len(dates),
+                "Low": [base - 1] * len(dates),
+                "Close": [base + 1] * len(dates),
+                "Volume": [1000] * len(dates),
+            },
+            index=pd.to_datetime(list(dates)),
+        )
+        frame.index.name = "Date"
+        return frame
+
+    def _adjusted_frame(sid: str, dates: tuple[str, ...], base: float = 100.0) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "date": list(dates),
+                "stock_id": [sid] * len(dates),
+                "open": [base] * len(dates),
+                "max": [base + 2] * len(dates),
+                "min": [base - 1] * len(dates),
+                "close": [base + 1] * len(dates),
+                "Trading_Volume": [1000] * len(dates),
+            }
+        )
+
+    class _PerTickerProvider:
+        def __init__(self, *, adjusted_dates: tuple[str, ...], raw_dates: tuple[str, ...] = ()):
+            self.adjusted_dates = adjusted_dates
+            self.raw_dates = raw_dates
+            self.data_request_count = 0
+            self.usage_request_count = 0
+
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            dataset = kwargs.get("dataset")
+            sid = str(kwargs.get("data_id") or "2330")
+            if dataset == downloader_runtime.FINMIND_PRICE_DATASET:
+                return _adjusted_frame(sid, self.adjusted_dates)
+            if dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET:
+                return pd.DataFrame({"date": list(self.raw_dates), "stock_id": [sid] * len(self.raw_dates)})
+            raise AssertionError(f"unexpected per-ticker dataset: {kwargs}")
+
+    with TemporaryDirectory(prefix="trading_price_existing_baseline_") as temp_dir:
+        price_dir = Path(temp_dir) / "prices"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        path = price_dir / "2330.csv"
+        _legacy_frame(100.0, ("2025-01-02", "2026-09-08")).to_csv(path)
+        original = path.read_bytes()
+        provider = _PerTickerProvider(adjusted_dates=("2026-09-08", "2026-09-09"))
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2025-01-01"), \
+             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
+             patch.object(downloader_runtime, "append_downloader_issues", return_value=None), \
+             patch.object(downloader_runtime, "get_downloader_issue_log_path", return_value=str(Path(temp_dir) / "issues.log")):
+            payload = downloader_sync.smart_download_vip_data(
+                ["2330"],
+                "2026-09-09",
+                verbose=False,
+                client=provider,
+                require_target_date_tickers=["2330"],
+            )
+        check("per_ticker_truncated_adjusted_history_is_rejected", 1, payload.get("download_error_count"))
+        check("per_ticker_truncated_adjusted_history_is_not_reported_success", 0, payload.get("count_success"))
+        check("per_ticker_truncated_adjusted_history_preserves_existing_csv_bytes", original, path.read_bytes())
+
+    with TemporaryDirectory(prefix="trading_price_new_baseline_") as temp_dir:
+        price_dir = Path(temp_dir) / "prices"
+        provider = _PerTickerProvider(
+            adjusted_dates=("2026-09-09",),
+            raw_dates=("2025-01-02", "2026-09-09"),
+        )
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2025-01-01"), \
+             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
+             patch.object(downloader_runtime, "append_downloader_issues", return_value=None), \
+             patch.object(downloader_runtime, "get_downloader_issue_log_path", return_value=str(Path(temp_dir) / "issues.log")):
+            payload = downloader_sync.smart_download_vip_data(
+                ["2330"],
+                "2026-09-09",
+                verbose=False,
+                client=provider,
+                require_target_date_tickers=["2330"],
+            )
+        check("new_ticker_requires_raw_full_history_date_evidence", 1, payload.get("raw_history_evidence_request_count"))
+        check("new_ticker_truncated_adjusted_history_fails_raw_date_proof", 1, payload.get("download_error_count"))
+        check("new_ticker_truncated_adjusted_history_publishes_no_csv", False, (price_dir / "2330.csv").exists())
+
+    with TemporaryDirectory(prefix="trading_price_missing_target_") as temp_dir:
+        price_dir = Path(temp_dir) / "prices"
+        provider = _PerTickerProvider(
+            adjusted_dates=("2025-01-02", "2026-09-08"),
+            raw_dates=("2025-01-02", "2026-09-08"),
+        )
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2025-01-01"), \
+             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
+             patch.object(downloader_runtime, "append_downloader_issues", return_value=None), \
+             patch.object(downloader_runtime, "get_downloader_issue_log_path", return_value=str(Path(temp_dir) / "issues.log")):
+            payload = downloader_sync.smart_download_vip_data(
+                ["2330"],
+                "2026-09-09",
+                verbose=False,
+                client=provider,
+                require_target_date_tickers=["2330"],
+            )
+        check("actionable_new_ticker_missing_target_date_is_rejected", 1, payload.get("download_error_count"))
+        check("actionable_new_ticker_missing_target_date_publishes_no_csv", False, (price_dir / "2330.csv").exists())
+
+    class _PartialExactDateProvider:
+        def __init__(self):
+            self.data_request_count = 0
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            dataset = kwargs.get("dataset")
+            if dataset == downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-09-09"],
+                    "stock_id": ["2330"],
+                    "Trading_Volume": [2_000_000],
+                })
+            if dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-09-09", "2026-09-09"],
+                    "stock_id": ["2330", "2317"],
+                })
+            if dataset == downloader_runtime.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-09-09", "2026-09-09"],
+                    "stock_id": ["2330", "2317"],
+                    "market_value": [1e12, 1e12],
+                })
+            raise AssertionError(f"unexpected exact-date dataset: {kwargs}")
+
+    partial_provider = _PartialExactDateProvider()
+    with patch.object(downloader_runtime, "append_downloader_issues", return_value=None):
+        try:
+            downloader_universe._load_finmind_bulk_screening_data(
+                market_date="2026-09-09",
+                client=partial_provider,
+            )
+        except RuntimeError as exc:
+            partial_exact_rejected = True
+            partial_exact_reason = str(exc)
+        else:
+            partial_exact_rejected = False
+            partial_exact_reason = ""
+    check("raw_exact_date_ticker_evidence_rejects_partial_priceadj_payload", True, partial_exact_rejected)
+    check("partial_priceadj_rejection_names_ticker_completeness", True, "traded ticker" in partial_exact_reason)
+
+    class _CalendarOnlyProvider:
+        def __init__(self):
+            self.data_request_count = 0
+            self.usage_request_count = 0
+        def get_usage(self):
+            self.usage_request_count += 1
+            return FinMindUsage(user_count=0, api_request_limit=6000)
+        def get_data(self, **kwargs):
+            self.data_request_count += 1
+            if kwargs.get("dataset") == "TaiwanStockTradingDate":
+                return pd.DataFrame({"date": ["2026-07-01", "2026-09-08", "2026-09-09"]})
+            raise AssertionError(f"unexpected bulk provider request: {kwargs}")
+
+    with TemporaryDirectory(prefix="trading_price_cached_universe_") as temp_dir:
+        price_dir = Path(temp_dir) / "prices"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        for sid, base in (("2330", 100.0), ("2317", 80.0)):
+            _legacy_frame(base, ("2026-07-01", "2026-09-08")).to_csv(price_dir / f"{sid}.csv")
+        original = {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")}
+        current = pd.concat([
+            _adjusted_frame("2330", ("2026-07-01", "2026-09-08", "2026-09-09")),
+            _adjusted_frame("2317", ("2026-07-01", "2026-09-08"), base=80.0),
+        ], ignore_index=True)
+        base = _CalendarOnlyProvider()
+        shared = SharedFinMindRequestClient(base)
+        current_range = PriceRange("2026-07-01", "2026-09-09")
+        shared.seed_data(
+            dataset=downloader_runtime.FINMIND_PRICE_DATASET,
+            start_date=current_range.start_date,
+            end_date=current_range.end_date,
+            frame=current,
+        )
+        probe = TradingPriceProbe(
+            candidate_date="2026-09-09",
+            market_date="2026-09-09",
+            current_range=current_range,
+            current_frame=current,
+        )
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
+             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-07-01"), \
+             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
+            try:
+                refresh_trading_adjusted_price_dataset(
+                    ["2330", "2317"],
+                    "2026-09-09",
+                    client=shared,
+                    probe=probe,
+                    universe_tickers=["2330", "2317"],
+                    verbose=False,
+                )
+            except TradingBulkPriceUnsupported as exc:
+                cached_universe_rejected = True
+                cached_universe_reason = str(exc)
+            else:
+                cached_universe_rejected = False
+                cached_universe_reason = ""
+        check("cached_actionable_universe_requires_every_current_priceadj_row", True, cached_universe_rejected)
+        check("cached_universe_partial_payload_names_missing_member", True, "2317" in cached_universe_reason)
+        check("cached_universe_partial_payload_publishes_no_csv_changes", original, {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")})
+
+    with TemporaryDirectory(prefix="trading_price_application_ready_") as temp_dir:
+        price_dir = Path(temp_dir) / "prices"
+        price_dir.mkdir(parents=True, exist_ok=True)
+        _legacy_frame(100.0, ("2026-09-09",)).to_csv(price_dir / "2330.csv")
+        _legacy_frame(80.0, ("2026-09-08",)).to_csv(price_dir / "2317.csv")
+        success_summary = {
+            "total": 2,
+            "count_success": 2,
+            "count_skipped_latest": 0,
+            "last_date_check_error_count": 0,
+            "download_error_count": 0,
+            "trimmed_future_row_count": 0,
+            "issue_log_path": None,
+        }
+        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
+             patch.object(downloader_application, "get_market_last_date", return_value="2026-09-09"), \
+             patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2317"]), \
+             patch.object(downloader_application, "smart_download_vip_data", return_value=success_summary):
+            try:
+                downloader_application.run_trading_dataset_update()
+            except RuntimeError as exc:
+                ready_guard_rejected = True
+                ready_guard_reason = str(exc)
+            else:
+                ready_guard_rejected = False
+                ready_guard_reason = ""
+        check("application_never_returns_ready_with_stale_actionable_ticker", True, ready_guard_rejected)
+        check("application_ready_guard_names_actionable_freshness", True, "actionable universe" in ready_guard_reason)
+
+    with TemporaryDirectory(prefix="trading_price_snapshot_freshness_") as temp_dir:
+        root = Path(temp_dir)
+        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
+        data_dir = Path(paths.data_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        _legacy_frame(100.0, ("2026-09-09",)).to_csv(data_dir / "2330.csv")
+        _legacy_frame(80.0, ("2026-09-08",)).to_csv(data_dir / "2317.csv")
+        try:
+            publish_trading_market_data_snapshot(
+                root,
+                market_date="2026-09-09",
+                required_position_tickers=[],
+                current_universe_tickers=["2330", "2317"],
+            )
+        except RuntimeError as exc:
+            snapshot_rejected = True
+            snapshot_reason = str(exc)
+        else:
+            snapshot_rejected = False
+            snapshot_reason = ""
+        check("snapshot_rejects_mixed_current_and_stale_universe_even_when_dataset_max_is_current", True, snapshot_rejected)
+        check("snapshot_mixed_freshness_rejection_names_member_freshness", True, "freshness" in snapshot_reason)
+        check("snapshot_failure_writes_no_canonical_snapshot", False, resolve_trading_market_data_snapshot_path(root).exists())
+
+        _legacy_frame(80.0, ("2026-09-08",)).to_csv(data_dir / "9999.csv")
+        published = publish_trading_market_data_snapshot(
+            root,
+            market_date="2026-09-09",
+            required_position_tickers=["9999"],
+            current_universe_tickers=["2330"],
+        )
+        check("stale_required_holding_outside_actionable_universe_is_allowed", ["9999"], published.get("required_position_tickers"))
+        check("snapshot_persists_exact_current_universe_freshness_evidence", ["2330"], published.get("current_universe_tickers"))
+
+    summary.update({"checks": len(results), "repair": "end_to_end_price_completeness_fail_closed"})
     return results, summary

@@ -4,6 +4,7 @@ from datetime import timedelta
 from io import StringIO
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
 
 from core.console_report import project_relative_display_path
 from core.trading_market_clock import (
@@ -158,6 +159,37 @@ def _normalize_finmind_bulk_screening_frame(
     return normalized[["stock_id", value_column]].copy()
 
 
+def _normalize_exact_date_ticker_evidence(
+    frame,
+    *,
+    dataset: str,
+    market_date: str,
+) -> set[str]:
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        raise ValueError(f"FinMind {dataset} 全市場資料為空")
+    normalized = frame.copy()
+    normalized.columns = [str(col).strip().lower() for col in normalized.columns]
+    required = {"date", "stock_id"}
+    missing = sorted(required - set(normalized.columns))
+    if missing:
+        raise ValueError(f"FinMind {dataset} 缺少必要欄位: {missing}")
+
+    target_date = str(pd.Timestamp(market_date).date())
+    normalized["date"] = pd.to_datetime(normalized["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    normalized = normalized.loc[normalized["date"] == target_date].copy()
+    if normalized.empty:
+        raise ValueError(f"FinMind {dataset} 尚無 market_date={target_date} 的全市場 ticker evidence")
+    normalized["stock_id"] = normalized["stock_id"].astype("string").str.strip()
+    if normalized["stock_id"].isna().any() or (normalized["stock_id"] == "").any():
+        raise ValueError(f"FinMind {dataset} 存在空白 stock_id")
+    duplicated = sorted(
+        normalized.loc[normalized["stock_id"].duplicated(keep=False), "stock_id"].astype(str).unique().tolist()
+    )
+    if duplicated:
+        raise ValueError(f"FinMind {dataset} 同一 market_date 存在重複 stock_id: {duplicated[:10]}")
+    return set(normalized["stock_id"].astype(str).tolist())
+
+
 def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple[pd.DataFrame, pd.DataFrame]:
     target_date = str(pd.Timestamp(market_date).date())
     try:
@@ -165,6 +197,11 @@ def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple
             loader = rt.get_finmind_loader()
             price_raw = loader.get_data(
                 dataset=rt.FINMIND_UNIVERSE_VOLUME_DATASET,
+                start_date=target_date,
+                timeout=rt.REQUEST_TIMEOUT_SEC,
+            )
+            raw_price_evidence = loader.get_data(
+                dataset=FINMIND_RAW_PRICE_ARCHIVE_DATASET,
                 start_date=target_date,
                 timeout=rt.REQUEST_TIMEOUT_SEC,
             )
@@ -176,6 +213,11 @@ def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple
         else:
             price_raw = client.get_data(
                 dataset=rt.FINMIND_UNIVERSE_VOLUME_DATASET,
+                start_date=target_date,
+                end_date=target_date,
+            )
+            raw_price_evidence = client.get_data(
+                dataset=FINMIND_RAW_PRICE_ARCHIVE_DATASET,
                 start_date=target_date,
                 end_date=target_date,
             )
@@ -191,6 +233,18 @@ def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple
             value_column="trading_volume",
             allow_zero=True,
         )
+        raw_traded_ids = _normalize_exact_date_ticker_evidence(
+            raw_price_evidence,
+            dataset=FINMIND_RAW_PRICE_ARCHIVE_DATASET,
+            market_date=target_date,
+        )
+        adjusted_ids = set(price["stock_id"].astype(str).tolist())
+        missing_adjusted = sorted(raw_traded_ids - adjusted_ids)
+        if missing_adjusted:
+            raise ValueError(
+                "FinMind TaiwanStockPriceAdj exact-date payload 缺少 TaiwanStockPrice 已確認 traded ticker；"
+                f"count={len(missing_adjusted)} sample={missing_adjusted[:20]}"
+            )
         market_value = _normalize_finmind_bulk_screening_frame(
             market_value_raw,
             dataset=rt.FINMIND_UNIVERSE_MARKET_VALUE_DATASET,
@@ -336,7 +390,7 @@ def get_or_update_universe(*, market_date: str, client=None):
     total_check = len(tickers_info)
     print(
         f"⏳ FinMind Backer bulk 快篩 {total_check} 檔純股與 ETF："
-        f"全市場成交量 + 全市場市值，共 2 個 dataset requests..."
+        f"PriceAdj 成交量 + raw ticker completeness evidence + 全市場市值，共 3 個 dataset requests..."
     )
     price, market_value = _load_finmind_bulk_screening_data(market_date=market_date_text, client=client)
     try:
