@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from config.downloader import DOWNLOADER_PRICE_HISTORY_START_DATE
 from core.exact_accounting import round_money_for_display
 from core.history_filters import evaluate_history_candidate_metrics
 from tools.validate.checks import (
@@ -269,7 +270,14 @@ def append_real_case_checks(
         add_check(results, "vip_downloader", ticker, "row_count", 2, len(downloader_df))
         add_check(results, "vip_downloader", ticker, "dataset", downloader_expected_dataset, None if downloader_request is None else downloader_request["dataset"])
         add_check(results, "vip_downloader", ticker, "data_id", ticker, None if downloader_request is None else downloader_request["data_id"])
-        add_check(results, "vip_downloader", ticker, "start_date", "1990-01-01", None if downloader_request is None else downloader_request["start_date"])
+        add_check(
+            results,
+            "vip_downloader",
+            ticker,
+            "start_date",
+            DOWNLOADER_PRICE_HISTORY_START_DATE,
+            None if downloader_request is None else downloader_request["start_date"],
+        )
         expected_download_index = ["2024-01-02", "2024-01-03"]
         actual_download_index = [str(idx).split(" ")[0] for idx in downloader_df.index.tolist()]
         add_check(results, "vip_downloader", ticker, "date_index_sorted", expected_download_index, actual_download_index)

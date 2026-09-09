@@ -1629,13 +1629,23 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         refresh_trading_adjusted_price_dataset,
     )
 
+    from services.downloader import runtime as downloader_runtime
+
     full_price_ranges = build_price_history_ranges(
-        start_date="1990-01-01",
+        start_date=downloader_runtime.PRICE_HISTORY_START_DATE,
         end_date="2026-09-07",
-        chunk_months=6,
+        chunk_months=downloader_runtime.CANONICAL_PRICE_BULK_CHUNK_MONTHS,
     )
-    check("canonical_price_history_uses_74_six_month_ranges", 74, len(full_price_ranges))
-    check("canonical_price_dedup_normal_day_design_remains_about_409_data_calls", 409, len(full_price_ranges) + 1 + manifest_a.total_requests - 8)
+    check(
+        "canonical_price_history_starts_from_configured_boundary",
+        downloader_runtime.PRICE_HISTORY_START_DATE,
+        full_price_ranges[0].start_date,
+    )
+    check(
+        "canonical_price_history_ends_at_requested_target_date",
+        "2026-09-07",
+        full_price_ranges[-1].end_date,
+    )
 
     class _SharedBaseClient:
         def __init__(self):

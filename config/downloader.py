@@ -12,10 +12,12 @@ DOWNLOADER_FINMIND_DOWNLOAD_SLEEP_SEC = 0.5
 
 # Canonical Trading adjusted-price refresh.  Current-vintage FinMind adjusted
 # history is refreshed in full-market calendar chunks instead of one full-history
-# request per ticker.  Six-month chunks keep provider response size bounded while
-# materially reducing request count; the planner falls back to per-ticker fetch
-# when fewer ticker requests are cheaper or bulk capability is unavailable.
-DOWNLOADER_PRICE_HISTORY_START_DATE = "1990-01-01"
+# request per ticker.  The default start aligns with FinMind's published
+# TaiwanStockPriceAdj history boundary; callers/tests must remain config-driven.
+# Six-month chunks keep provider response size bounded while materially reducing
+# request count; the planner falls back to per-ticker fetch when fewer ticker
+# requests are cheaper or bulk capability is unavailable.
+DOWNLOADER_PRICE_HISTORY_START_DATE = "1994-10-01"
 DOWNLOADER_CANONICAL_PRICE_BULK_CHUNK_MONTHS = 6
 
 DOWNLOADER_VERBOSE_UNIVERSE_FETCH_ERRORS = False
