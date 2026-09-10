@@ -2093,7 +2093,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     policy_members_by_policy: dict[str, list[dict]] = {}
     dashboard_session = None
     ensemble_started_at = time.perf_counter()
-    from services.optimizer.outer_rolling_oos import _ResourceUsageSampler, _resolve_resource_sample_interval_sec
+    from services.optimizer.outer_rolling_performance import _ResourceUsageSampler, _resolve_resource_sample_interval_sec
     resource_sampler = _ResourceUsageSampler(interval_sec=_resolve_resource_sample_interval_sec(environ))
     resource_sampler.start()
     parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))

@@ -49,6 +49,10 @@ from core.portfolio_fast_data import (
     summarize_single_stock_r_values,
 )
 from core.runtime_utils import resolve_strict_environment_flag as _env_flag
+from core.training_performance import (
+    resolve_optimizer_portfolio_prep_parallel_min_tickers_default,
+    resolve_optimizer_portfolio_prep_workers,
+)
 from services.optimizer.raw_cache import load_all_raw_data
 from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.walk_forward import resolve_first_walk_forward_test_boundary
@@ -520,17 +524,7 @@ def _save_portfolio_prepared_cache(cache_paths, context):
         _cleanup_portfolio_prepared_tmp_path(tmp_meta)
 
 def _resolve_portfolio_prep_workers(raw_data_count: int) -> int:
-    raw_override = str(os.environ.get("V16_PORTFOLIO_MAX_WORKERS", "")).strip()
-    if raw_override:
-        try:
-            return max(1, min(int(raw_override), max(1, int(raw_data_count))))
-        except ValueError as exc:
-            raise ValueError(f"V16_PORTFOLIO_MAX_WORKERS 必須是整數，收到: {raw_override}") from exc
-
-    # # (AI註: 小型/reduced 資料集用單執行緒，避免 process pool 啟動成本吃掉收益；完整台股才啟用並行)
-    if int(raw_data_count) < 30:
-        return 1
-    return max(1, min(os.cpu_count() or 1, 8, int(raw_data_count)))
+    return resolve_optimizer_portfolio_prep_workers(raw_data_count)
 
 
 def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True, raw_universe_required_min_rows=None):
@@ -765,7 +759,7 @@ def load_portfolio_market_context(
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
     csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
-    if len(csv_inputs) < 30:
+    if len(csv_inputs) < resolve_optimizer_portfolio_prep_parallel_min_tickers_default():
         return _load_portfolio_market_context_sequential(
             data_dir,
             params,

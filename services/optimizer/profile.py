@@ -5,6 +5,7 @@ import time
 from threading import RLock
 
 from core.display import C_CYAN, C_GRAY, C_RESET
+from core.training_performance import is_optimizer_profile_write_files_enabled
 
 PROFILE_FIELDS = [
     "trial_number", "objective_mode", "search_train_end_year", "search_train_date_count", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
@@ -39,7 +40,7 @@ class OptimizerProfileRecorder:
         self.enabled = bool(enabled)
         self.console_print = bool(console_print)
         self.print_every_n_trials = max(1, int(print_every_n_trials))
-        self.write_files = str(os.environ.get("OPTIMIZER_PROFILE_WRITE_FILES", "1")).strip().lower() not in {"0", "false", "no", "off"}
+        self.write_files = is_optimizer_profile_write_files_enabled()
         self.csv_path = os.path.join(output_dir, f"optimizer_profile_{session_ts}.csv")
         self.summary_path = os.path.join(output_dir, f"optimizer_profile_summary_{session_ts}.json")
         self.rows = []

@@ -6,7 +6,10 @@ from contextlib import nullcontext
 from services.optimizer.callbacks import run_optimizer_monitoring_callback
 from services.optimizer.dependency_stats import empty_local_min_dependency_stats as _empty_local_min_dependency_stats
 from services.optimizer.objective import run_optimizer_objective
-from core.training_performance import resolve_optimizer_rolling_parallel_prep_cache_max_items_default
+from core.training_performance import (
+    resolve_optimizer_full_evaluation_cache_max_items,
+    resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
+)
 from services.optimizer.trial_inputs import _build_process_pool_executor
 from core.raw_universe_contract import coerce_raw_universe_required_min_rows
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
@@ -203,12 +206,7 @@ class OptimizerSession:
         return max(0, min(256, value))
 
     def _resolve_full_evaluation_cache_max_items(self):
-        raw_value = os.environ.get("OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS", "512")
-        try:
-            value = int(raw_value)
-        except (TypeError, ValueError):
-            value = 512
-        return max(0, min(4096, value))
+        return resolve_optimizer_full_evaluation_cache_max_items()
 
     def attach_shared_prepared_trial_input_cache(self, cache, *, max_items=None):
         if cache is None:

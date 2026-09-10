@@ -2210,10 +2210,26 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "OPTIMIZER_ROLLING_FOLD_WORKERS",
             "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
             "OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS",
+            "OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS",
+            "OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS",
+            "OPTIMIZER_PORTFOLIO_PREP_WORKERS",
+            "OPTIMIZER_ACTIVE_REPLAY_PREP_WORKERS",
+            "OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC",
+            "OPTIMIZER_LOCAL_MIN_PROGRESS_MIN_INTERVAL_SEC",
+            "OPTIMIZER_PROFILE_WRITE_FILES",
+            "OPTIMIZER_RESOURCE_DISK_MBPS_CAP",
         },
         "core.training_performance": {
             "build_training_performance_policy_snapshot",
+            "build_optimizer_outer_rolling_env_defaults",
             "resolve_optimizer_rolling_fold_workers_default",
+            "resolve_optimizer_rolling_shared_prep_cache_max_items",
+            "resolve_optimizer_full_evaluation_cache_max_items",
+            "resolve_optimizer_portfolio_prep_workers",
+            "resolve_optimizer_active_replay_prep_workers",
+            "resolve_optimizer_raw_cache_lock_stale_sec",
+            "resolve_optimizer_local_min_progress_min_interval_sec",
+            "resolve_optimizer_resource_disk_mbps_cap",
         },
         "config.display_policy": {
             "SYSTEM_SCORE_DISPLAY_MULTIPLIER",
@@ -2361,6 +2377,100 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "refactored_config_modules_are_declarative",
         [],
         declarative_config_violations,
+    )
+
+    performance_config = importlib.import_module("config.training_performance_policy")
+    performance_runtime = importlib.import_module("core.training_performance")
+    clean_env = {
+        "OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS": "",
+        "OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS": "",
+        "OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC": "",
+        "OPTIMIZER_LOCAL_MIN_PROGRESS_MIN_INTERVAL_SEC": "",
+        "OPTIMIZER_PROFILE_WRITE_FILES": "",
+        "OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC": "",
+        "OPTIMIZER_RESOURCE_DISK_MBPS_CAP": "",
+    }
+    defaults_resolve_from_config = all((
+        performance_runtime.resolve_optimizer_rolling_shared_prep_cache_max_items(clean_env)
+        == max(0, min(4096, int(performance_config.OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS))),
+        performance_runtime.resolve_optimizer_full_evaluation_cache_max_items(clean_env)
+        == max(0, min(4096, int(performance_config.OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS))),
+        performance_runtime.resolve_optimizer_raw_cache_lock_stale_sec(clean_env)
+        == max(60.0, float(performance_config.OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC)),
+        performance_runtime.resolve_optimizer_local_min_progress_min_interval_sec(clean_env)
+        == max(0.0, min(10.0, float(performance_config.OPTIMIZER_LOCAL_MIN_PROGRESS_MIN_INTERVAL_SEC))),
+        performance_runtime.is_optimizer_profile_write_files_enabled(clean_env)
+        is bool(performance_config.OPTIMIZER_PROFILE_WRITE_FILES),
+        performance_runtime.resolve_optimizer_resource_sample_interval_sec(clean_env)
+        == max(0.5, min(60.0, float(performance_config.OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC))),
+        performance_runtime.resolve_optimizer_resource_disk_mbps_cap(clean_env)
+        == max(1.0, min(10000.0, float(performance_config.OPTIMIZER_RESOURCE_DISK_MBPS_CAP))),
+    ))
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "optimizer_performance_defaults_resolve_from_config_owner",
+        True,
+        defaults_resolve_from_config,
+    )
+
+    explicit_worker_overrides_respected = all((
+        performance_runtime.resolve_optimizer_portfolio_prep_workers(10, {"V16_PORTFOLIO_MAX_WORKERS": "3"}) == 3,
+        performance_runtime.resolve_optimizer_active_replay_prep_workers(10, {"OPTIMIZER_ACTIVE_REPLAY_PREP_WORKERS": "3"}) == 3,
+        performance_runtime.resolve_optimizer_single_fold_local_min_parallel_workers(
+            {"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS": "2"}
+        ) == min(2, int(performance_config.OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_MAX_WORKERS)),
+    ))
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "optimizer_performance_explicit_overrides_use_core_resolvers",
+        True,
+        explicit_worker_overrides_respected,
+    )
+
+    outer_defaults = performance_runtime.build_optimizer_outer_rolling_env_defaults(3)
+    expected_outer_default_keys = {
+        "OPTIMIZER_PROFILE_WRITE_FILES",
+        "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE",
+        "OPTIMIZER_RESOURCE_WRITE_CSV",
+        "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS",
+        "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX",
+        "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE",
+        "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE",
+        "OPTIMIZER_ROLLING_FOLD_WORKERS",
+        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS",
+        "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
+        "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS",
+        "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS",
+        "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
+        "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
+    }
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_execution_defaults_are_built_by_core_policy",
+        (expected_outer_default_keys, str(performance_runtime.resolve_optimizer_rolling_fold_workers_default(3))),
+        (set(outer_defaults), outer_defaults.get("OPTIMIZER_ROLLING_FOLD_WORKERS")),
+    )
+
+    raw_cache_invalid_override_fails_closed = False
+    try:
+        performance_runtime.resolve_optimizer_raw_cache_lock_stale_sec(
+            {"OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC": "not-a-number"}
+        )
+    except ValueError:
+        raw_cache_invalid_override_fails_closed = True
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "optimizer_raw_cache_invalid_override_remains_fail_closed",
+        True,
+        raw_cache_invalid_override_fails_closed,
     )
 
     summary["expected_target_count"] = len(expected_targets)

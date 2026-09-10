@@ -13,7 +13,9 @@ from core.training_performance import (
     is_optimizer_local_min_dependency_stats_enabled,
     resolve_optimizer_local_min_portfolio_dependency_order,
     resolve_optimizer_local_min_signal_dependency_field_order,
+    resolve_optimizer_local_min_progress_min_interval_sec,
     resolve_optimizer_single_fold_local_min_parallel_workers_default,
+    resolve_optimizer_single_fold_local_min_parallel_workers,
 )
 from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
@@ -77,12 +79,7 @@ def _build_session_trial_payload(session, trial):
 
 
 def _resolve_local_min_progress_min_interval_sec():
-    raw_value = os.environ.get("OPTIMIZER_LOCAL_MIN_PROGRESS_MIN_INTERVAL_SEC", "1.0")
-    try:
-        value = float(raw_value)
-    except (TypeError, ValueError):
-        value = 1.0
-    return max(0.0, min(10.0, float(value)))
+    return resolve_optimizer_local_min_progress_min_interval_sec()
 
 
 def _get_local_min_score_cache(session):
@@ -442,14 +439,9 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
 
 
 def _resolve_local_min_parallel_workers(session) -> int:
-    default_workers = resolve_optimizer_single_fold_local_min_parallel_workers_default()
-    raw_value = os.environ.get("OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", str(default_workers))
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        value = int(default_workers)
+    _ = session
     # AI註: local-min 平行化採小型 ordered prefetch window，避免重演 batch 過度超前計算。
-    return max(1, min(4, int(value)))
+    return resolve_optimizer_single_fold_local_min_parallel_workers()
 
 
 def _get_local_min_thread_lock(session):

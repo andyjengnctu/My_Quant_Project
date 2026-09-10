@@ -18,10 +18,10 @@ from core.dataset_profiles import (
     infer_dataset_profile_key_from_data_dir,
 )
 from core.runtime_utils import resolve_strict_environment_flag as _env_flag
+from core.training_performance import resolve_optimizer_raw_cache_lock_stale_sec
 
 RAW_CACHE_SCHEMA_VERSION = 2
 RAW_CACHE_LOCK_POLL_SEC = 0.25
-RAW_CACHE_LOCK_STALE_SEC = 6 * 60 * 60
 RAW_CACHE_REPLACE_RETRY_COUNT = 20
 RAW_CACHE_REPLACE_RETRY_SEC = 0.10
 
@@ -135,13 +135,7 @@ def _build_unique_tmp_path(target_path):
 
 
 def _raw_cache_lock_stale_seconds():
-    value = str(os.environ.get("OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC", "")).strip()
-    if not value:
-        return float(RAW_CACHE_LOCK_STALE_SEC)
-    try:
-        return max(60.0, float(value))
-    except ValueError as exc:
-        raise ValueError(f"OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC 必須是數字秒數，收到: {value}") from exc
+    return resolve_optimizer_raw_cache_lock_stale_sec()
 
 
 class _RawCacheBuildLock:
