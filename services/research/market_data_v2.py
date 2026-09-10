@@ -825,7 +825,7 @@ def _build_exact_candidate_sqlite(
                 "provider_manifest_fingerprint": view.archive.manifest_fingerprint,
                 "provider_as_of_date": provider_as_of,
                 "research_required_cutoff": cutoff,
-                "historical_instrument_count": len(historical_pool),
+                "historical_instrument_count": len(historical_instruments),
                 "historical_market_state_guard_dataset": RESEARCH_V2_MARKET_STATE_GUARD_DATASET,
                 "historical_market_state_guard_fingerprint": market_state_guard_fingerprint,
                 "historical_market_state_transition_count": len(transition_excluded_through),
