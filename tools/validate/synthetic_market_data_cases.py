@@ -1602,6 +1602,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("trading_manifest_is_deterministic", manifest_a.manifest_fingerprint, manifest_b.manifest_fingerprint)
     check("trading_manifest_covers_every_included_dataset", {spec.dataset for spec in specs}, {request.dataset for request in manifest_a.requests})
     check("trading_manifest_never_expands_to_historical_stock_universe", True, all(request.data_id is None or request.data_id in next(spec for spec in specs if spec.dataset == request.dataset).fixed_data_ids for request in manifest_a.requests))
+    price_adj_requests = [request for request in manifest_a.requests if request.dataset == "TaiwanStockPriceAdj"]
+    check("trading_priceadj_daily_sync_uses_full_market_exact_date_requests", True, bool(price_adj_requests) and all(request.data_id is None and request.start_date == request.end_date for request in price_adj_requests))
     check("trading_policy_is_non_blocking_for_current_execution", False, policy.execution_fail_closed)
     selective_manifest = build_trading_sync_request_manifest(
         specs=specs,
@@ -2270,8 +2272,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             def __getattr__(self, name):
                 raise AssertionError(f"discovery 尚未 due 時不得呼叫 provider: {name}")
         with patch(
-            "services.trading.market_data_auto_update.load_trading_market_data_snapshot",
-            return_value={"market_date": "2026-09-07"},
+            "services.trading.market_data_auto_update.find_latest_ready_provider_snapshot",
+            return_value=(Path("provider_snapshot_manifest.json"), {"as_of_date": "2026-09-07"}),
         ):
             scheduler_local = run_trading_market_data_auto_update(
                 project_root=scheduler_root,
@@ -2312,7 +2314,6 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 self.data_request_count = 0
                 self.usage_request_count = 0
         discovery_base = _DiscoveryBaseClient()
-        canonical_calls = []
         def _fake_probe(*, client, now):
             client.base_client.data_request_count += 1
             from services.downloader.trading_price_refresh import PriceRange, TradingPriceProbe
@@ -2322,21 +2323,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 current_range=PriceRange("2026-07-01", "2026-09-08"),
                 current_frame=pd.DataFrame(),
             )
-        def _fake_canonical(**kwargs):
-            canonical_calls.append(dict(kwargs))
-            return {"market_date": "2026-09-08"}
         with (
             patch(
-                "services.trading.market_data_auto_update.load_trading_market_data_snapshot",
-                return_value={"market_date": "2026-09-07"},
+                "services.trading.market_data_auto_update.find_latest_ready_provider_snapshot",
+                return_value=(Path("provider_snapshot_manifest.json"), {"as_of_date": "2026-09-07"}),
             ),
             patch(
                 "services.trading.market_data_auto_update.probe_latest_adjusted_price_market_date",
                 side_effect=_fake_probe,
-            ),
-            patch(
-                "services.trading.market_data_update.run_trading_market_data_update",
-                side_effect=_fake_canonical,
             ),
         ):
             discovery_new_day = run_trading_market_data_auto_update(
@@ -2346,9 +2340,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             )
         check("default_auto_worker_discovers_new_completed_trading_day", "2026-09-08", discovery_new_day["target_date"])
         check("default_auto_worker_new_day_probe_costs_one_data_request_in_isolation", 1, discovery_new_day["data_requests"])
-        check("default_auto_worker_new_day_runs_execution_update", True, discovery_new_day["execution_data_updated"])
-        check("market_date_discovery_reuses_shared_client_for_canonical_execution_update", True, len(canonical_calls) == 1 and canonical_calls[0].get("provider_client") is not None)
-        check("market_date_discovery_defers_full_v2_to_publication_due_planner", False, canonical_calls[0].get("sync_v2_archive"))
+        check("default_auto_worker_new_day_advances_only_v2_target", True, discovery_new_day["v2_target_advanced"])
+        discovery_state = load_market_date_discovery_state(discovery_root, required=True)
+        check("market_date_discovery_persists_new_v2_target_without_legacy_refresh", "2026-09-08", discovery_state["current_market_date"])
 
     with TemporaryDirectory() as auto_quota_dir:
         auto_root = Path(auto_quota_dir)
@@ -2614,6 +2608,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     readiness_source = (project_root / "services" / "trading" / "data_readiness.py").read_text(encoding="utf-8")
     operations_source = (project_root / "services" / "trading" / "operations_status.py").read_text(encoding="utf-8")
     data_ops_source = (project_root / "services" / "trading" / "market_data_ops.py").read_text(encoding="utf-8")
+    auto_update_source = (project_root / "services" / "trading" / "market_data_auto_update.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
     from services.trading import daily_workflow as daily_workflow_module
@@ -2629,18 +2624,23 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
     check("canonical_price_refresh_never_calculates_adjustment_locally", True, "TaiwanStockPriceAdj" in price_refresh_source and "adjusted-price calculator" in price_refresh_source and "full_market_range_current_vintage" in price_refresh_source)
     check("daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
-    check("smart_downloader_reuses_canonical_market_data_update_owner", True, "from services.trading.market_data_update import run_trading_market_data_update" in downloader_source and "run_trading_market_data_update(project_root=PROJECT_ROOT)" in downloader_source)
+    check("smart_downloader_uses_v2_daily_updater_as_option1_owner", True, "from services.trading.market_data_auto_update import run_trading_market_data_auto_update" in downloader_source and "force_market_date_discovery=True" in downloader_source)
+    check("smart_downloader_option1_does_not_call_legacy_provider_update", False, "return _run_trading_dataset_update()" in downloader_source)
     import importlib
     from unittest.mock import patch
     downloader_main = importlib.import_module("services.downloader.main")
     smart_calls = []
     with patch(
-        "services.trading.market_data_update.run_trading_market_data_update",
-        side_effect=lambda **kwargs: smart_calls.append(dict(kwargs)) or {"status": "READY"},
+        "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
+        side_effect=lambda **kwargs: smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
     ):
-        smart_exit = downloader_main._run_trading_dataset_update()
-    check("smart_downloader_runtime_calls_canonical_market_data_update_owner", 0, smart_exit)
-    check("smart_downloader_runtime_passes_project_root_to_canonical_owner", [str(downloader_main.PROJECT_ROOT)], [str(item.get("project_root")) for item in smart_calls])
+        smart_exit = downloader_main._run_market_data_v2_daily_update()
+    check("smart_downloader_runtime_calls_canonical_v2_daily_update_owner", 0, smart_exit)
+    check("smart_downloader_runtime_passes_project_root_to_v2_owner", [str(downloader_main.PROJECT_ROOT)], [str(item.get("project_root")) for item in smart_calls])
+    check("smart_downloader_manual_v2_update_forces_one_market_date_discovery", [True], [bool(item.get("force_market_date_discovery")) for item in smart_calls])
+    check("v2_auto_updater_does_not_import_legacy_trading_update_owner", False, "services.trading.market_data_update" in auto_update_source)
+    check("v2_auto_updater_does_not_read_legacy_trading_snapshot_for_target", False, "load_trading_market_data_snapshot" in auto_update_source)
+    check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "find_latest_ready_provider_snapshot" in auto_update_source and "load_trading_market_data_v2_state" in auto_update_source and "load_market_date_discovery_state" in auto_update_source)
     check("sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in update_source and "last_attempt_target_date" in state_source)
     check("workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
     check("scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)

@@ -90,6 +90,13 @@ MARKET_DATA_V2_LIFECYCLE = {
     "current_execution_pool_may_define_historical_training_universe": False,
     "research_view_role": "frozen_scientific_view",
     "trading_view_role": "latest_operational_view",
+    # Daily provider refresh is owned by the V2 due-dataset updater.  It must
+    # derive its target from V2 Provider Snapshot / overlay operational state
+    # and must not advance or refresh legacy provider truth as a side effect.
+    "daily_update_role": "v2_due_dataset_overlay_sync",
+    "daily_update_target_source": "v2_provider_snapshot_plus_operational_state",
+    "daily_update_may_refresh_legacy_provider_truth": False,
+    "full_market_exact_date_bulk_preferred": True,
     "shared_provider_archive_required": True,
     "independent_domain_provider_redownload_allowed": False,
     "legacy_target_role": "v2_materialized_compatibility_only",

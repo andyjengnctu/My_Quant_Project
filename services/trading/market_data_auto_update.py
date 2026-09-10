@@ -31,13 +31,17 @@ from services.trading.market_data_dataset_state import (
     refresh_market_data_due_state,
     schedule_market_data_auto_update_outcomes,
 )
-from services.trading.market_data_state import load_trading_market_data_snapshot
-from services.trading.market_data_v2_state import publish_trading_market_data_v2_auto_rollup
+from services.trading.market_data_v2_state import (
+    find_latest_ready_provider_snapshot,
+    load_trading_market_data_v2_state,
+    publish_trading_market_data_v2_auto_rollup,
+)
 from services.trading.market_data_market_date_discovery import (
     DISCOVERY_RESULT_ERROR,
     DISCOVERY_RESULT_NEW_DATE,
     DISCOVERY_RESULT_NO_NEW_DATE,
     DISCOVERY_RESULT_WAIT_QUOTA,
+    load_market_date_discovery_state,
     plan_market_date_discovery,
     record_market_date_probe_result,
 )
@@ -49,7 +53,7 @@ AUTO_UPDATE_STATUS_BUSY = "BUSY"
 AUTO_UPDATE_STATUS_UPDATED = "UPDATED"
 AUTO_UPDATE_STATUS_DEFERRED = "DEFERRED"
 AUTO_UPDATE_STATUS_BLOCKED = "BLOCKED"
-AUTO_UPDATE_STATUS_EXECUTION_UPDATED = "EXECUTION_UPDATED"
+AUTO_UPDATE_STATUS_TARGET_ADVANCED = "TARGET_ADVANCED"
 
 
 def _local_now(now_fn: Callable[[], datetime] | None) -> datetime:
@@ -62,10 +66,22 @@ def _local_now(now_fn: Callable[[], datetime] | None) -> datetime:
 def _resolve_target_date(project_root: Path, explicit: str | None) -> str | None:
     if explicit:
         return str(explicit)
-    snapshot = load_trading_market_data_snapshot(project_root, required=False, verify_dataset_content=False)
-    if snapshot is None:
+    provider = find_latest_ready_provider_snapshot(project_root)
+    if provider is None:
         return None
-    return str(snapshot.get("market_date") or "") or None
+    _provider_path, provider_payload = provider
+    candidates = [str(provider_payload.get("as_of_date") or "").strip()]
+    archive_state = load_trading_market_data_v2_state(project_root, required=False)
+    if archive_state is not None:
+        candidates.extend(
+            str(archive_state.get(key) or "").strip()
+            for key in ("latest_sync_target_date", "last_attempt_target_date")
+        )
+    discovery_state = load_market_date_discovery_state(project_root, required=False)
+    if discovery_state is not None:
+        candidates.append(str(discovery_state.get("current_market_date") or "").strip())
+    resolved = [value for value in candidates if value]
+    return max(resolved) if resolved else None
 
 
 def _next_check_at(plan) -> str | None:
@@ -100,6 +116,7 @@ def _discover_new_market_date_if_due(
     policy,
     token: str | None,
     client,
+    force: bool = False,
 ):
     discovery = plan_market_date_discovery(
         root,
@@ -107,7 +124,7 @@ def _discover_new_market_date_if_due(
         now=now,
         policy=policy,
     )
-    if not discovery["due"]:
+    if not discovery["due"] and not force:
         return current_target, token, client, False, discovery["next_probe_at"], None
 
     token, client = _prepare_provider_client(root=root, token=token, client=client)
@@ -149,28 +166,15 @@ def _discover_new_market_date_if_due(
         )
         return current_target, token, client, False, state["next_probe_at"], None
 
-    from services.trading.market_data_update import run_trading_market_data_update
-
-    execution = run_trading_market_data_update(
-        project_root=root,
-        provider_client=client,
-        sync_v2_archive=False,
-    )
-    updated_target = str(execution.get("market_date") or "")
-    if updated_target != observed:
-        raise RuntimeError(
-            "market-date discovery 與 canonical execution update target 不一致: "
-            f"probe={observed}, update={updated_target}"
-        )
     state = record_market_date_probe_result(
         root,
-        current_market_date=updated_target,
+        current_market_date=observed,
         observed_market_date=observed,
         now=now,
         policy=policy,
         result=DISCOVERY_RESULT_NEW_DATE,
     )
-    return updated_target, token, client, True, state["next_probe_at"], None
+    return observed, token, client, True, state["next_probe_at"], None
 
 
 @contextmanager
@@ -227,6 +231,7 @@ def run_trading_market_data_auto_update(
     sink=None,
     now_fn: Callable[[], datetime] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
+    force_market_date_discovery: bool = False,
 ) -> dict[str, object]:
     """Run exactly one scheduler-safe auto-update iteration."""
 
@@ -245,7 +250,7 @@ def run_trading_market_data_auto_update(
             return {"status": AUTO_UPDATE_STATUS_BUSY, "target_date": resolved_target, "provider_requests_required": False, "data_requests": 0, "usage_requests": 0}
 
         discovery_next_check = None
-        execution_updated = False
+        target_advanced = False
         discovery_error = None
         data_before, usage_before = _client_counts(client)
         if target_date is None:
@@ -253,7 +258,7 @@ def run_trading_market_data_auto_update(
                 resolved_target,
                 token,
                 client,
-                execution_updated,
+                target_advanced,
                 discovery_next_check,
                 discovery_error,
             ) = _discover_new_market_date_if_due(
@@ -263,6 +268,7 @@ def run_trading_market_data_auto_update(
                 policy=policy,
                 token=token,
                 client=client,
+                force=force_market_date_discovery,
             )
             if discovery_error is not None:
                 data_after, usage_after = _client_counts(client)
@@ -287,7 +293,7 @@ def run_trading_market_data_auto_update(
             candidates = [value for value in (local_next, discovery_next_check) if value]
             next_check = min(candidates) if candidates else None
             return {
-                "status": AUTO_UPDATE_STATUS_EXECUTION_UPDATED if execution_updated else AUTO_UPDATE_STATUS_NO_DUE,
+                "status": AUTO_UPDATE_STATUS_TARGET_ADVANCED if target_advanced else AUTO_UPDATE_STATUS_NO_DUE,
                 "target_date": resolved_target,
                 "provider_requests_required": bool(data_after > data_before or usage_after > usage_before),
                 "due_dataset_count": 0,
@@ -295,8 +301,14 @@ def run_trading_market_data_auto_update(
                 "data_requests": data_after - data_before,
                 "usage_requests": usage_after - usage_before,
                 "market_date_discovery_next_check_at": discovery_next_check,
-                "execution_data_updated": execution_updated,
+                "v2_target_advanced": target_advanced,
                 "next_check_at": next_check,
+                "request_count": 0,
+                "full_market_exact_date_request_count": 0,
+                "range_request_count": 0,
+                "undated_request_count": 0,
+                "request_date_start": None,
+                "request_date_end": None,
             }
 
         if client is None:
@@ -431,13 +443,19 @@ def run_trading_market_data_auto_update(
             "batch_data_requests": _client_counts(client)[0] - batch_data_before,
             "batch_usage_requests": _client_counts(client)[1] - batch_usage_before,
             "market_date_discovery_next_check_at": discovery_next_check,
-            "execution_data_updated": execution_updated,
+            "v2_target_advanced": target_advanced,
             "next_check_at": min(
                 [value for value in (_next_check_at(post_plan), discovery_next_check) if value],
                 default=None,
             ),
             "archive_status": None if rollup is None else rollup.get("status"),
             "batch_fingerprint": batch.get("batch_fingerprint"),
+            "request_date_start": batch.get("request_date_start"),
+            "request_date_end": batch.get("request_date_end"),
+            "unique_exact_date_count": int(batch.get("unique_exact_date_count") or 0),
+            "full_market_exact_date_request_count": int(batch.get("full_market_exact_date_request_count") or 0),
+            "range_request_count": int(batch.get("range_request_count") or 0),
+            "undated_request_count": int(batch.get("undated_request_count") or 0),
         }
 
 
@@ -449,6 +467,6 @@ __all__ = [
     "AUTO_UPDATE_STATUS_UPDATED",
     "AUTO_UPDATE_STATUS_DEFERRED",
     "AUTO_UPDATE_STATUS_BLOCKED",
-    "AUTO_UPDATE_STATUS_EXECUTION_UPDATED",
+    "AUTO_UPDATE_STATUS_TARGET_ADVANCED",
     "run_trading_market_data_auto_update",
 ]

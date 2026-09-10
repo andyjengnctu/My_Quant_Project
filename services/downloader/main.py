@@ -128,6 +128,55 @@ def _run_trading_dataset_update() -> int:
         return 1
 
 
+def _run_market_data_v2_daily_update() -> int:
+    try:
+        from services.trading.market_data_auto_update import run_trading_market_data_auto_update
+    except (ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        result = run_trading_market_data_auto_update(
+            project_root=PROJECT_ROOT,
+            force_market_date_discovery=True,
+        )
+    except (RuntimeError, FileNotFoundError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    status = str(result.get("status") or "UNKNOWN")
+    print("=" * 88)
+    print(" Market Data V2｜Daily Update")
+    print("=" * 88)
+    print(f"狀態                    : {status}")
+    print(f"V2 target date          : {result.get('target_date') or '-'}")
+    print(f"新 completed day        : {'YES' if result.get('v2_target_advanced') else 'NO'}")
+    print(f"Due datasets            : {result.get('due_dataset_count', 0)}")
+    print(f"Logical requests        : {result.get('request_count', 0)}")
+    print(f"Provider data requests  : {result.get('data_requests', 0)}")
+    print(f"Provider usage requests : {result.get('usage_requests', 0)}")
+    if result.get("request_date_start") or result.get("request_date_end"):
+        print(
+            "Request date window      : "
+            f"{result.get('request_date_start') or '-'} ~ {result.get('request_date_end') or '-'}"
+        )
+    print(f"Full-market exact-date  : {result.get('full_market_exact_date_request_count', 0)} requests")
+    print(f"Range requests          : {result.get('range_request_count', 0)}")
+    print(f"Undated/static requests : {result.get('undated_request_count', 0)}")
+    ready = result.get("ready_dataset_count")
+    total = result.get("dataset_count")
+    if ready is not None or total is not None:
+        print(f"Dataset READY           : {ready or 0} / {total or 0}")
+    if result.get("next_check_at"):
+        print(f"Next check              : {result.get('next_check_at')}")
+    if result.get("error"):
+        print(f"錯誤                    : {result.get('error')}")
+    if status == "NO_TARGET":
+        print("說明                    : 尚無 READY Provider Snapshot；請先完成 [2] → [3] → [4]。")
+        return 1
+    return 1 if status == "BLOCKED" else 0
+
+
 def _run_market_data_v2_preflight() -> int:
     try:
         from services.downloader.market_data_preflight import run_market_data_v2_preflight
@@ -458,7 +507,7 @@ def _interactive_menu() -> int:
     print("=" * 72)
     print(" Smart Downloader")
     print("=" * 72)
-    print("[1] Trading 資料更新（Canonical：CSV + Snapshot + V2）")
+    print("[1] Market Data V2｜Daily Update（Canonical：dataset × date bulk）")
     print("[2] Market Data V2｜Backer Preflight + Exact Bootstrap Plan")
     print("[3] Market Data V2｜開始 / 續傳完整 Bootstrap")
     print("[4] Market Data V2｜驗證 / 重建 Provider Snapshot（不使用 API quota）")
@@ -470,7 +519,7 @@ def _interactive_menu() -> int:
             print()
             return 0
         if choice == "1":
-            return _run_trading_dataset_update()
+            return _run_market_data_v2_daily_update()
         if choice == "2":
             return _run_market_data_v2_preflight()
         if choice == "3":
@@ -489,13 +538,13 @@ def main(argv=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "services/downloader/main.py")
         print(f"用法: python {program_name}")
-        print("說明: 互動式入口提供現行 Trading 更新、Market Data V2 Backer Preflight / Exact Planner、完整 Bootstrap 開始/續傳，以及不使用 API quota 的 Provider Snapshot 完整性驗證。")
-        print("非互動環境維持既有行為：直接執行 Trading 資料更新。")
+        print("說明: [1] 為 Market Data V2 canonical Daily Update；[2]-[4] 提供 Backer Preflight、完整 Bootstrap 與 Provider Snapshot 本機驗證。")
+        print("非互動環境直接執行 Market Data V2 Daily Update；不再由 Smart Downloader 先更新 Legacy Trading CSV。")
         return 0
 
     if len(argv) == 1 and is_interactive_console():
         return _interactive_menu()
-    return _run_trading_dataset_update()
+    return _run_market_data_v2_daily_update()
 
 
 if __name__ == "__main__":

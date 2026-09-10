@@ -45,6 +45,8 @@ MARKET_DATA_V2_TRADING_EXECUTION_POOL_ROLE = "date_local_new_entry_eligibility"
 MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE = "market_data_v2_provider_snapshot"
 MARKET_DATA_V2_RESEARCH_VIEW_ROLE = "frozen_scientific_view"
 MARKET_DATA_V2_TRADING_VIEW_ROLE = "latest_operational_view"
+MARKET_DATA_V2_DAILY_UPDATE_ROLE = "v2_due_dataset_overlay_sync"
+MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE = "v2_provider_snapshot_plus_operational_state"
 MARKET_DATA_V2_LEGACY_TARGET_ROLE = "v2_materialized_compatibility_only"
 MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION = "legacy_execution_transition"
 MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER = "v2_execution_cutover"
@@ -102,6 +104,10 @@ class MarketDataV2LifecycleContract:
     current_execution_pool_may_define_historical_training_universe: bool
     research_view_role: str
     trading_view_role: str
+    daily_update_role: str
+    daily_update_target_source: str
+    daily_update_may_refresh_legacy_provider_truth: bool
+    full_market_exact_date_bulk_preferred: bool
     shared_provider_archive_required: bool
     independent_domain_provider_redownload_allowed: bool
     legacy_target_role: str
@@ -236,6 +242,12 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     trading_view_role = _require_nonempty_text(
         raw.get("trading_view_role"), field="market_data_v2.trading_view_role"
     )
+    daily_update_role = _require_nonempty_text(
+        raw.get("daily_update_role"), field="market_data_v2.daily_update_role"
+    )
+    daily_update_target_source = _require_nonempty_text(
+        raw.get("daily_update_target_source"), field="market_data_v2.daily_update_target_source"
+    )
     legacy_target_role = _require_nonempty_text(
         raw.get("legacy_target_role"), field="market_data_v2.legacy_target_role"
     )
@@ -256,6 +268,10 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     current_execution_pool_may_define_historical_training_universe = bool(
         raw.get("current_execution_pool_may_define_historical_training_universe")
     )
+    daily_update_may_refresh_legacy_provider_truth = bool(
+        raw.get("daily_update_may_refresh_legacy_provider_truth")
+    )
+    full_market_exact_date_bulk_preferred = bool(raw.get("full_market_exact_date_bulk_preferred"))
     independent_domain_provider_redownload_allowed = bool(
         raw.get("independent_domain_provider_redownload_allowed")
     )
@@ -294,6 +310,16 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
         raise ValueError(f"Market Data V2 Research view role 必須為 {MARKET_DATA_V2_RESEARCH_VIEW_ROLE}")
     if trading_view_role != MARKET_DATA_V2_TRADING_VIEW_ROLE:
         raise ValueError(f"Market Data V2 Trading view role 必須為 {MARKET_DATA_V2_TRADING_VIEW_ROLE}")
+    if daily_update_role != MARKET_DATA_V2_DAILY_UPDATE_ROLE:
+        raise ValueError(f"Market Data V2 daily update role 必須為 {MARKET_DATA_V2_DAILY_UPDATE_ROLE}")
+    if daily_update_target_source != MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE:
+        raise ValueError(
+            f"Market Data V2 daily update target source 必須為 {MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE}"
+        )
+    if daily_update_may_refresh_legacy_provider_truth:
+        raise ValueError("Market Data V2 daily updater 不得以 side effect 更新 legacy provider truth")
+    if not full_market_exact_date_bulk_preferred:
+        raise ValueError("Market Data V2 對已宣告 Backer exact-date capability 的日更必須優先使用 full-market bulk")
     if not shared_provider_archive_required:
         raise ValueError("Market Data V2 必須由 Research / Trading 共用 neutral Provider Archive")
     if independent_domain_provider_redownload_allowed:
@@ -324,6 +350,10 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
         current_execution_pool_may_define_historical_training_universe=current_execution_pool_may_define_historical_training_universe,
         research_view_role=research_view_role,
         trading_view_role=trading_view_role,
+        daily_update_role=daily_update_role,
+        daily_update_target_source=daily_update_target_source,
+        daily_update_may_refresh_legacy_provider_truth=daily_update_may_refresh_legacy_provider_truth,
+        full_market_exact_date_bulk_preferred=full_market_exact_date_bulk_preferred,
         shared_provider_archive_required=shared_provider_archive_required,
         independent_domain_provider_redownload_allowed=independent_domain_provider_redownload_allowed,
         legacy_target_role=legacy_target_role,
@@ -405,6 +435,8 @@ __all__ = [
     "MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE",
     "MARKET_DATA_V2_RESEARCH_VIEW_ROLE",
     "MARKET_DATA_V2_TRADING_VIEW_ROLE",
+    "MARKET_DATA_V2_DAILY_UPDATE_ROLE",
+    "MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE",
     "MARKET_DATA_V2_LEGACY_TARGET_ROLE",
     "MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION",
     "MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER",

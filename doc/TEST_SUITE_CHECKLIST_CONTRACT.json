@@ -4441,6 +4441,17 @@
       "entry": "`core/market_data_trading_view.py`, `services/trading/market_data_v2_view.py`, `services/market_data/provider_snapshot_repository.py`, `services/market_data/daily_pit_universe.py`, `core/market_data_trading_storage_contract.py`",
       "initial_status": "NEW",
       "order": 400
+    },
+    {
+      "id": "B413",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 canonical daily updater / Legacy provider decoupling",
+      "item": "Smart Downloader and automatic due sync must update Market Data V2 directly from the neutral Provider Snapshot plus V2 operational/discovery state, use capability-declared dataset/date bulk request geometry, and must not refresh or read Legacy Trading provider truth to derive the V2 daily target.",
+      "gap": "After the shared V2 archive, neutral PIT universe, pool layering, and Trading historical/latest read view were established, Smart Downloader [1] and market-date discovery still routed through the Legacy Trading updater or Legacy Trading snapshot. That kept duplicate provider-history production alive and made daily request behavior difficult to audit. Repair must make V2 due-dataset overlay sync the canonical daily updater, advance target only from V2/provider evidence, keep no-due wakes zero-provider-call, use full-market exact-date requests whenever the dataset capability declares them, expose request-date geometry, and preserve the still-needed Legacy Workbench Full path only as an explicit later-migration compatibility exception.",
+      "entry": "`services/trading/market_data_auto_update.py`, `services/downloader/main.py`, `core/market_data_trading_sync.py`, `services/downloader/market_data_trading_sync.py`, `core/market_data_contract.py`",
+      "initial_status": "NEW",
+      "order": 401
     }
   ],
   "tests": [
@@ -8161,6 +8172,13 @@
       "description": "`validate_market_data_v2_trading_historical_latest_view_contract_case` 驗證 required-dataset common READY horizon、Provider Snapshot minimum baseline、verified overlay primary-key precedence、neutral historical PIT source，以及 current execution pool 不得成為歷史 training membership。",
       "initial_status": "NEW",
       "order": 522
+    },
+    {
+      "id": "T533",
+      "b_id": "B413",
+      "description": "`validate_market_data_v2_trading_workbench_sidecar_contract_case` 擴充驗證 Smart Downloader [1] 只委派 V2 daily updater、manual update 強制一次 market-date discovery、V2 target 不讀 Legacy Trading snapshot、新 completed day 不呼叫 Legacy update、full-market capable daily request 使用 exact-date geometry，並維持 no-due zero-provider-call / sidecar resume 等既有契約。",
+      "initial_status": "NEW",
+      "order": 523
     }
   ],
   "transitions": [
@@ -26195,6 +26213,22 @@
       "to_status": "DONE",
       "description": "新增 Trading V2 historical/latest view regression 並納入正式 DONE 測試摘要。",
       "note": "`validate_market_data_v2_trading_historical_latest_view_contract_case`"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "B413",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "Smart Downloader [1] 與 automatic due sync 切成 V2-only daily updater；V2 target/provider interaction 與 Legacy Trading producer 解耦，並回報可稽核 request-date geometry。",
+      "note": "V2 daily updater canonicalization; execution authority not cut over"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "T533",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "擴充 Trading V2 sidecar/daily-sync regression 覆蓋 V2-only Smart Downloader、target discovery decoupling 與 exact-date bulk geometry。",
+      "note": "`validate_market_data_v2_trading_workbench_sidecar_contract_case`"
     }
   ]
 }

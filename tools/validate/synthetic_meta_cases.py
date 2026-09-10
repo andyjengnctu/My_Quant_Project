@@ -2582,6 +2582,8 @@ def validate_market_data_governance_contract_case(_base_params):
         MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE,
         MARKET_DATA_V2_RESEARCH_VIEW_ROLE,
         MARKET_DATA_V2_TRADING_VIEW_ROLE,
+        MARKET_DATA_V2_DAILY_UPDATE_ROLE,
+        MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE,
         MARKET_DATA_V2_LEGACY_TARGET_ROLE,
         MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION,
         build_market_data_contract_snapshot,
@@ -2709,6 +2711,10 @@ def validate_market_data_governance_contract_case(_base_params):
     )
     check("v2_research_view_is_frozen_scientific_view", MARKET_DATA_V2_RESEARCH_VIEW_ROLE, market_data_v2.research_view_role)
     check("v2_trading_view_is_latest_operational_view", MARKET_DATA_V2_TRADING_VIEW_ROLE, market_data_v2.trading_view_role)
+    check("v2_daily_update_is_due_dataset_overlay_sync", MARKET_DATA_V2_DAILY_UPDATE_ROLE, market_data_v2.daily_update_role)
+    check("v2_daily_update_target_comes_only_from_v2_state", MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE, market_data_v2.daily_update_target_source)
+    check("v2_daily_update_cannot_refresh_legacy_provider_truth", False, market_data_v2.daily_update_may_refresh_legacy_provider_truth)
+    check("v2_daily_update_prefers_full_market_exact_date_bulk", True, market_data_v2.full_market_exact_date_bulk_preferred)
     check("v2_research_trading_share_provider_archive", True, market_data_v2.shared_provider_archive_required)
     check("v2_independent_domain_provider_redownload_is_forbidden", False, market_data_v2.independent_domain_provider_redownload_allowed)
     check("legacy_target_is_v2_materialized_compatibility_only", MARKET_DATA_V2_LEGACY_TARGET_ROLE, market_data_v2.legacy_target_role)
@@ -2734,6 +2740,7 @@ def validate_market_data_governance_contract_case(_base_params):
     check("market_data_snapshot_covers_all_declared_generations", set(RESEARCH_DATA_GENERATIONS), set(snapshot["research_generations"]))
     check("market_data_snapshot_exposes_v2_canonical_data_plane", market_data_v2.canonical_data_plane, snapshot["market_data_v2"]["canonical_data_plane"])
     check("market_data_snapshot_exposes_v2_migration_phase", market_data_v2.migration_phase, snapshot["market_data_v2"]["migration_phase"])
+    check("market_data_snapshot_exposes_v2_daily_update_role", market_data_v2.daily_update_role, snapshot["market_data_v2"]["daily_update_role"])
     check(
         "market_data_snapshot_exposes_neutral_historical_pit_universe_role",
         market_data_v2.historical_pit_universe_role,

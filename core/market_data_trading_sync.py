@@ -203,7 +203,15 @@ def build_trading_sync_request_manifest(
             requests.append(BootstrapHttpRequest(spec.dataset, TRADING_SYNC_QUERY_STATIC, None, None, None))
         elif spec.daily_mode == DAILY_INCREMENTAL:
             if incremental_start <= target:
-                if spec.bootstrap_mode == "single_no_dates" and not spec.fixed_data_ids:
+                if spec.full_market_exact_date_expected:
+                    requests.extend(
+                        _exact_date_requests(
+                            spec,
+                            TRADING_SYNC_QUERY_INCREMENTAL,
+                            _calendar_dates(incremental_start, target),
+                        )
+                    )
+                elif spec.bootstrap_mode == "single_no_dates" and not spec.fixed_data_ids:
                     requests.append(BootstrapHttpRequest(spec.dataset, TRADING_SYNC_QUERY_INCREMENTAL, None, None, None))
                 else:
                     requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_INCREMENTAL, incremental_start.isoformat(), target_text))

@@ -29,6 +29,25 @@ from services.downloader.market_data_trading_storage import MarketDataTradingSto
 TRADING_SYNC_REPORT_PREFIX = "market_data_v2_trading_sync_"
 
 
+def _request_geometry_summary(requests) -> dict[str, object]:
+    dated = [request for request in requests if request.start_date and request.end_date]
+    exact = [request for request in dated if request.start_date == request.end_date]
+    full_market_exact = [request for request in exact if request.data_id is None]
+    range_requests = [request for request in dated if request.start_date != request.end_date]
+    undated = [request for request in requests if not request.start_date and not request.end_date]
+    start_dates = [str(request.start_date) for request in dated]
+    end_dates = [str(request.end_date) for request in dated]
+    exact_dates = sorted({str(request.start_date) for request in exact})
+    return {
+        "request_date_start": min(start_dates) if start_dates else None,
+        "request_date_end": max(end_dates) if end_dates else None,
+        "unique_exact_date_count": len(exact_dates),
+        "full_market_exact_date_request_count": len(full_market_exact),
+        "range_request_count": len(range_requests),
+        "undated_request_count": len(undated),
+    }
+
+
 def _markdown(payload: dict[str, object]) -> str:
     return "\n".join(
         [
@@ -371,6 +390,7 @@ def sync_market_data_v2_due_datasets(
         "quota_usable_remaining": quota_snapshot.get("quota_usable_remaining"),
         "dataset_state_fingerprint": dataset_state.get("state_fingerprint") if dataset_state else None,
         "ledger_path": project_relative_display_path(ledger_path, project_root=root),
+        **_request_geometry_summary(manifest.requests),
     }
 
 

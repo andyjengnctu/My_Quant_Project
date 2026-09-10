@@ -12,13 +12,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run one scheduler-safe Trading market-data automatic update iteration, including sparse new-market-date discovery."
+        description="Run one scheduler-safe Market Data V2 automatic update iteration, including sparse new-market-date discovery."
     )
     parser.add_argument("--project-root", default=str(PROJECT_ROOT))
     parser.add_argument(
         "--target-date",
         default=None,
-        help="Optional YYYY-MM-DD override for deterministic recovery/testing. Default can sparsely discover a newer completed Trading day, then runs the canonical due planner.",
+        help="Optional YYYY-MM-DD override for deterministic recovery/testing. Default can sparsely discover a newer completed market day, then runs the canonical V2 due planner.",
     )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON result.")
     args = parser.parse_args(None if argv is None else list(argv)[1:])
@@ -33,10 +33,11 @@ def main(argv=None) -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str))
     else:
         print(
-            "Market Data Auto Update | "
+            "Market Data V2 Auto Update | "
             f"status={result.get('status')} | target={result.get('target_date') or '-'} | "
             f"due={result.get('due_dataset_count', 0)} | data_req={result.get('data_requests', 0)} | "
-            f"usage_req={result.get('usage_requests', 0)} | next={result.get('next_check_at') or '-'}"
+            f"usage_req={result.get('usage_requests', 0)} | full_market_exact={result.get('full_market_exact_date_request_count', 0)} | "
+            f"next={result.get('next_check_at') or '-'}"
         )
     return 2 if str(result.get("status") or "") == "BLOCKED" else 0
 
