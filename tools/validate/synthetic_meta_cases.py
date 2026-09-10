@@ -3111,7 +3111,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         }
     synthetic_market = {
         "market_date": "2099-01-01",
-        "dataset_fingerprint": {"csv_content_sha256": "a" * 64},
+        "source_view_fingerprint": "a" * 64,
     }
     synthetic_selected_sha = "b" * 64
     synthetic_binding = {
@@ -3119,12 +3119,13 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         "binding_fingerprint": "c" * 64,
     }
     with patch.object(trading_training, "run_static_strategy_parameter_training", side_effect=_fake_canonical_runner), \
-         patch.object(trading_training, "load_trading_market_data_snapshot", return_value=synthetic_market), \
-         patch.object(trading_training, "get_trading_market_data_snapshot_sha256", return_value="d" * 64), \
+         patch.object(trading_training, "load_trading_v2_consumer_state", return_value=synthetic_market), \
+         patch.object(trading_training, "get_trading_v2_consumer_state_sha256", return_value="d" * 64), \
          patch.object(trading_training, "compute_file_sha256", return_value=synthetic_selected_sha), \
          patch.object(trading_training, "publish_trading_strategy_param_binding", return_value=synthetic_binding):
         service_result = trading_training.run_trading_strategy_param_training(project_root=root, environ={})
-    add_check(results, "trading_param", case_id, "trading_service_delegates_to_canonical_optimizer", str(plan["data_dir"]), str(captured_service_kwargs.get("selected_data_dir")))
+    add_check(results, "trading_param", case_id, "trading_service_delegates_to_canonical_optimizer", str(root), str(captured_service_kwargs.get("selected_data_dir")))
+    add_check(results, "trading_param", case_id, "trading_service_uses_v2_optimizer_raw_data_loader", True, captured_service_kwargs.get("raw_data_loader") is trading_training.load_trading_v2_optimizer_raw_data)
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_output_root", str(plan["output_dir"]), str(captured_service_kwargs.get("output_dir")))
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_models_root", str(plan["models_root"]), str(captured_service_kwargs.get("models_dir")))
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_strategy_param_root", str(plan["strategy_params_root"]), str(captured_service_kwargs.get("strategy_params_root")))
