@@ -396,13 +396,12 @@ def refresh_trading_adjusted_price_dataset(
     )
     missing_local = _missing_local_price_files(target_tickers)
     bulk_baseline_unavailable = bool(missing_local or freshness.unreadable)
-    raw_evidence_tickers = set(missing_local) | set(freshness.unreadable)
-    per_ticker_provider_plan = per_ticker_request_count + len(raw_evidence_tickers)
+    per_ticker_provider_plan = per_ticker_request_count
 
     if bulk_baseline_unavailable or per_ticker_request_count < bulk_provider_plan:
         _ensure_quota_capacity(client, per_ticker_provider_plan)
         # Reuse the legacy function through its explicit shared-client seam; it
-        # refreshes only stale files and preserves current full-history semantics.
+        # refreshes only stale files and preserves current-vintage full-history semantics.
         from services.downloader.sync import smart_download_vip_data
 
         summary = smart_download_vip_data(

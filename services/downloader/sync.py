@@ -4,7 +4,6 @@ import pandas as pd
 
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_text
-from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
 from core.trading_dataset_identity import inspect_trading_dataset_member_date_evidence
 from services.downloader import runtime as rt
 from services.downloader.finmind_http import request_finmind_data_with_retry
@@ -59,32 +58,6 @@ def _normalize_adjusted_ticker_history(df: pd.DataFrame, *, market_last_date: st
     return frame[required_cols], trimmed_future_row_count
 
 
-def _raw_history_date_evidence(*, sid: str, market_last_date: str, client) -> set[str]:
-    raw = _provider_get_data(
-        client=client,
-        dataset=FINMIND_RAW_PRICE_ARCHIVE_DATASET,
-        data_id=sid,
-        start_date=rt.PRICE_HISTORY_START_DATE,
-    )
-    if raw is None or not isinstance(raw, pd.DataFrame) or raw.empty:
-        raise ValueError(f"FinMind {FINMIND_RAW_PRICE_ARCHIVE_DATASET} 對 {sid} 缺少 full-history date evidence")
-    columns = {str(column).strip().lower(): str(column) for column in raw.columns}
-    date_column = columns.get("date")
-    if date_column is None:
-        raise KeyError(f"FinMind {FINMIND_RAW_PRICE_ARCHIVE_DATASET} 缺少 Date 欄位")
-    target = pd.Timestamp(market_last_date).normalize()
-    parsed = pd.to_datetime(raw[date_column], errors="coerce")
-    if parsed.isna().any():
-        raise ValueError(f"FinMind {FINMIND_RAW_PRICE_ARCHIVE_DATASET} 含無法解析的 Date")
-    dates = {
-        item.date().isoformat()
-        for item in parsed
-        if item.normalize() <= target
-    }
-    if not dates:
-        raise ValueError(f"FinMind {FINMIND_RAW_PRICE_ARCHIVE_DATASET} 對 {sid} 沒有 target-date 以前的 date evidence")
-    return dates
-
 
 def smart_download_vip_data(
     tickers,
@@ -109,7 +82,6 @@ def smart_download_vip_data(
     count_success = 0
     count_skipped_latest = 0
     trimmed_future_row_count = 0
-    raw_history_evidence_request_count = 0
 
     for i, sid in enumerate(tickers, 1):
         file_path = rt.os.path.join(rt.SAVE_DIR, f"{sid}.csv")
@@ -130,7 +102,7 @@ def smart_download_vip_data(
         if baseline.exists and not baseline.readable:
             last_date_check_errors.append(f"{sid}: {baseline.error}")
             if rt.VERBOSE_LAST_DATE_CHECK_ERRORS:
-                vprint(f"\n注意：{sid} 檢查既有歷史發生錯誤，將以 raw date evidence 強制重建: {baseline.error}")
+                vprint(f"\n注意：{sid} 檢查既有歷史發生錯誤，將以 PriceAdj full-history 強制重建: {baseline.error}")
 
         vprint(
             f"\r⚡ [{i:03d}/{total:03d}] 成功:{count_success:>4} | 跳過:{count_skipped_latest:>4} | "
@@ -159,19 +131,12 @@ def smart_download_vip_data(
                         "FinMind TaiwanStockPriceAdj per-ticker full-history 遺失既有日期；"
                         f"missing={missing_existing[:20]} count={len(missing_existing)}"
                     )
-            else:
-                raw_dates = _raw_history_date_evidence(
-                    sid=str(sid),
-                    market_last_date=market_last_date,
-                    client=client,
-                )
-                raw_history_evidence_request_count += 1
-                missing_raw_dates = sorted(raw_dates - refreshed_dates)
-                if missing_raw_dates:
-                    raise ValueError(
-                        "FinMind TaiwanStockPriceAdj per-ticker full-history 未覆蓋 raw price date evidence；"
-                        f"missing={missing_raw_dates[:20]} count={len(missing_raw_dates)}"
-                    )
+            # With no readable adjusted-price baseline, FinMind PriceAdj itself is
+            # the canonical current-vintage price truth.  Raw TaiwanStockPrice is
+            # intentionally not used as a full-history calendar oracle because the
+            # provider datasets can have legitimate historical date mismatches.
+            # Completeness is instead anchored by the PriceAdj response plus the
+            # actionable target-date requirement below.
 
             target_date_text = str(pd.Timestamp(market_last_date).date())
             if str(sid) in require_target_date and target_date_text not in refreshed_dates:
@@ -216,6 +181,5 @@ def smart_download_vip_data(
         "last_date_check_error_count": len(last_date_check_errors),
         "download_error_count": len(download_errors),
         "trimmed_future_row_count": int(trimmed_future_row_count),
-        "raw_history_evidence_request_count": int(raw_history_evidence_request_count),
         "issue_log_path": issue_log_path,
     }

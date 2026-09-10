@@ -4773,6 +4773,7 @@ def validate_trading_price_bulk_completeness_contract_case(_base_params):
             )
         check("missing_legacy_baseline_forces_per_ticker_full_history", "per_ticker_full_history", missing_summary.get("price_fetch_strategy"))
         check("missing_legacy_baseline_calls_canonical_per_ticker_producer_once", 1, fallback.call_count)
+        check("missing_legacy_baseline_plans_one_priceadj_request_per_stale_ticker", 2, missing_summary.get("planned_price_data_requests"))
         check("missing_legacy_baseline_avoids_bulk_or_calendar_provider_calls", 0, base.data_request_count)
 
     with TemporaryDirectory() as unreadable_temp:
@@ -4803,6 +4804,7 @@ def validate_trading_price_bulk_completeness_contract_case(_base_params):
             )
         check("unreadable_legacy_baseline_forces_per_ticker_full_history", "per_ticker_full_history", unreadable_summary.get("price_fetch_strategy"))
         check("unreadable_legacy_baseline_calls_canonical_per_ticker_producer_once", 1, fallback.call_count)
+        check("unreadable_legacy_baseline_plans_one_priceadj_request_per_stale_ticker", 2, unreadable_summary.get("planned_price_data_requests"))
         check("unreadable_legacy_baseline_avoids_bulk_or_calendar_provider_calls", 0, base.data_request_count)
 
     class _SparseBulkProvider:
@@ -5031,6 +5033,8 @@ def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
         price_dir = Path(temp_dir) / "prices"
         provider = _PerTickerProvider(
             adjusted_dates=("2026-09-09",),
+            # Raw has an older trade date that PriceAdj legitimately omits.  It
+            # must not be requested or used as a full-history calendar oracle.
             raw_dates=("2025-01-02", "2026-09-09"),
         )
         with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
@@ -5046,9 +5050,11 @@ def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
                 client=provider,
                 require_target_date_tickers=["2330"],
             )
-        check("new_ticker_requires_raw_full_history_date_evidence", 1, payload.get("raw_history_evidence_request_count"))
-        check("new_ticker_truncated_adjusted_history_fails_raw_date_proof", 1, payload.get("download_error_count"))
-        check("new_ticker_truncated_adjusted_history_publishes_no_csv", False, (price_dir / "2330.csv").exists())
+        check("new_ticker_priceadj_is_canonical_without_raw_history_oracle", 1, provider.data_request_count)
+        check("new_ticker_provider_raw_date_mismatch_is_not_rejected", 0, payload.get("download_error_count"))
+        check("new_ticker_priceadj_history_is_published", True, (price_dir / "2330.csv").exists())
+        published = pd.read_csv(price_dir / "2330.csv")
+        check("new_ticker_published_dates_follow_priceadj_truth", ["2026-09-09"], published["Date"].astype(str).tolist())
 
     with TemporaryDirectory(prefix="trading_price_missing_target_") as temp_dir:
         price_dir = Path(temp_dir) / "prices"
