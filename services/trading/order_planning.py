@@ -10,7 +10,6 @@ import pandas as pd
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
 from core.capital_policy import resolve_portfolio_sizing_equity
 from core.console_report import project_relative_display_path
-from core.data_utils import discover_unique_csv_map, sanitize_ohlcv_dataframe
 from core.entry_plans import resize_candidate_plan_to_capital
 from core.exact_accounting import (
     build_buy_ledger_from_price,
@@ -29,11 +28,10 @@ from core.portfolio_entry_selection import (
     select_resource_aware_action_candidates,
 )
 from core.portfolio_fast_data import calc_mark_to_market_equity, pack_static_market_data
-from core.runtime_domains import (
-    RUNTIME_DOMAIN_TRADING,
-    resolve_runtime_domain_paths,
-)
+from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from services.trading.account_state import load_trading_account_state
+from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame
+from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.trading.proposed_order_state import (
     PROPOSED_ORDER_SCHEMA_VERSION,
     PROPOSED_ORDER_STATUS,
@@ -61,26 +59,24 @@ def _position_security_profile(record: dict[str, Any]):
     return None
 
 
-def _build_account_mark_inputs(*, data_dir: Path, state: dict[str, Any], information_date: str):
-    csv_map, duplicate_issues = discover_unique_csv_map(data_dir)
-    if duplicate_issues:
-        raise RuntimeError("Trading dataset 持股估值存在重複 ticker CSV，禁止在實盤 allocator 靜默選檔")
-
+def _build_account_mark_inputs(*, project_root: Path, state: dict[str, Any], information_date: str):
     target_date = pd.Timestamp(information_date)
     portfolio: dict[str, dict[str, Any]] = {}
     all_dfs_fast: dict[str, dict[pd.Timestamp, dict[str, float]]] = {}
     marks: list[dict[str, Any]] = []
+    view = TradingMarketDataV2View.open(project_root)
 
     for ticker, record in sorted((state.get("positions") or {}).items()):
         broker = record.get("broker") or {}
         qty = int(broker.get("qty") or 0)
         if qty <= 0:
             continue
-        file_path = csv_map.get(str(ticker))
-        if not file_path:
-            raise FileNotFoundError(f"Trading 持股 {ticker} 缺少市場資料，禁止估算 sizing equity")
-        raw = pd.read_csv(file_path)
-        df, _stats = sanitize_ohlcv_dataframe(raw, str(ticker), min_rows=1)
+        df = load_trading_v2_sanitized_ohlcv_frame(
+            view,
+            ticker=str(ticker),
+            through_date=information_date,
+            min_rows=1,
+        )
         usable = df.loc[df.index <= target_date]
         if usable.empty:
             raise RuntimeError(f"Trading 持股 {ticker} 在 {information_date} 前沒有合法收盤價")
@@ -104,7 +100,6 @@ def _build_account_mark_inputs(*, data_dir: Path, state: dict[str, Any], informa
             "mark_close": mark_close,
         })
     return portfolio, all_dfs_fast, marks
-
 
 def _build_allocator_candidate(row: dict[str, Any], *, sizing_equity: float, params) -> dict[str, Any] | None:
     seed = row.get("execution_plan_seed")
@@ -208,7 +203,7 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
     free_slots = max(0, max_positions - occupied)
 
     portfolio, all_dfs_fast, marks = _build_account_mark_inputs(
-        data_dir=Path(runtime["data_dir"]),
+        project_root=root,
         state=state,
         information_date=str(runtime["latest_data_date"]),
     )

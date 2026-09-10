@@ -7,7 +7,6 @@ never infers a broker submission or fill.
 """
 from __future__ import annotations
 
-import hashlib
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -30,6 +29,7 @@ from core.trading_order_state import (
 )
 from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
+from services.trading.market_data_consumer import get_trading_v2_consumer_state_sha256
 from services.trading.position_market_context import (
     load_trading_position_market_frame,
     normalize_trading_date,
@@ -56,10 +56,6 @@ def resolve_trading_indicator_exit_plan_text_path(project_root: str | Path) -> P
     return resolve_trading_indicator_exit_plan_dir(project_root) / "indicator_exit_plan.txt"
 
 
-def _file_sha256(path: str | Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _signal_key(*, ticker: str, entry_order_id: str, signal_information_date: str, frozen_params_sha256: str) -> str:
     return canonical_json_sha256({
         "ticker": str(ticker),
@@ -70,7 +66,7 @@ def _signal_key(*, ticker: str, entry_order_id: str, signal_information_date: st
     })
 
 
-def _source_binding(*, ticker: str, record: dict[str, Any], orders: dict[str, Any], file_path: str) -> dict[str, Any]:
+def _source_binding(*, ticker: str, record: dict[str, Any], orders: dict[str, Any], market_data_sha256: str) -> dict[str, Any]:
     management = record.get("strategy_management") or {}
     position = management.get("position_state")
     if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position, dict):
@@ -95,25 +91,30 @@ def _source_binding(*, ticker: str, record: dict[str, Any], orders: dict[str, An
         "position_state_sha256": canonical_json_sha256(position),
         "last_rollforward_date": normalize_trading_date(management.get("last_rollforward_date")),
         "frozen_params_sha256": params_sha,
-        "market_data_sha256": _file_sha256(file_path),
+        "market_data_sha256": str(market_data_sha256),
     }
 
 
-def _collect_current_bindings(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], list[dict[str, Any]], list[str]]:
-    account, orders, csv_map = resolve_trading_strategy_position_sources(root)
+def _collect_current_bindings(root: Path):
+    account, orders, market_view = resolve_trading_strategy_position_sources(root)
     if not account:
         raise FileNotFoundError("Trading account state 尚未初始化")
     bindings: list[dict[str, Any]] = []
     manual: list[str] = []
+    market_data_sha256 = get_trading_v2_consumer_state_sha256(root)
     for ticker in sorted(account.get("positions") or {}):
         record = account["positions"][ticker]
         if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
             manual.append(str(ticker)); continue
-        file_path = csv_map.get(ticker)
-        if not file_path:
-            raise FileNotFoundError(f"Trading dataset 缺少持股 {ticker} CSV")
-        bindings.append(_source_binding(ticker=str(ticker), record=record, orders=orders, file_path=file_path))
-    return account, orders, csv_map, bindings, manual
+        bindings.append(
+            _source_binding(
+                ticker=str(ticker),
+                record=record,
+                orders=orders,
+                market_data_sha256=market_data_sha256,
+            )
+        )
+    return account, orders, market_view, bindings, manual
 
 
 def _prior_unresolved_row(prior: dict[str, Any] | None, *, binding: dict[str, Any], orders: dict[str, Any]) -> dict[str, Any] | None:
@@ -207,7 +208,7 @@ def _render_indicator_exit_plan_text(plan: dict[str, Any]) -> str:
 
 def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any]:
     root=Path(project_root).resolve(); recover_trading_fill_transaction(root)
-    account, orders, csv_map, bindings, manual=_collect_current_bindings(root)
+    account, orders, market_view, bindings, manual=_collect_current_bindings(root)
     allowed_date=latest_allowed_completed_daily_date()
     prior=load_trading_indicator_exit_plan(root, required=False)
     exits=[]
@@ -225,7 +226,7 @@ def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any
             continue
         order=(orders.get("orders") or {})[binding["entry_order_id"]]
         params=build_params_from_mapping(order["frozen_params"])
-        df=load_trading_position_market_frame(file_path=csv_map[binding["ticker"]], ticker=binding["ticker"], params=params, allowed_date=allowed_date)
+        df=load_trading_position_market_frame(view=market_view, ticker=binding["ticker"], params=params, allowed_date=allowed_date)
         entry_date=binding["entry_trade_date"]
         eligible=df if entry_date is None else df.loc[df.index >= pd.Timestamp(entry_date)]
         if eligible.empty: continue

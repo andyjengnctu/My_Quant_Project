@@ -56,9 +56,9 @@ def _publish_ready_provider_snapshot_fixture(
         request = job.to_request()
         path = resolve_market_data_request_parquet_path(root, manifest_fingerprint, request)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((request.request_id + "\n").encode("utf-8"))
-        digest = compute_file_sha256(path)
         frame = frame_by_request[request.request_id]
+        frame.to_parquet(path, index=False)
+        digest = compute_file_sha256(path)
         ledger.mark_done(
             workload_id,
             request.request_id,
@@ -2547,23 +2547,34 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     dependency_stats = validate_trading_data_dependency_registry()
     current_dependency = get_trading_data_dependency_spec("full_rule_based_no_dl")
     check("trading_dependency_registry_has_current_strategy", 1, dependency_stats["strategy_count"])
-    check("current_rule_based_strategy_requires_execution_data", True, current_dependency.execution_market_data_required)
-    check("current_rule_based_strategy_requires_no_v2_dataset", (), current_dependency.required_v2_datasets)
+    check("current_rule_based_strategy_no_longer_requires_legacy_execution_data", False, current_dependency.execution_market_data_required)
+    check("current_rule_based_strategy_requires_six_v2_datasets", 6, len(current_dependency.required_v2_datasets))
+    current_dataset_state = {
+        "datasets": {
+            dataset: {
+                "status": "READY",
+                "last_ready_target_date": "2026-09-07",
+                "latest_data_date": "2026-09-07",
+                "schema_status": VALIDATION_STATUS_READY,
+                "coverage_status": VALIDATION_STATUS_READY,
+            }
+            for dataset in current_dependency.required_v2_datasets
+        }
+    }
     current_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
+        strategy_id="full_rule_based_no_dl",
+        target_date="2026-09-07",
+        execution_market_data_ready=False,
+        dataset_state=current_dataset_state,
+    )
+    check("current_rule_based_strategy_is_ready_from_required_v2_evidence", True, current_ready["ready"])
+    current_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
         strategy_id="full_rule_based_no_dl",
         target_date="2026-09-07",
         execution_market_data_ready=True,
         dataset_state=None,
     )
-    check("current_rule_based_strategy_is_not_blocked_by_optional_v2_state", True, current_ready["ready"])
-    current_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
-        strategy_id="full_rule_based_no_dl",
-        target_date="2026-09-07",
-        execution_market_data_ready=False,
-        execution_market_data_reason="execution missing",
-        dataset_state=None,
-    )
-    check("current_rule_based_strategy_fails_closed_without_execution_data", False, current_blocked["ready"])
+    check("current_rule_based_strategy_fails_closed_without_required_v2_evidence", False, current_blocked["ready"])
 
     future_dependency = TradingDataDependencySpec(
         strategy_id="synthetic_v2_strategy",
@@ -6099,7 +6110,17 @@ def validate_market_data_v2_trading_compatibility_materialization_contract_case(
             "market_date": "2026-09-09",
             "data_dir": "data/trading/tw_stock_data_vip",
             "current_execution_pool_tickers": ["2330"],
+            "retained_history_tickers": [],
             "dataset_fingerprint": {"csv_content_sha256": "compat-sha"},
+        }
+    def _consumer(*_args, **kwargs):
+        order.append("consumer")
+        captured["consumer_required"] = list(kwargs.get("required_position_tickers") or [])
+        captured["consumer_retained"] = list(kwargs.get("retained_training_tickers") or [])
+        return {
+            "state_fingerprint": "consumer-state-fp",
+            "source_view_fingerprint": "v2-view-fp",
+            "training_ticker_count": 2,
         }
     def _snapshot(*_args, **_kwargs):
         order.append("snapshot")
@@ -6120,6 +6141,10 @@ def validate_market_data_v2_trading_compatibility_materialization_contract_case(
             side_effect=_materialize,
         ), patch.object(
             market_data_update,
+            "publish_trading_v2_consumer_state",
+            side_effect=_consumer,
+        ), patch.object(
+            market_data_update,
             "publish_trading_market_data_snapshot",
             side_effect=_snapshot,
         ):
@@ -6127,10 +6152,11 @@ def validate_market_data_v2_trading_compatibility_materialization_contract_case(
                 project_root=root,
                 provider_client=object(),
             )
-    check("canonical_trading_update_order_is_v2_then_compat_then_snapshot", ["v2", "compat", "snapshot"], order)
+    check("canonical_trading_update_order_is_v2_then_compat_then_consumer_then_snapshot", ["v2", "compat", "consumer", "snapshot"], order)
     check("canonical_trading_update_passes_provider_client_only_to_v2_updater", True, captured.get("v2_kwargs", {}).get("client") is not None)
     check("canonical_trading_update_retains_current_positions_in_compatibility_targets", ["9999"], captured.get("required"))
     check("canonical_trading_update_requires_compatibility_at_v2_target_date", "2026-09-09", captured.get("compat_market_date"))
+    check("canonical_trading_update_publishes_v2_consumer_position_membership", ["9999"], captured.get("consumer_required"))
     session = dict(update.get("provider_request_session") or {})
     check("canonical_trading_update_reports_zero_legacy_provider_requests", (0, 0, 0), (
         session.get("legacy_stage_data_requests"),
@@ -6155,5 +6181,151 @@ def validate_market_data_v2_trading_compatibility_materialization_contract_case(
     summary.update({
         "checks": len(results),
         "compatibility_required_dataset_count": len(TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS),
+    })
+    return results, summary
+
+
+def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_params):
+    """Round-7 live Trading consumers read verified V2 truth, not Legacy CSV."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from core.trading_data_dependencies import get_trading_data_dependency_spec
+    from services.trading.market_data_consumer import (
+        build_trading_v2_ohlcv_frame,
+        load_trading_v2_consumer_state,
+        publish_trading_v2_consumer_state,
+    )
+
+    case_id = "MARKET_DATA_V2_TRADING_DIRECT_CONSUMER_CUTOVER"
+    results, summary, check, check_true = bind_synthetic_case(
+        case_id, "market_data", training_performed=False
+    )
+
+    required = {
+        "TaiwanStockPriceAdj",
+        "TaiwanStockPrice",
+        "TaiwanStockMarketValue",
+        "TaiwanStockTradingDate",
+        "TaiwanStockInfo",
+        "TaiwanStockDelisting",
+    }
+    spec = get_trading_data_dependency_spec("full_rule_based_no_dl")
+    check("rule_based_execution_no_longer_requires_legacy_execution_dataset", False, spec.execution_market_data_required)
+    check("rule_based_execution_requires_v2_price_volume_pool_contract", required, set(spec.required_v2_datasets))
+
+    class _FakeTradingV2View:
+        def __init__(self):
+            self.archive = SimpleNamespace(
+                snapshot_fingerprint="provider-snapshot-fp",
+                as_of_date="2026-03-02",
+            )
+
+        def training_horizon(self, *, required_datasets):
+            return SimpleNamespace(training_through_date="2026-09-09")
+
+        def daily_pit_market_members(self, market_date):
+            assert market_date == "2026-09-09"
+            return ("0050", "2330", "2317")
+
+        def view_identity(self, *, required_datasets):
+            return {"view_fingerprint": "verified-v2-view-fp"}
+
+        def read_dataset_frame(self, dataset, *, columns=None, data_id=None, start_date=None, end_date=None):
+            if dataset == "TaiwanStockInfo":
+                frame = pd.DataFrame({
+                    "date": ["2026-09-09"] * 3,
+                    "stock_id": ["0050", "2330", "2317"],
+                    "type": ["twse", "twse", "twse"],
+                    "industry_category": ["ETF", "半導體業", "電子業"],
+                })
+            elif dataset == "TaiwanStockMarketValue":
+                frame = pd.DataFrame({
+                    "date": ["2026-09-09", "2026-09-09"],
+                    "stock_id": ["2330", "2317"],
+                    "market_value": [20_000_000_000, 1],
+                })
+            elif dataset == "TaiwanStockPriceAdj" and data_id is None:
+                frame = pd.DataFrame({
+                    "date": ["2026-09-09"] * 3,
+                    "stock_id": ["0050", "2330", "2317"],
+                    "Trading_Volume": [2_000_000, 2_000_000, 1],
+                })
+            elif dataset == "TaiwanStockPriceAdj":
+                frame = pd.DataFrame({
+                    "date": ["2026-09-08", "2026-09-09"],
+                    "stock_id": [str(data_id), str(data_id)],
+                    "open": [100.0, 101.0],
+                    "max": [102.0, 103.0],
+                    "min": [99.0, 100.0],
+                    "close": [101.0, 102.0],
+                })
+            elif dataset == "TaiwanStockPrice":
+                frame = pd.DataFrame({
+                    "date": ["2026-09-08", "2026-09-09"],
+                    "stock_id": [str(data_id), str(data_id)],
+                    "Trading_Volume": [1111, 2222],
+                })
+            else:
+                frame = pd.DataFrame(columns=list(columns or ()))
+            if columns:
+                missing = [column for column in columns if column not in frame.columns]
+                if missing:
+                    raise ValueError(f"synthetic V2 view missing columns: {missing}")
+                frame = frame.loc[:, list(columns)]
+            return frame.reset_index(drop=True)
+
+    fake = _FakeTradingV2View()
+    frame = build_trading_v2_ohlcv_frame(fake, ticker="2330", through_date="2026-09-09")
+    check("direct_v2_ohlcv_frame_keeps_legacy_strategy_shape", ["Date", "Open", "High", "Low", "Close", "Volume"], list(frame.columns))
+    check("direct_v2_ohlcv_frame_uses_raw_price_volume", [1111, 2222], frame["Volume"].tolist())
+
+    with TemporaryDirectory(prefix="round7_v2_consumer_") as temp_dir:
+        root = Path(temp_dir)
+        first = publish_trading_v2_consumer_state(
+            root,
+            market_date="2026-09-09",
+            required_position_tickers=("9999",),
+            retained_training_tickers=("2454",),
+            view=fake,
+        )
+        check("consumer_state_current_execution_pool_is_v2_derived", ["0050", "2330"], first["current_execution_pool_tickers"])
+        check("consumer_state_training_membership_preserves_positions_and_history", ["0050", "2330", "2454", "9999"], first["training_tickers"])
+        check("consumer_state_has_zero_provider_calls", 0, first["provider_calls"])
+        second = publish_trading_v2_consumer_state(
+            root,
+            market_date="2026-09-09",
+            required_position_tickers=(),
+            retained_training_tickers=(),
+            view=fake,
+        )
+        loaded = load_trading_v2_consumer_state(root, required=True, verify_current_view=False)
+        check("consumer_state_carries_prior_training_membership_without_csv_membership_read", ["0050", "2330", "2454", "9999"], second["training_tickers"])
+        check("consumer_state_roundtrip_fingerprint_is_stable", second["state_fingerprint"], loaded["state_fingerprint"])
+
+    repo = Path(__file__).resolve().parents[2]
+    sources = {
+        "params": (repo / "services/trading/strategy_param_training.py").read_text(encoding="utf-8"),
+        "scanner_state": (repo / "services/trading/scanner_state.py").read_text(encoding="utf-8"),
+        "daily": (repo / "services/trading/daily_workflow.py").read_text(encoding="utf-8"),
+        "position": (repo / "services/trading/position_market_context.py").read_text(encoding="utf-8"),
+        "allocator": (repo / "services/trading/order_planning.py").read_text(encoding="utf-8"),
+        "data_ops": (repo / "services/trading/market_data_ops.py").read_text(encoding="utf-8"),
+    }
+    check_true("params_inject_v2_optimizer_loader", "raw_data_loader=load_trading_v2_optimizer_raw_data" in sources["params"])
+    check_true("scanner_runtime_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["scanner_state"])
+    check_true("trading_daily_scanner_passes_v2_prepared_frames", "prepared_frames=prepared_frames" in sources["daily"])
+    check("position_context_has_no_legacy_csv_read", False, "pd.read_csv" in sources["position"] or "discover_unique_csv_map" in sources["position"])
+    check("allocator_has_no_legacy_csv_read", False, "pd.read_csv" in sources["allocator"] or "discover_unique_csv_map" in sources["allocator"])
+    check_true("workbench_data_ops_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["data_ops"])
+
+    summary.update({
+        "checks": len(results),
+        "required_v2_dataset_count": len(spec.required_v2_datasets),
+        "provider_calls": 0,
     })
     return results, summary

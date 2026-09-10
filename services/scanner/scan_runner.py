@@ -37,15 +37,37 @@ def _normalize_ticker_membership(ticker_membership):
     return tuple(sorted(normalized))
 
 
-def _prepare_scan_inputs(data_dir, params, *, output_dir=None, ticker_membership=None):
+def _prepare_scan_inputs(data_dir, params, *, output_dir=None, ticker_membership=None, prepared_frames=None):
     from core.data_utils import discover_unique_csv_inputs
+
+    normalized_membership = _normalize_ticker_membership(ticker_membership)
+    if prepared_frames is not None:
+        if not isinstance(prepared_frames, dict) or not prepared_frames:
+            raise ValueError("Scanner prepared_frames 必須是非空 ticker->DataFrame mapping")
+        available = {str(ticker) for ticker in prepared_frames}
+        requested = set(normalized_membership or sorted(available))
+        missing = sorted(requested - available)
+        if missing:
+            raise FileNotFoundError(
+                "Scanner ticker membership 缺少 prepared V2 frame；"
+                f"missing={missing[:20]}"
+            )
+        scan_inputs = [(ticker, prepared_frames[ticker]) for ticker in sorted(requested)]
+        duplicate_file_issue_lines = []
+        ensure_runtime_dirs(output_dir=output_dir)
+        print_scanner_start_banner(get_taipei_now().strftime('%Y-%m-%d %H:%M'))
+        total_files = len(scan_inputs)
+        print(f"{C_GREEN}✅ 成功載入目前參數設定！{C_RESET}")
+        print_scanner_header(params)
+        print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額以 scanner_live_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")
+        print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
+        return scan_inputs, duplicate_file_issue_lines, total_files, [ticker for ticker, _frame in scan_inputs]
 
     if not os.path.exists(data_dir):
         profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
-    normalized_membership = _normalize_ticker_membership(ticker_membership)
     if normalized_membership is not None:
         requested = set(normalized_membership)
         available = {str(ticker) for ticker, _file_path in csv_inputs}
@@ -157,6 +179,8 @@ def _run_parallel_scan(
     progress_formatter,
     output_dir=None,
     ticker_membership=None,
+    prepared_frames=None,
+    process_prepared_stock_fn=None,
 ):
     resolved_output_dir = OUTPUT_DIR if output_dir is None else os.fspath(output_dir)
     csv_inputs, duplicate_file_issue_lines, total_files, scanned_tickers = _prepare_scan_inputs(
@@ -164,6 +188,7 @@ def _run_parallel_scan(
         params,
         output_dir=resolved_output_dir,
         ticker_membership=ticker_membership,
+        prepared_frames=prepared_frames,
     )
 
     count_scanned = 0
@@ -177,10 +202,18 @@ def _run_parallel_scan(
     process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
 
     with ProcessPoolExecutor(max_workers=max_workers, **process_pool_kwargs) as executor:
-        futures = {
-            executor.submit(process_single_stock_fn, file_path, ticker, params): file_path
-            for ticker, file_path in csv_inputs
-        }
+        if prepared_frames is None:
+            futures = {
+                executor.submit(process_single_stock_fn, file_path, ticker, params): file_path
+                for ticker, file_path in csv_inputs
+            }
+        else:
+            if process_prepared_stock_fn is None:
+                raise RuntimeError("Scanner prepared_frames 缺少 prepared processor")
+            futures = {
+                executor.submit(process_prepared_stock_fn, frame, ticker, params): ticker
+                for ticker, frame in csv_inputs
+            }
 
         for future in as_completed(futures):
             count_scanned += 1
@@ -222,10 +255,17 @@ def run_daily_scanner(
     output_dir=None,
     include_execution_context=False,
     ticker_membership=None,
+    prepared_frames=None,
 ):
-    from .stock_processor import process_single_stock, process_single_stock_actionable_detail
+    from .stock_processor import (
+        process_raw_stock_frame,
+        process_raw_stock_frame_actionable_detail,
+        process_single_stock,
+        process_single_stock_actionable_detail,
+    )
 
     process_fn = process_single_stock_actionable_detail if bool(include_execution_context) else process_single_stock
+    prepared_fn = process_raw_stock_frame_actionable_detail if bool(include_execution_context) else process_raw_stock_frame
     scan_state = _run_parallel_scan(
         data_dir,
         params,
@@ -234,6 +274,8 @@ def run_daily_scanner(
         progress_formatter=_format_candidate_progress,
         output_dir=output_dir,
         ticker_membership=ticker_membership,
+        prepared_frames=prepared_frames,
+        process_prepared_stock_fn=prepared_fn,
     )
     candidate_rows = list(scan_state['rows'])
     print_scanner_summary(

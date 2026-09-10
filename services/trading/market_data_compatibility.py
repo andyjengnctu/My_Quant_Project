@@ -11,15 +11,14 @@ from typing import Iterable
 
 import pandas as pd
 
-from config.downloader import DOWNLOADER_MIN_MARKET_CAP, DOWNLOADER_MIN_VOLUME
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, atomic_write_text, canonical_json_sha256
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET, FINMIND_RAW_PRICE_ARCHIVE_DATASET
 from core.market_data_ohlcv_compatibility import build_market_data_v2_ohlcv_compatibility_frame
-from core.market_data_pool_contract import screen_daily_trading_execution_pool
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.trading_dataset_identity import build_trading_dataset_fingerprint, resolve_trading_dataset_member_tickers
 from core.trading_identity import normalize_trading_ticker
+from services.trading.market_data_consumer import resolve_trading_v2_current_execution_pool
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 
 TRADING_V2_COMPATIBILITY_SCHEMA_VERSION = 1
@@ -35,61 +34,6 @@ TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS = (
 TRADING_V2_COMPATIBILITY_STATE_RELATIVE_PATH = Path(
     "state/trading/market_data_v2/compatibility_materialization.json"
 )
-
-
-def _current_market_member_records(view: TradingMarketDataV2View, *, market_date: str) -> list[dict[str, object]]:
-    members = tuple(view.daily_pit_market_members(market_date))
-    member_set = set(members)
-    info = view.read_dataset_frame(
-        "TaiwanStockInfo",
-        columns=("date", "stock_id", "type", "industry_category"),
-    )
-    if info.empty:
-        raise RuntimeError("Trading V2 compatibility 無 TaiwanStockInfo identity evidence")
-    info = info.copy()
-    info["stock_id"] = info["stock_id"].astype("string").str.strip()
-    info["type"] = info["type"].astype("string").str.strip().str.lower()
-    info["industry_category"] = info["industry_category"].astype("string").str.strip().str.casefold()
-    listed = info.loc[info["stock_id"].isin(member_set) & info["type"].isin({"twse", "tpex"})]
-    known = set(listed["stock_id"].astype(str))
-    missing_identity = sorted(member_set - known)
-    if missing_identity:
-        raise RuntimeError(
-            "Trading V2 current PIT member 缺 TWSE/TPEX TaiwanStockInfo identity；"
-            f"count={len(missing_identity)} sample={missing_identity[:20]}"
-        )
-    etf_ids = set(
-        listed.loc[listed["industry_category"] == "etf", "stock_id"].astype(str).tolist()
-    )
-    return [{"stock_id": sid, "is_etf": sid in etf_ids} for sid in members]
-
-
-def resolve_trading_v2_current_execution_pool(
-    view: TradingMarketDataV2View,
-    *,
-    market_date: str,
-) -> tuple[list[str], dict[str, int]]:
-    members = _current_market_member_records(view, market_date=market_date)
-    price = view.read_dataset_frame(
-        FINMIND_ADJUSTED_PRICE_DATASET,
-        columns=("date", "stock_id", "Trading_Volume"),
-        start_date=market_date,
-        end_date=market_date,
-    ).rename(columns={"Trading_Volume": "trading_volume"})
-    market_value = view.read_dataset_frame(
-        "TaiwanStockMarketValue",
-        columns=("date", "stock_id", "market_value"),
-        start_date=market_date,
-        end_date=market_date,
-    )
-    tickers, stats = screen_daily_trading_execution_pool(
-        members,
-        price_rows=price,
-        market_value_rows=market_value,
-        min_volume=DOWNLOADER_MIN_VOLUME,
-        min_market_cap=DOWNLOADER_MIN_MARKET_CAP,
-    )
-    return sorted(normalize_trading_ticker(item) for item in tickers), dict(stats)
 
 
 def materialize_trading_v2_compatibility_dataset(

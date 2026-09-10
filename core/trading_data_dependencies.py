@@ -38,13 +38,20 @@ class TradingDataDependencySpec:
 TRADING_DATA_DEPENDENCY_SPECS: tuple[TradingDataDependencySpec, ...] = (
     TradingDataDependencySpec(
         strategy_id="full_rule_based_no_dl",
-        execution_market_data_required=True,
-        required_v2_datasets=(),
+        execution_market_data_required=False,
+        required_v2_datasets=(
+            "TaiwanStockPriceAdj",
+            "TaiwanStockPrice",
+            "TaiwanStockMarketValue",
+            "TaiwanStockTradingDate",
+            "TaiwanStockInfo",
+            "TaiwanStockDelisting",
+        ),
         rationale=(
-            "Current migration phase only: production rule-based Trading still consumes the legacy "
-            "adjusted-price execution dataset. Market Data V2 is the canonical target data plane but "
-            "is not yet execution-authoritative; required_v2_datasets therefore remains empty until "
-            "the later consumer cutover changes this dependency contract explicitly."
+            "Round-7 execution cutover: production rule-based Trading reads the verified Market Data V2 "
+            "historical/latest view directly. PriceAdj+raw Price provide OHLCV, MarketValue+TradingDate+" 
+            "StockInfo+Delisting provide the date-local execution pool and membership evidence. The "
+            "transitional Legacy CSV/snapshot is no longer execution-required."
         ),
     ),
 )

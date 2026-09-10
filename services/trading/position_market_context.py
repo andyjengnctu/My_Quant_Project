@@ -1,4 +1,4 @@
-"""Shared completed-daily market context for live Trading strategy positions."""
+"""Shared completed-daily Market Data V2 context for live Trading positions."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,34 +6,36 @@ from typing import Any
 
 import pandas as pd
 
-from core.data_utils import discover_unique_csv_map, get_required_min_rows, sanitize_ohlcv_dataframe
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+from core.data_utils import get_required_min_rows
 from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
 from core.trading_identity import normalize_trading_date
 from services.trading.account_state import load_trading_account_state
+from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame
+from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.trading.order_state import load_trading_order_state
 
 
-def load_trading_position_market_frame(*, file_path: str, ticker: str, params, allowed_date: str) -> pd.DataFrame:
-    raw = pd.read_csv(file_path)
-    df, _stats = sanitize_ohlcv_dataframe(
-        raw,
-        ticker,
+def load_trading_position_market_frame(
+    *,
+    view: TradingMarketDataV2View,
+    ticker: str,
+    params,
+    allowed_date: str,
+) -> pd.DataFrame:
+    return load_trading_v2_sanitized_ohlcv_frame(
+        view,
+        ticker=ticker,
+        through_date=allowed_date,
         min_rows=get_required_min_rows(params),
     )
-    allowed_ts = pd.Timestamp(allowed_date).normalize()
-    if pd.Timestamp(df.index.max()).normalize() > allowed_ts:
-        raise RuntimeError(
-            f"Trading position data 含尚未完成日K: {ticker} "
-            f"latest={pd.Timestamp(df.index.max()).strftime('%Y-%m-%d')} > allowed={allowed_date}"
-        )
-    return df
 
 
-def resolve_trading_strategy_position_sources(project_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
+def resolve_trading_strategy_position_sources(
+    project_root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], TradingMarketDataV2View | None]:
     account = load_trading_account_state(project_root, required=False)
     if account is None:
-        return {}, {}, {}
+        return {}, {}, None
     orders = load_trading_order_state(project_root, required=False)
     if orders is None:
         orders = {"orders": {}}
@@ -42,12 +44,8 @@ def resolve_trading_strategy_position_sources(project_root: Path) -> tuple[dict[
         for record in (account.get("positions") or {}).values()
     )
     if not has_strategy_positions:
-        return account, orders, {}
-    paths = resolve_runtime_domain_paths(project_root, domain=RUNTIME_DOMAIN_TRADING)
-    csv_map, duplicate_issues = discover_unique_csv_map(paths.data_dir)
-    if duplicate_issues:
-        raise RuntimeError("Trading dataset 存在重複ticker CSV：" + "；".join(duplicate_issues[:5]))
-    return account, orders, csv_map
+        return account, orders, None
+    return account, orders, TradingMarketDataV2View.open(project_root)
 
 
 __all__ = [

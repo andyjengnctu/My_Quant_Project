@@ -353,40 +353,56 @@ def process_prepared_history_qualified_stock(df, ticker, params, sanitize_stats=
     return history_row
 
 
-def process_single_stock(file_path, ticker, params):
+def process_raw_stock_frame(raw_df, ticker, params):
     try:
-        raw_df = pd.read_csv(file_path)
         min_rows_needed = get_required_min_rows(params)
         df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
         return process_prepared_stock(df, ticker, params, sanitize_stats=sanitize_stats)
-
-    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
+    except (ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             return ('skip_insufficient', None, None, None, None, ticker, None)
         raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
 
 
-def process_single_stock_actionable_detail(file_path, ticker, params):
+def process_raw_stock_frame_actionable_detail(raw_df, ticker, params):
     try:
-        raw_df = pd.read_csv(file_path)
         min_rows_needed = get_required_min_rows(params)
         df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
         return process_prepared_stock_actionable_detail(df, ticker, params, sanitize_stats=sanitize_stats)
-    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
+    except (ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             return {'status': 'skip_insufficient', 'ticker': ticker, 'sanitize_issue': None}
         raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
 
 
-def process_single_stock_history_qualified(file_path, ticker, params):
+def process_raw_history_qualified_stock_frame(raw_df, ticker, params):
     try:
-        raw_df = pd.read_csv(file_path)
         min_rows_needed = get_required_min_rows(params)
         df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
         return process_prepared_history_qualified_stock(df, ticker, params, sanitize_stats=sanitize_stats)
-
-    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
+    except (ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             return {'status': 'skip_insufficient', 'ticker': ticker, 'sanitize_issue': None}
+        raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
+
+
+def process_single_stock(file_path, ticker, params):
+    try:
+        return process_raw_stock_frame(pd.read_csv(file_path), ticker, params)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+        raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
+
+
+def process_single_stock_actionable_detail(file_path, ticker, params):
+    try:
+        return process_raw_stock_frame_actionable_detail(pd.read_csv(file_path), ticker, params)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+        raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
+
+
+def process_single_stock_history_qualified(file_path, ticker, params):
+    try:
+        return process_raw_history_qualified_stock_frame(pd.read_csv(file_path), ticker, params)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as e:
         raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
 

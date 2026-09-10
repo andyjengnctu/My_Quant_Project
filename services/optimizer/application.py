@@ -2616,6 +2616,8 @@ def run_static_strategy_parameter_training(
     seed_min_agree,
     trade_train_window_months: int,
     environ=None,
+    raw_data_loader=None,
+    latest_data_date_override: str | None = None,
 ) -> dict:
     """Run the canonical non-rolling Optimizer against an explicit storage domain.
 
@@ -2630,7 +2632,7 @@ def run_static_strategy_parameter_training(
         resolve_strategy_param_artifact_path,
         resolve_strategy_param_manifest_path,
     )
-    from services.optimizer.prep import load_all_raw_data
+    from services.optimizer.prep import load_all_raw_data as default_load_all_raw_data
     from services.optimizer.runtime import (
         create_optimizer_study,
         resolve_optimizer_single_fold_search_parallel_trials,
@@ -2670,7 +2672,8 @@ def run_static_strategy_parameter_training(
     os.makedirs(runtime_models_dir, exist_ok=True)
     os.makedirs(runtime_strategy_params_root, exist_ok=True)
 
-    latest_data_date = _resolve_latest_dataset_date(data_dir)
+    latest_data_date = str(latest_data_date_override or "").strip() or _resolve_latest_dataset_date(data_dir)
+    load_all_raw_data = raw_data_loader or default_load_all_raw_data
     loaded_policy = load_walk_forward_policy(root)
     loaded_policy["trade_train_window_months"] = train_window_months
     selected_model_mode = "trade"

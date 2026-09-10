@@ -10,9 +10,10 @@ from core.path_utils import project_relative_display_path
 from core.trading_policy import build_trading_strategy_param_training_plan
 from core.file_integrity import compute_file_sha256
 from services.optimizer.application import run_static_strategy_parameter_training
-from services.trading.market_data_state import (
-    get_trading_market_data_snapshot_sha256,
-    load_trading_market_data_snapshot,
+from services.trading.market_data_consumer import (
+    get_trading_v2_consumer_state_sha256,
+    load_trading_v2_consumer_state,
+    load_trading_v2_optimizer_raw_data,
 )
 from services.trading.strategy_param_state import publish_trading_strategy_param_binding
 
@@ -32,13 +33,13 @@ def run_trading_strategy_param_training(
     if not bool(plan["optimizer_requires_multi_seed"]):
         raise RuntimeError("目前Trading strategy要求multi-seed producer；設定卻未啟用")
 
-    market_before = load_trading_market_data_snapshot(root, required=True, verify_dataset_content=True)
-    market_snapshot_sha_before = get_trading_market_data_snapshot_sha256(root)
-    dataset_content_sha_before = str(market_before["dataset_fingerprint"]["csv_content_sha256"])
+    market_before = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
+    market_snapshot_sha_before = get_trading_v2_consumer_state_sha256(root)
+    dataset_content_sha_before = str(market_before["source_view_fingerprint"])
 
     result = run_static_strategy_parameter_training(
         project_root=root,
-        selected_data_dir=str(plan["data_dir"]),
+        selected_data_dir=str(root),
         output_dir=str(plan["output_dir"]),
         models_dir=str(plan["models_root"]),
         strategy_params_root=str(plan["strategy_params_root"]),
@@ -51,12 +52,16 @@ def run_trading_strategy_param_training(
         seed_min_agree=plan["optimizer_seed_min_agree"],
         trade_train_window_months=int(plan["optimizer_train_window_months"]),
         environ=environ,
+        raw_data_loader=load_trading_v2_optimizer_raw_data,
+        latest_data_date_override=str(market_before["market_date"]),
     )
-    market_after = load_trading_market_data_snapshot(root, required=True, verify_dataset_content=True)
-    if str(market_after["dataset_fingerprint"]["csv_content_sha256"]) != dataset_content_sha_before:
-        raise RuntimeError("Trading dataset content 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
+    market_after = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
+    if str(market_after["source_view_fingerprint"]) != dataset_content_sha_before:
+        raise RuntimeError("Trading V2 view identity 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
+    if get_trading_v2_consumer_state_sha256(root) != market_snapshot_sha_before:
+        raise RuntimeError("Trading V2 consumer state 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
     if str(market_after.get("market_date") or "") != str(market_before.get("market_date") or ""):
-        raise RuntimeError("Trading dataset latest date 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
+        raise RuntimeError("Trading V2 latest date 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
     selected_path = Path(str(result["selected_params_path"]))
     selected_sha = compute_file_sha256(selected_path)
     binding = publish_trading_strategy_param_binding(root)
@@ -67,7 +72,8 @@ def run_trading_strategy_param_training(
         **dict(result),
         "runtime_domain": "trading",
         "strategy_id": str(plan["strategy_id"]),
-        "data_dir": _display_path(root, str(plan["data_dir"])),
+        "data_dir": "data/trading/market_data_v2",
+        "market_data_source": "trading_market_data_v2_historical_latest_view",
         "models_root": _display_path(root, str(plan["models_root"])),
         "strategy_params_root": _display_path(root, str(plan["strategy_params_root"])),
         "output_dir": _display_path(root, str(plan["output_dir"])),

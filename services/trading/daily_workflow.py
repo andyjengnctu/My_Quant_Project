@@ -6,8 +6,10 @@ from typing import Any
 
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, compute_file_sha256
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths, resolve_runtime_output_dir
+from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
+from services.trading.market_data_consumer import build_trading_v2_ohlcv_frame
 from services.trading.market_data_update import run_trading_market_data_update
+from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.scanner.scan_runner import run_daily_scanner
 from services.trading.scanner_state import (
     TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
@@ -45,12 +47,20 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     expected_scanned_tickers = list(runtime.get("current_universe_tickers") or [])
     if not expected_scanned_tickers:
         raise RuntimeError("Trading Scanner 缺少 canonical current universe membership；請重新更新 Trading 資料")
+    v2_view = TradingMarketDataV2View.open(root)
+    prepared_frames = {
+        ticker: build_trading_v2_ohlcv_frame(
+            v2_view, ticker=ticker, through_date=str(runtime["latest_data_date"])
+        )
+        for ticker in expected_scanned_tickers
+    }
     result = run_daily_scanner(
         str(runtime["data_dir"]),
         runtime["params"],
         output_dir=output_dir,
         include_execution_context=True,
         ticker_membership=expected_scanned_tickers,
+        prepared_frames=prepared_frames,
     )
     actual_scanned_tickers = list(result.get("scanned_tickers") or [])
     if actual_scanned_tickers != expected_scanned_tickers:

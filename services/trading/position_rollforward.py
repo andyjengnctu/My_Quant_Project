@@ -41,7 +41,7 @@ TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
 
 def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    account, orders, csv_map = resolve_trading_strategy_position_sources(root)
+    account, orders, market_view = resolve_trading_strategy_position_sources(root)
     allowed_date = latest_allowed_completed_daily_date()
     if not account:
         return {
@@ -80,11 +80,10 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
                 }
             )
             continue
-        file_path = csv_map.get(ticker)
-        if not file_path:
-            raise FileNotFoundError(f"Trading dataset 缺少持股 {ticker} CSV")
+        if market_view is None:
+            raise RuntimeError("Trading V2 position market view 尚未就緒")
         params = build_params_from_mapping(order["frozen_params"])
-        df = load_trading_position_market_frame(file_path=file_path, ticker=ticker, params=params, allowed_date=allowed_date)
+        df = load_trading_position_market_frame(view=market_view, ticker=ticker, params=params, allowed_date=allowed_date)
         entry_date = normalize_trading_date(broker.get("entry_date"))
         last_rollforward = normalize_trading_date(management.get("last_rollforward_date"))
         eligible = df.index
@@ -118,7 +117,7 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
 def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     recover_trading_fill_transaction(root)
-    account, orders, csv_map = resolve_trading_strategy_position_sources(root)
+    account, orders, market_view = resolve_trading_strategy_position_sources(root)
     allowed_date = latest_allowed_completed_daily_date()
     if not account:
         return {
@@ -151,11 +150,10 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
         stop_progress = build_trading_stop_exit_progress(orders, ticker=ticker, entry_order_id=entry_order_id)
         if bool(stop_progress.get("triggered")):
             continue
-        file_path = csv_map.get(ticker)
-        if not file_path:
-            raise FileNotFoundError(f"Trading dataset 缺少持股 {ticker} CSV")
+        if market_view is None:
+            raise RuntimeError("Trading V2 position market view 尚未就緒")
         params = build_params_from_mapping(order["frozen_params"])
-        df = load_trading_position_market_frame(file_path=file_path, ticker=ticker, params=params, allowed_date=allowed_date)
+        df = load_trading_position_market_frame(view=market_view, ticker=ticker, params=params, allowed_date=allowed_date)
         precomputed = generate_signals(df, params, ticker=ticker)
         atr_values, _buy_values, _sell_values, _limits = unpack_precomputed_signals(precomputed)
 

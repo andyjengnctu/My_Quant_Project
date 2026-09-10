@@ -4463,6 +4463,17 @@
       "entry": "`core/market_data_ohlcv_compatibility.py`, `services/trading/market_data_compatibility.py`, `services/trading/market_data_update.py`, `services/downloader/application.py`, `core/market_data_contract.py`",
       "initial_status": "NEW",
       "order": 402
+    },
+    {
+      "id": "B415",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 direct Trading consumer cutover / Legacy read retirement",
+      "item": "Live rule-based Trading Params, Scanner, holdings/exit planning, allocator mark-to-market and Workbench operational reads must consume the verified Market Data V2 historical/latest view plus canonical V2 execution consumer state; Legacy six-column CSV/snapshot may remain only as an unused transitional cache until deletion.",
+      "gap": "Round 6 removed Legacy provider authority but production consumers could still read V2-derived CSV/snapshot. Round 7 must preserve the existing adjusted-OHLC/raw-Volume strategy semantics and training-membership continuity while moving operational lineage/readiness to V2, keeping Research/file-based scanner behavior isolated and preventing any live consumer from requiring Legacy CSV membership or snapshot content.",
+      "entry": "`services/trading/market_data_consumer.py`, `core/trading_data_dependencies.py`, `services/trading/strategy_param_training.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/position_market_context.py`, `services/trading/order_planning.py`, `services/trading/market_data_ops.py`",
+      "initial_status": "NEW",
+      "order": 403
     }
   ],
   "tests": [
@@ -8197,6 +8208,13 @@
       "description": "`validate_market_data_v2_trading_compatibility_materialization_contract_case` 驗證 Research/Trading 共用六欄 OHLCV mapping、compatibility materialization 零 provider call、current execution + positions + retained membership union、target-date readiness fail-closed、Legacy direct-provider producer 在 V2 cutover 前置阻擋，以及 canonical Trading update 依序執行 V2 update → compatibility materialize → snapshot。",
       "initial_status": "NEW",
       "order": 524
+    },
+    {
+      "id": "T535",
+      "b_id": "B415",
+      "description": "`validate_market_data_v2_trading_direct_consumer_cutover_contract_case` 驗證 full_rule_based_no_dl 的六個 V2 dependency、V2 OHLCV mapping、consumer-state membership continuity/zero-provider-call，以及 Params/Scanner/holdings/allocator/Workbench direct consumer 不再讀 Legacy CSV。",
+      "initial_status": "NEW",
+      "order": 525
     }
   ],
   "transitions": [
@@ -26263,6 +26281,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_market_data_v2_trading_compatibility_materialization_contract_case`"
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B415",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "完成 Market Data V2 Round 7 direct consumer cutover；Legacy compatibility CSV/snapshot 降為無 production read consumer 的過渡 cache。",
+      "note": "Params/Scanner/holdings/allocator/Workbench direct V2 read migration"
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T535",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增 direct consumer cutover regression 並納入正式 synthetic registry。",
+      "note": "`validate_market_data_v2_trading_direct_consumer_cutover_contract_case`"
     }
   ]
 }

@@ -50,30 +50,165 @@ def _publish_synthetic_trading_input_lineage(
     required_position_tickers=(),
     current_universe_tickers=None,
 ):
-    """Publish canonical Trading data/param lineage for isolated synthetic fixtures."""
+    """Publish canonical V2 Trading data/param lineage for isolated synthetic fixtures."""
+    from datetime import datetime, timedelta
+
     from core.data_utils import discover_unique_csv_inputs
+    from core.file_integrity import canonical_json_sha256
+    from core.market_data_bootstrap_requests import (
+        BootstrapHttpRequest,
+        BootstrapRequestManifest,
+        build_registry_fingerprint,
+    )
+    from core.market_data_dataset_registry import get_market_dataset_specs
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
-    from services.trading.market_data_state import publish_trading_market_data_snapshot
+    from services.trading.market_data_consumer import publish_trading_v2_consumer_state
+    from services.trading.market_data_dataset_state import (
+        VALIDATION_STATUS_READY,
+        build_initial_market_data_dataset_state,
+        publish_market_data_dataset_state,
+    )
+    from services.trading.market_data_v2_view import TradingMarketDataV2View
     from services.trading.strategy_param_state import publish_trading_strategy_param_binding
     from services.trading.scanner_state import load_trading_scanner_runtime
+    from .synthetic_market_data_cases import _publish_ready_provider_snapshot_fixture
 
+    paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
+    csv_inputs, duplicate_issue_lines = discover_unique_csv_inputs(Path(paths.data_dir))
+    if duplicate_issue_lines:
+        raise RuntimeError(
+            "Synthetic Trading fixture 存在同 ticker 重複 CSV："
+            + " | ".join(duplicate_issue_lines)
+        )
+    if not csv_inputs:
+        raise RuntimeError("Synthetic Trading fixture 必須先建立至少一個 canonical Trading CSV")
+
+    csv_by_ticker = {str(ticker): Path(path) for ticker, path in csv_inputs}
+    all_tickers = sorted(csv_by_ticker)
     if current_universe_tickers is None:
-        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
-        csv_inputs, duplicate_issue_lines = discover_unique_csv_inputs(Path(paths.data_dir))
-        if duplicate_issue_lines:
-            raise RuntimeError(
-                "Synthetic Trading fixture 存在同 ticker 重複 CSV："
-                + " | ".join(duplicate_issue_lines)
-            )
-        current_universe_tickers = [str(ticker) for ticker, _path in csv_inputs]
-        if not current_universe_tickers:
-            raise RuntimeError("Synthetic Trading fixture 必須先建立至少一個 canonical Trading CSV")
+        current_universe_tickers = all_tickers
+    current_universe = sorted({normalize_trading_ticker(item) for item in current_universe_tickers})
+    unknown_current = sorted(set(current_universe) - set(all_tickers))
+    if unknown_current:
+        raise RuntimeError(f"Synthetic Trading current universe 缺 CSV fixture: {unknown_current}")
 
-    publish_trading_market_data_snapshot(
+    price_adj_parts = []
+    raw_price_parts = []
+    trading_dates = {str(market_date)}
+    for ticker, path in sorted(csv_by_ticker.items()):
+        source = pd.read_csv(path)
+        required = {"Date", "Open", "High", "Low", "Close", "Volume"}
+        missing = sorted(required.difference(source.columns))
+        if missing:
+            raise RuntimeError(f"Synthetic Trading CSV 缺欄位: {ticker} {missing}")
+        dates = pd.to_datetime(source["Date"], errors="raise").dt.strftime("%Y-%m-%d")
+        trading_dates.update(dates.tolist())
+        execution_volume = [
+            10_000_000_000 if ticker in current_universe and date == str(market_date) else 1
+            for date in dates.tolist()
+        ]
+        price_adj_parts.append(pd.DataFrame({
+            "date": dates,
+            "stock_id": ticker,
+            "open": source["Open"].astype(float),
+            "max": source["High"].astype(float),
+            "min": source["Low"].astype(float),
+            "close": source["Close"].astype(float),
+            "Trading_Volume": execution_volume,
+        }))
+        raw_price_parts.append(pd.DataFrame({
+            "date": dates,
+            "stock_id": ticker,
+            "Trading_Volume": source["Volume"],
+        }))
+
+    provider_frames = {
+        "TaiwanStockPriceAdj": pd.concat(price_adj_parts, ignore_index=True),
+        "TaiwanStockPrice": pd.concat(raw_price_parts, ignore_index=True),
+        "TaiwanStockMarketValue": pd.DataFrame({
+            "date": [str(market_date)] * len(all_tickers),
+            "stock_id": all_tickers,
+            "market_value": [10_000_000_000_000 if ticker in current_universe else 1 for ticker in all_tickers],
+        }),
+        "TaiwanStockTradingDate": pd.DataFrame({"date": sorted(trading_dates)}),
+        "TaiwanStockInfo": pd.DataFrame({
+            "date": [str(market_date)] * len(all_tickers),
+            "stock_id": all_tickers,
+            "type": ["twse"] * len(all_tickers),
+            "industry_category": ["ETF" if ticker.startswith("00") else "半導體業" for ticker in all_tickers],
+        }),
+        "TaiwanStockDelisting": pd.DataFrame({
+            "date": pd.Series(dtype="string"),
+            "stock_id": pd.Series(dtype="string"),
+        }),
+    }
+    required_datasets = tuple(provider_frames)
+    canonical_specs = get_market_dataset_specs(included_only=True)
+    registry_fingerprint = build_registry_fingerprint(canonical_specs)
+    requests = tuple(
+        BootstrapHttpRequest(
+            dataset=dataset,
+            bootstrap_mode="synthetic_full_range",
+            data_id=None,
+            start_date=None,
+            end_date=str(market_date),
+        )
+        for dataset in required_datasets
+    )
+    provider_as_of = (pd.Timestamp(market_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    manifest_core = {
+        "as_of_date": provider_as_of,
+        "registry_fingerprint": registry_fingerprint,
+        "requests": [request.request_id for request in requests],
+        "fixture": "trading_v2_direct_consumer",
+    }
+    manifest_fingerprint = canonical_json_sha256(manifest_core)
+    manifest = BootstrapRequestManifest(
+        as_of_date=provider_as_of,
+        full_range_start=min(trading_dates),
+        registry_fingerprint=registry_fingerprint,
+        manifest_fingerprint=manifest_fingerprint,
+        historical_instrument_count=len(all_tickers),
+        requests=requests,
+    )
+    frames_by_request = {
+        request.request_id: provider_frames[request.dataset]
+        for request in requests
+    }
+    started_at = datetime.now().astimezone()
+    _publish_ready_provider_snapshot_fixture(
+        root=root,
+        manifest=manifest,
+        manifest_fingerprint=manifest_fingerprint,
+        frame_by_request=frames_by_request,
+        owner_id="synthetic-trading-v2",
+        started_at=started_at,
+        finalized_at=(started_at + timedelta(seconds=len(requests) + 1)).isoformat(),
+        missing_columns_message="synthetic Trading V2 fixture 缺欄位",
+    )
+
+    dataset_state = build_initial_market_data_dataset_state(updated_at=started_at)
+    for dataset in required_datasets:
+        row = dataset_state["datasets"][dataset]
+        row.update({
+            "status": "READY",
+            "last_attempt_target_date": str(market_date),
+            "last_success_target_date": str(market_date),
+            "last_ready_target_date": str(market_date),
+            "latest_data_date": str(market_date),
+            "latest_expected_date": str(market_date),
+            "schema_status": VALIDATION_STATUS_READY,
+            "coverage_status": VALIDATION_STATUS_READY,
+        })
+    publish_market_data_dataset_state(root, dataset_state)
+
+    view = TradingMarketDataV2View.open(root)
+    publish_trading_v2_consumer_state(
         root,
-        market_date=market_date,
+        market_date=str(market_date),
         required_position_tickers=list(required_position_tickers),
-        current_universe_tickers=list(current_universe_tickers),
+        retained_training_tickers=all_tickers,
+        view=view,
     )
     publish_trading_strategy_param_binding(root)
     return load_trading_scanner_runtime(root, verify_dataset_content=True)

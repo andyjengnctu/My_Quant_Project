@@ -5,19 +5,18 @@ from pathlib import Path
 from typing import Any
 
 from core.console_report import project_relative_display_path
-from core.dataset_dates import resolve_latest_dataset_date
 from core.file_integrity import compute_file_sha256, load_json_strict
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths, resolve_runtime_output_dir
+from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.data_readiness import (
     assert_trading_data_readiness,
     build_trading_data_readiness_for_execution_evidence,
 )
-from services.trading.market_data_state import (
-    get_trading_market_data_snapshot_sha256,
-    load_trading_market_data_snapshot,
+from services.trading.market_data_consumer import (
+    get_trading_v2_consumer_state_sha256,
+    load_trading_v2_consumer_state,
 )
 from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
 from services.trading.strategy_param_state import (
@@ -75,15 +74,6 @@ def _selected_payload_latest_data_date(payload: dict[str, Any]) -> str:
     return str(policy.get("latest_data_date") or "").strip()
 
 
-def _safe_latest_dataset_date(data_dir: Path) -> str | None:
-    if not data_dir.is_dir():
-        return None
-    try:
-        return resolve_latest_dataset_date(data_dir)
-    except (OSError, ValueError):
-        return None
-
-
 def resolve_trading_candidate_snapshot_path(project_root: str | Path) -> Path:
     root = Path(project_root).resolve()
     return Path(resolve_runtime_output_dir(root, domain=RUNTIME_DOMAIN_TRADING, category="scanner")) / "candidate_snapshot.json"
@@ -96,16 +86,10 @@ def load_trading_scanner_runtime(
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     profile = get_trading_strategy_profile()
-    paths = resolve_runtime_domain_paths(
-        root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile
+    market_state = load_trading_v2_consumer_state(
+        root, required=True, verify_current_view=verify_dataset_content
     )
-    data_dir = Path(paths.data_dir)
-    market_snapshot = load_trading_market_data_snapshot(
-        root, required=True, verify_dataset_content=verify_dataset_content
-    )
-    latest_data_date = str(market_snapshot["market_date"])
-    if resolve_latest_dataset_date(data_dir) != latest_data_date:
-        raise RuntimeError("Trading dataset latest date 與 canonical market-data snapshot 不一致；請重新更新 Trading 資料")
+    latest_data_date = str(market_state["market_date"])
     data_readiness = build_trading_data_readiness_for_execution_evidence(
         root,
         strategy_id=profile.strategy_id,
@@ -149,18 +133,19 @@ def load_trading_scanner_runtime(
     return {
         "root": root,
         "profile": profile,
-        "paths": paths,
-        "data_dir": data_dir,
+        "data_dir": root / "data" / "trading" / "market_data_v2",
         "latest_data_date": latest_data_date,
         "selected_path": selected_path,
         "selected_params_sha256": compute_file_sha256(selected_path),
         "param_latest_data_date": param_latest_data_date,
         "member_count": member_count,
         "params": param_source["primary_params"],
-        "market_data_snapshot_sha256": get_trading_market_data_snapshot_sha256(root),
-        "dataset_content_sha256": str(market_snapshot["dataset_fingerprint"]["csv_content_sha256"]),
-        "current_universe_tickers": list(market_snapshot.get("current_universe_tickers") or []),
-        "required_position_tickers": list(market_snapshot.get("required_position_tickers") or []),
+        # Transitional field names are retained until Round 8 schema cleanup.
+        "market_data_snapshot_sha256": get_trading_v2_consumer_state_sha256(root),
+        "dataset_content_sha256": str(market_state["source_view_fingerprint"]),
+        "market_data_source": str(market_state.get("source") or "trading_market_data_v2_historical_latest_view"),
+        "current_universe_tickers": list(market_state.get("current_execution_pool_tickers") or []),
+        "required_position_tickers": list(market_state.get("required_position_tickers") or []),
         "param_binding_sha256": get_trading_strategy_param_binding_sha256(root),
         "param_binding_fingerprint": str(param_binding["binding_fingerprint"]),
         "trading_data_readiness": data_readiness,
@@ -171,20 +156,16 @@ def load_trading_scanner_runtime(
 def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     profile = get_trading_strategy_profile()
-    paths = resolve_runtime_domain_paths(
-        root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile
-    )
-    data_dir = Path(paths.data_dir)
-    raw_latest_data_date = _safe_latest_dataset_date(data_dir)
+    data_dir = root / "data" / "trading" / "market_data_v2"
     market_error = ""
-    market_snapshot = None
+    market_state = None
     try:
-        market_snapshot = load_trading_market_data_snapshot(root, required=False, verify_dataset_content=False)
+        market_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     except (OSError, TypeError, ValueError, RuntimeError) as exc:
         market_error = f"{type(exc).__name__}: {exc}"
-    market_date = None if market_snapshot is None else str(market_snapshot.get("market_date") or "") or None
-    market_ready = bool(market_snapshot is not None and market_date and market_date == raw_latest_data_date and not market_error)
-    latest_data_date = market_date or raw_latest_data_date
+    market_date = None if market_state is None else str(market_state.get("market_date") or "") or None
+    market_ready = bool(market_state is not None and market_date and not market_error)
+    latest_data_date = market_date
 
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     param_latest_data_date = ""
@@ -211,7 +192,7 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         strategy_id=profile.strategy_id,
         target_date=latest_data_date,
         execution_market_data_ready=market_ready,
-        execution_market_data_reason=market_error or (None if market_ready else "Trading market-data snapshot 尚未就緒／與 dataset date 不一致"),
+        execution_market_data_reason=market_error or (None if market_ready else "Trading V2 execution consumer state 尚未就緒"),
     )
     trading_data_ready = bool(data_readiness.get("ready"))
     params_ready = bool(
@@ -238,7 +219,7 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "param_selector": profile.param_selector,
         "data_dir": project_relative_display_path(data_dir, project_root=root),
         "latest_data_date": latest_data_date,
-        "raw_latest_data_date": raw_latest_data_date,
+        "raw_latest_data_date": latest_data_date,
         "market_data_ready": market_ready,
         "market_data_error": market_error or None,
         "trading_data_ready": trading_data_ready,
@@ -248,11 +229,12 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "trading_data_ready_v2_count": data_readiness.get("ready_v2_dataset_count"),
         "trading_data_blockers": list(data_readiness.get("blocking_dependencies") or []),
         "market_data_snapshot_sha256": (
-            get_trading_market_data_snapshot_sha256(root) if market_snapshot is not None and not market_error else None
+            get_trading_v2_consumer_state_sha256(root) if market_state is not None and not market_error else None
         ),
         "dataset_content_sha256": (
-            None if market_snapshot is None else str((market_snapshot.get("dataset_fingerprint") or {}).get("csv_content_sha256") or "") or None
+            None if market_state is None else str(market_state.get("source_view_fingerprint") or "") or None
         ),
+        "market_data_source": (None if market_state is None else market_state.get("source")),
         "market_data_v2_archive_status": v2_archive.get("status"),
         "market_data_v2_archive_provider_ready": bool(v2_archive.get("provider_ready")),
         "market_data_v2_archive_latest_date": v2_archive.get("latest_sync_target_date"),
@@ -271,7 +253,6 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             project_root=root,
         ),
     }
-
 
 def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):

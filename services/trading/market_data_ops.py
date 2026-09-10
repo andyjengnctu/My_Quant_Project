@@ -15,7 +15,7 @@ from core.market_data_due_planner import plan_market_data_due_datasets
 from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
 from services.trading.data_readiness import build_trading_data_readiness
 from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
-from services.trading.market_data_state import load_trading_market_data_snapshot
+from services.trading.market_data_consumer import load_trading_v2_consumer_state
 from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
 from services.trading.market_data_market_date_discovery import (
     default_next_market_date_probe_at,
@@ -55,8 +55,8 @@ def build_market_data_ops_read_model(
 
     root = Path(project_root).resolve()
     local_now = now or datetime.now().astimezone()
-    trading_snapshot = load_trading_market_data_snapshot(root, required=False)
-    target_date = None if trading_snapshot is None else str(trading_snapshot.get("market_date") or "") or None
+    consumer_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
+    target_date = None if consumer_state is None else str(consumer_state.get("market_date") or "") or None
     trading_readiness = build_trading_data_readiness(root, verify_execution_dataset_content=False)
     dataset_state = build_market_data_dataset_state_read_model(root)
     v2 = build_trading_market_data_v2_read_model(root)
@@ -162,7 +162,8 @@ def build_market_data_ops_read_model(
         "generated_at": local_now.isoformat(),
         "provider_calls": 0,
         "trading_target_date": target_date,
-        "trading_snapshot_ready": trading_snapshot is not None,
+        "trading_snapshot_ready": consumer_state is not None,
+        "trading_market_data_source": None if consumer_state is None else consumer_state.get("source"),
         "trading_strategy_id": trading_readiness.get("strategy_id"),
         "trading_ready": bool(trading_readiness.get("ready")),
         "trading_readiness_status": trading_readiness.get("status"),

@@ -8,12 +8,12 @@ from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
-from services.trading.market_data_state import (
-    get_trading_market_data_snapshot_sha256,
-    load_trading_market_data_snapshot,
+from services.trading.market_data_consumer import (
+    get_trading_v2_consumer_state_sha256,
+    load_trading_v2_consumer_state,
 )
 
-TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 1
+TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 2
 TRADING_STRATEGY_PARAM_BINDING_FILENAME = "trading_param_binding.json"
 
 
@@ -45,7 +45,7 @@ def publish_trading_strategy_param_binding(project_root: str | Path) -> dict[str
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     if not selected_path.is_file():
         raise FileNotFoundError("Trading selected strategy params 尚未產生")
-    market_snapshot = load_trading_market_data_snapshot(root, required=True, verify_dataset_content=True)
+    consumer_state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
     payload: dict[str, Any] = {
         "schema_version": TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION,
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
@@ -53,9 +53,10 @@ def publish_trading_strategy_param_binding(project_root: str | Path) -> dict[str
         "param_selector": profile.param_selector,
         "selected_params_path": project_relative_display_path(selected_path, project_root=root),
         "selected_params_sha256": compute_file_sha256(selected_path),
-        "market_data_snapshot_sha256": get_trading_market_data_snapshot_sha256(root),
-        "dataset_content_sha256": str(market_snapshot["dataset_fingerprint"]["csv_content_sha256"]),
-        "latest_data_date": str(market_snapshot["market_date"]),
+        "market_data_source": "trading_market_data_v2_historical_latest_view",
+        "market_data_snapshot_sha256": get_trading_v2_consumer_state_sha256(root),
+        "dataset_content_sha256": str(consumer_state["source_view_fingerprint"]),
+        "latest_data_date": str(consumer_state["market_date"]),
     }
     payload["binding_fingerprint"] = canonical_json_sha256(payload)
     path = resolve_trading_strategy_param_binding_path(root)
@@ -89,12 +90,14 @@ def load_trading_strategy_param_binding(
         raise RuntimeError("Trading param binding selector 已過期")
     if not selected_path.is_file() or str(payload.get("selected_params_sha256") or "") != compute_file_sha256(selected_path):
         raise RuntimeError("Trading selected params 已與 param binding 不一致；請重新更新 Trading Params")
-    market_snapshot = load_trading_market_data_snapshot(
-        root, required=True, verify_dataset_content=verify_dataset_content
+    consumer_state = load_trading_v2_consumer_state(
+        root, required=True, verify_current_view=bool(verify_dataset_content)
     )
-    if str(payload.get("dataset_content_sha256") or "") != str(market_snapshot["dataset_fingerprint"]["csv_content_sha256"]):
-        raise RuntimeError("Trading dataset content identity 與 params binding 不一致")
-    if str(payload.get("latest_data_date") or "") != str(market_snapshot.get("market_date") or ""):
+    if str(payload.get("market_data_snapshot_sha256") or "") != get_trading_v2_consumer_state_sha256(root):
+        raise RuntimeError("Trading V2 consumer state identity 與 params binding 不一致")
+    if str(payload.get("dataset_content_sha256") or "") != str(consumer_state["source_view_fingerprint"]):
+        raise RuntimeError("Trading V2 view identity 與 params binding 不一致")
+    if str(payload.get("latest_data_date") or "") != str(consumer_state.get("market_date") or ""):
         raise RuntimeError("Trading params binding data date 已過期")
     return payload
 

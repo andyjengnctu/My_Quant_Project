@@ -1,8 +1,9 @@
 """Canonical Trading market-data update orchestration during V2 cutover.
 
-Market Data V2 is provider-authoritative.  Existing rule-based consumers may
-still read the six-column Trading CSV dataset, but that dataset is now only a
-local compatibility materialization from the verified V2 historical/latest view.
+Market Data V2 is provider-authoritative and, after the Round-7 cutover, is also
+the direct production read source for rule-based Trading consumers.  The legacy
+six-column Trading CSV dataset is retained only as a transitional, provider-free
+compatibility materialization until Round 8 removes the unused cache.
 No Legacy CSV producer is allowed to call FinMind on this path.
 """
 from __future__ import annotations
@@ -14,6 +15,7 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_
 from core.trading_identity import normalize_trading_ticker
 from services.trading.account_state import load_trading_account_state
 from services.trading.market_data_compatibility import materialize_trading_v2_compatibility_dataset
+from services.trading.market_data_consumer import publish_trading_v2_consumer_state
 from services.trading.market_data_state import publish_trading_market_data_snapshot
 
 
@@ -76,6 +78,12 @@ def run_trading_market_data_update(
     if Path(paths.data_dir).resolve() == root.resolve():
         raise RuntimeError("Trading runtime data_dir 不可解析為 project root")
 
+    consumer_state = publish_trading_v2_consumer_state(
+        root,
+        market_date=str(result["market_date"]),
+        required_position_tickers=required_position_tickers,
+        retained_training_tickers=list(result.get("retained_history_tickers") or []),
+    )
     snapshot = publish_trading_market_data_snapshot(
         root,
         market_date=result["market_date"],
@@ -85,6 +93,9 @@ def run_trading_market_data_update(
     return {
         **result,
         "status": "READY",
+        "market_data_consumer_state_fingerprint": consumer_state["state_fingerprint"],
+        "market_data_consumer_source_view_fingerprint": consumer_state["source_view_fingerprint"],
+        "market_data_consumer_training_ticker_count": consumer_state["training_ticker_count"],
         "market_data_snapshot_fingerprint": snapshot["snapshot_fingerprint"],
         "dataset_content_sha256": snapshot["dataset_fingerprint"]["csv_content_sha256"],
         "market_data_v2_archive": v2_update,

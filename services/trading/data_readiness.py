@@ -21,6 +21,7 @@ from services.trading.market_data_dataset_state import (
     load_market_data_dataset_state,
 )
 from services.trading.market_data_state import load_trading_market_data_snapshot
+from services.trading.market_data_consumer import load_trading_v2_consumer_state
 
 READINESS_STATUS_READY = "READY"
 READINESS_STATUS_BLOCKED = "BLOCKED"
@@ -166,12 +167,12 @@ def build_trading_data_readiness(
     execution_ready = not spec.execution_market_data_required
     execution_reason: str | None = None
     try:
-        snapshot = load_trading_market_data_snapshot(
-            root,
-            required=spec.execution_market_data_required,
-            verify_dataset_content=verify_execution_dataset_content,
-        )
-        if snapshot is not None:
+        if spec.execution_market_data_required:
+            snapshot = load_trading_market_data_snapshot(
+                root,
+                required=True,
+                verify_dataset_content=verify_execution_dataset_content,
+            )
             target_date = str(snapshot.get("market_date") or "") or None
             paths = resolve_runtime_domain_paths(
                 root,
@@ -182,6 +183,14 @@ def build_trading_data_readiness(
             execution_ready = bool(target_date and latest == target_date)
             if not execution_ready:
                 execution_reason = f"execution dataset date={latest or '-'} 與 snapshot={target_date or '-'} 不一致"
+        else:
+            consumer_state = load_trading_v2_consumer_state(
+                root,
+                required=True,
+                verify_current_view=False,
+            )
+            target_date = str(consumer_state.get("market_date") or "") or None
+            execution_ready = True
     except (OSError, TypeError, ValueError, RuntimeError) as exc:
         execution_ready = False
         execution_reason = f"{type(exc).__name__}: {exc}"
