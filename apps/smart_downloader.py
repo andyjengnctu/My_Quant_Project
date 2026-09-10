@@ -24,19 +24,7 @@ def main(argv=None):
     return downloader_main(argv=argv)
 
 
-def __getattr__(name):
-    if name == "main":
-        return main
-    if name == "smart_download_vip_data":
-        from services import downloader as downloader_module
-
-        value = getattr(downloader_module, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-__all__ = ["smart_download_vip_data", "main"]
+__all__ = ["main"]
 
 if __name__ == "__main__":
     run_cli_entrypoint(main)

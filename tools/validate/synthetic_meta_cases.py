@@ -179,10 +179,13 @@ def _checklist_guard_result(consistency: dict, *, result_name: str, invalid_key:
 def _probe_module_symbols(expectations: dict, *, from_all: bool = False):
     import_failures = []
     symbol_failures = []
-    reloaded_modules = []
+    imported_modules = []
     for module_name, expected_symbols in expectations.items():
         try:
-            module = importlib.reload(importlib.import_module(module_name))
+            # Coverage/symbol probing must not reload canonical runtime modules.
+            # Reloading class owners such as core.strategy_params invalidates
+            # already-created objects and can break later multiprocessing pickle.
+            module = importlib.import_module(module_name)
         except Exception as exc:
             import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
             continue
@@ -190,8 +193,8 @@ def _probe_module_symbols(expectations: dict, *, from_all: bool = False):
         missing_symbols = sorted(set(expected_symbols) - available)
         if missing_symbols:
             symbol_failures.append(f"{module_name}: {missing_symbols}")
-        reloaded_modules.append(module_name)
-    return import_failures, symbol_failures, reloaded_modules
+        imported_modules.append(module_name)
+    return import_failures, symbol_failures, imported_modules
 
 
 def _run_checklist_row_mutation_guard(
@@ -2346,10 +2349,13 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_breakout_optimizer_high_len_values",
         },
     }
+    strategy_params_class_before = importlib.import_module("core.strategy_params").V16StrategyParams
     module_import_failures, module_symbol_failures, reloaded_modules = _probe_module_symbols(
         module_symbol_expectations
     )
+    strategy_params_class_after = importlib.import_module("core.strategy_params").V16StrategyParams
 
+    add_check(results, "meta_coverage", case_id, "policy_contract_coverage_probe_preserves_strategy_params_class_identity", True, strategy_params_class_before is strategy_params_class_after)
     add_check(results, "meta_coverage", case_id, "policy_contract_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "policy_contract_coverage_targets_declared", [], missing_targets)
     add_check(results, "meta_coverage", case_id, "policy_contract_modules_importable_for_coverage_probe", [], module_import_failures)

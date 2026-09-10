@@ -1625,19 +1625,23 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from unittest.mock import patch
+    from config.downloader import (
+        DOWNLOADER_CANONICAL_PRICE_BULK_CHUNK_MONTHS,
+        DOWNLOADER_PRICE_HISTORY_START_DATE,
+    )
     from services.downloader.finmind_http import FinMindUsage
     from services.downloader.finmind_shared_client import SharedFinMindRequestClient
     from services.downloader.trading_price_refresh import build_price_history_ranges
 
 
     full_price_ranges = build_price_history_ranges(
-        start_date=downloader_runtime.PRICE_HISTORY_START_DATE,
+        start_date=DOWNLOADER_PRICE_HISTORY_START_DATE,
         end_date="2026-09-07",
-        chunk_months=downloader_runtime.CANONICAL_PRICE_BULK_CHUNK_MONTHS,
+        chunk_months=DOWNLOADER_CANONICAL_PRICE_BULK_CHUNK_MONTHS,
     )
     check(
         "canonical_price_history_starts_from_configured_boundary",
-        downloader_runtime.PRICE_HISTORY_START_DATE,
+        DOWNLOADER_PRICE_HISTORY_START_DATE,
         full_price_ranges[0].start_date,
     )
     check(
@@ -2479,7 +2483,13 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
     check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and "legacy_stage_data_requests" not in update_source)
     check("executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
-    check("canonical_price_refresh_never_calculates_adjustment_locally", True, "TaiwanStockPriceAdj" in price_refresh_source and "adjusted-price calculator" in price_refresh_source and "full_market_range_current_vintage" in price_refresh_source)
+    check(
+        "canonical_price_refresh_consumes_provider_adjusted_price_without_local_reconstruction",
+        True,
+        "request_finmind_data_with_retry" in price_refresh_source
+        and "dataset=rt.FINMIND_PRICE_DATASET" in price_refresh_source
+        and "normalize_adjusted_price_frame" in price_refresh_source,
+    )
     check("daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
     check("smart_downloader_uses_v2_daily_updater_as_option1_owner", True, "from services.trading.market_data_auto_update import run_trading_market_data_auto_update" in downloader_source and "force_market_date_discovery=True" in downloader_source)
     check("smart_downloader_option1_does_not_call_legacy_provider_update", False, "return _run_trading_dataset_update()" in downloader_source)
@@ -4854,6 +4864,10 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     check("legacy_trading_market_data_state_module_is_retired", False, (repo / "services/trading/market_data_state.py").exists())
     check("legacy_trading_compatibility_module_is_retired", False, (repo / "services/trading/market_data_compatibility.py").exists())
     check("legacy_direct_provider_application_module_is_retired", False, (repo / "services/downloader/application.py").exists())
+    smart_downloader_source = (repo / "apps/smart_downloader.py").read_text(encoding="utf-8")
+    validator_tool_source = (repo / "tools/validate/external_tool_checks.py").read_text(encoding="utf-8")
+    check("smart_downloader_has_no_retired_per_ticker_download_api", False, "smart_download_vip_data" in smart_downloader_source)
+    check("real_case_validator_has_no_retired_legacy_downloader_adapter", False, "run_downloader_tool_check" in validator_tool_source)
     update_source = (repo / "services/trading/market_data_update.py").read_text(encoding="utf-8")
     readiness_source = (repo / "services/trading/data_readiness.py").read_text(encoding="utf-8")
     binding_source = (repo / "services/trading/strategy_param_state.py").read_text(encoding="utf-8")

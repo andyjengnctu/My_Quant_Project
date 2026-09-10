@@ -8,7 +8,6 @@ from .module_loader import (
 from .tool_checks import (
     resolve_source_date_column,
     run_debug_trade_log_check,
-    run_downloader_tool_check,
     run_portfolio_sim_tool_check,
     run_portfolio_sim_tool_check_for_dir,
     run_scanner_tool_check,
@@ -23,7 +22,6 @@ __all__ = [
     "load_module_from_candidates",
     "resolve_source_date_column",
     "run_debug_trade_log_check",
-    "run_downloader_tool_check",
     "run_portfolio_sim_tool_check",
     "run_portfolio_sim_tool_check_for_dir",
     "run_scanner_tool_check",

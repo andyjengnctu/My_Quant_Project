@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from config.downloader import DOWNLOADER_PRICE_HISTORY_START_DATE
 from core.exact_accounting import round_money_for_display
 from core.history_filters import evaluate_history_candidate_metrics
 from tools.validate.checks import (
@@ -63,10 +62,6 @@ def append_real_case_checks(
     portfolio_stats,
     portfolio_sim_stats,
     scanner_result,
-    downloader_df,
-    downloader_request,
-    downloader_expected_dataset,
-    downloader_error,
     debug_df,
 ):
     expected_scanner_payload = build_expected_scanner_payload(scanner_ref_stats, params, ticker=ticker, trade_date=scanner_ref_stats.get("trade_date"))
@@ -260,34 +255,6 @@ def append_real_case_checks(
             bool(latest_low <= order_limit),
             note="Low <= order_limit 代表今日是否可能依原始延續買入限價成交，應顯示為 extended_tbd，由使用者依實際持倉決定是否保留。",
         )
-
-    if downloader_error is not None:
-        add_fail_result(results, "vip_downloader", ticker, "tool_runtime", "tool loads and runs", downloader_error, note="downloader 工具失敗時，validate 應保留其他模組結果，不可整體中斷。")
-    else:
-        expected_download_cols = ["Open", "High", "Low", "Close", "Volume"]
-        actual_download_cols = list(downloader_df.columns)
-        add_check(results, "vip_downloader", ticker, "columns", expected_download_cols, actual_download_cols)
-        add_check(results, "vip_downloader", ticker, "row_count", 2, len(downloader_df))
-        add_check(results, "vip_downloader", ticker, "dataset", downloader_expected_dataset, None if downloader_request is None else downloader_request["dataset"])
-        add_check(results, "vip_downloader", ticker, "data_id", ticker, None if downloader_request is None else downloader_request["data_id"])
-        add_check(
-            results,
-            "vip_downloader",
-            ticker,
-            "start_date",
-            DOWNLOADER_PRICE_HISTORY_START_DATE,
-            None if downloader_request is None else downloader_request["start_date"],
-        )
-        expected_download_index = ["2024-01-02", "2024-01-03"]
-        actual_download_index = [str(idx).split(" ")[0] for idx in downloader_df.index.tolist()]
-        add_check(results, "vip_downloader", ticker, "date_index_sorted", expected_download_index, actual_download_index)
-        add_check(results, "vip_downloader", ticker, "index_name", "Date", downloader_df.index.name)
-        expected_download_rows = [
-            {"Open": 10.0, "High": 11.0, "Low": 9.5, "Close": 10.5, "Volume": 1000},
-            {"Open": 11.0, "High": 12.0, "Low": 10.5, "Close": 11.5, "Volume": 2000},
-        ]
-        actual_download_rows = downloader_df.reset_index(drop=True).to_dict("records")
-        add_check(results, "vip_downloader", ticker, "ohlcv_values_after_sort", expected_download_rows, actual_download_rows)
 
     expected_buy_rows = len(standalone_logs)
     if debug_df is None or len(debug_df) == 0:

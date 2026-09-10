@@ -20,7 +20,6 @@ from tools.validate.real_case_io import load_clean_df, load_clean_df_from_path
 from tools.validate.tool_adapters import (
     VALIDATION_RECOVERABLE_EXCEPTIONS,
     run_debug_trade_log_check,
-    run_downloader_tool_check,
     run_portfolio_sim_tool_check,
     run_scanner_tool_check,
 )
@@ -212,12 +211,6 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         sanitize_stats=sanitize_stats,
         precomputed_stats=scanner_ref_stats,
     )
-    downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = None, None, None, None
-    downloader_error = None
-    try:
-        downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
-    except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
-        downloader_error = f"{type(e).__name__}: {e}"
     if use_validation_consistency_cache:
         debug_df = validation_consistency_cache["debug_trade_log_df"].copy()
         debug_module_path = validation_consistency_cache.get("debug_module_path")
@@ -226,8 +219,6 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
 
     summary["portfolio_sim_module_path"] = portfolio_sim_stats["module_path"]
     summary["scanner_module_path"] = scanner_module_path
-    summary["downloader_module_path"] = downloader_module_path
-    summary["downloader_error"] = downloader_error
     summary["debug_module_path"] = debug_module_path
     summary["single_trade_count"] = single_stats["trade_count"]
     summary["portfolio_trade_count"] = portfolio_stats["trade_count"]
@@ -249,10 +240,6 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         portfolio_stats=portfolio_stats,
         portfolio_sim_stats=portfolio_sim_stats,
         scanner_result=scanner_result,
-        downloader_df=downloader_df,
-        downloader_request=downloader_request,
-        downloader_expected_dataset=downloader_expected_dataset,
-        downloader_error=downloader_error,
         debug_df=debug_df,
     )
 
