@@ -37,6 +37,12 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 
+def _legacy_execution_transition_lifecycle_fixture():
+    from types import SimpleNamespace
+    from core.market_data_contract import MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION
+
+    return SimpleNamespace(migration_phase=MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION)
+
 def _publish_synthetic_trading_input_lineage(
     root: Path,
     *,
@@ -331,7 +337,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
     profile = get_trading_strategy_profile()
     project_root = Path(__file__).resolve().parents[2]
 
-    with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
+    with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
+         patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
          patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2454"]), \
          patch.object(downloader_application, "resolve_trading_dataset_member_tickers", return_value=[]), \
          patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
@@ -351,7 +358,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
     def _capture_required_download(tickers, market_date, **_kwargs):
         captured_required_download["tickers"] = list(tickers)
         return {"total": len(tickers), "count_success": len(tickers), "count_skipped_latest": 0, "last_date_check_error_count": 0, "download_error_count": 0, "issue_log_path": None}
-    with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
+    with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
+         patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
          patch.object(downloader_application, "get_or_update_universe", return_value=["2330"]), \
          patch.object(downloader_application, "resolve_trading_dataset_member_tickers", return_value=[]), \
          patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
@@ -2321,6 +2329,7 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
         check("downloader_reports_trimmed_future_rows", 1, int(sync_summary.get("trimmed_future_row_count") or 0))
 
     with (
+        patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()),
         patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"),
         patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2317"]),
         patch.object(downloader_application, "smart_download_vip_data", return_value={
@@ -3200,15 +3209,20 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         publish_trading_strategy_param_binding(root)
         account = adopt_existing_trading_position(root, ticker="9999", qty=100, cost_basis_total=10_000, entry_date="2026-01-01", expected_revision=account["revision"])
         captured = {}
-        def _capture_update(*, required_tickers=None, provider_client=None):
+        def _capture_materialization(_root, *, required_tickers=(), **_kwargs):
             captured["required"] = list(required_tickers or [])
-            captured["provider_client_supplied"] = provider_client is not None
-            return {"runtime_domain": "trading", "market_date": "2026-09-04", "status": "READY"}
-        with patch("services.downloader.runtime.SAVE_DIR", str(data_dir)), \
-             patch.object(market_data_update, "run_trading_dataset_update", side_effect=_capture_update), \
+            return {
+                "runtime_domain": "trading",
+                "market_date": "2026-09-04",
+                "data_dir": "data/trading/tw_stock_data_vip",
+                "current_execution_pool_tickers": ["2330"],
+                "dataset_fingerprint": {"csv_content_sha256": "c"},
+            }
+        with patch("services.trading.market_data_auto_update.run_trading_market_data_auto_update", return_value={"status": "NO_DUE", "data_requests": 0, "usage_requests": 0}), \
+             patch.object(market_data_update, "materialize_trading_v2_compatibility_dataset", side_effect=_capture_materialization), \
              patch.object(market_data_update, "publish_trading_market_data_snapshot", return_value={"snapshot_fingerprint": "s", "dataset_fingerprint": {"csv_content_sha256": "c"}}):
             market_data_update.run_trading_market_data_update(project_root=root)
-        check("daily_data_update_forces_all_current_account_positions_into_downloader_targets", ["9999"], captured.get("required"))
+        check("daily_data_update_forces_all_current_account_positions_into_v2_compatibility_targets", ["9999"], captured.get("required"))
 
     summary["checks"] = len(results)
     return results, summary

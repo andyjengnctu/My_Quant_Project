@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 from core.console_report import project_relative_display_path
+from core.market_data_contract import (
+    MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION,
+    get_market_data_v2_lifecycle,
+)
 from core.trading_market_clock import assert_completed_daily_information_date
 from core.trading_identity import normalize_trading_ticker
 from core.trading_dataset_identity import resolve_trading_dataset_member_tickers
@@ -18,13 +22,13 @@ from services.downloader.trading_price_refresh import (
 
 
 def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -> dict[str, object]:
-    """Update the execution-critical Trading dataset and return a structured summary.
-
-    With ``provider_client`` the canonical path deduplicates FinMind requests and
-    refreshes current-vintage adjusted history through the lowest-request exact
-    strategy.  The legacy no-client seam is retained for isolated compatibility
-    tests and emergency fallback only.
-    """
+    """Historical direct-provider producer, allowed only before V2 execution cutover."""
+    lifecycle = get_market_data_v2_lifecycle()
+    if lifecycle.migration_phase != MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION:
+        raise RuntimeError(
+            "Legacy direct-provider Trading CSV producer 已在 V2 execution cutover 後停用；"
+            "請使用 V2 daily updater + compatibility materialization"
+        )
     print(f"🤖 Trading 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
     probe = None
     if provider_client is None:

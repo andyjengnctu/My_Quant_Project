@@ -2585,6 +2585,8 @@ def validate_market_data_governance_contract_case(_base_params):
         MARKET_DATA_V2_DAILY_UPDATE_ROLE,
         MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE,
         MARKET_DATA_V2_LEGACY_TARGET_ROLE,
+        MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE,
+        MARKET_DATA_V2_LEGACY_COMPATIBILITY_OHLCV_CONTRACT,
         MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION,
         build_market_data_contract_snapshot,
         get_active_research_data_generation,
@@ -2719,6 +2721,9 @@ def validate_market_data_governance_contract_case(_base_params):
     check("v2_independent_domain_provider_redownload_is_forbidden", False, market_data_v2.independent_domain_provider_redownload_allowed)
     check("legacy_target_is_v2_materialized_compatibility_only", MARKET_DATA_V2_LEGACY_TARGET_ROLE, market_data_v2.legacy_target_role)
     check("legacy_target_must_derive_from_v2", True, market_data_v2.legacy_target_must_derive_from_v2)
+    check("legacy_compatibility_source_is_trading_v2_historical_latest_view", MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE, market_data_v2.legacy_compatibility_source)
+    check("legacy_compatibility_materialization_has_zero_provider_calls", False, market_data_v2.legacy_compatibility_provider_calls_allowed)
+    check("legacy_compatibility_uses_shared_ohlcv_contract", MARKET_DATA_V2_LEGACY_COMPATIBILITY_OHLCV_CONTRACT, market_data_v2.legacy_compatibility_ohlcv_contract)
     check("v2_migration_phase_follows_config", str(MARKET_DATA_V2_LIFECYCLE.get("migration_phase")), market_data_v2.migration_phase)
     transition_allows_legacy_provider = (
         market_data_v2.migration_phase == MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION
@@ -2891,6 +2896,48 @@ def validate_market_data_governance_contract_case(_base_params):
         True,
         "MarketDataJobLedger(ledger_path, read_only=True)" in provider_repository_source,
     )
+
+    compat_core_source = (PROJECT_ROOT / "core/market_data_ohlcv_compatibility.py").read_text(encoding="utf-8")
+    research_compat_source = (PROJECT_ROOT / "core/market_data_research_materialization.py").read_text(encoding="utf-8")
+    trading_compat_source = (PROJECT_ROOT / "services/trading/market_data_compatibility.py").read_text(encoding="utf-8")
+    trading_update_source = (PROJECT_ROOT / "services/trading/market_data_update.py").read_text(encoding="utf-8")
+    legacy_application_source = (PROJECT_ROOT / "services/downloader/application.py").read_text(encoding="utf-8")
+    check(
+        "shared_ohlcv_compatibility_owner_maps_adjusted_ohlc_and_raw_volume_once",
+        True,
+        "FINMIND_ADJUSTED_PRICE_DATASET" in compat_core_source
+        and "FINMIND_RAW_PRICE_ARCHIVE_DATASET" in compat_core_source
+        and "PROVIDER_VOLUME_FIELD" in compat_core_source,
+    )
+    check(
+        "research_compatibility_consumes_shared_ohlcv_mapping_owner",
+        True,
+        "from core.market_data_ohlcv_compatibility import" in research_compat_source,
+    )
+    check(
+        "trading_compatibility_consumes_v2_view_and_shared_ohlcv_mapping",
+        True,
+        "TradingMarketDataV2View" in trading_compat_source
+        and "build_market_data_v2_ohlcv_compatibility_frame" in trading_compat_source,
+    )
+    check(
+        "trading_compatibility_has_no_direct_provider_or_legacy_universe_dependency",
+        False,
+        any(token in trading_compat_source for token in (
+            "finmind_http", "request_finmind_data_with_retry", "smart_download_vip_data", "get_or_update_universe"
+        )),
+    )
+    if market_data_v2.migration_phase != MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION:
+        check(
+            "v2_cutover_canonical_trading_update_has_no_legacy_provider_stage",
+            False,
+            "run_trading_dataset_update(" in trading_update_source,
+        )
+        check(
+            "v2_cutover_legacy_direct_provider_entry_is_fail_closed",
+            True,
+            "migration_phase != MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION" in legacy_application_source,
+        )
 
     summary["active_research_generation"] = active.generation_id
     summary["active_research_cutoff"] = active.cutoff

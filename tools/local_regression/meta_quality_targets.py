@@ -133,6 +133,8 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "services/downloader/market_data_trading_storage.py",
     "services/trading/market_data_v2_state.py",
     "services/trading/market_data_update.py",
+    "services/trading/market_data_compatibility.py",
+    "core/market_data_ohlcv_compatibility.py",
     "services/trading/market_data_auto_update.py",
     "services/trading/market_data_market_date_discovery.py",
     "services/downloader/universe.py",

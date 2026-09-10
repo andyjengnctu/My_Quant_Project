@@ -4452,6 +4452,17 @@
       "entry": "`services/trading/market_data_auto_update.py`, `services/downloader/main.py`, `core/market_data_trading_sync.py`, `services/downloader/market_data_trading_sync.py`, `core/market_data_contract.py`",
       "initial_status": "NEW",
       "order": 401
+    },
+    {
+      "id": "B414",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 compatibility materialization / Legacy provider retirement",
+      "item": "Legacy six-column Trading OHLCV must be a provider-free compatibility materialization from the verified Trading V2 historical/latest view; Research and Trading must share the canonical adjusted-OHLC/raw-Volume mapping, and Legacy CSV membership must not define PIT market truth.",
+      "gap": "After V2 became the canonical daily updater, Workbench Full and remaining Legacy consumers still depended on a six-column Trading CSV dataset that had historically been produced by direct FinMind requests. The cutover must rebuild that dataset only from verified V2 local truth, preserve current execution-pool + current-position + retained-member continuity, reject missing PriceAdj/raw Volume or target-date readiness gaps, publish the existing Trading snapshot only after compatibility materialization succeeds, and block the old direct-provider Legacy producer before any provider/universe request outside an explicitly isolated historical transition regression.",
+      "entry": "`core/market_data_ohlcv_compatibility.py`, `services/trading/market_data_compatibility.py`, `services/trading/market_data_update.py`, `services/downloader/application.py`, `core/market_data_contract.py`",
+      "initial_status": "NEW",
+      "order": 402
     }
   ],
   "tests": [
@@ -8179,6 +8190,13 @@
       "description": "`validate_market_data_v2_trading_workbench_sidecar_contract_case` 擴充驗證 Smart Downloader [1] 只委派 V2 daily updater、manual update 強制一次 market-date discovery、V2 target 不讀 Legacy Trading snapshot、新 completed day 不呼叫 Legacy update、full-market capable daily request 使用 exact-date geometry，並維持 no-due zero-provider-call / sidecar resume 等既有契約。",
       "initial_status": "NEW",
       "order": 523
+    },
+    {
+      "id": "T534",
+      "b_id": "B414",
+      "description": "`validate_market_data_v2_trading_compatibility_materialization_contract_case` 驗證 Research/Trading 共用六欄 OHLCV mapping、compatibility materialization 零 provider call、current execution + positions + retained membership union、target-date readiness fail-closed、Legacy direct-provider producer 在 V2 cutover 前置阻擋，以及 canonical Trading update 依序執行 V2 update → compatibility materialize → snapshot。",
+      "initial_status": "NEW",
+      "order": 524
     }
   ],
   "transitions": [
@@ -26229,6 +26247,22 @@
       "to_status": "DONE",
       "description": "擴充 Trading V2 sidecar/daily-sync regression 覆蓋 V2-only Smart Downloader、target discovery decoupling 與 exact-date bulk geometry。",
       "note": "`validate_market_data_v2_trading_workbench_sidecar_contract_case`"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "B414",
+      "description": "Legacy Trading 六欄 OHLCV 改為由 verified Trading V2 historical/latest view 純本機 materialize；direct-provider Legacy producer 在 V2 cutover fail-closed。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "V2 compatibility materialization cutover; direct consumer migration remains Round 7"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "T534",
+      "description": "新增 Trading V2 compatibility materialization regression，覆蓋 shared OHLCV mapping、zero-provider-call、membership continuity、target-date readiness 與 Legacy provider block。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_market_data_v2_trading_compatibility_materialization_contract_case`"
     }
   ]
 }

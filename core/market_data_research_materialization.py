@@ -12,10 +12,14 @@ from pathlib import Path
 from typing import Mapping
 
 from core.file_integrity import canonical_json_sha256, compute_file_sha256
-from core.market_data_adjusted_price_invariance import PROVIDER_VOLUME_FIELD
 from core.market_data_research_scope import (
     RESEARCH_V2_ADJUSTED_PRICE_DATASET,
     RESEARCH_V2_RAW_VOLUME_DATASET,
+)
+from core.market_data_ohlcv_compatibility import (
+    MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS,
+    MARKET_DATA_V2_COMPAT_PRICE_FIELD_MAPPING,
+    MARKET_DATA_V2_COMPAT_VOLUME_FIELD_MAPPING,
 )
 from core.market_data_research_storage_contract import (
     resolve_research_v2_compatibility_dataset_dir,
@@ -24,14 +28,9 @@ from core.market_data_research_storage_contract import (
 RESEARCH_V2_COMPAT_MATERIALIZATION_SCHEMA_VERSION = 2
 RESEARCH_V2_COMPAT_MATERIALIZATION_CONTRACT_ID = "research_v2_legacy_ohlcv_compatibility_v1"
 RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY = "MATERIALIZATION_READY"
-RESEARCH_V2_COMPAT_OUTPUT_COLUMNS = ("Date", "Open", "High", "Low", "Close", "Volume")
-RESEARCH_V2_COMPAT_PRICE_FIELD_MAPPING = {
-    "Open": "open",
-    "High": "max",
-    "Low": "min",
-    "Close": "close",
-}
-RESEARCH_V2_COMPAT_VOLUME_FIELD_MAPPING = {"Volume": PROVIDER_VOLUME_FIELD}
+RESEARCH_V2_COMPAT_OUTPUT_COLUMNS = MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS
+RESEARCH_V2_COMPAT_PRICE_FIELD_MAPPING = dict(MARKET_DATA_V2_COMPAT_PRICE_FIELD_MAPPING)
+RESEARCH_V2_COMPAT_VOLUME_FIELD_MAPPING = dict(MARKET_DATA_V2_COMPAT_VOLUME_FIELD_MAPPING)
 
 RESEARCH_V2_COMPAT_MATERIALIZATION_IDENTITY_FIELDS = (
     "schema_version",

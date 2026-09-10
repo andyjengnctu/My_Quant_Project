@@ -9,6 +9,14 @@ import pandas as pd
 from .checks import raises_expected, bind_synthetic_case, bind_checks, add_check
 
 
+
+
+def _legacy_execution_transition_lifecycle_fixture():
+    from types import SimpleNamespace
+    from core.market_data_contract import MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION
+
+    return SimpleNamespace(migration_phase=MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION)
+
 def _publish_ready_provider_snapshot_fixture(
     *,
     root,
@@ -2609,18 +2617,20 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     operations_source = (project_root / "services" / "trading" / "operations_status.py").read_text(encoding="utf-8")
     data_ops_source = (project_root / "services" / "trading" / "market_data_ops.py").read_text(encoding="utf-8")
     auto_update_source = (project_root / "services" / "trading" / "market_data_auto_update.py").read_text(encoding="utf-8")
+    v2_sync_source = (project_root / "services" / "downloader" / "market_data_trading_sync.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
     from services.trading import daily_workflow as daily_workflow_module
     from services.trading import market_data_update as market_data_update_module
 
-    legacy_pos = update_source.find("run_trading_dataset_update(")
+    v2_pos = update_source.find("run_trading_market_data_auto_update(")
+    compat_pos = update_source.find("materialize_trading_v2_compatibility_dataset(")
     snapshot_pos = update_source.find("publish_trading_market_data_snapshot(")
-    v2_pos = update_source.find("sync_market_data_v2_trading_archive(")
-    check("canonical_update_owner_preserves_execution_then_snapshot_then_v2_order", True, 0 <= legacy_pos < snapshot_pos < v2_pos)
+    check("canonical_update_owner_runs_v2_then_compatibility_then_snapshot", True, 0 <= v2_pos < compat_pos < snapshot_pos)
+    check("canonical_update_owner_has_no_legacy_direct_provider_stage", False, "run_trading_dataset_update(" in update_source)
     executor_source = (project_root / "services" / "downloader" / "market_data_executor.py").read_text(encoding="utf-8")
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
-    check("canonical_update_shares_one_provider_client_across_legacy_and_v2", True, "provider_client=shared_client" in update_source and "client=shared_client" in update_source and "SharedFinMindRequestClient" in update_source)
+    check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and '"legacy_stage_data_requests": 0' in update_source)
     check("executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
     check("canonical_price_refresh_never_calculates_adjustment_locally", True, "TaiwanStockPriceAdj" in price_refresh_source and "adjusted-price calculator" in price_refresh_source and "full_market_range_current_vintage" in price_refresh_source)
     check("daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
@@ -2641,7 +2651,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("v2_auto_updater_does_not_import_legacy_trading_update_owner", False, "services.trading.market_data_update" in auto_update_source)
     check("v2_auto_updater_does_not_read_legacy_trading_snapshot_for_target", False, "load_trading_market_data_snapshot" in auto_update_source)
     check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "find_latest_ready_provider_snapshot" in auto_update_source and "load_trading_market_data_v2_state" in auto_update_source and "load_market_date_discovery_state" in auto_update_source)
-    check("sidecar_failure_is_persisted_without_advancing_execution_truth", True, "publish_trading_market_data_v2_failure(" in update_source and "last_attempt_target_date" in state_source)
+    check("v2_failure_state_remains_owned_by_v2_sync_path", True, "publish_trading_market_data_v2_state(" in v2_sync_source and '"last_error": error' in v2_sync_source)
     check("workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
     check("scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
     check("scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_execution_evidence" in scanner_source)
@@ -2749,7 +2759,8 @@ def validate_trading_retained_dataset_current_vintage_contract_case(_base_params
                 "issue_log_path": None,
             }
 
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+        with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
+             patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
              patch.object(downloader_runtime, "OUTPUT_DIR", str(output_dir)), \
              patch("services.downloader.application.probe_latest_adjusted_price_market_date", return_value=probe), \
              patch("services.downloader.application.assert_completed_daily_information_date", side_effect=lambda value, now: value), \
@@ -4749,6 +4760,8 @@ def validate_trading_price_bulk_completeness_contract_case(_base_params):
         "services/downloader/finmind_shared_client.py",
         "services/downloader/trading_price_refresh.py",
         "services/trading/market_data_update.py",
+        "services/trading/market_data_compatibility.py",
+        "core/market_data_ohlcv_compatibility.py",
         "services/trading/market_data_auto_update.py",
         "services/trading/market_data_market_date_discovery.py",
     }
@@ -5295,7 +5308,8 @@ def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
             "trimmed_future_row_count": 0,
             "issue_log_path": None,
         }
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
+        with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
+             patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
              patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
              patch.object(downloader_application, "get_market_last_date", return_value="2026-09-09"), \
              patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2317"]), \
@@ -5828,4 +5842,318 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
             "contract_fingerprint": trading_v2_view_contract_fingerprint(),
         }
     )
+    return results, summary
+
+
+def validate_market_data_v2_trading_compatibility_materialization_contract_case(_base_params):
+    """Round-6 Legacy OHLCV becomes a provider-free materialized view of Trading V2."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import pandas as pd
+
+    from core.market_data_ohlcv_compatibility import (
+        MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS,
+        MARKET_DATA_V2_COMPAT_PRICE_DATASET,
+        MARKET_DATA_V2_COMPAT_VOLUME_DATASET,
+        build_market_data_v2_ohlcv_compatibility_frame,
+    )
+    from core.market_data_research_materialization import (
+        RESEARCH_V2_COMPAT_OUTPUT_COLUMNS,
+        RESEARCH_V2_COMPAT_PRICE_FIELD_MAPPING,
+        RESEARCH_V2_COMPAT_VOLUME_FIELD_MAPPING,
+    )
+    from services.downloader import application as downloader_application
+    from services.trading import market_data_update as market_data_update
+    from services.trading.market_data_compatibility import (
+        TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS,
+        materialize_trading_v2_compatibility_dataset,
+        resolve_trading_v2_current_execution_pool,
+    )
+
+    case_id = "MARKET_DATA_V2_TRADING_COMPATIBILITY_MATERIALIZATION"
+    results, summary, check, check_true = bind_synthetic_case(
+        case_id, "market_data", training_performed=False
+    )
+
+    check(
+        "research_and_trading_share_six_column_compatibility_schema",
+        tuple(MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS),
+        tuple(RESEARCH_V2_COMPAT_OUTPUT_COLUMNS),
+    )
+    check(
+        "shared_compatibility_adjusted_ohlc_mapping_stays_canonical",
+        {"Open": "open", "High": "max", "Low": "min", "Close": "close"},
+        dict(RESEARCH_V2_COMPAT_PRICE_FIELD_MAPPING),
+    )
+    check(
+        "shared_compatibility_volume_mapping_uses_raw_price_volume",
+        {"Volume": "Trading_Volume"},
+        dict(RESEARCH_V2_COMPAT_VOLUME_FIELD_MAPPING),
+    )
+    check("compatibility_price_dataset_is_priceadj", "TaiwanStockPriceAdj", MARKET_DATA_V2_COMPAT_PRICE_DATASET)
+    check("compatibility_volume_dataset_is_raw_price", "TaiwanStockPrice", MARKET_DATA_V2_COMPAT_VOLUME_DATASET)
+
+    adjusted = pd.DataFrame(
+        {
+            "date": ["2026-09-08", "2026-09-09"],
+            "stock_id": ["2330", "2330"],
+            "open": [100.0, 101.0],
+            "max": [102.0, 103.0],
+            "min": [99.0, 100.0],
+            "close": [101.0, 102.0],
+        }
+    )
+    raw = pd.DataFrame(
+        {
+            "date": ["2026-09-08", "2026-09-09"],
+            "stock_id": ["2330", "2330"],
+            "Trading_Volume": [1234, 5678],
+        }
+    )
+    six = build_market_data_v2_ohlcv_compatibility_frame(
+        adjusted, raw, stock_id="2330", through_date="2026-09-09"
+    )
+    check("shared_compatibility_frame_has_exact_six_columns", list(MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS), list(six.columns))
+    check("shared_compatibility_frame_uses_raw_volume_values", [1234, 5678], six["Volume"].tolist())
+    try:
+        build_market_data_v2_ohlcv_compatibility_frame(
+            adjusted,
+            raw.iloc[:1].copy(),
+            stock_id="2330",
+            through_date="2026-09-09",
+        )
+    except ValueError:
+        missing_raw_volume_rejected = True
+    else:
+        missing_raw_volume_rejected = False
+    check("compatibility_never_synthesizes_missing_raw_volume", True, missing_raw_volume_rejected)
+
+    class _FakeTradingV2View:
+        def __init__(self):
+            self.archive = SimpleNamespace(
+                snapshot_fingerprint="provider-snapshot-fp",
+                as_of_date="2026-03-02",
+            )
+            self.calls = []
+
+        def training_horizon(self, *, required_datasets):
+            self.calls.append(("training_horizon", tuple(required_datasets)))
+            return SimpleNamespace(training_through_date="2026-09-09")
+
+        def daily_pit_market_members(self, date_value):
+            self.calls.append(("daily_pit_market_members", str(date_value)))
+            return ("0050", "2330", "2317")
+
+        def view_identity(self, *, required_datasets):
+            return {
+                "view_fingerprint": "trading-v2-view-fp",
+                "required_datasets": list(required_datasets),
+            }
+
+        def read_dataset_frame(
+            self,
+            dataset,
+            *,
+            columns=None,
+            data_id=None,
+            start_date=None,
+            end_date=None,
+        ):
+            self.calls.append(("read", dataset, data_id, start_date, end_date, tuple(columns or ())))
+            if dataset == "TaiwanStockInfo":
+                frame = pd.DataFrame(
+                    {
+                        "date": ["2026-09-09"] * 3,
+                        "stock_id": ["0050", "2330", "2317"],
+                        "type": ["twse", "twse", "twse"],
+                        "industry_category": ["ETF", "半導體業", "電子業"],
+                    }
+                )
+            elif dataset == "TaiwanStockMarketValue":
+                frame = pd.DataFrame(
+                    {
+                        "date": ["2026-09-09", "2026-09-09"],
+                        "stock_id": ["2330", "2317"],
+                        "market_value": [20_000_000_000, 5_000_000_000],
+                    }
+                )
+            elif dataset == "TaiwanStockPriceAdj" and data_id is None:
+                # Preserve the current execution-screen source used before the
+                # V2 cutover: PriceAdj Trading_Volume + MarketValue.
+                frame = pd.DataFrame(
+                    {
+                        "date": ["2026-09-09"] * 3,
+                        "stock_id": ["0050", "2330", "2317"],
+                        "Trading_Volume": [2_000_000, 2_000_000, 2_000_000],
+                    }
+                )
+            elif dataset == "TaiwanStockPriceAdj":
+                frame = pd.DataFrame(
+                    {
+                        "date": ["2026-09-08", "2026-09-09"],
+                        "stock_id": [str(data_id), str(data_id)],
+                        "open": [100.0, 101.0],
+                        "max": [102.0, 103.0],
+                        "min": [99.0, 100.0],
+                        "close": [101.0, 102.0],
+                    }
+                )
+            elif dataset == "TaiwanStockPrice":
+                frame = pd.DataFrame(
+                    {
+                        "date": ["2026-09-08", "2026-09-09"],
+                        "stock_id": [str(data_id), str(data_id)],
+                        "Trading_Volume": [1111, 2222],
+                    }
+                )
+            else:
+                frame = pd.DataFrame(columns=list(columns or ()))
+            if columns:
+                missing = [column for column in columns if column not in frame.columns]
+                if missing:
+                    raise ValueError(f"synthetic V2 view missing columns: {missing}")
+                frame = frame.loc[:, list(columns)]
+            return frame.reset_index(drop=True)
+
+    fake = _FakeTradingV2View()
+    execution, stats = resolve_trading_v2_current_execution_pool(fake, market_date="2026-09-09")
+    check("v2_execution_pool_preserves_volume_market_value_semantics", ["0050", "2330"], execution)
+    check("v2_execution_pool_keeps_daily_market_member_count", 3, stats.get("listed_count"))
+    execution_reads = [item for item in fake.calls if item[0] == "read" and item[2] is None]
+    check(
+        "v2_execution_pool_preserves_priceadj_volume_screening_source",
+        True,
+        any(item[1] == "TaiwanStockPriceAdj" and "Trading_Volume" in item[-1] for item in execution_reads),
+    )
+
+    with TemporaryDirectory(prefix="round6_v2_compat_") as temp_dir:
+        root = Path(temp_dir)
+        data_dir = root / "data" / "trading" / "tw_stock_data_vip"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "Date": ["2026-09-08"],
+                "Open": [50.0],
+                "High": [51.0],
+                "Low": [49.0],
+                "Close": [50.5],
+                "Volume": [999],
+            }
+        ).to_csv(data_dir / "2454.csv", index=False)
+        materialized = materialize_trading_v2_compatibility_dataset(
+            root,
+            required_tickers=("9999",),
+            view=fake,
+            market_date="2026-09-09",
+        )
+        check("compatibility_materialization_performs_zero_provider_calls", 0, materialized.get("provider_calls"))
+        check("compatibility_materialization_source_is_trading_v2_view", "trading_market_data_v2_historical_latest_view", materialized.get("source"))
+        check("compatibility_materialization_current_execution_pool_is_v2_derived", ["0050", "2330"], materialized.get("current_execution_pool_tickers"))
+        check("compatibility_materialization_retains_existing_history_member", ["2454"], materialized.get("retained_history_tickers"))
+        check("compatibility_materialization_keeps_required_position", ["9999"], materialized.get("required_position_tickers"))
+        check("compatibility_materialization_target_count_unions_execution_positions_retained", 4, materialized.get("target_ticker_count"))
+        check("non_execution_market_member_is_not_materialized_without_other_dependency", False, (data_dir / "2317.csv").exists())
+        expected_members = ["0050", "2330", "2454", "9999"]
+        check("compatibility_files_match_union_target_membership", expected_members, sorted(path.stem for path in data_dir.glob("*.csv")))
+        saved_2330 = pd.read_csv(data_dir / "2330.csv")
+        check("materialized_csv_schema_is_exact_six_column_contract", list(MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS), list(saved_2330.columns))
+        check("materialized_csv_volume_comes_from_raw_price_archive", [1111, 2222], saved_2330["Volume"].tolist())
+        check("materialized_execution_member_is_current_to_target_date", "2026-09-09", str(saved_2330.iloc[-1]["Date"]))
+
+    # Default cutover must reject the historical provider-backed producer before
+    # any provider/universe request can be attempted.
+    provider_probe = []
+    with patch.object(
+        downloader_application,
+        "get_market_last_date",
+        side_effect=lambda *a, **k: provider_probe.append(True) or "2026-09-09",
+    ):
+        try:
+            downloader_application.run_trading_dataset_update()
+        except RuntimeError as exc:
+            direct_provider_blocked = "execution cutover" in str(exc)
+        else:
+            direct_provider_blocked = False
+    check("legacy_direct_provider_producer_is_blocked_after_v2_cutover", True, direct_provider_blocked)
+    check("legacy_direct_provider_block_happens_before_provider_probe", [], provider_probe)
+
+    # The canonical Trading update must use provider access only in the V2
+    # updater, then locally materialize compatibility and publish the existing
+    # snapshot consumed by still-unmigrated Workbench/Scanner paths.
+    order = []
+    captured = {}
+    def _auto(**kwargs):
+        order.append("v2")
+        captured["v2_kwargs"] = dict(kwargs)
+        return {"status": "NO_DUE", "target_date": "2026-09-09", "data_requests": 0, "usage_requests": 0}
+    def _materialize(_root, *, required_tickers=(), market_date=None, **_kwargs):
+        order.append("compat")
+        captured["required"] = list(required_tickers)
+        captured["compat_market_date"] = market_date
+        return {
+            "runtime_domain": "trading",
+            "market_date": "2026-09-09",
+            "data_dir": "data/trading/tw_stock_data_vip",
+            "current_execution_pool_tickers": ["2330"],
+            "dataset_fingerprint": {"csv_content_sha256": "compat-sha"},
+        }
+    def _snapshot(*_args, **_kwargs):
+        order.append("snapshot")
+        return {
+            "snapshot_fingerprint": "snapshot-fp",
+            "dataset_fingerprint": {"csv_content_sha256": "compat-sha"},
+        }
+    with TemporaryDirectory(prefix="round6_v2_update2_") as temp_dir:
+        root = Path(temp_dir)
+        with patch.object(market_data_update, "load_trading_account_state", return_value={
+            "positions": {"9999": {"broker": {"qty": 100}}}
+        }), patch(
+            "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
+            side_effect=_auto,
+        ), patch.object(
+            market_data_update,
+            "materialize_trading_v2_compatibility_dataset",
+            side_effect=_materialize,
+        ), patch.object(
+            market_data_update,
+            "publish_trading_market_data_snapshot",
+            side_effect=_snapshot,
+        ):
+            update = market_data_update.run_trading_market_data_update(
+                project_root=root,
+                provider_client=object(),
+            )
+    check("canonical_trading_update_order_is_v2_then_compat_then_snapshot", ["v2", "compat", "snapshot"], order)
+    check("canonical_trading_update_passes_provider_client_only_to_v2_updater", True, captured.get("v2_kwargs", {}).get("client") is not None)
+    check("canonical_trading_update_retains_current_positions_in_compatibility_targets", ["9999"], captured.get("required"))
+    check("canonical_trading_update_requires_compatibility_at_v2_target_date", "2026-09-09", captured.get("compat_market_date"))
+    session = dict(update.get("provider_request_session") or {})
+    check("canonical_trading_update_reports_zero_legacy_provider_requests", (0, 0, 0), (
+        session.get("legacy_stage_data_requests"),
+        session.get("legacy_stage_usage_requests"),
+        session.get("compatibility_materialization_provider_calls"),
+    ))
+
+    compatibility_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "market_data_compatibility.py").read_text(encoding="utf-8")
+    check(
+        "compatibility_materializer_has_no_finmind_http_or_legacy_downloader_dependency",
+        False,
+        any(token in compatibility_source for token in (
+            "finmind_http", "smart_download_vip_data", "get_or_update_universe", "request_finmind_data_with_retry"
+        )),
+    )
+    check(
+        "compatibility_required_datasets_include_adjusted_price_raw_volume_and_pool_evidence",
+        True,
+        {"TaiwanStockPriceAdj", "TaiwanStockPrice", "TaiwanStockMarketValue", "TaiwanStockTradingDate", "TaiwanStockInfo", "TaiwanStockDelisting"}.issubset(set(TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS)),
+    )
+
+    summary.update({
+        "checks": len(results),
+        "compatibility_required_dataset_count": len(TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS),
+    })
     return results, summary

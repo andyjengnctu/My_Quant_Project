@@ -101,8 +101,11 @@ MARKET_DATA_V2_LIFECYCLE = {
     "independent_domain_provider_redownload_allowed": False,
     "legacy_target_role": "v2_materialized_compatibility_only",
     "legacy_target_must_derive_from_v2": True,
-    "migration_phase": "legacy_execution_transition",
-    "legacy_direct_provider_download_allowed_during_transition": True,
+    "legacy_compatibility_source": "trading_market_data_v2_historical_latest_view",
+    "legacy_compatibility_provider_calls_allowed": False,
+    "legacy_compatibility_ohlcv_contract": "market_data_v2_shared_adjusted_ohlcv",
+    "migration_phase": "v2_execution_cutover",
+    "legacy_direct_provider_download_allowed_during_transition": False,
 }
 
 TRADING_MARKET_DATA_LIFECYCLE = {
@@ -111,10 +114,10 @@ TRADING_MARKET_DATA_LIFECYCLE = {
     # Compatibility metadata retained during migration; provider/archive truth
     # is no longer semantically owned by a Research generation.
     "bootstrap_source_generation": RESEARCH_DATA_GENERATION_V2,
-    # Execution-critical CSV truth remains in place while the V2 archive is
-    # maintained as a non-blocking sidecar.  Future DL Trading must explicitly
-    # declare V2 dataset dependencies before V2 may become execution-critical.
-    "status": "legacy_execution_with_v2_archive_sidecar",
+    # Existing execution consumers may still read the six-column CSV path, but the
+    # CSV is now a V2-derived compatibility materialization.  Direct V2 consumer
+    # migration remains a later round; provider truth has already cut over.
+    "status": "v2_authoritative_with_legacy_compatibility_consumers",
 }
 
 # Trading Market Data V2 archive synchronization is operational only; these
