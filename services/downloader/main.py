@@ -18,9 +18,6 @@ from core.runtime_utils import (
     validate_cli_args,
 )
 
-_RUNTIME_EXPORT_NAMES = {"SAVE_DIR", "FINMIND_PRICE_DATASET", "dl", "time"}
-
-
 def _format_bootstrap_duration(seconds: float | None) -> str:
     if seconds is None or seconds < 0 or seconds == float("inf"):
         return "--:--:--"
@@ -68,64 +65,6 @@ def _estimate_bootstrap_eta_seconds(
     effective_rate = min(rates)
     return remaining / effective_rate
 
-
-
-def _get_downloader_modules():
-    rt = importlib.import_module("services.downloader.runtime")
-    sync_runtime = importlib.import_module("services.downloader.sync")
-    universe_module = importlib.import_module("services.downloader.universe")
-
-    return rt, sync_runtime, universe_module.get_market_last_date, universe_module.get_or_update_universe
-
-
-def smart_download_vip_data(tickers, market_last_date, verbose=True):
-    global SAVE_DIR, dl, FINMIND_PRICE_DATASET, time
-
-    rt, sync_runtime, _get_market_last_date, _get_or_update_universe = _get_downloader_modules()
-    rt.SAVE_DIR = globals().get("SAVE_DIR", rt.SAVE_DIR)
-    rt.dl = globals().get("dl", rt.dl)
-    result = sync_runtime.smart_download_vip_data(tickers, market_last_date, verbose=verbose)
-    SAVE_DIR = rt.SAVE_DIR
-    FINMIND_PRICE_DATASET = rt.FINMIND_PRICE_DATASET
-    dl = rt.dl
-    time = rt.time
-    return result
-
-
-def __getattr__(name):
-    if name in _RUNTIME_EXPORT_NAMES:
-        rt, _sync_runtime, _get_market_last_date, _get_or_update_universe = _get_downloader_modules()
-        value = getattr(rt, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def _run_trading_dataset_update() -> int:
-    try:
-        import pandas as pd
-        import requests
-        from services.trading.market_data_update import run_trading_market_data_update
-    except (ImportError, ModuleNotFoundError) as exc:
-        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
-
-    try:
-        run_trading_market_data_update(project_root=PROJECT_ROOT)
-        return 0
-    except (
-        RuntimeError,
-        FileNotFoundError,
-        ValueError,
-        OSError,
-        requests.RequestException,
-        pd.errors.EmptyDataError,
-        pd.errors.ParserError,
-        ImportError,
-        ModuleNotFoundError,
-    ) as exc:
-        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
 
 
 def _run_market_data_v2_daily_update() -> int:

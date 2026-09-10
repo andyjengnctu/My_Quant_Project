@@ -72,8 +72,8 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     stable_fields = (
         "latest_data_date",
         "selected_params_sha256",
-        "market_data_snapshot_sha256",
-        "dataset_content_sha256",
+        "market_data_consumer_state_sha256",
+        "market_data_source_view_fingerprint",
         "param_binding_sha256",
     )
     changed = [field for field in stable_fields if str(runtime_after.get(field) or "") != str(runtime.get(field) or "")]
@@ -96,8 +96,8 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         'param_latest_data_date': runtime['param_latest_data_date'],
         'selected_params_path': project_relative_display_path(runtime['selected_path'], project_root=root),
         'selected_params_sha256': runtime['selected_params_sha256'],
-        'market_data_snapshot_sha256': runtime['market_data_snapshot_sha256'],
-        'dataset_content_sha256': runtime['dataset_content_sha256'],
+        'market_data_consumer_state_sha256': runtime['market_data_consumer_state_sha256'],
+        'market_data_source_view_fingerprint': runtime['market_data_source_view_fingerprint'],
         'param_binding_sha256': runtime['param_binding_sha256'],
         'scanned_tickers': list(actual_scanned_tickers),
         'candidate_rows': candidate_rows,
@@ -117,8 +117,8 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         "latest_data_date": runtime["latest_data_date"],
         "param_latest_data_date": runtime["param_latest_data_date"],
         "param_member_count": runtime["member_count"],
-        "market_data_snapshot_sha256": runtime["market_data_snapshot_sha256"],
-        "dataset_content_sha256": runtime["dataset_content_sha256"],
+        "market_data_consumer_state_sha256": runtime["market_data_consumer_state_sha256"],
+        "market_data_source_view_fingerprint": runtime["market_data_source_view_fingerprint"],
         "param_binding_sha256": runtime["param_binding_sha256"],
         "selected_params_path": project_relative_display_path(runtime["selected_path"], project_root=root),
         "scanner_output_dir": project_relative_display_path(output_dir, project_root=root),

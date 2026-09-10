@@ -57,7 +57,7 @@ def build_market_data_ops_read_model(
     local_now = now or datetime.now().astimezone()
     consumer_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     target_date = None if consumer_state is None else str(consumer_state.get("market_date") or "") or None
-    trading_readiness = build_trading_data_readiness(root, verify_execution_dataset_content=False)
+    trading_readiness = build_trading_data_readiness(root, verify_consumer_view=False)
     dataset_state = build_market_data_dataset_state_read_model(root)
     v2 = build_trading_market_data_v2_read_model(root)
     auto_policy = get_market_data_auto_update_policy()
@@ -162,14 +162,14 @@ def build_market_data_ops_read_model(
         "generated_at": local_now.isoformat(),
         "provider_calls": 0,
         "trading_target_date": target_date,
-        "trading_snapshot_ready": consumer_state is not None,
+        "trading_consumer_state_exists": consumer_state is not None,
         "trading_market_data_source": None if consumer_state is None else consumer_state.get("source"),
         "trading_strategy_id": trading_readiness.get("strategy_id"),
         "trading_ready": bool(trading_readiness.get("ready")),
         "trading_readiness_status": trading_readiness.get("status"),
         "trading_dependency_fingerprint": trading_readiness.get("dependency_fingerprint"),
-        "trading_execution_data_required": bool(trading_readiness.get("execution_market_data_required")),
-        "trading_execution_data_ready": bool(trading_readiness.get("execution_market_data_ready")),
+        "trading_consumer_state_required": bool(trading_readiness.get("consumer_state_required")),
+        "trading_consumer_state_ready": bool(trading_readiness.get("consumer_state_ready")),
         "trading_required_v2_count": int(trading_readiness.get("required_v2_dataset_count") or 0),
         "trading_ready_v2_count": int(trading_readiness.get("ready_v2_dataset_count") or 0),
         "trading_blocking_v2_count": int(trading_readiness.get("blocking_v2_dataset_count") or 0),
@@ -219,7 +219,6 @@ def build_market_data_ops_read_model(
         "latest_request_count": v2.get("latest_request_count"),
         "latest_row_count": v2.get("latest_row_count"),
         "overall_v2_ready": bool(target_date and len(rows) and ready_count == len(rows)),
-        "execution_data_ready": bool(trading_readiness.get("execution_market_data_ready")),
         "datasets": rows,
         "recent_activity": recent_activity,
     }

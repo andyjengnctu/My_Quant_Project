@@ -11,12 +11,6 @@ from .checks import raises_expected, bind_synthetic_case, bind_checks, add_check
 
 
 
-def _legacy_execution_transition_lifecycle_fixture():
-    from types import SimpleNamespace
-    from core.market_data_contract import MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION
-
-    return SimpleNamespace(migration_phase=MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION)
-
 def _publish_ready_provider_snapshot_fixture(
     *,
     root,
@@ -1327,7 +1321,6 @@ __all__ = [
     "validate_market_data_v2_provider_snapshot_completion_contract_case",
     "validate_market_data_v2_trading_workbench_sidecar_contract_case",
     "validate_market_data_v2_trading_historical_latest_view_contract_case",
-    "validate_trading_price_bulk_completeness_contract_case",
     "validate_market_data_v2_research_candidate_contract_case",
     "validate_market_data_v2_research_pit_review_contract_case",
     "validate_market_data_v2_research_required_cutoff_isolation_contract_case",
@@ -1626,21 +1619,16 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("selective_due_manifest_only_contains_due_datasets", {"TaiwanStockPrice", "TaiwanStockPER"}, {request.dataset for request in selective_manifest.requests})
     check("selective_due_manifest_is_smaller_than_full_daily_manifest", True, 0 < selective_manifest.total_requests < manifest_a.total_requests)
 
-    # Round 6 canonical provider fetch geometry.  Full-history current-vintage
-    # PriceAdj semantics stay intact while one process-local cache is shared by
-    # the execution CSV producer and the V2 sidecar.
+    # Shared provider request identity remains process-local optimization only.
+    # Round 8 no longer has a Legacy CSV producer; this block verifies the
+    # request cache and executor accounting used by V2 provider work/probing.
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from unittest.mock import patch
     from services.downloader.finmind_http import FinMindUsage
     from services.downloader.finmind_shared_client import SharedFinMindRequestClient
-    from services.downloader.trading_price_refresh import (
-        build_price_history_ranges,
-        probe_latest_adjusted_price_market_date,
-        refresh_trading_adjusted_price_dataset,
-    )
+    from services.downloader.trading_price_refresh import build_price_history_ranges
 
-    from services.downloader import runtime as downloader_runtime
 
     full_price_ranges = build_price_history_ranges(
         start_date=downloader_runtime.PRICE_HISTORY_START_DATE,
@@ -1728,164 +1716,6 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("executor_cache_hit_consumes_zero_provider_data_calls", 0, executor_base.data_request_count)
     check("executor_cache_hit_does_not_increment_http_attempts", 0, cached_summary.http_attempts)
     check("executor_cache_hit_still_commits_logical_job", 1, cached_summary.done)
-
-    class _BulkPriceBaseClient:
-        def __init__(self, *, omit_current=()):
-            self.data_request_count = 0
-            self.usage_request_count = 0
-            self.calls = []
-            self.omit_current = set(omit_current)
-        def get_usage(self):
-            self.usage_request_count += 1
-            return FinMindUsage(user_count=0, api_request_limit=6000)
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            self.calls.append(dict(kwargs))
-            dataset = kwargs.get("dataset")
-            if dataset == "TaiwanStockTradingDate":
-                if kwargs.get("data_id") is not None or kwargs.get("start_date") is not None or kwargs.get("end_date") is not None:
-                    raise AssertionError(f"unexpected synthetic trading-calendar request: {kwargs}")
-                return pd.DataFrame({"date": ["2026-01-02", "2026-06-30", "2026-07-01", "2026-09-07"]})
-            start = kwargs.get("start_date")
-            end = kwargs.get("end_date")
-            if dataset != "TaiwanStockPriceAdj" or kwargs.get("data_id") is not None:
-                raise AssertionError(f"unexpected synthetic bulk request: {kwargs}")
-            if start == "2026-07-01" and end == "2026-09-07":
-                dates = ["2026-07-01", "2026-09-07"]
-            elif start == "2026-01-01" and end == "2026-06-30":
-                dates = ["2026-01-02", "2026-06-30"]
-            else:
-                raise AssertionError(f"unexpected synthetic date range: {start}~{end}")
-            rows = []
-            for d in dates:
-                for sid, base in (("2330", 100.0), ("2317", 80.0)):
-                    if d == "2026-09-07" and sid in self.omit_current:
-                        continue
-                    rows.append({
-                        "date": d, "stock_id": sid, "open": base, "max": base + 2,
-                        "min": base - 1, "close": base + 1, "Trading_Volume": 1000,
-                    })
-            return pd.DataFrame(rows)
-
-    def _seed_bulk_price_baseline(price_dir: Path) -> None:
-        price_dir.mkdir(parents=True, exist_ok=True)
-        for sid, base in (("2330", 100.0), ("2317", 80.0)):
-            pd.DataFrame(
-                {
-                    "Open": [base, base, base],
-                    "High": [base + 2, base + 2, base + 2],
-                    "Low": [base - 1, base - 1, base - 1],
-                    "Close": [base + 1, base + 1, base + 1],
-                    "Volume": [1000, 1000, 1000],
-                },
-                index=pd.to_datetime(["2026-01-02", "2026-06-30", "2026-07-01"]),
-            ).to_csv(price_dir / f"{sid}.csv")
-
-    with TemporaryDirectory() as bulk_temp_dir:
-        from services.downloader import runtime as downloader_runtime
-        bulk_base = _BulkPriceBaseClient()
-        bulk_shared = SharedFinMindRequestClient(bulk_base)
-        bulk_price_dir = Path(bulk_temp_dir) / "prices"
-        _seed_bulk_price_baseline(bulk_price_dir)
-        with patch.object(downloader_runtime, "SAVE_DIR", str(bulk_price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(bulk_temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
-            probe = probe_latest_adjusted_price_market_date(
-                client=bulk_shared,
-                now=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
-            )
-            bulk_summary = refresh_trading_adjusted_price_dataset(
-                ["2330", "2317"],
-                "2026-09-07",
-                client=bulk_shared,
-                probe=probe,
-                universe_tickers=["2330", "2317"],
-                verbose=False,
-            )
-            csv_2330 = pd.read_csv(Path(downloader_runtime.SAVE_DIR) / "2330.csv", index_col=0)
-            calls_before_exact = bulk_base.data_request_count
-            exact_cached = bulk_shared.get_data(
-                dataset="TaiwanStockPriceAdj",
-                start_date="2026-09-07",
-                end_date="2026-09-07",
-            )
-        check("bulk_price_probe_history_and_calendar_use_three_provider_data_calls", 3, bulk_base.data_request_count)
-        check("bulk_price_refresh_uses_one_quota_capacity_probe", 1, bulk_base.usage_request_count)
-        check("bulk_price_refresh_preserves_full_current_vintage_history", 4, len(csv_2330))
-        check("bulk_price_refresh_reports_current_vintage_strategy", "full_market_range_current_vintage", bulk_summary.get("price_fetch_strategy"))
-        check("bulk_price_target_exact_request_reuses_same_response", calls_before_exact, bulk_base.data_request_count)
-        check("bulk_price_target_exact_cache_contains_full_market_rows", {"2317", "2330"}, set(exact_cached["stock_id"].astype(str)))
-        check("bulk_price_historical_raw_chunk_is_not_retained_in_shared_cache", False, bulk_shared.has_cached_data(dataset="TaiwanStockPriceAdj", start_date="2026-01-01", end_date="2026-06-30"))
-        check("bulk_price_reports_uncached_historical_fetch", 1, bulk_shared.snapshot().get("uncached_fetches"))
-
-    with TemporaryDirectory() as suspended_temp_dir:
-        from services.downloader import runtime as downloader_runtime
-        suspended_base = _BulkPriceBaseClient(omit_current={"2317"})
-        suspended_shared = SharedFinMindRequestClient(suspended_base)
-        suspended_price_dir = Path(suspended_temp_dir) / "prices"
-        _seed_bulk_price_baseline(suspended_price_dir)
-        with patch.object(downloader_runtime, "SAVE_DIR", str(suspended_price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(suspended_temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
-            suspended_probe = probe_latest_adjusted_price_market_date(
-                client=suspended_shared,
-                now=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
-            )
-            suspended_summary = refresh_trading_adjusted_price_dataset(
-                ["2330", "2317"],
-                "2026-09-07",
-                client=suspended_shared,
-                probe=suspended_probe,
-                # 2317 is a required/history target outside the exact-date actionable universe.
-                # It may legitimately have no target-date PriceAdj row (for example, suspension).
-                universe_tickers=["2330"],
-                verbose=False,
-            )
-            suspended_2317 = pd.read_csv(Path(downloader_runtime.SAVE_DIR) / "2317.csv", index_col=0)
-        check("bulk_price_preserves_nonactionable_required_ticker_history_without_fabricating_target_row", "2026-07-01", str(pd.Timestamp(suspended_2317.index[-1]).date()))
-        check("bulk_price_reports_zero_missing_rows_for_validated_actionable_universe", 0, suspended_summary.get("current_universe_missing_price_row_count"))
-
-    with TemporaryDirectory() as truncated_temp_dir:
-        from services.downloader import runtime as downloader_runtime
-        from services.downloader.trading_price_refresh import TradingBulkPriceUnsupported
-        truncated_price_dir = Path(truncated_temp_dir) / "prices"
-        truncated_price_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(
-            {"Open": [90.0], "High": [91.0], "Low": [89.0], "Close": [90.5], "Volume": [100]},
-            index=[pd.Timestamp("2026-03-01")],
-        ).to_csv(truncated_price_dir / "2330.csv")
-        pd.DataFrame(
-            {"Open": [80.0], "High": [82.0], "Low": [79.0], "Close": [81.0], "Volume": [1000]},
-            index=[pd.Timestamp("2026-01-02")],
-        ).to_csv(truncated_price_dir / "2317.csv")
-        truncated_original_bytes = (truncated_price_dir / "2330.csv").read_bytes()
-        truncated_base = _BulkPriceBaseClient()
-        truncated_shared = SharedFinMindRequestClient(truncated_base)
-        with patch.object(downloader_runtime, "SAVE_DIR", str(truncated_price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(truncated_temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
-            truncated_probe = probe_latest_adjusted_price_market_date(
-                client=truncated_shared,
-                now=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
-            )
-            try:
-                refresh_trading_adjusted_price_dataset(
-                    ["2330", "2317"],
-                    "2026-09-07",
-                    client=truncated_shared,
-                    probe=truncated_probe,
-                    universe_tickers=["2330", "2317"],
-                    verbose=False,
-                )
-            except TradingBulkPriceUnsupported:
-                truncated_rejected = True
-            else:
-                truncated_rejected = False
-        check("bulk_price_rejects_history_that_drops_existing_legacy_dates", True, truncated_rejected)
-        check("bulk_price_coverage_failure_publishes_no_partial_csv", truncated_original_bytes, (truncated_price_dir / "2330.csv").read_bytes())
 
     # Repair windows are minimum re-query horizons.  A long scheduler outage
     # must not leave a silent hole between the Provider Snapshot and the recent
@@ -2547,7 +2377,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     dependency_stats = validate_trading_data_dependency_registry()
     current_dependency = get_trading_data_dependency_spec("full_rule_based_no_dl")
     check("trading_dependency_registry_has_current_strategy", 1, dependency_stats["strategy_count"])
-    check("current_rule_based_strategy_no_longer_requires_legacy_execution_data", False, current_dependency.execution_market_data_required)
+    check("current_rule_based_strategy_is_v2_only", 6, len(current_dependency.required_v2_datasets))
     check("current_rule_based_strategy_requires_six_v2_datasets", 6, len(current_dependency.required_v2_datasets))
     current_dataset_state = {
         "datasets": {
@@ -2564,21 +2394,28 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     current_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
         strategy_id="full_rule_based_no_dl",
         target_date="2026-09-07",
-        execution_market_data_ready=False,
+        consumer_state_ready=True,
         dataset_state=current_dataset_state,
     )
     check("current_rule_based_strategy_is_ready_from_required_v2_evidence", True, current_ready["ready"])
+    current_consumer_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
+        strategy_id="full_rule_based_no_dl",
+        target_date="2026-09-07",
+        consumer_state_ready=False,
+        consumer_state_reason="synthetic missing consumer state",
+        dataset_state=current_dataset_state,
+    )
+    check("current_rule_based_strategy_requires_v2_consumer_state", False, current_consumer_blocked["ready"])
     current_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
         strategy_id="full_rule_based_no_dl",
         target_date="2026-09-07",
-        execution_market_data_ready=True,
+        consumer_state_ready=True,
         dataset_state=None,
     )
     check("current_rule_based_strategy_fails_closed_without_required_v2_evidence", False, current_blocked["ready"])
 
     future_dependency = TradingDataDependencySpec(
         strategy_id="synthetic_v2_strategy",
-        execution_market_data_required=True,
         required_v2_datasets=("TaiwanStockPER",),
     )
     synthetic_v2_state = {
@@ -2598,7 +2435,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         future_blocked = trading_data_readiness.build_trading_data_readiness_from_evidence(
             strategy_id="synthetic_v2_strategy",
             target_date="2026-09-07",
-            execution_market_data_ready=True,
+            consumer_state_ready=True,
             dataset_state=synthetic_v2_state,
         )
         check("future_v2_dependency_fails_closed_when_completeness_not_evaluated", False, future_blocked["ready"])
@@ -2606,7 +2443,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         future_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
             strategy_id="synthetic_v2_strategy",
             target_date="2026-09-07",
-            execution_market_data_ready=True,
+            consumer_state_ready=True,
             dataset_state=synthetic_v2_state,
         )
         check("future_v2_dependency_ready_only_after_fresh_schema_coverage_evidence", True, future_ready["ready"])
@@ -2614,7 +2451,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         future_error = trading_data_readiness.build_trading_data_readiness_from_evidence(
             strategy_id="synthetic_v2_strategy",
             target_date="2026-09-07",
-            execution_market_data_ready=True,
+            consumer_state_ready=True,
             dataset_state=synthetic_v2_state,
         )
         check("future_v2_dependency_fails_closed_on_same_target_error", False, future_error["ready"])
@@ -2635,13 +2472,12 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     from services.trading import market_data_update as market_data_update_module
 
     v2_pos = update_source.find("run_trading_market_data_auto_update(")
-    compat_pos = update_source.find("materialize_trading_v2_compatibility_dataset(")
-    snapshot_pos = update_source.find("publish_trading_market_data_snapshot(")
-    check("canonical_update_owner_runs_v2_then_compatibility_then_snapshot", True, 0 <= v2_pos < compat_pos < snapshot_pos)
-    check("canonical_update_owner_has_no_legacy_direct_provider_stage", False, "run_trading_dataset_update(" in update_source)
+    consumer_pos = update_source.find("publish_trading_v2_consumer_state(")
+    check("canonical_update_owner_runs_v2_then_consumer_state", True, 0 <= v2_pos < consumer_pos)
+    check("canonical_update_owner_has_no_legacy_materialization_or_snapshot_stage", False, any(token in update_source for token in ("materialize_trading_v2_compatibility_dataset", "publish_trading_market_data_snapshot", "run_trading_dataset_update(")))
     executor_source = (project_root / "services" / "downloader" / "market_data_executor.py").read_text(encoding="utf-8")
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
-    check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and '"legacy_stage_data_requests": 0' in update_source)
+    check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and "legacy_stage_data_requests" not in update_source)
     check("executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
     check("canonical_price_refresh_never_calculates_adjustment_locally", True, "TaiwanStockPriceAdj" in price_refresh_source and "adjusted-price calculator" in price_refresh_source and "full_market_range_current_vintage" in price_refresh_source)
     check("daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
@@ -2665,7 +2501,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("v2_failure_state_remains_owned_by_v2_sync_path", True, "publish_trading_market_data_v2_state(" in v2_sync_source and '"last_error": error' in v2_sync_source)
     check("workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
     check("scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
-    check("scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_execution_evidence" in scanner_source)
+    check("scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_consumer_evidence" in scanner_source)
     check("operations_status_uses_strategy_data_readiness_not_aggregate_v2_synced", True, "trading_data_ready" in operations_source and "overall_v2_ready" not in operations_source)
     check("data_ops_reads_canonical_trading_data_readiness_without_provider_call", True, "build_trading_data_readiness" in data_ops_source and '"provider_calls": 0' in data_ops_source)
     check("readiness_gate_requires_schema_and_coverage_for_v2_dependencies", True, "schema_status" in readiness_source and "coverage_status" in readiness_source and "VALIDATION_STATUS_NOT_EVALUATED" not in readiness_source)
@@ -2677,146 +2513,6 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         "verified_schedule_count": freshness_stats["verified_schedule_count"],
         "fallback_schedule_count": freshness_stats["fallback_schedule_count"],
     })
-    return results, summary
-
-
-def validate_trading_retained_dataset_current_vintage_contract_case(_base_params):
-    """Retained Optimizer members must share one current FinMind adjusted-price vintage."""
-
-    from pathlib import Path
-    from tempfile import TemporaryDirectory
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
-    import pandas as pd
-
-    from core.trading_dataset_identity import (
-        build_trading_dataset_fingerprint,
-        resolve_trading_dataset_member_tickers,
-    )
-    from services.downloader import application as downloader_application
-    from services.downloader import runtime as downloader_runtime
-    from services.downloader.trading_price_refresh import PriceRange, TradingPriceProbe
-    from services.optimizer.raw_cache import load_all_raw_data
-
-    case_id = "TRADING_RETAINED_DATASET_CURRENT_VINTAGE"
-    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
-
-    def _legacy(path: Path, close: float, trade_date: str) -> None:
-        frame = pd.DataFrame(
-            {
-                "Open": [close],
-                "High": [close + 1.0],
-                "Low": [close - 1.0],
-                "Close": [close],
-                "Volume": [1000],
-            },
-            index=pd.to_datetime([trade_date]),
-        )
-        frame.index.name = "Date"
-        frame.to_csv(path)
-
-    class _Client:
-        pass
-
-    with TemporaryDirectory(prefix="trading_retained_vintage_") as temp_dir:
-        root = Path(temp_dir)
-        price_dir = root / "prices"
-        output_dir = root / "outputs"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        _legacy(price_dir / "2330.csv", 100.0, "2026-09-09")
-        _legacy(price_dir / "2454.csv", 50.0, "2026-09-08")
-
-        check(
-            "retained_membership_resolver_matches_physical_dataset_membership",
-            ["2330", "2454"],
-            resolve_trading_dataset_member_tickers(price_dir, required=True),
-        )
-        check(
-            "dataset_fingerprint_includes_retained_optimizer_member",
-            2,
-            build_trading_dataset_fingerprint(price_dir).get("csv_count"),
-        )
-        optimizer_raw = load_all_raw_data(
-            str(price_dir),
-            required_min_rows=1,
-            output_dir=str(output_dir / "optimizer"),
-            verbose=False,
-        )
-        check(
-            "optimizer_raw_loader_consumes_all_retained_physical_members",
-            ["2330", "2454"],
-            sorted(optimizer_raw),
-        )
-
-        probe = TradingPriceProbe(
-            candidate_date="2026-09-09",
-            market_date="2026-09-09",
-            current_range=PriceRange("2026-07-01", "2026-09-09"),
-            current_frame=pd.DataFrame(),
-        )
-        captured = {}
-
-        def _refresh(tickers, market_date, **kwargs):
-            captured["tickers"] = list(tickers)
-            captured["universe_tickers"] = list(kwargs.get("universe_tickers") or [])
-            return {
-                "total": len(list(tickers)),
-                "count_success": len(list(tickers)),
-                "count_skipped_latest": 0,
-                "last_date_check_error_count": 0,
-                "download_error_count": 0,
-                "trimmed_future_row_count": 0,
-                "issue_log_path": None,
-            }
-
-        with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
-             patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(output_dir)), \
-             patch("services.downloader.application.probe_latest_adjusted_price_market_date", return_value=probe), \
-             patch("services.downloader.application.assert_completed_daily_information_date", side_effect=lambda value, now: value), \
-             patch("services.downloader.application.get_or_update_universe", return_value=["2330"]), \
-             patch("services.downloader.application.refresh_trading_adjusted_price_dataset", side_effect=_refresh), \
-             patch("services.downloader.application.inspect_local_price_freshness", return_value=SimpleNamespace(stale=(), unreadable=())):
-            update = downloader_application.run_trading_dataset_update(provider_client=_Client())
-
-        check(
-            "canonical_update_refreshes_actionable_and_retained_optimizer_members",
-            ["2330", "2454"],
-            captured.get("tickers"),
-        )
-        check(
-            "retained_non_actionable_member_does_not_gain_target_date_requirement",
-            ["2330"],
-            captured.get("universe_tickers"),
-        )
-        check(
-            "update_reports_exact_retained_physical_membership",
-            ["2330", "2454"],
-            update.get("retained_history_tickers"),
-        )
-        check(
-            "update_reports_only_non_actionable_retained_member_as_added",
-            ["2454"],
-            update.get("retained_history_tickers_added"),
-        )
-        check(
-            "legacy_universe_summary_is_explicitly_aliased_as_current_execution_pool",
-            ["2330"],
-            update.get("current_execution_pool_tickers"),
-        )
-        check(
-            "current_execution_pool_count_matches_compatibility_universe_count",
-            update.get("universe_ticker_count"),
-            update.get("current_execution_pool_ticker_count"),
-        )
-        check(
-            "missing_dataset_directory_has_empty_optional_retained_membership",
-            [],
-            resolve_trading_dataset_member_tickers(root / "missing", required=False),
-        )
-
-    summary["checks"] = len(results)
     return results, summary
 
 
@@ -4188,20 +3884,18 @@ def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
         is_historical_market_state_eligible,
     )
     from core.trading_market_clock import trading_daily_bar_complete_time
-    from services.downloader import runtime as downloader_runtime
-    from services.downloader.universe import _load_reusable_universe_cache, _publish_universe_cache
 
     case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR1"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
-    with TemporaryDirectory() as tmp:
-        cache_path = Path(tmp) / "universe_cache_v3.json"
-        _publish_universe_cache(cache_path, qualified_tickers=["2330"], market_date="2026-09-01")
-        now = downloader_runtime.get_taipei_now()
-        stale = _load_reusable_universe_cache(cache_path, now=now, market_date="2026-09-08")
-        same_date = _load_reusable_universe_cache(cache_path, now=now, market_date="2026-09-01")
-        check("cache_reuse_is_bound_to_requested_market_date", None, stale)
-        check("same_market_date_cache_remains_reusable", ["2330"], same_date)
+    # Trading cache identity moved to the V2 consumer/dataset state in Round 8;
+    # the retired Legacy universe cache must not participate in this repair contract.
+    from services.trading.market_data_consumer import TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
+    check(
+        "trading_market_data_runtime_state_is_v2_namespaced",
+        True,
+        str(TRADING_V2_CONSUMER_STATE_RELATIVE_PATH).replace("\\", "/").startswith("state/trading/market_data_v2/"),
+    )
 
     from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET
     from core.market_data_dataset_registry import get_market_dataset_spec
@@ -4744,841 +4438,6 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
 
 
 
-def validate_trading_price_bulk_completeness_contract_case(_base_params):
-    """Regression for canonical PriceAdj bulk completeness and formal coverage ownership."""
-
-    from datetime import datetime
-    from pathlib import Path
-    from tempfile import TemporaryDirectory
-    from unittest.mock import patch
-    from zoneinfo import ZoneInfo
-
-    from services.downloader import runtime as downloader_runtime
-    from services.downloader.finmind_http import FinMindUsage
-    from services.downloader.finmind_shared_client import SharedFinMindRequestClient
-    from services.downloader.trading_price_refresh import (
-        PriceRange,
-        TradingBulkPriceUnsupported,
-        TradingPriceProbe,
-        refresh_trading_adjusted_price_dataset,
-    )
-    from tools.local_regression.meta_quality_targets import COVERAGE_TARGETS
-
-    case_id = "TRADING_PRICE_BULK_COMPLETENESS"
-    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
-
-    required_coverage = {
-        "services/downloader/finmind_shared_client.py",
-        "services/downloader/trading_price_refresh.py",
-        "services/trading/market_data_update.py",
-        "services/trading/market_data_compatibility.py",
-        "core/market_data_ohlcv_compatibility.py",
-        "services/trading/market_data_auto_update.py",
-        "services/trading/market_data_market_date_discovery.py",
-    }
-    check("round6_execution_owners_are_formal_coverage_targets", set(), required_coverage - set(COVERAGE_TARGETS))
-
-    def _price_frame(*dates: str) -> pd.DataFrame:
-        rows = []
-        for value in dates:
-            for sid, base in (("2330", 100.0), ("2317", 80.0)):
-                rows.append({
-                    "date": value,
-                    "stock_id": sid,
-                    "open": base,
-                    "max": base + 2,
-                    "min": base - 1,
-                    "close": base + 1,
-                    "Trading_Volume": 1000,
-                })
-        return pd.DataFrame(rows)
-
-    def _legacy_frame(base: float, dates: tuple[str, ...]) -> pd.DataFrame:
-        return pd.DataFrame(
-            {
-                "Open": [base] * len(dates),
-                "High": [base + 2] * len(dates),
-                "Low": [base - 1] * len(dates),
-                "Close": [base + 1] * len(dates),
-                "Volume": [1000] * len(dates),
-            },
-            index=pd.to_datetime(list(dates)),
-        )
-
-    class _NoUnexpectedProviderCalls:
-        def __init__(self):
-            self.data_request_count = 0
-            self.usage_request_count = 0
-        def get_usage(self):
-            self.usage_request_count += 1
-            return FinMindUsage(user_count=0, api_request_limit=6000)
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            raise AssertionError(f"unexpected provider call: {kwargs}")
-
-    current_range = PriceRange("2026-01-01", "2026-09-07")
-    current_frame = _price_frame("2026-01-02", "2026-06-30", "2026-07-01", "2026-09-07")
-    probe = TradingPriceProbe(
-        candidate_date="2026-09-07",
-        market_date="2026-09-07",
-        current_range=current_range,
-        current_frame=current_frame,
-    )
-    fallback_summary = {
-        "total": 2,
-        "count_success": 2,
-        "count_skipped_latest": 0,
-        "last_date_check_error_count": 0,
-        "download_error_count": 0,
-        "trimmed_future_row_count": 0,
-        "issue_log_path": None,
-    }
-
-    with TemporaryDirectory() as missing_temp:
-        base = _NoUnexpectedProviderCalls()
-        shared = SharedFinMindRequestClient(base)
-        shared.seed_data(
-            dataset="TaiwanStockPriceAdj",
-            start_date=current_range.start_date,
-            end_date=current_range.end_date,
-            frame=current_frame,
-        )
-        with patch.object(downloader_runtime, "SAVE_DIR", str(Path(missing_temp) / "prices")), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(missing_temp) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 12), \
-             patch("services.downloader.sync.smart_download_vip_data", return_value=dict(fallback_summary)) as fallback:
-            missing_summary = refresh_trading_adjusted_price_dataset(
-                ["2330", "2317"],
-                "2026-09-07",
-                client=shared,
-                probe=probe,
-                universe_tickers=["2330", "2317"],
-                verbose=False,
-            )
-        check("missing_legacy_baseline_forces_per_ticker_full_history", "per_ticker_full_history", missing_summary.get("price_fetch_strategy"))
-        check("missing_legacy_baseline_calls_canonical_per_ticker_producer_once", 1, fallback.call_count)
-        check("missing_legacy_baseline_plans_one_priceadj_request_per_stale_ticker", 2, missing_summary.get("planned_price_data_requests"))
-        check("missing_legacy_baseline_avoids_bulk_or_calendar_provider_calls", 0, base.data_request_count)
-
-    with TemporaryDirectory() as unreadable_temp:
-        price_dir = Path(unreadable_temp) / "prices"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        (price_dir / "2330.csv").write_text("not,a,valid,legacy,csv\n", encoding="utf-8")
-        _legacy_frame(80.0, ("2026-07-01",)).to_csv(price_dir / "2317.csv")
-        base = _NoUnexpectedProviderCalls()
-        shared = SharedFinMindRequestClient(base)
-        shared.seed_data(
-            dataset="TaiwanStockPriceAdj",
-            start_date=current_range.start_date,
-            end_date=current_range.end_date,
-            frame=current_frame,
-        )
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(unreadable_temp) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 12), \
-             patch("services.downloader.sync.smart_download_vip_data", return_value=dict(fallback_summary)) as fallback:
-            unreadable_summary = refresh_trading_adjusted_price_dataset(
-                ["2330", "2317"],
-                "2026-09-07",
-                client=shared,
-                probe=probe,
-                universe_tickers=["2330", "2317"],
-                verbose=False,
-            )
-        check("unreadable_legacy_baseline_forces_per_ticker_full_history", "per_ticker_full_history", unreadable_summary.get("price_fetch_strategy"))
-        check("unreadable_legacy_baseline_calls_canonical_per_ticker_producer_once", 1, fallback.call_count)
-        check("unreadable_legacy_baseline_plans_one_priceadj_request_per_stale_ticker", 2, unreadable_summary.get("planned_price_data_requests"))
-        check("unreadable_legacy_baseline_avoids_bulk_or_calendar_provider_calls", 0, base.data_request_count)
-
-    class _SparseBulkProvider:
-        def __init__(self):
-            self.data_request_count = 0
-            self.usage_request_count = 0
-            self.calls = []
-        def get_usage(self):
-            self.usage_request_count += 1
-            return FinMindUsage(user_count=0, api_request_limit=6000)
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            self.calls.append(dict(kwargs))
-            dataset = kwargs.get("dataset")
-            if dataset == "TaiwanStockTradingDate":
-                return pd.DataFrame({"date": [
-                    "2026-01-02", "2026-06-30", "2026-07-01", "2026-08-03", "2026-09-07"
-                ]})
-            if dataset == "TaiwanStockPriceAdj" and kwargs.get("start_date") == "2026-01-01" and kwargs.get("end_date") == "2026-06-30":
-                return _price_frame("2026-01-02", "2026-06-30")
-            raise AssertionError(f"unexpected sparse bulk provider request: {kwargs}")
-
-    with TemporaryDirectory() as sparse_temp:
-        price_dir = Path(sparse_temp) / "prices"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        for sid, base_value in (("2330", 100.0), ("2317", 80.0)):
-            _legacy_frame(base_value, ("2026-01-02", "2026-06-30", "2026-07-01")).to_csv(price_dir / f"{sid}.csv")
-        original = {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")}
-        sparse_base = _SparseBulkProvider()
-        sparse_shared = SharedFinMindRequestClient(sparse_base)
-        sparse_current_range = PriceRange("2026-07-01", "2026-09-07")
-        sparse_current_frame = _price_frame("2026-07-01", "2026-09-07")
-        sparse_shared.seed_data(
-            dataset="TaiwanStockPriceAdj",
-            start_date=sparse_current_range.start_date,
-            end_date=sparse_current_range.end_date,
-            frame=sparse_current_frame,
-        )
-        sparse_probe = TradingPriceProbe(
-            candidate_date="2026-09-07",
-            market_date="2026-09-07",
-            current_range=sparse_current_range,
-            current_frame=sparse_current_frame,
-        )
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(sparse_temp) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
-            try:
-                refresh_trading_adjusted_price_dataset(
-                    ["2330", "2317"],
-                    "2026-09-07",
-                    client=sparse_shared,
-                    probe=sparse_probe,
-                    universe_tickers=["2330", "2317"],
-                    verbose=False,
-                )
-            except TradingBulkPriceUnsupported as exc:
-                sparse_rejected = True
-                sparse_reason = str(exc)
-            else:
-                sparse_rejected = False
-                sparse_reason = ""
-        check("sparse_bulk_range_is_rejected_by_trading_calendar_coverage", True, sparse_rejected)
-        check("sparse_bulk_rejection_names_calendar_coverage", True, "TaiwanStockTradingDate" in sparse_reason)
-        check("sparse_bulk_failure_publishes_no_partial_price_csv", original, {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")})
-        check("sparse_current_range_rejects_before_historical_bulk_fetch", 1, sparse_base.data_request_count)
-
-    class _LaggingCalendarProvider:
-        def __init__(self):
-            self.data_request_count = 0
-            self.usage_request_count = 0
-        def get_usage(self):
-            self.usage_request_count += 1
-            return FinMindUsage(user_count=0, api_request_limit=6000)
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            dataset = kwargs.get("dataset")
-            if dataset == "TaiwanStockTradingDate":
-                return pd.DataFrame({"date": [
-                    "2026-01-02", "2026-06-30", "2026-07-01", "2026-08-03"
-                ]})
-            if dataset == "TaiwanStockPriceAdj" and kwargs.get("start_date") == "2026-01-01" and kwargs.get("end_date") == "2026-06-30":
-                return _price_frame("2026-01-02", "2026-06-30")
-            raise AssertionError(f"unexpected lagging-calendar provider request: {kwargs}")
-
-    with TemporaryDirectory() as lagging_temp:
-        price_dir = Path(lagging_temp) / "prices"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        baseline_dates = ("2026-01-02", "2026-06-30", "2026-07-01", "2026-08-03")
-        for sid, base_value in (("2330", 100.0), ("2317", 80.0)):
-            _legacy_frame(base_value, baseline_dates).to_csv(price_dir / f"{sid}.csv")
-        lagging_base = _LaggingCalendarProvider()
-        lagging_shared = SharedFinMindRequestClient(lagging_base)
-        lagging_range = PriceRange("2026-07-01", "2026-09-07")
-        lagging_current = _price_frame("2026-07-01", "2026-08-03", "2026-09-07")
-        lagging_shared.seed_data(
-            dataset="TaiwanStockPriceAdj",
-            start_date=lagging_range.start_date,
-            end_date=lagging_range.end_date,
-            frame=lagging_current,
-        )
-        lagging_probe = TradingPriceProbe(
-            candidate_date="2026-09-07",
-            market_date="2026-09-07",
-            current_range=lagging_range,
-            current_frame=lagging_current,
-        )
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(lagging_temp) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-01-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
-            lagging_summary = refresh_trading_adjusted_price_dataset(
-                ["2330", "2317"],
-                "2026-09-07",
-                client=lagging_shared,
-                probe=lagging_probe,
-                universe_tickers=["2330", "2317"],
-                verbose=False,
-            )
-        check("calendar_lag_does_not_override_priceadj_completed_market_date", "full_market_range_current_vintage", lagging_summary.get("price_fetch_strategy"))
-        check("calendar_lag_bulk_path_still_uses_calendar_plus_one_historical_fetch", 2, lagging_base.data_request_count)
-
-    summary.update({"checks": len(results), "repair": "bulk_completeness_fail_closed"})
-    return results, summary
-
-
-def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
-    """Historical regression for per-ticker, universe, application and snapshot completeness."""
-
-    from pathlib import Path
-    from tempfile import TemporaryDirectory
-    from unittest.mock import patch
-
-    from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
-    from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
-    from services.downloader import application as downloader_application
-    from services.downloader import runtime as downloader_runtime
-    from services.downloader import sync as downloader_sync
-    from services.downloader import universe as downloader_universe
-    from services.downloader.finmind_http import FinMindUsage
-    from services.downloader.finmind_shared_client import SharedFinMindRequestClient
-    from services.downloader.trading_price_refresh import (
-        PriceRange,
-        TradingBulkPriceUnsupported,
-        TradingPriceProbe,
-        refresh_trading_adjusted_price_dataset,
-    )
-    from services.trading.market_data_state import (
-        publish_trading_market_data_snapshot,
-        resolve_trading_market_data_snapshot_path,
-    )
-
-    case_id = "TRADING_PRICE_END_TO_END_COMPLETENESS"
-    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
-
-    def _legacy_frame(base: float, dates: tuple[str, ...]) -> pd.DataFrame:
-        frame = pd.DataFrame(
-            {
-                "Open": [base] * len(dates),
-                "High": [base + 2] * len(dates),
-                "Low": [base - 1] * len(dates),
-                "Close": [base + 1] * len(dates),
-                "Volume": [1000] * len(dates),
-            },
-            index=pd.to_datetime(list(dates)),
-        )
-        frame.index.name = "Date"
-        return frame
-
-    def _adjusted_frame(sid: str, dates: tuple[str, ...], base: float = 100.0) -> pd.DataFrame:
-        return pd.DataFrame(
-            {
-                "date": list(dates),
-                "stock_id": [sid] * len(dates),
-                "open": [base] * len(dates),
-                "max": [base + 2] * len(dates),
-                "min": [base - 1] * len(dates),
-                "close": [base + 1] * len(dates),
-                "Trading_Volume": [1000] * len(dates),
-            }
-        )
-
-    class _PerTickerProvider:
-        def __init__(self, *, adjusted_dates: tuple[str, ...], raw_dates: tuple[str, ...] = ()):
-            self.adjusted_dates = adjusted_dates
-            self.raw_dates = raw_dates
-            self.data_request_count = 0
-            self.usage_request_count = 0
-
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            dataset = kwargs.get("dataset")
-            sid = str(kwargs.get("data_id") or "2330")
-            if dataset == downloader_runtime.FINMIND_PRICE_DATASET:
-                return _adjusted_frame(sid, self.adjusted_dates)
-            if dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET:
-                return pd.DataFrame({"date": list(self.raw_dates), "stock_id": [sid] * len(self.raw_dates)})
-            raise AssertionError(f"unexpected per-ticker dataset: {kwargs}")
-
-    with TemporaryDirectory(prefix="trading_price_existing_baseline_") as temp_dir:
-        price_dir = Path(temp_dir) / "prices"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        path = price_dir / "2330.csv"
-        _legacy_frame(100.0, ("2025-01-02", "2026-09-08")).to_csv(path)
-        original = path.read_bytes()
-        provider = _PerTickerProvider(adjusted_dates=("2026-09-08", "2026-09-09"))
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2025-01-01"), \
-             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
-             patch.object(downloader_runtime, "append_downloader_issues", return_value=None), \
-             patch.object(downloader_runtime, "get_downloader_issue_log_path", return_value=str(Path(temp_dir) / "issues.log")):
-            payload = downloader_sync.smart_download_vip_data(
-                ["2330"],
-                "2026-09-09",
-                verbose=False,
-                client=provider,
-                require_target_date_tickers=["2330"],
-            )
-        check("per_ticker_truncated_adjusted_history_is_rejected", 1, payload.get("download_error_count"))
-        check("per_ticker_truncated_adjusted_history_is_not_reported_success", 0, payload.get("count_success"))
-        check("per_ticker_truncated_adjusted_history_preserves_existing_csv_bytes", original, path.read_bytes())
-
-    with TemporaryDirectory(prefix="trading_price_new_baseline_") as temp_dir:
-        price_dir = Path(temp_dir) / "prices"
-        provider = _PerTickerProvider(
-            adjusted_dates=("2026-09-09",),
-            # Raw has an older trade date that PriceAdj legitimately omits.  It
-            # must not be requested or used as a full-history calendar oracle.
-            raw_dates=("2025-01-02", "2026-09-09"),
-        )
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2025-01-01"), \
-             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
-             patch.object(downloader_runtime, "append_downloader_issues", return_value=None), \
-             patch.object(downloader_runtime, "get_downloader_issue_log_path", return_value=str(Path(temp_dir) / "issues.log")):
-            payload = downloader_sync.smart_download_vip_data(
-                ["2330"],
-                "2026-09-09",
-                verbose=False,
-                client=provider,
-                require_target_date_tickers=["2330"],
-            )
-        check("new_ticker_priceadj_is_canonical_without_raw_history_oracle", 1, provider.data_request_count)
-        check("new_ticker_provider_raw_date_mismatch_is_not_rejected", 0, payload.get("download_error_count"))
-        check("new_ticker_priceadj_history_is_published", True, (price_dir / "2330.csv").exists())
-        published = pd.read_csv(price_dir / "2330.csv")
-        check("new_ticker_published_dates_follow_priceadj_truth", ["2026-09-09"], published["Date"].astype(str).tolist())
-
-    with TemporaryDirectory(prefix="trading_price_missing_target_") as temp_dir:
-        price_dir = Path(temp_dir) / "prices"
-        provider = _PerTickerProvider(
-            adjusted_dates=("2025-01-02", "2026-09-08"),
-            raw_dates=("2025-01-02", "2026-09-08"),
-        )
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2025-01-01"), \
-             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
-             patch.object(downloader_runtime, "append_downloader_issues", return_value=None), \
-             patch.object(downloader_runtime, "get_downloader_issue_log_path", return_value=str(Path(temp_dir) / "issues.log")):
-            payload = downloader_sync.smart_download_vip_data(
-                ["2330"],
-                "2026-09-09",
-                verbose=False,
-                client=provider,
-                require_target_date_tickers=["2330"],
-            )
-        check("actionable_new_ticker_missing_target_date_is_rejected", 1, payload.get("download_error_count"))
-        check("actionable_new_ticker_missing_target_date_publishes_no_csv", False, (price_dir / "2330.csv").exists())
-
-    class _PartialExactDateProvider:
-        def __init__(self):
-            self.data_request_count = 0
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            dataset = kwargs.get("dataset")
-            if dataset == downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET:
-                return pd.DataFrame({
-                    "date": ["2026-09-09"],
-                    "stock_id": ["2330"],
-                    "Trading_Volume": [2_000_000],
-                })
-            if dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET:
-                return pd.DataFrame({
-                    "date": ["2026-09-09", "2026-09-09"],
-                    "stock_id": ["2330", "2317"],
-                })
-            if dataset == downloader_runtime.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
-                return pd.DataFrame({
-                    "date": ["2026-09-09", "2026-09-09"],
-                    "stock_id": ["2330", "2317"],
-                    "market_value": [1e12, 1e12],
-                })
-            raise AssertionError(f"unexpected exact-date dataset: {kwargs}")
-
-    partial_provider = _PartialExactDateProvider()
-    with patch.object(downloader_runtime, "append_downloader_issues", return_value=None):
-        try:
-            downloader_universe._load_finmind_bulk_screening_data(
-                market_date="2026-09-09",
-                universe_ticker_ids={"2330", "2317"},
-                client=partial_provider,
-            )
-        except RuntimeError as exc:
-            partial_exact_rejected = True
-            partial_exact_reason = str(exc)
-        else:
-            partial_exact_rejected = False
-            partial_exact_reason = ""
-    check("raw_exact_date_ticker_evidence_rejects_partial_priceadj_payload", True, partial_exact_rejected)
-    check("partial_priceadj_rejection_names_ticker_completeness", True, "current TWSE/TPEX stock/ETF universe" in partial_exact_reason)
-
-    class _OutOfUniverseRawTickerProvider:
-        def get_data(self, **kwargs):
-            dataset = kwargs.get("dataset")
-            if dataset == downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET:
-                return pd.DataFrame({
-                    "date": ["2026-09-09"],
-                    "stock_id": ["2330"],
-                    "Trading_Volume": [2_000_000],
-                })
-            if dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET:
-                return pd.DataFrame({
-                    "date": ["2026-09-09", "2026-09-09"],
-                    "stock_id": ["2330", "030004"],
-                })
-            if dataset == downloader_runtime.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
-                return pd.DataFrame({
-                    "date": ["2026-09-09"],
-                    "stock_id": ["2330"],
-                    "market_value": [1e12],
-                })
-            raise AssertionError(f"unexpected exact-date dataset: {kwargs}")
-
-    with patch.object(downloader_runtime, "append_downloader_issues", return_value=None):
-        scoped_price, scoped_market_value = downloader_universe._load_finmind_bulk_screening_data(
-            market_date="2026-09-09",
-            universe_ticker_ids={"2330"},
-            client=_OutOfUniverseRawTickerProvider(),
-        )
-    check(
-        "raw_non_stock_etf_ticker_does_not_expand_priceadj_completeness_scope",
-        ["2330"],
-        scoped_price["stock_id"].astype(str).tolist(),
-    )
-    check(
-        "raw_non_stock_etf_ticker_preserves_market_value_payload",
-        ["2330"],
-        scoped_market_value["stock_id"].astype(str).tolist(),
-    )
-
-    class _CalendarOnlyProvider:
-        def __init__(self):
-            self.data_request_count = 0
-            self.usage_request_count = 0
-        def get_usage(self):
-            self.usage_request_count += 1
-            return FinMindUsage(user_count=0, api_request_limit=6000)
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            if kwargs.get("dataset") == "TaiwanStockTradingDate":
-                return pd.DataFrame({"date": ["2026-07-01", "2026-09-08", "2026-09-09"]})
-            raise AssertionError(f"unexpected bulk provider request: {kwargs}")
-
-    with TemporaryDirectory(prefix="trading_price_cached_universe_") as temp_dir:
-        price_dir = Path(temp_dir) / "prices"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        for sid, base in (("2330", 100.0), ("2317", 80.0)):
-            _legacy_frame(base, ("2026-07-01", "2026-09-08")).to_csv(price_dir / f"{sid}.csv")
-        original = {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")}
-        current = pd.concat([
-            _adjusted_frame("2330", ("2026-07-01", "2026-09-08", "2026-09-09")),
-            _adjusted_frame("2317", ("2026-07-01", "2026-09-08"), base=80.0),
-        ], ignore_index=True)
-        base = _CalendarOnlyProvider()
-        shared = SharedFinMindRequestClient(base)
-        current_range = PriceRange("2026-07-01", "2026-09-09")
-        shared.seed_data(
-            dataset=downloader_runtime.FINMIND_PRICE_DATASET,
-            start_date=current_range.start_date,
-            end_date=current_range.end_date,
-            frame=current,
-        )
-        probe = TradingPriceProbe(
-            candidate_date="2026-09-09",
-            market_date="2026-09-09",
-            current_range=current_range,
-            current_frame=current,
-        )
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-07-01"), \
-             patch.object(downloader_runtime, "CANONICAL_PRICE_BULK_CHUNK_MONTHS", 6):
-            try:
-                refresh_trading_adjusted_price_dataset(
-                    ["2330", "2317"],
-                    "2026-09-09",
-                    client=shared,
-                    probe=probe,
-                    universe_tickers=["2330", "2317"],
-                    verbose=False,
-                )
-            except TradingBulkPriceUnsupported as exc:
-                cached_universe_rejected = True
-                cached_universe_reason = str(exc)
-            else:
-                cached_universe_rejected = False
-                cached_universe_reason = ""
-        check("cached_actionable_universe_requires_every_current_priceadj_row", True, cached_universe_rejected)
-        check("cached_universe_partial_payload_names_missing_member", True, "2317" in cached_universe_reason)
-        check("cached_universe_partial_payload_publishes_no_csv_changes", original, {sid: (price_dir / f"{sid}.csv").read_bytes() for sid in ("2330", "2317")})
-
-    with TemporaryDirectory(prefix="trading_price_application_ready_") as temp_dir:
-        price_dir = Path(temp_dir) / "prices"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        _legacy_frame(100.0, ("2026-09-09",)).to_csv(price_dir / "2330.csv")
-        _legacy_frame(80.0, ("2026-09-08",)).to_csv(price_dir / "2317.csv")
-        success_summary = {
-            "total": 2,
-            "count_success": 2,
-            "count_skipped_latest": 0,
-            "last_date_check_error_count": 0,
-            "download_error_count": 0,
-            "trimmed_future_row_count": 0,
-            "issue_log_path": None,
-        }
-        with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
-             patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
-             patch.object(downloader_application, "get_market_last_date", return_value="2026-09-09"), \
-             patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2317"]), \
-             patch.object(downloader_application, "smart_download_vip_data", return_value=success_summary):
-            try:
-                downloader_application.run_trading_dataset_update()
-            except RuntimeError as exc:
-                ready_guard_rejected = True
-                ready_guard_reason = str(exc)
-            else:
-                ready_guard_rejected = False
-                ready_guard_reason = ""
-        check("application_never_returns_ready_with_stale_actionable_ticker", True, ready_guard_rejected)
-        check("application_ready_guard_names_actionable_freshness", True, "actionable universe" in ready_guard_reason)
-
-    with TemporaryDirectory(prefix="trading_price_snapshot_freshness_") as temp_dir:
-        root = Path(temp_dir)
-        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
-        data_dir = Path(paths.data_dir)
-        data_dir.mkdir(parents=True, exist_ok=True)
-        _legacy_frame(100.0, ("2026-09-09",)).to_csv(data_dir / "2330.csv")
-        _legacy_frame(80.0, ("2026-09-08",)).to_csv(data_dir / "2317.csv")
-        try:
-            publish_trading_market_data_snapshot(
-                root,
-                market_date="2026-09-09",
-                required_position_tickers=[],
-                current_universe_tickers=["2330", "2317"],
-            )
-        except RuntimeError as exc:
-            snapshot_rejected = True
-            snapshot_reason = str(exc)
-        else:
-            snapshot_rejected = False
-            snapshot_reason = ""
-        check("snapshot_rejects_mixed_current_and_stale_universe_even_when_dataset_max_is_current", True, snapshot_rejected)
-        check("snapshot_mixed_freshness_rejection_names_member_freshness", True, "freshness" in snapshot_reason)
-        check("snapshot_failure_writes_no_canonical_snapshot", False, resolve_trading_market_data_snapshot_path(root).exists())
-
-        _legacy_frame(80.0, ("2026-09-08",)).to_csv(data_dir / "9999.csv")
-        published = publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-09",
-            required_position_tickers=["9999"],
-            current_universe_tickers=["2330"],
-        )
-        check("stale_required_holding_outside_actionable_universe_is_allowed", ["9999"], published.get("required_position_tickers"))
-        check("snapshot_persists_exact_current_universe_freshness_evidence", ["2330"], published.get("current_universe_tickers"))
-
-    summary.update({"checks": len(results), "repair": "end_to_end_price_completeness_fail_closed"})
-    return results, summary
-
-
-def validate_trading_execution_finmind_retry_contract_case(_base_params):
-    """Execution-critical Trading FinMind reads share one explicit bounded retry contract."""
-
-    from pathlib import Path
-    from tempfile import TemporaryDirectory
-    from unittest.mock import patch
-
-    from services.downloader import runtime as downloader_runtime
-    from services.downloader import sync as downloader_sync
-    from services.downloader.finmind_http import FinMindHttpError, request_finmind_data_with_retry
-    from services.downloader.finmind_shared_client import SharedFinMindRequestClient
-
-    case_id = "TRADING_EXECUTION_FINMIND_RETRY"
-    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
-
-    class _Policy:
-        max_retryable_attempts = 3
-
-        @staticmethod
-        def retry_delay_seconds(failure_count):
-            return float(failure_count)
-
-    class _SequenceClient:
-        def __init__(self, outcomes, *, uncached=False):
-            self.outcomes = list(outcomes)
-            self.calls = 0
-            self.uncached_calls = 0
-            self.use_uncached = bool(uncached)
-
-        def _next(self):
-            self.calls += 1
-            outcome = self.outcomes.pop(0)
-            if isinstance(outcome, BaseException):
-                raise outcome
-            return outcome
-
-        def get_data(self, **_kwargs):
-            return self._next()
-
-        def get_data_uncached(self, **_kwargs):
-            self.uncached_calls += 1
-            return self._next()
-
-    success_frame = pd.DataFrame({"date": ["2026-09-09"]})
-    sleeps = []
-    transient = _SequenceClient([
-        FinMindHttpError("temporary", retryable=True),
-        success_frame,
-    ])
-    observed = request_finmind_data_with_retry(
-        transient,
-        dataset="Synthetic",
-        policy=_Policy(),
-        sleep_fn=sleeps.append,
-    )
-    check("retryable_error_retries_then_returns_payload", True, observed.equals(success_frame))
-    check("retryable_error_uses_exact_attempt_count", 2, transient.calls)
-    check("retryable_error_uses_policy_backoff", [1.0], sleeps)
-
-    quota = _SequenceClient([
-        FinMindHttpError("quota", retryable=True, quota_exhausted=True),
-        success_frame,
-    ])
-    try:
-        request_finmind_data_with_retry(quota, dataset="Synthetic", policy=_Policy(), sleep_fn=lambda _x: None)
-    except FinMindHttpError:
-        quota_raised = True
-    else:
-        quota_raised = False
-    check("quota_exhaustion_is_never_retried", True, quota_raised)
-    check("quota_exhaustion_stops_after_one_attempt", 1, quota.calls)
-
-    permanent = _SequenceClient([
-        FinMindHttpError("permanent", retryable=False),
-        success_frame,
-    ])
-    try:
-        request_finmind_data_with_retry(permanent, dataset="Synthetic", policy=_Policy(), sleep_fn=lambda _x: None)
-    except FinMindHttpError:
-        permanent_raised = True
-    else:
-        permanent_raised = False
-    check("permanent_error_is_never_retried", True, permanent_raised)
-    check("permanent_error_stops_after_one_attempt", 1, permanent.calls)
-
-    exhausted = _SequenceClient([
-        FinMindHttpError("temporary-1", retryable=True),
-        FinMindHttpError("temporary-2", retryable=True),
-        FinMindHttpError("temporary-3", retryable=True),
-    ])
-    exhausted_sleeps = []
-    try:
-        request_finmind_data_with_retry(
-            exhausted,
-            dataset="Synthetic",
-            policy=_Policy(),
-            sleep_fn=exhausted_sleeps.append,
-        )
-    except FinMindHttpError:
-        exhausted_raised = True
-    else:
-        exhausted_raised = False
-    check("retry_budget_exhaustion_fails_closed", True, exhausted_raised)
-    check("retry_budget_is_bounded", 3, exhausted.calls)
-    check("retry_budget_sleeps_only_between_attempts", [1.0, 2.0], exhausted_sleeps)
-
-    uncached = _SequenceClient([success_frame], uncached=True)
-    request_finmind_data_with_retry(
-        uncached,
-        dataset="Synthetic",
-        retain_cache=False,
-        policy=_Policy(),
-        sleep_fn=lambda _x: None,
-    )
-    check("historical_bulk_can_preserve_uncached_fetch_semantics", 1, uncached.uncached_calls)
-
-    class _TransientPerTickerBase:
-        def __init__(self):
-            self.data_request_count = 0
-            self.usage_request_count = 0
-
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            if self.data_request_count == 1:
-                raise FinMindHttpError("temporary", retryable=True)
-            return pd.DataFrame({
-                "date": ["2026-09-08", "2026-09-09"],
-                "stock_id": ["2330", "2330"],
-                "open": [100.0, 101.0],
-                "max": [102.0, 103.0],
-                "min": [99.0, 100.0],
-                "close": [101.0, 102.0],
-                "Trading_Volume": [1000, 1100],
-            })
-
-    with TemporaryDirectory(prefix="trading_retry_sync_") as temp_dir:
-        price_dir = Path(temp_dir) / "prices"
-        price_dir.mkdir(parents=True, exist_ok=True)
-        baseline = pd.DataFrame({
-            "Open": [100.0], "High": [102.0], "Low": [99.0], "Close": [101.0], "Volume": [1000],
-        }, index=pd.to_datetime(["2026-09-08"]))
-        baseline.index.name = "Date"
-        baseline.to_csv(price_dir / "2330.csv")
-        base = _TransientPerTickerBase()
-        shared = SharedFinMindRequestClient(base)
-        with patch.object(downloader_runtime, "SAVE_DIR", str(price_dir)), \
-             patch.object(downloader_runtime, "OUTPUT_DIR", str(Path(temp_dir) / "outputs")), \
-             patch.object(downloader_runtime, "PRICE_HISTORY_START_DATE", "2026-09-08"), \
-             patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0), \
-             patch("services.downloader.finmind_http.time.sleep", return_value=None):
-            payload = downloader_sync.smart_download_vip_data(
-                ["2330"],
-                "2026-09-09",
-                verbose=False,
-                client=shared,
-                require_target_date_tickers=["2330"],
-            )
-        check("real_per_ticker_fallback_reuses_bounded_retry_contract", 1, payload.get("count_success"))
-        check("real_per_ticker_retry_consumes_two_provider_attempts", 2, base.data_request_count)
-
-    class _TransientUniverseBase:
-        def __init__(self):
-            self.data_request_count = 0
-            self.usage_request_count = 0
-            self.price_attempts = 0
-
-        def get_data(self, **kwargs):
-            self.data_request_count += 1
-            dataset = kwargs.get("dataset")
-            if dataset == downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET:
-                self.price_attempts += 1
-                if self.price_attempts == 1:
-                    raise FinMindHttpError("temporary", retryable=True)
-                return pd.DataFrame({
-                    "date": ["2026-09-09"],
-                    "stock_id": ["2330"],
-                    "Trading_Volume": [2_000_000],
-                })
-            if dataset == "TaiwanStockPrice":
-                return pd.DataFrame({"date": ["2026-09-09"], "stock_id": ["2330"]})
-            if dataset == downloader_runtime.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
-                return pd.DataFrame({
-                    "date": ["2026-09-09"],
-                    "stock_id": ["2330"],
-                    "market_value": [1e12],
-                })
-            raise AssertionError(f"unexpected universe request: {kwargs}")
-
-    from services.downloader import universe as downloader_universe
-    universe_base = _TransientUniverseBase()
-    universe_shared = SharedFinMindRequestClient(universe_base)
-    with patch("services.downloader.finmind_http.time.sleep", return_value=None):
-        price_frame, market_value_frame = downloader_universe._load_finmind_bulk_screening_data(
-            market_date="2026-09-09",
-            universe_ticker_ids={"2330"},
-            client=universe_shared,
-        )
-    check("universe_exact_date_reuses_bounded_retry_contract", ["2330"], price_frame["stock_id"].astype(str).tolist())
-    check("universe_retry_preserves_market_value_payload", ["2330"], market_value_frame["stock_id"].astype(str).tolist())
-    check("universe_transient_retry_consumes_one_extra_provider_attempt", 4, universe_base.data_request_count)
-
-    summary.update({"checks": len(results), "retry_owner": "explicit_execution_critical_finmind_wrapper"})
-    return results, summary
-
-
 def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_params):
     """Round-4 Trading V2 read seam keeps history PIT-local and overlay/latest semantics deterministic."""
 
@@ -5856,337 +4715,8 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
     return results, summary
 
 
-def validate_market_data_v2_trading_compatibility_materialization_contract_case(_base_params):
-    """Round-6 Legacy OHLCV becomes a provider-free materialized view of Trading V2."""
-
-    from pathlib import Path
-    from tempfile import TemporaryDirectory
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
-    import pandas as pd
-
-    from core.market_data_ohlcv_compatibility import (
-        MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS,
-        MARKET_DATA_V2_COMPAT_PRICE_DATASET,
-        MARKET_DATA_V2_COMPAT_VOLUME_DATASET,
-        build_market_data_v2_ohlcv_compatibility_frame,
-    )
-    from core.market_data_research_materialization import (
-        RESEARCH_V2_COMPAT_OUTPUT_COLUMNS,
-        RESEARCH_V2_COMPAT_PRICE_FIELD_MAPPING,
-        RESEARCH_V2_COMPAT_VOLUME_FIELD_MAPPING,
-    )
-    from services.downloader import application as downloader_application
-    from services.trading import market_data_update as market_data_update
-    from services.trading.market_data_compatibility import (
-        TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS,
-        materialize_trading_v2_compatibility_dataset,
-        resolve_trading_v2_current_execution_pool,
-    )
-
-    case_id = "MARKET_DATA_V2_TRADING_COMPATIBILITY_MATERIALIZATION"
-    results, summary, check, check_true = bind_synthetic_case(
-        case_id, "market_data", training_performed=False
-    )
-
-    check(
-        "research_and_trading_share_six_column_compatibility_schema",
-        tuple(MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS),
-        tuple(RESEARCH_V2_COMPAT_OUTPUT_COLUMNS),
-    )
-    check(
-        "shared_compatibility_adjusted_ohlc_mapping_stays_canonical",
-        {"Open": "open", "High": "max", "Low": "min", "Close": "close"},
-        dict(RESEARCH_V2_COMPAT_PRICE_FIELD_MAPPING),
-    )
-    check(
-        "shared_compatibility_volume_mapping_uses_raw_price_volume",
-        {"Volume": "Trading_Volume"},
-        dict(RESEARCH_V2_COMPAT_VOLUME_FIELD_MAPPING),
-    )
-    check("compatibility_price_dataset_is_priceadj", "TaiwanStockPriceAdj", MARKET_DATA_V2_COMPAT_PRICE_DATASET)
-    check("compatibility_volume_dataset_is_raw_price", "TaiwanStockPrice", MARKET_DATA_V2_COMPAT_VOLUME_DATASET)
-
-    adjusted = pd.DataFrame(
-        {
-            "date": ["2026-09-08", "2026-09-09"],
-            "stock_id": ["2330", "2330"],
-            "open": [100.0, 101.0],
-            "max": [102.0, 103.0],
-            "min": [99.0, 100.0],
-            "close": [101.0, 102.0],
-        }
-    )
-    raw = pd.DataFrame(
-        {
-            "date": ["2026-09-08", "2026-09-09"],
-            "stock_id": ["2330", "2330"],
-            "Trading_Volume": [1234, 5678],
-        }
-    )
-    six = build_market_data_v2_ohlcv_compatibility_frame(
-        adjusted, raw, stock_id="2330", through_date="2026-09-09"
-    )
-    check("shared_compatibility_frame_has_exact_six_columns", list(MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS), list(six.columns))
-    check("shared_compatibility_frame_uses_raw_volume_values", [1234, 5678], six["Volume"].tolist())
-    try:
-        build_market_data_v2_ohlcv_compatibility_frame(
-            adjusted,
-            raw.iloc[:1].copy(),
-            stock_id="2330",
-            through_date="2026-09-09",
-        )
-    except ValueError:
-        missing_raw_volume_rejected = True
-    else:
-        missing_raw_volume_rejected = False
-    check("compatibility_never_synthesizes_missing_raw_volume", True, missing_raw_volume_rejected)
-
-    class _FakeTradingV2View:
-        def __init__(self):
-            self.archive = SimpleNamespace(
-                snapshot_fingerprint="provider-snapshot-fp",
-                as_of_date="2026-03-02",
-            )
-            self.calls = []
-
-        def training_horizon(self, *, required_datasets):
-            self.calls.append(("training_horizon", tuple(required_datasets)))
-            return SimpleNamespace(training_through_date="2026-09-09")
-
-        def daily_pit_market_members(self, date_value):
-            self.calls.append(("daily_pit_market_members", str(date_value)))
-            return ("0050", "2330", "2317")
-
-        def view_identity(self, *, required_datasets):
-            return {
-                "view_fingerprint": "trading-v2-view-fp",
-                "required_datasets": list(required_datasets),
-            }
-
-        def read_dataset_frame(
-            self,
-            dataset,
-            *,
-            columns=None,
-            data_id=None,
-            start_date=None,
-            end_date=None,
-        ):
-            self.calls.append(("read", dataset, data_id, start_date, end_date, tuple(columns or ())))
-            if dataset == "TaiwanStockInfo":
-                frame = pd.DataFrame(
-                    {
-                        "date": ["2026-09-09"] * 3,
-                        "stock_id": ["0050", "2330", "2317"],
-                        "type": ["twse", "twse", "twse"],
-                        "industry_category": ["ETF", "半導體業", "電子業"],
-                    }
-                )
-            elif dataset == "TaiwanStockMarketValue":
-                frame = pd.DataFrame(
-                    {
-                        "date": ["2026-09-09", "2026-09-09"],
-                        "stock_id": ["2330", "2317"],
-                        "market_value": [20_000_000_000, 5_000_000_000],
-                    }
-                )
-            elif dataset == "TaiwanStockPriceAdj" and data_id is None:
-                # Preserve the current execution-screen source used before the
-                # V2 cutover: PriceAdj Trading_Volume + MarketValue.
-                frame = pd.DataFrame(
-                    {
-                        "date": ["2026-09-09"] * 3,
-                        "stock_id": ["0050", "2330", "2317"],
-                        "Trading_Volume": [2_000_000, 2_000_000, 2_000_000],
-                    }
-                )
-            elif dataset == "TaiwanStockPriceAdj":
-                frame = pd.DataFrame(
-                    {
-                        "date": ["2026-09-08", "2026-09-09"],
-                        "stock_id": [str(data_id), str(data_id)],
-                        "open": [100.0, 101.0],
-                        "max": [102.0, 103.0],
-                        "min": [99.0, 100.0],
-                        "close": [101.0, 102.0],
-                    }
-                )
-            elif dataset == "TaiwanStockPrice":
-                frame = pd.DataFrame(
-                    {
-                        "date": ["2026-09-08", "2026-09-09"],
-                        "stock_id": [str(data_id), str(data_id)],
-                        "Trading_Volume": [1111, 2222],
-                    }
-                )
-            else:
-                frame = pd.DataFrame(columns=list(columns or ()))
-            if columns:
-                missing = [column for column in columns if column not in frame.columns]
-                if missing:
-                    raise ValueError(f"synthetic V2 view missing columns: {missing}")
-                frame = frame.loc[:, list(columns)]
-            return frame.reset_index(drop=True)
-
-    fake = _FakeTradingV2View()
-    execution, stats = resolve_trading_v2_current_execution_pool(fake, market_date="2026-09-09")
-    check("v2_execution_pool_preserves_volume_market_value_semantics", ["0050", "2330"], execution)
-    check("v2_execution_pool_keeps_daily_market_member_count", 3, stats.get("listed_count"))
-    execution_reads = [item for item in fake.calls if item[0] == "read" and item[2] is None]
-    check(
-        "v2_execution_pool_preserves_priceadj_volume_screening_source",
-        True,
-        any(item[1] == "TaiwanStockPriceAdj" and "Trading_Volume" in item[-1] for item in execution_reads),
-    )
-
-    with TemporaryDirectory(prefix="round6_v2_compat_") as temp_dir:
-        root = Path(temp_dir)
-        data_dir = root / "data" / "trading" / "tw_stock_data_vip"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(
-            {
-                "Date": ["2026-09-08"],
-                "Open": [50.0],
-                "High": [51.0],
-                "Low": [49.0],
-                "Close": [50.5],
-                "Volume": [999],
-            }
-        ).to_csv(data_dir / "2454.csv", index=False)
-        materialized = materialize_trading_v2_compatibility_dataset(
-            root,
-            required_tickers=("9999",),
-            view=fake,
-            market_date="2026-09-09",
-        )
-        check("compatibility_materialization_performs_zero_provider_calls", 0, materialized.get("provider_calls"))
-        check("compatibility_materialization_source_is_trading_v2_view", "trading_market_data_v2_historical_latest_view", materialized.get("source"))
-        check("compatibility_materialization_current_execution_pool_is_v2_derived", ["0050", "2330"], materialized.get("current_execution_pool_tickers"))
-        check("compatibility_materialization_retains_existing_history_member", ["2454"], materialized.get("retained_history_tickers"))
-        check("compatibility_materialization_keeps_required_position", ["9999"], materialized.get("required_position_tickers"))
-        check("compatibility_materialization_target_count_unions_execution_positions_retained", 4, materialized.get("target_ticker_count"))
-        check("non_execution_market_member_is_not_materialized_without_other_dependency", False, (data_dir / "2317.csv").exists())
-        expected_members = ["0050", "2330", "2454", "9999"]
-        check("compatibility_files_match_union_target_membership", expected_members, sorted(path.stem for path in data_dir.glob("*.csv")))
-        saved_2330 = pd.read_csv(data_dir / "2330.csv")
-        check("materialized_csv_schema_is_exact_six_column_contract", list(MARKET_DATA_V2_COMPAT_OUTPUT_COLUMNS), list(saved_2330.columns))
-        check("materialized_csv_volume_comes_from_raw_price_archive", [1111, 2222], saved_2330["Volume"].tolist())
-        check("materialized_execution_member_is_current_to_target_date", "2026-09-09", str(saved_2330.iloc[-1]["Date"]))
-
-    # Default cutover must reject the historical provider-backed producer before
-    # any provider/universe request can be attempted.
-    provider_probe = []
-    with patch.object(
-        downloader_application,
-        "get_market_last_date",
-        side_effect=lambda *a, **k: provider_probe.append(True) or "2026-09-09",
-    ):
-        try:
-            downloader_application.run_trading_dataset_update()
-        except RuntimeError as exc:
-            direct_provider_blocked = "execution cutover" in str(exc)
-        else:
-            direct_provider_blocked = False
-    check("legacy_direct_provider_producer_is_blocked_after_v2_cutover", True, direct_provider_blocked)
-    check("legacy_direct_provider_block_happens_before_provider_probe", [], provider_probe)
-
-    # The canonical Trading update must use provider access only in the V2
-    # updater, then locally materialize compatibility and publish the existing
-    # snapshot consumed by still-unmigrated Workbench/Scanner paths.
-    order = []
-    captured = {}
-    def _auto(**kwargs):
-        order.append("v2")
-        captured["v2_kwargs"] = dict(kwargs)
-        return {"status": "NO_DUE", "target_date": "2026-09-09", "data_requests": 0, "usage_requests": 0}
-    def _materialize(_root, *, required_tickers=(), market_date=None, **_kwargs):
-        order.append("compat")
-        captured["required"] = list(required_tickers)
-        captured["compat_market_date"] = market_date
-        return {
-            "runtime_domain": "trading",
-            "market_date": "2026-09-09",
-            "data_dir": "data/trading/tw_stock_data_vip",
-            "current_execution_pool_tickers": ["2330"],
-            "retained_history_tickers": [],
-            "dataset_fingerprint": {"csv_content_sha256": "compat-sha"},
-        }
-    def _consumer(*_args, **kwargs):
-        order.append("consumer")
-        captured["consumer_required"] = list(kwargs.get("required_position_tickers") or [])
-        captured["consumer_retained"] = list(kwargs.get("retained_training_tickers") or [])
-        return {
-            "state_fingerprint": "consumer-state-fp",
-            "source_view_fingerprint": "v2-view-fp",
-            "training_ticker_count": 2,
-        }
-    def _snapshot(*_args, **_kwargs):
-        order.append("snapshot")
-        return {
-            "snapshot_fingerprint": "snapshot-fp",
-            "dataset_fingerprint": {"csv_content_sha256": "compat-sha"},
-        }
-    with TemporaryDirectory(prefix="round6_v2_update2_") as temp_dir:
-        root = Path(temp_dir)
-        with patch.object(market_data_update, "load_trading_account_state", return_value={
-            "positions": {"9999": {"broker": {"qty": 100}}}
-        }), patch(
-            "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
-            side_effect=_auto,
-        ), patch.object(
-            market_data_update,
-            "materialize_trading_v2_compatibility_dataset",
-            side_effect=_materialize,
-        ), patch.object(
-            market_data_update,
-            "publish_trading_v2_consumer_state",
-            side_effect=_consumer,
-        ), patch.object(
-            market_data_update,
-            "publish_trading_market_data_snapshot",
-            side_effect=_snapshot,
-        ):
-            update = market_data_update.run_trading_market_data_update(
-                project_root=root,
-                provider_client=object(),
-            )
-    check("canonical_trading_update_order_is_v2_then_compat_then_consumer_then_snapshot", ["v2", "compat", "consumer", "snapshot"], order)
-    check("canonical_trading_update_passes_provider_client_only_to_v2_updater", True, captured.get("v2_kwargs", {}).get("client") is not None)
-    check("canonical_trading_update_retains_current_positions_in_compatibility_targets", ["9999"], captured.get("required"))
-    check("canonical_trading_update_requires_compatibility_at_v2_target_date", "2026-09-09", captured.get("compat_market_date"))
-    check("canonical_trading_update_publishes_v2_consumer_position_membership", ["9999"], captured.get("consumer_required"))
-    session = dict(update.get("provider_request_session") or {})
-    check("canonical_trading_update_reports_zero_legacy_provider_requests", (0, 0, 0), (
-        session.get("legacy_stage_data_requests"),
-        session.get("legacy_stage_usage_requests"),
-        session.get("compatibility_materialization_provider_calls"),
-    ))
-
-    compatibility_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "market_data_compatibility.py").read_text(encoding="utf-8")
-    check(
-        "compatibility_materializer_has_no_finmind_http_or_legacy_downloader_dependency",
-        False,
-        any(token in compatibility_source for token in (
-            "finmind_http", "smart_download_vip_data", "get_or_update_universe", "request_finmind_data_with_retry"
-        )),
-    )
-    check(
-        "compatibility_required_datasets_include_adjusted_price_raw_volume_and_pool_evidence",
-        True,
-        {"TaiwanStockPriceAdj", "TaiwanStockPrice", "TaiwanStockMarketValue", "TaiwanStockTradingDate", "TaiwanStockInfo", "TaiwanStockDelisting"}.issubset(set(TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS)),
-    )
-
-    summary.update({
-        "checks": len(results),
-        "compatibility_required_dataset_count": len(TRADING_V2_COMPATIBILITY_REQUIRED_DATASETS),
-    })
-    return results, summary
-
-
 def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_params):
-    """Round-7 live Trading consumers read verified V2 truth, not Legacy CSV."""
+    """Live Trading is V2-only and legacy execution artifacts/APIs are retired."""
 
     from pathlib import Path
     from tempfile import TemporaryDirectory
@@ -6215,7 +4745,6 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         "TaiwanStockDelisting",
     }
     spec = get_trading_data_dependency_spec("full_rule_based_no_dl")
-    check("rule_based_execution_no_longer_requires_legacy_execution_dataset", False, spec.execution_market_data_required)
     check("rule_based_execution_requires_v2_price_volume_pool_contract", required, set(spec.required_v2_datasets))
 
     class _FakeTradingV2View:
@@ -6284,7 +4813,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     check("direct_v2_ohlcv_frame_keeps_legacy_strategy_shape", ["Date", "Open", "High", "Low", "Close", "Volume"], list(frame.columns))
     check("direct_v2_ohlcv_frame_uses_raw_price_volume", [1111, 2222], frame["Volume"].tolist())
 
-    with TemporaryDirectory(prefix="round7_v2_consumer_") as temp_dir:
+    with TemporaryDirectory(prefix="round8_v2_consumer_") as temp_dir:
         root = Path(temp_dir)
         first = publish_trading_v2_consumer_state(
             root,
@@ -6322,6 +4851,18 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     check("position_context_has_no_legacy_csv_read", False, "pd.read_csv" in sources["position"] or "discover_unique_csv_map" in sources["position"])
     check("allocator_has_no_legacy_csv_read", False, "pd.read_csv" in sources["allocator"] or "discover_unique_csv_map" in sources["allocator"])
     check_true("workbench_data_ops_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["data_ops"])
+    check("legacy_trading_market_data_state_module_is_retired", False, (repo / "services/trading/market_data_state.py").exists())
+    check("legacy_trading_compatibility_module_is_retired", False, (repo / "services/trading/market_data_compatibility.py").exists())
+    check("legacy_direct_provider_application_module_is_retired", False, (repo / "services/downloader/application.py").exists())
+    update_source = (repo / "services/trading/market_data_update.py").read_text(encoding="utf-8")
+    readiness_source = (repo / "services/trading/data_readiness.py").read_text(encoding="utf-8")
+    binding_source = (repo / "services/trading/strategy_param_state.py").read_text(encoding="utf-8")
+    check("v2_only_update_does_not_materialize_legacy_artifacts", False, any(token in update_source for token in ("market_data_compatibility", "market_data_state", "tw_stock_data_vip")))
+    check("v2_only_readiness_does_not_import_legacy_snapshot", False, "market_data_state" in readiness_source or "execution_market_data_required" in readiness_source)
+    check_true("param_binding_schema_uses_explicit_v2_lineage_names", "market_data_consumer_state_sha256" in binding_source and "market_data_source_view_fingerprint" in binding_source)
+    check("param_binding_schema_has_no_legacy_lineage_field_names", False, "market_data_snapshot_sha256" in binding_source or "dataset_content_sha256" in binding_source)
+    check_true("candidate_schema_uses_explicit_v2_lineage_names", "market_data_consumer_state_sha256" in sources["scanner_state"] and "market_data_source_view_fingerprint" in sources["scanner_state"])
+    check("candidate_schema_has_no_legacy_lineage_field_names", False, "market_data_snapshot_sha256" in sources["scanner_state"] or "dataset_content_sha256" in sources["scanner_state"])
 
     summary.update({
         "checks": len(results),

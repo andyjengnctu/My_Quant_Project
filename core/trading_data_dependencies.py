@@ -12,13 +12,12 @@ from dataclasses import dataclass
 from core.file_integrity import canonical_json_sha256
 from core.market_data_dataset_registry import get_market_dataset_specs
 
-TRADING_DATA_DEPENDENCY_SCHEMA_VERSION = 1
+TRADING_DATA_DEPENDENCY_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
 class TradingDataDependencySpec:
     strategy_id: str
-    execution_market_data_required: bool
     required_v2_datasets: tuple[str, ...] = ()
     rationale: str = ""
 
@@ -26,7 +25,6 @@ class TradingDataDependencySpec:
         return {
             "schema_version": TRADING_DATA_DEPENDENCY_SCHEMA_VERSION,
             "strategy_id": self.strategy_id,
-            "execution_market_data_required": bool(self.execution_market_data_required),
             "required_v2_datasets": list(self.required_v2_datasets),
         }
 
@@ -38,7 +36,6 @@ class TradingDataDependencySpec:
 TRADING_DATA_DEPENDENCY_SPECS: tuple[TradingDataDependencySpec, ...] = (
     TradingDataDependencySpec(
         strategy_id="full_rule_based_no_dl",
-        execution_market_data_required=False,
         required_v2_datasets=(
             "TaiwanStockPriceAdj",
             "TaiwanStockPrice",
@@ -48,10 +45,10 @@ TRADING_DATA_DEPENDENCY_SPECS: tuple[TradingDataDependencySpec, ...] = (
             "TaiwanStockDelisting",
         ),
         rationale=(
-            "Round-7 execution cutover: production rule-based Trading reads the verified Market Data V2 "
-            "historical/latest view directly. PriceAdj+raw Price provide OHLCV, MarketValue+TradingDate+" 
-            "StockInfo+Delisting provide the date-local execution pool and membership evidence. The "
-            "transitional Legacy CSV/snapshot is no longer execution-required."
+            "V2-only execution: production rule-based Trading reads the verified Market Data V2 "
+            "historical/latest view directly. PriceAdj+raw Price provide OHLCV, MarketValue+TradingDate+"
+            "StockInfo+Delisting provide date-local execution-pool and membership evidence. Legacy "
+            "Trading CSV/snapshot is not part of the execution dependency contract."
         ),
     ),
 )

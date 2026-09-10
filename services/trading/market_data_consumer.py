@@ -1,9 +1,9 @@
 """Production Trading consumers over the verified Market Data V2 view.
 
-This module is the consumer-side bridge used after the Round-7 execution cutover.
-It performs no provider calls and never reads the transitional Legacy Trading CSV
-cache.  Price/volume field mapping remains owned by the cross-domain OHLCV
-compatibility contract.
+This module is the terminal V2-only Trading consumer seam after the Round-8
+Legacy retirement. It performs no provider calls and never reads retired Legacy
+Trading CSV/snapshot artifacts. Price/volume field mapping remains owned by the
+cross-domain OHLCV compatibility contract.
 """
 from __future__ import annotations
 

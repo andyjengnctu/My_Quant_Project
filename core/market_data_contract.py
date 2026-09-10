@@ -47,17 +47,7 @@ MARKET_DATA_V2_RESEARCH_VIEW_ROLE = "frozen_scientific_view"
 MARKET_DATA_V2_TRADING_VIEW_ROLE = "latest_operational_view"
 MARKET_DATA_V2_DAILY_UPDATE_ROLE = "v2_due_dataset_overlay_sync"
 MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE = "v2_provider_snapshot_plus_operational_state"
-MARKET_DATA_V2_LEGACY_TARGET_ROLE = "v2_materialized_compatibility_only"
-MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE = "trading_market_data_v2_historical_latest_view"
-MARKET_DATA_V2_LEGACY_COMPATIBILITY_OHLCV_CONTRACT = "market_data_v2_shared_adjusted_ohlcv"
-MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION = "legacy_execution_transition"
-MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER = "v2_execution_cutover"
-MARKET_DATA_V2_MIGRATION_PHASE_V2_ONLY = "v2_only"
-MARKET_DATA_V2_MIGRATION_PHASES = (
-    MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION,
-    MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER,
-    MARKET_DATA_V2_MIGRATION_PHASE_V2_ONLY,
-)
+TRADING_MARKET_DATA_STATUS_V2_ONLY = "v2_only"
 
 
 @dataclass(frozen=True)
@@ -108,17 +98,9 @@ class MarketDataV2LifecycleContract:
     trading_view_role: str
     daily_update_role: str
     daily_update_target_source: str
-    daily_update_may_refresh_legacy_provider_truth: bool
     full_market_exact_date_bulk_preferred: bool
     shared_provider_archive_required: bool
     independent_domain_provider_redownload_allowed: bool
-    legacy_target_role: str
-    legacy_target_must_derive_from_v2: bool
-    legacy_compatibility_source: str
-    legacy_compatibility_provider_calls_allowed: bool
-    legacy_compatibility_ohlcv_contract: str
-    migration_phase: str
-    legacy_direct_provider_download_allowed_during_transition: bool
 
 
 def _require_nonempty_text(value: object, *, field: str) -> str:
@@ -253,20 +235,6 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     daily_update_target_source = _require_nonempty_text(
         raw.get("daily_update_target_source"), field="market_data_v2.daily_update_target_source"
     )
-    legacy_target_role = _require_nonempty_text(
-        raw.get("legacy_target_role"), field="market_data_v2.legacy_target_role"
-    )
-    legacy_compatibility_source = _require_nonempty_text(
-        raw.get("legacy_compatibility_source"), field="market_data_v2.legacy_compatibility_source"
-    )
-    legacy_compatibility_ohlcv_contract = _require_nonempty_text(
-        raw.get("legacy_compatibility_ohlcv_contract"),
-        field="market_data_v2.legacy_compatibility_ohlcv_contract",
-    )
-    migration_phase = _require_nonempty_text(
-        raw.get("migration_phase"), field="market_data_v2.migration_phase"
-    )
-
     shared_provider_archive_required = bool(raw.get("shared_provider_archive_required"))
     historical_pit_universe_shared_across_domains = bool(
         raw.get("historical_pit_universe_shared_across_domains")
@@ -280,19 +248,9 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     current_execution_pool_may_define_historical_training_universe = bool(
         raw.get("current_execution_pool_may_define_historical_training_universe")
     )
-    daily_update_may_refresh_legacy_provider_truth = bool(
-        raw.get("daily_update_may_refresh_legacy_provider_truth")
-    )
     full_market_exact_date_bulk_preferred = bool(raw.get("full_market_exact_date_bulk_preferred"))
     independent_domain_provider_redownload_allowed = bool(
         raw.get("independent_domain_provider_redownload_allowed")
-    )
-    legacy_target_must_derive_from_v2 = bool(raw.get("legacy_target_must_derive_from_v2"))
-    legacy_compatibility_provider_calls_allowed = bool(
-        raw.get("legacy_compatibility_provider_calls_allowed")
-    )
-    legacy_direct_provider_download_allowed_during_transition = bool(
-        raw.get("legacy_direct_provider_download_allowed_during_transition")
     )
 
     if canonical_data_plane != MARKET_DATA_V2_CANONICAL_DATA_PLANE:
@@ -331,35 +289,12 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
         raise ValueError(
             f"Market Data V2 daily update target source 必須為 {MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE}"
         )
-    if daily_update_may_refresh_legacy_provider_truth:
-        raise ValueError("Market Data V2 daily updater 不得以 side effect 更新 legacy provider truth")
     if not full_market_exact_date_bulk_preferred:
         raise ValueError("Market Data V2 對已宣告 Backer exact-date capability 的日更必須優先使用 full-market bulk")
     if not shared_provider_archive_required:
         raise ValueError("Market Data V2 必須由 Research / Trading 共用 neutral Provider Archive")
     if independent_domain_provider_redownload_allowed:
         raise ValueError("Market Data V2 禁止 Research / Trading 為相同 provider history 建立獨立下載真理")
-    if legacy_target_role != MARKET_DATA_V2_LEGACY_TARGET_ROLE:
-        raise ValueError(f"Legacy target role 必須為 {MARKET_DATA_V2_LEGACY_TARGET_ROLE}")
-    if not legacy_target_must_derive_from_v2:
-        raise ValueError("Legacy compatibility target 必須由 V2 materialize，不得維持獨立 provider truth")
-    if legacy_compatibility_source != MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE:
-        raise ValueError(
-            f"Legacy compatibility source 必須為 {MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE}"
-        )
-    if legacy_compatibility_provider_calls_allowed:
-        raise ValueError("Legacy compatibility materialization 不得直接呼叫 provider")
-    if legacy_compatibility_ohlcv_contract != MARKET_DATA_V2_LEGACY_COMPATIBILITY_OHLCV_CONTRACT:
-        raise ValueError(
-            "Legacy compatibility OHLCV contract 必須由 Market Data V2 shared mapping SSOT 定義"
-        )
-    if migration_phase not in MARKET_DATA_V2_MIGRATION_PHASES:
-        raise ValueError(f"不支援的 Market Data V2 migration phase: {migration_phase}")
-    if migration_phase == MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION:
-        if not legacy_direct_provider_download_allowed_during_transition:
-            raise ValueError("legacy execution transition 必須如實允許尚未退役的 direct-provider producer")
-    elif legacy_direct_provider_download_allowed_during_transition:
-        raise ValueError("V2 execution cutover 後不得再允許 legacy direct-provider producer")
 
     return MarketDataV2LifecycleContract(
         canonical_data_plane=canonical_data_plane,
@@ -377,17 +312,9 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
         trading_view_role=trading_view_role,
         daily_update_role=daily_update_role,
         daily_update_target_source=daily_update_target_source,
-        daily_update_may_refresh_legacy_provider_truth=daily_update_may_refresh_legacy_provider_truth,
         full_market_exact_date_bulk_preferred=full_market_exact_date_bulk_preferred,
         shared_provider_archive_required=shared_provider_archive_required,
         independent_domain_provider_redownload_allowed=independent_domain_provider_redownload_allowed,
-        legacy_target_role=legacy_target_role,
-        legacy_target_must_derive_from_v2=legacy_target_must_derive_from_v2,
-        legacy_compatibility_source=legacy_compatibility_source,
-        legacy_compatibility_provider_calls_allowed=legacy_compatibility_provider_calls_allowed,
-        legacy_compatibility_ohlcv_contract=legacy_compatibility_ohlcv_contract,
-        migration_phase=migration_phase,
-        legacy_direct_provider_download_allowed_during_transition=legacy_direct_provider_download_allowed_during_transition,
     )
 
 
@@ -410,10 +337,11 @@ def get_trading_market_data_lifecycle() -> TradingMarketDataLifecycleContract:
         raise ValueError(
             f"Trading V2 provider archive source 必須為 {MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE}"
         )
-    # Compatibility metadata remains resolvable during migration, but it does
-    # not own provider/archive truth; both Research and Trading pin the neutral
-    # Market Data V2 Provider Snapshot.
     get_research_data_generation(bootstrap_source_generation)
+    if status != TRADING_MARKET_DATA_STATUS_V2_ONLY:
+        raise ValueError(
+            f"Trading market-data status 必須為 {TRADING_MARKET_DATA_STATUS_V2_ONLY}: {status!r}"
+        )
     return TradingMarketDataLifecycleContract(
         mode=mode,
         provider_archive_source=provider_archive_source,
@@ -465,13 +393,7 @@ __all__ = [
     "MARKET_DATA_V2_TRADING_VIEW_ROLE",
     "MARKET_DATA_V2_DAILY_UPDATE_ROLE",
     "MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE",
-    "MARKET_DATA_V2_LEGACY_TARGET_ROLE",
-    "MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE",
-    "MARKET_DATA_V2_LEGACY_COMPATIBILITY_OHLCV_CONTRACT",
-    "MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION",
-    "MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER",
-    "MARKET_DATA_V2_MIGRATION_PHASE_V2_ONLY",
-    "MARKET_DATA_V2_MIGRATION_PHASES",
+    "TRADING_MARKET_DATA_STATUS_V2_ONLY",
     "MarketPriceSourceContract",
     "ResearchDataGenerationContract",
     "TradingMarketDataLifecycleContract",

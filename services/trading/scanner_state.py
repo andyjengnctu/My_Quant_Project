@@ -12,7 +12,7 @@ from core.trading_policy import get_trading_strategy_profile, resolve_trading_se
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.data_readiness import (
     assert_trading_data_readiness,
-    build_trading_data_readiness_for_execution_evidence,
+    build_trading_data_readiness_for_consumer_evidence,
 )
 from services.trading.market_data_consumer import (
     get_trading_v2_consumer_state_sha256,
@@ -25,7 +25,7 @@ from services.trading.strategy_param_state import (
 )
 
 
-TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 3
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 4
 
 
 def partition_trading_candidate_rows_for_information_date(
@@ -90,11 +90,11 @@ def load_trading_scanner_runtime(
         root, required=True, verify_current_view=verify_dataset_content
     )
     latest_data_date = str(market_state["market_date"])
-    data_readiness = build_trading_data_readiness_for_execution_evidence(
+    data_readiness = build_trading_data_readiness_for_consumer_evidence(
         root,
         strategy_id=profile.strategy_id,
         target_date=latest_data_date,
-        execution_market_data_ready=True,
+        consumer_state_ready=True,
     )
     assert_trading_data_readiness(data_readiness)
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
@@ -140,9 +140,8 @@ def load_trading_scanner_runtime(
         "param_latest_data_date": param_latest_data_date,
         "member_count": member_count,
         "params": param_source["primary_params"],
-        # Transitional field names are retained until Round 8 schema cleanup.
-        "market_data_snapshot_sha256": get_trading_v2_consumer_state_sha256(root),
-        "dataset_content_sha256": str(market_state["source_view_fingerprint"]),
+        "market_data_consumer_state_sha256": get_trading_v2_consumer_state_sha256(root),
+        "market_data_source_view_fingerprint": str(market_state["source_view_fingerprint"]),
         "market_data_source": str(market_state.get("source") or "trading_market_data_v2_historical_latest_view"),
         "current_universe_tickers": list(market_state.get("current_execution_pool_tickers") or []),
         "required_position_tickers": list(market_state.get("required_position_tickers") or []),
@@ -187,12 +186,12 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             )
         except (OSError, ValueError, RuntimeError) as exc:
             param_error = f"{type(exc).__name__}: {exc}"
-    data_readiness = build_trading_data_readiness_for_execution_evidence(
+    data_readiness = build_trading_data_readiness_for_consumer_evidence(
         root,
         strategy_id=profile.strategy_id,
         target_date=latest_data_date,
-        execution_market_data_ready=market_ready,
-        execution_market_data_reason=market_error or (None if market_ready else "Trading V2 execution consumer state 尚未就緒"),
+        consumer_state_ready=market_ready,
+        consumer_state_reason=market_error or (None if market_ready else "Trading V2 execution consumer state 尚未就緒"),
     )
     trading_data_ready = bool(data_readiness.get("ready"))
     params_ready = bool(
@@ -228,10 +227,10 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "trading_data_required_v2_count": data_readiness.get("required_v2_dataset_count"),
         "trading_data_ready_v2_count": data_readiness.get("ready_v2_dataset_count"),
         "trading_data_blockers": list(data_readiness.get("blocking_dependencies") or []),
-        "market_data_snapshot_sha256": (
+        "market_data_consumer_state_sha256": (
             get_trading_v2_consumer_state_sha256(root) if market_state is not None and not market_error else None
         ),
-        "dataset_content_sha256": (
+        "market_data_source_view_fingerprint": (
             None if market_state is None else str(market_state.get("source_view_fingerprint") or "") or None
         ),
         "market_data_source": (None if market_state is None else market_state.get("source")),
@@ -269,7 +268,7 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
         raise ValueError("Trading candidate snapshot 缺少 latest_data_date")
     if not str(payload.get("selected_params_sha256") or "").strip():
         raise ValueError("Trading candidate snapshot 缺少 selected_params_sha256")
-    for field in ("market_data_snapshot_sha256", "dataset_content_sha256", "param_binding_sha256"):
+    for field in ("market_data_consumer_state_sha256", "market_data_source_view_fingerprint", "param_binding_sha256"):
         if not str(payload.get(field) or "").strip():
             raise ValueError(f"Trading candidate snapshot 缺少 {field}")
     scanned_tickers = payload.get("scanned_tickers")
@@ -323,11 +322,11 @@ def load_trading_candidate_snapshot(
         raise RuntimeError("Trading candidate snapshot params date 與目前設定不一致；請重新執行 Scanner")
     if str(payload.get("selected_params_sha256") or "") != str(runtime["selected_params_sha256"]):
         raise RuntimeError("Trading candidate snapshot 對應的 params 已改變；請重新執行 Scanner")
-    if str(payload.get("market_data_snapshot_sha256") or "") != str(runtime["market_data_snapshot_sha256"]):
+    if str(payload.get("market_data_consumer_state_sha256") or "") != str(runtime["market_data_consumer_state_sha256"]):
         raise RuntimeError("Trading candidate snapshot 對應的 market-data membership 已改變；請重新執行 Scanner")
     if list(payload.get("scanned_tickers") or []) != list(runtime.get("current_universe_tickers") or []):
         raise RuntimeError("Trading candidate snapshot scanned membership 已過期；請重新執行 Scanner")
-    if str(payload.get("dataset_content_sha256") or "") != str(runtime["dataset_content_sha256"]):
+    if str(payload.get("market_data_source_view_fingerprint") or "") != str(runtime["market_data_source_view_fingerprint"]):
         raise RuntimeError("Trading candidate snapshot dataset content identity 已改變；請重新執行 Scanner")
     if str(payload.get("param_binding_sha256") or "") != str(runtime["param_binding_sha256"]):
         raise RuntimeError("Trading candidate snapshot 對應的 Params binding 已改變；請重新執行 Scanner")
@@ -375,8 +374,8 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
         "stale_candidate_count": len(payload.get("stale_candidate_rows_skipped") or []),
         "information_date": payload.get("latest_data_date"),
         "selected_params_sha256": payload.get("selected_params_sha256"),
-        "market_data_snapshot_sha256": payload.get("market_data_snapshot_sha256"),
-        "dataset_content_sha256": payload.get("dataset_content_sha256"),
+        "market_data_consumer_state_sha256": payload.get("market_data_consumer_state_sha256"),
+        "market_data_source_view_fingerprint": payload.get("market_data_source_view_fingerprint"),
         "param_binding_sha256": payload.get("param_binding_sha256"),
         "error": freshness_error,
         "path": project_relative_display_path(path, project_root=root),

@@ -34,8 +34,8 @@ def run_trading_strategy_param_training(
         raise RuntimeError("目前Trading strategy要求multi-seed producer；設定卻未啟用")
 
     market_before = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
-    market_snapshot_sha_before = get_trading_v2_consumer_state_sha256(root)
-    dataset_content_sha_before = str(market_before["source_view_fingerprint"])
+    consumer_state_sha_before = get_trading_v2_consumer_state_sha256(root)
+    source_view_fingerprint_before = str(market_before["source_view_fingerprint"])
 
     result = run_static_strategy_parameter_training(
         project_root=root,
@@ -56,9 +56,9 @@ def run_trading_strategy_param_training(
         latest_data_date_override=str(market_before["market_date"]),
     )
     market_after = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
-    if str(market_after["source_view_fingerprint"]) != dataset_content_sha_before:
+    if str(market_after["source_view_fingerprint"]) != source_view_fingerprint_before:
         raise RuntimeError("Trading V2 view identity 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
-    if get_trading_v2_consumer_state_sha256(root) != market_snapshot_sha_before:
+    if get_trading_v2_consumer_state_sha256(root) != consumer_state_sha_before:
         raise RuntimeError("Trading V2 consumer state 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
     if str(market_after.get("market_date") or "") != str(market_before.get("market_date") or ""):
         raise RuntimeError("Trading V2 latest date 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
@@ -79,8 +79,8 @@ def run_trading_strategy_param_training(
         "output_dir": _display_path(root, str(plan["output_dir"])),
         "selected_params_path": _display_path(root, str(result["selected_params_path"])),
         "manifest_path": _display_path(root, str(result["manifest_path"])),
-        "market_data_snapshot_sha256": market_snapshot_sha_before,
-        "dataset_content_sha256": dataset_content_sha_before,
+        "market_data_consumer_state_sha256": consumer_state_sha_before,
+        "market_data_source_view_fingerprint": source_view_fingerprint_before,
         "param_binding_fingerprint": binding["binding_fingerprint"],
     }
 

@@ -13,7 +13,7 @@ from services.trading.market_data_consumer import (
     load_trading_v2_consumer_state,
 )
 
-TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 2
+TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 3
 TRADING_STRATEGY_PARAM_BINDING_FILENAME = "trading_param_binding.json"
 
 
@@ -31,7 +31,7 @@ def _validate_binding(payload: dict[str, Any]) -> None:
         raise ValueError("Trading param binding schema 不相容；請重新更新 Trading Params")
     if str(payload.get("runtime_domain") or "") != RUNTIME_DOMAIN_TRADING:
         raise ValueError("Trading param binding runtime domain 不合法")
-    for field in ("strategy_id", "param_selector", "selected_params_sha256", "market_data_snapshot_sha256", "dataset_content_sha256", "latest_data_date"):
+    for field in ("strategy_id", "param_selector", "selected_params_sha256", "market_data_consumer_state_sha256", "market_data_source_view_fingerprint", "latest_data_date"):
         if not str(payload.get(field) or ""):
             raise ValueError(f"Trading param binding 缺少 {field}")
     core = {key: value for key, value in payload.items() if key != "binding_fingerprint"}
@@ -54,8 +54,8 @@ def publish_trading_strategy_param_binding(project_root: str | Path) -> dict[str
         "selected_params_path": project_relative_display_path(selected_path, project_root=root),
         "selected_params_sha256": compute_file_sha256(selected_path),
         "market_data_source": "trading_market_data_v2_historical_latest_view",
-        "market_data_snapshot_sha256": get_trading_v2_consumer_state_sha256(root),
-        "dataset_content_sha256": str(consumer_state["source_view_fingerprint"]),
+        "market_data_consumer_state_sha256": get_trading_v2_consumer_state_sha256(root),
+        "market_data_source_view_fingerprint": str(consumer_state["source_view_fingerprint"]),
         "latest_data_date": str(consumer_state["market_date"]),
     }
     payload["binding_fingerprint"] = canonical_json_sha256(payload)
@@ -93,9 +93,9 @@ def load_trading_strategy_param_binding(
     consumer_state = load_trading_v2_consumer_state(
         root, required=True, verify_current_view=bool(verify_dataset_content)
     )
-    if str(payload.get("market_data_snapshot_sha256") or "") != get_trading_v2_consumer_state_sha256(root):
+    if str(payload.get("market_data_consumer_state_sha256") or "") != get_trading_v2_consumer_state_sha256(root):
         raise RuntimeError("Trading V2 consumer state identity 與 params binding 不一致")
-    if str(payload.get("dataset_content_sha256") or "") != str(consumer_state["source_view_fingerprint"]):
+    if str(payload.get("market_data_source_view_fingerprint") or "") != str(consumer_state["source_view_fingerprint"]):
         raise RuntimeError("Trading V2 view identity 與 params binding 不一致")
     if str(payload.get("latest_data_date") or "") != str(consumer_state.get("market_date") or ""):
         raise RuntimeError("Trading params binding data date 已過期")

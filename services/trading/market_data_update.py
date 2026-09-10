@@ -1,22 +1,34 @@
-"""Canonical Trading market-data update orchestration during V2 cutover.
+"""Canonical Trading Market Data V2 update orchestration.
 
-Market Data V2 is provider-authoritative and, after the Round-7 cutover, is also
-the direct production read source for rule-based Trading consumers.  The legacy
-six-column Trading CSV dataset is retained only as a transitional, provider-free
-compatibility materialization until Round 8 removes the unused cache.
-No Legacy CSV producer is allowed to call FinMind on this path.
+The updater owns the production write sequence after the V2-only cutover:
+refresh/verify the Trading V2 archive and then publish the V2 execution consumer
+state. Legacy six-column Trading CSV/snapshot artifacts are not produced here.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
+from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_identity import normalize_trading_ticker
+from core.trading_policy import get_trading_strategy_profile
 from services.trading.account_state import load_trading_account_state
-from services.trading.market_data_compatibility import materialize_trading_v2_compatibility_dataset
 from services.trading.market_data_consumer import publish_trading_v2_consumer_state
-from services.trading.market_data_state import publish_trading_market_data_snapshot
+from services.trading.market_data_v2_view import TradingMarketDataV2View
+
+
+def _resolve_consumer_market_date(project_root: Path, update_result: dict[str, Any]) -> str:
+    target_date = str(update_result.get("target_date") or "").strip()
+    if target_date:
+        return target_date
+    profile = get_trading_strategy_profile()
+    spec = get_trading_data_dependency_spec(profile.strategy_id)
+    view = TradingMarketDataV2View.open(project_root)
+    horizon = view.training_horizon(required_datasets=spec.required_v2_datasets)
+    resolved = str(horizon.training_through_date or "").strip()
+    if not resolved:
+        raise RuntimeError("Trading V2 required datasets 尚未形成可發布 consumer state 的共同 READY horizon")
+    return resolved
 
 
 def run_trading_market_data_update(
@@ -25,14 +37,9 @@ def run_trading_market_data_update(
     provider_client=None,
     sync_v2_archive: bool = True,
 ) -> dict[str, Any]:
-    """Refresh V2 first, then rebuild the transitional CSV compatibility view.
-
-    ``sync_v2_archive=False`` is retained for local/test callers that explicitly
-    want to materialize only from already-verified V2 state.
-    """
+    """Refresh V2 if requested, then publish canonical execution consumer state."""
 
     root = Path(project_root).resolve()
-    paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING)
     account = load_trading_account_state(root, required=False)
     required_position_tickers = sorted(
         normalize_trading_ticker(ticker)
@@ -52,7 +59,7 @@ def run_trading_market_data_update(
         )
         if str(v2_update.get("status") or "") in {"NO_TARGET", "BLOCKED", "DISABLED"}:
             raise RuntimeError(
-                "Trading V2 update 尚未提供可 materialize 的 canonical market-data truth；"
+                "Trading V2 update 尚未提供可發布 consumer state 的 canonical market-data truth；"
                 f"status={v2_update.get('status')} error={v2_update.get('error') or '-'}"
             )
     else:
@@ -63,46 +70,27 @@ def run_trading_market_data_update(
             "usage_requests": 0,
         }
 
-    target_date = str(v2_update.get("target_date") or "").strip() or None
-    result = dict(
-        materialize_trading_v2_compatibility_dataset(
-            root,
-            required_tickers=required_position_tickers,
-            market_date=target_date,
-        )
-    )
-    if str(result.get("runtime_domain") or "") != RUNTIME_DOMAIN_TRADING:
-        raise RuntimeError("Trading V2 compatibility materialization runtime domain 不合法")
-    if Path(result.get("data_dir") or "").is_absolute():
-        raise RuntimeError("Trading V2 compatibility data_dir user-facing path 必須為 project-relative")
-    if Path(paths.data_dir).resolve() == root.resolve():
-        raise RuntimeError("Trading runtime data_dir 不可解析為 project root")
-
+    market_date = _resolve_consumer_market_date(root, v2_update)
     consumer_state = publish_trading_v2_consumer_state(
         root,
-        market_date=str(result["market_date"]),
+        market_date=market_date,
         required_position_tickers=required_position_tickers,
-        retained_training_tickers=list(result.get("retained_history_tickers") or []),
-    )
-    snapshot = publish_trading_market_data_snapshot(
-        root,
-        market_date=result["market_date"],
-        required_position_tickers=required_position_tickers,
-        current_universe_tickers=list(result["current_execution_pool_tickers"]),
     )
     return {
-        **result,
         "status": "READY",
-        "market_data_consumer_state_fingerprint": consumer_state["state_fingerprint"],
-        "market_data_consumer_source_view_fingerprint": consumer_state["source_view_fingerprint"],
-        "market_data_consumer_training_ticker_count": consumer_state["training_ticker_count"],
-        "market_data_snapshot_fingerprint": snapshot["snapshot_fingerprint"],
-        "dataset_content_sha256": snapshot["dataset_fingerprint"]["csv_content_sha256"],
+        "runtime_domain": "trading",
+        "market_date": str(consumer_state["market_date"]),
+        "market_data_source": str(consumer_state["source"]),
+        "market_data_consumer_state_fingerprint": str(consumer_state["state_fingerprint"]),
+        "market_data_consumer_source_view_fingerprint": str(consumer_state["source_view_fingerprint"]),
+        "current_execution_pool_tickers": list(consumer_state["current_execution_pool_tickers"]),
+        "current_execution_pool_ticker_count": int(consumer_state["current_execution_pool_ticker_count"]),
+        "required_position_tickers": list(consumer_state["required_position_tickers"]),
+        "required_position_ticker_count": len(consumer_state["required_position_tickers"]),
+        "training_tickers": list(consumer_state["training_tickers"]),
+        "training_ticker_count": int(consumer_state["training_ticker_count"]),
         "market_data_v2_archive": v2_update,
         "provider_request_session": {
-            "legacy_stage_data_requests": 0,
-            "legacy_stage_usage_requests": 0,
-            "compatibility_materialization_provider_calls": 0,
             "v2_stage_data_requests": int(v2_update.get("data_requests") or 0),
             "v2_stage_usage_requests": int(v2_update.get("usage_requests") or 0),
         },

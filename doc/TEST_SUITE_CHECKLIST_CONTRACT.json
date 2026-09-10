@@ -4474,6 +4474,17 @@
       "entry": "`services/trading/market_data_consumer.py`, `core/trading_data_dependencies.py`, `services/trading/strategy_param_training.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/position_market_context.py`, `services/trading/order_planning.py`, `services/trading/market_data_ops.py`",
       "initial_status": "NEW",
       "order": 403
+    },
+    {
+      "id": "B416",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 terminal Trading state / Legacy compatibility retirement",
+      "item": "Production Trading market-data update, readiness, Params lineage, Scanner lineage, holdings/exit and allocator reads must be V2-only. Legacy Trading direct-provider application, six-column compatibility materializer and snapshot state modules must be absent from the production dependency graph; operational lineage field names must explicitly identify the V2 consumer-state SHA and V2 source-view fingerprint.",
+      "gap": "Round 7 moved live consumers to verified Market Data V2 but deliberately left an unused Legacy CSV/snapshot compatibility cache plus migration-era lifecycle/schema names. Round 8 must remove the Legacy producer/materializer/snapshot runtime paths, eliminate the readiness fallback, enforce the v2_only terminal lifecycle, bump Params/Scanner operational schemas so stale artifacts fail closed, retain only the shared canonical adjusted-OHLC/raw-Volume mapping needed by V2/Research, and keep Research scientific identity unchanged.",
+      "entry": "`core/trading_data_dependencies.py`, `core/market_data_contract.py`, `config/market_data.py`, `services/trading/market_data_update.py`, `services/trading/market_data_consumer.py`, `services/trading/data_readiness.py`, `services/trading/strategy_param_state.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/operations_status.py`, `tools/validate/synthetic_market_data_cases.py`, `tools/validate/synthetic_meta_cases.py`",
+      "initial_status": "NEW",
+      "order": 404
     }
   ],
   "tests": [
@@ -8215,6 +8226,13 @@
       "description": "`validate_market_data_v2_trading_direct_consumer_cutover_contract_case` 驗證 full_rule_based_no_dl 的六個 V2 dependency、V2 OHLCV mapping、consumer-state membership continuity/zero-provider-call，以及 Params/Scanner/holdings/allocator/Workbench direct consumer 不再讀 Legacy CSV。",
       "initial_status": "NEW",
       "order": 525
+    },
+    {
+      "id": "T536",
+      "b_id": "B416",
+      "description": "`validate_market_data_v2_trading_direct_consumer_cutover_contract_case` 擴充驗證 Round 8 V2-only terminal state：Legacy Trading producer/materializer/snapshot modules 已退役、canonical update 只執行 V2 update→consumer-state publish、readiness 無 Legacy fallback、dependency contract/schema 已 bump、Params/Scanner lineage 使用明確 V2 欄位且舊欄位不存在。",
+      "initial_status": "NEW",
+      "order": 526
     }
   ],
   "transitions": [
@@ -26297,6 +26315,182 @@
       "to_status": "DONE",
       "description": "新增 direct consumer cutover regression 並納入正式 synthetic registry。",
       "note": "`validate_market_data_v2_trading_direct_consumer_cutover_contract_case`"
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B392",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Round 8 V2-only terminal state supersedes the earlier Workbench V2 sidecar while preserving Legacy execution compatibility contract.",
+      "note": "Superseded by B416; historical convergence retained in G."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T512",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "The legacy-preserving sidecar regression is no longer a current DONE requirement after Legacy Trading execution retirement.",
+      "note": "Superseded by T536/B416."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B407",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "The per-ticker Legacy Trading producer/application/snapshot completeness contract is retired with its production modules.",
+      "note": "Round 8 removes the Legacy producer path."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T527",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy Trading producer end-to-end completeness regression retired because the producer/application/snapshot path no longer exists.",
+      "note": "Historical regression superseded by V2-only terminal contract."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B410",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy CSV current-vintage/training-membership contract is no longer applicable after direct V2 consumer-state membership became authoritative.",
+      "note": "Superseded by B415/B416."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T530",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Retained Legacy CSV current-vintage regression retired after Round 8 Legacy cache retirement.",
+      "note": "Superseded by direct V2 consumer-state regressions."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B411",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Migration-phase lifecycle contract is retired because Market Data V2 has reached the explicit v2_only terminal state.",
+      "note": "Superseded by B416 terminal lifecycle."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T531",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Migration-phase governance regression is replaced by terminal V2-only governance checks.",
+      "note": "Generic governance case remains and now validates B416 semantics."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B414",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Trading V2-to-Legacy six-column compatibility materialization is retired after all production consumers completed direct V2 cutover.",
+      "note": "Shared core OHLCV mapping remains; Trading Legacy materializer does not."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T534",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Trading Legacy compatibility materialization regression retired with the materializer.",
+      "note": "Shared mapping continues to be covered by current V2/Research tests."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B416",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "Round 8 completes Market Data V2 terminal Trading state: removes Legacy producer/materializer/snapshot runtime paths, V2-only readiness/update, and explicit V2 operational lineage schemas.",
+      "note": "Market Data V2 Legacy compatibility retirement + V2 lineage schema cleanup."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T536",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "Direct-consumer regression extended to cover V2-only terminal state, retired Legacy modules, readiness/update source graph and explicit V2 lineage schema names.",
+      "note": "`validate_market_data_v2_trading_direct_consumer_cutover_contract_case`"
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T42",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy downloader market-date fallback regression retired; V2 market-date discovery is the production owner.",
+      "note": "Superseded by Market Data V2 auto-update/discovery contracts."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T43",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy per-ticker Trading CSV sync error-path regression retired with the direct-provider producer.",
+      "note": "V2 executor/update error paths remain covered separately."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T57",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy downloader universe fetch/parser regression retired with the old direct-provider universe module.",
+      "note": "Neutral V2 PIT universe is the current membership owner."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T58",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy downloader bulk universe screening regression retired with the old direct-provider universe module.",
+      "note": "Current execution screening is owned by core/market_data_pool_contract.py and V2 consumer."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B385",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy FinMind downloader universe screening path is retired after V2 execution-pool ownership became authoritative.",
+      "note": "Superseded by B415/B416 V2 consumer pool contracts."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T505",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy downloader universe screening initialization/error regression retired with services/downloader/universe.py.",
+      "note": "V2 pool/readiness regressions remain current."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B406",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy Trading PriceAdj bulk-to-CSV producer completeness contract is retired; V2 update stores provider truth directly in the V2 archive/overlay.",
+      "note": "PriceAdj latest-day probe remains read-only for market-date discovery."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T526",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy PriceAdj bulk CSV materialization regression retired with the CSV producer.",
+      "note": "Shared-client/executor request accounting remains covered by V2 tests."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B408",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy execution bulk/per-ticker/universe retry aggregation contract is retired with those provider consumers.",
+      "note": "Read-only V2 market-date probe still uses the bounded finmind_http retry seam."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T528",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy bulk/per-ticker/universe retry regression retired; current V2 provider retry/executor behavior is covered by V2 contracts.",
+      "note": "Round 8 Legacy producer retirement."
     }
   ]
 }

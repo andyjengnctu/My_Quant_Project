@@ -37,12 +37,6 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 
-def _legacy_execution_transition_lifecycle_fixture():
-    from types import SimpleNamespace
-    from core.market_data_contract import MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION
-
-    return SimpleNamespace(migration_phase=MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION)
-
 def _publish_synthetic_trading_input_lineage(
     root: Path,
     *,
@@ -286,8 +280,8 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
         "latest_data_date": runtime["latest_data_date"],
         "param_latest_data_date": runtime["param_latest_data_date"],
         "selected_params_sha256": runtime["selected_params_sha256"],
-        "market_data_snapshot_sha256": runtime["market_data_snapshot_sha256"],
-        "dataset_content_sha256": runtime["dataset_content_sha256"],
+        "market_data_consumer_state_sha256": runtime["market_data_consumer_state_sha256"],
+        "market_data_source_view_fingerprint": runtime["market_data_source_view_fingerprint"],
         "param_binding_sha256": runtime["param_binding_sha256"],
         "scanned_tickers": list(runtime.get("current_universe_tickers") or []),
         "candidate_rows": list(candidate_rows),
@@ -526,42 +520,10 @@ def validate_trading_daily_workflow_contract_case(base_params):
     from core.params_io import params_to_json_dict
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
-    import services.downloader.application as downloader_application
     import services.trading.daily_workflow as daily_workflow
 
     profile = get_trading_strategy_profile()
     project_root = Path(__file__).resolve().parents[2]
-
-    with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
-         patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
-         patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2454"]), \
-         patch.object(downloader_application, "resolve_trading_dataset_member_tickers", return_value=[]), \
-         patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
-         patch.object(downloader_application, "smart_download_vip_data", return_value={
-             "total": 2,
-             "count_success": 1,
-             "count_skipped_latest": 1,
-             "last_date_check_error_count": 0,
-             "download_error_count": 0,
-             "issue_log_path": None,
-         }):
-        downloader_result = downloader_application.run_trading_dataset_update()
-    check("downloader_application_returns_trading_domain", "trading", downloader_result.get("runtime_domain"))
-    check("downloader_application_returns_market_date", "2026-09-04", downloader_result.get("market_date"))
-    check("downloader_application_returns_ticker_count", 2, downloader_result.get("ticker_count"))
-    captured_required_download = {}
-    def _capture_required_download(tickers, market_date, **_kwargs):
-        captured_required_download["tickers"] = list(tickers)
-        return {"total": len(tickers), "count_success": len(tickers), "count_skipped_latest": 0, "last_date_check_error_count": 0, "download_error_count": 0, "issue_log_path": None}
-    with patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()), \
-         patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
-         patch.object(downloader_application, "get_or_update_universe", return_value=["2330"]), \
-         patch.object(downloader_application, "resolve_trading_dataset_member_tickers", return_value=[]), \
-         patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
-         patch.object(downloader_application, "smart_download_vip_data", side_effect=_capture_required_download):
-        required_result = downloader_application.run_trading_dataset_update(required_tickers=["9999", "2330"])
-    check("downloader_unions_required_account_ticker_outside_dynamic_universe", ["2330", "9999"], captured_required_download.get("tickers"))
-    check("downloader_reports_required_ticker_added_to_universe", ["9999"], required_result.get("required_position_tickers_added"))
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -602,8 +564,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("workflow_snapshot_reads_param_latest_date", "2026-09-04", snapshot.get("param_latest_data_date"))
         check("workflow_snapshot_requires_single_member", 1, snapshot.get("param_member_count"))
         check("workflow_snapshot_ready_when_data_and_params_match", True, snapshot.get("params_ready_for_scan"))
-        check("workflow_snapshot_requires_canonical_market_data_snapshot", True, snapshot.get("market_data_ready"))
-        check("workflow_snapshot_exposes_dataset_content_identity", 64, len(str(snapshot.get("dataset_content_sha256") or "")))
+        check("workflow_snapshot_requires_canonical_v2_consumer_state", True, snapshot.get("market_data_ready"))
+        check("workflow_snapshot_exposes_market_data_source_view_identity", 64, len(str(snapshot.get("market_data_source_view_fingerprint") or "")))
         check("workflow_scanner_output_is_trading_scoped", "outputs/trading/scanner", snapshot.get("scanner_output_dir"))
 
         fake_scan = {
@@ -639,7 +601,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
         check("trading_scanner_persists_candidate_snapshot", True, (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").is_file())
         check("trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
-        check("trading_scanner_carries_market_data_snapshot_identity", 64, len(str(scan_result.get("market_data_snapshot_sha256") or "")))
+        check("trading_scanner_carries_market_data_consumer_state_identity", 64, len(str(scan_result.get("market_data_consumer_state_sha256") or "")))
         check("trading_scanner_carries_param_binding_identity", 64, len(str(scan_result.get("param_binding_sha256") or "")))
 
         _write_param_payload("2026-09-03", 1)
@@ -694,7 +656,6 @@ def validate_trading_actionable_universe_scanner_membership_contract_case(base_p
     from services.scanner import scan_runner
     import services.trading.daily_workflow as daily_workflow
     from services.trading.scanner_state import load_trading_candidate_snapshot
-    from services.trading.market_data_state import publish_trading_market_data_snapshot
 
     profile = get_trading_strategy_profile()
 
@@ -814,17 +775,14 @@ def validate_trading_actionable_universe_scanner_membership_contract_case(base_p
         check("retained_holding_csv_is_not_deleted_by_scanner_membership", True, (data_dir / "2454.csv").is_file())
 
         candidate_snapshot = load_trading_candidate_snapshot(root, require_current=True)
-        check("candidate_snapshot_v3_binds_exact_scanned_membership", ["2317", "2330"], candidate_snapshot.get("scanned_tickers"))
+        check("candidate_snapshot_v4_binds_exact_scanned_membership", ["2317", "2330"], candidate_snapshot.get("scanned_tickers"))
         check("candidate_snapshot_candidate_is_inside_scanned_membership", "2330", candidate_snapshot["candidate_rows"][0]["ticker"])
 
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            current_universe_tickers=["2330"],
-            required_position_tickers=["2454"],
-        )
+        legacy_snapshot_path = root / "state" / "trading" / "market_data_snapshot.json"
+        legacy_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_snapshot_path.write_text('{"obsolete": true}', encoding="utf-8")
         legacy_drift_snapshot = load_trading_candidate_snapshot(root, require_current=True)
-        check("candidate_snapshot_ignores_transitional_legacy_snapshot_membership_drift", ["2317", "2330"], legacy_drift_snapshot.get("scanned_tickers"))
+        check("candidate_snapshot_ignores_retired_legacy_snapshot_file", ["2317", "2330"], legacy_drift_snapshot.get("scanned_tickers"))
 
         from services.trading.market_data_consumer import TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
         consumer_state_path = root / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
@@ -2478,10 +2436,6 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
         select_latest_completed_daily_date,
         trading_daily_bar_complete_time,
     )
-    from services.downloader import application as downloader_application
-    from services.downloader import runtime as downloader_runtime
-    from services.downloader import sync as downloader_sync
-    from services.downloader import universe as downloader_universe
     from services.trading.operational_audit import (
         TRADING_OPERATIONAL_AUDIT_STATUS_LIVE_BLOCKED,
         build_trading_operational_audit,
@@ -2506,63 +2460,6 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
     else:
         provisional_rejected = False
     check("intraday_today_information_date_is_rejected", True, provisional_rejected)
-
-    class _FakeLoader:
-        def get_data(self, **_kwargs):
-            return pd.DataFrame(
-                {
-                    "date": ["2026-09-04", "2026-09-05"],
-                    "open": [100.0, 101.0],
-                    "max": [102.0, 103.0],
-                    "min": [99.0, 100.0],
-                    "close": [101.0, 102.0],
-                    "Trading_volume": [1000, 2000],
-                }
-            )
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_root = Path(temp_dir)
-        data_dir = temp_root / "data" / "trading" / "tw_stock_data_vip"
-        output_dir = temp_root / "outputs" / "trading" / "smart_downloader"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        with (
-            patch.object(downloader_runtime, "SAVE_DIR", str(data_dir)),
-            patch.object(downloader_runtime, "OUTPUT_DIR", str(output_dir)),
-            patch.object(downloader_runtime, "get_finmind_loader", return_value=_FakeLoader()),
-            patch.object(downloader_runtime, "FINMIND_DOWNLOAD_SLEEP_SEC", 0),
-        ):
-            sync_summary = downloader_sync.smart_download_vip_data(["2330"], "2026-09-04", verbose=False)
-        saved = pd.read_csv(data_dir / "2330.csv")
-        saved_dates = pd.to_datetime(saved["Date"]).dt.strftime("%Y-%m-%d").tolist()
-        check("downloader_physically_seals_rows_to_confirmed_market_date", ["2026-09-04"], saved_dates)
-        check("downloader_reports_trimmed_future_rows", 1, int(sync_summary.get("trimmed_future_row_count") or 0))
-
-    with (
-        patch.object(downloader_application, "get_market_data_v2_lifecycle", return_value=_legacy_execution_transition_lifecycle_fixture()),
-        patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"),
-        patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2317"]),
-        patch.object(downloader_application, "smart_download_vip_data", return_value={
-            "count_success": 1,
-            "count_skipped_latest": 0,
-            "last_date_check_error_count": 0,
-            "download_error_count": 1,
-            "trimmed_future_row_count": 0,
-            "issue_log_path": None,
-        }),
-        patch.object(downloader_runtime, "get_taipei_now", return_value=after_close),
-    ):
-        try:
-            downloader_application.run_trading_dataset_update()
-        except RuntimeError:
-            incomplete_download_rejected = True
-        else:
-            incomplete_download_rejected = False
-    check("trading_update_rejects_known_ticker_download_failure", True, incomplete_download_rejected)
-
-    with patch.object(downloader_runtime, "get_taipei_now", return_value=morning), patch.object(downloader_runtime, "get_finmind_loader", return_value=_FakeLoader()):
-        safe_market_date = downloader_universe.get_market_last_date()
-    check("market_date_resolver_ignores_provisional_today_row", "2026-09-04", safe_market_date)
 
     capability = build_trading_capability_snapshot()
     blockers = set(capability.get("live_blocking_capabilities") or [])
@@ -2614,8 +2511,6 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
         append_ordered_trading_proposal,
         build_empty_trading_order_state,
     )
-    from services.downloader import runtime as downloader_runtime
-    from services.downloader import universe as downloader_universe
     from services.trading.fill_reconciliation import (
         confirm_trading_buy_order_fill,
         confirm_trading_protection_sell_order_fill,
@@ -2658,34 +2553,6 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
     else:
         seed_mismatch_rejected = False
     check("candidate_and_execution_seed_date_mismatch_is_fail_fast", True, seed_mismatch_rejected)
-
-    class _FailLoader:
-        def get_data(self, **_kwargs):
-            raise ValueError("synthetic market-date provider failure")
-
-    class _FailTicker:
-        def history(self, **_kwargs):
-            raise ValueError("synthetic yfinance market-date failure")
-
-    class _FailYF:
-        @staticmethod
-        def Ticker(_ticker):
-            return _FailTicker()
-
-    after_close = datetime(2026, 9, 4, 14, 30, tzinfo=ZoneInfo("Asia/Taipei"))
-    with (
-        patch.object(downloader_runtime, "get_taipei_now", return_value=after_close),
-        patch.object(downloader_runtime, "get_finmind_loader", return_value=_FailLoader()),
-        patch.object(downloader_runtime, "get_yfinance_module", return_value=_FailYF()),
-        patch.object(downloader_runtime, "append_downloader_issues", return_value=None),
-    ):
-        try:
-            downloader_universe.get_market_last_date()
-        except RuntimeError:
-            guessed_weekday_rejected = True
-        else:
-            guessed_weekday_rejected = False
-    check("market_date_provider_failure_never_falls_back_to_guessed_weekday", True, guessed_weekday_rejected)
 
     frozen_params = params_to_json_dict(base_params)
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -3218,7 +3085,6 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         get_trading_v2_consumer_state_sha256,
         load_trading_v2_consumer_state,
     )
-    from services.trading.market_data_state import publish_trading_market_data_snapshot
     from services.trading.scanner_state import (
         load_trading_candidate_snapshot,
         load_trading_scanner_runtime,
@@ -3265,28 +3131,25 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         )
         runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
         consumer_state_sha = get_trading_v2_consumer_state_sha256(root)
-        check("params_bind_exact_v2_view_identity", consumer["source_view_fingerprint"], binding["dataset_content_sha256"])
-        check("scanner_runtime_consumes_same_v2_view_identity", binding["dataset_content_sha256"], runtime["dataset_content_sha256"])
-        check("params_bind_exact_v2_consumer_state_sha", consumer_state_sha, binding["market_data_snapshot_sha256"])
-        check("scanner_runtime_consumes_same_v2_consumer_state_sha", consumer_state_sha, runtime["market_data_snapshot_sha256"])
+        check("params_bind_exact_v2_view_identity", consumer["source_view_fingerprint"], binding["market_data_source_view_fingerprint"])
+        check("scanner_runtime_consumes_same_v2_view_identity", binding["market_data_source_view_fingerprint"], runtime["market_data_source_view_fingerprint"])
+        check("params_bind_exact_v2_consumer_state_sha", consumer_state_sha, binding["market_data_consumer_state_sha256"])
+        check("scanner_runtime_consumes_same_v2_consumer_state_sha", consumer_state_sha, runtime["market_data_consumer_state_sha256"])
         check("scanner_runtime_reports_v2_market_data_source", "trading_market_data_v2_historical_latest_view", runtime["market_data_source"])
 
         changed_legacy = base_frame.copy()
         changed_legacy.loc[1, "Close"] = 999.0
         changed_legacy.to_csv(csv_path, index=False)
         legacy_ignored = load_trading_scanner_runtime(root, verify_dataset_content=True)
-        check("legacy_csv_content_drift_no_longer_changes_v2_lineage", runtime["dataset_content_sha256"], legacy_ignored["dataset_content_sha256"])
-        check("legacy_csv_content_drift_no_longer_changes_v2_consumer_state_sha", runtime["market_data_snapshot_sha256"], legacy_ignored["market_data_snapshot_sha256"])
+        check("legacy_csv_content_drift_no_longer_changes_v2_lineage", runtime["market_data_source_view_fingerprint"], legacy_ignored["market_data_source_view_fingerprint"])
+        check("legacy_csv_content_drift_no_longer_changes_v2_consumer_state_sha", runtime["market_data_consumer_state_sha256"], legacy_ignored["market_data_consumer_state_sha256"])
         csv_path.write_bytes(original_legacy_bytes)
 
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            required_position_tickers=["2330"],
-            current_universe_tickers=["2330"],
-        )
+        legacy_snapshot_path = root / "state" / "trading" / "market_data_snapshot.json"
+        legacy_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_snapshot_path.write_text('{"obsolete": true}', encoding="utf-8")
         legacy_snapshot_ignored = load_trading_scanner_runtime(root, verify_dataset_content=True)
-        check("legacy_snapshot_metadata_drift_no_longer_changes_v2_lineage", runtime["dataset_content_sha256"], legacy_snapshot_ignored["dataset_content_sha256"])
+        check("retired_legacy_snapshot_file_no_longer_changes_v2_lineage", runtime["market_data_source_view_fingerprint"], legacy_snapshot_ignored["market_data_source_view_fingerprint"])
 
         consumer_state_path = root / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
         original_consumer_state = consumer_state_path.read_bytes()

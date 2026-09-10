@@ -433,7 +433,7 @@ Round 3完成後，current `ensure_strategy_parameter_artifact()`不再掃描、
 
 Workbench「實際交易」頁對`ORDERED/PARTIAL` Stop/TP、Indicator SELL與STOP remainder MARKET都只接受使用者輸入的券商實際成交股數、成交價與成交日；不得由行情觸發自動推定。成交透過同一canonical exact-accounting / position-sell seam同步account/order state；native OCO任一腿實際成交後，另一active腿同步記錄為券商互斥取消。STOP partial-fill/cancel後的剩餘MARKET retry仍維持原STOP accounting lineage，Indicator SELL不得覆蓋已觸發STOP的退出義務。
 
-- Round 5 起 Smart Downloader `[1]` 與 Workbench Due/Auto Sync 使用同一 V2-only `services/trading/market_data_auto_update.py`；它們不從 Legacy Trading snapshot 解析 V2 target。Round 6 起 Workbench「完整更新 Trading 資料」也先執行同一 V2 updater，再由 verified Trading V2 historical/latest view 純本機 materialize `data/trading/tw_stock_data_vip/` 六欄 compatibility CSV 並發布既有 Trading snapshot；compatibility stage 不得呼叫 FinMind，Legacy direct-provider producer 在目前 V2 cutover lifecycle 會 fail-closed。Provider Snapshot 尚未 READY 時 V2 顯示 `NOT_BOOTSTRAPPED` 且不耗用額外 FinMind data request；READY 後 sidecar 以 `data/trading/market_data_v2/` / `state/trading/market_data_v2/` 獨立 overlay 做 quota-aware resumable daily sync。Workbench sidecar不跨quota window或retry backoff sleep：當額度不足／retry尚未到期時立即回 `STALE`，unfinished jobs留在ledger，下次「更新 Trading 資料」再resume；只有 Smart Downloader完整Bootstrap `[3]` 會持續等待quota並自動下載到底。V2 `SYNCED/STALE/NOT_BOOTSTRAPPED` 狀態會顯示在 Workbench/Data Ops，但不再被任何 consumer直接當成 execution readiness。Round 7 的 `core/trading_data_dependencies.py` 明確宣告目前 `full_rule_based_no_dl` 不再要求 Legacy execution dataset，改直接要求 PriceAdj、raw Price、MarketValue、TradingDate、StockInfo、Delisting 六個 V2 datasets；`services/trading/data_readiness.py` 對同一 target 的 freshness + schema + coverage fail-closed。未來 DL-based Trading 仍必須登記其精確 required V2 datasets。
+- Round 8 起 Trading 已進入 **V2-only terminal state**。Smart Downloader `[1]`、Workbench Due/Auto Sync 與「完整更新 Trading 資料」共用 Market Data V2 provider/update authority；Full Update 正式順序為 **V2 update/verify → V2 execution consumer-state publication**，不再產生 `data/trading/tw_stock_data_vip/` compatibility CSV 或 `state/trading/market_data_snapshot.json`。舊 direct-provider Trading producer、Legacy universe/sync 與 Trading compatibility/snapshot modules 已退役。Provider Snapshot 尚未 READY 時 V2 顯示 `NOT_BOOTSTRAPPED` 且不耗用額外 FinMind data request；READY 後 Trading overlay 維持 quota-aware resumable sync。V2 aggregate `SYNCED/STALE/NOT_BOOTSTRAPPED` 只作 operational observation，execution readiness 唯一由 `core/trading_data_dependencies.py` + `services/trading/data_readiness.py` 判斷。目前 `full_rule_based_no_dl` 直接要求 PriceAdj、raw Price、MarketValue、TradingDate、StockInfo、Delisting 六個 V2 datasets，並對同一 target 的 freshness + schema + coverage fail-closed；未來 DL-based Trading 仍必須登記其精確 required V2 datasets。
 - Market Data V2 的 51 個 included datasets 由 `core/market_data_freshness_contract.py` 各自解析 canonical operational contract，至少固定 cadence、expected-date semantics、row expectation、completeness mode、schema validation requirement 與 publication first-check policy；Trading sync manifest 建立前會驗證 contract 必須完整覆蓋 current included registry。Publication timing 由 `config/market_data.py::MARKET_DATA_V2_PUBLICATION_POLICY` 單一持有：有 provider documentation evidence 的 dataset 使用具 grace 的 verified override，尚無明確 provider 時間者使用隔日 01:45 conservative fallback。Round 3 起動態 state 持久化於 `state/trading/market_data_v2/dataset_state.json`，包含 last attempt/success/ready、實際 latest data date、latest expected date、expected publish、next check、status、schema/coverage status 與 last error；其中 cadence/publication 規則不複製進 state，而由 contract 即時 join。`core/market_data_due_planner.py` / `services/trading/market_data_update.py::plan_trading_market_data_due_update()` 只讀本機 state/contract 計算 due，沒有 due dataset 時不得建立 provider request；成功 Trading V2 sync 會從實際 Parquet frame date evidence 更新 state，periodic 資料不會因其 row date早於 Trading target而誤判未發布。Round 4 Automatic updater 與 Round 5 Data Ops UI 已消費同一 state/contract truth；aggregate `SYNCED` 仍不得取代 dataset-level publication completeness。
 
 ### Trading Data Readiness Gate（Round 8）
@@ -455,11 +455,11 @@ READY / BLOCKED
 目前 active `full_rule_based_no_dl`：
 
 ```text
-execution legacy adjusted-price Trading snapshot = REQUIRED
-required V2 datasets                         = 0
+execution Legacy Trading snapshot            = RETIRED / NOT A DEPENDENCY
+required V2 datasets                         = 6
 ```
 
-所以 V2 某些 optional dataset `WAIT_PUBLISH/STALE` 不會誤擋現行 rule-based Trading。Scanner、Operations Status 與 Data Ops 都消費同一 readiness gate；未登記 dependency 的 executable strategy直接不合法。未來若新增 DL Trading，必須在同一 dependency registry列出實際 required V2 datasets；該 target 的 required dataset只有在 freshness target、schema與coverage都已驗證時才能 READY，`coverage=NOT_EVALUATED`、`ERROR/STALE/BLOCKED` 或缺 state都 fail closed。Data Ops 的「Trading Ready」KPI會顯示 active strategy與 `required V2 ready/total`，刷新仍為 0 provider request。
+六個 required V2 datasets 必須全部對同一 target 通過 freshness、schema 與 coverage 才能讓現行 rule-based Trading READY；其他 optional V2 dataset 的 `WAIT_PUBLISH/STALE` 不會誤擋。Scanner、Operations Status 與 Data Ops 都消費同一 readiness gate；未登記 dependency 的 executable strategy直接不合法。未來若新增 DL Trading，必須在同一 dependency registry列出實際 required V2 datasets；`coverage=NOT_EVALUATED`、`ERROR/STALE/BLOCKED` 或缺 state都 fail closed。Data Ops 的「Trading Ready」KPI顯示 active strategy與 `required V2 ready/total`，local refresh 仍為 0 provider request。
 
 ### Trading Market Data V2 Automatic Updater（Round 4）
 
@@ -471,27 +471,23 @@ required V2 datasets                         = 0
 
 Round 7 起 Windows Task Scheduler registration 由 `services/trading/market_data_scheduler.py` 正式管理，Workbench「資料中心」可安裝／更新、啟用／停用與移除 Auto Sync。預設 task 在目前 Windows 使用者登入時立即喚醒一次，之後每 15 分鐘喚醒 `apps/market_data_auto_update.py`；`StartWhenAvailable` 補跑錯過的 scheduled wake，`MultipleInstances=IgnoreNew` 配合 worker lease lock 防重疊，task action 以 hidden PowerShell launcher 執行目前 Python interpreter。排程頻率不是 provider query 頻率：沒有 dataset due 且 market-date discovery 未 due 時 provider quota 消耗必須為 0。Data Ops 把 scheduler next-run、dataset next-check 與 Trading Market Date Discovery next-probe 一起顯示；刷新頁面可查本機 Task Scheduler status，但不為 UI 額外打 FinMind `/user_info`。由於 task principal 使用 current-user `Interactive` context，正式保證是 Windows 登入後自動，不宣稱尚未登入時可執行需要網路的 FinMind workflow。
 
-### Market Data V2 Trading Compatibility Materialization（Round 6）
+### Market Data V2 Trading Legacy Retirement（Round 8）
 
-Workbench「完整更新 Trading 資料」維持原操作入口，但 provider authority 已切到 Market Data V2。正式順序固定為：
+Round 6 的 V2→Legacy 六欄 compatibility materialization 與 Round 7 暫留的 Legacy cache 已在 Round 8 正式退役。Workbench「完整更新 Trading 資料」維持相同操作入口，但目前只執行：
 
 ```text
-V2 Daily Update
+V2 Daily Update / verified historical-latest view
     ↓
-V2 historical/latest view
+V2 execution consumer-state publication
     ↓
-六欄 compatibility materialization（0 provider call）
-    ↓
-existing Trading market-data snapshot
+Trading Params / Scanner / holdings / allocator direct V2 consumers
 ```
 
-六欄 compatibility schema 仍是 `Date/Open/High/Low/Close/Volume`；共用 mapping SSOT 在 `core/market_data_ohlcv_compatibility.py`。OHLC 只來自 `TaiwanStockPriceAdj`，Volume 只來自 raw `TaiwanStockPrice.Trading_Volume`，按股票與日期精確 join。缺 Volume 不補值、不建立第二套 adjusted-price engine。Research/Trading compatibility consumer 使用同一 mapping owner。
+Trading runtime 不再建立或讀取 `data/trading/tw_stock_data_vip/*.csv`、`state/trading/market_data_snapshot.json`，也不再提供 Legacy direct-provider updater/universe/sync producer。`services/trading/market_data_update.py` 是 V2-only Full Update owner；`services/trading/market_data_consumer.py` 保存 execution pool、required positions、retained training membership 與 source-view lineage。
 
-Trading compatibility materialization 只讀已驗證的 `services/trading/market_data_v2_view.py`，本身不得建立 FinMind client。current execution pool 由當日 neutral PIT market universe + PriceAdj `Trading_Volume` + `TaiwanStockMarketValue` 依 canonical execution-screen contract 計算；materialize target = current execution pool + current positions/required tickers + 已存在 retained compatibility members。execution pool 只約束當日新 entry，不得拿來裁 historical model context。
+策略仍使用同一 canonical OHLCV 語意：`core/market_data_ohlcv_compatibility.py` 只做跨 domain 共用的 PriceAdj OHLC + raw Price Volume mapping，不是 Legacy Trading cache。Trading 刪除 Legacy materializer 不會建立第二套還原價，也不改 Research compatibility materialization。
 
-Workbench Full 會把 V2 updater 解析出的 target date 傳給 compatibility materializer。PriceAdj、raw Price、MarketValue、TradingDate、StockInfo、Delisting 等 compatibility-critical datasets 的共同 READY horizon 若未到該 target，流程直接 BLOCKED；不得用較舊資料 materialize 後仍發布 READY snapshot。其他目前 rule-based Trading 不需要的 optional V2 datasets依自己的 publication cadence 更新，不要求 51 datasets 全部同日 READY。
-
-`services/downloader/application.py::run_trading_dataset_update()` 只保留作隔離的 Legacy transition regression/history；目前 `v2_execution_cutover` lifecycle 下正式呼叫會在任何 provider/universe request 前 fail-closed，**沒有需要使用者手動執行的 Legacy downloader 指令**。長時間離線後的缺口仍由 V2 due manifest / full-market exact-date 或 dataset canonical geometry補齊，再由 compatibility materializer一次重建所需 CSV。
+Round 8 同步 bump operational lineage schema：Params binding 與 Scanner candidate/runtime 明確使用 `market_data_consumer_state_sha256` 與 `market_data_source_view_fingerprint`；舊 `market_data_snapshot_sha256` / `dataset_content_sha256` 名稱不再接受，讓舊 artifact fail-closed。
 
 ## Research Market Data V2 lifecycle（Round 16）
 

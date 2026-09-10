@@ -2584,10 +2584,7 @@ def validate_market_data_governance_contract_case(_base_params):
         MARKET_DATA_V2_TRADING_VIEW_ROLE,
         MARKET_DATA_V2_DAILY_UPDATE_ROLE,
         MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE,
-        MARKET_DATA_V2_LEGACY_TARGET_ROLE,
-        MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE,
-        MARKET_DATA_V2_LEGACY_COMPATIBILITY_OHLCV_CONTRACT,
-        MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION,
+        TRADING_MARKET_DATA_STATUS_V2_ONLY,
         build_market_data_contract_snapshot,
         get_active_research_data_generation,
         get_market_data_v2_lifecycle,
@@ -2715,23 +2712,24 @@ def validate_market_data_governance_contract_case(_base_params):
     check("v2_trading_view_is_latest_operational_view", MARKET_DATA_V2_TRADING_VIEW_ROLE, market_data_v2.trading_view_role)
     check("v2_daily_update_is_due_dataset_overlay_sync", MARKET_DATA_V2_DAILY_UPDATE_ROLE, market_data_v2.daily_update_role)
     check("v2_daily_update_target_comes_only_from_v2_state", MARKET_DATA_V2_DAILY_UPDATE_TARGET_SOURCE, market_data_v2.daily_update_target_source)
-    check("v2_daily_update_cannot_refresh_legacy_provider_truth", False, market_data_v2.daily_update_may_refresh_legacy_provider_truth)
     check("v2_daily_update_prefers_full_market_exact_date_bulk", True, market_data_v2.full_market_exact_date_bulk_preferred)
     check("v2_research_trading_share_provider_archive", True, market_data_v2.shared_provider_archive_required)
     check("v2_independent_domain_provider_redownload_is_forbidden", False, market_data_v2.independent_domain_provider_redownload_allowed)
-    check("legacy_target_is_v2_materialized_compatibility_only", MARKET_DATA_V2_LEGACY_TARGET_ROLE, market_data_v2.legacy_target_role)
-    check("legacy_target_must_derive_from_v2", True, market_data_v2.legacy_target_must_derive_from_v2)
-    check("legacy_compatibility_source_is_trading_v2_historical_latest_view", MARKET_DATA_V2_LEGACY_COMPATIBILITY_SOURCE, market_data_v2.legacy_compatibility_source)
-    check("legacy_compatibility_materialization_has_zero_provider_calls", False, market_data_v2.legacy_compatibility_provider_calls_allowed)
-    check("legacy_compatibility_uses_shared_ohlcv_contract", MARKET_DATA_V2_LEGACY_COMPATIBILITY_OHLCV_CONTRACT, market_data_v2.legacy_compatibility_ohlcv_contract)
-    check("v2_migration_phase_follows_config", str(MARKET_DATA_V2_LIFECYCLE.get("migration_phase")), market_data_v2.migration_phase)
-    transition_allows_legacy_provider = (
-        market_data_v2.migration_phase == MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION
-    )
+    check("trading_market_data_terminal_status_is_v2_only", TRADING_MARKET_DATA_STATUS_V2_ONLY, trading.status)
+    retired_lifecycle_keys = {
+        "daily_update_may_refresh_legacy_provider_truth",
+        "legacy_target_role",
+        "legacy_target_must_derive_from_v2",
+        "legacy_compatibility_source",
+        "legacy_compatibility_provider_calls_allowed",
+        "legacy_compatibility_ohlcv_contract",
+        "migration_phase",
+        "legacy_direct_provider_download_allowed_during_transition",
+    }
     check(
-        "legacy_direct_provider_permission_matches_migration_phase",
-        transition_allows_legacy_provider,
-        market_data_v2.legacy_direct_provider_download_allowed_during_transition,
+        "v2_terminal_lifecycle_has_no_legacy_or_migration_keys",
+        set(),
+        retired_lifecycle_keys.intersection(MARKET_DATA_V2_LIFECYCLE),
     )
 
     downloader_runtime = importlib.import_module("services.downloader.runtime")
@@ -2744,7 +2742,12 @@ def validate_market_data_governance_contract_case(_base_params):
     check("market_data_snapshot_exposes_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, snapshot["active_research_generation"]["generation_id"])
     check("market_data_snapshot_covers_all_declared_generations", set(RESEARCH_DATA_GENERATIONS), set(snapshot["research_generations"]))
     check("market_data_snapshot_exposes_v2_canonical_data_plane", market_data_v2.canonical_data_plane, snapshot["market_data_v2"]["canonical_data_plane"])
-    check("market_data_snapshot_exposes_v2_migration_phase", market_data_v2.migration_phase, snapshot["market_data_v2"]["migration_phase"])
+    check("market_data_snapshot_exposes_trading_v2_only_status", TRADING_MARKET_DATA_STATUS_V2_ONLY, snapshot["trading"]["status"])
+    check(
+        "market_data_snapshot_has_no_retired_v2_legacy_fields",
+        set(),
+        retired_lifecycle_keys.intersection(snapshot["market_data_v2"]),
+    )
     check("market_data_snapshot_exposes_v2_daily_update_role", market_data_v2.daily_update_role, snapshot["market_data_v2"]["daily_update_role"])
     check(
         "market_data_snapshot_exposes_neutral_historical_pit_universe_role",
@@ -2828,17 +2831,17 @@ def validate_market_data_governance_contract_case(_base_params):
     check("pool_layer_contract_has_content_identity", 64, len(market_data_pool_layer_contract_fingerprint()))
 
     pool_owner_source = (PROJECT_ROOT / "core/market_data_pool_contract.py").read_text(encoding="utf-8")
-    downloader_universe_source = (PROJECT_ROOT / "services/downloader/universe.py").read_text(encoding="utf-8")
+    trading_consumer_pool_source = (PROJECT_ROOT / "services/trading/market_data_consumer.py").read_text(encoding="utf-8")
     check(
         "pool_layer_owner_has_no_research_or_trading_service_dependency",
         False,
         any(token in pool_owner_source for token in ("from services.research", "from services.trading")),
     )
     check(
-        "legacy_current_universe_adapter_delegates_execution_screening_to_pool_owner",
+        "trading_v2_consumer_delegates_execution_screening_to_pool_owner",
         True,
-        "screen_daily_trading_execution_pool" in downloader_universe_source
-        and "missing_market_value_for_high_volume_stock" not in downloader_universe_source,
+        "screen_daily_trading_execution_pool" in trading_consumer_pool_source
+        and "missing_market_value_for_high_volume_stock" not in trading_consumer_pool_source,
     )
 
     from core.market_data_trading_view import (
@@ -2899,9 +2902,9 @@ def validate_market_data_governance_contract_case(_base_params):
 
     compat_core_source = (PROJECT_ROOT / "core/market_data_ohlcv_compatibility.py").read_text(encoding="utf-8")
     research_compat_source = (PROJECT_ROOT / "core/market_data_research_materialization.py").read_text(encoding="utf-8")
-    trading_compat_source = (PROJECT_ROOT / "services/trading/market_data_compatibility.py").read_text(encoding="utf-8")
     trading_update_source = (PROJECT_ROOT / "services/trading/market_data_update.py").read_text(encoding="utf-8")
-    legacy_application_source = (PROJECT_ROOT / "services/downloader/application.py").read_text(encoding="utf-8")
+    trading_consumer_source = (PROJECT_ROOT / "services/trading/market_data_consumer.py").read_text(encoding="utf-8")
+    trading_readiness_source = (PROJECT_ROOT / "services/trading/data_readiness.py").read_text(encoding="utf-8")
     check(
         "shared_ohlcv_compatibility_owner_maps_adjusted_ohlc_and_raw_volume_once",
         True,
@@ -2915,36 +2918,34 @@ def validate_market_data_governance_contract_case(_base_params):
         "from core.market_data_ohlcv_compatibility import" in research_compat_source,
     )
     check(
-        "trading_compatibility_consumes_v2_view_and_shared_ohlcv_mapping",
+        "trading_v2_consumer_consumes_shared_ohlcv_mapping_owner",
         True,
-        "TradingMarketDataV2View" in trading_compat_source
-        and "build_market_data_v2_ohlcv_compatibility_frame" in trading_compat_source,
+        "build_market_data_v2_ohlcv_compatibility_frame" in trading_consumer_source,
+    )
+    retired_modules = (
+        PROJECT_ROOT / "services/downloader/application.py",
+        PROJECT_ROOT / "services/trading/market_data_state.py",
+        PROJECT_ROOT / "services/trading/market_data_compatibility.py",
+    )
+    check("legacy_trading_producer_and_cache_modules_are_retired", True, all(not path.exists() for path in retired_modules))
+    check(
+        "v2_only_update_publishes_consumer_state_without_legacy_stage",
+        True,
+        "publish_trading_v2_consumer_state" in trading_update_source
+        and not any(token in trading_update_source for token in ("market_data_compatibility", "market_data_state", "run_trading_dataset_update(")),
     )
     check(
-        "trading_compatibility_has_no_direct_provider_or_legacy_universe_dependency",
+        "v2_only_readiness_has_no_legacy_snapshot_fallback",
         False,
-        any(token in trading_compat_source for token in (
-            "finmind_http", "request_finmind_data_with_retry", "smart_download_vip_data", "get_or_update_universe"
-        )),
+        any(token in trading_readiness_source for token in ("market_data_state", "execution_market_data_required", "tw_stock_data_vip")),
     )
-    if market_data_v2.migration_phase != MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION:
-        check(
-            "v2_cutover_canonical_trading_update_has_no_legacy_provider_stage",
-            False,
-            "run_trading_dataset_update(" in trading_update_source,
-        )
-        check(
-            "v2_cutover_legacy_direct_provider_entry_is_fail_closed",
-            True,
-            "migration_phase != MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION" in legacy_application_source,
-        )
 
     summary["active_research_generation"] = active.generation_id
     summary["active_research_cutoff"] = active.cutoff
     summary["research_generation_count"] = len(resolved_generations)
     summary["trading_mode"] = trading.mode
     summary["market_data_v2_canonical_data_plane"] = market_data_v2.canonical_data_plane
-    summary["market_data_v2_migration_phase"] = market_data_v2.migration_phase
+    summary["trading_market_data_status"] = trading.status
     return results, summary
 
 def validate_runtime_domain_isolation_contract_case(_base_params):

@@ -67,12 +67,11 @@ MARKET_DATA_V2_STORAGE_POLICY = {
     "minimum_staging_headroom_bytes": 64 * 1024**2,
 }
 
-# Final V2 data-plane target plus the truthful current migration phase.  The
-# neutral Provider Archive is the one long-term provider-data SSOT shared by
-# Research and Trading.  Domain-specific consumers may expose different views
-# (frozen scientific vs latest operational), but must not create independent
-# provider-history truths.  Legacy direct-provider CSV remains temporarily
-# allowed only because current execution consumers have not yet migrated.
+# Market Data V2 terminal data-plane contract.  The neutral Provider Archive is
+# the one long-term provider-data SSOT shared by Research and Trading.
+# Domain-specific consumers may expose different views (frozen scientific vs
+# latest operational), but must not create independent provider-history truths.
+# Production Trading is V2-only; Legacy Trading CSV/snapshot is retired.
 MARKET_DATA_V2_LIFECYCLE = {
     "canonical_data_plane": "market_data_v2",
     "provider_archive_role": "neutral_provider_ssot",
@@ -90,34 +89,23 @@ MARKET_DATA_V2_LIFECYCLE = {
     "current_execution_pool_may_define_historical_training_universe": False,
     "research_view_role": "frozen_scientific_view",
     "trading_view_role": "latest_operational_view",
-    # Daily provider refresh is owned by the V2 due-dataset updater.  It must
-    # derive its target from V2 Provider Snapshot / overlay operational state
-    # and must not advance or refresh legacy provider truth as a side effect.
+    # Daily provider refresh is owned by the V2 due-dataset updater and derives
+    # its target only from V2 Provider Snapshot / overlay operational state.
     "daily_update_role": "v2_due_dataset_overlay_sync",
     "daily_update_target_source": "v2_provider_snapshot_plus_operational_state",
-    "daily_update_may_refresh_legacy_provider_truth": False,
     "full_market_exact_date_bulk_preferred": True,
     "shared_provider_archive_required": True,
     "independent_domain_provider_redownload_allowed": False,
-    "legacy_target_role": "v2_materialized_compatibility_only",
-    "legacy_target_must_derive_from_v2": True,
-    "legacy_compatibility_source": "trading_market_data_v2_historical_latest_view",
-    "legacy_compatibility_provider_calls_allowed": False,
-    "legacy_compatibility_ohlcv_contract": "market_data_v2_shared_adjusted_ohlcv",
-    "migration_phase": "v2_execution_cutover",
-    "legacy_direct_provider_download_allowed_during_transition": False,
 }
 
 TRADING_MARKET_DATA_LIFECYCLE = {
     "mode": "incremental_latest",
     "provider_archive_source": "market_data_v2_provider_snapshot",
-    # Compatibility metadata retained during migration; provider/archive truth
-    # is no longer semantically owned by a Research generation.
+    # Historical bootstrap provenance remains explicit; provider/archive truth
+    # is neutral and is not semantically owned by a Research generation.
     "bootstrap_source_generation": RESEARCH_DATA_GENERATION_V2,
-    # Existing execution consumers may still read the six-column CSV path, but the
-    # CSV is now a V2-derived compatibility materialization.  Direct V2 consumer
-    # migration remains a later round; provider truth has already cut over.
-    "status": "v2_authoritative_with_legacy_compatibility_consumers",
+    # Round 8 terminal state: production Trading is V2-only.
+    "status": "v2_only",
 }
 
 # Trading Market Data V2 archive synchronization is operational only; these
