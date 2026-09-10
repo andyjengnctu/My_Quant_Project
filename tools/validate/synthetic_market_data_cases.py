@@ -5102,6 +5102,7 @@ def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
         try:
             downloader_universe._load_finmind_bulk_screening_data(
                 market_date="2026-09-09",
+                universe_ticker_ids={"2330", "2317"},
                 client=partial_provider,
             )
         except RuntimeError as exc:
@@ -5111,7 +5112,46 @@ def validate_trading_price_end_to_end_completeness_contract_case(_base_params):
             partial_exact_rejected = False
             partial_exact_reason = ""
     check("raw_exact_date_ticker_evidence_rejects_partial_priceadj_payload", True, partial_exact_rejected)
-    check("partial_priceadj_rejection_names_ticker_completeness", True, "traded ticker" in partial_exact_reason)
+    check("partial_priceadj_rejection_names_ticker_completeness", True, "current TWSE/TPEX stock/ETF universe" in partial_exact_reason)
+
+    class _OutOfUniverseRawTickerProvider:
+        def get_data(self, **kwargs):
+            dataset = kwargs.get("dataset")
+            if dataset == downloader_runtime.FINMIND_UNIVERSE_VOLUME_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-09-09"],
+                    "stock_id": ["2330"],
+                    "Trading_Volume": [2_000_000],
+                })
+            if dataset == FINMIND_RAW_PRICE_ARCHIVE_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-09-09", "2026-09-09"],
+                    "stock_id": ["2330", "030004"],
+                })
+            if dataset == downloader_runtime.FINMIND_UNIVERSE_MARKET_VALUE_DATASET:
+                return pd.DataFrame({
+                    "date": ["2026-09-09"],
+                    "stock_id": ["2330"],
+                    "market_value": [1e12],
+                })
+            raise AssertionError(f"unexpected exact-date dataset: {kwargs}")
+
+    with patch.object(downloader_runtime, "append_downloader_issues", return_value=None):
+        scoped_price, scoped_market_value = downloader_universe._load_finmind_bulk_screening_data(
+            market_date="2026-09-09",
+            universe_ticker_ids={"2330"},
+            client=_OutOfUniverseRawTickerProvider(),
+        )
+    check(
+        "raw_non_stock_etf_ticker_does_not_expand_priceadj_completeness_scope",
+        ["2330"],
+        scoped_price["stock_id"].astype(str).tolist(),
+    )
+    check(
+        "raw_non_stock_etf_ticker_preserves_market_value_payload",
+        ["2330"],
+        scoped_market_value["stock_id"].astype(str).tolist(),
+    )
 
     class _CalendarOnlyProvider:
         def __init__(self):
@@ -5436,6 +5476,7 @@ def validate_trading_execution_finmind_retry_contract_case(_base_params):
     with patch("services.downloader.finmind_http.time.sleep", return_value=None):
         price_frame, market_value_frame = downloader_universe._load_finmind_bulk_screening_data(
             market_date="2026-09-09",
+            universe_ticker_ids={"2330"},
             client=universe_shared,
         )
     check("universe_exact_date_reuses_bounded_retry_contract", ["2330"], price_frame["stock_id"].astype(str).tolist())

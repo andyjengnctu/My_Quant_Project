@@ -58,8 +58,8 @@ def get_market_last_date(*, client=None):
     )
 
 
-UNIVERSE_CACHE_SCHEMA_VERSION = 3
-UNIVERSE_SCREENING_CONTRACT = "finmind_backer_bulk_exact_market_date_volume_market_value_v1"
+UNIVERSE_CACHE_SCHEMA_VERSION = 4
+UNIVERSE_SCREENING_CONTRACT = "finmind_backer_bulk_exact_market_date_volume_market_value_v2"
 
 
 def _universe_contract_identity() -> dict[str, object]:
@@ -193,7 +193,12 @@ def _normalize_exact_date_ticker_evidence(
     return set(normalized["stock_id"].astype(str).tolist())
 
 
-def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _load_finmind_bulk_screening_data(
+    *,
+    market_date: str,
+    universe_ticker_ids: set[str] | list[str] | tuple[str, ...],
+    client=None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     target_date = str(pd.Timestamp(market_date).date())
     try:
         if client is None:
@@ -244,11 +249,16 @@ def _load_finmind_bulk_screening_data(*, market_date: str, client=None) -> tuple
             dataset=FINMIND_RAW_PRICE_ARCHIVE_DATASET,
             market_date=target_date,
         )
+        current_universe_ids = {str(sid).strip() for sid in universe_ticker_ids if str(sid).strip()}
+        if not current_universe_ids:
+            raise ValueError("TWSE/TPEX current stock/ETF universe 為空，無法驗證 PriceAdj completeness")
         adjusted_ids = set(price["stock_id"].astype(str).tolist())
-        missing_adjusted = sorted(raw_traded_ids - adjusted_ids)
+        required_traded_ids = raw_traded_ids & current_universe_ids
+        missing_adjusted = sorted(required_traded_ids - adjusted_ids)
         if missing_adjusted:
             raise ValueError(
-                "FinMind TaiwanStockPriceAdj exact-date payload 缺少 TaiwanStockPrice 已確認 traded ticker；"
+                "FinMind TaiwanStockPriceAdj exact-date payload 缺少 current TWSE/TPEX stock/ETF universe 中，"
+                "已由 TaiwanStockPrice 確認成交的 ticker；"
                 f"count={len(missing_adjusted)} sample={missing_adjusted[:20]}"
             )
         market_value = _normalize_finmind_bulk_screening_frame(
@@ -396,9 +406,13 @@ def get_or_update_universe(*, market_date: str, client=None):
     total_check = len(tickers_info)
     print(
         f"⏳ FinMind Backer bulk 快篩 {total_check} 檔純股與 ETF："
-        f"PriceAdj 成交量 + raw ticker completeness evidence + 全市場市值，共 3 個 dataset requests..."
+        f"PriceAdj 成交量 + raw current-universe ticker completeness evidence + 全市場市值，共 3 個 dataset requests..."
     )
-    price, market_value = _load_finmind_bulk_screening_data(market_date=market_date_text, client=client)
+    price, market_value = _load_finmind_bulk_screening_data(
+        market_date=market_date_text,
+        universe_ticker_ids={str(item.get("sid") or "").strip() for item in tickers_info},
+        client=client,
+    )
     try:
         qualified_tickers, stats = _screen_finmind_bulk_universe(
             tickers_info, price=price, market_value=market_value
