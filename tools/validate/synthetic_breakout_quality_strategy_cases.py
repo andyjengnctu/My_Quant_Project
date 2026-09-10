@@ -1305,6 +1305,18 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     strategy_dashboard_source = (project_root / "core/strategy_dashboard.py").read_text(encoding="utf-8")
     optimizer_callbacks_source = (project_root / "services/optimizer/callbacks.py").read_text(encoding="utf-8")
     outer_roos_source = (project_root / "services/optimizer/outer_rolling_oos.py").read_text(encoding="utf-8")
+    from core.report_style import signal_for_signed_value as canonical_signal_for_signed_value
+    from core.report_style import terminal_signal as canonical_terminal_signal
+    from services.optimizer.outer_rolling_oos import _color_numeric_text as outer_rolling_color_numeric_text
+
+    outer_rolling_uses_project_wide_color_semantics = (
+        outer_rolling_color_numeric_text("+1.00", 1.0)
+        == canonical_terminal_signal(
+            "+1.00",
+            canonical_signal_for_signed_value(1.0),
+            enabled=True,
+        )
+    )
     render_report_source = comparison_source[
         comparison_source.index("def render_strategy_aggregate_report("):
         comparison_source.index("def _run_directory(")
@@ -2195,7 +2207,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "from core.report_style import" in model_report_source
                 and "from core.report_style import" in strategy_dashboard_source
                 and "from core.report_style import" in optimizer_callbacks_source
-                and "from core.report_style import" in outer_roos_source
+                and outer_rolling_uses_project_wide_color_semantics
                 and "SIGNAL_POSITIVE" in report_style_source
                 and "markdown_signal" in report_style_source
                 and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪")),
