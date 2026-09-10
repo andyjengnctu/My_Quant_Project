@@ -983,7 +983,7 @@ def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> d
 
 
 def _render_nonrolling_single_fold_progress_line(walk_forward_policy: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None) -> str:
-    from services.optimizer.outer_rolling_oos import render_optimizer_fold_progress_line
+    from services.optimizer.outer_rolling_progress import render_optimizer_fold_progress_line
 
     context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
     return render_optimizer_fold_progress_line(
@@ -1123,7 +1123,7 @@ def _make_nonrolling_seed_trial_progress_callback(
 
 
 def _emit_nonrolling_seed_process_progress_event(task: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None, **extra_payload) -> None:
-    from services.optimizer.outer_rolling_oos import write_optimizer_seed_progress_event
+    from services.optimizer.outer_rolling_progress import write_optimizer_seed_progress_event
 
     context = dict((task or {}).get("progress_context") or {})
     member_index = int((task or {}).get("member_index", 0) or 0)
@@ -2117,7 +2117,8 @@ def _run_nonrolling_random_seed_ensemble_training(
             policy_members_by_policy.setdefault(str(policy_name), []).append(dict(member))
 
     if compact_display:
-        from services.optimizer.outer_rolling_oos import OptimizerSeedEnsembleProgressBoard, format_optimizer_seed_ensemble_progress_header
+        from services.optimizer.outer_rolling_oos import OptimizerSeedEnsembleProgressBoard
+        from services.optimizer.outer_rolling_progress import format_optimizer_seed_ensemble_progress_header
 
         period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
         contexts = []
@@ -2157,7 +2158,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         )
         progress_board.render(force=True)
     else:
-        from services.optimizer.outer_rolling_oos import format_optimizer_seed_ensemble_progress_header
+        from services.optimizer.outer_rolling_progress import format_optimizer_seed_ensemble_progress_header
         print(f"{C_GRAY}{format_optimizer_seed_ensemble_progress_header(folds=1, seeds=len(seeds), min_agree=int(policy['min_agree']), parallel_workers=int(parallel_workers), backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0, completed_trials=0)}{C_RESET}")
     configure_optuna_logging()
 
@@ -2335,7 +2336,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     def _refresh_process_progress_board(*, force: bool = False) -> None:
         if not compact_display or progress_board is None or not process_log_paths:
             return
-        from services.optimizer.outer_rolling_oos import read_optimizer_seed_progresses_from_log_paths
+        from services.optimizer.outer_rolling_progress import read_optimizer_seed_progresses_from_log_paths
 
         latest = read_optimizer_seed_progresses_from_log_paths(process_log_paths.values())
         if not latest:
@@ -2538,7 +2539,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 force=True,
             )
     resource_sampler.stop()
-    from services.optimizer.outer_rolling_oos import format_optimizer_final_performance_summary
+    from services.optimizer.outer_rolling_progress import format_optimizer_final_performance_summary
 
     if progress_board is not None:
         completed_trials = progress_board.get_completed_trial_count()
