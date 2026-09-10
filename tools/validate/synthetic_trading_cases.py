@@ -333,6 +333,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
 
     with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
          patch.object(downloader_application, "get_or_update_universe", return_value=["2330", "2454"]), \
+         patch.object(downloader_application, "resolve_trading_dataset_member_tickers", return_value=[]), \
          patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
          patch.object(downloader_application, "smart_download_vip_data", return_value={
              "total": 2,
@@ -352,6 +353,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
         return {"total": len(tickers), "count_success": len(tickers), "count_skipped_latest": 0, "last_date_check_error_count": 0, "download_error_count": 0, "issue_log_path": None}
     with patch.object(downloader_application, "get_market_last_date", return_value="2026-09-04"), \
          patch.object(downloader_application, "get_or_update_universe", return_value=["2330"]), \
+         patch.object(downloader_application, "resolve_trading_dataset_member_tickers", return_value=[]), \
          patch.object(downloader_application, "inspect_local_price_freshness", return_value=type("F", (), {"stale": (), "unreadable": ()})()), \
          patch.object(downloader_application, "smart_download_vip_data", side_effect=_capture_required_download):
         required_result = downloader_application.run_trading_dataset_update(required_tickers=["9999", "2330"])
