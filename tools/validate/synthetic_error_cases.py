@@ -339,12 +339,53 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
     results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
     issue_sections = []
+
+    # Parser regression: do not depend on decoded Chinese header names.
+    positional_table = pd.DataFrame([
+        ["2330 台積電", "x", "x", "x", "x", "ESVUFR", ""],
+        ["0050 元大台灣50", "x", "x", "x", "x", "CEOGEU", ""],
+        ["030004 權證", "x", "x", "x", "x", "RWXXXX", ""],
+    ], columns=["garbled-0", "garbled-1", "garbled-2", "garbled-3", "garbled-4", "garbled-5", "garbled-6"])
+    with patch.object(universe.pd, "read_html", return_value=[positional_table]):
+        parsed = universe._parse_isin_universe_html("<html></html>")
+    check("isin_parser_uses_positional_contract_not_localized_headers", [
+        {"sid": "2330", "is_etf": False},
+        {"sid": "0050", "is_etf": True},
+    ], parsed)
+
+    class _GoodResponse:
+        text = "<html></html>"
+        encoding = None
+        def raise_for_status(self):
+            return None
+
+    # A transient request failure must retry with browser-compatible headers and recover.
+    transient_calls = []
+    good_response = _GoodResponse()
+    transient_responses = [requests.RequestException("temporary block"), good_response]
+    def _transient_get(url, **kwargs):
+        transient_calls.append((url, dict(kwargs)))
+        value = transient_responses.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    with patch.object(universe.requests, "get", side_effect=_transient_get), \
+         patch.object(universe, "_parse_isin_universe_html", return_value=[{"sid": "2330", "is_etf": False}]), \
+         patch.object(universe.rt.time, "sleep", return_value=None):
+        recovered = universe._fetch_isin_universe_source("https://isin.twse.com.tw/isin/C_public.jsp?strMode=2")
+    check("isin_transient_failure_is_retried", 2, len(transient_calls))
+    check("isin_retry_recovers_membership", [{"sid": "2330", "is_etf": False}], recovered)
+    check("isin_fetch_sends_browser_user_agent", True, all(bool(call[1].get("headers", {}).get("User-Agent")) for call in transient_calls))
+    check("isin_fetch_sets_cp950_decoding", "cp950", good_response.encoding)
+
     with tempfile.TemporaryDirectory(prefix="v16_downloader_universe_fetch_") as tmp_dir:
         tmp_root = Path(tmp_dir)
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
              patch.object(universe.rt, "SAVE_DIR", str(tmp_root)), \
              patch.object(universe.rt.os.path, "exists", return_value=False), \
              patch.object(universe.requests, "get", side_effect=requests.RequestException("twse down")), \
+             patch.object(universe.rt.time, "sleep", return_value=None), \
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
             try:
                 universe.get_or_update_universe(market_date="2026-04-03")
@@ -355,23 +396,11 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
                 check("universe_fetch_failure_logs_issues", True, any(section == "名單來源失敗" and "twse down" in "\n".join(lines) for section, lines in issue_sections))
 
         partial_issue_sections = []
-        table = pd.DataFrame({
-            "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電"],
-            "CFICode": ["CFICode", "skip", "ESVUFR"],
-        })
-
-        class _GoodResponse:
-            text = "<html></html>"
-            def raise_for_status(self):
-                return None
-
-        responses = [_GoodResponse(), requests.RequestException("tpex down")]
-        cache_path = tmp_root / "universe_list.txt"
+        source_rows = [{"sid": "2330", "is_etf": False}]
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
-             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(tmp_root / "universe_cache_v3.json")), \
              patch.object(universe.rt.os.path, "exists", return_value=False), \
-             patch.object(universe.requests, "get", side_effect=responses), \
-             patch.object(universe.pd, "read_html", return_value=[table]), \
+             patch.object(universe, "_fetch_isin_universe_source", side_effect=[source_rows, ValueError("tpex down")]), \
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: partial_issue_sections.append((section, list(lines)))):
             try:
                 universe.get_or_update_universe(market_date="2026-04-03")
@@ -383,12 +412,24 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
 
         check("partial_twse_tpex_source_failure_is_fail_closed", True, partial_rejected)
         check("partial_source_failure_reports_incomplete_universe", True, "universe 來源不完整" in partial_message)
-        check("partial_source_failure_never_publishes_cache", False, cache_path.exists())
+        check("partial_source_failure_never_publishes_cache", False, (tmp_root / "universe_cache_v3.json").exists())
         check("partial_source_failure_logs_failed_source", True, any(section == "名單來源失敗" and "tpex down" in "\n".join(lines) for section, lines in partial_issue_sections))
+
+        empty_issue_sections = []
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "get_universe_list_file_path", return_value=str(tmp_root / "universe_cache_empty.json")), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
+             patch.object(universe, "_fetch_isin_universe_source", side_effect=[[], [{"sid": "0050", "is_etf": True}]]), \
+             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: empty_issue_sections.append((section, list(lines)))):
+            try:
+                universe.get_or_update_universe(market_date="2026-04-03")
+                empty_source_rejected = False
+            except RuntimeError:
+                empty_source_rejected = True
+        check("empty_one_market_source_is_fail_closed", True, empty_source_rejected)
 
     summary["issue_section_count"] = len(issue_sections)
     return results, summary
-
 
 def validate_downloader_universe_screening_init_error_path_case(base_params):
     from services.downloader import universe
@@ -398,19 +439,12 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
 
     issue_sections = []
 
-    twse_table = pd.DataFrame({
-        "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電", "2317 鴻海", "9999 停牌股"],
-        "CFICode": ["CFICode", "skip", "ESVUFR", "ESVUFR", "ESVUFR"],
-    })
-    tpex_table = pd.DataFrame({
-        "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "0050 元大台灣50"],
-        "CFICode": ["CFICode", "skip", "CEOGEU"],
-    })
-
-    class _Response:
-        text = "<html></html>"
-        def raise_for_status(self):
-            return None
+    twse_rows = [
+        {"sid": "2330", "is_etf": False},
+        {"sid": "2317", "is_etf": False},
+        {"sid": "9999", "is_etf": False},
+    ]
+    tpex_rows = [{"sid": "0050", "is_etf": True}]
 
     class _BulkLoader:
         def __init__(self, *, fail_dataset=None, missing_market_value=False):
@@ -452,8 +486,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
              patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
              patch.object(universe.rt.os.path, "exists", return_value=False), \
-             patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe, "_fetch_isin_universe_source", side_effect=[twse_rows, tpex_rows]), \
              patch.object(universe.rt, "get_finmind_loader", side_effect=ModuleNotFoundError("no module named FinMind")), \
              patch.object(universe.rt, "get_yfinance_module", side_effect=AssertionError("YFinance must not be used for universe screening")), \
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
@@ -475,8 +508,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
              patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
              patch.object(universe.rt.os.path, "exists", return_value=False), \
-             patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe, "_fetch_isin_universe_source", side_effect=[twse_rows, tpex_rows]), \
              patch.object(universe.rt, "get_finmind_loader", return_value=failing_loader), \
              patch.object(universe.rt, "get_yfinance_module", side_effect=AssertionError("YFinance must not be used for universe screening")), \
              patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
@@ -492,8 +524,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
              patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
              patch.object(universe.rt.os.path, "exists", return_value=False), \
-             patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe, "_fetch_isin_universe_source", side_effect=[twse_rows, tpex_rows]), \
              patch.object(universe.rt, "get_finmind_loader", return_value=good_loader), \
              patch.object(universe.rt, "get_yfinance_module", side_effect=AssertionError("YFinance must not be used for universe screening")), \
              patch.object(universe.rt, "MIN_VOLUME", 1_000), \
@@ -538,8 +569,7 @@ def validate_downloader_universe_screening_init_error_path_case(base_params):
         with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
              patch.object(universe.rt, "get_universe_list_file_path", return_value=str(cache_path)), \
              patch.object(universe.rt.os.path, "exists", return_value=False), \
-             patch.object(universe.requests, "get", return_value=_Response()), \
-             patch.object(universe.pd, "read_html", side_effect=[[twse_table], [tpex_table]]), \
+             patch.object(universe, "_fetch_isin_universe_source", side_effect=[twse_rows, tpex_rows]), \
              patch.object(universe.rt, "get_finmind_loader", return_value=missing_cap_loader), \
              patch.object(universe.rt, "MIN_VOLUME", 1_000), \
              patch.object(universe.rt, "MIN_MARKET_CAP", 1_000_000_000):

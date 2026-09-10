@@ -15,6 +15,85 @@ from services.downloader import runtime as rt
 from services.downloader.finmind_http import FinMindHttpError, request_finmind_data_with_retry
 
 
+_UNIVERSE_SOURCE_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+}
+_UNIVERSE_SOURCE_ENCODING = "cp950"
+_UNIVERSE_SOURCE_MAX_ATTEMPTS = 3
+_UNIVERSE_SOURCE_RETRY_DELAYS_SEC = (1.0, 3.0)
+
+
+def _parse_isin_universe_html(html: str) -> list[dict[str, object]]:
+    """Parse TWSE ISIN stock/ETF rows without depending on localized headers."""
+
+    tables = pd.read_html(StringIO(str(html)))
+    if not tables:
+        raise ValueError("TWSE ISIN 回應不含可解析 table")
+    frame = tables[0]
+    # The ISIN table contract exposes security code/name in column 0 and
+    # CFICode in column 5.  Positional parsing intentionally avoids coupling
+    # Trading runtime to the MS950-decoded Chinese header labels.
+    if frame.shape[1] < 6:
+        raise ValueError(f"TWSE ISIN table 欄位不足: columns={frame.shape[1]}")
+
+    code_name = frame.iloc[:, 0].astype("string")
+    cfi_code = frame.iloc[:, 5].astype("string").str.strip().str.upper()
+    eligible = cfi_code.str.startswith("ES", na=False) | cfi_code.str.startswith("CE", na=False)
+    if not bool(eligible.any()):
+        raise ValueError("TWSE ISIN table 未解析到任何 ES/CE 股票或 ETF")
+
+    result: list[dict[str, object]] = []
+    for raw_code_name, raw_cfi in zip(code_name.loc[eligible], cfi_code.loc[eligible]):
+        token = str(raw_code_name or "").strip().split()
+        if not token or token[0].lower() in {"nan", "<na>"}:
+            continue
+        result.append({
+            "sid": token[0],
+            "is_etf": str(raw_cfi).startswith("CE"),
+        })
+    if not result:
+        raise ValueError("TWSE ISIN ES/CE rows 缺少可用 security id")
+    return result
+
+
+def _fetch_isin_universe_source(url: str) -> list[dict[str, object]]:
+    """Fetch one TWSE/TPEX ISIN source with bounded transient retry."""
+
+    failures: list[str] = []
+    last_exc: BaseException | None = None
+    for attempt in range(1, _UNIVERSE_SOURCE_MAX_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                url,
+                headers=_UNIVERSE_SOURCE_HTTP_HEADERS,
+                timeout=rt.REQUEST_TIMEOUT_SEC,
+            )
+            response.raise_for_status()
+            # ISIN pages declare MS950; cp950 is Python's compatible codec.
+            response.encoding = _UNIVERSE_SOURCE_ENCODING
+            rows = _parse_isin_universe_html(response.text)
+            if not rows:
+                raise ValueError("TWSE ISIN source 解析結果為空")
+            return rows
+        except rt.EXPECTED_UNIVERSE_FETCH_EXCEPTIONS as exc:
+            last_exc = exc
+            failures.append(f"attempt={attempt} {type(exc).__name__}: {exc}")
+            if attempt >= _UNIVERSE_SOURCE_MAX_ATTEMPTS:
+                break
+            delay = _UNIVERSE_SOURCE_RETRY_DELAYS_SEC[
+                min(attempt - 1, len(_UNIVERSE_SOURCE_RETRY_DELAYS_SEC) - 1)
+            ]
+            rt.time.sleep(float(delay))
+
+    detail = " | ".join(failures)
+    raise ValueError(
+        f"TWSE ISIN source 在 {_UNIVERSE_SOURCE_MAX_ATTEMPTS} 次嘗試後仍失敗: {detail}"
+    ) from last_exc
+
+
 def get_market_last_date(*, client=None):
     print("🕵️‍♂️ 正在確認最新交易日...")
     try:
@@ -360,7 +439,7 @@ def get_or_update_universe(*, market_date: str, client=None):
 
     urls = [
         "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
-        "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
+        "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",
     ]
 
     tickers_info = []
@@ -368,23 +447,10 @@ def get_or_update_universe(*, market_date: str, client=None):
 
     for url in urls:
         try:
-            res = requests.get(url, timeout=rt.REQUEST_TIMEOUT_SEC)
-            res.raise_for_status()
-
-            df = pd.read_html(StringIO(res.text))[0]
-            df.columns = df.iloc[0]
-            df = df.iloc[2:]
-
-            mask = df['CFICode'].str.startswith('ES', na=False) | df['CFICode'].str.startswith('CE', na=False)
-            df = df[mask]
-
-            for _, row in df.iterrows():
-                code_name = str(row['有價證券代號及名稱']).split()
-                if len(code_name) >= 2:
-                    sid = code_name[0]
-                    is_etf = str(row['CFICode']).startswith('CE')
-                    tickers_info.append({"sid": sid, "is_etf": is_etf})
-
+            source_rows = _fetch_isin_universe_source(url)
+            if not source_rows:
+                raise ValueError("TWSE/TPEX ISIN source 解析結果為空")
+            tickers_info.extend(source_rows)
         except rt.EXPECTED_UNIVERSE_FETCH_EXCEPTIONS as e:
             universe_fetch_errors.append(f"{url} -> {type(e).__name__}: {e}")
             if rt.VERBOSE_UNIVERSE_FETCH_ERRORS:
