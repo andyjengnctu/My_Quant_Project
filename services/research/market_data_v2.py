@@ -7,7 +7,6 @@ active/frozen Research truth is intentionally outside this module.
 """
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime
 import hashlib
@@ -32,8 +31,8 @@ from core.market_data_research_promotion import get_effective_research_data_gene
 from core.market_data_instrument_universe import (
     build_historical_market_state_guard,
     historical_market_state_guard_fingerprint,
-    is_historical_market_state_eligible,
 )
+from core.market_data_pit_universe import make_daily_pit_market_universe_guard
 from core.market_data_adjusted_price_revision_proof import (
     ADJUSTED_PRICE_REVISION_STATUS_READY,
 )
@@ -102,10 +101,15 @@ from core.market_data_research_v2 import (
     validate_research_v2_candidate_contract,
     validate_research_v2_required_cutoff,
 )
-from core.market_data_storage_contract import resolve_market_data_request_parquet_path
+from core.market_data_storage_contract import resolve_market_data_daily_pit_universe_path
 from services.market_data.provider_snapshot_repository import (
     ReadyProviderSnapshotArchive,
     load_ready_provider_snapshot_archive,
+)
+from services.market_data.provider_snapshot_view import ProviderSnapshotView
+from services.market_data.daily_pit_universe import (
+    build_market_data_v2_daily_pit_universe,
+    load_market_data_v2_daily_pit_universe,
 )
 from services.research.adjusted_price_revision_proof import (
     build_adjusted_price_revision_proof,
@@ -130,54 +134,25 @@ class ResearchV2ProviderView:
     ):
         self.project_root = Path(project_root).resolve()
         self.archive = archive
-        self._frame_reader = frame_reader or self._read_parquet
-        self._hash_fn = hash_fn or compute_file_sha256
-        self._artifacts_by_dataset: dict[str, tuple] = {}
-        grouped: dict[str, list] = defaultdict(list)
-        for item in archive.artifacts:
-            grouped[item.dataset].append(item)
-        self._artifacts_by_dataset = {key: tuple(value) for key, value in grouped.items()}
+        self._snapshot_view = ProviderSnapshotView(
+            project_root=self.project_root,
+            archive=archive,
+            frame_reader=frame_reader,
+            hash_fn=hash_fn,
+        )
         self._assessment_by_dataset = {row.dataset: row for row in build_research_v2_dataset_assessments()}
         self._scope_by_dataset = {row.dataset: row for row in build_research_v2_dataset_scope_contracts()}
-
-    @staticmethod
-    def _read_parquet(path: Path, columns: tuple[str, ...] | None) -> pd.DataFrame:
-        if not columns:
-            return pd.read_parquet(path)
-        try:
-            import pyarrow.parquet as pq
-        except ImportError as exc:
-            raise RuntimeError("Research V2 Parquet read 需要 pyarrow") from exc
-        parquet = pq.ParquetFile(path)
-        names = tuple(str(name) for name in parquet.schema_arrow.names)
-        missing = [column for column in columns if column not in names]
-        if missing:
-            if int(parquet.metadata.num_rows) == 0 and not names:
-                return pd.DataFrame(columns=list(columns))
-            raise ValueError(f"Provider Snapshot parquet 缺少欄位: {missing}")
-        return pd.read_parquet(path, columns=list(columns))
 
     def dataset_artifacts(self, dataset: str):
         name = str(dataset or "").strip()
         if name not in self._assessment_by_dataset:
             raise ValueError(f"Research V2 未登記 dataset: {name}")
-        return self._artifacts_by_dataset.get(name, ())
+        return self._snapshot_view.dataset_artifacts(name)
 
     def historical_instruments(self) -> tuple[str, ...]:
-        ids = sorted(
-            {
-                str(item.data_id or "").strip()
-                for item in self.dataset_artifacts(RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET)
-                if str(item.data_id or "").strip()
-            }
+        return self._snapshot_view.historical_instruments(
+            source_dataset=RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET
         )
-        expected = int(self.archive.payload.get("historical_instrument_count") or 0)
-        if len(ids) != expected:
-            raise ValueError(
-                "Research V2 historical instrument pool 與 Provider Snapshot 不一致: "
-                f"actual={len(ids)}, expected={expected}"
-            )
-        return tuple(ids)
 
     def historical_market_state_guard(
         self, *, historical_instruments: tuple[str, ...]
@@ -213,27 +188,11 @@ class ResearchV2ProviderView:
         name = str(dataset or "").strip()
         if name not in self._assessment_by_dataset:
             raise ValueError(f"Research V2 未登記 dataset: {name}")
-        wanted_data_id = None if data_id is None else str(data_id).strip()
-        for artifact in self.dataset_artifacts(name):
-            if wanted_data_id is not None and str(artifact.data_id or "").strip() != wanted_data_id:
-                continue
-            request = artifact.to_request()
-            path = resolve_market_data_request_parquet_path(
-                self.project_root,
-                self.archive.manifest_fingerprint,
-                request,
-            )
-            if not path.is_file():
-                raise FileNotFoundError(
-                    f"Provider Snapshot artifact 不存在: {project_relative_display_path(path, project_root=self.project_root)}"
-                )
-            actual_hash = str(self._hash_fn(path) or "").strip().lower()
-            if actual_hash != artifact.content_sha256:
-                raise ValueError(f"Provider Snapshot artifact SHA256 drift: {request.request_id}")
-            frame = self._frame_reader(path, columns)
-            if not isinstance(frame, pd.DataFrame):
-                raise TypeError("Research V2 provider frame reader 必須回傳 pandas.DataFrame")
-            yield frame
+        yield from self._snapshot_view.iter_verified_frames(
+            name,
+            columns=columns,
+            data_id=data_id,
+        )
 
     def iter_dataset_frames(
         self,
@@ -577,6 +536,8 @@ def _build_exact_candidate_sqlite(
     output_path: Path,
     research_cutoff: str,
     research_scope_contract_fingerprint: str,
+    neutral_daily_pit_universe_path: Path,
+    neutral_daily_pit_universe_manifest: dict[str, object],
 ) -> tuple[dict[str, object], pd.DataFrame]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=".daily_universe.", suffix=".sqlite3.tmp", dir=str(output_path.parent))
@@ -588,44 +549,50 @@ def _build_exact_candidate_sqlite(
             _init_universe_db(conn)
             cutoff = str(research_cutoff)
             provider_as_of = view.archive.as_of_date
-            trading_rows: set[str] = set()
-            for frame in view.iter_dataset_scope_frames(RESEARCH_V2_TRADING_CALENDAR_DATASET, columns=("date",)):
-                if "date" not in frame.columns:
-                    raise ValueError("TaiwanStockTradingDate 缺少 date")
-                dates = pd.to_datetime(frame["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-                trading_rows.update(str(value) for value in dates.dropna().tolist() if str(value) <= cutoff)
+            if str(neutral_daily_pit_universe_manifest.get("provider_snapshot_fingerprint") or "") != view.archive.snapshot_fingerprint:
+                raise ValueError("Research V2 neutral daily PIT universe Provider Snapshot identity drift")
+            if str(neutral_daily_pit_universe_manifest.get("provider_as_of_date") or "") != provider_as_of:
+                raise ValueError("Research V2 neutral daily PIT universe provider as-of drift")
+
+            conn.execute("ATTACH DATABASE ? AS neutral_pit", (str(neutral_daily_pit_universe_path),))
+            conn.execute(
+                "INSERT OR IGNORE INTO trading_dates(date) "
+                "SELECT date FROM neutral_pit.trading_dates WHERE date <= ? ORDER BY date",
+                (cutoff,),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO daily_universe(date, stock_id) "
+                "SELECT date, stock_id FROM neutral_pit.daily_universe WHERE date <= ? ORDER BY date, stock_id",
+                (cutoff,),
+            )
+            trading_rows = {str(row[0]) for row in conn.execute("SELECT date FROM trading_dates ORDER BY date")}
             if not trading_rows:
-                raise ValueError("Research V2 trading calendar evidence 不可為空")
-            conn.executemany("INSERT OR IGNORE INTO trading_dates(date) VALUES (?)", ((value,) for value in sorted(trading_rows)))
+                raise ValueError("Research V2 neutral daily PIT trading calendar projection 不可為空")
+            if int(conn.execute("SELECT COUNT(*) FROM daily_universe").fetchone()[0]) <= 0:
+                raise ValueError("Research V2 neutral daily PIT universe cutoff projection 不可為空")
 
             historical_instruments = view.historical_instruments()
-            historical_pool = set(historical_instruments)
             transition_excluded_through, market_state_guard_fingerprint = view.historical_market_state_guard(
                 historical_instruments=historical_instruments
             )
+            if market_state_guard_fingerprint != str(
+                neutral_daily_pit_universe_manifest.get("historical_market_state_guard_fingerprint") or ""
+            ):
+                raise ValueError("Research V2 neutral daily PIT universe market-state guard drift")
+            eligibility_guard = make_daily_pit_market_universe_guard(
+                historical_instruments=historical_instruments,
+                transition_excluded_through=transition_excluded_through,
+                trading_dates=trading_rows,
+                provider_as_of_date=cutoff,
+            )
 
             def _pit_member(date_value: str, stock_id: str) -> bool:
-                return (
-                    stock_id in historical_pool
-                    and date_value in trading_rows
-                    and is_historical_market_state_eligible(
-                        stock_id=stock_id,
-                        date_value=date_value,
-                        transition_excluded_through=transition_excluded_through,
-                    )
-                )
+                return eligibility_guard.allows(stock_id=stock_id, date_value=date_value)
 
             for frame in view.iter_dataset_scope_frames(
                 RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET,
                 columns=("date", "stock_id", PROVIDER_VOLUME_FIELD),
             ):
-                rows = [
-                    row
-                    for row in _normalize_date_stock(frame, dataset=RESEARCH_V2_DAILY_UNIVERSE_SOURCE_DATASET)
-                    if row[0] <= cutoff and _pit_member(row[0], row[1])
-                ]
-                if rows:
-                    conn.executemany("INSERT OR IGNORE INTO daily_universe(date, stock_id) VALUES (?, ?)", rows)
                 volume_rows = [
                     row
                     for row in _normalize_required_field_values(
@@ -866,6 +833,12 @@ def _build_exact_candidate_sqlite(
                 "required_source_projection_fingerprint": required_source_projection_fingerprint,
                 "daily_universe_row_count": universe_count,
                 "daily_universe_fingerprint": universe_fingerprint,
+                "neutral_daily_pit_universe_identity_fingerprint": str(
+                    neutral_daily_pit_universe_manifest.get("daily_pit_universe_identity_fingerprint") or ""
+                ),
+                "neutral_daily_pit_universe_file_sha256": str(
+                    neutral_daily_pit_universe_manifest.get("daily_universe_file_sha256") or ""
+                ),
                 "exact_coverage_fingerprint": summary.coverage_fingerprint,
                 "delisting_event_row_count": int(delisting_rows),
                 "pit_review_contract_fingerprint": research_v2_pit_review_contract_fingerprint(),
@@ -1015,6 +988,16 @@ def build_research_v2_candidate(
         frame_reader=frame_reader,
         hash_fn=hash_fn,
     )
+    neutral_daily_pit = build_market_data_v2_daily_pit_universe(
+        root,
+        snapshot_fingerprint=archive.snapshot_fingerprint,
+        frame_reader=frame_reader,
+        hash_fn=hash_fn,
+        now=now,
+    )
+    neutral_daily_pit_path = resolve_market_data_daily_pit_universe_path(
+        root, archive.snapshot_fingerprint
+    )
     candidate_dir = resolve_research_v2_candidate_dir(root, archive.snapshot_fingerprint)
     universe_path = resolve_research_v2_daily_universe_path(root, archive.snapshot_fingerprint)
     derived, _coverage_table = _build_exact_candidate_sqlite(
@@ -1022,6 +1005,8 @@ def build_research_v2_candidate(
         output_path=universe_path,
         research_cutoff=required_cutoff,
         research_scope_contract_fingerprint=str(research_scope_stats["contract_fingerprint"]),
+        neutral_daily_pit_universe_path=neutral_daily_pit_path,
+        neutral_daily_pit_universe_manifest=neutral_daily_pit,
     )
     del _coverage_table
     coverage_summary = dict(derived["coverage_summary"])
@@ -1078,6 +1063,13 @@ def build_research_v2_candidate(
         "provider_snapshot_path": project_relative_display_path(archive.path, project_root=root),
         "daily_universe_path": project_relative_display_path(universe_path, project_root=root),
         "daily_universe_file_sha256": compute_file_sha256(universe_path),
+        "neutral_daily_pit_universe_identity_fingerprint": str(
+            neutral_daily_pit.get("daily_pit_universe_identity_fingerprint") or ""
+        ),
+        "neutral_daily_pit_universe_file_sha256": str(neutral_daily_pit.get("daily_universe_file_sha256") or ""),
+        "neutral_daily_pit_universe_path": project_relative_display_path(
+            neutral_daily_pit_path, project_root=root
+        ),
         "daily_universe_row_count": int(derived["daily_universe_row_count"]),
         "historical_market_state_transition_count": int(derived["historical_market_state_transition_count"]),
         "daily_universe_date_count": int(coverage_summary.get("daily_universe_date_count") or 0),
@@ -1179,6 +1171,20 @@ def load_research_v2_candidate(
     )
     if str(payload.get("required_cutoff") or "") != expected_required_cutoff:
         raise ValueError("Research V2 candidate required cutoff drift")
+    neutral_identity = str(payload.get("neutral_daily_pit_universe_identity_fingerprint") or "").strip().lower()
+    if neutral_identity:
+        neutral = load_market_data_v2_daily_pit_universe(
+            root,
+            provider_snapshot_fingerprint=archive.snapshot_fingerprint,
+            required=True,
+        )
+        assert neutral is not None
+        if neutral_identity != str(neutral.get("daily_pit_universe_identity_fingerprint") or ""):
+            raise ValueError("Research V2 candidate neutral daily PIT universe identity drift")
+        if str(payload.get("neutral_daily_pit_universe_file_sha256") or "") != str(
+            neutral.get("daily_universe_file_sha256") or ""
+        ):
+            raise ValueError("Research V2 candidate neutral daily PIT universe physical provenance drift")
     projection = payload.get("required_source_projection")
     if not isinstance(projection, dict):
         raise ValueError("Research V2 candidate required source projection 缺失")

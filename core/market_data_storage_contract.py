@@ -14,6 +14,10 @@ MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT = Path("data") / "market_data_v2" / "bootstr
 MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME = "bootstrap_manifest.json"
 MARKET_DATA_BOOTSTRAP_LEDGER_FILENAME = "bootstrap_ledger.sqlite3"
 MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME = "provider_snapshot_manifest.json"
+MARKET_DATA_DERIVED_RELATIVE_ROOT = Path("data") / "market_data_v2" / "derived"
+MARKET_DATA_DAILY_PIT_UNIVERSE_DIRNAME = "daily_pit_market_universe"
+MARKET_DATA_DAILY_PIT_UNIVERSE_FILENAME = "daily_universe.sqlite3"
+MARKET_DATA_DAILY_PIT_UNIVERSE_MANIFEST_FILENAME = "daily_pit_universe_manifest.json"
 MARKET_DATA_DATASET_SCHEMA_FILENAME = "dataset_schema.json"
 MARKET_DATA_PARQUET_METADATA_KEY = "my_quant_market_data_v2"
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -70,6 +74,30 @@ def resolve_market_data_request_parquet_path(
     request_id = _require_hex64(request.request_id, field="request_id")
     return resolve_market_data_dataset_dir(project_root, manifest_fingerprint, request.dataset) / f"{request_id}.parquet"
 
+
+
+def resolve_market_data_daily_pit_universe_dir(project_root, provider_snapshot_fingerprint: str) -> Path:
+    fingerprint = _require_hex64(provider_snapshot_fingerprint, field="provider_snapshot_fingerprint")
+    return (
+        Path(project_root).resolve()
+        / MARKET_DATA_DERIVED_RELATIVE_ROOT
+        / MARKET_DATA_DAILY_PIT_UNIVERSE_DIRNAME
+        / fingerprint
+    )
+
+
+def resolve_market_data_daily_pit_universe_path(project_root, provider_snapshot_fingerprint: str) -> Path:
+    return (
+        resolve_market_data_daily_pit_universe_dir(project_root, provider_snapshot_fingerprint)
+        / MARKET_DATA_DAILY_PIT_UNIVERSE_FILENAME
+    )
+
+
+def resolve_market_data_daily_pit_universe_manifest_path(project_root, provider_snapshot_fingerprint: str) -> Path:
+    return (
+        resolve_market_data_daily_pit_universe_dir(project_root, provider_snapshot_fingerprint)
+        / MARKET_DATA_DAILY_PIT_UNIVERSE_MANIFEST_FILENAME
+    )
 
 def build_frame_schema_payload(frame) -> dict[str, object]:
     columns = [str(column) for column in frame.columns]
@@ -128,6 +156,10 @@ __all__ = [
     "MARKET_DATA_BOOTSTRAP_MANIFEST_FILENAME",
     "MARKET_DATA_BOOTSTRAP_LEDGER_FILENAME",
     "MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME",
+    "MARKET_DATA_DERIVED_RELATIVE_ROOT",
+    "MARKET_DATA_DAILY_PIT_UNIVERSE_DIRNAME",
+    "MARKET_DATA_DAILY_PIT_UNIVERSE_FILENAME",
+    "MARKET_DATA_DAILY_PIT_UNIVERSE_MANIFEST_FILENAME",
     "MARKET_DATA_DATASET_SCHEMA_FILENAME",
     "MARKET_DATA_PARQUET_METADATA_KEY",
     "MarketDataCommitReceipt",
@@ -135,6 +167,9 @@ __all__ = [
     "resolve_market_data_bootstrap_archive_dir",
     "resolve_market_data_bootstrap_ledger_path",
     "resolve_market_data_provider_snapshot_path",
+    "resolve_market_data_daily_pit_universe_dir",
+    "resolve_market_data_daily_pit_universe_path",
+    "resolve_market_data_daily_pit_universe_manifest_path",
     "resolve_market_data_dataset_dir",
     "resolve_market_data_request_parquet_path",
     "build_frame_schema_payload",

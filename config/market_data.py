@@ -76,6 +76,9 @@ MARKET_DATA_V2_STORAGE_POLICY = {
 MARKET_DATA_V2_LIFECYCLE = {
     "canonical_data_plane": "market_data_v2",
     "provider_archive_role": "neutral_provider_ssot",
+    "historical_pit_universe_role": "neutral_derived_ssot",
+    "historical_pit_universe_shared_across_domains": True,
+    "domain_specific_historical_membership_rebuild_allowed": False,
     "research_view_role": "frozen_scientific_view",
     "trading_view_role": "latest_operational_view",
     "shared_provider_archive_required": True,

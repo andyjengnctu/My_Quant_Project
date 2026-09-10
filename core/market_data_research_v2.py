@@ -20,7 +20,7 @@ from core.market_data_contract import (
     FINMIND_RAW_PRICE_ARCHIVE_DATASET,
 )
 from core.market_data_research_freeze import ResearchV2RequiredCommonCompleteSummary
-from core.market_data_instrument_universe import is_historical_market_state_eligible
+from core.market_data_pit_universe import build_daily_pit_market_universe
 from core.market_data_dataset_registry import (
     PIT_ARCHIVE_ONLY,
     PIT_CURRENT_VINTAGE,
@@ -200,36 +200,19 @@ def build_daily_pit_universe(
     trading_dates: Iterable[str] | None = None,
     provider_as_of_date: str | None = None,
 ) -> pd.DataFrame:
-    required = {"date", "stock_id"}
-    missing = required.difference(raw_price_rows.columns)
-    if missing:
-        raise ValueError(f"TaiwanStockPrice PIT universe evidence 缺少欄位: {sorted(missing)}")
-    pool = {str(value or "").strip() for value in historical_instruments if str(value or "").strip()}
-    if not pool:
-        raise ValueError("Research V2 historical instrument pool 不可為空")
-    frame = raw_price_rows.loc[:, ["date", "stock_id"]].copy()
-    frame["date"] = _normalize_date_series(frame["date"])
-    frame["stock_id"] = frame["stock_id"].astype(str).str.strip()
-    frame = frame.loc[frame["date"].notna() & frame["stock_id"].isin(pool)]
-    guard = {str(key): str(value) for key, value in transition_excluded_through.items()}
-    frame = frame.loc[
-        [
-            is_historical_market_state_eligible(
-                stock_id=stock_id,
-                date_value=date_value,
-                transition_excluded_through=guard,
-            )
-            for date_value, stock_id in frame[["date", "stock_id"]].itertuples(index=False, name=None)
-        ]
-    ]
-    if provider_as_of_date:
-        frame = frame.loc[frame["date"] <= str(provider_as_of_date)]
-    if trading_dates is not None:
-        allowed_dates = {str(value) for value in trading_dates}
-        frame = frame.loc[frame["date"].isin(allowed_dates)]
-    frame = frame.drop_duplicates(["date", "stock_id"]).sort_values(["date", "stock_id"], kind="stable")
-    return frame.reset_index(drop=True)
+    """Compatibility alias for the neutral Market Data V2 PIT universe owner.
 
+    Research-specific callers retain this symbol so existing scientific/artifact
+    identities do not change during the V2 ownership migration.
+    """
+
+    return build_daily_pit_market_universe(
+        raw_price_rows,
+        historical_instruments=historical_instruments,
+        transition_excluded_through=transition_excluded_through,
+        trading_dates=trading_dates,
+        provider_as_of_date=provider_as_of_date,
+    )
 
 
 def summarize_exact_candidate_coverage_table(

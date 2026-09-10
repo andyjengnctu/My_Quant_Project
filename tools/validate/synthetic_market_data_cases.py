@@ -2818,7 +2818,9 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
     from core.market_data_storage_contract import (
         resolve_market_data_provider_snapshot_path,
         resolve_market_data_request_parquet_path,
+        resolve_market_data_daily_pit_universe_path,
     )
+    from core.market_data_pit_universe import build_daily_pit_market_universe
     from services.downloader.market_data_ledger import MarketDataJobLedger
     from services.research.market_data_v2 import (
         ResearchV2ProviderView,
@@ -2854,6 +2856,21 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         )
         check("canonical_daily_pit_universe_primitive_requires_date_specific_market_state",
             [(research_cutoff, "2330")],
+            list(primitive_universe[["date", "stock_id"]].itertuples(index=False, name=None)),
+        )
+        neutral_primitive = build_daily_pit_market_universe(
+            pd.DataFrame({
+                "date": [before_cutoff, research_cutoff],
+                "stock_id": ["2330", "2330"],
+            }),
+            historical_instruments=("2330",),
+            transition_excluded_through={"2330": before_cutoff},
+            trading_dates=(before_cutoff, research_cutoff),
+            provider_as_of_date=research_cutoff,
+        )
+        check(
+            "research_daily_pit_compatibility_alias_reuses_neutral_v2_owner",
+            list(neutral_primitive[["date", "stock_id"]].itertuples(index=False, name=None)),
             list(primitive_universe[["date", "stock_id"]].itertuples(index=False, name=None)),
         )
         manifest_fingerprint = "7" * 64
@@ -2929,6 +2946,11 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         check("research_v2_candidate_records_fixed_required_cutoff", research_cutoff, candidate["required_cutoff"])
         check("exact_candidate_ceiling_retreats_before_incomplete_required_cutoff", before_cutoff, candidate["exact_candidate_ceiling_date"])
         check("daily_universe_is_price_presence_based_market_state_guarded_and_cutoff_capped", 3, candidate["daily_universe_row_count"])
+        check(
+            "research_v2_candidate_records_neutral_daily_pit_universe_provenance",
+            64,
+            len(str(candidate.get("neutral_daily_pit_universe_identity_fingerprint") or "")),
+        )
         check("research_v2_candidate_pins_market_state_guard_identity", 64, len(str(candidate.get("historical_market_state_guard_fingerprint") or "")))
         check("research_v2_transition_guard_detects_one_future_board_transition", 1, int(candidate.get("historical_market_state_transition_count") or 0))
         blockers = {str(item.get("code")) for item in candidate["blockers"]}
@@ -2939,6 +2961,24 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         check("research_v2_candidate_keeps_archive_wide_mechanical_audit_diagnostic_only", False, any(code.startswith("MECHANICAL_") for code in blockers))
         check("research_v2_candidate_blocks_incomplete_required_cutoff_exact_coverage", True, "RESEARCH_REQUIRED_CUTOFF_EXACT_COVERAGE_NOT_READY" in blockers)
         check("research_v2_candidate_preserves_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, candidate["active_research_generation"])
+
+        neutral_universe_path = resolve_market_data_daily_pit_universe_path(
+            root, provider_payload["snapshot_fingerprint"]
+        )
+        check(
+            "neutral_daily_pit_universe_is_market_data_v2_derived_artifact",
+            True,
+            neutral_universe_path.is_file()
+            and "data/market_data_v2/derived/daily_pit_market_universe" in neutral_universe_path.as_posix(),
+        )
+        neutral_conn = sqlite3.connect(neutral_universe_path)
+        try:
+            neutral_universe_rows = int(neutral_conn.execute("SELECT COUNT(*) FROM daily_universe").fetchone()[0])
+            neutral_max_universe_date = neutral_conn.execute("SELECT MAX(date) FROM daily_universe").fetchone()[0]
+        finally:
+            neutral_conn.close()
+        check("neutral_daily_pit_universe_keeps_full_provider_snapshot_horizon", 5, neutral_universe_rows)
+        check("neutral_daily_pit_universe_is_not_research_cutoff_capped", after_cutoff, neutral_max_universe_date)
 
         universe_path = resolve_research_v2_daily_universe_path(root, provider_payload["snapshot_fingerprint"])
         manifest_path = resolve_research_v2_candidate_manifest_path(root, provider_payload["snapshot_fingerprint"])
@@ -2967,6 +3007,16 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
 
         loaded = load_research_v2_candidate(root, required=True)
         check("research_v2_candidate_fingerprint_roundtrips", candidate["candidate_fingerprint"], loaded["candidate_fingerprint"])
+        original_neutral_universe_bytes = neutral_universe_path.read_bytes()
+        neutral_universe_path.write_bytes(original_neutral_universe_bytes + b"\n")
+        neutral_tamper_blocked = False
+        try:
+            load_research_v2_candidate(root, required=True)
+        except ValueError as exc:
+            neutral_tamper_blocked = "physical hash drift" in str(exc)
+        check("research_v2_candidate_rejects_neutral_daily_pit_universe_tamper", True, neutral_tamper_blocked)
+        neutral_universe_path.write_bytes(original_neutral_universe_bytes)
+
         original_universe_bytes = universe_path.read_bytes()
         universe_path.write_bytes(original_universe_bytes + b"\n")
         tamper_blocked = False

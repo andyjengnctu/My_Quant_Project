@@ -2575,6 +2575,7 @@ def validate_market_data_governance_contract_case(_base_params):
         RESEARCH_STATUS_AUTHORIZED_NOT_READY,
         MARKET_DATA_V2_CANONICAL_DATA_PLANE,
         MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE,
+        MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE,
         MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE,
         MARKET_DATA_V2_RESEARCH_VIEW_ROLE,
         MARKET_DATA_V2_TRADING_VIEW_ROLE,
@@ -2658,6 +2659,21 @@ def validate_market_data_governance_contract_case(_base_params):
     check("v2_canonical_data_plane_follows_config", str(MARKET_DATA_V2_LIFECYCLE.get("canonical_data_plane")), market_data_v2.canonical_data_plane)
     check("v2_canonical_data_plane_is_market_data_v2", MARKET_DATA_V2_CANONICAL_DATA_PLANE, market_data_v2.canonical_data_plane)
     check("v2_provider_archive_is_neutral_shared_ssot", MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE, market_data_v2.provider_archive_role)
+    check(
+        "v2_historical_pit_universe_is_neutral_derived_ssot",
+        MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE,
+        market_data_v2.historical_pit_universe_role,
+    )
+    check(
+        "v2_historical_pit_universe_is_shared_across_research_and_trading",
+        True,
+        market_data_v2.historical_pit_universe_shared_across_domains,
+    )
+    check(
+        "v2_domain_specific_historical_membership_rebuild_is_forbidden",
+        False,
+        market_data_v2.domain_specific_historical_membership_rebuild_allowed,
+    )
     check("v2_research_view_is_frozen_scientific_view", MARKET_DATA_V2_RESEARCH_VIEW_ROLE, market_data_v2.research_view_role)
     check("v2_trading_view_is_latest_operational_view", MARKET_DATA_V2_TRADING_VIEW_ROLE, market_data_v2.trading_view_role)
     check("v2_research_trading_share_provider_archive", True, market_data_v2.shared_provider_archive_required)
@@ -2685,6 +2701,27 @@ def validate_market_data_governance_contract_case(_base_params):
     check("market_data_snapshot_covers_all_declared_generations", set(RESEARCH_DATA_GENERATIONS), set(snapshot["research_generations"]))
     check("market_data_snapshot_exposes_v2_canonical_data_plane", market_data_v2.canonical_data_plane, snapshot["market_data_v2"]["canonical_data_plane"])
     check("market_data_snapshot_exposes_v2_migration_phase", market_data_v2.migration_phase, snapshot["market_data_v2"]["migration_phase"])
+    check(
+        "market_data_snapshot_exposes_neutral_historical_pit_universe_role",
+        market_data_v2.historical_pit_universe_role,
+        snapshot["market_data_v2"]["historical_pit_universe_role"],
+    )
+    pit_core_source = (PROJECT_ROOT / "core/market_data_pit_universe.py").read_text(encoding="utf-8")
+    pit_service_source = (PROJECT_ROOT / "services/market_data/daily_pit_universe.py").read_text(encoding="utf-8")
+    check(
+        "neutral_historical_pit_owner_has_no_research_or_trading_runtime_dependency",
+        False,
+        any(
+            token in source
+            for source in (pit_core_source, pit_service_source)
+            for token in ("from services.research", "from services.trading", "from config.research", "from config.trading")
+        ),
+    )
+    check(
+        "neutral_historical_pit_owner_has_no_domain_storage_path_literal",
+        False,
+        any(token in pit_service_source for token in ("data/research", "data/trading")),
+    )
 
     summary["active_research_generation"] = active.generation_id
     summary["active_research_cutoff"] = active.cutoff

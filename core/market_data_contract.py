@@ -38,6 +38,7 @@ RESEARCH_STATUS_READY_FROZEN = "ready_frozen"
 
 MARKET_DATA_V2_CANONICAL_DATA_PLANE = "market_data_v2"
 MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE = "neutral_provider_ssot"
+MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE = "neutral_derived_ssot"
 MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE = "market_data_v2_provider_snapshot"
 MARKET_DATA_V2_RESEARCH_VIEW_ROLE = "frozen_scientific_view"
 MARKET_DATA_V2_TRADING_VIEW_ROLE = "latest_operational_view"
@@ -87,6 +88,9 @@ class TradingMarketDataLifecycleContract:
 class MarketDataV2LifecycleContract:
     canonical_data_plane: str
     provider_archive_role: str
+    historical_pit_universe_role: str
+    historical_pit_universe_shared_across_domains: bool
+    domain_specific_historical_membership_rebuild_allowed: bool
     research_view_role: str
     trading_view_role: str
     shared_provider_archive_required: bool
@@ -202,6 +206,9 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     provider_archive_role = _require_nonempty_text(
         raw.get("provider_archive_role"), field="market_data_v2.provider_archive_role"
     )
+    historical_pit_universe_role = _require_nonempty_text(
+        raw.get("historical_pit_universe_role"), field="market_data_v2.historical_pit_universe_role"
+    )
     research_view_role = _require_nonempty_text(
         raw.get("research_view_role"), field="market_data_v2.research_view_role"
     )
@@ -216,6 +223,12 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     )
 
     shared_provider_archive_required = bool(raw.get("shared_provider_archive_required"))
+    historical_pit_universe_shared_across_domains = bool(
+        raw.get("historical_pit_universe_shared_across_domains")
+    )
+    domain_specific_historical_membership_rebuild_allowed = bool(
+        raw.get("domain_specific_historical_membership_rebuild_allowed")
+    )
     independent_domain_provider_redownload_allowed = bool(
         raw.get("independent_domain_provider_redownload_allowed")
     )
@@ -228,6 +241,14 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
         raise ValueError(f"Market Data canonical data plane 必須為 {MARKET_DATA_V2_CANONICAL_DATA_PLANE}")
     if provider_archive_role != MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE:
         raise ValueError(f"Market Data V2 provider archive role 必須為 {MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE}")
+    if historical_pit_universe_role != MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE:
+        raise ValueError(
+            f"Market Data V2 historical PIT universe role 必須為 {MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE}"
+        )
+    if not historical_pit_universe_shared_across_domains:
+        raise ValueError("Market Data V2 historical PIT universe 必須由 Research / Trading 共用")
+    if domain_specific_historical_membership_rebuild_allowed:
+        raise ValueError("Research / Trading 不得各自重建第二套 historical PIT membership truth")
     if research_view_role != MARKET_DATA_V2_RESEARCH_VIEW_ROLE:
         raise ValueError(f"Market Data V2 Research view role 必須為 {MARKET_DATA_V2_RESEARCH_VIEW_ROLE}")
     if trading_view_role != MARKET_DATA_V2_TRADING_VIEW_ROLE:
@@ -251,6 +272,9 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     return MarketDataV2LifecycleContract(
         canonical_data_plane=canonical_data_plane,
         provider_archive_role=provider_archive_role,
+        historical_pit_universe_role=historical_pit_universe_role,
+        historical_pit_universe_shared_across_domains=historical_pit_universe_shared_across_domains,
+        domain_specific_historical_membership_rebuild_allowed=domain_specific_historical_membership_rebuild_allowed,
         research_view_role=research_view_role,
         trading_view_role=trading_view_role,
         shared_provider_archive_required=shared_provider_archive_required,
@@ -327,6 +351,7 @@ __all__ = [
     "RESEARCH_STATUS_READY_FROZEN",
     "MARKET_DATA_V2_CANONICAL_DATA_PLANE",
     "MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE",
+    "MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE",
     "MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE",
     "MARKET_DATA_V2_RESEARCH_VIEW_ROLE",
     "MARKET_DATA_V2_TRADING_VIEW_ROLE",
