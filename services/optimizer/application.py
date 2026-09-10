@@ -1661,7 +1661,7 @@ def _write_static_seed_ensemble_policy_paramsets(
         select_finalist_best_members,
         _is_finalist_best_policy,
     )
-    from services.optimizer.outer_rolling_oos import _remove_stale_policy_paramset_files
+    from services.optimizer.outer_rolling_artifacts import _remove_stale_policy_paramset_files
 
     first_class_policy_names = tuple(get_optimizer_paramset_policy_names())
     replay_policy_names = first_class_policy_names
@@ -2117,7 +2117,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             policy_members_by_policy.setdefault(str(policy_name), []).append(dict(member))
 
     if compact_display:
-        from services.optimizer.outer_rolling_oos import OptimizerSeedEnsembleProgressBoard
+        from services.optimizer.outer_rolling_live_boards import OptimizerSeedEnsembleProgressBoard
         from services.optimizer.outer_rolling_progress import format_optimizer_seed_ensemble_progress_header
 
         period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)

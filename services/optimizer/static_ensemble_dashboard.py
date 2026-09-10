@@ -110,12 +110,12 @@ def _build_static_policy_rows_from_paramsets(
     data_dir = getattr(session, "raw_data_cache_data_dir", None)
     if not data_dir:
         raise ValueError("session 尚未載入 data_dir，無法建立 ensemble policy replay")
-    from services.optimizer.outer_rolling_oos import (
+    from services.optimizer.outer_rolling_policy_replay import (
         _build_policy_replay_context,
         _run_policy_replay_tasks,
         _stable_policy_replay_signature,
-        is_optimizer_policy_replay_dedup_by_signature_enabled_default,
     )
+    from core.training_performance import is_optimizer_policy_replay_dedup_by_signature_enabled_default
 
     replay_context = _build_policy_replay_context(
         selected_data_dir=str(data_dir),
@@ -280,7 +280,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
 def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict | None:
     """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""
     from services.optimizer.outer_rolling_policy import optimizer_seed_ensemble_table_titles
-    from services.optimizer.outer_rolling_oos import render_optimizer_results_tables
+    from services.optimizer.outer_rolling_results import render_optimizer_results_tables
 
     row = build_optimizer_static_ensemble_single_fold_oos_row(
         session,

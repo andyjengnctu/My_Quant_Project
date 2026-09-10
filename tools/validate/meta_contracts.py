@@ -69,7 +69,7 @@ CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
     "services/optimizer/dependency_stats.py": (
         "empty_local_min_dependency_stats",
     ),
-    "services/optimizer/outer_rolling_oos.py": (
+    "services/optimizer/outer_rolling_artifacts.py": (
         "_build_seed_ensemble_policy_payload",
     ),
 }
