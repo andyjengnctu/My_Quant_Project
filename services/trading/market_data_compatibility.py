@@ -165,8 +165,11 @@ def materialize_trading_v2_compatibility_dataset(
                 if path.read_text(encoding="utf-8") == text:
                     unchanged += 1
                     continue
-            except OSError:
-                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    "Trading V2 compatibility 無法讀取既有 CSV 以確認是否 unchanged；"
+                    f"ticker={ticker}, file={path.name}"
+                ) from exc
         atomic_write_text(path, text)
         written += 1
 
