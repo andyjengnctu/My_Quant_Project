@@ -60,7 +60,13 @@ def _publish_synthetic_trading_input_lineage(
         BootstrapRequestManifest,
         build_registry_fingerprint,
     )
-    from core.market_data_dataset_registry import get_market_dataset_specs
+    from core.market_data_dataset_registry import (
+        BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE,
+        BOOTSTRAP_SINGLE_FULL_RANGE,
+        BOOTSTRAP_SINGLE_NO_DATES,
+        get_market_dataset_spec,
+        get_market_dataset_specs,
+    )
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from services.trading.market_data_consumer import publish_trading_v2_consumer_state
     from services.trading.market_data_dataset_state import (
@@ -145,17 +151,42 @@ def _publish_synthetic_trading_input_lineage(
     required_datasets = tuple(provider_frames)
     canonical_specs = get_market_dataset_specs(included_only=True)
     registry_fingerprint = build_registry_fingerprint(canonical_specs)
-    requests = tuple(
-        BootstrapHttpRequest(
-            dataset=dataset,
-            bootstrap_mode="synthetic_full_range",
-            data_id=None,
-            start_date=None,
-            end_date=str(market_date),
-        )
-        for dataset in required_datasets
-    )
-    provider_as_of = (pd.Timestamp(market_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    provider_as_of = str(market_date)
+    full_range_start = min(trading_dates)
+    requests = []
+    frames_by_request = {}
+    for dataset in required_datasets:
+        spec = get_market_dataset_spec(dataset)
+        mode = spec.bootstrap_mode
+        if mode == BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE:
+            for ticker in all_tickers:
+                request = BootstrapHttpRequest(
+                    dataset=dataset,
+                    bootstrap_mode=mode,
+                    data_id=ticker,
+                    start_date=full_range_start,
+                    end_date=provider_as_of,
+                )
+                requests.append(request)
+                frame = provider_frames[dataset]
+                frames_by_request[request.request_id] = frame.loc[
+                    frame["stock_id"].astype("string").str.strip() == ticker
+                ].reset_index(drop=True)
+        elif mode == BOOTSTRAP_SINGLE_NO_DATES:
+            request = BootstrapHttpRequest(dataset, mode, None, None, None)
+            requests.append(request)
+            frames_by_request[request.request_id] = provider_frames[dataset].reset_index(drop=True)
+        elif mode == BOOTSTRAP_SINGLE_FULL_RANGE:
+            request = BootstrapHttpRequest(
+                dataset, mode, None, full_range_start, provider_as_of
+            )
+            requests.append(request)
+            frames_by_request[request.request_id] = provider_frames[dataset].reset_index(drop=True)
+        else:
+            raise RuntimeError(
+                f"Synthetic Trading V2 fixture 尚未支援 canonical bootstrap mode: {dataset} -> {mode}"
+            )
+    requests = tuple(requests)
     manifest_core = {
         "as_of_date": provider_as_of,
         "registry_fingerprint": registry_fingerprint,
@@ -165,18 +196,14 @@ def _publish_synthetic_trading_input_lineage(
     manifest_fingerprint = canonical_json_sha256(manifest_core)
     manifest = BootstrapRequestManifest(
         as_of_date=provider_as_of,
-        full_range_start=min(trading_dates),
+        full_range_start=full_range_start,
         registry_fingerprint=registry_fingerprint,
         manifest_fingerprint=manifest_fingerprint,
         historical_instrument_count=len(all_tickers),
         requests=requests,
     )
-    frames_by_request = {
-        request.request_id: provider_frames[request.dataset]
-        for request in requests
-    }
     started_at = datetime.now().astimezone()
-    _publish_ready_provider_snapshot_fixture(
+    provider_payload, frame_reader = _publish_ready_provider_snapshot_fixture(
         root=root,
         manifest=manifest,
         manifest_fingerprint=manifest_fingerprint,
@@ -185,6 +212,13 @@ def _publish_synthetic_trading_input_lineage(
         started_at=started_at,
         finalized_at=(started_at + timedelta(seconds=len(requests) + 1)).isoformat(),
         missing_columns_message="synthetic Trading V2 fixture 缺欄位",
+    )
+    from services.market_data.daily_pit_universe import build_market_data_v2_daily_pit_universe
+
+    build_market_data_v2_daily_pit_universe(
+        root,
+        snapshot_fingerprint=str(provider_payload["snapshot_fingerprint"]),
+        frame_reader=frame_reader,
     )
 
     dataset_state = build_initial_market_data_dataset_state(updated_at=started_at)
@@ -212,6 +246,32 @@ def _publish_synthetic_trading_input_lineage(
     )
     publish_trading_strategy_param_binding(root)
     return load_trading_scanner_runtime(root, verify_dataset_content=True)
+
+
+
+
+def _mutate_synthetic_trading_v2_consumer_membership(root: Path, *, ticker: str = "9999"):
+    """Change only V2 consumer-state membership while preserving the verified source view."""
+    from core.file_integrity import canonical_json_sha256
+    from services.trading.market_data_consumer import (
+        TRADING_V2_CONSUMER_STATE_RELATIVE_PATH,
+        load_trading_v2_consumer_state,
+    )
+
+    payload = dict(load_trading_v2_consumer_state(root, required=True, verify_current_view=False))
+    required = sorted(set(payload.get("required_position_tickers") or []) | {normalize_trading_ticker(ticker)})
+    retained = sorted(set(payload.get("retained_training_tickers") or []))
+    execution = sorted(set(payload.get("current_execution_pool_tickers") or []))
+    training = sorted(set(execution) | set(required) | set(retained))
+    payload["required_position_tickers"] = required
+    payload["training_tickers"] = training
+    payload["training_ticker_count"] = len(training)
+    payload["state_fingerprint"] = canonical_json_sha256(
+        {key: value for key, value in payload.items() if key != "state_fingerprint"}
+    )
+    path = Path(root).resolve() / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
+    atomic_write_json(path, payload)
+    return payload
 
 
 def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
@@ -570,7 +630,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
         with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan) as scanner_mock:
             scan_result = daily_workflow.run_trading_candidate_scan(project_root=root)
         scanner_args = scanner_mock.call_args
-        check("trading_scanner_uses_trading_data_dir", str(data_dir), str(scanner_args.args[0]))
+        check("trading_scanner_uses_v2_runtime_data_dir", str((root / "data" / "trading" / "market_data_v2").resolve()), str(Path(scanner_args.args[0]).resolve()))
+        check("trading_scanner_injects_v2_prepared_frames", ["2330"], sorted((scanner_args.kwargs.get("prepared_frames") or {}).keys()))
         check("trading_scanner_injects_trading_output_dir", str((root / "outputs" / "trading" / "scanner").resolve()), str(Path(scanner_args.kwargs["output_dir"]).resolve()))
         check("trading_scanner_requests_execution_context_for_allocator", True, scanner_args.kwargs.get("include_execution_context"))
         check("trading_scanner_receives_canonical_current_universe_membership", ["2330"], scanner_args.kwargs.get("ticker_membership"))
@@ -762,19 +823,21 @@ def validate_trading_actionable_universe_scanner_membership_contract_case(base_p
             current_universe_tickers=["2330"],
             required_position_tickers=["2454"],
         )
+        legacy_drift_snapshot = load_trading_candidate_snapshot(root, require_current=True)
+        check("candidate_snapshot_ignores_transitional_legacy_snapshot_membership_drift", ["2317", "2330"], legacy_drift_snapshot.get("scanned_tickers"))
+
+        from services.trading.market_data_consumer import TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
+        consumer_state_path = root / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
+        original_consumer_state = consumer_state_path.read_bytes()
+        _mutate_synthetic_trading_v2_consumer_membership(root, ticker="9999")
         try:
             load_trading_candidate_snapshot(root, require_current=True)
         except RuntimeError as exc:
-            market_membership_drift_rejected = "market-data membership" in str(exc) or "scanned membership" in str(exc)
+            market_membership_drift_rejected = "consumer state" in str(exc) or "market-data membership" in str(exc) or "dataset content" in str(exc)
         else:
             market_membership_drift_rejected = False
-        check("candidate_snapshot_rejects_market_snapshot_membership_drift_same_dataset_bytes", True, market_membership_drift_rejected)
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            current_universe_tickers=["2330", "2317"],
-            required_position_tickers=["2454"],
-        )
+        check("candidate_snapshot_rejects_v2_consumer_state_drift", True, market_membership_drift_rejected)
+        consumer_state_path.write_bytes(original_consumer_state)
 
         candidate_path = root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json"
         tampered = load_json_strict(candidate_path)
@@ -1956,6 +2019,20 @@ def validate_trading_position_rollforward_contract_case(base_params):
         }])], ignore_index=True)
         completed_next_day.to_csv(csv_path, index=False)
 
+        changed = deepcopy(base_params)
+        changed.atr_times_trail = float(base_params.atr_times_trail) + 5.0
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
+        ), ensure_ascii=False), encoding="utf-8")
+        _publish_synthetic_trading_input_lineage(
+            root,
+            market_date="2026-09-04",
+            current_universe_tickers=["2454"],
+            required_position_tickers=["2454"],
+        )
+
         build_trading_protection_plan(root)
         order_state = load_trading_order_state(root)
         order_state = confirm_trading_protection_leg_submission(
@@ -1967,14 +2044,6 @@ def validate_trading_position_rollforward_contract_case(base_params):
         )
         protection_before = get_trading_protection_plan_read_model(root)
         check("pre_rollforward_active_stop_matches_current_position_plan", [], protection_before.get("stale_active_protection_order_ids"))
-
-        changed = deepcopy(base_params)
-        changed.atr_times_trail = float(base_params.atr_times_trail) + 5.0
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
-            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
-            selector=profile.param_selector,
-            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
-        ), ensure_ascii=False), encoding="utf-8")
 
         clean_df, _stats = sanitize_ohlcv_dataframe(pd.read_csv(csv_path), "2454", min_rows=get_required_min_rows(base_params))
         atr_values, _buy, _sell, _limits = unpack_precomputed_signals(generate_signals(clean_df, base_params, ticker="2454"))
@@ -2013,14 +2082,20 @@ def validate_trading_position_rollforward_contract_case(base_params):
             "Date": "2026-09-05", "Open": 251.0, "High": 270.0, "Low": 250.0, "Close": 265.0, "Volume": 1_000_000,
         }])], ignore_index=True)
         future.to_csv(csv_path, index=False)
+        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+            members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
+            selector=profile.param_selector,
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-05"}},
+        ), ensure_ascii=False), encoding="utf-8")
+        _publish_synthetic_trading_input_lineage(
+            root,
+            market_date="2026-09-05",
+            current_universe_tickers=["2454"],
+            required_position_tickers=["2454"],
+        )
         with patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-04"):
-            try:
-                build_trading_position_rollforward_snapshot(root)
-            except RuntimeError as exc:
-                provisional_rejected = "尚未完成日K" in str(exc)
-            else:
-                provisional_rejected = False
-        check("rollforward_rejects_dataset_containing_uncompleted_future_daily_bar", True, provisional_rejected)
+            future_cutoff = build_trading_position_rollforward_snapshot(root)
+        check("rollforward_v2_reader_excludes_uncompleted_future_daily_bar_at_cutoff", [], future_cutoff["due_tickers"])
 
     capability = build_trading_capability_snapshot()
     check("daily_position_rollforward_capability_is_implemented", True, bool(capability["capabilities"]["daily_position_rollforward"]["implemented"]))
@@ -3127,19 +3202,28 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
     return results, summary
 
 def validate_trading_market_data_lineage_contract_case(base_params):
-    """Trading Data→Params→Scanner lineage is content-bound and fail-closed."""
+    """Trading V2 Data→Params→Scanner lineage is identity-bound and fail-closed."""
     case_id = "TRADING_MARKET_DATA_LINEAGE"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_data_lineage')
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.file_integrity import canonical_json_sha256, compute_file_sha256
     from core.params_io import params_to_json_dict
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
     import services.trading.daily_workflow as daily_workflow
-    import services.trading.market_data_update as market_data_update
     import services.trading.strategy_param_training as param_training
+    from services.trading.market_data_consumer import (
+        TRADING_V2_CONSUMER_STATE_RELATIVE_PATH,
+        get_trading_v2_consumer_state_sha256,
+        load_trading_v2_consumer_state,
+    )
     from services.trading.market_data_state import publish_trading_market_data_snapshot
-    from services.trading.scanner_state import load_trading_scanner_runtime
+    from services.trading.scanner_state import (
+        load_trading_candidate_snapshot,
+        load_trading_scanner_runtime,
+        resolve_trading_candidate_snapshot_path,
+    )
     from services.trading.strategy_param_state import (
         load_trading_strategy_param_binding,
         publish_trading_strategy_param_binding,
@@ -3148,17 +3232,19 @@ def validate_trading_market_data_lineage_contract_case(base_params):
     profile = get_trading_strategy_profile()
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
-        paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
-        data_dir = Path(paths.data_dir)
-        data_dir.mkdir(parents=True)
-        csv_path = data_dir / "2330.csv"
+        paths = resolve_runtime_domain_paths(
+            root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile
+        )
+        legacy_data_dir = Path(paths.data_dir)
+        legacy_data_dir.mkdir(parents=True)
+        csv_path = legacy_data_dir / "2330.csv"
         base_frame = pd.DataFrame({
             "Date": ["2026-09-03", "2026-09-04"],
             "Open": [100.0, 101.0], "High": [102.0, 103.0], "Low": [99.0, 100.0],
             "Close": [101.0, 102.0], "Volume": [1000, 1100],
         })
         base_frame.to_csv(csv_path, index=False)
-        original_bytes = csv_path.read_bytes()
+        original_legacy_bytes = csv_path.read_bytes()
 
         selected_path = Path(resolve_trading_selected_strategy_param_path(root))
         selected_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3168,79 +3254,61 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
         ), ensure_ascii=False), encoding="utf-8")
 
-        first_market = publish_trading_market_data_snapshot(
+        _publish_synthetic_trading_input_lineage(
             root,
             market_date="2026-09-04",
-            required_position_tickers=[],
             current_universe_tickers=["2330"],
         )
-        binding = publish_trading_strategy_param_binding(root)
+        consumer = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
+        binding = load_trading_strategy_param_binding(
+            root, required=True, verify_current=True, verify_dataset_content=True
+        )
         runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
-        check("params_bind_exact_dataset_content_hash", first_market["dataset_fingerprint"]["csv_content_sha256"], binding["dataset_content_sha256"])
-        check("scanner_runtime_consumes_same_dataset_content_hash", binding["dataset_content_sha256"], runtime["dataset_content_sha256"])
+        consumer_state_sha = get_trading_v2_consumer_state_sha256(root)
+        check("params_bind_exact_v2_view_identity", consumer["source_view_fingerprint"], binding["dataset_content_sha256"])
+        check("scanner_runtime_consumes_same_v2_view_identity", binding["dataset_content_sha256"], runtime["dataset_content_sha256"])
+        check("params_bind_exact_v2_consumer_state_sha", consumer_state_sha, binding["market_data_snapshot_sha256"])
+        check("scanner_runtime_consumes_same_v2_consumer_state_sha", consumer_state_sha, runtime["market_data_snapshot_sha256"])
+        check("scanner_runtime_reports_v2_market_data_source", "trading_market_data_v2_historical_latest_view", runtime["market_data_source"])
 
-        from core.trading_dataset_identity import build_trading_dataset_fingerprint
-        canonical_fp = build_trading_dataset_fingerprint(data_dir)
-        nested_dir = data_dir / "ignored_nested"
-        nested_dir.mkdir()
-        (nested_dir / "diagnostic.csv").write_text("Date,Close\n2026-09-04,999\n", encoding="utf-8")
-        nested_fp = build_trading_dataset_fingerprint(data_dir)
-        check("dataset_identity_hashes_only_canonical_consumed_top_level_csv_inputs", canonical_fp["csv_content_sha256"], nested_fp["csv_content_sha256"])
-        duplicate_path = data_dir / "TV_Data_Full_2330.csv"
-        duplicate_path.write_bytes(csv_path.read_bytes())
-        try:
-            build_trading_dataset_fingerprint(data_dir)
-        except RuntimeError:
-            duplicate_rejected = True
-        else:
-            duplicate_rejected = False
-        check("duplicate_ticker_csv_is_fail_closed_in_dataset_identity", True, duplicate_rejected)
-        duplicate_path.unlink()
-        (nested_dir / "diagnostic.csv").unlink(); nested_dir.rmdir()
+        changed_legacy = base_frame.copy()
+        changed_legacy.loc[1, "Close"] = 999.0
+        changed_legacy.to_csv(csv_path, index=False)
+        legacy_ignored = load_trading_scanner_runtime(root, verify_dataset_content=True)
+        check("legacy_csv_content_drift_no_longer_changes_v2_lineage", runtime["dataset_content_sha256"], legacy_ignored["dataset_content_sha256"])
+        check("legacy_csv_content_drift_no_longer_changes_v2_consumer_state_sha", runtime["market_data_snapshot_sha256"], legacy_ignored["market_data_snapshot_sha256"])
+        csv_path.write_bytes(original_legacy_bytes)
 
-        metadata_only = publish_trading_market_data_snapshot(
+        publish_trading_market_data_snapshot(
             root,
             market_date="2026-09-04",
             required_position_tickers=["2330"],
             current_universe_tickers=["2330"],
         )
-        check("market_snapshot_operational_metadata_can_change_without_data_content_change", first_market["dataset_fingerprint"]["csv_content_sha256"], metadata_only["dataset_fingerprint"]["csv_content_sha256"])
-        metadata_binding = load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
-        check("params_freshness_uses_content_identity_not_snapshot_metadata_sha", binding["binding_fingerprint"], metadata_binding["binding_fingerprint"])
+        legacy_snapshot_ignored = load_trading_scanner_runtime(root, verify_dataset_content=True)
+        check("legacy_snapshot_metadata_drift_no_longer_changes_v2_lineage", runtime["dataset_content_sha256"], legacy_snapshot_ignored["dataset_content_sha256"])
 
-        changed_frame = base_frame.copy()
-        changed_frame.loc[1, "Close"] = 102.5
-        changed_frame.to_csv(csv_path, index=False)
+        consumer_state_path = root / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
+        original_consumer_state = consumer_state_path.read_bytes()
+        _mutate_synthetic_trading_v2_consumer_membership(root, ticker="9999")
+        try:
+            load_trading_strategy_param_binding(
+                root, required=True, verify_current=True, verify_dataset_content=True
+            )
+        except RuntimeError:
+            v2_state_invalidates_params = True
+        else:
+            v2_state_invalidates_params = False
+        check("v2_consumer_state_change_invalidates_existing_params_binding", True, v2_state_invalidates_params)
         try:
             load_trading_scanner_runtime(root, verify_dataset_content=True)
         except RuntimeError:
-            out_of_band_change_rejected = True
+            v2_state_invalidates_scanner = True
         else:
-            out_of_band_change_rejected = False
-        check("same_date_dataset_content_change_is_detected_even_when_latest_date_is_unchanged", True, out_of_band_change_rejected)
+            v2_state_invalidates_scanner = False
+        check("v2_consumer_state_change_invalidates_scanner_runtime", True, v2_state_invalidates_scanner)
+        consumer_state_path.write_bytes(original_consumer_state)
 
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            required_position_tickers=["2330"],
-            current_universe_tickers=["2330"],
-        )
-        try:
-            load_trading_strategy_param_binding(root, required=True, verify_current=True, verify_dataset_content=True)
-        except RuntimeError:
-            old_params_rejected = True
-        else:
-            old_params_rejected = False
-        check("canonical_data_update_invalidates_params_when_content_changes_same_date", True, old_params_rejected)
-
-        csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            required_position_tickers=["2330"],
-            current_universe_tickers=["2330"],
-        )
-        publish_trading_strategy_param_binding(root)
         fake_scan = {
             "count_scanned": 1, "elapsed_time": 0.01, "count_history_qualified": 1,
             "count_skipped_insufficient": 0, "count_sanitized_candidates": 0, "max_workers": 1,
@@ -3249,57 +3317,54 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             "candidate_rows": [{
                 "ticker": "2330", "trade_date": "2026-09-04", "kind": "buy", "sort_value": 1.0,
                 "expected_value": 0.2,
-                "execution_plan_seed": {"ticker": "2330", "trade_date": "2026-09-04", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0, "target_price": 106.0, "entry_atr": 2.0},
+                "execution_plan_seed": {
+                    "ticker": "2330", "trade_date": "2026-09-04", "limit_price": 102.0,
+                    "init_sl": 98.0, "init_trail": 99.0, "target_price": 106.0, "entry_atr": 2.0,
+                },
             }],
         }
+
         def _scan_and_mutate(*_args, **_kwargs):
-            mutated = base_frame.copy(); mutated.loc[1, "Close"] = 103.0; mutated.to_csv(csv_path, index=False)
+            _mutate_synthetic_trading_v2_consumer_membership(root, ticker="9999")
             return fake_scan
+
         with patch.object(daily_workflow, "run_daily_scanner", side_effect=_scan_and_mutate):
             try:
                 daily_workflow.run_trading_candidate_scan(project_root=root)
             except RuntimeError:
-                scan_toctou_rejected = True
+                scan_toctou_rejected = not resolve_trading_candidate_snapshot_path(root).is_file()
             else:
                 scan_toctou_rejected = False
-        check("scanner_refuses_publish_when_dataset_changes_during_scan", True, scan_toctou_rejected)
+        check("scanner_refuses_publish_when_v2_consumer_state_changes_during_scan", True, scan_toctou_rejected)
+        consumer_state_path.write_bytes(original_consumer_state)
 
-        csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            required_position_tickers=["2330"],
-            current_universe_tickers=["2330"],
-        )
         def _optimizer_and_mutate(**_kwargs):
-            mutated = base_frame.copy(); mutated.loc[1, "Close"] = 104.0; mutated.to_csv(csv_path, index=False)
-            return {"selected_params_path": str(selected_path), "manifest_path": str(selected_path.parent / "manifest.json")}
+            _mutate_synthetic_trading_v2_consumer_membership(root, ticker="9999")
+            return {
+                "selected_params_path": str(selected_path),
+                "manifest_path": str(selected_path.parent / "manifest.json"),
+            }
+
         with patch.object(param_training, "run_static_strategy_parameter_training", side_effect=_optimizer_and_mutate):
             try:
                 param_training.run_trading_strategy_param_training(project_root=root, environ={})
-            except RuntimeError:
-                params_toctou_rejected = True
+            except RuntimeError as exc:
+                params_toctou_rejected = "consumer state" in str(exc) or "view identity" in str(exc)
             else:
                 params_toctou_rejected = False
-        check("params_producer_refuses_publish_binding_when_dataset_changes_during_training", True, params_toctou_rejected)
-
-        csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            required_position_tickers=["2330"],
-            current_universe_tickers=["2330"],
-        )
+        check("params_producer_refuses_publish_when_v2_consumer_state_changes_during_training", True, params_toctou_rejected)
+        consumer_state_path.write_bytes(original_consumer_state)
         publish_trading_strategy_param_binding(root)
+
         with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan):
             daily_workflow.run_trading_candidate_scan(project_root=root)
 
-        from core.file_integrity import canonical_json_sha256, compute_file_sha256
         from services.trading.proposed_order_state import (
-            PROPOSED_ORDER_SCHEMA_VERSION, PROPOSED_ORDER_STATUS,
-            load_current_trading_proposed_order_plan, resolve_trading_proposed_orders_json_path,
+            PROPOSED_ORDER_SCHEMA_VERSION,
+            PROPOSED_ORDER_STATUS,
+            load_current_trading_proposed_order_plan,
+            resolve_trading_proposed_orders_json_path,
         )
-        from services.trading.scanner_state import load_trading_candidate_snapshot, resolve_trading_candidate_snapshot_path
         account = initialize_trading_account_state(root, cash=500_000)
         current_runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
         proposed_payload = {
@@ -3318,47 +3383,22 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         proposed_payload["plan_fingerprint"] = canonical_json_sha256(proposed_payload)
         atomic_write_json(resolve_trading_proposed_orders_json_path(root), proposed_payload)
 
-        drifted = base_frame.copy(); drifted.loc[1, "Close"] = 105.0; drifted.to_csv(csv_path, index=False)
+        _mutate_synthetic_trading_v2_consumer_membership(root, ticker="9999")
         try:
             load_trading_candidate_snapshot(root, require_current=True)
         except RuntimeError:
-            candidate_same_date_drift_rejected = True
+            candidate_v2_drift_rejected = True
         else:
-            candidate_same_date_drift_rejected = False
-        check("candidate_currentness_rehashes_actual_csv_content", True, candidate_same_date_drift_rejected)
+            candidate_v2_drift_rejected = False
+        check("candidate_currentness_rechecks_v2_consumer_state_identity", True, candidate_v2_drift_rejected)
         try:
             load_current_trading_proposed_order_plan(root, require_current=True)
         except RuntimeError:
-            proposed_same_date_drift_rejected = True
+            proposed_v2_drift_rejected = True
         else:
-            proposed_same_date_drift_rejected = False
-        check("proposed_order_currentness_rehashes_actual_csv_content", True, proposed_same_date_drift_rejected)
-
-        csv_path.write_bytes(original_bytes)
-        publish_trading_market_data_snapshot(
-            root,
-            market_date="2026-09-04",
-            required_position_tickers=["2330"],
-            current_universe_tickers=["2330"],
-        )
-        publish_trading_strategy_param_binding(root)
-        account = adopt_existing_trading_position(root, ticker="9999", qty=100, cost_basis_total=10_000, entry_date="2026-01-01", expected_revision=account["revision"])
-        captured = {}
-        def _capture_materialization(_root, *, required_tickers=(), **_kwargs):
-            captured["required"] = list(required_tickers or [])
-            return {
-                "runtime_domain": "trading",
-                "market_date": "2026-09-04",
-                "data_dir": "data/trading/tw_stock_data_vip",
-                "current_execution_pool_tickers": ["2330"],
-                "dataset_fingerprint": {"csv_content_sha256": "c"},
-            }
-        with patch("services.trading.market_data_auto_update.run_trading_market_data_auto_update", return_value={"status": "NO_DUE", "data_requests": 0, "usage_requests": 0}), \
-             patch.object(market_data_update, "materialize_trading_v2_compatibility_dataset", side_effect=_capture_materialization), \
-             patch.object(market_data_update, "publish_trading_market_data_snapshot", return_value={"snapshot_fingerprint": "s", "dataset_fingerprint": {"csv_content_sha256": "c"}}):
-            market_data_update.run_trading_market_data_update(project_root=root)
-        check("daily_data_update_forces_all_current_account_positions_into_v2_compatibility_targets", ["9999"], captured.get("required"))
+            proposed_v2_drift_rejected = False
+        check("proposed_order_currentness_rechecks_v2_consumer_state_identity", True, proposed_v2_drift_rejected)
+        consumer_state_path.write_bytes(original_consumer_state)
 
     summary["checks"] = len(results)
     return results, summary
-
