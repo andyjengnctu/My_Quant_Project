@@ -240,6 +240,8 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     from services.optimizer.outer_rolling_oos import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
         REPORT_POLICY_NAMES,
+    )
+    from services.optimizer.outer_rolling_fold_context import (
         build_optimizer_seed_ensemble_fold_context,
         normalize_optimizer_seed_ensemble_fold_row,
     )

@@ -926,7 +926,7 @@ def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, fin
 
 
 def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> dict:
-    from services.optimizer.outer_rolling_oos import build_optimizer_seed_ensemble_fold_context
+    from services.optimizer.outer_rolling_fold_context import build_optimizer_seed_ensemble_fold_context
 
     policy = dict(walk_forward_policy or {})
     normalized_mode = normalize_optimizer_model_mode(policy.get("model_mode", "oos"))
