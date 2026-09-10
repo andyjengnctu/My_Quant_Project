@@ -8233,6 +8233,13 @@
       "description": "`validate_market_data_v2_trading_direct_consumer_cutover_contract_case` 擴充驗證 Round 8 V2-only terminal state：Legacy Trading producer/materializer/snapshot modules 已退役、canonical update 只執行 V2 update→consumer-state publish、readiness 無 Legacy fallback、dependency contract/schema 已 bump、Params/Scanner lineage 使用明確 V2 欄位且舊欄位不存在。",
       "initial_status": "NEW",
       "order": 526
+    },
+    {
+      "id": "T537",
+      "b_id": "B416",
+      "description": "`validate_trading_market_data_lineage_contract_case` 覆蓋 Market Data V2 consumer-state/source-view lineage、Params/Scanner exact identity、Legacy CSV/snapshot drift 不影響 V2 truth、V2 state drift 使 Params/Scanner/candidate/proposed artifact fail-closed，以及 Scanner/Params producer TOCTOU publication guard。",
+      "initial_status": "NEW",
+      "order": 527
     }
   ],
   "transitions": [
@@ -26491,6 +26498,30 @@
       "to_status": "N/A",
       "description": "Legacy bulk/per-ticker/universe retry regression retired; current V2 provider retry/executor behavior is covered by V2 contracts.",
       "note": "Round 8 Legacy producer retirement."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B383",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy Trading CSV dataset-content lineage implementation is retired after Market Data V2 consumer-state/source-view lineage became authoritative.",
+      "note": "Superseded by B416 Market Data V2 terminal Trading state."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T503",
+      "from_status": "DONE",
+      "to_status": "N/A",
+      "description": "Legacy CSV/snapshot lineage regression is retired with core/trading_dataset_identity.py and the old Trading snapshot producer path.",
+      "note": "Superseded by T536 V2-only direct-consumer/lineage regression."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T537",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "將既有 Data→Params→Scanner lineage regression 重新綁定到 Round 8 V2-only terminal contract。",
+      "note": "Supersedes retired T503/B383 Legacy CSV lineage binding; validator function identity unchanged."
     }
   ]
 }

@@ -176,6 +176,43 @@ def _checklist_guard_result(consistency: dict, *, result_name: str, invalid_key:
     return result, invalid_rows
 
 
+def _trace_loaded_module_source_for_active_coverage(module) -> None:
+    """Trace import-time module code without reloading the canonical module object.
+
+    Formal synthetic coverage starts after parts of the validator import graph are
+    already resident in ``sys.modules``.  A plain ``import_module`` therefore
+    cannot attribute their import-time statements to the active coverage run.
+    Re-loading those canonical modules is unsafe because it replaces class
+    objects (for example ``V16StrategyParams``) that may already be referenced by
+    later multiprocessing work.
+
+    When coverage is active, execute the same source file in an isolated globals
+    namespace.  Coverage attributes those executed statements to the original
+    filename, while the canonical module and every existing object identity stay
+    untouched.  Outside a coverage run this helper is a no-op.
+    """
+
+    try:
+        import coverage
+    except ImportError:
+        return
+    if coverage.Coverage.current() is None:
+        return
+
+    source_path = Path(str(getattr(module, "__file__", "") or ""))
+    if source_path.suffix.lower() != ".py" or not source_path.is_file():
+        return
+
+    isolated_globals = {
+        "__name__": str(getattr(module, "__name__", "")),
+        "__file__": str(source_path),
+        "__package__": str(getattr(module, "__package__", "") or ""),
+        "__builtins__": __builtins__,
+    }
+    source = source_path.read_text(encoding="utf-8")
+    exec(compile(source, str(source_path), "exec"), isolated_globals, isolated_globals)
+
+
 def _probe_module_symbols(expectations: dict, *, from_all: bool = False):
     import_failures = []
     symbol_failures = []
@@ -183,9 +220,10 @@ def _probe_module_symbols(expectations: dict, *, from_all: bool = False):
     for module_name, expected_symbols in expectations.items():
         try:
             # Coverage/symbol probing must not reload canonical runtime modules.
-            # Reloading class owners such as core.strategy_params invalidates
-            # already-created objects and can break later multiprocessing pickle.
+            # The isolated source trace records import-time coverage while
+            # preserving canonical class/function identities for later workers.
             module = importlib.import_module(module_name)
+            _trace_loaded_module_source_for_active_coverage(module)
         except Exception as exc:
             import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
             continue

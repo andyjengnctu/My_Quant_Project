@@ -12,7 +12,6 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/exit_priority.py",
     "core/event_hash_chain.py",
     "core/trading_identity.py",
-    "core/trading_dataset_identity.py",
     "core/trading_state_paths.py",
     "core/trading_account_state.py",
     "core/trading_order_state.py",
