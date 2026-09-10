@@ -41,9 +41,10 @@ TRADING_DATA_DEPENDENCY_SPECS: tuple[TradingDataDependencySpec, ...] = (
         execution_market_data_required=True,
         required_v2_datasets=(),
         rationale=(
-            "Current production rule-based Trading consumes the canonical legacy adjusted-price "
-            "execution dataset. Market Data V2 remains operational/archival sidecar evidence and "
-            "must not block this strategy while no DL dependency is enabled."
+            "Current migration phase only: production rule-based Trading still consumes the legacy "
+            "adjusted-price execution dataset. Market Data V2 is the canonical target data plane but "
+            "is not yet execution-authoritative; required_v2_datasets therefore remains empty until "
+            "the later consumer cutover changes this dependency contract explicitly."
         ),
     ),
 )

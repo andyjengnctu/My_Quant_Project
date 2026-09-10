@@ -56,9 +56,9 @@ MARKET_DATA_V2_EXECUTION_POLICY = {
     "progress_every_committed_requests": 100,
 }
 
-# Market Data V2 storage knobs are operational only.  Bootstrap data is first
-# published into a neutral provider archive; Research V2 and Trading will branch
-# into isolated lifecycle snapshots in later rounds.
+# Market Data V2 storage knobs are operational only. Bootstrap data is first
+# published into the neutral provider archive. Research and Trading may hold
+# isolated lifecycle views/state, but they must not fork provider-history truth.
 MARKET_DATA_V2_STORAGE_POLICY = {
     "format": "parquet",
     "compression": "zstd",
@@ -67,8 +67,30 @@ MARKET_DATA_V2_STORAGE_POLICY = {
     "minimum_staging_headroom_bytes": 64 * 1024**2,
 }
 
+# Final V2 data-plane target plus the truthful current migration phase.  The
+# neutral Provider Archive is the one long-term provider-data SSOT shared by
+# Research and Trading.  Domain-specific consumers may expose different views
+# (frozen scientific vs latest operational), but must not create independent
+# provider-history truths.  Legacy direct-provider CSV remains temporarily
+# allowed only because current execution consumers have not yet migrated.
+MARKET_DATA_V2_LIFECYCLE = {
+    "canonical_data_plane": "market_data_v2",
+    "provider_archive_role": "neutral_provider_ssot",
+    "research_view_role": "frozen_scientific_view",
+    "trading_view_role": "latest_operational_view",
+    "shared_provider_archive_required": True,
+    "independent_domain_provider_redownload_allowed": False,
+    "legacy_target_role": "v2_materialized_compatibility_only",
+    "legacy_target_must_derive_from_v2": True,
+    "migration_phase": "legacy_execution_transition",
+    "legacy_direct_provider_download_allowed_during_transition": True,
+}
+
 TRADING_MARKET_DATA_LIFECYCLE = {
     "mode": "incremental_latest",
+    "provider_archive_source": "market_data_v2_provider_snapshot",
+    # Compatibility metadata retained during migration; provider/archive truth
+    # is no longer semantically owned by a Research generation.
     "bootstrap_source_generation": RESEARCH_DATA_GENERATION_V2,
     # Execution-critical CSV truth remains in place while the V2 archive is
     # maintained as a non-blocking sidecar.  Future DL Trading must explicitly
@@ -163,6 +185,7 @@ __all__ = [
     "MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY",
     "MARKET_DATA_V2_EXECUTION_POLICY",
     "MARKET_DATA_V2_STORAGE_POLICY",
+    "MARKET_DATA_V2_LIFECYCLE",
     "MARKET_DATA_V2_TRADING_SYNC_POLICY",
     "MARKET_DATA_V2_AUTO_UPDATE_POLICY",
     "MARKET_DATA_V2_PUBLICATION_POLICY",

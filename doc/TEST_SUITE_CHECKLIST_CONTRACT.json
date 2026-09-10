@@ -4419,6 +4419,17 @@
       "entry": "`core/trading_dataset_identity.py`, `services/downloader/application.py`, `services/optimizer/raw_cache.py`, `services/trading/strategy_param_training.py`",
       "initial_status": "NEW",
       "order": 398
+    },
+    {
+      "id": "B411",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 canonical data-plane lifecycle / migration truth",
+      "item": "Research and Trading must share one neutral Market Data V2 provider-history SSOT; domain differences are views/cutoffs/authorization, while Legacy may remain direct-provider execution truth only as an explicit temporary migration phase and must end as V2-derived compatibility-only.",
+      "gap": "After Market Data Rounds 1–16, the neutral Provider Snapshot was already shared by Research V2 and the Trading V2 overlay, but lifecycle configuration still described only the Trading sidecar transition. Without a canonical target contract, later consumer work could accidentally normalize the transitional dual-producer state into a permanent architecture, re-download identical provider history by domain, or declare V2 execution-authoritative before Scanner/Optimizer/Workbench actually migrate. Repair must declare one V2 canonical data plane, shared-provider/archive invariants, frozen Research vs latest Trading view roles, Legacy compatibility-only target, and the truthful current legacy-execution transition exception without changing current execution behavior.",
+      "entry": "`config/market_data.py`, `core/market_data_contract.py`, `core/runtime_domains.py`, `core/trading_data_dependencies.py`, `doc/ARCHITECTURE.md`",
+      "initial_status": "NEW",
+      "order": 399
     }
   ],
   "tests": [
@@ -8125,6 +8136,13 @@
       "description": "`validate_trading_retained_dataset_current_vintage_contract_case` 對抗驗證 canonical physical CSV membership 同時是 dataset fingerprint／Optimizer retention membership，Trading updater 必須把 universe 外 retained ticker 納入 current-vintage refresh target，但只有 current_universe_tickers 具有 target-date/actionable freshness requirement。",
       "initial_status": "NEW",
       "order": 520
+    },
+    {
+      "id": "T531",
+      "b_id": "B411",
+      "description": "`validate_market_data_governance_contract_case` 擴充驗證 V2 canonical data plane、neutral shared Provider Archive、Research frozen / Trading latest view 分工、禁止 domain-specific provider-history redownload、Legacy V2-derived compatibility target，以及 current legacy-execution transition 不得假裝已完成切換。",
+      "initial_status": "NEW",
+      "order": 521
     }
   ],
   "transitions": [
@@ -26127,6 +26145,22 @@
       "to_status": "DONE",
       "description": "新增 retained Trading dataset current-vintage / Optimizer membership alignment regression 並納入正式 DONE 測試摘要。",
       "note": "`validate_trading_retained_dataset_current_vintage_contract_case`"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "B411",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "建立 Market Data V2 最終 canonical data-plane lifecycle 與 truthful legacy-execution migration phase，明確鎖定 Research/Trading 共用 neutral provider-history SSOT。",
+      "note": "V2 canonical lifecycle / migration truth"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "T531",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "擴充既有 Market Data governance synthetic 驗證 V2 SSOT target、shared archive、domain view 分工與 Legacy transition/target invariant。",
+      "note": "`validate_market_data_governance_contract_case`"
     }
   ]
 }

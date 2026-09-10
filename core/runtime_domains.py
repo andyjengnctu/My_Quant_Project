@@ -135,6 +135,7 @@ def build_runtime_domain_contract_snapshot(project_root: str | os.PathLike[str])
             "outputs_root": trading.outputs_root,
             "state_root": trading.state_root,
             "market_data_mode": trading_lifecycle.mode,
+            "market_data_provider_archive_source": trading_lifecycle.provider_archive_source,
             "market_data_bootstrap_source_generation": trading_lifecycle.bootstrap_source_generation,
         },
     }

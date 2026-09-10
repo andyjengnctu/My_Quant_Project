@@ -2250,6 +2250,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "RESEARCH_DATA_GENERATIONS",
             "ACTIVE_RESEARCH_DATA_GENERATION",
             "TRADING_MARKET_DATA_LIFECYCLE",
+            "MARKET_DATA_V2_LIFECYCLE",
             "MARKET_DATA_V2_EXECUTION_POLICY",
         },
         "core.market_data_execution_policy": {
@@ -2262,6 +2263,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "get_market_price_source_contract",
             "get_active_research_data_generation",
             "get_research_data_generation",
+            "get_market_data_v2_lifecycle",
             "get_trading_market_data_lifecycle",
             "build_market_data_contract_snapshot",
         },
@@ -2562,6 +2564,7 @@ def validate_market_data_governance_contract_case(_base_params):
         ACTIVE_RESEARCH_DATA_GENERATION,
         RESEARCH_DATA_GENERATIONS,
         TRADING_MARKET_DATA_LIFECYCLE,
+        MARKET_DATA_V2_LIFECYCLE,
     )
     from config.research import RESEARCH_MARKET_DATA_CUTOFF
     from core.market_data_contract import (
@@ -2570,8 +2573,16 @@ def validate_market_data_governance_contract_case(_base_params):
         RESEARCH_DAILY_BAR_CLOCK,
         ADJUSTED_PRICE_NO_PRICE_DAY_POLICY,
         RESEARCH_STATUS_AUTHORIZED_NOT_READY,
+        MARKET_DATA_V2_CANONICAL_DATA_PLANE,
+        MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE,
+        MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE,
+        MARKET_DATA_V2_RESEARCH_VIEW_ROLE,
+        MARKET_DATA_V2_TRADING_VIEW_ROLE,
+        MARKET_DATA_V2_LEGACY_TARGET_ROLE,
+        MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION,
         build_market_data_contract_snapshot,
         get_active_research_data_generation,
+        get_market_data_v2_lifecycle,
         get_market_price_source_contract,
         get_research_data_generation,
         get_trading_market_data_lifecycle,
@@ -2587,6 +2598,7 @@ def validate_market_data_governance_contract_case(_base_params):
         for generation_id in RESEARCH_DATA_GENERATIONS
     }
     trading = get_trading_market_data_lifecycle()
+    market_data_v2 = get_market_data_v2_lifecycle()
     snapshot = build_market_data_contract_snapshot()
 
     check("finmind_adjusted_price_is_canonical_source", FINMIND_ADJUSTED_PRICE_DATASET, price.adjusted_dataset)
@@ -2638,8 +2650,29 @@ def validate_market_data_governance_contract_case(_base_params):
     check("not_ready_research_generation_does_not_preclaim_cutoff", True, not_ready_cutoffs_are_unclaimed)
 
     check("trading_lifecycle_mode_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("mode")), trading.mode)
+    check("trading_provider_archive_source_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("provider_archive_source")), trading.provider_archive_source)
+    check("trading_provider_archive_source_is_neutral_v2_snapshot", MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE, trading.provider_archive_source)
     check("trading_bootstrap_generation_follows_config", str(TRADING_MARKET_DATA_LIFECYCLE.get("bootstrap_source_generation")), trading.bootstrap_source_generation)
     check("trading_bootstrap_generation_is_declared", True, trading.bootstrap_source_generation in resolved_generations)
+
+    check("v2_canonical_data_plane_follows_config", str(MARKET_DATA_V2_LIFECYCLE.get("canonical_data_plane")), market_data_v2.canonical_data_plane)
+    check("v2_canonical_data_plane_is_market_data_v2", MARKET_DATA_V2_CANONICAL_DATA_PLANE, market_data_v2.canonical_data_plane)
+    check("v2_provider_archive_is_neutral_shared_ssot", MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE, market_data_v2.provider_archive_role)
+    check("v2_research_view_is_frozen_scientific_view", MARKET_DATA_V2_RESEARCH_VIEW_ROLE, market_data_v2.research_view_role)
+    check("v2_trading_view_is_latest_operational_view", MARKET_DATA_V2_TRADING_VIEW_ROLE, market_data_v2.trading_view_role)
+    check("v2_research_trading_share_provider_archive", True, market_data_v2.shared_provider_archive_required)
+    check("v2_independent_domain_provider_redownload_is_forbidden", False, market_data_v2.independent_domain_provider_redownload_allowed)
+    check("legacy_target_is_v2_materialized_compatibility_only", MARKET_DATA_V2_LEGACY_TARGET_ROLE, market_data_v2.legacy_target_role)
+    check("legacy_target_must_derive_from_v2", True, market_data_v2.legacy_target_must_derive_from_v2)
+    check("v2_migration_phase_follows_config", str(MARKET_DATA_V2_LIFECYCLE.get("migration_phase")), market_data_v2.migration_phase)
+    transition_allows_legacy_provider = (
+        market_data_v2.migration_phase == MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION
+    )
+    check(
+        "legacy_direct_provider_permission_matches_migration_phase",
+        transition_allows_legacy_provider,
+        market_data_v2.legacy_direct_provider_download_allowed_during_transition,
+    )
 
     downloader_runtime = importlib.import_module("services.downloader.runtime")
     check("downloader_adjusted_price_identity_consumes_canonical_owner", FINMIND_ADJUSTED_PRICE_DATASET, downloader_runtime.FINMIND_PRICE_DATASET)
@@ -2650,11 +2683,15 @@ def validate_market_data_governance_contract_case(_base_params):
 
     check("market_data_snapshot_exposes_configured_active_generation", ACTIVE_RESEARCH_DATA_GENERATION, snapshot["active_research_generation"]["generation_id"])
     check("market_data_snapshot_covers_all_declared_generations", set(RESEARCH_DATA_GENERATIONS), set(snapshot["research_generations"]))
+    check("market_data_snapshot_exposes_v2_canonical_data_plane", market_data_v2.canonical_data_plane, snapshot["market_data_v2"]["canonical_data_plane"])
+    check("market_data_snapshot_exposes_v2_migration_phase", market_data_v2.migration_phase, snapshot["market_data_v2"]["migration_phase"])
 
     summary["active_research_generation"] = active.generation_id
     summary["active_research_cutoff"] = active.cutoff
     summary["research_generation_count"] = len(resolved_generations)
     summary["trading_mode"] = trading.mode
+    summary["market_data_v2_canonical_data_plane"] = market_data_v2.canonical_data_plane
+    summary["market_data_v2_migration_phase"] = market_data_v2.migration_phase
     return results, summary
 
 def validate_runtime_domain_isolation_contract_case(_base_params):

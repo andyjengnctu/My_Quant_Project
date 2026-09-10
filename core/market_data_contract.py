@@ -14,6 +14,7 @@ from config.market_data import (
     ACTIVE_RESEARCH_DATA_GENERATION,
     RESEARCH_DATA_GENERATIONS,
     TRADING_MARKET_DATA_LIFECYCLE,
+    MARKET_DATA_V2_LIFECYCLE,
 )
 
 MARKET_DATA_PROVIDER_ID = "finmind"
@@ -34,6 +35,21 @@ RESEARCH_CUTOFF_MODE_BOOTSTRAP_COMMON_COMPLETE_MANIFEST = "bootstrap_common_comp
 RESEARCH_STATUS_ACTIVE_FROZEN = "active_frozen"
 RESEARCH_STATUS_AUTHORIZED_NOT_READY = "authorized_not_ready"
 RESEARCH_STATUS_READY_FROZEN = "ready_frozen"
+
+MARKET_DATA_V2_CANONICAL_DATA_PLANE = "market_data_v2"
+MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE = "neutral_provider_ssot"
+MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE = "market_data_v2_provider_snapshot"
+MARKET_DATA_V2_RESEARCH_VIEW_ROLE = "frozen_scientific_view"
+MARKET_DATA_V2_TRADING_VIEW_ROLE = "latest_operational_view"
+MARKET_DATA_V2_LEGACY_TARGET_ROLE = "v2_materialized_compatibility_only"
+MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION = "legacy_execution_transition"
+MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER = "v2_execution_cutover"
+MARKET_DATA_V2_MIGRATION_PHASE_V2_ONLY = "v2_only"
+MARKET_DATA_V2_MIGRATION_PHASES = (
+    MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION,
+    MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER,
+    MARKET_DATA_V2_MIGRATION_PHASE_V2_ONLY,
+)
 
 
 @dataclass(frozen=True)
@@ -62,8 +78,23 @@ class ResearchDataGenerationContract:
 @dataclass(frozen=True)
 class TradingMarketDataLifecycleContract:
     mode: str
+    provider_archive_source: str
     bootstrap_source_generation: str
     status: str
+
+
+@dataclass(frozen=True)
+class MarketDataV2LifecycleContract:
+    canonical_data_plane: str
+    provider_archive_role: str
+    research_view_role: str
+    trading_view_role: str
+    shared_provider_archive_required: bool
+    independent_domain_provider_redownload_allowed: bool
+    legacy_target_role: str
+    legacy_target_must_derive_from_v2: bool
+    migration_phase: str
+    legacy_direct_provider_download_allowed_during_transition: bool
 
 
 def _require_nonempty_text(value: object, *, field: str) -> str:
@@ -160,11 +191,85 @@ def get_active_research_data_generation() -> ResearchDataGenerationContract:
     return contract
 
 
+def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
+    raw = MARKET_DATA_V2_LIFECYCLE
+    if not isinstance(raw, Mapping):
+        raise ValueError("MARKET_DATA_V2_LIFECYCLE 必須是 mapping")
+
+    canonical_data_plane = _require_nonempty_text(
+        raw.get("canonical_data_plane"), field="market_data_v2.canonical_data_plane"
+    )
+    provider_archive_role = _require_nonempty_text(
+        raw.get("provider_archive_role"), field="market_data_v2.provider_archive_role"
+    )
+    research_view_role = _require_nonempty_text(
+        raw.get("research_view_role"), field="market_data_v2.research_view_role"
+    )
+    trading_view_role = _require_nonempty_text(
+        raw.get("trading_view_role"), field="market_data_v2.trading_view_role"
+    )
+    legacy_target_role = _require_nonempty_text(
+        raw.get("legacy_target_role"), field="market_data_v2.legacy_target_role"
+    )
+    migration_phase = _require_nonempty_text(
+        raw.get("migration_phase"), field="market_data_v2.migration_phase"
+    )
+
+    shared_provider_archive_required = bool(raw.get("shared_provider_archive_required"))
+    independent_domain_provider_redownload_allowed = bool(
+        raw.get("independent_domain_provider_redownload_allowed")
+    )
+    legacy_target_must_derive_from_v2 = bool(raw.get("legacy_target_must_derive_from_v2"))
+    legacy_direct_provider_download_allowed_during_transition = bool(
+        raw.get("legacy_direct_provider_download_allowed_during_transition")
+    )
+
+    if canonical_data_plane != MARKET_DATA_V2_CANONICAL_DATA_PLANE:
+        raise ValueError(f"Market Data canonical data plane 必須為 {MARKET_DATA_V2_CANONICAL_DATA_PLANE}")
+    if provider_archive_role != MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE:
+        raise ValueError(f"Market Data V2 provider archive role 必須為 {MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE}")
+    if research_view_role != MARKET_DATA_V2_RESEARCH_VIEW_ROLE:
+        raise ValueError(f"Market Data V2 Research view role 必須為 {MARKET_DATA_V2_RESEARCH_VIEW_ROLE}")
+    if trading_view_role != MARKET_DATA_V2_TRADING_VIEW_ROLE:
+        raise ValueError(f"Market Data V2 Trading view role 必須為 {MARKET_DATA_V2_TRADING_VIEW_ROLE}")
+    if not shared_provider_archive_required:
+        raise ValueError("Market Data V2 必須由 Research / Trading 共用 neutral Provider Archive")
+    if independent_domain_provider_redownload_allowed:
+        raise ValueError("Market Data V2 禁止 Research / Trading 為相同 provider history 建立獨立下載真理")
+    if legacy_target_role != MARKET_DATA_V2_LEGACY_TARGET_ROLE:
+        raise ValueError(f"Legacy target role 必須為 {MARKET_DATA_V2_LEGACY_TARGET_ROLE}")
+    if not legacy_target_must_derive_from_v2:
+        raise ValueError("Legacy compatibility target 必須由 V2 materialize，不得維持獨立 provider truth")
+    if migration_phase not in MARKET_DATA_V2_MIGRATION_PHASES:
+        raise ValueError(f"不支援的 Market Data V2 migration phase: {migration_phase}")
+    if migration_phase == MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION:
+        if not legacy_direct_provider_download_allowed_during_transition:
+            raise ValueError("legacy execution transition 必須如實允許尚未退役的 direct-provider producer")
+    elif legacy_direct_provider_download_allowed_during_transition:
+        raise ValueError("V2 execution cutover 後不得再允許 legacy direct-provider producer")
+
+    return MarketDataV2LifecycleContract(
+        canonical_data_plane=canonical_data_plane,
+        provider_archive_role=provider_archive_role,
+        research_view_role=research_view_role,
+        trading_view_role=trading_view_role,
+        shared_provider_archive_required=shared_provider_archive_required,
+        independent_domain_provider_redownload_allowed=independent_domain_provider_redownload_allowed,
+        legacy_target_role=legacy_target_role,
+        legacy_target_must_derive_from_v2=legacy_target_must_derive_from_v2,
+        migration_phase=migration_phase,
+        legacy_direct_provider_download_allowed_during_transition=legacy_direct_provider_download_allowed_during_transition,
+    )
+
+
 def get_trading_market_data_lifecycle() -> TradingMarketDataLifecycleContract:
     raw = TRADING_MARKET_DATA_LIFECYCLE
     if not isinstance(raw, Mapping):
         raise ValueError("TRADING_MARKET_DATA_LIFECYCLE 必須是 mapping")
     mode = _require_nonempty_text(raw.get("mode"), field="trading.mode")
+    provider_archive_source = _require_nonempty_text(
+        raw.get("provider_archive_source"), field="trading.provider_archive_source"
+    )
     bootstrap_source_generation = _require_nonempty_text(
         raw.get("bootstrap_source_generation"),
         field="trading.bootstrap_source_generation",
@@ -172,11 +277,17 @@ def get_trading_market_data_lifecycle() -> TradingMarketDataLifecycleContract:
     status = _require_nonempty_text(raw.get("status"), field="trading.status")
     if mode != "incremental_latest":
         raise ValueError(f"不支援的 Trading market-data mode: {mode}")
-    # The target bootstrap source must be a declared Research data generation;
-    # it may remain AUTHORIZED_NOT_READY until the bootstrap round completes.
+    if provider_archive_source != MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE:
+        raise ValueError(
+            f"Trading V2 provider archive source 必須為 {MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE}"
+        )
+    # Compatibility metadata remains resolvable during migration, but it does
+    # not own provider/archive truth; both Research and Trading pin the neutral
+    # Market Data V2 Provider Snapshot.
     get_research_data_generation(bootstrap_source_generation)
     return TradingMarketDataLifecycleContract(
         mode=mode,
+        provider_archive_source=provider_archive_source,
         bootstrap_source_generation=bootstrap_source_generation,
         status=status,
     )
@@ -190,11 +301,13 @@ def build_market_data_contract_snapshot() -> dict[str, object]:
         for generation_id in RESEARCH_DATA_GENERATIONS
     }
     trading = get_trading_market_data_lifecycle()
+    market_data_v2 = get_market_data_v2_lifecycle()
     return {
         "price_source": price.__dict__,
         "active_research_generation": active_research.__dict__,
         "research_generations": research_generations,
         "trading": trading.__dict__,
+        "market_data_v2": market_data_v2.__dict__,
     }
 
 
@@ -212,12 +325,24 @@ __all__ = [
     "RESEARCH_STATUS_ACTIVE_FROZEN",
     "RESEARCH_STATUS_AUTHORIZED_NOT_READY",
     "RESEARCH_STATUS_READY_FROZEN",
+    "MARKET_DATA_V2_CANONICAL_DATA_PLANE",
+    "MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE",
+    "MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE",
+    "MARKET_DATA_V2_RESEARCH_VIEW_ROLE",
+    "MARKET_DATA_V2_TRADING_VIEW_ROLE",
+    "MARKET_DATA_V2_LEGACY_TARGET_ROLE",
+    "MARKET_DATA_V2_MIGRATION_PHASE_LEGACY_EXECUTION_TRANSITION",
+    "MARKET_DATA_V2_MIGRATION_PHASE_V2_EXECUTION_CUTOVER",
+    "MARKET_DATA_V2_MIGRATION_PHASE_V2_ONLY",
+    "MARKET_DATA_V2_MIGRATION_PHASES",
     "MarketPriceSourceContract",
     "ResearchDataGenerationContract",
     "TradingMarketDataLifecycleContract",
+    "MarketDataV2LifecycleContract",
     "get_market_price_source_contract",
     "get_research_data_generation",
     "get_active_research_data_generation",
+    "get_market_data_v2_lifecycle",
     "get_trading_market_data_lifecycle",
     "build_market_data_contract_snapshot",
 ]
