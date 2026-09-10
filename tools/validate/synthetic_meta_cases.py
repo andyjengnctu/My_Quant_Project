@@ -2457,6 +2457,78 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         (set(outer_defaults), outer_defaults.get("OPTIMIZER_ROLLING_FOLD_WORKERS")),
     )
 
+    outer_runtime = importlib.import_module("services.optimizer.outer_rolling_oos")
+    outer_performance = importlib.import_module("services.optimizer.outer_rolling_performance")
+    outer_timing = importlib.import_module("services.optimizer.outer_rolling_timing")
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_search_parallel_resolver_remains_bound_after_responsibility_extraction",
+        True,
+        bool(
+            outer_runtime._resolve_single_fold_search_parallel_trials
+            is outer_performance._resolve_single_fold_search_parallel_trials
+            and isinstance(
+                outer_runtime._resolve_single_fold_search_parallel_trials({}, sampler_kind="tpe"),
+                int,
+            )
+        ),
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_timing_helpers_are_compatibility_reexports_of_timing_owner",
+        True,
+        all(
+            getattr(outer_runtime, name) is getattr(outer_timing, name)
+            for name in (
+                "_build_outer_timing_row",
+                "_sum_timing_rows",
+                "_sum_int_timing_rows",
+                "_parse_compact_count_text",
+                "_merge_compact_timing_count_text",
+                "_write_outer_timing_summary",
+            )
+        ),
+    )
+
+    timing_summary_probe = outer_runtime._write_outer_timing_summary(
+        output_dir=".",
+        session_ts="synthetic",
+        dataset_label="full",
+        config=outer_runtime.OuterRollingConfig(
+            training_start_year=2015,
+            first_oos_year=2021,
+            last_oos_year=2021,
+            trials_per_fold=1,
+            first_oos_date="2021-01-01",
+            last_oos_date="2021-12-31",
+        ),
+        timing_mode=False,
+        optimizer_seed=1,
+        raw_data_load_sec=0.0,
+        active_replay_chain_sec=0.0,
+        report_write_sec=0.0,
+        overall_sec=0.0,
+        fold_timing_rows=[],
+        write_files=False,
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_timing_summary_executes_through_extracted_owner_without_files",
+        ("outer_rolling_oos_timing", "", "", True),
+        (
+            str((timing_summary_probe.get("payload") or {}).get("type", "")),
+            str(timing_summary_probe.get("json", "")),
+            str(timing_summary_probe.get("csv", "")),
+            int(((timing_summary_probe.get("payload") or {}).get("summary") or {}).get("single_fold_search_parallel_trials", 0) or 0) >= 1,
+        ),
+    )
+
     raw_cache_invalid_override_fails_closed = False
     try:
         performance_runtime.resolve_optimizer_raw_cache_lock_stale_sec(
