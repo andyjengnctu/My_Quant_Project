@@ -310,14 +310,14 @@ def validate_downloader_main_error_path_case(base_params):
     case_id = "DOWNLOADER_MAIN_ERROR_PATHS"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'synthetic_error_paths')
 
-    market_data_update = importlib.import_module("services.trading.market_data_update")
+    market_data_auto_update = importlib.import_module("services.trading.market_data_auto_update")
     stderr = io.StringIO()
     with patch.object(
-        market_data_update,
-        "run_trading_market_data_update",
+        market_data_auto_update,
+        "run_trading_market_data_auto_update",
         side_effect=RuntimeError(
-            "VIP 資料庫更新失敗：成功 0 檔、已最新跳過 0 檔、最後日期檢查失敗 1 檔、下載失敗 2 檔；"
-            "詳細請見 outputs/smart_downloader/downloader_issues_20260402.log"
+            "Market Data V2 Daily Update synthetic failure；"
+            "target=2026-09-10；dataset=TaiwanStockPriceAdj"
         ),
     ):
         with contextlib.redirect_stderr(stderr):
@@ -326,8 +326,8 @@ def validate_downloader_main_error_path_case(base_params):
     err = stderr.getvalue()
     check("downloader_main_returns_failure", 1, rc)
     check("downloader_main_reports_runtimeerror", True, "❌ RuntimeError:" in err)
-    check("downloader_main_reports_counts", True, "成功 0 檔、已最新跳過 0 檔、最後日期檢查失敗 1 檔、下載失敗 2 檔" in err)
-    check("downloader_main_reports_issue_log_path", True, "outputs/smart_downloader/downloader_issues_20260402.log" in err)
+    check("downloader_main_reports_v2_target_context", True, "target=2026-09-10" in err)
+    check("downloader_main_reports_v2_dataset_context", True, "dataset=TaiwanStockPriceAdj" in err)
     summary["downloader_main_error_cases"] = 1
     return results, summary
 
