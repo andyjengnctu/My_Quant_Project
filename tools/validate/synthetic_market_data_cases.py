@@ -1318,6 +1318,7 @@ __all__ = [
     "validate_market_data_v2_bootstrap_activation_contract_case",
     "validate_market_data_v2_provider_snapshot_completion_contract_case",
     "validate_market_data_v2_trading_workbench_sidecar_contract_case",
+    "validate_market_data_v2_trading_historical_latest_view_contract_case",
     "validate_trading_price_bulk_completeness_contract_case",
     "validate_market_data_v2_research_candidate_contract_case",
     "validate_market_data_v2_research_pit_review_contract_case",
@@ -5550,4 +5551,281 @@ def validate_trading_execution_finmind_retry_contract_case(_base_params):
     check("universe_transient_retry_consumes_one_extra_provider_attempt", 4, universe_base.data_request_count)
 
     summary.update({"checks": len(results), "retry_owner": "explicit_execution_critical_finmind_wrapper"})
+    return results, summary
+
+
+def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_params):
+    """Round-4 Trading V2 read seam keeps history PIT-local and overlay/latest semantics deterministic."""
+
+    from pathlib import Path
+
+    import pandas as pd
+
+    from core.market_data_trading_view import (
+        TRADING_V2_CURRENT_EXECUTION_POOL_IS_TRAINING_SOURCE,
+        TRADING_V2_HISTORICAL_MEMBERSHIP_SOURCE,
+        TRADING_V2_VIEW_ROLE,
+        merge_market_data_v2_fragments,
+        resolve_trading_v2_training_horizon,
+        trading_v2_view_contract_fingerprint,
+        trading_v2_view_contract_payload,
+    )
+
+    case_id = "MARKET_DATA_V2_TRADING_HISTORICAL_LATEST_VIEW"
+    results, summary, check, check_true = bind_synthetic_case(
+        case_id, "market_data", training_performed=False
+    )
+
+    contract = trading_v2_view_contract_payload()
+    check("trading_v2_view_role_is_latest_operational_view", "latest_operational_view", TRADING_V2_VIEW_ROLE)
+    check(
+        "historical_membership_source_is_neutral_daily_pit_ssot",
+        "neutral_daily_pit_market_universe",
+        TRADING_V2_HISTORICAL_MEMBERSHIP_SOURCE,
+    )
+    check(
+        "current_execution_pool_is_never_historical_training_source",
+        False,
+        TRADING_V2_CURRENT_EXECUTION_POOL_IS_TRAINING_SOURCE,
+    )
+    check(
+        "view_contract_explicitly_preserves_current_execution_authority",
+        False,
+        bool(contract.get("execution_authority_changes_in_this_contract")),
+    )
+    check("trading_v2_view_contract_has_content_identity", 64, len(trading_v2_view_contract_fingerprint()))
+
+    horizon = resolve_trading_v2_training_horizon(
+        provider_as_of_date="2026-03-02",
+        required_datasets=("Price", "PriceAdj", "MarketValue"),
+        dataset_state={
+            "Price": {"last_ready_target_date": "2026-03-05"},
+            "PriceAdj": {"last_ready_target_date": "2026-03-04"},
+            "MarketValue": {"last_ready_target_date": "2026-03-06"},
+        },
+    )
+    check("training_horizon_is_common_minimum_ready_date", "2026-03-04", horizon.training_through_date)
+    check(
+        "training_horizon_preserves_dataset_specific_ready_evidence",
+        {"Price": "2026-03-05", "PriceAdj": "2026-03-04", "MarketValue": "2026-03-06"},
+        dict(horizon.dataset_ready_through),
+    )
+
+    baseline_only = resolve_trading_v2_training_horizon(
+        provider_as_of_date="2026-03-02",
+        required_datasets=("PriceAdj", "NewFeature"),
+        dataset_state={"PriceAdj": {"last_ready_target_date": "2026-03-05"}},
+    )
+    check(
+        "provider_snapshot_is_minimum_complete_baseline_for_missing_operational_state",
+        "2026-03-02",
+        baseline_only.dataset_ready_through["NewFeature"],
+    )
+    stale_state = resolve_trading_v2_training_horizon(
+        provider_as_of_date="2026-03-02",
+        required_datasets=("PriceAdj",),
+        dataset_state={"PriceAdj": {"last_ready_target_date": "2026-02-27"}},
+    )
+    check(
+        "stale_operational_state_cannot_move_complete_provider_snapshot_backward",
+        "2026-03-02",
+        stale_state.training_through_date,
+    )
+
+    base = pd.DataFrame(
+        {
+            "date": ["2026-03-01", "2026-03-02"],
+            "stock_id": ["2330", "2330"],
+            "close": [100.0, 101.0],
+        }
+    )
+    overlay = pd.DataFrame(
+        {
+            "date": ["2026-03-02", "2026-03-03"],
+            "stock_id": ["2330", "2330"],
+            "close": [111.0, 112.0],
+        }
+    )
+    merged = merge_market_data_v2_fragments(
+        (base, overlay), primary_key=("date", "stock_id")
+    )
+    row_by_date = dict(zip(merged["date"].tolist(), merged["close"].tolist()))
+    check("later_verified_overlay_restates_same_primary_key", 111.0, row_by_date["2026-03-02"])
+    check("provider_history_not_touched_by_overlay_is_preserved", 100.0, row_by_date["2026-03-01"])
+    check("new_overlay_date_extends_latest_view", 112.0, row_by_date["2026-03-03"])
+
+    project_root = Path(__file__).resolve().parents[2]
+    service_source = (project_root / "services" / "trading" / "market_data_v2_view.py").read_text(encoding="utf-8")
+    check(
+        "trading_v2_read_seam_reads_neutral_daily_pit_artifact",
+        True,
+        "read_market_data_v2_daily_pit_members" in service_source,
+    )
+    check(
+        "trading_v2_read_seam_does_not_import_legacy_current_universe_owner",
+        False,
+        "services.downloader.universe" in service_source,
+    )
+    check(
+        "trading_v2_read_seam_does_not_call_execution_pool_screening",
+        False,
+        "screen_daily_trading_execution_pool" in service_source,
+    )
+
+    # Exercise the actual read seam over one immutable Provider Snapshot plus one
+    # completed Trading overlay.  This covers read-only ledger validation and
+    # ensures incomplete/raw batch files are not the source of latest truth.
+    from datetime import datetime, timedelta, timezone
+    from tempfile import TemporaryDirectory
+
+    from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
+    from core.market_data_trading_storage_contract import (
+        build_trading_sync_batch_manifest_payload,
+        resolve_trading_market_data_v2_batch_manifest_path,
+        resolve_trading_market_data_v2_ledger_path,
+        resolve_trading_market_data_v2_request_path,
+    )
+    from core.market_data_trading_sync import TradingSyncRequestManifest
+    from services.downloader.market_data_ledger import MarketDataJobLedger
+    from services.trading.market_data_v2_view import TradingMarketDataV2View
+
+    with TemporaryDirectory(prefix="market_data_v2_trading_view_") as temp_dir:
+        root = Path(temp_dir)
+        provider_request = BootstrapHttpRequest(
+            "TaiwanStockPriceAdj",
+            "per_instrument_full_range",
+            "2330",
+            "2026-03-01",
+            "2026-03-02",
+        )
+        registry_fp = canonical_json_sha256({"registry": "round4-synthetic"})
+        provider_manifest_fp = canonical_json_sha256({"provider_request": provider_request.request_id})
+        provider_manifest = BootstrapRequestManifest(
+            as_of_date="2026-03-02",
+            full_range_start="2026-03-01",
+            registry_fingerprint=registry_fp,
+            manifest_fingerprint=provider_manifest_fp,
+            historical_instrument_count=1,
+            requests=(provider_request,),
+        )
+        provider_frames = {
+            provider_request.request_id: pd.DataFrame({
+                "date": ["2026-03-01", "2026-03-02"],
+                "stock_id": ["2330", "2330"],
+                "open": [100.0, 101.0],
+                "max": [102.0, 103.0],
+                "min": [99.0, 100.0],
+                "close": [101.0, 102.0],
+            })
+        }
+        provider_payload, _unused_reader = _publish_ready_provider_snapshot_fixture(
+            root=root,
+            manifest=provider_manifest,
+            manifest_fingerprint=provider_manifest_fp,
+            frame_by_request=provider_frames,
+            owner_id="round4-provider",
+            started_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            finalized_at="2026-03-02T00:00:05+00:00",
+            missing_columns_message="synthetic provider columns missing",
+        )
+
+        overlay_request = BootstrapHttpRequest(
+            "TaiwanStockPriceAdj",
+            "trading_recent_repair",
+            None,
+            "2026-03-02",
+            "2026-03-02",
+        )
+        batch_fp = canonical_json_sha256({"overlay_request": overlay_request.request_id})
+        trading_manifest = TradingSyncRequestManifest(
+            as_of_date="2026-03-02",
+            full_range_start="2026-03-02",
+            registry_fingerprint=registry_fp,
+            manifest_fingerprint=batch_fp,
+            historical_instrument_count=1,
+            requests=(overlay_request,),
+            base_provider_snapshot_fingerprint=str(provider_payload["snapshot_fingerprint"]),
+            base_provider_manifest_fingerprint=provider_manifest_fp,
+            base_as_of_date="2026-03-02",
+            previous_sync_date=None,
+        )
+        atomic_write_json(
+            resolve_trading_market_data_v2_batch_manifest_path(root, batch_fp),
+            build_trading_sync_batch_manifest_payload(trading_manifest),
+        )
+        overlay_ledger = MarketDataJobLedger(
+            resolve_trading_market_data_v2_ledger_path(root, batch_fp),
+            workload_namespace="market_data_v2_trading_sync",
+        )
+        now = datetime(2026, 3, 2, 0, 1, tzinfo=timezone.utc)
+        workload_id = overlay_ledger.seed_manifest(trading_manifest, now=now)
+        job = overlay_ledger.claim_next_job(
+            workload_id,
+            owner_id="round4-overlay",
+            now=now,
+            lease_until=now + timedelta(minutes=5),
+        )
+        if job is None:
+            raise AssertionError("synthetic Trading overlay job was not claimable")
+        overlay_path = resolve_trading_market_data_v2_request_path(root, batch_fp, overlay_request)
+        overlay_path.parent.mkdir(parents=True, exist_ok=True)
+        overlay_path.write_bytes(b"round4-overlay\n")
+        overlay_ledger.mark_done(
+            workload_id,
+            overlay_request.request_id,
+            row_count=1,
+            content_sha256=compute_file_sha256(overlay_path),
+            now=now + timedelta(seconds=1),
+        )
+        overlay_ledger.set_workload_status(
+            workload_id, status="DONE", now=now + timedelta(seconds=2)
+        )
+        frames = {
+            **provider_frames,
+            overlay_request.request_id: pd.DataFrame({
+                "date": ["2026-03-02"],
+                "stock_id": ["2330"],
+                "open": [110.0],
+                "max": [112.0],
+                "min": [109.0],
+                "close": [111.0],
+            }),
+        }
+
+        def frame_reader(path, columns=None):
+            frame = frames[path.stem].copy()
+            if columns:
+                frame = frame.loc[:, list(columns)]
+            return frame
+
+        view = TradingMarketDataV2View.open(root, frame_reader=frame_reader)
+        latest = view.read_dataset_frame(
+            "TaiwanStockPriceAdj", columns=("date", "stock_id", "close")
+        )
+        check(
+            "actual_trading_v2_view_composes_provider_and_verified_overlay",
+            [
+                {"date": "2026-03-01", "stock_id": "2330", "close": 101.0},
+                {"date": "2026-03-02", "stock_id": "2330", "close": 111.0},
+            ],
+            latest.to_dict("records"),
+        )
+        identity = view.view_identity(required_datasets=("TaiwanStockPriceAdj",))
+        check(
+            "actual_view_identity_pins_overlay_and_rejects_execution_pool_as_history",
+            (False, [batch_fp]),
+            (
+                bool(identity["current_execution_pool_used_for_historical_membership"]),
+                list(identity["overlay_batch_fingerprints"]),
+            ),
+        )
+
+    summary.update(
+        {
+            "checks": len(results),
+            "training_through_date": horizon.training_through_date,
+            "contract_fingerprint": trading_v2_view_contract_fingerprint(),
+        }
+    )
     return results, summary

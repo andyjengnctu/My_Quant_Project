@@ -60,6 +60,7 @@ class LedgerCommittedArtifact:
     end_date: str | None
     row_count: int
     content_sha256: str
+    completed_at: str | None = None
 
     def to_request(self) -> BootstrapHttpRequest:
         return BootstrapHttpRequest(
@@ -117,20 +118,38 @@ def _row_to_job(row: sqlite3.Row) -> LedgerJob:
 
 
 class MarketDataJobLedger:
-    def __init__(self, path, *, workload_namespace: str = "market_data_v2_bootstrap"):
+    def __init__(
+        self,
+        path,
+        *,
+        workload_namespace: str = "market_data_v2_bootstrap",
+        read_only: bool = False,
+    ):
         self.path = Path(path)
         self.workload_namespace = str(workload_namespace or "").strip()
         if not self.workload_namespace:
             raise ValueError("Market Data ledger workload_namespace 不可空白")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
+        self.read_only = bool(read_only)
+        if self.read_only:
+            if not self.path.is_file():
+                raise FileNotFoundError(f"Market Data ledger 不存在: {self.path}")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
+        if self.read_only:
+            uri = self.path.resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=30.0, isolation_level=None)
+        else:
+            conn = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        if self.read_only:
+            conn.execute("PRAGMA query_only=ON")
+        else:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
 
@@ -589,6 +608,24 @@ class MarketDataJobLedger:
             ).fetchone()
         return None if row is None else row["next_retry"]
 
+    def find_unique_workload_id_by_manifest_fingerprint(self, manifest_fingerprint: str) -> str | None:
+        fingerprint = str(manifest_fingerprint or "").strip().lower()
+        if len(fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in fingerprint):
+            raise ValueError("Market Data manifest_fingerprint 必須是 SHA256 hex")
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT workload_id FROM workloads WHERE manifest_fingerprint = ? ORDER BY workload_id",
+                (fingerprint,),
+            ).fetchall()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise ValueError(
+                "Market Data ledger 同一 manifest_fingerprint 對應多個 workload: "
+                f"fingerprint={fingerprint}, count={len(rows)}"
+            )
+        return str(rows[0]["workload_id"])
+
     def get_summary(self, workload_id: str) -> LedgerSummary:
         with self._connection() as conn:
             workload = conn.execute(
@@ -624,7 +661,7 @@ class MarketDataJobLedger:
             rows = conn.execute(
                 """
                 SELECT workload_id, request_id, ordinal, dataset, bootstrap_mode,
-                       data_id, start_date, end_date, row_count, content_sha256
+                       data_id, start_date, end_date, row_count, content_sha256, completed_at
                 FROM jobs
                 WHERE workload_id = ? AND status = ?
                 ORDER BY ordinal
@@ -650,6 +687,7 @@ class MarketDataJobLedger:
                     end_date=row["end_date"],
                     row_count=int(row["row_count"]),
                     content_sha256=content_sha256,
+                    completed_at=row["completed_at"],
                 )
             )
         return tuple(artifacts)

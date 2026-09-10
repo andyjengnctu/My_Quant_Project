@@ -196,6 +196,43 @@ def load_market_data_v2_daily_pit_universe(
     )
 
 
+def read_market_data_v2_daily_pit_members(
+    project_root,
+    *,
+    provider_snapshot_fingerprint: str,
+    date_value: str,
+) -> tuple[str, ...]:
+    """Read one date's neutral PIT membership from the immutable derived artifact."""
+
+    payload = load_market_data_v2_daily_pit_universe(
+        project_root,
+        provider_snapshot_fingerprint=provider_snapshot_fingerprint,
+        required=True,
+    )
+    assert payload is not None
+    date_text = str(pd.to_datetime(date_value, errors="raise").date().isoformat())
+    provider_as_of = str(payload.get("provider_as_of_date") or "")
+    if date_text > provider_as_of:
+        raise ValueError(
+            "neutral daily PIT artifact 只能讀 Provider Snapshot as-of 以前日期: "
+            f"date={date_text}, provider_as_of={provider_as_of}"
+        )
+    db_path = resolve_market_data_daily_pit_universe_path(
+        project_root, provider_snapshot_fingerprint
+    ).resolve()
+    uri = db_path.as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        rows = conn.execute(
+            "SELECT stock_id FROM daily_universe WHERE date = ? ORDER BY stock_id",
+            (date_text,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return tuple(str(row[0]) for row in rows)
+
+
 def build_market_data_v2_daily_pit_universe(
     project_root,
     *,
@@ -330,5 +367,6 @@ __all__ = [
     "DAILY_PIT_UNIVERSE_STATUS_READY",
     "DAILY_PIT_UNIVERSE_MANIFEST_SCHEMA_VERSION",
     "load_market_data_v2_daily_pit_universe",
+    "read_market_data_v2_daily_pit_members",
     "build_market_data_v2_daily_pit_universe",
 ]

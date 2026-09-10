@@ -58,6 +58,10 @@ def resolve_trading_market_data_v2_batch_dir(project_root, batch_fingerprint: st
     return resolve_trading_market_data_v2_root(project_root) / "batches" / _hex64(batch_fingerprint, field="batch_fingerprint")
 
 
+def resolve_trading_market_data_v2_batch_manifest_path(project_root, batch_fingerprint: str) -> Path:
+    return resolve_trading_market_data_v2_batch_dir(project_root, batch_fingerprint) / TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME
+
+
 def resolve_trading_market_data_v2_dataset_dir(project_root, batch_fingerprint: str, dataset: str) -> Path:
     return resolve_trading_market_data_v2_batch_dir(project_root, batch_fingerprint) / "datasets" / _dataset(dataset)
 
@@ -87,6 +91,38 @@ def build_trading_sync_batch_manifest_payload(manifest: TradingSyncRequestManife
         "request_ids": [request.request_id for request in manifest.requests],
     }
     return {**identity, "identity_fingerprint": canonical_json_sha256(identity)}
+
+
+def validate_trading_sync_batch_manifest_payload(payload: dict[str, object]) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ValueError("Trading V2 batch manifest 必須是 object")
+    if int(payload.get("schema_version", -1)) != TRADING_MARKET_DATA_V2_SCHEMA_VERSION:
+        raise ValueError("Trading V2 batch manifest schema 不相容")
+    if str(payload.get("role") or "") != "trading_market_data_v2_archive_sync_batch":
+        raise ValueError("Trading V2 batch manifest role 不合法")
+    if str(payload.get("status") or "") != "READY":
+        raise ValueError("Trading V2 batch manifest 尚未 READY")
+    batch_fingerprint = _hex64(str(payload.get("batch_fingerprint") or ""), field="batch_fingerprint")
+    _hex64(str(payload.get("base_provider_snapshot_fingerprint") or ""), field="base_provider_snapshot_fingerprint")
+    _hex64(str(payload.get("base_provider_manifest_fingerprint") or ""), field="base_provider_manifest_fingerprint")
+    _hex64(str(payload.get("registry_fingerprint") or ""), field="registry_fingerprint")
+    request_ids = [str(value or "").strip().lower() for value in list(payload.get("request_ids") or [])]
+    if any(not _HEX64_RE.fullmatch(value) for value in request_ids):
+        raise ValueError("Trading V2 batch manifest 含不合法 request_id")
+    if len(set(request_ids)) != len(request_ids):
+        raise ValueError("Trading V2 batch manifest request_id 重複")
+    try:
+        request_count = int(payload.get("request_count"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Trading V2 batch manifest request_count 不合法") from exc
+    if request_count != len(request_ids):
+        raise ValueError("Trading V2 batch manifest request_count 不一致")
+    identity = {key: value for key, value in payload.items() if key != "identity_fingerprint"}
+    if str(payload.get("identity_fingerprint") or "").strip().lower() != canonical_json_sha256(identity):
+        raise ValueError("Trading V2 batch manifest identity fingerprint 不一致")
+    if str(identity.get("batch_fingerprint") or "").lower() != batch_fingerprint:
+        raise ValueError("Trading V2 batch manifest batch fingerprint drift")
+    return payload
 
 
 def build_trading_request_metadata(
@@ -133,9 +169,11 @@ __all__ = [
     "resolve_trading_market_data_v2_auto_update_lock_path",
     "resolve_trading_market_data_v2_market_date_discovery_state_path",
     "resolve_trading_market_data_v2_batch_dir",
+    "resolve_trading_market_data_v2_batch_manifest_path",
     "resolve_trading_market_data_v2_dataset_dir",
     "resolve_trading_market_data_v2_request_path",
     "resolve_trading_market_data_v2_ledger_path",
     "build_trading_sync_batch_manifest_payload",
+    "validate_trading_sync_batch_manifest_payload",
     "build_trading_request_metadata",
 ]

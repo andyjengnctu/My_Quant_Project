@@ -16,6 +16,25 @@ FrameReader = Callable[[Path, tuple[str, ...] | None], pd.DataFrame]
 HashFn = Callable[[Path], str]
 
 
+def read_parquet_frame(path: Path, columns: tuple[str, ...] | None = None) -> pd.DataFrame:
+    """Read a Market Data V2 parquet fragment without mutating archive state."""
+
+    if not columns:
+        return pd.read_parquet(path)
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise RuntimeError("Market Data V2 Parquet read 需要 pyarrow") from exc
+    parquet = pq.ParquetFile(path)
+    names = tuple(str(name) for name in parquet.schema_arrow.names)
+    missing = [column for column in columns if column not in names]
+    if missing:
+        if int(parquet.metadata.num_rows) == 0 and not names:
+            return pd.DataFrame(columns=list(columns))
+        raise ValueError(f"Market Data V2 parquet 缺少欄位: {missing}")
+    return pd.read_parquet(path, columns=list(columns))
+
+
 class ProviderSnapshotView:
     def __init__(
         self,
@@ -27,29 +46,12 @@ class ProviderSnapshotView:
     ):
         self.project_root = Path(project_root).resolve()
         self.archive = archive
-        self._frame_reader = frame_reader or self._read_parquet
+        self._frame_reader = frame_reader or read_parquet_frame
         self._hash_fn = hash_fn or compute_file_sha256
         grouped: dict[str, list] = defaultdict(list)
         for item in archive.artifacts:
             grouped[str(item.dataset)].append(item)
         self._artifacts_by_dataset = {key: tuple(value) for key, value in grouped.items()}
-
-    @staticmethod
-    def _read_parquet(path: Path, columns: tuple[str, ...] | None) -> pd.DataFrame:
-        if not columns:
-            return pd.read_parquet(path)
-        try:
-            import pyarrow.parquet as pq
-        except ImportError as exc:
-            raise RuntimeError("Market Data V2 Parquet read 需要 pyarrow") from exc
-        parquet = pq.ParquetFile(path)
-        names = tuple(str(name) for name in parquet.schema_arrow.names)
-        missing = [column for column in columns if column not in names]
-        if missing:
-            if int(parquet.metadata.num_rows) == 0 and not names:
-                return pd.DataFrame(columns=list(columns))
-            raise ValueError(f"Provider Snapshot parquet 缺少欄位: {missing}")
-        return pd.read_parquet(path, columns=list(columns))
 
     def dataset_artifacts(self, dataset: str):
         return self._artifacts_by_dataset.get(str(dataset or "").strip(), ())
@@ -101,4 +103,4 @@ class ProviderSnapshotView:
         return tuple(ids)
 
 
-__all__ = ["FrameReader", "HashFn", "ProviderSnapshotView"]
+__all__ = ["FrameReader", "HashFn", "read_parquet_frame", "ProviderSnapshotView"]

@@ -4430,6 +4430,17 @@
       "entry": "`config/market_data.py`, `core/market_data_contract.py`, `core/runtime_domains.py`, `core/trading_data_dependencies.py`, `doc/ARCHITECTURE.md`",
       "initial_status": "NEW",
       "order": 399
+    },
+    {
+      "id": "B412",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Market Data V2 Trading historical/latest read view",
+      "item": "Trading production training must read one verified Market Data V2 historical/latest view composed from the neutral Provider Snapshot plus completed Trading overlays, use neutral date-local PIT market membership, and resolve its endpoint from the common READY horizon of the exact required datasets; the current execution pool must never define historical training membership.",
+      "gap": "After neutral PIT ownership and pool layering were established, Trading still lacked a canonical read seam that could compose immutable Provider Snapshot history with verified overlay restatements for future production training. Without it, consumers could use aggregate SYNCED state, the newest single dataset date, current 556 membership, or incomplete overlay files as historical truth. The read seam must be provider-free/write-free, use registry primary keys for deterministic overlay precedence, enforce lineage/ledger/hash verification, reuse neutral PIT membership, and preserve current execution authority until a later consumer cutover.",
+      "entry": "`core/market_data_trading_view.py`, `services/trading/market_data_v2_view.py`, `services/market_data/provider_snapshot_repository.py`, `services/market_data/daily_pit_universe.py`, `core/market_data_trading_storage_contract.py`",
+      "initial_status": "NEW",
+      "order": 400
     }
   ],
   "tests": [
@@ -8143,6 +8154,13 @@
       "description": "`validate_market_data_governance_contract_case` 擴充驗證 V2 canonical data plane、neutral shared Provider Archive、Research frozen / Trading latest view 分工、禁止 domain-specific provider-history redownload、Legacy V2-derived compatibility target，以及 current legacy-execution transition 不得假裝已完成切換。",
       "initial_status": "NEW",
       "order": 521
+    },
+    {
+      "id": "T532",
+      "b_id": "B412",
+      "description": "`validate_market_data_v2_trading_historical_latest_view_contract_case` 驗證 required-dataset common READY horizon、Provider Snapshot minimum baseline、verified overlay primary-key precedence、neutral historical PIT source，以及 current execution pool 不得成為歷史 training membership。",
+      "initial_status": "NEW",
+      "order": 522
     }
   ],
   "transitions": [
@@ -26161,6 +26179,22 @@
       "to_status": "DONE",
       "description": "擴充既有 Market Data governance synthetic 驗證 V2 SSOT target、shared archive、domain view 分工與 Legacy transition/target invariant。",
       "note": "`validate_market_data_governance_contract_case`"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "B412",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "建立 Trading Market Data V2 historical/latest read seam，組合 neutral Provider Snapshot 與 verified Trading overlays，並以 required datasets 共同 READY horizon 與 neutral daily PIT universe 約束 future production training。",
+      "note": "Trading V2 historical/latest read view; execution authority unchanged"
+    },
+    {
+      "date": "2026-09-10",
+      "id": "T532",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增 Trading V2 historical/latest view regression 並納入正式 DONE 測試摘要。",
+      "note": "`validate_market_data_v2_trading_historical_latest_view_contract_case`"
     }
   ]
 }

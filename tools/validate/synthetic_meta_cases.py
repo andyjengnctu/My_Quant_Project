@@ -2829,6 +2829,62 @@ def validate_market_data_governance_contract_case(_base_params):
         and "missing_market_value_for_high_volume_stock" not in downloader_universe_source,
     )
 
+    from core.market_data_trading_view import (
+        TRADING_V2_CURRENT_EXECUTION_POOL_IS_TRAINING_SOURCE,
+        TRADING_V2_HISTORICAL_MEMBERSHIP_SOURCE,
+        TRADING_V2_VIEW_ROLE,
+        resolve_trading_v2_training_horizon,
+        trading_v2_view_contract_payload,
+    )
+    trading_view_contract = trading_v2_view_contract_payload()
+    check("trading_v2_historical_latest_view_role_is_operational", "latest_operational_view", TRADING_V2_VIEW_ROLE)
+    check(
+        "trading_v2_historical_membership_reuses_neutral_daily_pit_ssot",
+        "neutral_daily_pit_market_universe",
+        TRADING_V2_HISTORICAL_MEMBERSHIP_SOURCE,
+    )
+    check(
+        "trading_v2_current_execution_pool_never_defines_historical_training_membership",
+        False,
+        TRADING_V2_CURRENT_EXECUTION_POOL_IS_TRAINING_SOURCE,
+    )
+    check(
+        "round4_read_view_does_not_change_current_execution_authority",
+        False,
+        bool(trading_view_contract.get("execution_authority_changes_in_this_contract")),
+    )
+    governance_horizon = resolve_trading_v2_training_horizon(
+        provider_as_of_date="2026-03-02",
+        required_datasets=("A", "B", "C"),
+        dataset_state={
+            "A": {"last_ready_target_date": "2026-03-05"},
+            "B": {"last_ready_target_date": "2026-03-04"},
+            "C": {"last_ready_target_date": "2026-03-06"},
+        },
+    )
+    check(
+        "trading_v2_training_horizon_is_required_dataset_common_ready_minimum",
+        "2026-03-04",
+        governance_horizon.training_through_date,
+    )
+    trading_view_source = (PROJECT_ROOT / "services/trading/market_data_v2_view.py").read_text(encoding="utf-8")
+    provider_repository_source = (PROJECT_ROOT / "services/market_data/provider_snapshot_repository.py").read_text(encoding="utf-8")
+    check(
+        "trading_v2_view_reads_neutral_historical_membership_owner",
+        True,
+        "read_market_data_v2_daily_pit_members" in trading_view_source,
+    )
+    check(
+        "trading_v2_view_has_no_legacy_current_universe_dependency",
+        False,
+        "services.downloader.universe" in trading_view_source,
+    )
+    check(
+        "provider_snapshot_repository_uses_read_only_ledger_seam",
+        True,
+        "MarketDataJobLedger(ledger_path, read_only=True)" in provider_repository_source,
+    )
+
     summary["active_research_generation"] = active.generation_id
     summary["active_research_cutoff"] = active.cutoff
     summary["research_generation_count"] = len(resolved_generations)

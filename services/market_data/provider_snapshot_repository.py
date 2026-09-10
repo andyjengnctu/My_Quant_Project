@@ -153,7 +153,7 @@ def load_ready_provider_snapshot_archive(
     ledger_path = resolve_market_data_bootstrap_ledger_path(root, manifest_fingerprint)
     if not ledger_path.is_file():
         raise FileNotFoundError("Provider Snapshot 對應 bootstrap ledger 不存在")
-    ledger = MarketDataJobLedger(ledger_path)
+    ledger = MarketDataJobLedger(ledger_path, read_only=True)
     workload_id = f"market_data_v2_bootstrap:{manifest_fingerprint}"
     summary = ledger.get_summary(workload_id)
     expected_total = int(payload.get("total_requests") or 0)
