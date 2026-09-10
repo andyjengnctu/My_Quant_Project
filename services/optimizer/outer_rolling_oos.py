@@ -2,34 +2,23 @@ from __future__ import annotations
 
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 
-import glob
 import hashlib
 import json
-import math
 import os
-import re
 import statistics
 import sys
 import time
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
-from threading import Lock, Thread
 from contextlib import redirect_stderr, redirect_stdout
 from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Any
 
 PARALLEL_FOLD_HEARTBEAT_INTERVAL_SEC = 2.0
 
 import pandas as pd
 
 from config.training_policy import (
-    OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-    OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
-    OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
-    OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
-    OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
@@ -39,10 +28,6 @@ from config.training_policy import (
 )
 from core.training_policy import (
     is_optimizer_local_min_review_enabled,
-    resolve_optimizer_base_finalists_agree_min_agree,
-    resolve_optimizer_local_finalists_agree_min_agree,
-    resolve_optimizer_retention_finalists_agree_min_agree,
-    resolve_optimizer_enabled_policy_indicators,
 )
 from core.training_performance import (
     is_optimizer_active_replay_include_pit_stats_index_enabled,
@@ -100,6 +85,8 @@ from services.optimizer.outer_rolling_formatting import (
     _strip_ansi,
     _timestamp_or_none,
     _visible_len,
+    format_optimizer_output_file_lines,
+    print_optimizer_output_files,
 )
 from services.optimizer.outer_rolling_search_progress import _SearchProgress
 from services.optimizer.outer_rolling_progress import (
@@ -125,6 +112,10 @@ from services.optimizer.outer_rolling_progress import (
     render_optimizer_fold_progress_line,
     render_optimizer_seed_progress_line,
     write_optimizer_seed_progress_event,
+    _compact_policy_for_live_result,
+    _compact_row_for_live_result,
+    _seed_progress_context_from_task,
+    _FoldLogSearchProgress,
 )
 from services.optimizer.outer_rolling_fold_context import (
     _fold_label,
@@ -170,18 +161,123 @@ from services.optimizer.outer_rolling_parallel_progress import (
     _read_parallel_fold_replay_phase_metrics,
     _read_parallel_fold_result_row,
 )
+from services.optimizer.outer_rolling_params import (
+    _materialize_fixed_strategy_param_overrides_in_members,
+    build_effective_trial_params_payload,
+    materialize_fixed_strategy_param_overrides_in_active_param_payload,
+    materialize_fixed_strategy_param_overrides_in_payload,
+)
+from services.optimizer.outer_rolling_policy import (
+    ALL_REPORT_POLICY_NAMES,
+    BASE_FINALISTS_AGREE_POLICY_NAME,
+    BASE_FINALIST_BEST_POLICY_NAME,
+    BASE_RETENTION_COMPARISON_POLICY_LABELS,
+    BASE_RETENTION_COMPARISON_POLICY_NAMES,
+    BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS,
+    BASE_RETENTION_COMPARISON_THRESHOLDS,
+    CHAIN_POLICY_NAMES,
+    FINALISTS_AGREE_POLICY_NAMES,
+    FINALISTS_AGREE_RESULT_POLICY_NAMES,
+    FINALISTS_AGREE_TABLE_TITLE,
+    FINALIST_BEST_POLICY_NAMES,
+    FINALIST_BEST_RESULT_POLICY_NAMES,
+    FINALIST_BEST_TABLE_TITLE,
+    LOCAL_FINALISTS_AGREE_POLICY_NAME,
+    LOCAL_FINALIST_BEST_POLICY_NAME,
+    LOCAL_DEPENDENT_POLICY_NAMES,
+    NONROLLING_PARAMSET_FILENAME_BY_POLICY,
+    NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE,
+    PARAMSET_FILENAME_BY_POLICY,
+    POLICY_OUTPUT_LABELS,
+    REPORT_POLICY_LABELS,
+    REPORT_POLICY_NAMES,
+    RETENTION_FINALISTS_AGREE_POLICY_NAME,
+    RETENTION_FINALIST_BEST_POLICY_NAME,
+    SEED_ENSEMBLE_OOS_TABLE_TITLE,
+    SEED_ENSEMBLE_POLICY_NAMES,
+    SEED_ENSEMBLE_RESULTS_TABLE_TITLE,
+    SEED_ENSEMBLE_RESULT_POLICY_NAMES,
+    SEED_ENSEMBLE_RETENTION_TABLE_TITLE,
+    STALE_POLICY_PARAMSET_FILENAMES,
+    _active_optimizer_table_titles,
+    _build_finalists_agree_member_payloads,
+    _build_local_rank_map,
+    _build_policy_items,
+    _build_policy_schedule_entry,
+    _build_retention_rank_map,
+    _finalist_best_policy_sort_key,
+    _finalists_agree_member_order_key,
+    _finalists_agree_metadata,
+    _finalists_agree_metadata_keys,
+    _finalists_agree_policy_config,
+    _finalists_agree_seed_group_sort_key,
+    _is_finalist_best_policy,
+    _is_finalists_agree_policy,
+    _is_local_finalist_best_policy,
+    _is_local_finalists_agree_policy,
+    _is_policy_ensemble_item,
+    _is_retention_finalist_best_policy,
+    _is_retention_finalists_agree_policy,
+    _is_rolling_random_seed_ensemble_enabled,
+    _policy_is_available,
+    _policy_plain_romd_score,
+    _rank_base_finalist_items,
+    _rank_local_finalist_items,
+    _rank_retention_finalist_items,
+    _resolve_finalists_agree_min_agree,
+    _resolve_report_policy_names,
+    _safe_float_for_finalists_agree_sort,
+    _safe_int_for_finalists_agree_sort,
+    _select_base_finalists_agree_item,
+    _select_base_rank1_item,
+    _select_finalists_agree_item,
+    _select_local_finalists_agree_item,
+    _select_local_rank1_item,
+    _select_retention_finalists_agree_item,
+    _select_retention_rank1_item,
+    _select_winner,
+    build_optimizer_policy_members_from_finalists,
+    get_optimizer_nonrolling_policy_paramset_filename,
+    get_optimizer_paramset_policy_names,
+    get_optimizer_policy_output_label,
+    get_optimizer_policy_paramset_filename,
+    optimizer_seed_ensemble_table_titles,
+    select_base_finalists_agree_members,
+    select_finalist_best_members,
+    select_finalists_agree_members,
+    select_local_finalists_agree_members,
+    select_retention_finalists_agree_members,
+)
+from services.optimizer.outer_rolling_plan import (
+    OuterRollingConfig,
+    _build_rolling_folds,
+    _confirm_plan,
+    _print_plan,
+    _resolve_config,
+    _resolve_latest_date_from_csv_data_dir,
+)
+from services.optimizer.outer_rolling_curve_metrics import (
+    _calc_full_month_return_metrics_from_curve,
+    _calc_full_quarter_return_metrics_from_curve,
+    _calc_full_year_return_metrics_from_curve,
+    _calc_stitched_curve_metrics,
+    _derive_curve_initial_capital,
+    _month_end_equities_from_curve,
+    _normalize_equity_curve_rows,
+    _stitch_benchmark_equity_curve,
+    _stitch_strategy_equity_curves,
+)
 from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
     ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
     get_active_param_ensemble_policy,
     is_active_param_ensemble_payload,
 )
-from core.config import V16StrategyParams
-from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
+from core.display import C_CYAN, C_GRAY, C_GREEN, C_RESET, C_YELLOW
 from core.file_integrity import atomic_write_json
-from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.params_io import build_params_from_mapping
 from core.model_paths import resolve_models_dir
-from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_plain_romd, calc_portfolio_score
+from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 from core.portfolio_param_runtime import (
     build_active_param_objects_from_payload,
     build_active_param_ensemble_objects_from_payload,
@@ -193,11 +289,8 @@ from core.raw_universe_contract import (
     resolve_raw_universe_required_min_rows,
 )
 from core.runtime_utils import (
-    choose_inline_progress_message,
     get_process_pool_executor_kwargs,
     get_taipei_now,
-    resolve_environment_flag as _env_flag,
-    safe_prompt_choice,
     stdout_supports_inline_progress,
     write_inline_progress,
 )
@@ -214,1337 +307,68 @@ from core.walk_forward_policy import build_optimizer_runtime_policy
 from services.optimizer.param_cache import build_prep_cache_key
 from services.optimizer.prep import prepare_trial_inputs
 from services.optimizer.robustness import (
-    _has_dependency_warning,
-    _has_inner_validate_pass,
-    is_dominant_year_dependency_anti_overfit_enabled,
-    is_inner_validate_anti_overfit_enabled,
     list_local_min_score_finalists,
 )
-from services.optimizer.score_display import format_optimizer_score_for_display, scale_optimizer_score_for_display
+from services.optimizer.score_display import format_optimizer_score_for_display
 from services.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
-    build_best_params_payload_from_trial,
-    is_qualified_trial_value,
 )
 from services.optimizer.walk_forward import evaluate_walk_forward
 
 
 
 
-@dataclass
-class OuterRollingConfig:
-    training_start_year: int
-    first_oos_year: int
-    last_oos_year: int
-    trials_per_fold: int
-    window_mode: str = "fixed"
-    train_window_years: int = 5
-    confirm: bool = True
-    first_oos_date: str = ""
-    last_oos_date: str = ""
-    train_window_months: int = OUTER_ROLLING_TRAIN_WINDOW_MONTHS
-    oos_horizon_months: int = OUTER_ROLLING_OOS_HORIZON_MONTHS
-    raw_universe_required_min_rows: int | None = None
-
-
-
-
-def materialize_fixed_strategy_param_overrides_in_payload(
-    params_payload: dict | None,
-    fixed_strategy_param_overrides: dict | None,
-) -> dict:
-    """Return a full validated strategy payload with fixed runtime fields applied."""
-    payload = params_to_json_dict(V16StrategyParams())
-    payload.update(dict(params_payload or {}))
-    payload.update(dict(fixed_strategy_param_overrides or {}))
-    return params_to_json_dict(build_params_from_mapping(payload))
-
-
-def build_effective_trial_params_payload(*, session, trial) -> dict:
-    """Rebuild the exact params used by the optimizer objective and runtime."""
-    return build_best_params_payload_from_trial(
-        trial,
-        fixed_tp_percent=getattr(
-            session,
-            "optimizer_fixed_tp_percent",
-            OPTIMIZER_FIXED_TP_PERCENT,
-        ),
-        fixed_strategy_param_overrides=getattr(
-            session,
-            "fixed_strategy_param_overrides",
-            None,
-        ),
-    )
-
-
-def materialize_fixed_strategy_param_overrides_in_active_param_payload(
-    payload: dict,
-    fixed_strategy_param_overrides: dict | None,
-) -> dict:
-    """Apply one fixed-runtime contract to every params node in an active-param artifact."""
-    resolved = dict(payload or {})
-    overrides = dict(fixed_strategy_param_overrides or {})
-    if not overrides:
-        return resolved
-
-    for field_name in ("params_by_oos_year", "params_by_effective_date"):
-        mapping = dict(resolved.get(field_name) or {})
-        if mapping:
-            resolved[field_name] = {
-                str(key): materialize_fixed_strategy_param_overrides_in_payload(
-                    dict(value or {}),
-                    overrides,
-                )
-                for key, value in mapping.items()
-            }
-
-    for field_name in ("params_ensemble_by_effective_date",):
-        mapping = dict(resolved.get(field_name) or {})
-        if not mapping:
-            continue
-        normalized_mapping = {}
-        for key, raw_members in mapping.items():
-            members = []
-            for raw_member in list(raw_members or []):
-                member = dict(raw_member or {})
-                member["params"] = materialize_fixed_strategy_param_overrides_in_payload(
-                    dict(member.get("params") or {}),
-                    overrides,
-                )
-                members.append(member)
-            normalized_mapping[str(key)] = members
-        resolved[field_name] = normalized_mapping
-
-    if isinstance(resolved.get("params_ensemble"), list):
-        members = []
-        for raw_member in list(resolved.get("params_ensemble") or []):
-            member = dict(raw_member or {})
-            member["params"] = materialize_fixed_strategy_param_overrides_in_payload(
-                dict(member.get("params") or {}),
-                overrides,
-            )
-            members.append(member)
-        resolved["params_ensemble"] = members
-
-    return resolved
-
-
-def _materialize_fixed_strategy_param_overrides_in_members(
-    raw_members,
-    fixed_strategy_param_overrides: dict | None,
-) -> list[dict]:
-    members = renumber_seed_ensemble_members(raw_members)
-    overrides = dict(fixed_strategy_param_overrides or {})
-    if not overrides:
-        return members
-    normalized = []
-    for raw_member in members:
-        member = dict(raw_member)
-        member["params"] = materialize_fixed_strategy_param_overrides_in_payload(
-            dict(member.get("params") or {}),
-            overrides,
-        )
-        normalized.append(member)
-    return renumber_seed_ensemble_members(normalized)
-
-BASE_FINALIST_BEST_POLICY_NAME = "base_finalist_best"
-LOCAL_FINALIST_BEST_POLICY_NAME = "local_finalist_best"
-RETENTION_FINALIST_BEST_POLICY_NAME = "retention_finalist_best"
-FINALIST_BEST_POLICY_NAMES = (
-    BASE_FINALIST_BEST_POLICY_NAME,
-    LOCAL_FINALIST_BEST_POLICY_NAME,
-    RETENTION_FINALIST_BEST_POLICY_NAME,
-)
-
-BASE_FINALISTS_AGREE_POLICY_NAME = "base_finalists_agree"
-LOCAL_FINALISTS_AGREE_POLICY_NAME = "local_finalists_agree"
-RETENTION_FINALISTS_AGREE_POLICY_NAME = "retention_finalists_agree"
-FINALISTS_AGREE_POLICY_NAMES = (
-    BASE_FINALISTS_AGREE_POLICY_NAME,
-    LOCAL_FINALISTS_AGREE_POLICY_NAME,
-    RETENTION_FINALISTS_AGREE_POLICY_NAME,
-)
-
-SEED_ENSEMBLE_POLICY_NAMES = ("base", "local", "retention")
-LOCAL_DEPENDENT_POLICY_NAMES = frozenset({
-    LOCAL_FINALIST_BEST_POLICY_NAME,
-    RETENTION_FINALIST_BEST_POLICY_NAME,
-    LOCAL_FINALISTS_AGREE_POLICY_NAME,
-    RETENTION_FINALISTS_AGREE_POLICY_NAME,
-    "local",
-    "retention",
-})
-ALL_REPORT_POLICY_NAMES = (
-    *FINALIST_BEST_POLICY_NAMES,
-    *FINALISTS_AGREE_POLICY_NAMES,
-    *SEED_ENSEMBLE_POLICY_NAMES,
-)
-
-
-def _resolve_report_policy_names(policy_names: tuple[str, ...]) -> tuple[str, ...]:
-    enabled = set(resolve_optimizer_enabled_policy_indicators(policy_names))
-    local_enabled = bool(is_optimizer_local_min_review_enabled())
-    return tuple(
-        name
-        for name in policy_names
-        if name in enabled and (local_enabled or name not in LOCAL_DEPENDENT_POLICY_NAMES)
-    )
-
-
-REPORT_POLICY_NAMES = _resolve_report_policy_names(ALL_REPORT_POLICY_NAMES)
-REPORT_POLICY_LABELS = {
-    BASE_FINALIST_BEST_POLICY_NAME: "base best",
-    LOCAL_FINALIST_BEST_POLICY_NAME: "local best",
-    RETENTION_FINALIST_BEST_POLICY_NAME: "retention best",
-    BASE_FINALISTS_AGREE_POLICY_NAME: "base agree",
-    LOCAL_FINALISTS_AGREE_POLICY_NAME: "local agree",
-    RETENTION_FINALISTS_AGREE_POLICY_NAME: "retention agree",
-    "base": "base ensemble",
-    "local": "local ensemble",
-    "retention": "retention ensemble",
-}
-FINALIST_BEST_RESULT_POLICY_NAMES = tuple(name for name in FINALIST_BEST_POLICY_NAMES if name in set(REPORT_POLICY_NAMES))
-FINALISTS_AGREE_RESULT_POLICY_NAMES = tuple(name for name in FINALISTS_AGREE_POLICY_NAMES if name in set(REPORT_POLICY_NAMES))
-SEED_ENSEMBLE_RESULT_POLICY_NAMES = tuple(name for name in SEED_ENSEMBLE_POLICY_NAMES if name in set(REPORT_POLICY_NAMES))
-FINALIST_BEST_TABLE_TITLE = "FINALIST BEST RESULTS"
-FINALISTS_AGREE_TABLE_TITLE = "FINALIST AGREE RESULTS"
-SEED_ENSEMBLE_RESULTS_TABLE_TITLE = "SEED ENSEMBLE RESULTS"
-
-# Retention-threshold variants were retired from the official OOS/ROOS contract.
-# Keep these names as empty compatibility anchors so old helper imports do not
-# reintroduce threshold replay, reports, or paramset output.
-BASE_RETENTION_COMPARISON_THRESHOLDS = ()
-BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS = OrderedDict()
-BASE_RETENTION_COMPARISON_POLICY_NAMES = ()
-BASE_RETENTION_COMPARISON_POLICY_LABELS = {}
-CHAIN_POLICY_NAMES = REPORT_POLICY_NAMES
-
-PARAMSET_FILENAME_BY_POLICY = {
-    BASE_FINALIST_BEST_POLICY_NAME: "roos_base_best.json",
-    LOCAL_FINALIST_BEST_POLICY_NAME: "roos_local_best.json",
-    RETENTION_FINALIST_BEST_POLICY_NAME: "roos_retention_best.json",
-    BASE_FINALISTS_AGREE_POLICY_NAME: "roos_base_finalists_agree.json",
-    LOCAL_FINALISTS_AGREE_POLICY_NAME: "roos_local_finalists_agree.json",
-    RETENTION_FINALISTS_AGREE_POLICY_NAME: "roos_retention_finalists_agree.json",
-    "base": "roos_ensemble_base.json",
-    "local": "roos_ensemble_local.json",
-    "retention": "roos_ensemble_retention.json",
-}
-
-NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
-    BASE_FINALIST_BEST_POLICY_NAME: "base_best.json",
-    LOCAL_FINALIST_BEST_POLICY_NAME: "local_best.json",
-    RETENTION_FINALIST_BEST_POLICY_NAME: "retention_best.json",
-    BASE_FINALISTS_AGREE_POLICY_NAME: "base_finalists_agree.json",
-    LOCAL_FINALISTS_AGREE_POLICY_NAME: "local_finalists_agree.json",
-    RETENTION_FINALISTS_AGREE_POLICY_NAME: "retention_finalists_agree.json",
-    "base": "base.json",
-    "local": "local.json",
-    "retention": "retention.json",
-}
-
-NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE = {
-    "study": "",
-    "full": "full_",
-    "oos": "oos_",
-    "trade": "trade_",
-}
-
-POLICY_OUTPUT_LABELS = {
-    BASE_FINALIST_BEST_POLICY_NAME: "base_best",
-    LOCAL_FINALIST_BEST_POLICY_NAME: "local_best",
-    RETENTION_FINALIST_BEST_POLICY_NAME: "retention_best",
-    BASE_FINALISTS_AGREE_POLICY_NAME: "base_agree",
-    LOCAL_FINALISTS_AGREE_POLICY_NAME: "local_agree",
-    RETENTION_FINALISTS_AGREE_POLICY_NAME: "retention_agree",
-    "base": "base_ensemble",
-    "local": "local_ensemble",
-    "retention": "retention_ensemble",
-}
-
-STALE_POLICY_PARAMSET_FILENAMES = (
-    "roos_base_r.json",
-    "base_r.json",
-    "oos_base_r.json",
-    "trade_base_r.json",
-    "base_r0.json",
-    "base_r05.json",
-    "oos_base_r0.json",
-    "oos_base_r05.json",
-    "trade_base_r0.json",
-    "trade_base_r05.json",
-    "roos_base_r0.json",
-    "roos_base_r05.json",
-    "roos_base_retention_gt_0_0.json",
-    "roos_base_retention_gt_0_2.json",
-    "roos_base_retention_gt_0_4.json",
-    "roos_base_retention_gt_0_6.json",
-    "roos_base_retention_gt_0_8.json",
-    "base_retention_gt_0_0.json",
-    "base_retention_gt_0_2.json",
-    "base_retention_gt_0_4.json",
-    "base_retention_gt_0_6.json",
-    "base_retention_gt_0_8.json",
-    "oos_base_retention_gt_0_0.json",
-    "oos_base_retention_gt_0_2.json",
-    "oos_base_retention_gt_0_4.json",
-    "oos_base_retention_gt_0_6.json",
-    "oos_base_retention_gt_0_8.json",
-    "trade_base_retention_gt_0_0.json",
-    "trade_base_retention_gt_0_2.json",
-    "trade_base_retention_gt_0_4.json",
-    "trade_base_retention_gt_0_6.json",
-    "trade_base_retention_gt_0_8.json",
-    "roos_base_agree.json",
-    "base_agree.json",
-    "oos_base_agree.json",
-    "trade_base_agree.json",
-    "roos_local_agree.json",
-    "local_agree.json",
-    "oos_local_agree.json",
-    "trade_local_agree.json",
-    "roos_retention_agree.json",
-    "retention_agree.json",
-    "oos_retention_agree.json",
-    "trade_retention_agree.json",
-    "full_base.json",
-    "full_local.json",
-    "full_retention.json",
-    "oos_base.json",
-    "oos_local.json",
-    "oos_retention.json",
-    "trade_base.json",
-    "trade_local.json",
-    "trade_retention.json",
-    "roos_base.json",
-    "roos_local.json",
-    "roos_retention.json",
-)
-
-
-SEED_ENSEMBLE_OOS_TABLE_TITLE = SEED_ENSEMBLE_RESULTS_TABLE_TITLE
-SEED_ENSEMBLE_RETENTION_TABLE_TITLE = ""
-
-
-def optimizer_seed_ensemble_table_titles() -> tuple[str, str]:
-    return SEED_ENSEMBLE_OOS_TABLE_TITLE, SEED_ENSEMBLE_RETENTION_TABLE_TITLE
-
-
-def _active_optimizer_table_titles() -> tuple[str, str]:
-    if _is_rolling_random_seed_ensemble_enabled():
-        return optimizer_seed_ensemble_table_titles()
-    return SEED_ENSEMBLE_RESULTS_TABLE_TITLE, ""
-
-
-def format_optimizer_output_file_lines(
-    entries: list[tuple[str, str]] | tuple[tuple[str, str], ...],
-    *,
-    title: str = "💾 輸出檔案",
-    project_root: str | None = None,
-) -> list[str]:
-    root = str(project_root or os.getcwd())
-    visible_entries: list[tuple[str, str]] = []
-    for label, path in list(entries or []):
-        label_text = str(label or "").strip()
-        path_text = str(path or "").strip()
-        if not label_text or not path_text:
-            continue
-        try:
-            display_path = os.path.relpath(path_text, root).replace(os.sep, "/")
-        except ValueError:
-            display_path = os.path.basename(path_text).replace(os.sep, "/")
-        visible_entries.append((label_text, display_path))
-    if not visible_entries:
-        return []
-    lines = [str(title or "💾 輸出檔案")]
-    lines.extend(f"  {label}: {path}" for label, path in visible_entries)
-    return lines
-
-
-def print_optimizer_output_files(
-    entries: list[tuple[str, str]] | tuple[tuple[str, str], ...],
-    *,
-    title: str = "💾 輸出檔案",
-    project_root: str | None = None,
-    color: bool = True,
-) -> None:
-    lines = format_optimizer_output_file_lines(entries, title=title, project_root=project_root)
-    if not lines:
-        return
-    if color:
-        print("\n".join(f"{C_GREEN}{line}{C_RESET}" for line in lines))
-    else:
-        print("\n".join(lines))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _build_rolling_folds(config: OuterRollingConfig) -> list[dict]:
-    first_oos = _parse_oos_boundary(config.first_oos_date, default=pd.Timestamp(year=int(config.first_oos_year), month=1, day=1))
-    last_oos = _parse_oos_boundary(config.last_oos_date, default=pd.Timestamp(year=int(config.last_oos_year), month=12, day=1), year_boundary="end")
-    horizon_months = max(1, int(config.oos_horizon_months or OUTER_ROLLING_OOS_HORIZON_MONTHS))
-    train_months = max(1, int(config.train_window_months or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
-    training_start = pd.Timestamp(year=int(config.training_start_year), month=1, day=1)
-    if first_oos > last_oos:
-        raise ValueError("first OOS date 不可晚於 last OOS date")
-    folds: list[dict] = []
-    current = first_oos
-    while current <= last_oos:
-        oos_start = _month_start(current)
-        oos_end = oos_start + pd.DateOffset(months=horizon_months) - pd.Timedelta(days=1)
-        selection_end = oos_start - pd.Timedelta(days=1)
-        if str(config.window_mode).lower() == "fixed":
-            selection_start = oos_start - pd.DateOffset(months=train_months)
-        else:
-            selection_start = training_start
-        if selection_start < training_start:
-            raise ValueError("fixed window 下 first OOS date - train window months 不可早於 training start date")
-        context = build_optimizer_seed_ensemble_fold_context(
-            fold_idx=len(folds) + 1,
-            fold_count=0,
-            selection_start_date=selection_start.strftime("%Y-%m-%d"),
-            selection_end_date=selection_end.strftime("%Y-%m-%d"),
-            oos_start_date=oos_start.strftime("%Y-%m-%d"),
-            oos_end_date=oos_end.strftime("%Y-%m-%d"),
-        )
-        context["fold_key"] = int(context["oos_year"])
-        context["selection_start_year"] = int(selection_start.year)
-        context["selection_end_year"] = int(selection_end.year)
-        folds.append(context)
-        current = oos_start + pd.DateOffset(months=horizon_months)
-    total_folds = len(folds)
-    for idx, fold in enumerate(folds, start=1):
-        fold["fold_idx"] = int(idx)
-        fold["fold_count"] = int(total_folds)
-        fold["fold"] = f"{idx}/{total_folds}"
-    return folds
-
-
-
-
-def _resolve_latest_date_from_csv_data_dir(data_dir: str) -> pd.Timestamp | None:
-    # AI註: outer rolling OOS 的互動設定只需要 last OOS 預設值；
-    # 不應為此先觸發 optimizer 完整資料清洗、快取摘要與 issue log。
-    if not os.path.isdir(str(data_dir)):
-        return None
-    try:
-        from core.data_utils import discover_unique_csv_inputs
-        csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(str(data_dir))
-    except (OSError, ValueError, TypeError):
-        return None
-
-    latest_date = None
-    date_column_names = {"date", "datetime", "time", "timestamp", "日期"}
-    for _ticker, file_path in list(csv_inputs or []):
-        try:
-            columns = list(pd.read_csv(file_path, nrows=0).columns)
-            date_col = next((col for col in columns if str(col).strip().lower() in date_column_names), None)
-            if date_col is None:
-                continue
-            date_values = pd.read_csv(file_path, usecols=[date_col])[date_col]
-            if date_values.empty:
-                continue
-            parsed_dates = pd.to_datetime(date_values, errors="coerce").dropna()
-            if parsed_dates.empty:
-                continue
-            file_date = pd.Timestamp(parsed_dates.max()).normalize()
-        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError):
-            continue
-        if latest_date is None or file_date > latest_date:
-            latest_date = file_date
-    return latest_date
-
-
-
-
-def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, latest_date=None, default_trials: int, timing_mode: bool = False) -> OuterRollingConfig:
-    env = os.environ if environ is None else environ
-    first_oos_year_default = int(base_policy.get("oos_start_year") or base_policy.get("search_train_end_year", 0) + 1 or 2023)
-    first_oos_date_default = pd.Timestamp(year=first_oos_year_default, month=1, day=1)
-    latest_ts = pd.Timestamp(latest_date).normalize() if latest_date is not None else pd.Timestamp(year=int(latest_year or first_oos_year_default), month=1, day=1)
-    last_oos_date_default = _month_start(latest_ts)
-    configured_oos_end_date = str(base_policy.get("oos_end_date") or "").strip()
-    if configured_oos_end_date:
-        last_oos_date_default = min(last_oos_date_default, _month_start(pd.Timestamp(configured_oos_end_date).normalize()))
-    trials_default = int(
-        default_trials
-        if int(default_trials or 0) > 0
-        else int(
-            env.get(
-                "V16_OUTER_ROLLING_OOS_TRIALS",
-                str(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
-            )
-            or OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
-        )
-    )
-
-    cli_first_date = _extract_cli_value(argv, "--outer-first-oos-date")
-    cli_last_date = _extract_cli_value(argv, "--outer-last-oos-date")
-    cli_first = _extract_cli_value(argv, "--outer-first-oos")
-    cli_last = _extract_cli_value(argv, "--outer-last-oos")
-    cli_trials = _extract_cli_value(argv, "--trials")
-    cli_window_mode = _extract_cli_value(argv, "--outer-window-mode")
-    cli_train_start = _extract_cli_value(argv, "--outer-train-start")
-    cli_train_window_months = _extract_cli_value(argv, "--outer-train-window-months")
-    cli_train_window_years = _extract_cli_value(argv, "--outer-train-window-years")
-    cli_oos_months = _extract_cli_value(argv, "--outer-oos-months")
-
-    requested_window_mode = str(cli_window_mode or env.get("V16_OUTER_ROLLING_WINDOW_MODE", "fixed") or "fixed").strip().lower()
-    if requested_window_mode != "fixed":
-        raise ValueError("目前固定採 fixed-window 架構，--outer-window-mode / V16_OUTER_ROLLING_WINDOW_MODE 只接受 fixed。")
-    window_mode = "fixed"
-
-    train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", str(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)) or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
-    if not str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", "")).strip() and str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS", "")).strip():
-        train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS")) * 12)
-    if cli_train_window_months:
-        train_window_months = int(cli_train_window_months)
-    elif cli_train_window_years:
-        train_window_months = int(cli_train_window_years) * 12
-    else:
-        train_window_months = train_window_month_default
-
-    oos_horizon_month_default = max(1, int(env.get("V16_OUTER_ROLLING_OOS_MONTHS", str(OUTER_ROLLING_OOS_HORIZON_MONTHS)) or OUTER_ROLLING_OOS_HORIZON_MONTHS))
-    if cli_oos_months:
-        oos_horizon_months = int(cli_oos_months)
-    else:
-        oos_horizon_months = oos_horizon_month_default
-
-    first_source = cli_first_date or cli_first or str(env.get("V16_OUTER_ROLLING_FIRST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_FIRST_OOS", "")).strip()
-    last_source = cli_last_date or cli_last or str(env.get("V16_OUTER_ROLLING_LAST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_LAST_OOS", "")).strip()
-    first_oos_date = _parse_oos_boundary(first_source, default=first_oos_date_default) if first_source else first_oos_date_default
-    last_oos_date = _parse_oos_boundary(last_source, default=last_oos_date_default, year_boundary="end") if last_source else last_oos_date_default
-
-    if cli_trials:
-        trials = int(cli_trials)
-    elif bool(timing_mode) or int(default_trials or 0) > 0:
-        trials = trials_default
-    else:
-        trials = _prompt_int("optimizer trials per fold", trials_default, minimum=1)
-
-    if train_window_months <= 0:
-        raise ValueError("train window months 必須大於 0")
-    if oos_horizon_months <= 0:
-        raise ValueError("OOS horizon months 必須大於 0")
-    if first_oos_date > last_oos_date:
-        raise ValueError("first OOS date 不可晚於 last OOS date")
-    if trials <= 0:
-        raise ValueError("optimizer trials per fold 必須大於 0")
-
-    derived_train_start_date = first_oos_date - pd.DateOffset(months=int(train_window_months))
-    derived_train_start_year = int(derived_train_start_date.year)
-    explicit_train_start = cli_train_start or str(env.get("V16_OUTER_ROLLING_TRAIN_START", "")).strip()
-    if explicit_train_start:
-        explicit_year = int(str(explicit_train_start).strip())
-        if explicit_year != derived_train_start_year:
-            raise ValueError(
-                "fixed-window 架構下 training start year 由 first OOS date - train window months 推導，"
-                f"不可獨立設定為 {explicit_year}；目前推導值為 {derived_train_start_year}。"
-            )
-
-    return OuterRollingConfig(
-        int(derived_train_start_year),
-        int(first_oos_date.year),
-        int(last_oos_date.year),
-        int(trials),
-        window_mode=window_mode,
-        train_window_years=max(1, int(math.ceil(int(train_window_months) / 12.0))),
-        confirm=False,
-        first_oos_date=first_oos_date.strftime("%Y-%m-%d"),
-        last_oos_date=last_oos_date.strftime("%Y-%m-%d"),
-        train_window_months=int(train_window_months),
-        oos_horizon_months=int(oos_horizon_months),
-    )
-
-
-
-def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None):
-    folds = _build_rolling_folds(config)
-    print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(f"OUTER ROLLING OOS TEST | NEXT {int(config.oos_horizon_months)} MONTHS")
-    print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(f"window mode      : {config.window_mode}")
-    if str(config.window_mode).lower() == "fixed":
-        print(f"train window     : {int(config.train_window_months)} months")
-    else:
-        print(f"training start   : {config.training_start_year}-01-01")
-    print("oos feedback     : False")
-    print("promotion        : disabled")
-    print(f"oos horizon      : next {int(config.oos_horizon_months)} months")
-    print(f"optimizer trials : {config.trials_per_fold} per fold")
-    if parallel_settings_line:
-        print(str(parallel_settings_line))
-    print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    print(f"{'fold':<6} | {'selection period':<15} | {'OOS test period':<15}")
-    print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    for idx, fold in enumerate(folds, start=1):
-        print(f"{idx}/{len(folds):<4} | {_fold_selection_label_display(fold):<15} | {_fold_label_display(fold):<15}")
-    print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    print(f"LOCAL_MIN_SCORE              : {bool(is_optimizer_local_min_review_enabled())}")
-    print(f"INNER_VALIDATE_RANK          : {bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED)}")
-    print(f"DOMINANT_YEAR_DEPENDENCY     : {bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED)}")
-    print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-
-
-def _confirm_plan(config: OuterRollingConfig) -> bool:
-    return True
-
-
-
-
-def _select_winner(finalists: list[dict], *, objective_mode: str):
-    eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
-    if is_inner_validate_anti_overfit_enabled(objective_mode):
-        eligible = [item for item in eligible if _has_inner_validate_pass(item)]
-    if is_dominant_year_dependency_anti_overfit_enabled():
-        safe = [item for item in eligible if not _has_dependency_warning(item)]
-        if safe:
-            eligible = safe
-    if not eligible:
-        return None
-    eligible = sorted(
-        eligible,
-        key=lambda item: (
-            float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            float(item.get("local_retention", float("-inf"))),
-            float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            -int(item["trial"].number),
-        ),
-        reverse=True,
-    )
-    return eligible[0]
-
-
-def _build_local_rank_map(finalists: list[dict]) -> dict[int, int]:
-    return {int(item["trial"].number): rank for rank, item in enumerate(finalists or [], start=1) if item.get("trial") is not None}
-
-
-def _build_retention_rank_map(finalists: list[dict]) -> dict[int, int]:
-    ranked = sorted(
-        [item for item in list(finalists or []) if item.get("trial") is not None],
-        key=lambda item: (
-            float(item.get("local_retention", float("-inf"))),
-            float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            -int(item["trial"].number),
-        ),
-        reverse=True,
-    )
-    return {int(item["trial"].number): rank for rank, item in enumerate(ranked, start=1)}
-
-
-def _select_base_rank1_item(finalists: list[dict]):
-    items = [item for item in list(finalists or []) if item.get("trial") is not None]
-    if not items:
-        return None
-    return min(items, key=lambda item: (int(item.get("base_rank", 10**9) or 10**9), -float(item.get("base_score", INVALID_TRIAL_VALUE)), int(item["trial"].number)))
-
-
-
-def _rank_base_finalist_items(finalists: list[dict]) -> list[dict]:
-    items = [item for item in list(finalists or []) if item.get("trial") is not None]
-    return sorted(
-        items,
-        key=lambda item: (
-            int(item.get("base_rank", 10**9) or 10**9),
-            -float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            int(item["trial"].number),
-        ),
-    )
-
-
-def _rank_local_finalist_items(finalists: list[dict]) -> list[dict]:
-    items = [item for item in list(finalists or []) if item.get("trial") is not None]
-    return sorted(
-        items,
-        key=lambda item: (
-            -float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            -float(item.get("local_retention", float("-inf"))),
-            -float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            int(item["trial"].number),
-        ),
-    )
-
-
-def _rank_retention_finalist_items(finalists: list[dict]) -> list[dict]:
-    items = [item for item in list(finalists or []) if item.get("trial") is not None]
-    return sorted(
-        items,
-        key=lambda item: (
-            -float(item.get("local_retention", float("-inf"))),
-            -float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            -float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            int(item["trial"].number),
-        ),
-    )
-
-
-
-
-def _is_local_finalists_agree_policy(policy_name: str) -> bool:
-    return str(policy_name) == LOCAL_FINALISTS_AGREE_POLICY_NAME
-
-
-def _is_retention_finalists_agree_policy(policy_name: str) -> bool:
-    return str(policy_name) == RETENTION_FINALISTS_AGREE_POLICY_NAME
-
-
-def _is_finalists_agree_policy(policy_name: str) -> bool:
-    return str(policy_name) in set(FINALISTS_AGREE_POLICY_NAMES)
-
-
-
-
-def _is_local_finalist_best_policy(policy_name: str) -> bool:
-    return str(policy_name) == LOCAL_FINALIST_BEST_POLICY_NAME
-
-
-def _is_retention_finalist_best_policy(policy_name: str) -> bool:
-    return str(policy_name) == RETENTION_FINALIST_BEST_POLICY_NAME
-
-
-def _is_finalist_best_policy(policy_name: str) -> bool:
-    return str(policy_name) in set(FINALIST_BEST_POLICY_NAMES)
-
-
-def _finalist_best_policy_sort_key(member: dict, *, policy_name: str) -> tuple:
-    item = dict(member or {})
-    selected_trial = int(item.get("selected_trial", 0) or 0)
-    optimizer_seed = int(item.get("optimizer_seed", item.get("seed", 0)) or 0)
-    if _is_local_finalist_best_policy(policy_name):
-        return (
-            -float(item.get("local_min_score", item.get("local_min", INVALID_TRIAL_VALUE))),
-            -float(item.get("retention", 0.0)),
-            -float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            selected_trial,
-            optimizer_seed,
-        )
-    if _is_retention_finalist_best_policy(policy_name):
-        return (
-            -float(item.get("retention", 0.0)),
-            -float(item.get("local_min_score", item.get("local_min", INVALID_TRIAL_VALUE))),
-            -float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            selected_trial,
-            optimizer_seed,
-        )
-    return (
-        int(item.get("base_rank", 10**9) or 10**9),
-        -float(item.get("base_score", INVALID_TRIAL_VALUE)),
-        selected_trial,
-        optimizer_seed,
-    )
-
-
-def select_finalist_best_members(members: list[dict], *, policy_name: str) -> list[dict]:
-    candidates = [dict(item) for item in list(members or []) if isinstance(item, dict)]
-    if not candidates:
-        return []
-    winner = min(candidates, key=lambda item: _finalist_best_policy_sort_key(item, policy_name=policy_name))
-    winner["policy"] = str(policy_name)
-    winner["member_index"] = 1
-    return [winner]
-
-
-def _is_policy_ensemble_item(item: dict | None) -> bool:
-    return isinstance(item, dict) and bool(normalize_seed_ensemble_members(item.get("params_ensemble")))
-
-
-def _finalists_agree_policy_config(policy_name: str) -> dict:
-    name = str(policy_name)
-    if _is_local_finalists_agree_policy(name):
-        return {
-            "policy_name": LOCAL_FINALISTS_AGREE_POLICY_NAME,
-            "label": "local_agree",
-            "score_field": "local_min_score",
-            "seed_score_sum_key": "local_agree_seed_local_min_sum",
-            "seed_finalist_count_key": "local_agree_seed_finalist_count",
-            "seed_selected_trials_key": "local_agree_seed_selected_trials",
-            "min_agree_requested_key": "local_agree_min_agree_requested",
-            "min_agree_requested": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
-            "selection_rule": "all_finalists_local_min_sum_best_seed_finalist_agree",
-            "member_selection": "seed_with_max_all_finalists_local_min_sum",
-            "ranker": _rank_local_finalist_items,
-            "resolver": resolve_optimizer_local_finalists_agree_min_agree,
-        }
-    if _is_retention_finalists_agree_policy(name):
-        return {
-            "policy_name": RETENTION_FINALISTS_AGREE_POLICY_NAME,
-            "label": "retention_agree",
-            "score_field": "local_retention",
-            "seed_score_sum_key": "retention_agree_seed_retention_sum",
-            "seed_finalist_count_key": "retention_agree_seed_finalist_count",
-            "seed_selected_trials_key": "retention_agree_seed_selected_trials",
-            "min_agree_requested_key": "retention_agree_min_agree_requested",
-            "min_agree_requested": OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
-            "selection_rule": "all_finalists_retention_sum_best_seed_finalist_agree",
-            "member_selection": "seed_with_max_all_finalists_retention_sum",
-            "ranker": _rank_retention_finalist_items,
-            "resolver": resolve_optimizer_retention_finalists_agree_min_agree,
-        }
-    return {
-        "policy_name": BASE_FINALISTS_AGREE_POLICY_NAME,
-        "label": "base_agree",
-        "score_field": "base_score",
-        "seed_score_sum_key": "base_agree_seed_base_score_sum",
-        "seed_finalist_count_key": "base_agree_seed_finalist_count",
-        "seed_selected_trials_key": "base_agree_seed_selected_trials",
-        "min_agree_requested_key": "base_agree_min_agree_requested",
-        "min_agree_requested": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-        "selection_rule": "all_finalists_base_score_sum_best_seed_finalist_agree",
-        "member_selection": "seed_with_max_all_finalists_base_score_sum",
-        "ranker": _rank_base_finalist_items,
-        "resolver": resolve_optimizer_base_finalists_agree_min_agree,
-    }
-
-
-def _resolve_finalists_agree_min_agree(policy_name: str, member_count: int) -> int:
-    config = _finalists_agree_policy_config(policy_name)
-    return int(config["resolver"](member_count, config["min_agree_requested"]))
-
-
-def _finalists_agree_metadata(finalists: list[dict], *, policy_name: str) -> dict:
-    config = _finalists_agree_policy_config(policy_name)
-    ranked = config["ranker"](finalists)
-    member_count = int(len(ranked))
-    score_sum = float(sum(float(item.get(config["score_field"], INVALID_TRIAL_VALUE)) for item in ranked)) if ranked else 0.0
-    selected_trials = [int(item["trial"].number) + 1 for item in ranked if item.get("trial") is not None]
-    metadata = {
-        "policy_type": "selected_seed_finalist_ensemble",
-        "selection_rule": str(config["selection_rule"]),
-        str(config["seed_finalist_count_key"]): int(member_count),
-        str(config["seed_score_sum_key"]): float(score_sum),
-        str(config["seed_selected_trials_key"]): selected_trials,
-        str(config["min_agree_requested_key"]): config["min_agree_requested"],
-        "member_selection": str(config["member_selection"]),
-        "intra_seed_agree": "selected_seed_finalists",
-        "member_count": int(member_count),
-        "min_agree": _resolve_finalists_agree_min_agree(policy_name, member_count) if member_count > 0 else 0,
-    }
-    return metadata
-
-
-
-
-
-
-
-
-def _build_finalists_agree_member_payloads(
-    finalists: list[dict],
-    *,
-    policy_name: str,
-    member_index: int = 1,
-    seed: int | None = None,
-    local_rank_map: dict[int, int] | None = None,
-    retention_rank_map: dict[int, int] | None = None,
-) -> list[dict]:
-    config = _finalists_agree_policy_config(policy_name)
-    ranked = config["ranker"](finalists)
-    if not ranked:
-        return []
-    metadata = _finalists_agree_metadata(ranked, policy_name=policy_name)
-    local_ranks = dict(local_rank_map or _build_local_rank_map(ranked))
-    retention_ranks = dict(retention_rank_map or _build_retention_rank_map(ranked))
-    members: list[dict] = []
-    for offset, item in enumerate(ranked):
-        trial = item.get("trial")
-        if trial is None:
-            continue
-        trial_number = int(trial.number)
-        member_payload = {
-            "member_index": int(member_index) + int(offset),
-            "seed": None if seed is None else int(seed),
-            "policy": str(config["policy_name"]),
-            "selected_trial": trial_number + 1,
-            "optimizer_seed": None if seed is None else int(seed),
-            "score": float(item.get(config["score_field"], INVALID_TRIAL_VALUE)),
-            "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            "base_rank": int(item.get("base_rank", 0) or 0),
-            "local_min_score": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
-            "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
-            "local_rank": int(local_ranks.get(trial_number, 0)),
-            "retention": float(item.get("local_retention", 0.0)),
-            "retention_rank": int(retention_ranks.get(trial_number, 0)),
-            "local_gate": bool(item.get("gate_pass", False)),
-            "params": build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT),
-        }
-        member_payload.update(metadata)
-        members.append(member_payload)
-    return renumber_seed_ensemble_members(members)
-
-
-
-
-
-
-
-
-
-
-def _safe_float_for_finalists_agree_sort(value, default: float = INVALID_TRIAL_VALUE) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
-
-
-def _safe_int_for_finalists_agree_sort(value, default: int = 10**9) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
-
-def _finalists_agree_seed_group_sort_key(group: list[dict], *, policy_name: str) -> tuple:
-    config = _finalists_agree_policy_config(policy_name)
-    members = [dict(member) for member in list(group or []) if isinstance(member, dict)]
-    if not members:
-        return (float("-inf"), float("-inf"), float("-inf"), 0, -10**9)
-    seed_score_sum = max(
-        _safe_float_for_finalists_agree_sort(member.get(config["seed_score_sum_key"]), INVALID_TRIAL_VALUE)
-        for member in members
-    )
-    best_retention = max(_safe_float_for_finalists_agree_sort(member.get("retention"), float("-inf")) for member in members)
-    best_local_min = max(_safe_float_for_finalists_agree_sort(member.get("local_min_score", member.get("local_min")), INVALID_TRIAL_VALUE) for member in members)
-    best_base_score = max(_safe_float_for_finalists_agree_sort(member.get("base_score"), INVALID_TRIAL_VALUE) for member in members)
-    best_base_rank = min(_safe_int_for_finalists_agree_sort(member.get("base_rank"), 10**9) for member in members)
-    seed_values = [
-        _safe_int_for_finalists_agree_sort(member.get("seed", member.get("optimizer_seed")), 10**9)
-        for member in members
-    ]
-    seed_value = min(seed_values) if seed_values else 10**9
-    if _is_local_finalists_agree_policy(policy_name):
-        return (seed_score_sum, best_local_min, best_retention, best_base_score, -best_base_rank, -seed_value)
-    if _is_retention_finalists_agree_policy(policy_name):
-        return (seed_score_sum, best_retention, best_local_min, best_base_score, -best_base_rank, -seed_value)
-    return (seed_score_sum, best_base_score, best_local_min, best_retention, -best_base_rank, -seed_value)
-
-
-def _finalists_agree_member_order_key(member: dict, *, policy_name: str) -> tuple:
-    data = dict(member or {})
-    if _is_local_finalists_agree_policy(policy_name):
-        return (
-            _safe_int_for_finalists_agree_sort(data.get("local_rank"), 10**9),
-            -_safe_float_for_finalists_agree_sort(data.get("local_min_score", data.get("local_min")), INVALID_TRIAL_VALUE),
-            -_safe_float_for_finalists_agree_sort(data.get("retention"), float("-inf")),
-            -_safe_float_for_finalists_agree_sort(data.get("base_score"), INVALID_TRIAL_VALUE),
-            _safe_int_for_finalists_agree_sort(data.get("selected_trial"), 10**9),
-            _safe_int_for_finalists_agree_sort(data.get("member_index"), 10**9),
-        )
-    if _is_retention_finalists_agree_policy(policy_name):
-        return (
-            _safe_int_for_finalists_agree_sort(data.get("retention_rank"), 10**9),
-            -_safe_float_for_finalists_agree_sort(data.get("retention"), float("-inf")),
-            -_safe_float_for_finalists_agree_sort(data.get("local_min_score", data.get("local_min")), INVALID_TRIAL_VALUE),
-            -_safe_float_for_finalists_agree_sort(data.get("base_score"), INVALID_TRIAL_VALUE),
-            _safe_int_for_finalists_agree_sort(data.get("selected_trial"), 10**9),
-            _safe_int_for_finalists_agree_sort(data.get("member_index"), 10**9),
-        )
-    return (
-        _safe_int_for_finalists_agree_sort(data.get("base_rank"), 10**9),
-        -_safe_float_for_finalists_agree_sort(data.get("base_score"), INVALID_TRIAL_VALUE),
-        _safe_int_for_finalists_agree_sort(data.get("selected_trial"), 10**9),
-        _safe_int_for_finalists_agree_sort(data.get("member_index"), 10**9),
-    )
-
-
-def select_finalists_agree_members(members: list[dict], *, policy_name: str) -> list[dict]:
-    if not _is_finalists_agree_policy(policy_name):
-        return renumber_seed_ensemble_members(list(members or []))
-    config = _finalists_agree_policy_config(policy_name)
-    candidates = [dict(member) for member in list(members or []) if isinstance(member, dict) and dict(member).get("params")]
-    if not candidates:
-        return []
-    groups: OrderedDict[str, list[dict]] = OrderedDict()
-    for member in candidates:
-        seed_key = member.get("seed", member.get("optimizer_seed"))
-        if seed_key is None:
-            seed_key = f"member:{member.get('member_index', len(groups) + 1)}"
-        groups.setdefault(str(seed_key), []).append(member)
-    selected_group = max(groups.values(), key=lambda group: _finalists_agree_seed_group_sort_key(group, policy_name=policy_name))
-    selected_members = sorted((dict(member) for member in selected_group), key=lambda member: _finalists_agree_member_order_key(member, policy_name=policy_name))
-    resolved_min_agree = _resolve_finalists_agree_min_agree(policy_name, len(selected_members))
-    first_selected = dict(selected_members[0]) if selected_members else {}
-    metadata = {key: first_selected.get(key) for key in _finalists_agree_metadata_keys() if key in first_selected}
-    metadata.update({
-        "selection_rule": str(config["selection_rule"]),
-        "policy_type": "selected_seed_finalist_ensemble",
-        "member_selection": str(config["member_selection"]),
-        "intra_seed_agree": "selected_seed_finalists",
-        "member_count": int(len(selected_members)),
-        "min_agree": int(resolved_min_agree),
-        str(config["min_agree_requested_key"]): config["min_agree_requested"],
-    })
-    for member in selected_members:
-        member.update(metadata)
-        member["policy"] = str(config["policy_name"])
-    return renumber_seed_ensemble_members(selected_members)
-
-
-def select_base_finalists_agree_members(members: list[dict]) -> list[dict]:
-    return select_finalists_agree_members(members, policy_name=BASE_FINALISTS_AGREE_POLICY_NAME)
-
-
-def select_local_finalists_agree_members(members: list[dict]) -> list[dict]:
-    return select_finalists_agree_members(members, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME)
-
-
-def select_retention_finalists_agree_members(members: list[dict]) -> list[dict]:
-    return select_finalists_agree_members(members, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
-
-
-def _select_finalists_agree_item(finalists: list[dict], *, policy_name: str) -> dict | None:
-    config = _finalists_agree_policy_config(policy_name)
-    ranked = config["ranker"](finalists)
-    if not ranked:
-        return None
-    members = _build_finalists_agree_member_payloads(ranked, policy_name=policy_name)
-    if not members:
-        return None
-    metadata = _finalists_agree_metadata(ranked, policy_name=policy_name)
-    first_member = dict(members[0])
-    item = {
-        "params_ensemble": members,
-        "params": dict(first_member.get("params") or {}),
-        "trial": ranked[0].get("trial"),
-        "base_score": float(first_member.get("base_score", INVALID_TRIAL_VALUE)),
-        "base_rank": int(first_member.get("base_rank", 0) or 0),
-        "local_min_score": float(first_member.get("local_min_score", INVALID_TRIAL_VALUE)),
-        "local_retention": float(first_member.get("retention", 0.0)),
-    }
-    item.update(metadata)
-    return item
-
-
-def _select_base_finalists_agree_item(finalists: list[dict]) -> dict | None:
-    return _select_finalists_agree_item(finalists, policy_name=BASE_FINALISTS_AGREE_POLICY_NAME)
-
-
-def _select_local_finalists_agree_item(finalists: list[dict]) -> dict | None:
-    return _select_finalists_agree_item(finalists, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME)
-
-
-def _select_retention_finalists_agree_item(finalists: list[dict]) -> dict | None:
-    return _select_finalists_agree_item(finalists, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
-
-
-def _select_local_rank1_item(finalists: list[dict], *, objective_mode: str):
-    winner = _select_winner(finalists, objective_mode=objective_mode)
-    if winner is not None:
-        return winner
-    items = [item for item in list(finalists or []) if item.get("trial") is not None]
-    return items[0] if items else None
-
-
-def _select_retention_rank1_item(finalists: list[dict]):
-    items = [item for item in list(finalists or []) if item.get("trial") is not None]
-    if not items:
-        return None
-    return max(
-        items,
-        key=lambda item: (
-            float(item.get("local_retention", float("-inf"))),
-            float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            -int(item["trial"].number),
-        ),
-    )
-
-
-def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[str, dict | None]:
-    base_rank1 = _select_base_rank1_item(finalists)
-    local_rank1 = _select_local_rank1_item(finalists, objective_mode=objective_mode)
-    retention_rank1 = _select_retention_rank1_item(finalists)
-    items = {
-        BASE_FINALIST_BEST_POLICY_NAME: base_rank1,
-        LOCAL_FINALIST_BEST_POLICY_NAME: local_rank1,
-        RETENTION_FINALIST_BEST_POLICY_NAME: retention_rank1,
-        BASE_FINALISTS_AGREE_POLICY_NAME: _select_base_finalists_agree_item(finalists),
-        LOCAL_FINALISTS_AGREE_POLICY_NAME: _select_local_finalists_agree_item(finalists),
-        RETENTION_FINALISTS_AGREE_POLICY_NAME: _select_retention_finalists_agree_item(finalists),
-        "base": base_rank1,
-        "local": local_rank1,
-        "retention": retention_rank1,
-    }
-    return {name: item for name, item in items.items() if name in set(REPORT_POLICY_NAMES)}
-
-
-def get_optimizer_paramset_policy_names() -> tuple[str, ...]:
-    """Return the policy set that writes first-class optimizer param JSON files."""
-    return tuple(REPORT_POLICY_NAMES)
-
-
-def get_optimizer_policy_paramset_filename(policy_name: str) -> str:
-    """Return the canonical JSON filename for a rolling-OOS optimizer policy paramset."""
-    return str(PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"roos_{policy_name}.json"))
-
-
-def get_optimizer_nonrolling_policy_paramset_filename(policy_name: str, *, mode: str | None = None) -> str:
-    """Return the canonical JSON filename for a non-rolling optimizer policy paramset.
-
-    Study mode keeps the legacy first-class filenames (base/local/retention) as
-    the single-seed study artifact.  Prefixed modes put the aggregation dimension
-    before the policy target, e.g. ``full_ensemble_base.json`` and
-    ``oos_ensemble_base.json``, so console labels and filenames use the same
-    ``<mode>_<method>_<target>.json`` contract.
-    """
-    policy_key = str(policy_name)
-    base_filename = str(NONROLLING_PARAMSET_FILENAME_BY_POLICY.get(policy_key, f"{policy_key}.json"))
-    normalized_mode = str(mode or "study").strip().lower()
-    if normalized_mode == "split":
-        normalized_mode = "oos"
-    if normalized_mode != "study" and policy_key in {"base", "local", "retention"}:
-        return f"{normalized_mode}_ensemble_{policy_key}.json"
-    prefix = str(NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE.get(normalized_mode, ""))
-    if prefix == "":
-        return base_filename
-    return f"{prefix}{base_filename}"
-
-
-def get_optimizer_policy_output_label(policy_name: str) -> str:
-    """Return the canonical console label for an optimizer policy paramset."""
-    return str(POLICY_OUTPUT_LABELS.get(str(policy_name), str(policy_name)))
-
-
-def build_optimizer_policy_members_from_finalists(
-    finalists: list[dict],
-    *,
-    objective_mode: str,
-    member_index: int,
-    seed: int | None = None,
-) -> dict[str, dict | list[dict]]:
-    """Build static active-param ensemble members with the same policy selectors as rolling OOS.
-
-    Non-rolling training is a single-fold case, so it must reuse rolling's policy
-    selection rules instead of re-implementing base/local/retention choices.
-    """
-    policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
-    local_rank_map = _build_local_rank_map(finalists)
-    retention_rank_map = _build_retention_rank_map(finalists)
-    members: dict[str, dict | list[dict]] = {}
-    for policy_name in CHAIN_POLICY_NAMES:
-        item = policy_items.get(policy_name)
-        if item is None:
-            continue
-        if _is_finalists_agree_policy(policy_name):
-            finalists_agree_members = normalize_seed_ensemble_members(item.get("params_ensemble"))
-            if not finalists_agree_members:
-                finalists_agree_members = _build_finalists_agree_member_payloads(
-                    finalists,
-                    policy_name=str(policy_name),
-                    member_index=int(member_index),
-                    seed=seed,
-                    local_rank_map=local_rank_map,
-                    retention_rank_map=retention_rank_map,
-                )
-            for offset, raw_member in enumerate(finalists_agree_members):
-                member_payload = dict(raw_member)
-                member_payload["member_index"] = int(member_index) + int(offset)
-                member_payload["seed"] = None if seed is None else int(seed)
-                member_payload["optimizer_seed"] = None if seed is None else int(seed)
-                member_payload["policy"] = str(policy_name)
-                existing_members = members.setdefault(str(policy_name), [])
-                if isinstance(existing_members, list):
-                    existing_members.append(member_payload)
-            continue
-        if item.get("trial") is None:
-            continue
-        trial = item["trial"]
-        trial_number = int(trial.number)
-        params_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
-        member_payload = {
-            "member_index": int(member_index),
-            "seed": None if seed is None else int(seed),
-            "policy": str(policy_name),
-            "selected_trial": trial_number + 1,
-            "optimizer_seed": None if seed is None else int(seed),
-            "score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
-            "base_rank": int(item.get("base_rank", 0) or 0),
-            "local_min_score": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
-            "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
-            "local_rank": int(local_rank_map.get(trial_number, 0)),
-            "retention": float(item.get("local_retention", 0.0)),
-            "retention_rank": int(retention_rank_map.get(trial_number, 0)),
-            "local_gate": bool(item.get("gate_pass", False)),
-            "params": dict(params_payload),
-        }
-        if _is_finalists_agree_policy(policy_name):
-            for key in _finalists_agree_metadata_keys():
-                if key in item:
-                    member_payload[key] = item.get(key)
-        members[str(policy_name)] = member_payload
-    return members
-
-
-
-def _finalists_agree_metadata_keys() -> tuple[str, ...]:
-    return (
-        "selection_rule",
-        "policy_type",
-        "member_selection",
-        "intra_seed_agree",
-        "base_agree_seed_finalist_count",
-        "base_agree_seed_base_score_sum",
-        "base_agree_seed_selected_trials",
-        "base_agree_min_agree_requested",
-        "local_agree_seed_finalist_count",
-        "local_agree_seed_local_min_sum",
-        "local_agree_seed_selected_trials",
-        "local_agree_min_agree_requested",
-        "retention_agree_seed_finalist_count",
-        "retention_agree_seed_retention_sum",
-        "retention_agree_seed_selected_trials",
-        "retention_agree_min_agree_requested",
-    )
-
-
-
-def _build_policy_schedule_entry(
-    *,
-    item: dict,
-    policy_name: str,
-    oos_year: int,
-    selection_period: str,
-    local_rank_map: dict[int, int],
-    retention_rank_map: dict[int, int],
-    oos_start_date: str | None = None,
-    oos_end_date: str | None = None,
-    optimizer_seed: int | None = None,
-    fixed_strategy_param_overrides: dict | None = None,
-    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-) -> dict:
-    effective_start = str(oos_start_date or f"{str(oos_year)[:4]}-01-01")
-    effective_end = str(oos_end_date or f"{str(oos_year)[:4]}-12-31")
-    ensemble_members = _materialize_fixed_strategy_param_overrides_in_members(
-        item.get("params_ensemble"),
-        fixed_strategy_param_overrides,
-    )
-    if ensemble_members:
-        if optimizer_seed is not None:
-            for member in ensemble_members:
-                if member.get("seed") is None:
-                    member["seed"] = int(optimizer_seed)
-                if member.get("optimizer_seed") is None:
-                    member["optimizer_seed"] = int(optimizer_seed)
-        optimizer_seed_values = sorted({member.get("seed") for member in ensemble_members if member.get("seed") is not None})
-        if not optimizer_seed_values and optimizer_seed is not None:
-            optimizer_seed_values = [int(optimizer_seed)]
-        first_member = dict(ensemble_members[0])
-        return {
-            "effective_start": effective_start,
-            "effective_end": effective_end,
-            "selection": str(selection_period),
-            "oos_year": int(oos_year),
-            "oos_period": f"{effective_start}~{effective_end}",
-            "policy": str(policy_name),
-            "selected_trial": first_member.get("selected_trial"),
-            "optimizer_seed": None if optimizer_seed is None else int(optimizer_seed),
-            "optimizer_seeds": optimizer_seed_values,
-            "member_count": int(len(ensemble_members)),
-            "min_agree": int(item.get("min_agree") or (_resolve_finalists_agree_min_agree(policy_name, len(ensemble_members)) if _is_finalists_agree_policy(policy_name) else 1)),
-            "min_agree_requested": item.get("min_agree_requested", item.get("base_agree_min_agree_requested", item.get("local_agree_min_agree_requested", item.get("retention_agree_min_agree_requested")))),
-            "base_agree_min_agree_requested": item.get("base_agree_min_agree_requested"),
-            "local_agree_min_agree_requested": item.get("local_agree_min_agree_requested"),
-            "retention_agree_min_agree_requested": item.get("retention_agree_min_agree_requested"),
-            "base_score": float(item.get("base_score", first_member.get("base_score", INVALID_TRIAL_VALUE))),
-            "base_rank": int(item.get("base_rank", first_member.get("base_rank", 0)) or 0),
-            "local_min": float(item.get("local_min_score", first_member.get("local_min_score", INVALID_TRIAL_VALUE))),
-            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
-            "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
-            "retention": float(item.get("local_retention", first_member.get("retention", 0.0))),
-            "params": dict(first_member.get("params") or {}),
-            "params_ensemble": ensemble_members,
-            "selection_rule": item.get("selection_rule", first_member.get("selection_rule")),
-            "policy_type": item.get("policy_type", first_member.get("policy_type")),
-            "base_agree_seed_finalist_count": item.get("base_agree_seed_finalist_count", first_member.get("base_agree_seed_finalist_count")),
-            "base_agree_seed_base_score_sum": item.get("base_agree_seed_base_score_sum", first_member.get("base_agree_seed_base_score_sum")),
-            "base_agree_seed_selected_trials": item.get("base_agree_seed_selected_trials", first_member.get("base_agree_seed_selected_trials")),
-            "local_agree_seed_finalist_count": item.get("local_agree_seed_finalist_count", first_member.get("local_agree_seed_finalist_count")),
-            "local_agree_seed_local_min_sum": item.get("local_agree_seed_local_min_sum", first_member.get("local_agree_seed_local_min_sum")),
-            "local_agree_seed_selected_trials": item.get("local_agree_seed_selected_trials", first_member.get("local_agree_seed_selected_trials")),
-            "retention_agree_seed_finalist_count": item.get("retention_agree_seed_finalist_count", first_member.get("retention_agree_seed_finalist_count")),
-            "retention_agree_seed_retention_sum": item.get("retention_agree_seed_retention_sum", first_member.get("retention_agree_seed_retention_sum")),
-            "retention_agree_seed_selected_trials": item.get("retention_agree_seed_selected_trials", first_member.get("retention_agree_seed_selected_trials")),
-        }
-    trial = item["trial"]
-    trial_number = int(trial.number)
-    entry = {
-        "effective_start": effective_start,
-        "effective_end": effective_end,
-        "selection": str(selection_period),
-        "oos_year": int(oos_year),
-        "oos_period": f"{effective_start}~{effective_end}",
-        "policy": str(policy_name),
-        "selected_trial": trial_number + 1,
-        "optimizer_seed": None if optimizer_seed is None else int(optimizer_seed),
-        "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
-        "base_rank": int(item.get("base_rank", 0) or 0),
-        "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-        "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-        "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
-        "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
-        "local_rank": int(local_rank_map.get(trial_number, 0)),
-        "retention": float(item.get("local_retention", 0.0)),
-        "retention_rank": int(retention_rank_map.get(trial_number, 0)),
-        "params": build_best_params_payload_from_trial(
-            trial,
-            fixed_tp_percent=fixed_tp_percent,
-            fixed_strategy_param_overrides=fixed_strategy_param_overrides,
-        ),
-    }
-    if _is_finalists_agree_policy(policy_name):
-        for key in _finalists_agree_metadata_keys():
-            if key in item:
-                entry[key] = item.get(key)
-    return entry
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _prep_result_has_pit_index(prep_result) -> bool:
@@ -1840,375 +664,6 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
 
 
 
-def _normalize_equity_curve_rows(curve_rows: list[dict]) -> list[dict]:
-    normalized: list[dict] = []
-    for raw in list(curve_rows or []):
-        try:
-            date = pd.Timestamp(raw.get("date") or raw.get("Date")).strftime("%Y-%m-%d")
-            equity = float(raw.get("equity", raw.get("Equity", 0.0)) or 0.0)
-            strategy_return_pct = float(raw.get("strategy_return_pct", raw.get("Strategy_Return_Pct", 0.0)) or 0.0)
-            benchmark_return_pct = float(raw.get("benchmark_return_pct", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if not date or equity <= 0.0:
-            continue
-        normalized.append({
-            "date": date,
-            "equity": equity,
-            "strategy_return_pct": strategy_return_pct,
-            "benchmark_return_pct": benchmark_return_pct,
-        })
-    return sorted(normalized, key=lambda row: row["date"])
-
-
-def _derive_curve_initial_capital(curve_rows: list[dict], explicit_initial_capital: float | int | None = None) -> float:
-    explicit = _safe_float(explicit_initial_capital, 0.0)
-    if explicit > 0.0:
-        return explicit
-    curve = _normalize_equity_curve_rows(curve_rows)
-    if not curve:
-        return 0.0
-    first = curve[0]
-    denominator = 1.0 + float(first.get("strategy_return_pct", 0.0)) / 100.0
-    if denominator <= 0.0:
-        return float(first.get("equity", 0.0))
-    return float(first.get("equity", 0.0)) / denominator
-
-
-def _stitch_strategy_equity_curves(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False) -> dict:
-    ordered_rows = sorted((normalize_optimizer_seed_ensemble_fold_row(row) for row in list(rows or [])), key=optimizer_seed_ensemble_row_sort_key)
-    stitched: list[dict] = []
-    chain_initial = 0.0
-    current_start = 0.0
-    score_total_r = 0.0
-    score_median_samples = []
-    for row in ordered_rows:
-        if best_finalist:
-            raw_curve = _normalize_equity_curve_rows(list(row.get("best_finalist_equity_curve") or []))
-            raw_initial = _derive_curve_initial_capital(raw_curve, row.get("best_finalist_initial_capital"))
-            row_score_total_r = _safe_float(row.get("best_finalist_score_total_r", row.get("best_finalist_total_r", 0.0)), 0.0)
-            row_score_median_r = _safe_float(row.get("best_finalist_score_median_r", row.get("best_finalist_median_r", 0.0)), 0.0)
-        else:
-            policy = dict(row.get(str(policy_name)) or {})
-            raw_curve = _normalize_equity_curve_rows(list(policy.get("rank_1_equity_curve") or []))
-            raw_initial = _derive_curve_initial_capital(raw_curve, policy.get("rank_1_initial_capital"))
-            row_score_total_r = _safe_float(policy.get("rank_1_score_total_r", policy.get("rank_1_total_r", 0.0)), 0.0)
-            row_score_median_r = _safe_float(policy.get("rank_1_score_median_r", policy.get("rank_1_median_r", 0.0)), 0.0)
-        if not raw_curve or raw_initial <= 0.0:
-            continue
-        score_total_r += float(row_score_total_r)
-        score_median_samples.append(float(row_score_median_r))
-        if current_start <= 0.0:
-            current_start = raw_initial
-            chain_initial = raw_initial
-        scale = current_start / raw_initial
-        for point in raw_curve:
-            stitched.append({
-                "date": point["date"],
-                "equity": float(point["equity"]) * scale,
-            })
-        current_start = float(stitched[-1]["equity"])
-    score_median_r = float(pd.Series(score_median_samples).median()) if score_median_samples else 0.0
-    return {
-        "initial_equity": float(chain_initial),
-        "curve": stitched,
-        "score_total_r": float(score_total_r),
-        "score_median_r": float(score_median_r),
-        "score_r_source": "single_stock",
-    }
-
-
-def _stitch_benchmark_equity_curve(rows: list[dict]) -> dict:
-    ordered_rows = sorted((normalize_optimizer_seed_ensemble_fold_row(row) for row in list(rows or [])), key=optimizer_seed_ensemble_row_sort_key)
-    stitched: list[dict] = []
-    chain_initial = 0.0
-    current_start = 0.0
-    for row in ordered_rows:
-        curve_source = None
-        best_curve = _normalize_equity_curve_rows(list(row.get("best_finalist_equity_curve") or []))
-        if best_curve:
-            curve_source = best_curve
-            raw_initial = _derive_curve_initial_capital(best_curve, row.get("best_finalist_initial_capital"))
-        else:
-            raw_initial = 0.0
-            for policy_name in REPORT_POLICY_NAMES:
-                policy = dict(row.get(policy_name) or {})
-                policy_curve = _normalize_equity_curve_rows(list(policy.get("rank_1_equity_curve") or []))
-                if policy_curve:
-                    curve_source = policy_curve
-                    raw_initial = _derive_curve_initial_capital(policy_curve, policy.get("rank_1_initial_capital"))
-                    break
-        if not curve_source:
-            continue
-        if current_start <= 0.0:
-            current_start = raw_initial if raw_initial > 0.0 else 1.0
-            chain_initial = current_start
-        for point in curve_source:
-            benchmark_factor = 1.0 + float(point.get("benchmark_return_pct", 0.0)) / 100.0
-            stitched.append({
-                "date": point["date"],
-                "equity": current_start * benchmark_factor,
-            })
-        current_start = float(stitched[-1]["equity"])
-    return {"initial_equity": float(chain_initial), "curve": stitched}
-
-
-def _month_end_equities_from_curve(curve: list[dict], *, initial_equity: float) -> list[float]:
-    values = []
-    if initial_equity > 0.0:
-        values.append(float(initial_equity))
-    current_month = None
-    previous_equity = None
-    for point in list(curve or []):
-        try:
-            ts = pd.Timestamp(point.get("date"))
-            equity = float(point.get("equity", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-        month_key = (int(ts.year), int(ts.month))
-        if current_month is None:
-            current_month = month_key
-        elif month_key != current_month:
-            if previous_equity is not None:
-                values.append(float(previous_equity))
-            current_month = month_key
-        previous_equity = equity
-    if previous_equity is not None:
-        values.append(float(previous_equity))
-    return values
-
-
-def _calc_full_year_return_metrics_from_curve(curve: list[dict]) -> dict:
-    by_year: dict[int, dict] = {}
-    for point in list(curve or []):
-        try:
-            ts = pd.Timestamp(point.get("date"))
-            equity = float(point.get("equity", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if not pd.notna(ts) or equity <= 0.0:
-            continue
-        year = int(ts.year)
-        bucket = by_year.setdefault(
-            year,
-            {"first_date": ts, "first_equity": equity, "last_date": ts, "last_equity": equity},
-        )
-        if ts < bucket["first_date"]:
-            bucket["first_date"] = ts
-            bucket["first_equity"] = equity
-        if ts > bucket["last_date"]:
-            bucket["last_date"] = ts
-            bucket["last_equity"] = equity
-
-    rows = []
-    for year in sorted(by_year):
-        bucket = by_year[year]
-        first_date = bucket["first_date"]
-        last_date = bucket["last_date"]
-        if not bool(first_date.month == 1 and last_date.month == 12):
-            continue
-        start_equity = float(bucket["first_equity"])
-        end_equity = float(bucket["last_equity"])
-        year_return_pct = (end_equity / start_equity - 1.0) * 100.0 if start_equity > 0.0 else 0.0
-        rows.append({
-            "year": int(year),
-            "year_return_pct": float(year_return_pct),
-            "start_equity": float(start_equity),
-            "end_equity": float(end_equity),
-            "is_full_year": True,
-        })
-    return {
-        "full_year_count": int(len(rows)),
-        "min_full_year_return_pct": float(min((row["year_return_pct"] for row in rows), default=0.0)),
-        "yearly_return_rows": rows,
-    }
-
-
-
-def _calc_full_month_return_metrics_from_curve(curve: list[dict]) -> dict:
-    by_month: dict[tuple[int, int], dict] = {}
-    for point in list(curve or []):
-        try:
-            ts = pd.Timestamp(point.get("date"))
-            equity = float(point.get("equity", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if not pd.notna(ts) or equity <= 0.0:
-            continue
-        key = (int(ts.year), int(ts.month))
-        bucket = by_month.setdefault(
-            key,
-            {"first_date": ts, "first_equity": equity, "last_date": ts, "last_equity": equity},
-        )
-        if ts < bucket["first_date"]:
-            bucket["first_date"] = ts
-            bucket["first_equity"] = equity
-        if ts > bucket["last_date"]:
-            bucket["last_date"] = ts
-            bucket["last_equity"] = equity
-
-    rows = []
-    for year, month in sorted(by_month):
-        bucket = by_month[(year, month)]
-        start_equity = float(bucket["first_equity"])
-        end_equity = float(bucket["last_equity"])
-        month_return_pct = (end_equity / start_equity - 1.0) * 100.0 if start_equity > 0.0 else 0.0
-        rows.append({
-            "year": int(year),
-            "month": int(month),
-            "period": f"{int(year):04d}-{int(month):02d}",
-            "month_return_pct": float(month_return_pct),
-            "start_equity": float(start_equity),
-            "end_equity": float(end_equity),
-            "is_full_month": True,
-        })
-    return {
-        "full_month_count": int(len(rows)),
-        "min_month_return_pct": float(min((row["month_return_pct"] for row in rows), default=0.0)),
-        "monthly_return_rows": rows,
-    }
-
-def _calc_full_quarter_return_metrics_from_curve(curve: list[dict]) -> dict:
-    by_quarter: dict[tuple[int, int], dict] = {}
-    for point in list(curve or []):
-        try:
-            ts = pd.Timestamp(point.get("date"))
-            equity = float(point.get("equity", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if not pd.notna(ts) or equity <= 0.0:
-            continue
-        quarter = int((ts.month - 1) // 3 + 1)
-        key = (int(ts.year), int(quarter))
-        bucket = by_quarter.setdefault(
-            key,
-            {"first_date": ts, "first_equity": equity, "last_date": ts, "last_equity": equity},
-        )
-        if ts < bucket["first_date"]:
-            bucket["first_date"] = ts
-            bucket["first_equity"] = equity
-        if ts > bucket["last_date"]:
-            bucket["last_date"] = ts
-            bucket["last_equity"] = equity
-
-    rows = []
-    for year, quarter in sorted(by_quarter):
-        bucket = by_quarter[(year, quarter)]
-        first_date = bucket["first_date"]
-        last_date = bucket["last_date"]
-        first_month = (int(quarter) - 1) * 3 + 1
-        last_month = first_month + 2
-        if not bool(first_date.month == first_month and last_date.month == last_month):
-            continue
-        start_equity = float(bucket["first_equity"])
-        end_equity = float(bucket["last_equity"])
-        quarter_return_pct = (end_equity / start_equity - 1.0) * 100.0 if start_equity > 0.0 else 0.0
-        rows.append({
-            "year": int(year),
-            "quarter": int(quarter),
-            "period": f"{int(year)}Q{int(quarter)}",
-            "quarter_return_pct": float(quarter_return_pct),
-            "start_equity": float(start_equity),
-            "end_equity": float(end_equity),
-            "is_full_quarter": True,
-        })
-    return {
-        "full_quarter_count": int(len(rows)),
-        "min_quarter_return_pct": float(min((row["quarter_return_pct"] for row in rows), default=0.0)),
-        "quarterly_return_rows": rows,
-    }
-
-def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool = False) -> dict:
-    initial_equity = _safe_float(stitched.get("initial_equity"), 0.0)
-    curve = list(stitched.get("curve") or [])
-    if initial_equity <= 0.0 or not curve:
-        return {
-            "score": 0.0,
-            "plain_romd_score": 0.0,
-            "return_pct": 0.0,
-            "mdd_pct": 0.0,
-            "annual_return_pct": 0.0,
-            "full_year_count": 0,
-            "min_full_year_return_pct": 0.0,
-            "yearly_return_rows": [],
-            "full_month_count": 0,
-            "min_month_return_pct": 0.0,
-            "monthly_return_rows": [],
-            "full_quarter_count": 0,
-            "min_quarter_return_pct": 0.0,
-            "quarterly_return_rows": [],
-            "r_squared": 0.0,
-            "monthly_win_rate": 0.0,
-            "curve_points": 0,
-        }
-    final_equity = float(curve[-1].get("equity", initial_equity) or initial_equity)
-    return_pct = (final_equity / initial_equity - 1.0) * 100.0
-    peak = initial_equity
-    max_drawdown = 0.0
-    for point in curve:
-        equity = float(point.get("equity", 0.0) or 0.0)
-        if equity > peak:
-            peak = equity
-        if peak > 0.0:
-            drawdown = (peak - equity) / peak * 100.0
-            if drawdown > max_drawdown:
-                max_drawdown = drawdown
-    first_date = pd.Timestamp(curve[0]["date"])
-    last_date = pd.Timestamp(curve[-1]["date"])
-    years = max(0.0, ((last_date - first_date).days + 1) / 365.25)
-    annual_return_pct = calc_annual_return_pct(initial_equity, final_equity, years)
-    monthly_equities = _month_end_equities_from_curve(curve, initial_equity=initial_equity)
-    r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
-    full_year_metrics = _calc_full_year_return_metrics_from_curve(curve)
-    full_month_metrics = _calc_full_month_return_metrics_from_curve(curve)
-    full_quarter_metrics = _calc_full_quarter_return_metrics_from_curve(curve)
-    min_full_year_return_pct = float(full_year_metrics.get("min_full_year_return_pct", 0.0))
-    min_month_return_pct = float(full_month_metrics.get("min_month_return_pct", 0.0))
-    min_quarter_return_pct = float(full_quarter_metrics.get("min_quarter_return_pct", 0.0))
-    score_total_r = _safe_float(stitched.get("score_total_r", 0.0), 0.0)
-    score_median_r = _safe_float(stitched.get("score_median_r", 0.0), 0.0)
-    plain_romd_score = calc_plain_romd(return_pct, max_drawdown)
-    if benchmark_plain_romd:
-        score = plain_romd_score
-    else:
-        score = calc_portfolio_score(
-            return_pct,
-            max_drawdown,
-            monthly_win_rate,
-            r_squared,
-            annual_return_pct=annual_return_pct,
-            min_full_year_return_pct=min_full_year_return_pct,
-            min_month_return_pct=min_month_return_pct,
-            min_quarter_return_pct=min_quarter_return_pct,
-            total_r=score_total_r,
-            median_r=score_median_r,
-        )
-    return {
-        "score": float(score),
-        "plain_romd_score": float(plain_romd_score),
-        "return_pct": float(return_pct),
-        "mdd_pct": float(max_drawdown),
-        "annual_return_pct": float(annual_return_pct),
-        "full_year_count": int(full_year_metrics.get("full_year_count", 0)),
-        "min_full_year_return_pct": min_full_year_return_pct,
-        "yearly_return_rows": list(full_year_metrics.get("yearly_return_rows", [])),
-        "full_month_count": int(full_month_metrics.get("full_month_count", 0)),
-        "min_month_return_pct": min_month_return_pct,
-        "monthly_return_rows": list(full_month_metrics.get("monthly_return_rows", [])),
-        "full_quarter_count": int(full_quarter_metrics.get("full_quarter_count", 0)),
-        "min_quarter_return_pct": min_quarter_return_pct,
-        "quarterly_return_rows": list(full_quarter_metrics.get("quarterly_return_rows", [])),
-        "r_squared": float(r_squared),
-        "monthly_win_rate": float(monthly_win_rate),
-        "score_total_r": float(score_total_r),
-        "score_median_r": float(score_median_r),
-        "score_r_source": str(stitched.get("score_r_source", "single_stock")),
-        "curve_points": int(len(curve)),
-        "start_date": str(curve[0].get("date", "")),
-        "end_date": str(curve[-1].get("date", "")),
-        "initial_equity": float(initial_equity),
-        "final_equity": float(final_equity),
-    }
 
 
 def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False, raw_universe_required_min_rows=None) -> dict:
@@ -3245,30 +1700,8 @@ def _build_oos_avg_row(rows: list[dict]) -> dict | None:
     return row
 
 
-def _policy_is_available(policy_row: dict) -> bool:
-    if not policy_row:
-        return False
-    if policy_row.get("available") is False:
-        return False
-    try:
-        float(policy_row.get("rank_1_oos"))
-    except (TypeError, ValueError):
-        return False
-    return True
 
 
-def _policy_plain_romd_score(policy_row: dict) -> float:
-    payload = dict(policy_row or {})
-    for key in ("rank_1_plain_romd", "rank_1_romd", "rank_1_oos_romd", "plain_romd_score"):
-        if key not in payload:
-            continue
-        try:
-            value = float(payload.get(key, 0.0))
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(value):
-            return value
-    return calc_plain_romd(payload.get("rank_1_return_pct", 0.0), payload.get("rank_1_mdd_pct", 0.0))
 
 
 def _policy_cell_text(policy_row: dict, *, best_score: float, benchmark_score: float, color: bool = True) -> tuple[str, str]:
@@ -3921,40 +2354,8 @@ def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False
 
 
 
-def _compact_policy_for_live_result(policy: dict) -> dict:
-    payload = dict(policy or {})
-    available = _policy_is_available(payload)
-    compact = {
-        "available": bool(available),
-        "unavailable_reason": str(payload.get("unavailable_reason") or payload.get("skip_reason") or ""),
-    }
-    if available:
-        for key in ("rank_1_oos", "rank_1_plain_romd", "rank_1_return_pct", "rank_1_mdd_pct", "benchmark_0050_gap", "benchmark_0050_plain_romd_gap", "best_gap"):
-            if key in payload:
-                try:
-                    compact[key] = float(payload.get(key, 0.0) or 0.0)
-                except (TypeError, ValueError):
-                    compact[key] = 0.0
-        for key in ("rank_1_trial", "rank_1_trades"):
-            if key in payload:
-                compact[key] = payload.get(key)
-    return compact
 
 
-def _compact_row_for_live_result(row: dict) -> dict:
-    source = dict(row or {})
-    compact = {
-        "fold": source.get("fold"),
-        "oos_year": source.get("oos_year"),
-        "selection_period": source.get("selection_period", ""),
-        "oos_period": source.get("oos_period") or source.get("oos_year", ""),
-        "best_finalist_oos_score": float(source.get("best_finalist_oos_score", 0.0) or 0.0),
-        "benchmark_oos_score": float(source.get("benchmark_oos_score", 0.0) or 0.0),
-        "elapsed_sec": source.get("elapsed_sec"),
-    }
-    for policy_name in list(REPORT_POLICY_NAMES) + list(BASE_RETENTION_COMPARISON_POLICY_NAMES):
-        compact[policy_name] = _compact_policy_for_live_result(source.get(policy_name) or {})
-    return compact
 
 
 
@@ -4587,73 +2988,10 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
 
 
 
-def _seed_progress_context_from_task(task: dict) -> dict:
-    if not bool((task or {}).get("seed_ensemble_member")):
-        return {}
-    member_index = int((task or {}).get("seed_ensemble_member_index", 0) or 0)
-    member_count = int((task or {}).get("seed_ensemble_member_count", 0) or 0)
-    if member_index <= 0 or member_count <= 0:
-        return {}
-    return {
-        "seed_ensemble_member_index": int(member_index),
-        "seed_ensemble_member_count": int(member_count),
-        "seed": int((task or {}).get("optimizer_seed", 0) or 0),
-    }
-
-class _FoldLogSearchProgress:
-    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, total_trials: int, seed_context: dict | None = None):
-        self.fold_idx = int(fold_idx)
-        self.fold_count = int(fold_count)
-        self.oos_year = int(oos_year)
-        self.selection_start = str(selection_start)
-        self.selection_end = str(selection_end)
-        self.total_trials = int(total_trials)
-        self.seed_context = dict(seed_context or {})
-        self.stage_start = time.perf_counter()
-        self.stage_start_ts = time.time()
-        self.best_score = float("-inf")
-        self.last_completed = -1
-        self._lock = Lock()
-
-    def emit(self, completed: int, *, force: bool = False) -> None:
-        completed = int(completed)
-        if not force and completed == self.last_completed:
-            return
-        self.last_completed = completed
-        best_score = None if self.best_score == float("-inf") else float(self.best_score)
-        _write_parallel_fold_progress_event(
-            stage="OPTIMIZER_SEARCH",
-            fold_idx=self.fold_idx,
-            fold_count=self.fold_count,
-            oos_year=self.oos_year,
-            selection_start=self.selection_start,
-            selection_end=self.selection_end,
-            **self.seed_context,
-            completed=completed,
-            total=self.total_trials,
-            best_score=best_score,
-            elapsed_sec=max(0.0, time.perf_counter() - self.stage_start),
-            search_started_ts=float(self.stage_start_ts),
-            search_last_done_ts=time.time() if int(completed) > 0 else None,
-        )
-
-    def callback(self, session):
-        def _callback(study, trial):
-            with self._lock:
-                session.current_session_trial += 1
-                if trial.value is not None and is_qualified_trial_value(trial.value):
-                    self.best_score = max(self.best_score, float(trial.value))
-                completed = int(session.current_session_trial)
-            self.emit(completed)
-        return _callback
-
-    def done(self, completed: int) -> None:
-        self.emit(int(completed), force=True)
 
 
 
-def _is_rolling_random_seed_ensemble_enabled() -> bool:
-    return bool(OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED) and int(OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE or 1) > 1
+
 
 
 def _effective_rolling_seed_ensemble_policy_payload() -> dict:

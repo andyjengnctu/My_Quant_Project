@@ -270,9 +270,9 @@ def _load_params_summary_or_legacy_sidecar(params_path: str, legacy_summary_path
 
 
 def _visible_policy_paramset_paths(policy_paramset_paths: dict) -> dict[str, str]:
-    from services.optimizer.outer_rolling_oos import get_optimizer_policy_output_label
+    from services.optimizer.outer_rolling_policy import get_optimizer_policy_output_label
 
-    from services.optimizer.outer_rolling_oos import get_optimizer_paramset_policy_names
+    from services.optimizer.outer_rolling_policy import get_optimizer_paramset_policy_names
 
     visible_names = tuple(get_optimizer_paramset_policy_names())
     return {
@@ -283,7 +283,7 @@ def _visible_policy_paramset_paths(policy_paramset_paths: dict) -> dict[str, str
 
 
 def _print_optimizer_output_files(title: str, entries: list[tuple[str, str]]) -> None:
-    from services.optimizer.outer_rolling_oos import print_optimizer_output_files
+    from services.optimizer.outer_rolling_formatting import print_optimizer_output_files
 
     print_optimizer_output_files(entries, title=title, project_root=PROJECT_ROOT, color=True)
 
@@ -299,7 +299,7 @@ def _find_finalist_entry(finalists, winner_trial):
 
 
 def _select_finalist_entry_by_selector(finalists, *, objective_mode: str, selector: str):
-    from services.optimizer.outer_rolling_oos import _build_policy_items
+    from services.optimizer.outer_rolling_policy import _build_policy_items
 
     normalized = _normalize_trade_selector(selector)
     policy_items = _build_policy_items(list(finalists or []), objective_mode=objective_mode)
@@ -1448,7 +1448,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 finalist_entry=finalist_entry,
                 params_payload=params_payload,
             )
-            from services.optimizer.outer_rolling_oos import build_optimizer_policy_members_from_finalists
+            from services.optimizer.outer_rolling_policy import build_optimizer_policy_members_from_finalists
             policy_members = build_optimizer_policy_members_from_finalists(
                 finalists,
                 objective_mode=str(task.get("objective_mode") or "split_train_romd"),
@@ -1653,15 +1653,15 @@ def _write_static_seed_ensemble_policy_paramsets(
     requested_seed_policy: dict | None = None,
     manifest_training_policy: dict | None = None,
 ) -> tuple[dict[str, str], dict[str, dict]]:
-    from services.optimizer.outer_rolling_oos import (
+    from services.optimizer.outer_rolling_policy import (
         ALL_REPORT_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
         get_optimizer_nonrolling_policy_paramset_filename,
         select_finalists_agree_members,
         select_finalist_best_members,
         _is_finalist_best_policy,
-        _remove_stale_policy_paramset_files,
     )
+    from services.optimizer.outer_rolling_oos import _remove_stale_policy_paramset_files
 
     first_class_policy_names = tuple(get_optimizer_paramset_policy_names())
     replay_policy_names = first_class_policy_names
@@ -1752,7 +1752,7 @@ def _write_static_seed_ensemble_candidate(
     requested_seed_policy: dict | None = None,
     manifest_training_policy: dict | None = None,
 ) -> tuple[dict, dict, dict[str, dict]]:
-    from services.optimizer.outer_rolling_oos import select_finalist_best_members, select_finalists_agree_members, _is_finalist_best_policy
+    from services.optimizer.outer_rolling_policy import select_finalist_best_members, select_finalists_agree_members, _is_finalist_best_policy
 
     candidate_selector = (
         str(candidate_selector_override)
@@ -1850,7 +1850,7 @@ def _resolve_trial_base_score(trial) -> float:
 
 
 def _remove_study_full_non_base_policy_outputs() -> None:
-    from services.optimizer.outer_rolling_oos import (
+    from services.optimizer.outer_rolling_policy import (
         get_optimizer_nonrolling_policy_paramset_filename,
         get_optimizer_paramset_policy_names,
     )
@@ -1883,7 +1883,7 @@ def _finalize_single_seed_study_base_only_outputs(
     build_best_params_payload_from_trial,
     dashboard_session=None,
 ) -> int:
-    from services.optimizer.outer_rolling_oos import get_optimizer_nonrolling_policy_paramset_filename
+    from services.optimizer.outer_rolling_policy import get_optimizer_nonrolling_policy_paramset_filename
 
     base_score = _resolve_trial_base_score(best_trial)
     params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
@@ -1983,7 +1983,7 @@ def _finalize_single_seed_study_outputs(
     elapsed_sec: float | None = None,
 ) -> int:
     from services.optimizer.static_ensemble_dashboard import print_optimizer_static_ensemble_rolling_oos_table
-    from services.optimizer.outer_rolling_oos import build_optimizer_policy_members_from_finalists
+    from services.optimizer.outer_rolling_policy import build_optimizer_policy_members_from_finalists
 
     finalist_entry = _find_finalist_entry(finalists, best_trial)
     if finalist_entry is None:
@@ -2310,7 +2310,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 finalist_entry=finalist_entry,
                 params_payload=params_payload,
             )
-            from services.optimizer.outer_rolling_oos import build_optimizer_policy_members_from_finalists
+            from services.optimizer.outer_rolling_policy import build_optimizer_policy_members_from_finalists
             policy_members = build_optimizer_policy_members_from_finalists(
                 finalists,
                 objective_mode=objective_mode,

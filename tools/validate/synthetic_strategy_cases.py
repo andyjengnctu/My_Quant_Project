@@ -38,6 +38,7 @@ from tools.optimizer import callbacks as optimizer_callbacks, study_utils
 from services.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
 from tools.optimizer.score_display import format_optimizer_score_for_display
+from services.optimizer.outer_rolling_formatting import _format_system_score_compare_plain
 from tools.optimizer.study_utils import (
     DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE,
     INVALID_TRIAL_VALUE,
@@ -2088,7 +2089,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "format_system_score_for_display(trial.value" in callbacks_source
         and "format_optimizer_score_for_display" in optimizer_main_source
         and "format_optimizer_score_for_display" in optimizer_robustness_source
-        and "scale_optimizer_score_for_display" in optimizer_outer_rolling_source
+        and "_format_system_score_compare_plain" in optimizer_outer_rolling_source
+        and _format_system_score_compare_plain(1.0, 2.0)
+            == f"{1.0 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f} ({1.0 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:+.2f})"
         and "OOS 系統得分" in optimizer_walk_forward_source
         and "OOS RoMD" in optimizer_walk_forward_source,
     )

@@ -237,7 +237,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
             break
     range_start = str(oos_start_date or "")[:10] if model_mode == "oos" else ""
     range_end = str(oos_end_date or "")[:10] if model_mode == "oos" and oos_end_date else ""
-    from services.optimizer.outer_rolling_oos import (
+    from services.optimizer.outer_rolling_policy import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
         REPORT_POLICY_NAMES,
     )
@@ -279,7 +279,8 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
 
 def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict | None:
     """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""
-    from services.optimizer.outer_rolling_oos import optimizer_seed_ensemble_table_titles, render_optimizer_results_tables
+    from services.optimizer.outer_rolling_policy import optimizer_seed_ensemble_table_titles
+    from services.optimizer.outer_rolling_oos import render_optimizer_results_tables
 
     row = build_optimizer_static_ensemble_single_fold_oos_row(
         session,

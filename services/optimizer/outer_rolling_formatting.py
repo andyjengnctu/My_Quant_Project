@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
 
 import pandas as pd
 
+from core.display import C_GREEN, C_RESET
 from core.report_style import signal_for_signed_value, terminal_signal
 from core.runtime_utils import is_interactive_console
 from services.optimizer.score_display import scale_optimizer_score_for_display
@@ -314,3 +316,44 @@ def _oos_key_from_start_date(value, default: int = 0) -> int:
         except ValueError:
             return int(default)
     return int(default)
+
+
+def format_optimizer_output_file_lines(
+    entries: list[tuple[str, str]] | tuple[tuple[str, str], ...],
+    *,
+    title: str = "💾 輸出檔案",
+    project_root: str | None = None,
+) -> list[str]:
+    root = str(project_root or os.getcwd())
+    visible_entries: list[tuple[str, str]] = []
+    for label, path in list(entries or []):
+        label_text = str(label or "").strip()
+        path_text = str(path or "").strip()
+        if not label_text or not path_text:
+            continue
+        try:
+            display_path = os.path.relpath(path_text, root).replace(os.sep, "/")
+        except ValueError:
+            display_path = os.path.basename(path_text).replace(os.sep, "/")
+        visible_entries.append((label_text, display_path))
+    if not visible_entries:
+        return []
+    lines = [str(title or "💾 輸出檔案")]
+    lines.extend(f"  {label}: {path}" for label, path in visible_entries)
+    return lines
+
+
+def print_optimizer_output_files(
+    entries: list[tuple[str, str]] | tuple[tuple[str, str], ...],
+    *,
+    title: str = "💾 輸出檔案",
+    project_root: str | None = None,
+    color: bool = True,
+) -> None:
+    lines = format_optimizer_output_file_lines(entries, title=title, project_root=project_root)
+    if not lines:
+        return
+    if color:
+        print("\n".join(f"{C_GREEN}{line}{C_RESET}" for line in lines))
+    else:
+        print("\n".join(lines))

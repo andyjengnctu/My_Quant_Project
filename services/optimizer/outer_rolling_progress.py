@@ -12,6 +12,7 @@ import json
 import math
 import os
 import time
+from threading import Lock
 
 from core.display import C_CYAN, C_GRAY, C_RESET
 from services.optimizer.outer_rolling_formatting import (
@@ -19,6 +20,12 @@ from services.optimizer.outer_rolling_formatting import (
     _fmt_duration,
     _fmt_duration_compact,
 )
+from services.optimizer.outer_rolling_policy import (
+    BASE_RETENTION_COMPARISON_POLICY_NAMES,
+    REPORT_POLICY_NAMES,
+    _policy_is_available,
+)
+from services.optimizer.study_utils import is_qualified_trial_value
 from services.optimizer.score_display import (
     format_optimizer_score_for_display,
     scale_optimizer_score_for_display,
@@ -812,3 +819,104 @@ def render_optimizer_fold_progress_line(
 
 def render_optimizer_seed_progress_line(*, context: dict, progress: dict) -> str:
     return _format_seed_ensemble_progress_line(dict(context or {}), dict(progress or {}))
+
+
+def _compact_policy_for_live_result(policy: dict) -> dict:
+    payload = dict(policy or {})
+    available = _policy_is_available(payload)
+    compact = {
+        "available": bool(available),
+        "unavailable_reason": str(payload.get("unavailable_reason") or payload.get("skip_reason") or ""),
+    }
+    if available:
+        for key in ("rank_1_oos", "rank_1_plain_romd", "rank_1_return_pct", "rank_1_mdd_pct", "benchmark_0050_gap", "benchmark_0050_plain_romd_gap", "best_gap"):
+            if key in payload:
+                try:
+                    compact[key] = float(payload.get(key, 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    compact[key] = 0.0
+        for key in ("rank_1_trial", "rank_1_trades"):
+            if key in payload:
+                compact[key] = payload.get(key)
+    return compact
+
+
+def _compact_row_for_live_result(row: dict) -> dict:
+    source = dict(row or {})
+    compact = {
+        "fold": source.get("fold"),
+        "oos_year": source.get("oos_year"),
+        "selection_period": source.get("selection_period", ""),
+        "oos_period": source.get("oos_period") or source.get("oos_year", ""),
+        "best_finalist_oos_score": float(source.get("best_finalist_oos_score", 0.0) or 0.0),
+        "benchmark_oos_score": float(source.get("benchmark_oos_score", 0.0) or 0.0),
+        "elapsed_sec": source.get("elapsed_sec"),
+    }
+    for policy_name in list(REPORT_POLICY_NAMES) + list(BASE_RETENTION_COMPARISON_POLICY_NAMES):
+        compact[policy_name] = _compact_policy_for_live_result(source.get(policy_name) or {})
+    return compact
+
+
+def _seed_progress_context_from_task(task: dict) -> dict:
+    if not bool((task or {}).get("seed_ensemble_member")):
+        return {}
+    member_index = int((task or {}).get("seed_ensemble_member_index", 0) or 0)
+    member_count = int((task or {}).get("seed_ensemble_member_count", 0) or 0)
+    if member_index <= 0 or member_count <= 0:
+        return {}
+    return {
+        "seed_ensemble_member_index": int(member_index),
+        "seed_ensemble_member_count": int(member_count),
+        "seed": int((task or {}).get("optimizer_seed", 0) or 0),
+    }
+
+
+class _FoldLogSearchProgress:
+    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, total_trials: int, seed_context: dict | None = None):
+        self.fold_idx = int(fold_idx)
+        self.fold_count = int(fold_count)
+        self.oos_year = int(oos_year)
+        self.selection_start = str(selection_start)
+        self.selection_end = str(selection_end)
+        self.total_trials = int(total_trials)
+        self.seed_context = dict(seed_context or {})
+        self.stage_start = time.perf_counter()
+        self.stage_start_ts = time.time()
+        self.best_score = float("-inf")
+        self.last_completed = -1
+        self._lock = Lock()
+
+    def emit(self, completed: int, *, force: bool = False) -> None:
+        completed = int(completed)
+        if not force and completed == self.last_completed:
+            return
+        self.last_completed = completed
+        best_score = None if self.best_score == float("-inf") else float(self.best_score)
+        _write_parallel_fold_progress_event(
+            stage="OPTIMIZER_SEARCH",
+            fold_idx=self.fold_idx,
+            fold_count=self.fold_count,
+            oos_year=self.oos_year,
+            selection_start=self.selection_start,
+            selection_end=self.selection_end,
+            **self.seed_context,
+            completed=completed,
+            total=self.total_trials,
+            best_score=best_score,
+            elapsed_sec=max(0.0, time.perf_counter() - self.stage_start),
+            search_started_ts=float(self.stage_start_ts),
+            search_last_done_ts=time.time() if int(completed) > 0 else None,
+        )
+
+    def callback(self, session):
+        def _callback(study, trial):
+            with self._lock:
+                session.current_session_trial += 1
+                if trial.value is not None and is_qualified_trial_value(trial.value):
+                    self.best_score = max(self.best_score, float(trial.value))
+                completed = int(session.current_session_trial)
+            self.emit(completed)
+        return _callback
+
+    def done(self, completed: int) -> None:
+        self.emit(int(completed), force=True)
