@@ -79,6 +79,15 @@ MARKET_DATA_V2_LIFECYCLE = {
     "historical_pit_universe_role": "neutral_derived_ssot",
     "historical_pit_universe_shared_across_domains": True,
     "domain_specific_historical_membership_rebuild_allowed": False,
+    # Pool layering is date-local. Model context may be a model-specific
+    # projection of the same-day PIT market universe, but today's Trading
+    # execution pool may never define historical model/training membership.
+    "model_context_pool_role": "date_local_pit_projection",
+    "model_context_pool_source": "neutral_daily_pit_market_universe",
+    "model_context_may_depend_on_current_execution_pool": False,
+    "trading_execution_pool_role": "date_local_new_entry_eligibility",
+    "trading_execution_pool_source": "neutral_daily_pit_market_universe",
+    "current_execution_pool_may_define_historical_training_universe": False,
     "research_view_role": "frozen_scientific_view",
     "trading_view_role": "latest_operational_view",
     "shared_provider_archive_required": True,

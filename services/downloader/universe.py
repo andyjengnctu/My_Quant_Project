@@ -5,6 +5,7 @@ from io import StringIO
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
+from core.market_data_pool_contract import screen_daily_trading_execution_pool
 
 from core.console_report import project_relative_display_path
 from core.trading_market_clock import (
@@ -365,61 +366,22 @@ def _screen_finmind_bulk_universe(
     price: pd.DataFrame,
     market_value: pd.DataFrame,
 ) -> tuple[list[str], dict[str, int]]:
-    universe_by_sid: dict[str, bool] = {}
-    for item in tickers_info:
-        sid = str(item.get("sid") or "").strip()
-        if not sid:
-            raise ValueError("TWSE/TPEX universe 存在空白 sid")
-        is_etf = bool(item.get("is_etf"))
-        prior = universe_by_sid.get(sid)
-        if prior is not None and prior != is_etf:
-            raise ValueError(f"TWSE/TPEX universe 同一 sid ETF identity 不一致: {sid}")
-        universe_by_sid[sid] = is_etf
+    """Legacy current-market adapter to the canonical Trading execution-pool owner."""
 
-    volume_by_sid = dict(zip(price["stock_id"].astype(str), price["trading_volume"].astype(float)))
-    market_value_by_sid = dict(zip(market_value["stock_id"].astype(str), market_value["market_value"].astype(float)))
-
-    qualified: list[str] = []
-    missing_market_value_for_high_volume_stock: list[str] = []
-    listed_without_exact_price = 0
-    high_volume_count = 0
-    for sid, is_etf in universe_by_sid.items():
-        volume = volume_by_sid.get(sid)
-        if volume is None:
-            # Exact-date FinMind price rows define the actually traded daily universe.
-            # A listed but non-traded/suspended symbol is conservatively not actionable.
-            listed_without_exact_price += 1
-            continue
-        if volume < float(rt.MIN_VOLUME):
-            continue
-        high_volume_count += 1
-        if is_etf:
-            qualified.append(sid)
-            continue
-        cap = market_value_by_sid.get(sid)
-        if cap is None or cap <= 0:
-            missing_market_value_for_high_volume_stock.append(sid)
-            continue
-        if cap >= float(rt.MIN_MARKET_CAP):
-            qualified.append(sid)
-
-    if missing_market_value_for_high_volume_stock:
-        sample = ",".join(missing_market_value_for_high_volume_stock[:20])
-        raise RuntimeError(
-            "FinMind bulk快篩對高成交量股票缺少同日 market_value，依 Trading 保守原則中止重掃；"
-            f"count={len(missing_market_value_for_high_volume_stock)} sample={sample}"
-        )
-
-    qualified = list(dict.fromkeys(qualified))
-    stats = {
-        "listed_count": len(universe_by_sid),
-        "price_exact_date_count": len(volume_by_sid),
-        "market_value_exact_date_count": len(market_value_by_sid),
-        "listed_without_exact_price_count": int(listed_without_exact_price),
-        "high_volume_count": int(high_volume_count),
-        "qualified_count": len(qualified),
-    }
-    return qualified, stats
+    daily_market_members = [
+        {
+            "stock_id": str(item.get("sid") or "").strip(),
+            "is_etf": bool(item.get("is_etf")),
+        }
+        for item in tickers_info
+    ]
+    return screen_daily_trading_execution_pool(
+        daily_market_members,
+        price_rows=price,
+        market_value_rows=market_value,
+        min_volume=rt.MIN_VOLUME,
+        min_market_cap=rt.MIN_MARKET_CAP,
+    )
 
 
 def get_or_update_universe(*, market_date: str, client=None):

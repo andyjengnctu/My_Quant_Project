@@ -2778,6 +2778,16 @@ def validate_trading_retained_dataset_current_vintage_contract_case(_base_params
             update.get("retained_history_tickers_added"),
         )
         check(
+            "legacy_universe_summary_is_explicitly_aliased_as_current_execution_pool",
+            ["2330"],
+            update.get("current_execution_pool_tickers"),
+        )
+        check(
+            "current_execution_pool_count_matches_compatibility_universe_count",
+            update.get("universe_ticker_count"),
+            update.get("current_execution_pool_ticker_count"),
+        )
+        check(
             "missing_dataset_directory_has_empty_optional_retained_membership",
             [],
             resolve_trading_dataset_member_tickers(root / "missing", required=False),

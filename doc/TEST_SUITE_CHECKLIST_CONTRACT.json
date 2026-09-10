@@ -4151,8 +4151,8 @@
       "priority": "P0",
       "category": "Market Data governance / provider and lifecycle SSOT",
       "item": "Market Data provider, price-source and Research/Trading lifecycle semantics remain single-source and non-promoting",
-      "gap": "Market Data穩定語意必須由`core/market_data_contract.py`與`config/market_data.py`單一持有：FinMind `TaiwanStockPriceAdj`維持目前模型/策略canonical還原價source，`TaiwanStockPrice` raw只允許archive/audit等非現行price-input用途，專案不得自行建立第二套還原價engine；使用current-vintage adjusted history仍須遵守PIT legality/invariance要求。Research active generation/cutoff必須由declarative generation config解析，NOT_READY generation不得預占cutoff或自動promotion；`config/research.py::RESEARCH_MARKET_DATA_CUTOFF`只可作active generation compatibility alias。Trading lifecycle mode/bootstrap generation亦須由同一contract解析。Downloader的adjusted-price與universe-volume dataset identity必須消費canonical owner，不得在runtime重複硬編dataset literal。",
-      "entry": "`config/market_data.py`, `config/research.py`, `core/market_data_contract.py`, `services/downloader/runtime.py`, `tools/validate/synthetic_meta_cases.py`",
+      "gap": "Market Data穩定語意必須由`core/market_data_contract.py`與`config/market_data.py`單一持有：FinMind `TaiwanStockPriceAdj`維持目前模型/策略canonical還原價source，`TaiwanStockPrice` raw只允許archive/audit等非現行price-input用途，專案不得自行建立第二套還原價engine；使用current-vintage adjusted history仍須遵守PIT legality/invariance要求。Research active generation/cutoff必須由declarative generation config解析，NOT_READY generation不得預占cutoff或自動promotion；`config/research.py::RESEARCH_MARKET_DATA_CUTOFF`只可作active generation compatibility alias。Trading lifecycle mode/bootstrap generation亦須由同一contract解析。Market Data V2 pool layering必須固定為daily PIT market universe → model-context projection → Trading execution/new-entry mask；model context不得依current execution pool反推，current execution pool不得定義historical training universe。Trading成交量/市值execution screening須由`core/market_data_pool_contract.py`單一持有且threshold保持config-driven；Downloader只能作latest-date membership adapter，不得再實作第二份screening公式。Downloader的adjusted-price與universe-volume dataset identity仍必須消費canonical owner，不得在runtime重複硬編dataset literal。",
+      "entry": "`config/market_data.py`, `config/research.py`, `core/market_data_contract.py`, `core/market_data_pool_contract.py`, `services/downloader/runtime.py`, `services/downloader/universe.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 374
     },
@@ -7965,7 +7965,7 @@
     {
       "id": "T506",
       "b_id": "B386",
-      "description": "`validate_market_data_governance_contract_case` 覆蓋FinMind canonical adjusted-price/raw archive/lifecycle SSOT、retrospective invariance requirement，以及既有V1/V2 adjusted-price calendar-row/no-price-day carry-forward等價語意。",
+      "description": "`validate_market_data_governance_contract_case` 覆蓋FinMind canonical adjusted-price/raw archive/lifecycle SSOT、retrospective invariance requirement、V1/V2 calendar-row語意，以及daily PIT → model context → Trading execution pool 分層、current execution pool不得裁歷史training universe與Downloader execution-screen owner單一化。",
       "initial_status": "NEW",
       "order": 496
     },

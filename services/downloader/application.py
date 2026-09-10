@@ -50,6 +50,11 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
             market_date = assert_completed_daily_information_date(probe.market_date, now=rt.get_taipei_now())
             print(f"📅 台股最新完整交易日 (FinMind PriceAdj bulk) 為: {market_date}")
 
+    # During the legacy transition this producer still obtains the latest-date
+    # membership from the current TWSE/TPEX source, but the resulting filtered
+    # set is explicitly the *current Trading execution pool*, not a historical
+    # model/training universe.  The screening semantics are owned by
+    # core.market_data_pool_contract.
     universe_tickers = [
         normalize_trading_ticker(item)
         for item in get_or_update_universe(market_date=market_date, client=provider_client)
@@ -141,8 +146,11 @@ def run_trading_dataset_update(*, required_tickers=None, provider_client=None) -
         "runtime_domain": "trading",
         "market_date": str(market_date),
         "ticker_count": int(len(target_tickers)),
+        # Compatibility names retained until the downstream V2 consumer cutover.
         "universe_ticker_count": int(len(universe_tickers)),
         "universe_tickers": list(universe_tickers),
+        "current_execution_pool_ticker_count": int(len(universe_tickers)),
+        "current_execution_pool_tickers": list(universe_tickers),
         "required_position_tickers": required,
         "required_position_ticker_count": int(len(required)),
         "required_position_tickers_added": sorted(set(required) - set(universe_tickers)),

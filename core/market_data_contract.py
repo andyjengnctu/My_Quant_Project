@@ -39,6 +39,9 @@ RESEARCH_STATUS_READY_FROZEN = "ready_frozen"
 MARKET_DATA_V2_CANONICAL_DATA_PLANE = "market_data_v2"
 MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE = "neutral_provider_ssot"
 MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE = "neutral_derived_ssot"
+MARKET_DATA_V2_MODEL_CONTEXT_POOL_ROLE = "date_local_pit_projection"
+MARKET_DATA_V2_POOL_SOURCE_ROLE = "neutral_daily_pit_market_universe"
+MARKET_DATA_V2_TRADING_EXECUTION_POOL_ROLE = "date_local_new_entry_eligibility"
 MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE = "market_data_v2_provider_snapshot"
 MARKET_DATA_V2_RESEARCH_VIEW_ROLE = "frozen_scientific_view"
 MARKET_DATA_V2_TRADING_VIEW_ROLE = "latest_operational_view"
@@ -91,6 +94,12 @@ class MarketDataV2LifecycleContract:
     historical_pit_universe_role: str
     historical_pit_universe_shared_across_domains: bool
     domain_specific_historical_membership_rebuild_allowed: bool
+    model_context_pool_role: str
+    model_context_pool_source: str
+    model_context_may_depend_on_current_execution_pool: bool
+    trading_execution_pool_role: str
+    trading_execution_pool_source: str
+    current_execution_pool_may_define_historical_training_universe: bool
     research_view_role: str
     trading_view_role: str
     shared_provider_archive_required: bool
@@ -209,6 +218,18 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     historical_pit_universe_role = _require_nonempty_text(
         raw.get("historical_pit_universe_role"), field="market_data_v2.historical_pit_universe_role"
     )
+    model_context_pool_role = _require_nonempty_text(
+        raw.get("model_context_pool_role"), field="market_data_v2.model_context_pool_role"
+    )
+    model_context_pool_source = _require_nonempty_text(
+        raw.get("model_context_pool_source"), field="market_data_v2.model_context_pool_source"
+    )
+    trading_execution_pool_role = _require_nonempty_text(
+        raw.get("trading_execution_pool_role"), field="market_data_v2.trading_execution_pool_role"
+    )
+    trading_execution_pool_source = _require_nonempty_text(
+        raw.get("trading_execution_pool_source"), field="market_data_v2.trading_execution_pool_source"
+    )
     research_view_role = _require_nonempty_text(
         raw.get("research_view_role"), field="market_data_v2.research_view_role"
     )
@@ -228,6 +249,12 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
     )
     domain_specific_historical_membership_rebuild_allowed = bool(
         raw.get("domain_specific_historical_membership_rebuild_allowed")
+    )
+    model_context_may_depend_on_current_execution_pool = bool(
+        raw.get("model_context_may_depend_on_current_execution_pool")
+    )
+    current_execution_pool_may_define_historical_training_universe = bool(
+        raw.get("current_execution_pool_may_define_historical_training_universe")
     )
     independent_domain_provider_redownload_allowed = bool(
         raw.get("independent_domain_provider_redownload_allowed")
@@ -249,6 +276,20 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
         raise ValueError("Market Data V2 historical PIT universe 必須由 Research / Trading 共用")
     if domain_specific_historical_membership_rebuild_allowed:
         raise ValueError("Research / Trading 不得各自重建第二套 historical PIT membership truth")
+    if model_context_pool_role != MARKET_DATA_V2_MODEL_CONTEXT_POOL_ROLE:
+        raise ValueError(f"Market Data V2 model context pool role 必須為 {MARKET_DATA_V2_MODEL_CONTEXT_POOL_ROLE}")
+    if model_context_pool_source != MARKET_DATA_V2_POOL_SOURCE_ROLE:
+        raise ValueError(f"Market Data V2 model context pool source 必須為 {MARKET_DATA_V2_POOL_SOURCE_ROLE}")
+    if model_context_may_depend_on_current_execution_pool:
+        raise ValueError("Model context pool 不得由 current Trading execution pool 定義")
+    if trading_execution_pool_role != MARKET_DATA_V2_TRADING_EXECUTION_POOL_ROLE:
+        raise ValueError(
+            f"Market Data V2 Trading execution pool role 必須為 {MARKET_DATA_V2_TRADING_EXECUTION_POOL_ROLE}"
+        )
+    if trading_execution_pool_source != MARKET_DATA_V2_POOL_SOURCE_ROLE:
+        raise ValueError(f"Market Data V2 Trading execution pool source 必須為 {MARKET_DATA_V2_POOL_SOURCE_ROLE}")
+    if current_execution_pool_may_define_historical_training_universe:
+        raise ValueError("Current Trading execution pool 不得反向定義 historical training universe")
     if research_view_role != MARKET_DATA_V2_RESEARCH_VIEW_ROLE:
         raise ValueError(f"Market Data V2 Research view role 必須為 {MARKET_DATA_V2_RESEARCH_VIEW_ROLE}")
     if trading_view_role != MARKET_DATA_V2_TRADING_VIEW_ROLE:
@@ -275,6 +316,12 @@ def get_market_data_v2_lifecycle() -> MarketDataV2LifecycleContract:
         historical_pit_universe_role=historical_pit_universe_role,
         historical_pit_universe_shared_across_domains=historical_pit_universe_shared_across_domains,
         domain_specific_historical_membership_rebuild_allowed=domain_specific_historical_membership_rebuild_allowed,
+        model_context_pool_role=model_context_pool_role,
+        model_context_pool_source=model_context_pool_source,
+        model_context_may_depend_on_current_execution_pool=model_context_may_depend_on_current_execution_pool,
+        trading_execution_pool_role=trading_execution_pool_role,
+        trading_execution_pool_source=trading_execution_pool_source,
+        current_execution_pool_may_define_historical_training_universe=current_execution_pool_may_define_historical_training_universe,
         research_view_role=research_view_role,
         trading_view_role=trading_view_role,
         shared_provider_archive_required=shared_provider_archive_required,
@@ -352,6 +399,9 @@ __all__ = [
     "MARKET_DATA_V2_CANONICAL_DATA_PLANE",
     "MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE",
     "MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE",
+    "MARKET_DATA_V2_MODEL_CONTEXT_POOL_ROLE",
+    "MARKET_DATA_V2_POOL_SOURCE_ROLE",
+    "MARKET_DATA_V2_TRADING_EXECUTION_POOL_ROLE",
     "MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE",
     "MARKET_DATA_V2_RESEARCH_VIEW_ROLE",
     "MARKET_DATA_V2_TRADING_VIEW_ROLE",

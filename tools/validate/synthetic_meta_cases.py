@@ -2576,6 +2576,9 @@ def validate_market_data_governance_contract_case(_base_params):
         MARKET_DATA_V2_CANONICAL_DATA_PLANE,
         MARKET_DATA_V2_PROVIDER_ARCHIVE_ROLE,
         MARKET_DATA_V2_HISTORICAL_PIT_UNIVERSE_ROLE,
+        MARKET_DATA_V2_MODEL_CONTEXT_POOL_ROLE,
+        MARKET_DATA_V2_POOL_SOURCE_ROLE,
+        MARKET_DATA_V2_TRADING_EXECUTION_POOL_ROLE,
         MARKET_DATA_V2_PROVIDER_SNAPSHOT_SOURCE,
         MARKET_DATA_V2_RESEARCH_VIEW_ROLE,
         MARKET_DATA_V2_TRADING_VIEW_ROLE,
@@ -2674,6 +2677,36 @@ def validate_market_data_governance_contract_case(_base_params):
         False,
         market_data_v2.domain_specific_historical_membership_rebuild_allowed,
     )
+    check(
+        "v2_model_context_is_date_local_pit_projection",
+        MARKET_DATA_V2_MODEL_CONTEXT_POOL_ROLE,
+        market_data_v2.model_context_pool_role,
+    )
+    check(
+        "v2_model_context_comes_from_neutral_daily_pit_universe",
+        MARKET_DATA_V2_POOL_SOURCE_ROLE,
+        market_data_v2.model_context_pool_source,
+    )
+    check(
+        "v2_model_context_cannot_depend_on_current_execution_pool",
+        False,
+        market_data_v2.model_context_may_depend_on_current_execution_pool,
+    )
+    check(
+        "v2_trading_execution_pool_is_date_local_new_entry_eligibility",
+        MARKET_DATA_V2_TRADING_EXECUTION_POOL_ROLE,
+        market_data_v2.trading_execution_pool_role,
+    )
+    check(
+        "v2_trading_execution_pool_comes_from_neutral_daily_pit_universe",
+        MARKET_DATA_V2_POOL_SOURCE_ROLE,
+        market_data_v2.trading_execution_pool_source,
+    )
+    check(
+        "current_execution_pool_cannot_define_historical_training_universe",
+        False,
+        market_data_v2.current_execution_pool_may_define_historical_training_universe,
+    )
     check("v2_research_view_is_frozen_scientific_view", MARKET_DATA_V2_RESEARCH_VIEW_ROLE, market_data_v2.research_view_role)
     check("v2_trading_view_is_latest_operational_view", MARKET_DATA_V2_TRADING_VIEW_ROLE, market_data_v2.trading_view_role)
     check("v2_research_trading_share_provider_archive", True, market_data_v2.shared_provider_archive_required)
@@ -2706,6 +2739,16 @@ def validate_market_data_governance_contract_case(_base_params):
         market_data_v2.historical_pit_universe_role,
         snapshot["market_data_v2"]["historical_pit_universe_role"],
     )
+    check(
+        "market_data_snapshot_exposes_model_context_pool_role",
+        market_data_v2.model_context_pool_role,
+        snapshot["market_data_v2"]["model_context_pool_role"],
+    )
+    check(
+        "market_data_snapshot_exposes_trading_execution_pool_role",
+        market_data_v2.trading_execution_pool_role,
+        snapshot["market_data_v2"]["trading_execution_pool_role"],
+    )
     pit_core_source = (PROJECT_ROOT / "core/market_data_pit_universe.py").read_text(encoding="utf-8")
     pit_service_source = (PROJECT_ROOT / "services/market_data/daily_pit_universe.py").read_text(encoding="utf-8")
     check(
@@ -2721,6 +2764,69 @@ def validate_market_data_governance_contract_case(_base_params):
         "neutral_historical_pit_owner_has_no_domain_storage_path_literal",
         False,
         any(token in pit_service_source for token in ("data/research", "data/trading")),
+    )
+
+    from core.market_data_pool_contract import (
+        market_data_pool_layer_contract_fingerprint,
+        project_daily_model_context_pool,
+        screen_daily_trading_execution_pool,
+    )
+    daily_pit_members = ("2330", "2317", "0050", "9999")
+    full_context = project_daily_model_context_pool(
+        daily_pit_members, requested_members=daily_pit_members
+    )
+    check("explicit_full_market_context_preserves_same_day_pit_membership", daily_pit_members, full_context)
+    projected_context = project_daily_model_context_pool(
+        daily_pit_members, requested_members=("2317", "0050")
+    )
+    check("model_specific_context_projection_preserves_pit_order", ("2317", "0050"), projected_context)
+    try:
+        project_daily_model_context_pool(daily_pit_members, requested_members=("2330", "OUTSIDE"))
+    except ValueError:
+        context_outside_pit_rejected = True
+    else:
+        context_outside_pit_rejected = False
+    check("model_context_cannot_include_non_pit_member", True, context_outside_pit_rejected)
+
+    execution_pool, execution_stats = screen_daily_trading_execution_pool(
+        (
+            {"stock_id": "2330", "is_etf": False},
+            {"stock_id": "2317", "is_etf": False},
+            {"stock_id": "0050", "is_etf": True},
+            {"stock_id": "9999", "is_etf": False},
+        ),
+        price_rows=pd.DataFrame(
+            {
+                "stock_id": ["2330", "2317", "0050", "9999"],
+                "trading_volume": [2_000_000, 2_000_000, 2_000_000, 500_000],
+            }
+        ),
+        market_value_rows=pd.DataFrame(
+            {
+                "stock_id": ["2330", "2317", "9999"],
+                "market_value": [1_000_000_000_000, 5_000_000_000, 20_000_000_000],
+            }
+        ),
+        min_volume=1_000_000,
+        min_market_cap=10_000_000_000,
+    )
+    check("execution_pool_applies_existing_liquidity_value_mask", ["2330", "0050"], execution_pool)
+    check("execution_pool_remains_strict_subset_without_pruning_model_context", True, set(execution_pool) < set(full_context))
+    check("execution_pool_stats_keep_daily_market_member_count", 4, execution_stats.get("listed_count"))
+    check("pool_layer_contract_has_content_identity", 64, len(market_data_pool_layer_contract_fingerprint()))
+
+    pool_owner_source = (PROJECT_ROOT / "core/market_data_pool_contract.py").read_text(encoding="utf-8")
+    downloader_universe_source = (PROJECT_ROOT / "services/downloader/universe.py").read_text(encoding="utf-8")
+    check(
+        "pool_layer_owner_has_no_research_or_trading_service_dependency",
+        False,
+        any(token in pool_owner_source for token in ("from services.research", "from services.trading")),
+    )
+    check(
+        "legacy_current_universe_adapter_delegates_execution_screening_to_pool_owner",
+        True,
+        "screen_daily_trading_execution_pool" in downloader_universe_source
+        and "missing_market_value_for_high_volume_stock" not in downloader_universe_source,
     )
 
     summary["active_research_generation"] = active.generation_id
