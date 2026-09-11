@@ -2386,6 +2386,15 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         from services.trading.market_data_ops import build_market_data_ops_read_model
         ops_model = build_market_data_ops_read_model(state_root, now=state_now)
         check("data_ops_local_refresh_uses_zero_provider_calls", 0, ops_model.get("provider_calls"))
+        utc_ops_model = build_market_data_ops_read_model(
+            state_root,
+            now=state_now.astimezone(ZoneInfo("UTC")),
+        )
+        check(
+            "data_ops_read_model_normalizes_generated_at_to_publication_timezone",
+            state_now.isoformat(),
+            utc_ops_model.get("generated_at"),
+        )
         check("data_ops_local_read_model_exposes_scheduler_status", True, bool(ops_model.get("scheduler_registration_status")))
         check("data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
         loaded_state = load_market_data_dataset_state(state_root, required=True)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import threading
@@ -22,6 +21,7 @@ from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, prin
 from core.console_report import project_relative_display_path
 from services.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
 from core.entry_plans import build_position_from_entry_fill
+from core.file_integrity import load_json_strict
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
 from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.log_utils import write_issue_log
@@ -180,9 +180,8 @@ def _resolve_training_data_start_year_hint():
 
 def _load_param_source_payload_silent(path):
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        payload = load_json_strict(path)
+    except (OSError, UnicodeDecodeError, TypeError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
 

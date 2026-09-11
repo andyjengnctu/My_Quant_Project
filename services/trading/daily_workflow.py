@@ -101,7 +101,6 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         'param_binding_sha256': runtime['param_binding_sha256'],
         'scanned_tickers': list(actual_scanned_tickers),
         'candidate_rows': candidate_rows,
-        'scanned_tickers': list(actual_scanned_tickers),
         'stale_candidate_rows_skipped': stale_candidate_rows,
     }
     atomic_write_json(snapshot_path, snapshot_payload)

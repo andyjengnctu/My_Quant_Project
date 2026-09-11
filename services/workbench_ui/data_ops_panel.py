@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
+from core.console_report import format_datetime_in_timezone
 from services.trading.market_data_auto_update import run_trading_market_data_auto_update
 from services.trading.market_data_ops import build_market_data_ops_read_model
 from services.trading.market_data_scheduler import (
@@ -29,14 +30,11 @@ WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _fmt_datetime(value) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "-"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return text
-    return parsed.astimezone().strftime("%m-%d %H:%M") if parsed.tzinfo else parsed.strftime("%m-%d %H:%M")
+    return format_datetime_in_timezone(
+        value,
+        timezone_name=str(MARKET_DATA_V2_PUBLICATION_POLICY.get("timezone") or "Asia/Taipei"),
+        output_format="%m-%d %H:%M",
+    )
 
 
 def _fmt_date(value) -> str:

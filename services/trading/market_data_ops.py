@@ -12,7 +12,7 @@ from typing import Any
 
 from core.market_data_auto_update_policy import get_market_data_auto_update_policy
 from core.market_data_dataset_readiness import is_market_data_dataset_ready
-from core.market_data_due_planner import plan_market_data_due_datasets
+from core.market_data_due_planner import normalize_market_data_planner_now, plan_market_data_due_datasets
 from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
 from services.trading.data_readiness import build_trading_data_readiness
 from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
@@ -55,7 +55,7 @@ def build_market_data_ops_read_model(
     """Return a provider-free Workbench Data Ops snapshot."""
 
     root = Path(project_root).resolve()
-    local_now = now or datetime.now().astimezone()
+    local_now = normalize_market_data_planner_now(now or datetime.now().astimezone())
     consumer_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     target_date = None if consumer_state is None else str(consumer_state.get("market_date") or "") or None
     trading_readiness = build_trading_data_readiness(root, verify_consumer_view=False)

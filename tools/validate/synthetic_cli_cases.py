@@ -927,6 +927,12 @@ def validate_extended_tool_cli_contract_case(_base_params):
         ("apps/workbench.py", app_workbench.main, {}),
     ]
 
+    workbench_entry_source = Path(app_workbench.__file__).read_text(encoding="utf-8")
+    check_true(
+        "apps_workbench_uses_shared_cli_error_boundary",
+        "run_cli_entrypoint" in workbench_entry_source and "run_cli_entrypoint(main, sys.argv)" in workbench_entry_source,
+    )
+
     for program, main_func, kwargs in no_dataset_cases:
         metric_prefix = program.replace("/", "_").replace(".", "_")
         rc, help_text = _capture_stdout(main_func, [program, "--help"], **kwargs)

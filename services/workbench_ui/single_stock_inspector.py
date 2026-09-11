@@ -26,6 +26,7 @@ import pandas as pd
 from config.execution_policy import DEFAULT_FIXED_RISK
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
+from core.console_report import project_relative_display_path
 from core.runtime_utils import parse_float_strict
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method, sort_candidate_rows
 from core.scanner_display import build_scanner_sort_probe_text
@@ -1437,7 +1438,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
     def _open_path(self, path):
         normalized_path = os.path.abspath(path)
         if not os.path.exists(normalized_path):
-            messagebox.showerror("股票工具工作台", f"找不到檔案或資料夾：{normalized_path}")
+            display_path = project_relative_display_path(normalized_path, project_root=WORKBENCH_PROJECT_ROOT)
+            messagebox.showerror("股票工具工作台", f"找不到檔案或資料夾：{display_path}")
             return
         try:
             if os.name == "nt":
