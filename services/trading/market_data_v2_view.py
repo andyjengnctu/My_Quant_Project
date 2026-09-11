@@ -26,7 +26,7 @@ from core.market_data_trading_storage_contract import (
     resolve_trading_market_data_v2_ledger_path,
     resolve_trading_market_data_v2_request_path,
     resolve_trading_market_data_v2_root,
-    validate_trading_sync_batch_manifest_payload,
+    validate_trading_sync_batch_manifest_payload_for_read,
 )
 from core.market_data_trading_view import (
     TradingV2TrainingHorizon,
@@ -98,7 +98,7 @@ class TradingMarketDataV2View:
             return self._overlay_batches
 
         for manifest_path in sorted(base.glob(f"*/{TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME}")):
-            payload = validate_trading_sync_batch_manifest_payload(load_json_strict(manifest_path))
+            payload = validate_trading_sync_batch_manifest_payload_for_read(load_json_strict(manifest_path))
             batch_fp = str(payload["batch_fingerprint"])
             if manifest_path.parent.name != batch_fp:
                 raise ValueError("Trading V2 batch directory 與 manifest fingerprint 不一致")

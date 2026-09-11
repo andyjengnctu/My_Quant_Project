@@ -5212,6 +5212,50 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
         "screen_daily_trading_execution_pool" in service_source,
     )
 
+    from core.file_integrity import canonical_json_sha256
+    from core.market_data_trading_storage_contract import (
+        TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
+        validate_trading_sync_batch_manifest_payload,
+        validate_trading_sync_batch_manifest_payload_for_read,
+    )
+    legacy_identity = {
+        "schema_version": TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
+        "role": "trading_market_data_v2_archive_sync_batch",
+        "status": "READY",
+        "target_date": "2026-03-02",
+        "base_as_of_date": "2026-03-02",
+        "previous_sync_date": None,
+        "base_provider_snapshot_fingerprint": "a" * 64,
+        "base_provider_manifest_fingerprint": "b" * 64,
+        "registry_fingerprint": "c" * 64,
+        "batch_fingerprint": "d" * 64,
+        "validation_contract_version": 2,
+        "request_count": 1,
+        "request_ids": ["e" * 64],
+    }
+    legacy_payload = {**legacy_identity, "identity_fingerprint": canonical_json_sha256(legacy_identity)}
+    try:
+        validate_trading_sync_batch_manifest_payload(legacy_payload)
+    except ValueError:
+        strict_accepts_legacy = False
+    else:
+        strict_accepts_legacy = True
+    check("current_producer_validator_rejects_legacy_v2_batch", False, strict_accepts_legacy)
+    check(
+        "read_validator_accepts_immutable_legacy_v2_batch",
+        legacy_payload,
+        validate_trading_sync_batch_manifest_payload_for_read(legacy_payload),
+    )
+    tampered_legacy = dict(legacy_payload)
+    tampered_legacy["request_count"] = 2
+    try:
+        validate_trading_sync_batch_manifest_payload_for_read(tampered_legacy)
+    except ValueError:
+        tampered_rejected = True
+    else:
+        tampered_rejected = False
+    check("read_validator_still_rejects_tampered_legacy_batch", True, tampered_rejected)
+
     # Exercise the actual read seam over one immutable Provider Snapshot plus one
     # completed Trading overlay.  This covers read-only ledger validation and
     # ensures incomplete/raw batch files are not the source of latest truth.

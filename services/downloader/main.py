@@ -32,8 +32,12 @@ def _status_color(status: object) -> str:
     normalized = str(status or "").strip().upper()
     if normalized in {"PASS", "READY", "UPDATED", "DONE", "AVAILABLE", "YES", "SYNCED", "COMPLETE"}:
         return C_GREEN
-    if normalized in {"DEFERRED", "WAIT_PUBLISH", "WAIT_QUOTA", "UNVERIFIED", "NO", "NO_DUE", "TARGET_ADVANCED"}:
+    if normalized in {"DEFERRED", "WAIT_PUBLISH", "WAIT_QUOTA", "UNVERIFIED"}:
         return C_YELLOW
+    if normalized in {"NO", "NO_DUE"}:
+        return C_GRAY
+    if normalized in {"TARGET_ADVANCED"}:
+        return C_CYAN
     if normalized in {"FAIL", "BLOCKED", "ERROR", "UNAVAILABLE", "STALE"}:
         return C_RED
     return C_CYAN
@@ -295,16 +299,20 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
 
     archive_incomplete = tuple(result.get("archive_incomplete_datasets") or ())
     if archive_incomplete:
-        print(_paint("Target freshness pending:", C_YELLOW))
+        print("Target freshness pending:")
         for item in archive_incomplete:
             row = dict(item or {})
-            pending_line = (
+            status_text = str(row.get("status") or "-")
+            schema_text = str(row.get("schema_status") or "-")
+            coverage_text = str(row.get("coverage_status") or "-")
+            print(
                 "  - "
-                f"{row.get('dataset')}: status={row.get('status')}, "
+                f"{row.get('dataset')}: "
+                f"status={_paint(status_text, _status_color(status_text))}, "
                 f"latest={row.get('latest_data_date') or '-'}, "
-                f"schema={row.get('schema_status')}, coverage={row.get('coverage_status')}"
+                f"schema={_paint(schema_text, _status_color(schema_text))}, "
+                f"coverage={_paint(coverage_text, _status_color(coverage_text))}"
             )
-            print(_paint(pending_line, _status_color(row.get("status"))))
             if row.get("last_error"):
                 print(f"      reason: {row.get('last_error')}")
 
@@ -332,7 +340,7 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             if safe_date < target_date:
                 print(
                     "Trading safe horizon    : "
-                    f"{_paint(safe_date, C_YELLOW)} "
+                    f"{_paint(safe_date, C_GREEN)} "
                     f"(target {_paint(target_date, C_YELLOW)} 尚未由全部 required datasets 共同 READY)"
                 )
             else:
@@ -350,11 +358,11 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             final_count = int(pool.get("qualified_count") or 0)
             print(f"StockInfo broad ref     : {_paint(broad, C_GRAY)}")
             print(f"PIT market members      : {_paint(listed, C_CYAN)}")
-            print(f"Exact-date price        : {_paint(exact, C_CYAN)}  ({_paint(f'excluded {no_price}', C_YELLOW)})")
-            print(f"Volume >= {int(DOWNLOADER_MIN_VOLUME):,}     : {_paint(high_volume, C_CYAN)}  ({_paint(f'excluded {low_volume}', C_YELLOW)})")
+            print(f"Exact-date price        : {_paint(exact, C_CYAN)}  ({_paint(f'excluded {no_price}', C_GRAY)})")
+            print(f"Volume >= {int(DOWNLOADER_MIN_VOLUME):,}     : {_paint(high_volume, C_CYAN)}  ({_paint(f'excluded {low_volume}', C_GRAY)})")
             print(f"  ETF pass              : {_paint(etf_pass, C_CYAN)}")
             print(f"  Stock to cap gate     : {_paint(stock_gate, C_CYAN)}")
-            print(f"Stock cap >= {int(DOWNLOADER_MIN_MARKET_CAP):,}: {_paint(cap_pass, C_CYAN)}  ({_paint(f'excluded {cap_fail}', C_YELLOW)})")
+            print(f"Stock cap >= {int(DOWNLOADER_MIN_MARKET_CAP):,}: {_paint(cap_pass, C_CYAN)}  ({_paint(f'excluded {cap_fail}', C_GRAY)})")
             print(f"Final execution pool    : {_paint(final_count, C_GREEN)}")
         except (RuntimeError, FileNotFoundError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
             print(_paint("-" * 88, C_CYAN))

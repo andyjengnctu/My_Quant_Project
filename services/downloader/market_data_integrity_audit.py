@@ -23,7 +23,7 @@ from core.market_data_trading_storage_contract import (
     resolve_trading_market_data_v2_ledger_path,
     resolve_trading_market_data_v2_request_path,
     resolve_trading_market_data_v2_root,
-    validate_trading_sync_batch_manifest_payload,
+    validate_trading_sync_batch_manifest_payload_for_read,
 )
 from services.downloader.market_data_ledger import MarketDataJobLedger, WORKLOAD_DONE
 from services.downloader.market_data_storage import PyArrowParquetCodec
@@ -186,7 +186,7 @@ def run_market_data_v2_full_integrity_audit(
     overlay_artifacts_verified = 0
     if batch_root.is_dir():
         for manifest_path in sorted(batch_root.glob(f"*/{TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME}")):
-            payload = validate_trading_sync_batch_manifest_payload(load_json_strict(manifest_path))
+            payload = validate_trading_sync_batch_manifest_payload_for_read(load_json_strict(manifest_path))
             batch_fp = str(payload["batch_fingerprint"])
             if manifest_path.parent.name != batch_fp:
                 raise ValueError(f"Trading V2 batch directory 與 manifest fingerprint 不一致: {batch_fp}")
