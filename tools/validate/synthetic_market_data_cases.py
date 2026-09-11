@@ -1543,7 +1543,7 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
     return results, summary
 
 
-def _validate_market_data_v2_trading_workbench_sidecar_contract_case_impl(_base_params):
+def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params):
     """Round-6 Trading integration stays isolated, resumable and non-blocking for current rule-based execution."""
 
     from pathlib import Path
@@ -3255,23 +3255,6 @@ def _validate_market_data_v2_trading_workbench_sidecar_contract_case_impl(_base_
         "fallback_schedule_count": freshness_stats["fallback_schedule_count"],
     })
     return results, summary
-
-
-def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params):
-    """Run the sidecar contract without forcing durable flushes for synthetic temp files.
-
-    Production atomic writes retain their fsync contract.  This synthetic case performs
-    dozens of state publications in disposable TemporaryDirectory fixtures; forcing a
-    physical flush for every fixture write makes the formal consistency wall time
-    depend on Windows/filesystem flush latency rather than the sidecar semantics being
-    validated.  Dedicated atomic-write synthetic cases continue to exercise the real
-    durability primitive.
-    """
-
-    from unittest.mock import patch
-
-    with patch("core.file_integrity.os.fsync", new=lambda _fd: None):
-        return _validate_market_data_v2_trading_workbench_sidecar_contract_case_impl(_base_params)
 
 
 def validate_market_data_v2_research_candidate_contract_case(_base_params):

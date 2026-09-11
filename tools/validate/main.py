@@ -164,6 +164,19 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
         include=build_coverage_include_paths(PROJECT_ROOT),
         omit=HEADLESS_COVERAGE_OMIT_PATTERNS,
     )
+    coverage_core_requested = "default"
+    if sys.version_info >= (3, 14):
+        try:
+            from coverage.tracer import CTracer as _CoverageCTracer  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            # coverage.py defaults to sysmon on Python 3.14+, but branch-heavy
+            # suites can be materially slower with that core.  Prefer the C tracer
+            # when the installed wheel provides it; this changes only instrumentation
+            # execution strategy, not the measured source/branch contract.
+            cov.set_option("run:core", "ctrace")
+            coverage_core_requested = "ctrace"
     results = []
     summaries = []
     synthetic_fail_count = 0
@@ -178,10 +191,16 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
         "synthetic_case_count": 0,
         "suite_completed": False,
         "json_generated": False,
+        "coverage_core_requested": coverage_core_requested,
+        "coverage_core_actual": None,
     }
 
     try:
         cov.start()
+        collector = getattr(cov, "_collector", None)
+        tracer_name = getattr(collector, "tracer_name", None)
+        if callable(tracer_name):
+            run_info["coverage_core_actual"] = str(tracer_name())
         results, summaries = validator_runner(base_params)
         run_info["suite_completed"] = True
         synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")

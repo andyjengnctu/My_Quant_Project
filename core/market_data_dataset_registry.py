@@ -260,15 +260,22 @@ MARKET_DATASET_SPECS: tuple[MarketDatasetSpec, ...] = (
 )
 
 
+_INCLUDED_MARKET_DATASET_SPECS = tuple(spec for spec in MARKET_DATASET_SPECS if spec.included)
+_MARKET_DATASET_SPEC_GROUPS: dict[str, tuple[MarketDatasetSpec, ...]] = {
+    dataset: tuple(spec for spec in MARKET_DATASET_SPECS if spec.dataset == dataset)
+    for dataset in {spec.dataset for spec in MARKET_DATASET_SPECS}
+}
+
+
 def get_market_dataset_specs(*, included_only: bool = False) -> tuple[MarketDatasetSpec, ...]:
     if not included_only:
         return MARKET_DATASET_SPECS
-    return tuple(spec for spec in MARKET_DATASET_SPECS if spec.included)
+    return _INCLUDED_MARKET_DATASET_SPECS
 
 
 def get_market_dataset_spec(dataset: str) -> MarketDatasetSpec:
     key = str(dataset or "").strip()
-    matches = [spec for spec in MARKET_DATASET_SPECS if spec.dataset == key]
+    matches = _MARKET_DATASET_SPEC_GROUPS.get(key, ())
     if len(matches) != 1:
         raise ValueError(f"Market Data dataset registry identity 無法唯一解析: {key!r}")
     return matches[0]
