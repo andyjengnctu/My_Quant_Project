@@ -2364,6 +2364,63 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             tamper_blocked = False
         check("dataset_state_fingerprint_blocks_manual_tamper", True, tamper_blocked)
 
+    with TemporaryDirectory() as force_validation_temp_dir:
+        force_validation_root = Path(force_validation_temp_dir)
+        prior_ready_state = record_market_data_sync_success(
+            force_validation_root,
+            target_date="2026-09-07",
+            finished_at=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockPrice": {
+                    "row_count": 1,
+                    "request_count": 1,
+                    "nonempty_request_count": 1,
+                    "target_covering_request_count": 1,
+                    "target_fresh_request_count": 1,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+            },
+            attempted_datasets={"TaiwanStockPrice"},
+        )
+        prior_price = prior_ready_state["datasets"]["TaiwanStockPrice"]
+        check(
+            "manual_force_validation_fixture_starts_current_and_ready",
+            ("READY", "READY", "READY", "2026-09-07"),
+            (prior_price["status"], prior_price["schema_status"], prior_price["coverage_status"], prior_price["last_ready_target_date"]),
+        )
+        refresh_market_data_due_state(
+            force_validation_root,
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 8, 17, 30, tzinfo=ZoneInfo("Asia/Taipei")),
+        )
+        manual_wait_state = record_market_data_sync_success(
+            force_validation_root,
+            target_date="2026-09-08",
+            finished_at=datetime(2026, 9, 8, 17, 31, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockPrice": {
+                    "row_count": 1,
+                    "request_count": 1,
+                    "nonempty_request_count": 1,
+                    "target_covering_request_count": 1,
+                    "target_fresh_request_count": 0,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+            },
+            attempted_datasets={"TaiwanStockPrice"},
+            count_publication_retry=False,
+        )
+        manual_wait_price = manual_wait_state["datasets"]["TaiwanStockPrice"]
+        check("manual_force_wait_publish_preserves_current_schema_validation", "READY", manual_wait_price["schema_status"])
+        check("manual_force_wait_publish_preserves_current_request_scope_validation", "READY", manual_wait_price["coverage_status"])
+        check(
+            "manual_force_wait_publish_does_not_authorize_new_target",
+            ("WAIT_PUBLISH", "2026-09-07"),
+            (manual_wait_price["status"], manual_wait_price["last_ready_target_date"]),
+        )
+
     with TemporaryDirectory() as partial_temp_dir:
         partial_state = record_market_data_sync_success(
             Path(partial_temp_dir),

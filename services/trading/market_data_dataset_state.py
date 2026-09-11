@@ -326,8 +326,6 @@ def record_market_data_sync_success(
         else:
             coverage_status = VALIDATION_STATUS_READY if row_count > 0 else VALIDATION_STATUS_NOT_EVALUATED
 
-        row["schema_status"] = schema_status
-        row["coverage_status"] = coverage_status
         validation_ready = bool(
             schema_status in {VALIDATION_STATUS_READY, VALIDATION_STATUS_NO_ROW_VALID}
             and coverage_status in {VALIDATION_STATUS_READY, VALIDATION_STATUS_NO_ROW_VALID}
@@ -339,6 +337,18 @@ def record_market_data_sync_success(
         else:
             ready = validation_ready
 
+        if not ready and not count_publication_retry and prior_validation_current:
+            # Manual force refresh is an observation lane, not a replacement for
+            # previously current canonical validation.  A pre-publication empty
+            # response proves target freshness is still pending, but it does not
+            # invalidate schema/request-scope evidence that was already current.
+            # Keep `ready` from the fresh observation so this preservation cannot
+            # authorize the new target; status remains WAIT_PUBLISH below.
+            schema_status = prior_schema_status
+            coverage_status = prior_coverage_status
+
+        row["schema_status"] = schema_status
+        row["coverage_status"] = coverage_status
         row["last_attempt_result"] = "SUCCESS"
         row["quota_defer_count"] = 0
         row["error_retry_count"] = 0
