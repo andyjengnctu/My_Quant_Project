@@ -137,6 +137,14 @@ def _extract_checklist_test_entries(entry: str) -> List[str]:
     return sorted(test_entries)
 
 
+def _extract_checklist_exact_project_python_paths(entry: str) -> List[str]:
+    normalized = str(entry or "").replace("\\", "/")
+    if not normalized:
+        return []
+    pattern = r"(?<![A-Za-z0-9_.-])((?:apps|config|core|filters|services|tools)/[A-Za-z0-9_./-]+\.py)(?![A-Za-z0-9_.-])"
+    return sorted(dict.fromkeys(re.findall(pattern, normalized)))
+
+
 def _summarize_checklist_consistency() -> Dict[str, Any]:
     state = derive_checklist_state(CHECKLIST_PATH)
     tables = state["tables"]
@@ -161,6 +169,24 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             not invalid_statuses,
             detail=f"invalid={sorted(invalid_statuses.items())}" if invalid_statuses else f"checked={len(main_statuses)}",
             extra={"invalid_statuses": invalid_statuses},
+        )
+    )
+
+    missing_done_entry_paths: List[Dict[str, str]] = []
+    for table_name, status_idx, entry_idx in (("B1", 3, 5), ("B2", 4, 6), ("B3", 4, 6)):
+        for row in tables.get(table_name, []):
+            if len(row) <= max(status_idx, entry_idx) or row[status_idx].strip() != "DONE":
+                continue
+            item_id = row[0].strip()
+            for relative_path in _extract_checklist_exact_project_python_paths(row[entry_idx]):
+                if not (PROJECT_ROOT / relative_path).is_file():
+                    missing_done_entry_paths.append({"id": item_id, "path": relative_path})
+    results.append(
+        summarize_result(
+            "checklist_done_entries_reference_existing_exact_python_paths",
+            not missing_done_entry_paths,
+            detail=f"missing={missing_done_entry_paths}",
+            extra={"missing_paths": missing_done_entry_paths},
         )
     )
 

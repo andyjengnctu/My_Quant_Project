@@ -1284,6 +1284,44 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
         check("single_transaction_generates_t_view", True, any(row and row[0] == "T999" for row in tables["T"]))
         check("single_transaction_appends_b_and_t_convergence_events", 2, sum(1 for row in tables["G"] if len(row) > 1 and row[1] in {"B999", "T999"}))
 
+        apply_checklist_transaction(
+            temp_checklist,
+            main_updates=({"id": "B999", "gap": "updated synthetic definition", "entry": "`services/example/missing.py`"},),
+            test_updates=({"id": "T999", "description": "`validate_checklist_generated_view_ssot_contract_case` updated synthetic transaction"},),
+        )
+        updated_contract = load_checklist_contract(temp_checklist)
+        updated_b999 = next(row for row in updated_contract["main_items"] if row["id"] == "B999")
+        updated_t999 = next(row for row in updated_contract["tests"] if row["id"] == "T999")
+        check("transaction_updates_existing_main_definition", "updated synthetic definition", updated_b999["gap"])
+        check("transaction_updates_existing_test_definition", True, "updated synthetic transaction" in updated_t999["description"])
+        check("definition_update_keeps_generated_views_in_sync", True, bool(compare_persisted_views(temp_checklist).get("ok")))
+
+        meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", temp_checklist):
+            missing_path_summary = meta_quality_module._summarize_checklist_consistency()
+        missing_path_result = next(
+            row for row in missing_path_summary["results"]
+            if row["name"] == "checklist_done_entries_reference_existing_exact_python_paths"
+        )
+        check("done_entry_missing_exact_python_path_fails_meta_guard", "FAIL", missing_path_result["status"])
+        check(
+            "done_entry_missing_exact_python_path_is_reported",
+            True,
+            any(row.get("id") == "B999" and row.get("path") == "services/example/missing.py" for row in missing_path_result.get("missing_paths", [])),
+        )
+
+        apply_checklist_transaction(
+            temp_checklist,
+            main_updates=({"id": "B999", "entry": "`tools/local_regression/checklist_contract.py`"},),
+        )
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", temp_checklist):
+            restored_summary = meta_quality_module._summarize_checklist_consistency()
+        restored_result = next(
+            row for row in restored_summary["results"]
+            if row["name"] == "checklist_done_entries_reference_existing_exact_python_paths"
+        )
+        check("done_entry_existing_exact_python_path_passes_meta_guard", "PASS", restored_result["status"])
+
         invalid_contract = load_checklist_contract(temp_checklist)
         invalid_contract["transitions"].append(
             {
@@ -2970,6 +3008,7 @@ def validate_market_data_governance_contract_case(_base_params):
         PROJECT_ROOT / "services/downloader/application.py",
         PROJECT_ROOT / "services/trading/market_data_state.py",
         PROJECT_ROOT / "services/trading/market_data_compatibility.py",
+        PROJECT_ROOT / "core/trading_dataset_identity.py",
     )
     check("legacy_trading_producer_and_cache_modules_are_retired", True, all(not path.exists() for path in retired_modules))
     check(

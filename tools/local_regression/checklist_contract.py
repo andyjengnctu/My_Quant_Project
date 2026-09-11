@@ -509,13 +509,16 @@ def apply_checklist_transaction(
     *,
     main_definitions: Iterable[Mapping[str, Any]] = (),
     test_definitions: Iterable[Mapping[str, Any]] = (),
+    main_updates: Iterable[Mapping[str, Any]] = (),
+    test_updates: Iterable[Mapping[str, Any]] = (),
     transitions: Iterable[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Atomically update canonical definitions/events and regenerate all B/T/G views.
 
-    This is the write seam for future checklist maintenance: callers register a
-    B definition, optional T bindings, and append transitions once.  They must
-    never hand-edit the three Markdown tables independently.
+    This is the write seam for future checklist maintenance: callers may register
+    new B/T definitions, update mutable fields of existing definitions, and append
+    status transitions atomically.  They must never hand-edit the three Markdown
+    tables independently.
     """
 
     contract = deepcopy(load_checklist_contract(checklist_path))
@@ -550,6 +553,24 @@ def apply_checklist_transaction(
         next_test_order += 1
         contract.setdefault("tests", []).append(row)
         existing_ids.add(item_id)
+
+    immutable_update_fields = {"id", "section", "initial_status", "legacy_initial_status", "order"}
+
+    def _apply_definition_updates(kind: str, updates: Iterable[Mapping[str, Any]]) -> None:
+        rows = contract.get(kind, [])
+        by_id = {str(row.get("id", "")).strip(): row for row in rows}
+        for raw_update in updates:
+            update = dict(raw_update)
+            item_id = str(update.pop("id", "")).strip()
+            if not item_id or item_id not in by_id:
+                raise ValueError(f"checklist update references unknown definition: {item_id!r}")
+            forbidden = sorted(immutable_update_fields.intersection(update))
+            if forbidden:
+                raise ValueError(f"{item_id}: checklist definition update cannot change immutable fields={forbidden}")
+            by_id[item_id].update(update)
+
+    _apply_definition_updates("main_items", main_updates)
+    _apply_definition_updates("tests", test_updates)
 
     previous_date = str(contract.get("transitions", [])[-1].get("date", "")) if contract.get("transitions") else ""
     for raw in transitions:

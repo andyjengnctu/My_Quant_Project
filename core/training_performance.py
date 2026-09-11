@@ -291,13 +291,6 @@ def _resolve_env_float(name: str, *, config_default, environ=None, min_value: fl
     return float(resolved)
 
 
-def _resolve_env_bool(name: str, *, config_default: bool, environ=None) -> bool:
-    raw_value = _environment_value(name, environ=environ)
-    if raw_value is None or str(raw_value).strip() == "":
-        raw_value = config_default
-    return _coerce_bool(raw_value, default=bool(config_default))
-
-
 def _resolve_env_permissive_bool(name: str, *, config_default: bool, environ=None) -> bool:
     raw_value = _environment_value(name, environ=environ)
     if raw_value is None or str(raw_value).strip() == "":
