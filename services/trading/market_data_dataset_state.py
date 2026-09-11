@@ -223,21 +223,20 @@ def _later_date(a: object, b: object) -> str | None:
     return max(values) if values else None
 
 
-def _manual_force_validation_can_self_heal(
+def _prior_ready_validation_can_self_heal(
     row: Mapping[str, object],
     *,
     contract,
     target_date: str,
 ) -> bool:
-    """Recognize validation erased by an old manual force-refresh.
+    """Recover structural validation without authorizing newer freshness.
 
-    Automatic publication attempts always consume retry budget before they can
-    leave WAIT_PUBLISH.  Therefore a current-contract required target-date row
-    with a prior READY horizon, same-target SUCCESS attempt, and zero publication
-    retries is the legacy manual-force shape.  `last_ready_target_date` was only
-    written after schema and request-scope validation were both READY, so those
-    two validation fields can be reconstructed without authorizing the newer
-    target date.
+    A prior ``last_ready_target_date`` was written only after schema and
+    request-scope validation both passed.  If a later WAIT_PUBLISH observation
+    (including legacy manual-force or zero-provider ledger reuse) erased those
+    structural fields, the prior READY horizon is sufficient to restore them.
+    Freshness remains fail-closed because ``last_ready_target_date`` and status
+    are not advanced by this repair.
     """
 
     try:
@@ -251,9 +250,6 @@ def _manual_force_validation_can_self_heal(
         and contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET
         and contract.row_expectation == ROW_EXPECTATION_REQUIRED
         and str(row.get("status") or "") == FRESHNESS_STATUS_WAIT_PUBLISH
-        and str(row.get("last_attempt_target_date") or "") == str(target_date)
-        and str(row.get("last_attempt_result") or "") == "SUCCESS"
-        and int(row.get("publication_retry_count") or 0) == 0
         and bool(last_ready_target)
         and last_ready_target < str(target_date)
         and bool(latest_data_date)
@@ -294,7 +290,7 @@ def record_market_data_sync_success(
         prior_attempt_target = str(row.get("last_attempt_target_date") or "")
         prior_publication_retry_count = int(row.get("publication_retry_count") or 0)
         prior_validation_current = has_current_market_data_dataset_validation(row)
-        prior_manual_force_validation_recoverable = _manual_force_validation_can_self_heal(
+        prior_validation_recoverable = _prior_ready_validation_can_self_heal(
             row, contract=contract, target_date=str(target_date)
         )
         prior_schema_status = str(row.get("schema_status") or VALIDATION_STATUS_UNKNOWN)
@@ -343,19 +339,30 @@ def record_market_data_sync_success(
             schema_status = VALIDATION_STATUS_READY
         elif contract.row_expectation == ROW_EXPECTATION_OPTIONAL:
             schema_status = VALIDATION_STATUS_NO_ROW_VALID
-        elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE and prior_validation_current:
+        elif prior_validation_current:
+            # An empty response does not erase a schema contract that was
+            # already proven under the same validation version.
             schema_status = prior_schema_status
+        elif prior_validation_recoverable:
+            schema_status = VALIDATION_STATUS_READY
         else:
             schema_status = VALIDATION_STATUS_UNKNOWN
 
         if contract.row_expectation == ROW_EXPECTATION_OPTIONAL and row_count == 0:
             coverage_status = VALIDATION_STATUS_NO_ROW_VALID
         elif contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET:
-            target_scope_ready = bool(
-                target_covering_request_count > 0
-                and target_fresh_request_count == target_covering_request_count
-            )
-            coverage_status = VALIDATION_STATUS_READY if target_scope_ready else VALIDATION_STATUS_NOT_EVALUATED
+            # Request-scope validation and target-date freshness are distinct.
+            # Completing a request that covers the target proves the requested
+            # scope was exercised even when the provider still returns only an
+            # older date. Freshness is checked separately below.
+            if target_covering_request_count > 0:
+                coverage_status = VALIDATION_STATUS_READY
+            elif prior_validation_current:
+                coverage_status = prior_coverage_status
+            elif prior_validation_recoverable:
+                coverage_status = VALIDATION_STATUS_READY
+            else:
+                coverage_status = VALIDATION_STATUS_NOT_EVALUATED
         elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
             latest_scope_ready = bool(
                 request_count > 0
@@ -364,9 +371,21 @@ def record_market_data_sync_success(
                     or (nonempty_request_count > 0 and nonempty_request_count == request_count)
                 )
             )
-            coverage_status = VALIDATION_STATUS_READY if latest_scope_ready else prior_coverage_status if prior_validation_current else VALIDATION_STATUS_NOT_EVALUATED
+            coverage_status = (
+                VALIDATION_STATUS_READY
+                if latest_scope_ready
+                else prior_coverage_status
+                if prior_validation_current
+                else VALIDATION_STATUS_NOT_EVALUATED
+            )
         else:
-            coverage_status = VALIDATION_STATUS_READY if row_count > 0 else VALIDATION_STATUS_NOT_EVALUATED
+            coverage_status = (
+                VALIDATION_STATUS_READY
+                if row_count > 0
+                else prior_coverage_status
+                if prior_validation_current
+                else VALIDATION_STATUS_NOT_EVALUATED
+            )
 
         validation_ready = bool(
             schema_status in {VALIDATION_STATUS_READY, VALIDATION_STATUS_NO_ROW_VALID}
@@ -377,19 +396,18 @@ def record_market_data_sync_success(
         elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
             ready = bool(validation_ready and str(row.get("latest_data_date") or "").strip())
         else:
-            ready = validation_ready
+            target_freshness_ready = bool(
+                target_covering_request_count > 0
+                and target_fresh_request_count == target_covering_request_count
+            )
+            ready = bool(validation_ready and target_freshness_ready)
 
-        if not ready and not count_publication_retry and (
-            prior_validation_current or prior_manual_force_validation_recoverable
-        ):
-            # Manual force refresh is an observation lane, not a replacement for
-            # previously current canonical validation.  A pre-publication empty
-            # response proves target freshness is still pending, but it does not
-            # invalidate schema/request-scope evidence that was already current.
-            # Old force-refresh code could already have erased those two fields;
-            # for required target-date datasets the retained last READY horizon
-            # proves both were READY at that horizon, so reconstruct them.  Keep
-            # `ready` from the fresh observation so this cannot authorize target.
+        if not ready and (prior_validation_current or prior_validation_recoverable):
+            # Freshness observations must never erase structural validation.
+            # Keep the prior/recoverable schema and request-scope evidence while
+            # leaving status/last_ready_target_date fail-closed on the older
+            # horizon. This applies to both manual force observations and normal
+            # automatic publication retries.
             if prior_validation_current:
                 schema_status = prior_schema_status
                 coverage_status = prior_coverage_status
@@ -560,7 +578,7 @@ def refresh_market_data_due_state(
             row["publication_retry_count"] = 0
             row["last_error"] = None
         contract = contracts[decision.dataset]
-        if _manual_force_validation_can_self_heal(
+        if _prior_ready_validation_can_self_heal(
             row, contract=contract, target_date=str(target_date)
         ):
             # Repair validation fields erased by the pre-fix manual `R` path.

@@ -1818,6 +1818,28 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("selective_due_manifest_keeps_full_registry_identity", manifest_a.registry_fingerprint, selective_manifest.registry_fingerprint)
     check("selective_due_manifest_only_contains_due_datasets", {"TaiwanStockPrice", "TaiwanStockPER"}, {request.dataset for request in selective_manifest.requests})
     check("selective_due_manifest_is_smaller_than_full_daily_manifest", True, 0 < selective_manifest.total_requests < manifest_a.total_requests)
+    retry_manifest_a = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"TaiwanStockPrice", "TaiwanStockPER"},
+        previous_ready_dates_by_dataset={"TaiwanStockPrice": "2026-09-04", "TaiwanStockPER": "2026-09-04"},
+        refresh_token="synthetic-publication-retry-a",
+    )
+    retry_manifest_b = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"TaiwanStockPrice", "TaiwanStockPER"},
+        previous_ready_dates_by_dataset={"TaiwanStockPrice": "2026-09-04", "TaiwanStockPER": "2026-09-04"},
+        refresh_token="synthetic-publication-retry-b",
+    )
+    check("publication_retry_token_keeps_normal_due_request_geometry", [r.request_id for r in selective_manifest.requests], [r.request_id for r in retry_manifest_a.requests])
+    check("publication_retry_token_creates_fresh_batch_identity", True, retry_manifest_a.manifest_fingerprint != retry_manifest_b.manifest_fingerprint)
     force_manifest_a = build_trading_sync_request_manifest(
         specs=specs,
         provider_snapshot=provider,
@@ -2390,7 +2412,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             },
         )
         check("multi_lane_target_freshness_does_not_accept_one_fresh_lane", "WAIT_PUBLISH", partial_lane["datasets"]["TaiwanStockTotalReturnIndex"]["status"])
-        check("multi_lane_partial_target_scope_is_not_coverage_ready", "NOT_EVALUATED", partial_lane["datasets"]["TaiwanStockTotalReturnIndex"]["coverage_status"])
+        check("multi_lane_partial_target_scope_preserves_request_coverage_while_freshness_waits", "READY", partial_lane["datasets"]["TaiwanStockTotalReturnIndex"]["coverage_status"])
         complete_lane = record_market_data_sync_success(
             lane_root,
             target_date="2026-09-10",
@@ -2688,8 +2710,54 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 locally_repaired_market_value["next_check_at"],
             ),
         )
+        retry_contaminated_rows = {
+            key: dict(value) for key, value in locally_repaired_state["datasets"].items()
+        }
+        retry_contaminated = retry_contaminated_rows["TaiwanStockMarketValue"]
+        retry_contaminated.update({
+            "status": "WAIT_PUBLISH",
+            "last_attempt_at": "2026-09-11T22:33:00+08:00",
+            "last_attempt_target_date": "2026-09-11",
+            "last_success_at": "2026-09-11T22:33:00+08:00",
+            "last_success_target_date": "2026-09-11",
+            "schema_status": "UNKNOWN",
+            "coverage_status": "NOT_EVALUATED",
+            "publication_retry_count": 3,
+            "last_attempt_result": "WAIT_PUBLISH",
+            "next_check_at": "2026-09-11T23:33:00+08:00",
+        })
+        publish_market_data_dataset_state(
+            force_repair_root,
+            {
+                **{
+                    key: value
+                    for key, value in locally_repaired_state.items()
+                    if key not in {"state_fingerprint", "datasets", "updated_at"}
+                },
+                "updated_at": "2026-09-11T22:33:00+08:00",
+                "datasets": retry_contaminated_rows,
+            },
+        )
+        _, retry_repaired_state = refresh_market_data_due_state(
+            force_repair_root,
+            target_date="2026-09-11",
+            now=datetime(2026, 9, 11, 22, 40, tzinfo=ZoneInfo("Asia/Taipei")),
+        )
+        retry_repaired_market_value = retry_repaired_state["datasets"]["TaiwanStockMarketValue"]
+        check(
+            "local_due_projection_repairs_zero_provider_retry_validation_erasure",
+            ("WAIT_PUBLISH", "READY", "READY", 3, "2026-09-10"),
+            (
+                retry_repaired_market_value["status"],
+                retry_repaired_market_value["schema_status"],
+                retry_repaired_market_value["coverage_status"],
+                retry_repaired_market_value["publication_retry_count"],
+                retry_repaired_market_value["last_ready_target_date"],
+            ),
+        )
+
         from services.trading.market_data_auto_update import _dataset_readiness_summary
-        repaired_summary = _dataset_readiness_summary(locally_repaired_state, target_date="2026-09-11")
+        repaired_summary = _dataset_readiness_summary(retry_repaired_state, target_date="2026-09-11")
         market_value_pending = next(
             row for row in repaired_summary["archive_incomplete_datasets"]
             if row["dataset"] == "TaiwanStockMarketValue"
@@ -2698,9 +2766,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             "pending_summary_exposes_operator_name_and_timestamps",
             (
                 "台灣股價市值表",
-                "2026-09-11T19:20:00+08:00",
+                "2026-09-11T22:33:00+08:00",
                 "2026-09-11T23:45:00+08:00",
-                "2026-09-11T23:45:00+08:00",
+                "2026-09-11T23:33:00+08:00",
             ),
             (
                 market_value_pending["display_name_zh"],
@@ -2892,6 +2960,100 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("auto_force_refresh_does_not_reschedule_automatic_publication_retry", 0, force_schedule.call_count)
         force_price_after = load_market_data_dataset_state(auto_root, required=True)["datasets"]["TaiwanStockPrice"]
         check("auto_force_refresh_keeps_publication_retry_budget_unconsumed", 0, force_price_after["publication_retry_count"])
+
+    with TemporaryDirectory() as auto_retry_dir:
+        from services.trading.market_data_dataset_state import publish_market_data_dataset_state
+
+        retry_root = Path(auto_retry_dir)
+        retry_base = record_market_data_sync_success(
+            retry_root,
+            target_date="2026-09-07",
+            finished_at=datetime(2026, 9, 7, 18, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations=observations,
+        )
+        retry_rows = {key: dict(value) for key, value in retry_base["datasets"].items()}
+        retry_price = retry_rows["TaiwanStockPrice"]
+        retry_price.update({
+            "status": "WAIT_PUBLISH",
+            "last_attempt_at": "2026-09-08T17:46:00+08:00",
+            "last_attempt_target_date": "2026-09-08",
+            "last_success_at": "2026-09-08T17:46:00+08:00",
+            "last_success_target_date": "2026-09-08",
+            "latest_expected_date": "2026-09-08",
+            "expected_publish_at": "2026-09-08T17:45:00+08:00",
+            "next_check_at": "2026-09-08T18:01:00+08:00",
+            "schema_status": "READY",
+            "coverage_status": "READY",
+            "publication_retry_count": 1,
+            "last_attempt_result": "WAIT_PUBLISH",
+            "last_error": "provider target-date freshness evidence not yet present",
+        })
+        publish_market_data_dataset_state(
+            retry_root,
+            {
+                **{
+                    key: value
+                    for key, value in retry_base.items()
+                    if key not in {"state_fingerprint", "datasets", "updated_at"}
+                },
+                "updated_at": "2026-09-08T17:46:00+08:00",
+                "datasets": retry_rows,
+            },
+        )
+        retry_calls = []
+
+        def _retry_sync_stub(**kwargs):
+            retry_calls.append(dict(kwargs))
+            record_market_data_sync_success(
+                retry_root,
+                target_date="2026-09-08",
+                finished_at=datetime(2026, 9, 8, 18, 2, tzinfo=ZoneInfo("Asia/Taipei")),
+                observations={
+                    "TaiwanStockPrice": {
+                        "row_count": 1,
+                        "request_count": 1,
+                        "nonempty_request_count": 1,
+                        "target_covering_request_count": 1,
+                        "target_fresh_request_count": 0,
+                        "observed_min_date": "2026-09-07",
+                        "observed_max_date": "2026-09-07",
+                    }
+                },
+                attempted_datasets={"TaiwanStockPrice"},
+            )
+            return {
+                "status": "DONE",
+                "target_date": "2026-09-08",
+                "batch_fingerprint": "b" * 64,
+                "refresh_token": kwargs.get("refresh_token"),
+                "request_count": 1,
+                "done": 1,
+                "blocked": 0,
+                "completed_datasets": ("TaiwanStockPrice",),
+                "incomplete_datasets": (),
+                "process_data_requests": 1,
+                "process_usage_requests": 1,
+                "verification": {},
+            }
+
+        with patch(
+            "services.trading.market_data_auto_update.sync_market_data_v2_due_datasets",
+            side_effect=_retry_sync_stub,
+        ):
+            retry_result = run_trading_market_data_auto_update(
+                project_root=retry_root,
+                target_date="2026-09-08",
+                client=_AutoNoCallClient(),
+                now_fn=lambda: datetime(2026, 9, 8, 18, 2, tzinfo=ZoneInfo("Asia/Taipei")),
+            )
+        check("auto_publication_retry_executes_due_dataset_once", 1, len(retry_calls))
+        check("auto_publication_retry_keeps_normal_request_geometry", False, retry_calls[0]["force_refresh_current_target"])
+        check("auto_publication_retry_gets_nonreuse_refresh_token", True, str(retry_calls[0]["refresh_token"]).startswith("publication-retry:"))
+        check("auto_publication_retry_is_reported_explicitly", ("TaiwanStockPrice",), retry_result.get("publication_retry_datasets"))
+        retry_price_after = load_market_data_dataset_state(retry_root, required=True)["datasets"]["TaiwanStockPrice"]
+        check("auto_publication_retry_preserves_schema_validation_while_freshness_waits", "READY", retry_price_after["schema_status"])
+        check("auto_publication_retry_preserves_request_coverage_while_freshness_waits", "READY", retry_price_after["coverage_status"])
+        check("auto_publication_retry_does_not_advance_last_ready_target", "2026-09-07", retry_price_after["last_ready_target_date"])
 
     from unittest.mock import patch
 

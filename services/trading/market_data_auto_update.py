@@ -412,6 +412,25 @@ def run_trading_market_data_auto_update(
                 token = downloader_runtime.resolve_finmind_api_token(project_root=root)
             client = FinMindHttpClient(token=str(token or ""))
 
+        state_rows = dict((_state or {}).get("datasets") or {})
+        publication_retry_due = tuple(
+            sorted(
+                dataset
+                for dataset in due
+                if str(dict(state_rows.get(dataset) or {}).get("last_attempt_target_date") or "") == str(resolved_target)
+                and int(dict(state_rows.get(dataset) or {}).get("publication_retry_count") or 0) > 0
+            )
+        )
+        refresh_token = None
+        if force_refresh_current_target:
+            refresh_token = f"manual-refresh:{now.isoformat()}:{uuid4().hex[:8]}"
+        elif publication_retry_due:
+            # A publication retry must be a fresh provider observation. Reusing
+            # the same DONE ledger/shared HTTP cache would only replay the prior
+            # stale response, consume retry budget and falsely advance
+            # last_success_at without contacting the provider.
+            refresh_token = f"publication-retry:{resolved_target}:{now.isoformat()}:{uuid4().hex[:8]}"
+
         batch_data_before, batch_usage_before = _client_counts(client)
         try:
             batch = sync_market_data_v2_due_datasets(
@@ -426,7 +445,7 @@ def run_trading_market_data_auto_update(
                 progress_fn=progress_fn,
                 quota_wait_fn=quota_wait_fn,
                 force_refresh_current_target=bool(force_refresh_current_target),
-                refresh_token=(f"manual-refresh:{now.isoformat()}:{uuid4().hex[:8]}" if force_refresh_current_target else None),
+                refresh_token=refresh_token,
             )
         except (FinMindHttpError, OSError, ValueError, RuntimeError, ImportError) as exc:
             schedule_market_data_auto_update_outcomes(
@@ -528,6 +547,7 @@ def run_trading_market_data_auto_update(
             "provider_requests_required": True,
             "due_dataset_count": len(due),
             "due_datasets": due,
+            "publication_retry_datasets": publication_retry_due,
             "completed_datasets": tuple(sorted(completed)),
             "incomplete_datasets": tuple(sorted(incomplete)),
             "ready_dataset_count": int(ready_count),

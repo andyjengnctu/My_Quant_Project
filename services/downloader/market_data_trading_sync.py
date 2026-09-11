@@ -482,7 +482,7 @@ def sync_market_data_v2_due_datasets(
         blocking_waits=False,
         quota_wait_observer=quota_wait_fn,
         progress_observer=progress_fn,
-        force_uncached_data_requests=bool(force_refresh_current_target),
+        force_uncached_data_requests=bool(force_refresh_current_target or refresh_token),
     )
     summary = executor.run(manifest=manifest, sink=storage)
     quota_snapshot = executor.quota_progress_snapshot()

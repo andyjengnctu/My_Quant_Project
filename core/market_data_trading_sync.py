@@ -242,8 +242,10 @@ def build_trading_sync_request_manifest(
     refresh_text = str(refresh_token or "").strip() or None
     if force_refresh_current_target and refresh_text is None:
         raise ValueError("force_refresh_current_target 需要 refresh_token 以建立不可 REUSE 的 batch identity")
-    if refresh_text is not None and not force_refresh_current_target:
-        raise ValueError("refresh_token 只能用於 force_refresh_current_target")
+    # refresh_token is an execution-observation identity, not a geometry switch.
+    # Manual force refresh uses it together with force_refresh_current_target,
+    # while automatic publication retries use it alone so the normal repair
+    # window is preserved but a previously DONE ledger/cache cannot be reused.
     included_names = {spec.dataset for spec in included}
     if selected_datasets is None:
         selected_names = included_names
