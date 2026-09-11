@@ -2421,6 +2421,135 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             (manual_wait_price["status"], manual_wait_price["last_ready_target_date"]),
         )
 
+    with TemporaryDirectory() as force_repair_temp_dir:
+        from services.trading.market_data_dataset_state import publish_market_data_dataset_state
+
+        force_repair_root = Path(force_repair_temp_dir)
+        ready_market_value_state = record_market_data_sync_success(
+            force_repair_root,
+            target_date="2026-09-10",
+            finished_at=datetime(2026, 9, 10, 23, 50, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockMarketValue": {
+                    "row_count": 1,
+                    "request_count": 1,
+                    "nonempty_request_count": 1,
+                    "target_covering_request_count": 1,
+                    "target_fresh_request_count": 1,
+                    "observed_min_date": "2026-09-10",
+                    "observed_max_date": "2026-09-10",
+                }
+            },
+            attempted_datasets={"TaiwanStockMarketValue"},
+        )
+        contaminated_rows = {
+            key: dict(value) for key, value in ready_market_value_state["datasets"].items()
+        }
+        contaminated_market_value = contaminated_rows["TaiwanStockMarketValue"]
+        contaminated_market_value.update({
+            "status": "WAIT_PUBLISH",
+            "last_attempt_at": "2026-09-11T19:20:00+08:00",
+            "last_attempt_target_date": "2026-09-11",
+            "last_success_at": "2026-09-11T19:20:00+08:00",
+            "last_success_target_date": "2026-09-11",
+            "latest_expected_date": "2026-09-11",
+            "expected_publish_at": "2026-09-11T23:45:00+08:00",
+            "next_check_at": "2026-09-11T23:45:00+08:00",
+            "schema_status": "UNKNOWN",
+            "coverage_status": "NOT_EVALUATED",
+            "publication_retry_count": 0,
+            "last_attempt_result": "SUCCESS",
+            "last_error": "sync requests completed but canonical freshness/request-scope evidence is not yet present",
+        })
+        contaminated_state = publish_market_data_dataset_state(
+            force_repair_root,
+            {
+                **{
+                    key: value
+                    for key, value in ready_market_value_state.items()
+                    if key not in {"state_fingerprint", "datasets", "updated_at"}
+                },
+                "updated_at": "2026-09-11T19:20:00+08:00",
+                "datasets": contaminated_rows,
+            },
+        )
+        check(
+            "legacy_manual_force_erasure_fixture_matches_user_state",
+            ("WAIT_PUBLISH", "UNKNOWN", "NOT_EVALUATED", 0, "2026-09-10"),
+            (
+                contaminated_state["datasets"]["TaiwanStockMarketValue"]["status"],
+                contaminated_state["datasets"]["TaiwanStockMarketValue"]["schema_status"],
+                contaminated_state["datasets"]["TaiwanStockMarketValue"]["coverage_status"],
+                contaminated_state["datasets"]["TaiwanStockMarketValue"]["publication_retry_count"],
+                contaminated_state["datasets"]["TaiwanStockMarketValue"]["last_ready_target_date"],
+            ),
+        )
+        _, locally_repaired_state = refresh_market_data_due_state(
+            force_repair_root,
+            target_date="2026-09-11",
+            now=datetime(2026, 9, 11, 19, 40, tzinfo=ZoneInfo("Asia/Taipei")),
+        )
+        locally_repaired_market_value = locally_repaired_state["datasets"]["TaiwanStockMarketValue"]
+        check(
+            "local_due_projection_self_heals_legacy_manual_force_validation_erasure",
+            ("WAIT_PUBLISH", "READY", "READY", "2026-09-10", "2026-09-11T23:45:00+08:00"),
+            (
+                locally_repaired_market_value["status"],
+                locally_repaired_market_value["schema_status"],
+                locally_repaired_market_value["coverage_status"],
+                locally_repaired_market_value["last_ready_target_date"],
+                locally_repaired_market_value["next_check_at"],
+            ),
+        )
+
+        repaired_rows = {
+            key: dict(value) for key, value in locally_repaired_state["datasets"].items()
+        }
+        repaired_rows["TaiwanStockMarketValue"]["schema_status"] = "UNKNOWN"
+        repaired_rows["TaiwanStockMarketValue"]["coverage_status"] = "NOT_EVALUATED"
+        publish_market_data_dataset_state(
+            force_repair_root,
+            {
+                **{
+                    key: value
+                    for key, value in locally_repaired_state.items()
+                    if key not in {"state_fingerprint", "datasets", "updated_at"}
+                },
+                "updated_at": "2026-09-11T19:41:00+08:00",
+                "datasets": repaired_rows,
+            },
+        )
+        manual_repaired_state = record_market_data_sync_success(
+            force_repair_root,
+            target_date="2026-09-11",
+            finished_at=datetime(2026, 9, 11, 19, 42, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockMarketValue": {
+                    "row_count": 0,
+                    "request_count": 1,
+                    "nonempty_request_count": 0,
+                    "target_covering_request_count": 1,
+                    "target_fresh_request_count": 0,
+                    "observed_min_date": None,
+                    "observed_max_date": None,
+                }
+            },
+            attempted_datasets={"TaiwanStockMarketValue"},
+            count_publication_retry=False,
+        )
+        manual_repaired_market_value = manual_repaired_state["datasets"]["TaiwanStockMarketValue"]
+        check(
+            "manual_force_can_self_heal_already_erased_validation_without_authorizing_target",
+            ("WAIT_PUBLISH", "READY", "READY", 0, "2026-09-10"),
+            (
+                manual_repaired_market_value["status"],
+                manual_repaired_market_value["schema_status"],
+                manual_repaired_market_value["coverage_status"],
+                manual_repaired_market_value["publication_retry_count"],
+                manual_repaired_market_value["last_ready_target_date"],
+            ),
+        )
+
     with TemporaryDirectory() as partial_temp_dir:
         partial_state = record_market_data_sync_success(
             Path(partial_temp_dir),

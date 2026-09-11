@@ -31,6 +31,7 @@ from core.market_data_freshness_contract import (
     FRESHNESS_STATUS_WAIT_PUBLISH,
     FRESHNESS_STATUS_WAIT_QUOTA,
     ROW_EXPECTATION_OPTIONAL,
+    ROW_EXPECTATION_REQUIRED,
     get_market_data_freshness_contracts,
 )
 from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_dataset_state_path
@@ -222,6 +223,44 @@ def _later_date(a: object, b: object) -> str | None:
     return max(values) if values else None
 
 
+def _manual_force_validation_can_self_heal(
+    row: Mapping[str, object],
+    *,
+    contract,
+    target_date: str,
+) -> bool:
+    """Recognize validation erased by an old manual force-refresh.
+
+    Automatic publication attempts always consume retry budget before they can
+    leave WAIT_PUBLISH.  Therefore a current-contract required target-date row
+    with a prior READY horizon, same-target SUCCESS attempt, and zero publication
+    retries is the legacy manual-force shape.  `last_ready_target_date` was only
+    written after schema and request-scope validation were both READY, so those
+    two validation fields can be reconstructed without authorizing the newer
+    target date.
+    """
+
+    try:
+        validation_version = int(row.get("validation_contract_version", -1))
+    except (TypeError, ValueError):
+        return False
+    last_ready_target = str(row.get("last_ready_target_date") or "").strip()
+    latest_data_date = str(row.get("latest_data_date") or "").strip()
+    return bool(
+        validation_version == MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
+        and contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET
+        and contract.row_expectation == ROW_EXPECTATION_REQUIRED
+        and str(row.get("status") or "") == FRESHNESS_STATUS_WAIT_PUBLISH
+        and str(row.get("last_attempt_target_date") or "") == str(target_date)
+        and str(row.get("last_attempt_result") or "") == "SUCCESS"
+        and int(row.get("publication_retry_count") or 0) == 0
+        and bool(last_ready_target)
+        and last_ready_target < str(target_date)
+        and bool(latest_data_date)
+        and latest_data_date >= last_ready_target
+    )
+
+
 def record_market_data_sync_success(
     project_root,
     *,
@@ -255,6 +294,9 @@ def record_market_data_sync_success(
         prior_attempt_target = str(row.get("last_attempt_target_date") or "")
         prior_publication_retry_count = int(row.get("publication_retry_count") or 0)
         prior_validation_current = has_current_market_data_dataset_validation(row)
+        prior_manual_force_validation_recoverable = _manual_force_validation_can_self_heal(
+            row, contract=contract, target_date=str(target_date)
+        )
         prior_schema_status = str(row.get("schema_status") or VALIDATION_STATUS_UNKNOWN)
         prior_coverage_status = str(row.get("coverage_status") or VALIDATION_STATUS_NOT_EVALUATED)
         evidence = observed.get(dataset) if isinstance(observed.get(dataset), Mapping) else {}
@@ -337,15 +379,23 @@ def record_market_data_sync_success(
         else:
             ready = validation_ready
 
-        if not ready and not count_publication_retry and prior_validation_current:
+        if not ready and not count_publication_retry and (
+            prior_validation_current or prior_manual_force_validation_recoverable
+        ):
             # Manual force refresh is an observation lane, not a replacement for
             # previously current canonical validation.  A pre-publication empty
             # response proves target freshness is still pending, but it does not
             # invalidate schema/request-scope evidence that was already current.
-            # Keep `ready` from the fresh observation so this preservation cannot
-            # authorize the new target; status remains WAIT_PUBLISH below.
-            schema_status = prior_schema_status
-            coverage_status = prior_coverage_status
+            # Old force-refresh code could already have erased those two fields;
+            # for required target-date datasets the retained last READY horizon
+            # proves both were READY at that horizon, so reconstruct them.  Keep
+            # `ready` from the fresh observation so this cannot authorize target.
+            if prior_validation_current:
+                schema_status = prior_schema_status
+                coverage_status = prior_coverage_status
+            else:
+                schema_status = VALIDATION_STATUS_READY
+                coverage_status = VALIDATION_STATUS_READY
 
         row["schema_status"] = schema_status
         row["coverage_status"] = coverage_status
@@ -496,6 +546,7 @@ def refresh_market_data_due_state(
         state = build_initial_market_data_dataset_state(updated_at=now)
     plan = plan_market_data_due_datasets(target_date=target_date, now=now, state=state)
     datasets = {key: dict(value) for key, value in dict(state["datasets"]).items()}
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
     for decision in plan.decisions:
         row = dict(datasets[decision.dataset])
         row["status"] = decision.status
@@ -508,6 +559,15 @@ def refresh_market_data_due_state(
             # state or a prior manual force observation.  Repair it locally.
             row["publication_retry_count"] = 0
             row["last_error"] = None
+        contract = contracts[decision.dataset]
+        if _manual_force_validation_can_self_heal(
+            row, contract=contract, target_date=str(target_date)
+        ):
+            # Repair validation fields erased by the pre-fix manual `R` path.
+            # Freshness status/last_ready_target_date remain untouched, so the
+            # current target still fails closed until provider evidence arrives.
+            row["schema_status"] = VALIDATION_STATUS_READY
+            row["coverage_status"] = VALIDATION_STATUS_READY
         datasets[decision.dataset] = row
     persisted = publish_market_data_dataset_state(
         project_root,
