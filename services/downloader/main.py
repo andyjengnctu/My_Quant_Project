@@ -822,6 +822,67 @@ def _run_market_data_v2_full_integrity_audit() -> int:
     print(f"Canonical schema valid     : {validation.get('schema_valid_count', 0)} / {validation.get('dataset_count', 0)}")
     print(f"Request coverage valid     : {validation.get('coverage_valid_count', 0)} / {validation.get('dataset_count', 0)}")
     print(f"Dataset READY              : {validation.get('ready_count', 0)} / {validation.get('dataset_count', 0)}")
+    semantic = dict(result.get("semantic_integrity") or {})
+    date_semantic = dict(semantic.get("date_semantic") or {})
+    natural_key = dict(semantic.get("natural_key") or {})
+    semantic_status = semantic.get("status") or "UNVERIFIED"
+    print(f"Semantic integrity         : {_paint(semantic_status, _status_color(semantic_status))}")
+    print(
+        "Date-semantic coverage     : "
+        f"PASS={date_semantic.get('pass_count', 0)} "
+        f"FAIL={date_semantic.get('fail_count', 0)} "
+        f"UNVERIFIED={date_semantic.get('unverified_count', 0)} "
+        f"N/A={date_semantic.get('not_applicable_count', 0)}"
+    )
+    print(
+        "Natural-key uniqueness     : "
+        f"PASS={natural_key.get('pass_count', 0)} "
+        f"FAIL={natural_key.get('fail_count', 0)} "
+        f"UNVERIFIED={natural_key.get('unverified_count', 0)}"
+    )
+    semantic_rows = tuple(dict(row) for row in semantic.get("rows") or ())
+    exceptions = []
+    for row in semantic_rows:
+        date_row = dict(row.get("date_semantic") or {})
+        date_status = str(date_row.get("status") or "UNVERIFIED")
+        key_status = str(row.get("natural_key_status") or "UNVERIFIED")
+        if date_status in {"PASS", "NOT_APPLICABLE"} and key_status == "PASS":
+            continue
+        details = []
+        if date_status not in {"PASS", "NOT_APPLICABLE"}:
+            reason_code = str(date_row.get("reason") or "-")
+            missing = tuple(date_row.get("missing_dates") or ())
+            unexpected = tuple(date_row.get("unexpected_dates") or ())
+            if date_status == "UNVERIFIED":
+                reason = "無 authoritative cadence"
+            elif missing or unexpected:
+                reason = f"缺日期={len(missing)}, 非交易日={len(unexpected)}"
+            else:
+                reason = reason_code
+            details.append(f"date:{reason}")
+        if key_status != "PASS":
+            primary_key = tuple(row.get("primary_key") or ())
+            if key_status == "UNVERIFIED":
+                details.append("key:no registry primary_key_hint")
+            else:
+                details.append(
+                    "key:"
+                    f"null_rows={row.get('natural_key_null_rows', 0)}, "
+                    f"duplicate_rows={row.get('natural_key_duplicate_rows', 0)}, "
+                    f"missing_column_artifacts={row.get('natural_key_missing_column_artifacts', 0)}, "
+                    f"pk={'+'.join(str(value) for value in primary_key)}"
+                )
+        exceptions.append((
+            row.get("dataset") or "-",
+            row.get("display_name_zh") or "-",
+            date_status,
+            key_status,
+            " | ".join(details) or "-",
+        ))
+    if exceptions:
+        print("-" * 88)
+        print("Semantic audit exceptions / evidence limits")
+        _print_console_table(("Dataset", "中文名稱", "日期語意", "Natural Key", "說明"), tuple(exceptions))
     absolute_status = result.get("absolute_instrument_completeness")
     print(f"Absolute completeness      : {_paint(absolute_status, _status_color(absolute_status))}")
     print(_paint("Reason                     : provider 未提供每個 dataset 的 authoritative expected instrument universe；不可把 StockInfo broad ref 當所有 feed 的應有集合。", C_GRAY))

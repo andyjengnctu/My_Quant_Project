@@ -7,8 +7,11 @@ instrument universe.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 from typing import Callable
+
+import pandas as pd
 
 from core.file_integrity import compute_file_sha256, load_json_strict
 from core.market_data_dataset_readiness import (
@@ -16,7 +19,19 @@ from core.market_data_dataset_readiness import (
     VALID_DATASET_VALIDATION_STATUSES,
     is_market_data_dataset_ready,
 )
-from core.market_data_dataset_registry import get_market_dataset_specs
+from core.market_data_dataset_registry import get_market_dataset_display_name_zh, get_market_dataset_specs
+from core.market_data_integrity_contract import (
+    AUTHORITATIVE_TRADING_CALENDAR_DATASET,
+    DATE_SEMANTIC_FAIL,
+    DATE_SEMANTIC_NOT_APPLICABLE,
+    DATE_SEMANTIC_NOT_APPLICABLE_STATUS,
+    DATE_SEMANTIC_PASS,
+    DATE_SEMANTIC_UNVERIFIED,
+    DATE_SEMANTIC_UNVERIFIED_STATUS,
+    evaluate_date_semantics,
+    resolve_date_semantic_mode,
+    validate_market_data_integrity_contract,
+)
 from core.market_data_storage_contract import resolve_market_data_request_parquet_path
 from core.market_data_trading_storage_contract import (
     TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME,
@@ -33,6 +48,121 @@ from services.trading.market_data_v2_state import load_trading_market_data_v2_st
 
 
 ProgressFn = Callable[[dict[str, object]], None]
+
+
+def _new_semantic_row(spec) -> dict[str, object]:
+    keys = tuple(str(value) for value in spec.primary_key_hint)
+    return {
+        "dataset": spec.dataset,
+        "display_name_zh": get_market_dataset_display_name_zh(spec.dataset),
+        "primary_key": keys,
+        "natural_key_status": "UNVERIFIED" if not keys else "PASS",
+        "natural_key_artifacts_checked": 0,
+        "natural_key_null_rows": 0,
+        "natural_key_duplicate_rows": 0,
+        "natural_key_missing_column_artifacts": 0,
+        "date_semantic_mode": resolve_date_semantic_mode(spec),
+        "observed_dates": set(),
+        "invalid_date_rows": 0,
+        "missing_date_column_artifacts": 0,
+    }
+
+
+def _natural_key_issue_counts(frame: pd.DataFrame, primary_key: tuple[str, ...]) -> tuple[int, int]:
+    keys = tuple(str(value) for value in primary_key if str(value))
+    if not keys:
+        raise ValueError("natural-key audit 需要非空 primary key")
+    missing = [key for key in keys if key not in frame.columns]
+    if missing:
+        raise ValueError(f"natural-key audit frame 缺 key 欄位: {missing}")
+    null_rows = int(frame.loc[:, list(keys)].isna().any(axis=1).sum())
+    duplicate_rows = int(frame.duplicated(list(keys), keep=False).sum())
+    return null_rows, duplicate_rows
+
+
+def _observe_semantic_artifact(*, path: Path, inspection, spec, semantic_row: dict[str, object]) -> None:
+    if int(inspection.row_count) <= 0:
+        return
+
+    keys = tuple(str(value) for value in spec.primary_key_hint)
+    date_mode = str(semantic_row["date_semantic_mode"])
+    needs_date = date_mode not in {DATE_SEMANTIC_NOT_APPLICABLE, DATE_SEMANTIC_UNVERIFIED}
+    available = set(str(value) for value in inspection.columns)
+    missing_keys = [key for key in keys if key not in available]
+    if keys and missing_keys:
+        semantic_row["natural_key_status"] = "FAIL"
+        semantic_row["natural_key_missing_column_artifacts"] = int(semantic_row["natural_key_missing_column_artifacts"]) + 1
+    if needs_date and "date" not in available:
+        semantic_row["missing_date_column_artifacts"] = int(semantic_row["missing_date_column_artifacts"]) + 1
+
+    requested_columns = tuple(dict.fromkeys((*(key for key in keys if key in available), *(("date",) if needs_date and "date" in available else ()))))
+    if not requested_columns:
+        return
+    frame = pd.read_parquet(path, columns=list(requested_columns))
+
+    if keys and not missing_keys:
+        semantic_row["natural_key_artifacts_checked"] = int(semantic_row["natural_key_artifacts_checked"]) + 1
+        null_rows, duplicate_rows = _natural_key_issue_counts(frame, keys)
+        semantic_row["natural_key_null_rows"] = int(semantic_row["natural_key_null_rows"]) + null_rows
+        semantic_row["natural_key_duplicate_rows"] = int(semantic_row["natural_key_duplicate_rows"]) + duplicate_rows
+        if null_rows or duplicate_rows:
+            semantic_row["natural_key_status"] = "FAIL"
+
+    if needs_date and "date" in frame.columns:
+        raw = frame["date"]
+        parsed = pd.to_datetime(raw, errors="coerce")
+        invalid_rows = int((raw.notna() & parsed.isna()).sum())
+        semantic_row["invalid_date_rows"] = int(semantic_row["invalid_date_rows"]) + invalid_rows
+        normalized = parsed.dropna().dt.strftime("%Y-%m-%d")
+        semantic_row["observed_dates"].update(str(value) for value in normalized.unique())
+
+
+def _finalize_semantic_integrity(semantic_rows: dict[str, dict[str, object]]) -> dict[str, object]:
+    calendar_row = semantic_rows[AUTHORITATIVE_TRADING_CALENDAR_DATASET]
+    trading_calendar_dates = tuple(sorted(str(value) for value in calendar_row["observed_dates"]))
+    rows: list[dict[str, object]] = []
+    date_counts = defaultdict(int)
+    key_counts = defaultdict(int)
+    for dataset in sorted(semantic_rows):
+        row = semantic_rows[dataset]
+        date_result = evaluate_date_semantics(
+            mode=str(row["date_semantic_mode"]),
+            observed_dates=tuple(row["observed_dates"]),
+            trading_calendar_dates=trading_calendar_dates,
+            invalid_date_rows=int(row["invalid_date_rows"]),
+            missing_date_column=bool(int(row["missing_date_column_artifacts"])),
+        )
+        natural_key_status = str(row["natural_key_status"] or "UNVERIFIED")
+        date_counts[date_result.status] += 1
+        key_counts[natural_key_status] += 1
+        rows.append({
+            "dataset": dataset,
+            "display_name_zh": row["display_name_zh"],
+            "date_semantic": date_result.as_dict(),
+            "primary_key": list(row["primary_key"]),
+            "natural_key_status": natural_key_status,
+            "natural_key_artifacts_checked": int(row["natural_key_artifacts_checked"]),
+            "natural_key_null_rows": int(row["natural_key_null_rows"]),
+            "natural_key_duplicate_rows": int(row["natural_key_duplicate_rows"]),
+            "natural_key_missing_column_artifacts": int(row["natural_key_missing_column_artifacts"]),
+        })
+
+    status = "PASS" if date_counts[DATE_SEMANTIC_FAIL] == 0 and key_counts["FAIL"] == 0 else "FAIL"
+    return {
+        "status": status,
+        "date_semantic": {
+            "pass_count": int(date_counts[DATE_SEMANTIC_PASS]),
+            "fail_count": int(date_counts[DATE_SEMANTIC_FAIL]),
+            "unverified_count": int(date_counts[DATE_SEMANTIC_UNVERIFIED_STATUS]),
+            "not_applicable_count": int(date_counts[DATE_SEMANTIC_NOT_APPLICABLE_STATUS]),
+        },
+        "natural_key": {
+            "pass_count": int(key_counts["PASS"]),
+            "fail_count": int(key_counts["FAIL"]),
+            "unverified_count": int(key_counts["UNVERIFIED"]),
+        },
+        "rows": rows,
+    }
 
 
 def _verify_artifact(*, path: Path, ledger_item, codec: PyArrowParquetCodec):
@@ -166,6 +296,10 @@ def run_market_data_v2_full_integrity_audit(
     root = Path(project_root).resolve()
     codec = PyArrowParquetCodec()
     archive = load_ready_provider_snapshot_archive(root)
+    validate_market_data_integrity_contract()
+    specs = tuple(get_market_dataset_specs(included_only=True))
+    spec_by_dataset = {spec.dataset: spec for spec in specs}
+    semantic_rows = {spec.dataset: _new_semantic_row(spec) for spec in specs}
 
     provider_total = len(archive.artifacts)
     provider_rows = 0
@@ -174,6 +308,10 @@ def run_market_data_v2_full_integrity_audit(
         path = resolve_market_data_request_parquet_path(root, archive.manifest_fingerprint, request)
         inspection = _verify_artifact(path=path, ledger_item=item, codec=codec)
         _verify_provider_metadata(inspection=inspection, archive=archive, ledger_item=item)
+        spec = spec_by_dataset.get(str(item.dataset))
+        if spec is None:
+            raise ValueError(f"Provider Snapshot artifact dataset 不在 current included registry: {item.dataset}")
+        _observe_semantic_artifact(path=path, inspection=inspection, spec=spec, semantic_row=semantic_rows[spec.dataset])
         provider_rows += int(item.row_count)
         if progress_fn is not None and (index == provider_total or index % 500 == 0):
             progress_fn({
@@ -231,6 +369,10 @@ def run_market_data_v2_full_integrity_audit(
                 path = resolve_trading_market_data_v2_request_path(root, batch_fp, request)
                 inspection = _verify_artifact(path=path, ledger_item=item, codec=codec)
                 _verify_overlay_metadata(inspection=inspection, payload=payload, ledger_item=item)
+                spec = spec_by_dataset.get(str(item.dataset))
+                if spec is None:
+                    raise ValueError(f"Trading V2 overlay dataset 不在 current included registry: {item.dataset}")
+                _observe_semantic_artifact(path=path, inspection=inspection, spec=spec, semantic_row=semantic_rows[spec.dataset])
                 overlay_rows += int(item.row_count)
                 overlay_artifacts_verified += 1
                 if progress_fn is not None and overlay_artifacts_verified % 250 == 0:
@@ -244,7 +386,8 @@ def run_market_data_v2_full_integrity_audit(
     archive_state = load_trading_market_data_v2_state(root, required=False)
     target_date = str((archive_state or {}).get("latest_sync_target_date") or archive.as_of_date)
     dataset_validation = _dataset_validation_summary(root, target_date=target_date)
-    local_integrity = "PASS" if dataset_validation["status"] == "PASS" else "FAIL"
+    semantic_integrity = _finalize_semantic_integrity(semantic_rows)
+    local_integrity = "PASS" if (dataset_validation["status"] == "PASS" and semantic_integrity["status"] == "PASS") else "FAIL"
     return {
         "status": local_integrity,
         "provider_snapshot_status": "PASS",
@@ -259,6 +402,7 @@ def run_market_data_v2_full_integrity_audit(
         "overlay_rows_verified": overlay_rows,
         "target_date": target_date,
         "dataset_validation": dataset_validation,
+        "semantic_integrity": semantic_integrity,
         "absolute_instrument_completeness": "UNVERIFIED",
         "absolute_instrument_completeness_reason": "no_authoritative_dataset_specific_expected_universe",
         "provider_requests_made": 0,

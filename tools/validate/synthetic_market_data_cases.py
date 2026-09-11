@@ -1562,6 +1562,15 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         MARKET_DATA_PROVIDER_SNAPSHOT_ROLE,
         MARKET_DATA_PROVIDER_SNAPSHOT_SCHEMA_VERSION,
     )
+    from core.market_data_integrity_contract import (
+        DATE_SEMANTIC_FAIL,
+        DATE_SEMANTIC_PASS,
+        DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
+        DATE_SEMANTIC_UNVERIFIED_STATUS,
+        evaluate_date_semantics,
+        validate_market_data_integrity_contract,
+    )
+    from services.downloader.market_data_integrity_audit import _natural_key_issue_counts
     from core.market_data_storage_contract import resolve_market_data_provider_snapshot_path
     from core.market_data_trading_storage_contract import (
         resolve_trading_market_data_v2_root,
@@ -1577,6 +1586,35 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
 
     registry = validate_market_dataset_registry()
     specs = get_market_dataset_specs(included_only=True)
+    integrity_contract = validate_market_data_integrity_contract()
+    check("integrity_contract_covers_current_included_registry", len(specs), integrity_contract["dataset_count"])
+    check("integrity_contract_has_authoritative_calendar_owner", 1, integrity_contract["authoritative_calendar_count"])
+    check("integrity_contract_has_dense_trading_date_scope", True, integrity_contract["dense_trading_calendar_count"] > 0)
+    date_pass = evaluate_date_semantics(
+        mode=DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
+        observed_dates=("2026-09-07", "2026-09-08", "2026-09-09"),
+        trading_calendar_dates=("2026-09-07", "2026-09-08", "2026-09-09"),
+    )
+    check("date_semantic_dense_presence_passes_complete_calendar_span", DATE_SEMANTIC_PASS, date_pass.status)
+    date_gap = evaluate_date_semantics(
+        mode=DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
+        observed_dates=("2026-09-07", "2026-09-09"),
+        trading_calendar_dates=("2026-09-07", "2026-09-08", "2026-09-09"),
+    )
+    check("date_semantic_dense_presence_detects_internal_gap", DATE_SEMANTIC_FAIL, date_gap.status)
+    check("date_semantic_gap_reports_missing_date", ("2026-09-08",), date_gap.missing_dates)
+    date_unverified = evaluate_date_semantics(
+        mode=DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
+        observed_dates=("2026-09-06", "2026-09-07"),
+        trading_calendar_dates=("2026-09-07", "2026-09-08"),
+    )
+    check("date_semantic_does_not_overclaim_when_calendar_span_is_insufficient", DATE_SEMANTIC_UNVERIFIED_STATUS, date_unverified.status)
+    key_nulls, key_duplicates = _natural_key_issue_counts(
+        pd.DataFrame({"date": ["2026-09-08", "2026-09-08", None], "stock_id": ["2330", "2330", "2317"]}),
+        ("date", "stock_id"),
+    )
+    check("natural_key_audit_detects_null_key_rows", 1, key_nulls)
+    check("natural_key_audit_detects_duplicate_key_rows", 2, key_duplicates)
     from services.downloader.market_data_trading_storage import MarketDataTradingStorageSink
     observed_bounds = MarketDataTradingStorageSink._frame_date_bounds(
         pd.DataFrame({"date": ["2026-09-05", "2026-09-07", "bad"]})
@@ -3244,6 +3282,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("canonical_consumer_market_date_is_capped_by_common_ready_horizon", True, "return min(target_date, ready_through)" in update_source)
     check("smart_downloader_exposes_local_only_full_database_integrity_audit", True, "Full Database Integrity Audit" in downloader_source and "run_market_data_v2_full_integrity_audit" in downloader_source)
     check("full_integrity_audit_does_not_claim_absolute_instrument_completeness", True, '"absolute_instrument_completeness": "UNVERIFIED"' in integrity_source and "no_authoritative_dataset_specific_expected_universe" in integrity_source)
+    check("full_integrity_audit_adds_date_semantic_and_natural_key_layers", True, all(token in integrity_source for token in ("semantic_integrity", "evaluate_date_semantics", "_natural_key_issue_counts")))
     check("full_integrity_audit_has_no_provider_client_dependency", False, "FinMindHttpClient" in integrity_source or "request_finmind" in integrity_source)
     check("v2_auto_updater_does_not_import_legacy_trading_update_owner", False, "services.trading.market_data_update" in auto_update_source)
     check("v2_auto_updater_does_not_read_legacy_trading_snapshot_for_target", False, "load_trading_market_data_snapshot" in auto_update_source)
