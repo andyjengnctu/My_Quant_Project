@@ -151,11 +151,12 @@ class BootstrapRequestManifest:
 
 
 def build_registry_fingerprint(specs: Iterable[MarketDatasetSpec]) -> str:
-    # Trading sync query cadence is execution-only sidecar policy.  It must not
-    # alter the neutral bootstrap/provider artifact identity.
+    # Trading sync query cadence and latest-view row identity are execution/view
+    # sidecar policy.  They must not alter the neutral bootstrap/provider artifact identity.
     ordered = []
     for spec in specs:
         item = asdict(spec)
+        item.pop("row_identity_hint", None)
         item.pop("trading_query_mode", None)
         item.pop("trading_lookback_periods", None)
         item.pop("trading_fixed_data_ids", None)

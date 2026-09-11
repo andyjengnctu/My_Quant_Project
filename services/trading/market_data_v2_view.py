@@ -14,7 +14,7 @@ from typing import Iterator
 import pandas as pd
 
 from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
-from core.market_data_dataset_registry import get_market_dataset_spec
+from core.market_data_dataset_registry import get_market_dataset_spec, resolve_market_dataset_row_identity
 from core.market_data_instrument_universe import (
     build_historical_market_state_guard,
     build_historical_stock_etf_universe,
@@ -219,9 +219,9 @@ class TradingMarketDataV2View:
         spec = get_market_dataset_spec(name)
         if not spec.included:
             raise ValueError(f"Trading V2 view 不允許讀未納入 archive 的 dataset: {name}")
-        keys = tuple(spec.primary_key_hint)
+        keys = resolve_market_dataset_row_identity(spec)
         if not keys:
-            raise RuntimeError(f"{name} 尚未宣告 primary_key_hint，禁止建立可覆寫 latest view")
+            raise RuntimeError(f"{name} 尚未宣告 row identity，禁止建立可覆寫 latest view")
 
         requested = None if columns is None else tuple(dict.fromkeys(str(value) for value in columns))
         read_columns = None if requested is None else tuple(dict.fromkeys((*requested, *keys)))

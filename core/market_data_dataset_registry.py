@@ -108,6 +108,7 @@ class MarketDatasetSpec:
     daily_mode: str
     pit_class: str
     primary_key_hint: tuple[str, ...] = ()
+    row_identity_hint: tuple[str, ...] = ()
     fixed_data_ids: tuple[str, ...] = ()
     probe_data_id: str | None = None
     full_market_exact_date_expected: bool = False
@@ -133,6 +134,7 @@ def _include(
     pit_class: str,
     *,
     primary_key_hint: tuple[str, ...] = (),
+    row_identity_hint: tuple[str, ...] = (),
     fixed_data_ids: tuple[str, ...] = (),
     probe_data_id: str | None = None,
     full_market_exact_date_expected: bool = False,
@@ -153,6 +155,7 @@ def _include(
         daily_mode=daily_mode,
         pit_class=pit_class,
         primary_key_hint=primary_key_hint,
+        row_identity_hint=row_identity_hint,
         fixed_data_ids=fixed_data_ids,
         probe_data_id=probe_data_id,
         full_market_exact_date_expected=full_market_exact_date_expected,
@@ -185,7 +188,7 @@ DEFAULT_EQUITY_PROBE_DATA_ID = "2330"
 
 MARKET_DATASET_SPECS: tuple[MarketDatasetSpec, ...] = (
     # Market/security master and price truth.
-    _include("TaiwanStockInfo", "security_master", BOOTSTRAP_SINGLE_NO_DATES, DAILY_STATIC_REFRESH, PIT_REVIEW_REQUIRED, primary_key_hint=("stock_id", "type", "date"), rationale="Historical/current market identity source; transition rows are preserved."),
+    _include("TaiwanStockInfo", "security_master", BOOTSTRAP_SINGLE_NO_DATES, DAILY_STATIC_REFRESH, PIT_REVIEW_REQUIRED, primary_key_hint=("stock_id", "type", "date"), row_identity_hint=("stock_id", "type", "date", "industry_category"), rationale="Historical/current market identity source; transition rows are preserved."),
     _include("TaiwanStockTradingDate", "calendar", BOOTSTRAP_SINGLE_NO_DATES, DAILY_INCREMENTAL, PIT_EXACT_CANDIDATE, primary_key_hint=("date",)),
     _include("TaiwanStockDelisting", "security_master", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_EVENT_REPAIR, PIT_EXACT_CANDIDATE, primary_key_hint=("date", "stock_id")),
     _include("TaiwanStockIndustryChain", "security_master", BOOTSTRAP_SINGLE_NO_DATES, DAILY_STATIC_REFRESH, PIT_REVIEW_REQUIRED, primary_key_hint=("stock_id", "industry", "sub_industry", "date"), rationale="Current-vintage industry classification; archive now, PIT legality is reviewed later."),
@@ -242,7 +245,7 @@ MARKET_DATASET_SPECS: tuple[MarketDatasetSpec, ...] = (
     _include("TaiwanOptionDaily", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",), bootstrap_start_date="2001-12-01", bootstrap_chunk_months=1, preflight_probe_calendar_days=2, rationale="High-density strike/expiry option history is chunked by calendar month; capability preflight uses only the latest two completed-market calendar days to avoid oversized provider responses."),
     _include("TaiwanOptionInstitutionalInvestors", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",)),
     _include("TaiwanOptionOpenInterestLargeTraders", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",)),
-    _include("TaiwanOptionVix", "derivative_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, primary_key_hint=("date",)),
+    _include("TaiwanOptionVix", "derivative_context", BOOTSTRAP_SINGLE_FULL_RANGE, DAILY_INCREMENTAL, PIT_REVIEW_REQUIRED, primary_key_hint=("date",), row_identity_hint=("date", "time")),
 
     # Explicit exclusions prevent later downloader expansion from silently adding
     # redundant, oversized, unsupported, or currently out-of-scope datasets.
@@ -280,6 +283,21 @@ def get_market_dataset_display_name_zh(dataset: str) -> str:
         return MARKET_DATASET_DISPLAY_NAMES_ZH[key]
     except KeyError as exc:
         raise ValueError(f"Market Data dataset 缺少中文顯示名稱: {key!r}") from exc
+
+
+def resolve_market_dataset_row_identity(spec: MarketDatasetSpec) -> tuple[str, ...]:
+    """Resolve the canonical row identity used by latest-view merge and integrity audit.
+
+    ``primary_key_hint`` is legacy provider-registry metadata and participates in
+    the immutable bootstrap fingerprint.  ``row_identity_hint`` is an
+    operational/view-sidecar correction for datasets whose provider row identity
+    is richer; it is intentionally excluded from bootstrap identity.
+    """
+
+    explicit = tuple(str(value) for value in spec.row_identity_hint if str(value))
+    if explicit:
+        return explicit
+    return tuple(str(value) for value in spec.primary_key_hint if str(value))
 
 
 def validate_market_dataset_registry() -> dict[str, int]:
@@ -323,6 +341,11 @@ def validate_market_dataset_registry() -> dict[str, int]:
         TRADING_QUERY_QUARTER_ENDS,
     }
     for spec in MARKET_DATASET_SPECS:
+        row_identity = resolve_market_dataset_row_identity(spec)
+        if len(row_identity) != len(set(row_identity)):
+            raise ValueError(f"{spec.dataset} row_identity_hint 不得重複欄位")
+        if any(not str(value or "").strip() for value in spec.row_identity_hint):
+            raise ValueError(f"{spec.dataset} row_identity_hint 不得包含空白欄位")
         if spec.bootstrap_mode == BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE and not spec.fixed_data_ids:
             raise ValueError(f"{spec.dataset} fixed_data_id mode 缺少 fixed_data_ids")
         if spec.bootstrap_mode in {BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, BOOTSTRAP_BULK_REFERENCE_DATES} and not spec.probe_data_id:
@@ -400,5 +423,6 @@ __all__ = [
     "get_market_dataset_specs",
     "get_market_dataset_spec",
     "get_market_dataset_display_name_zh",
+    "resolve_market_dataset_row_identity",
     "validate_market_dataset_registry",
 ]

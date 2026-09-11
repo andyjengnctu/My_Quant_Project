@@ -19,10 +19,17 @@ from core.market_data_dataset_readiness import (
     VALID_DATASET_VALIDATION_STATUSES,
     is_market_data_dataset_ready,
 )
-from core.market_data_dataset_registry import get_market_dataset_display_name_zh, get_market_dataset_specs
+from core.market_data_dataset_registry import (
+    get_market_dataset_display_name_zh,
+    get_market_dataset_specs,
+    resolve_market_dataset_row_identity,
+)
 from core.market_data_integrity_contract import (
     AUTHORITATIVE_TRADING_CALENDAR_DATASET,
+    STOCK_MARKET_ACTIVITY_ANCHOR_DATASETS,
+    DATE_SEMANTIC_ATTENTION,
     DATE_SEMANTIC_FAIL,
+    DATE_SEMANTIC_PARTIAL,
     DATE_SEMANTIC_NOT_APPLICABLE,
     DATE_SEMANTIC_NOT_APPLICABLE_STATUS,
     DATE_SEMANTIC_PASS,
@@ -51,7 +58,7 @@ ProgressFn = Callable[[dict[str, object]], None]
 
 
 def _new_semantic_row(spec) -> dict[str, object]:
-    keys = tuple(str(value) for value in spec.primary_key_hint)
+    keys = resolve_market_dataset_row_identity(spec)
     return {
         "dataset": spec.dataset,
         "display_name_zh": get_market_dataset_display_name_zh(spec.dataset),
@@ -84,7 +91,7 @@ def _observe_semantic_artifact(*, path: Path, inspection, spec, semantic_row: di
     if int(inspection.row_count) <= 0:
         return
 
-    keys = tuple(str(value) for value in spec.primary_key_hint)
+    keys = resolve_market_dataset_row_identity(spec)
     date_mode = str(semantic_row["date_semantic_mode"])
     needs_date = date_mode not in {DATE_SEMANTIC_NOT_APPLICABLE, DATE_SEMANTIC_UNVERIFIED}
     available = set(str(value) for value in inspection.columns)
@@ -117,18 +124,49 @@ def _observe_semantic_artifact(*, path: Path, inspection, spec, semantic_row: di
         semantic_row["observed_dates"].update(str(value) for value in normalized.unique())
 
 
+
+def _corroborated_stock_session_dates(
+    semantic_rows: dict[str, dict[str, object]],
+    *,
+    exclude_dataset: str | None = None,
+) -> tuple[str, ...]:
+    """Return stock-market sessions corroborated by schedule + observed activity.
+
+    TaiwanStockTradingDate can contain a scheduled date that later becomes an
+    exceptional market closure.  A date is therefore eligible for dense/sparse
+    stock-session comparison only when it is present in the calendar feed and
+    observed by at least one independent activity anchor.  The dataset being
+    audited is excluded when it is itself an anchor, preventing self-proof.
+    """
+
+    calendar_row = semantic_rows.get(AUTHORITATIVE_TRADING_CALENDAR_DATASET)
+    if not calendar_row:
+        return ()
+    scheduled = {str(value) for value in calendar_row["observed_dates"] if str(value)}
+    activity: set[str] = set()
+    for dataset in STOCK_MARKET_ACTIVITY_ANCHOR_DATASETS:
+        if dataset == exclude_dataset:
+            continue
+        row = semantic_rows.get(dataset)
+        if row is None:
+            continue
+        activity.update(str(value) for value in row["observed_dates"] if str(value))
+    return tuple(sorted(scheduled & activity))
+
 def _finalize_semantic_integrity(semantic_rows: dict[str, dict[str, object]]) -> dict[str, object]:
-    calendar_row = semantic_rows[AUTHORITATIVE_TRADING_CALENDAR_DATASET]
-    trading_calendar_dates = tuple(sorted(str(value) for value in calendar_row["observed_dates"]))
     rows: list[dict[str, object]] = []
     date_counts = defaultdict(int)
     key_counts = defaultdict(int)
     for dataset in sorted(semantic_rows):
         row = semantic_rows[dataset]
+        stock_session_dates = _corroborated_stock_session_dates(
+            semantic_rows,
+            exclude_dataset=dataset,
+        )
         date_result = evaluate_date_semantics(
             mode=str(row["date_semantic_mode"]),
             observed_dates=tuple(row["observed_dates"]),
-            trading_calendar_dates=trading_calendar_dates,
+            trading_calendar_dates=stock_session_dates,
             invalid_date_rows=int(row["invalid_date_rows"]),
             missing_date_column=bool(int(row["missing_date_column_artifacts"])),
         )
@@ -147,11 +185,21 @@ def _finalize_semantic_integrity(semantic_rows: dict[str, dict[str, object]]) ->
             "natural_key_missing_column_artifacts": int(row["natural_key_missing_column_artifacts"]),
         })
 
-    status = "PASS" if date_counts[DATE_SEMANTIC_FAIL] == 0 and key_counts["FAIL"] == 0 else "FAIL"
+    blocking_failures = int(date_counts[DATE_SEMANTIC_FAIL]) + int(key_counts["FAIL"])
+    evidence_limits = (
+        int(date_counts[DATE_SEMANTIC_ATTENTION])
+        + int(date_counts[DATE_SEMANTIC_PARTIAL])
+        + int(date_counts[DATE_SEMANTIC_UNVERIFIED_STATUS])
+        + int(key_counts["UNVERIFIED"])
+    )
+    status = "FAIL" if blocking_failures else "ATTENTION" if evidence_limits else "PASS"
     return {
         "status": status,
+        "blocking_status": "FAIL" if blocking_failures else "PASS",
         "date_semantic": {
             "pass_count": int(date_counts[DATE_SEMANTIC_PASS]),
+            "attention_count": int(date_counts[DATE_SEMANTIC_ATTENTION]),
+            "partial_count": int(date_counts[DATE_SEMANTIC_PARTIAL]),
             "fail_count": int(date_counts[DATE_SEMANTIC_FAIL]),
             "unverified_count": int(date_counts[DATE_SEMANTIC_UNVERIFIED_STATUS]),
             "not_applicable_count": int(date_counts[DATE_SEMANTIC_NOT_APPLICABLE_STATUS]),
@@ -238,7 +286,24 @@ def _verify_overlay_metadata(*, inspection, payload: dict[str, object], ledger_i
         )
 
 
-def _dataset_validation_summary(project_root: Path, *, target_date: str) -> dict[str, object]:
+def _resolve_validation_target_date(state: dict[str, object] | None, *, fallback: str) -> str:
+    rows = dict((state or {}).get("datasets") or {})
+    candidates = [str(fallback)]
+    for raw in rows.values():
+        row = dict(raw or {})
+        for key in (
+            "last_attempt_target_date",
+            "last_success_target_date",
+            "last_ready_target_date",
+            "latest_expected_date",
+        ):
+            value = str(row.get(key) or "").strip()
+            if value:
+                candidates.append(value)
+    return max(candidates)
+
+
+def _dataset_validation_summary(project_root: Path, *, fallback_target_date: str) -> dict[str, object]:
     specs = tuple(get_market_dataset_specs(included_only=True))
     expected = {spec.dataset for spec in specs}
     state = load_market_data_dataset_state(project_root, required=False)
@@ -246,6 +311,7 @@ def _dataset_validation_summary(project_root: Path, *, target_date: str) -> dict
     actual = set(rows)
     missing = sorted(expected - actual)
     unexpected = sorted(actual - expected)
+    target_date = _resolve_validation_target_date(state, fallback=str(fallback_target_date))
     current_validation = 0
     schema_valid = 0
     coverage_valid = 0
@@ -265,16 +331,19 @@ def _dataset_validation_summary(project_root: Path, *, target_date: str) -> dict
         if is_market_data_dataset_ready(row, target_date=str(target_date)):
             ready += 1
     total = len(expected)
-    status = "PASS" if (
+    state_contract_status = "PASS" if (
         not missing
         and not unexpected
         and current_validation == total
-        and schema_valid == total
-        and coverage_valid == total
-        and ready == total
     ) else "FAIL"
+    current_target_status = "READY" if ready == total else "INCOMPLETE"
+    validation_evidence_status = "PASS" if schema_valid == total and coverage_valid == total else "ATTENTION"
     return {
-        "status": status,
+        "status": state_contract_status,
+        "state_contract_status": state_contract_status,
+        "validation_evidence_status": validation_evidence_status,
+        "current_target_status": current_target_status,
+        "target_date": target_date,
         "dataset_count": total,
         "state_dataset_count": len(rows),
         "current_validation_count": current_validation,
@@ -384,10 +453,17 @@ def run_market_data_v2_full_integrity_audit(
                     })
 
     archive_state = load_trading_market_data_v2_state(root, required=False)
-    target_date = str((archive_state or {}).get("latest_sync_target_date") or archive.as_of_date)
-    dataset_validation = _dataset_validation_summary(root, target_date=target_date)
+    fallback_target = str((archive_state or {}).get("latest_sync_target_date") or archive.as_of_date)
+    dataset_validation = _dataset_validation_summary(root, fallback_target_date=fallback_target)
+    target_date = str(dataset_validation["target_date"])
     semantic_integrity = _finalize_semantic_integrity(semantic_rows)
-    local_integrity = "PASS" if (dataset_validation["status"] == "PASS" and semantic_integrity["status"] == "PASS") else "FAIL"
+    # Provider/overlay physical integrity has already been proven by the read/hash/ledger
+    # checks above.  Current target freshness may legitimately be incomplete while the
+    # provider publication window is still open, so it must not redefine local integrity.
+    local_integrity = "PASS" if (
+        dataset_validation["state_contract_status"] == "PASS"
+        and semantic_integrity["blocking_status"] == "PASS"
+    ) else "FAIL"
     return {
         "status": local_integrity,
         "provider_snapshot_status": "PASS",

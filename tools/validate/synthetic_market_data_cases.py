@@ -100,6 +100,8 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
         get_market_dataset_display_name_zh,
         get_market_dataset_spec,
         get_market_dataset_specs,
+        get_market_dataset_spec,
+        resolve_market_dataset_row_identity,
         validate_market_dataset_registry,
     )
     from core.market_data_instrument_universe import historical_stock_etf_universe_contract_fingerprint
@@ -1546,8 +1548,10 @@ def validate_market_data_v2_provider_snapshot_completion_contract_case(_base_par
 def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params):
     """Round-6 Trading integration stays isolated, resumable and non-blocking for current rule-based execution."""
 
+    from dataclasses import replace
     from pathlib import Path
     from tempfile import TemporaryDirectory
+    from unittest.mock import patch
 
     from core.file_integrity import atomic_write_json, canonical_json_sha256
     from core.market_data_bootstrap_requests import build_registry_fingerprint
@@ -1555,6 +1559,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         DAILY_PERIODIC_REPAIR,
         TRADING_QUERY_AUTO,
         get_market_dataset_specs,
+        get_market_dataset_spec,
+        resolve_market_dataset_row_identity,
         validate_market_dataset_registry,
     )
     from core.market_data_provider_snapshot import (
@@ -1563,14 +1569,22 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         MARKET_DATA_PROVIDER_SNAPSHOT_SCHEMA_VERSION,
     )
     from core.market_data_integrity_contract import (
+        DATE_SEMANTIC_ATTENTION,
         DATE_SEMANTIC_FAIL,
+        DATE_SEMANTIC_PARTIAL,
         DATE_SEMANTIC_PASS,
         DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
+        DATE_SEMANTIC_TRADING_CALENDAR_SPARSE,
         DATE_SEMANTIC_UNVERIFIED_STATUS,
         evaluate_date_semantics,
         validate_market_data_integrity_contract,
     )
-    from services.downloader.market_data_integrity_audit import _natural_key_issue_counts
+    from services.downloader.market_data_integrity_audit import (
+        _corroborated_stock_session_dates,
+        _dataset_validation_summary,
+        _natural_key_issue_counts,
+        _resolve_validation_target_date,
+    )
     from core.market_data_storage_contract import resolve_market_data_provider_snapshot_path
     from core.market_data_trading_storage_contract import (
         resolve_trading_market_data_v2_root,
@@ -1601,20 +1615,82 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         observed_dates=("2026-09-07", "2026-09-09"),
         trading_calendar_dates=("2026-09-07", "2026-09-08", "2026-09-09"),
     )
-    check("date_semantic_dense_presence_detects_internal_gap", DATE_SEMANTIC_FAIL, date_gap.status)
+    check("date_semantic_dense_presence_reports_provider_gap_without_local_corruption", DATE_SEMANTIC_ATTENTION, date_gap.status)
     check("date_semantic_gap_reports_missing_date", ("2026-09-08",), date_gap.missing_dates)
     date_unverified = evaluate_date_semantics(
         mode=DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
         observed_dates=("2026-09-06", "2026-09-07"),
         trading_calendar_dates=("2026-09-07", "2026-09-08"),
     )
-    check("date_semantic_does_not_overclaim_when_calendar_span_is_insufficient", DATE_SEMANTIC_UNVERIFIED_STATUS, date_unverified.status)
+    check("date_semantic_marks_partial_when_calendar_covers_only_overlap", DATE_SEMANTIC_PARTIAL, date_unverified.status)
+    sparse_presence = evaluate_date_semantics(
+        mode=DATE_SEMANTIC_TRADING_CALENDAR_SPARSE,
+        observed_dates=("2026-09-07", "2026-09-09"),
+        trading_calendar_dates=("2026-09-07", "2026-09-08", "2026-09-09"),
+    )
+    check("sparse_stock_session_feed_does_not_require_rows_every_market_day", DATE_SEMANTIC_PASS, sparse_presence.status)
+    synthetic_semantic_rows = {
+        "TaiwanStockTradingDate": {"observed_dates": {"2026-07-09", "2026-07-10", "2026-07-13"}},
+        "TaiwanStockPrice": {"observed_dates": {"2026-07-09", "2026-07-13"}},
+        "TaiwanStockPriceAdj": {"observed_dates": {"2026-07-09", "2026-07-13"}},
+        "TaiwanStockTotalReturnIndex": {"observed_dates": {"2026-07-09", "2026-07-13"}},
+    }
+    corroborated_sessions = _corroborated_stock_session_dates(synthetic_semantic_rows)
+    check(
+        "exceptional_calendar_only_closure_is_not_treated_as_actual_stock_session",
+        ("2026-07-09", "2026-07-13"),
+        corroborated_sessions,
+    )
+    anchor_excluded_sessions = _corroborated_stock_session_dates(
+        synthetic_semantic_rows,
+        exclude_dataset="TaiwanStockPrice",
+    )
+    check(
+        "activity_anchor_does_not_self_prove_its_own_date_presence",
+        ("2026-07-09", "2026-07-13"),
+        anchor_excluded_sessions,
+    )
     key_nulls, key_duplicates = _natural_key_issue_counts(
         pd.DataFrame({"date": ["2026-09-08", "2026-09-08", None], "stock_id": ["2330", "2330", "2317"]}),
         ("date", "stock_id"),
     )
     check("natural_key_audit_detects_null_key_rows", 1, key_nulls)
     check("natural_key_audit_detects_duplicate_key_rows", 2, key_duplicates)
+    stock_info_key = resolve_market_dataset_row_identity(get_market_dataset_spec("TaiwanStockInfo"))
+    option_vix_key = resolve_market_dataset_row_identity(get_market_dataset_spec("TaiwanOptionVix"))
+    check("stock_info_row_identity_preserves_industry_category", ("stock_id", "type", "date", "industry_category"), stock_info_key)
+    check("option_vix_row_identity_preserves_intraday_time", ("date", "time"), option_vix_key)
+    from core.market_data_integrity_contract import resolve_date_semantic_mode
+    check(
+        "securities_lending_uses_sparse_stock_session_presence_contract",
+        DATE_SEMANTIC_TRADING_CALENDAR_SPARSE,
+        resolve_date_semantic_mode(get_market_dataset_spec("TaiwanStockSecuritiesLending")),
+    )
+    check(
+        "day_trading_borrow_fee_uses_sparse_stock_session_presence_contract",
+        DATE_SEMANTIC_TRADING_CALENDAR_SPARSE,
+        resolve_date_semantic_mode(get_market_dataset_spec("TaiwanStockDayTradingBorrowingFeeRate")),
+    )
+    from core.market_data_trading_view import merge_market_data_v2_fragments
+    stock_info_merged = merge_market_data_v2_fragments(
+        [pd.DataFrame({
+            "stock_id": ["2330", "2330"],
+            "type": ["twse", "twse"],
+            "date": ["2026-09-11", "2026-09-11"],
+            "industry_category": ["半導體業", "上市"],
+        })],
+        primary_key=stock_info_key,
+    )
+    check("stock_info_latest_view_does_not_collapse_legitimate_category_rows", 2, len(stock_info_merged))
+    vix_merged = merge_market_data_v2_fragments(
+        [pd.DataFrame({
+            "date": ["2026-09-11", "2026-09-11"],
+            "time": ["09:00:00", "09:01:00"],
+            "vix": [18.1, 18.2],
+        })],
+        primary_key=option_vix_key,
+    )
+    check("option_vix_latest_view_does_not_collapse_intraday_rows", 2, len(vix_merged))
     from services.downloader.market_data_trading_storage import MarketDataTradingStorageSink
     observed_bounds = MarketDataTradingStorageSink._frame_date_bounds(
         pd.DataFrame({"date": ["2026-09-05", "2026-09-07", "bad"]})
@@ -1635,6 +1711,47 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     )
 
     registry_fp = build_registry_fingerprint(specs)
+    first_spec = specs[0]
+    specs_with_view_only_row_identity_change = tuple(
+        replace(spec, row_identity_hint=("synthetic_row_id",)) if spec.dataset == first_spec.dataset else spec
+        for spec in specs
+    )
+    check(
+        "row_identity_hint_does_not_mutate_provider_registry_fingerprint",
+        registry_fp,
+        build_registry_fingerprint(specs_with_view_only_row_identity_change),
+    )
+    check(
+        "integrity_target_prefers_latest_dataset_attempt_over_completed_rollup",
+        "2026-09-11",
+        _resolve_validation_target_date(
+            {"datasets": {"synthetic": {"last_attempt_target_date": "2026-09-11", "last_ready_target_date": "2026-09-10"}}},
+            fallback="2026-09-10",
+        ),
+    )
+    from core.market_data_dataset_readiness import (
+        MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
+        VALIDATION_STATUS_READY,
+    )
+    incomplete_rows = {
+        spec.dataset: {
+            "validation_contract_version": MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
+            "schema_status": VALIDATION_STATUS_READY,
+            "coverage_status": VALIDATION_STATUS_READY,
+            "status": "WAIT_PUBLISH",
+            "last_attempt_target_date": "2026-09-11",
+            "last_ready_target_date": "2026-09-10",
+        }
+        for spec in specs
+    }
+    with patch(
+        "services.downloader.market_data_integrity_audit.load_market_data_dataset_state",
+        return_value={"datasets": incomplete_rows},
+    ):
+        incomplete_summary = _dataset_validation_summary(Path.cwd(), fallback_target_date="2026-09-10")
+    check("integrity_state_contract_does_not_fail_for_current_publication_wait", "PASS", incomplete_summary["state_contract_status"])
+    check("integrity_current_target_readiness_remains_incomplete_while_waiting", "INCOMPLETE", incomplete_summary["current_target_status"])
+    check("integrity_current_target_uses_latest_attempt_date", "2026-09-11", incomplete_summary["target_date"])
     provider = {
         "status": "READY",
         "snapshot_fingerprint": "a" * 64,

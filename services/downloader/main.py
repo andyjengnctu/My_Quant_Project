@@ -71,7 +71,7 @@ def _status_color(status: object) -> str:
     normalized = str(status or "").strip().upper()
     if normalized in {"PASS", "READY", "UPDATED", "DONE", "AVAILABLE", "YES", "SYNCED", "COMPLETE"}:
         return C_GREEN
-    if normalized in {"DEFERRED", "WAIT_PUBLISH", "WAIT_QUOTA", "UNVERIFIED"}:
+    if normalized in {"DEFERRED", "WAIT_PUBLISH", "WAIT_QUOTA", "UNVERIFIED", "ATTENTION", "PARTIAL", "INCOMPLETE"}:
         return C_YELLOW
     if normalized in {"NO", "NO_DUE", "NOT_IN_BATCH"}:
         return C_GRAY
@@ -325,7 +325,8 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
     verification = dict(result.get("verification") or {})
     if verification:
         print(_paint("-" * 88, C_CYAN))
-        print(_paint(" Force-refresh verification（instrument comparison 是非阻擋 reference diagnostic）", C_CYAN))
+        verification_title = "Force-refresh verification" if result.get("force_refresh") else "Fresh-batch verification"
+        print(_paint(f" {verification_title}（instrument comparison 是非阻擋 reference diagnostic）", C_CYAN))
         print(_paint("-" * 88, C_CYAN))
         print(f"Fresh batch observed    : {verification.get('observed_dataset_count', 0)} datasets")
         print(f"Schema observed         : {verification.get('schema_verified_dataset_count', 0)} datasets")
@@ -816,20 +817,24 @@ def _run_market_data_v2_full_integrity_audit() -> int:
     print(f"Provider Snapshot          : {result.get('provider_snapshot_status')} | requests={result.get('provider_requests_verified')} rows={result.get('provider_rows_verified')}")
     print(f"Trading DONE overlays      : {result.get('overlay_status')} | batches={result.get('overlay_done_batches_verified')} requests={result.get('overlay_requests_verified')} rows={result.get('overlay_rows_verified')}")
     print(f"Incomplete overlay batches : {result.get('overlay_incomplete_batches_ignored')} (resumable, not part of canonical read view)")
-    print(f"Validation target          : {result.get('target_date')}")
+    print(f"Current target             : {result.get('target_date')}")
     print(f"Dataset registry/state     : {validation.get('state_dataset_count', 0)} / {validation.get('dataset_count', 0)}")
+    print(f"State contract             : {_paint(validation.get('state_contract_status') or '-', _status_color(validation.get('state_contract_status')))}")
     print(f"Current validation         : {validation.get('current_validation_count', 0)} / {validation.get('dataset_count', 0)}")
     print(f"Canonical schema valid     : {validation.get('schema_valid_count', 0)} / {validation.get('dataset_count', 0)}")
     print(f"Request coverage valid     : {validation.get('coverage_valid_count', 0)} / {validation.get('dataset_count', 0)}")
-    print(f"Dataset READY              : {validation.get('ready_count', 0)} / {validation.get('dataset_count', 0)}")
+    current_target_status = validation.get('current_target_status') or 'INCOMPLETE'
+    print(f"Current target readiness   : {_paint(current_target_status, _status_color(current_target_status))} | READY={validation.get('ready_count', 0)} / {validation.get('dataset_count', 0)}")
     semantic = dict(result.get("semantic_integrity") or {})
     date_semantic = dict(semantic.get("date_semantic") or {})
     natural_key = dict(semantic.get("natural_key") or {})
     semantic_status = semantic.get("status") or "UNVERIFIED"
-    print(f"Semantic integrity         : {_paint(semantic_status, _status_color(semantic_status))}")
+    print(f"Semantic evidence          : {_paint(semantic_status, _status_color(semantic_status))}")
     print(
-        "Date-semantic coverage     : "
+        "Date-semantic evidence     : "
         f"PASS={date_semantic.get('pass_count', 0)} "
+        f"ATTENTION={date_semantic.get('attention_count', 0)} "
+        f"PARTIAL={date_semantic.get('partial_count', 0)} "
         f"FAIL={date_semantic.get('fail_count', 0)} "
         f"UNVERIFIED={date_semantic.get('unverified_count', 0)} "
         f"N/A={date_semantic.get('not_applicable_count', 0)}"
@@ -854,16 +859,20 @@ def _run_market_data_v2_full_integrity_audit() -> int:
             missing = tuple(date_row.get("missing_dates") or ())
             unexpected = tuple(date_row.get("unexpected_dates") or ())
             if date_status == "UNVERIFIED":
-                reason = "無 authoritative cadence"
+                reason = "無 authoritative dataset-specific calendar"
+            elif date_status == "PARTIAL":
+                reason = "authoritative calendar 僅覆蓋部分 observed span"
             elif missing or unexpected:
-                reason = f"缺日期={len(missing)}, 非交易日={len(unexpected)}"
+                missing_sample = ",".join(str(value) for value in missing[:5]) or "-"
+                unexpected_sample = ",".join(str(value) for value in unexpected[:5]) or "-"
+                reason = f"provider observed gap={len(missing)} [{missing_sample}], calendar mismatch={len(unexpected)} [{unexpected_sample}]"
             else:
                 reason = reason_code
             details.append(f"date:{reason}")
         if key_status != "PASS":
             primary_key = tuple(row.get("primary_key") or ())
             if key_status == "UNVERIFIED":
-                details.append("key:no registry primary_key_hint")
+                details.append("key:no authoritative row identity")
             else:
                 details.append(
                     "key:"

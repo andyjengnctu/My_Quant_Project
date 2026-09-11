@@ -20,6 +20,7 @@ from core.market_data_dataset_registry import (
     DAILY_STATIC_REFRESH,
     MarketDatasetSpec,
     get_market_dataset_specs,
+    resolve_market_dataset_row_identity,
 )
 
 FRESHNESS_STATUS_READY = "READY"
@@ -164,7 +165,9 @@ def build_market_data_freshness_contract(spec: MarketDatasetSpec) -> MarketDataF
         publication_day_offset=day_offset,
         publication_schedule_source=source,
         publication_schedule_verified=verified,
-        primary_key_hint=tuple(spec.primary_key_hint),
+        # Operational consumers need the canonical row identity, which may be
+        # stricter than the immutable provider/bootstrap merge hint.
+        primary_key_hint=tuple(resolve_market_dataset_row_identity(spec)),
     )
 
 
