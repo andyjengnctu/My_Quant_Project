@@ -12,7 +12,6 @@ from typing import Iterable, Mapping, Sequence
 
 import pandas as pd
 
-from core.market_data_dataset_readiness import has_current_market_data_dataset_validation
 from core.file_integrity import canonical_json_sha256
 
 TRADING_V2_VIEW_CONTRACT_VERSION = 1
@@ -97,10 +96,14 @@ def resolve_trading_v2_training_horizon(
     for dataset in required:
         row = dict(state.get(dataset) or {})
         candidate_raw = row.get("last_ready_target_date")
-        if candidate_raw and has_current_market_data_dataset_validation(row):
+        if candidate_raw:
             candidate = _iso(candidate_raw, field=f"{dataset}.last_ready_target_date")
-            # The Provider Snapshot already proves this dataset through ``base``;
-            # stale/older operational state may not move the view backwards.
+            # ``last_ready_target_date`` is the persisted horizon evidence.
+            # Runtime authorization separately validates current schema/coverage
+            # in services.trading.data_readiness; the view resolver must not
+            # collapse a valid historical READY horizon merely because the row's
+            # current validation contract changed.  The Provider Snapshot still
+            # remains the minimum complete baseline.
             ready[dataset] = max(base, candidate)
         else:
             ready[dataset] = base
