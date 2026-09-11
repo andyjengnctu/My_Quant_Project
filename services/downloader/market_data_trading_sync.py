@@ -511,6 +511,7 @@ def sync_market_data_v2_due_datasets(
             finished_at=finished_at,
             observations=observations,
             attempted_datasets=completed,
+            count_publication_retry=not force_refresh_current_target,
         )
     verification_reader = getattr(storage, "verification_summary", None)
     verification = verification_reader() if callable(verification_reader) else {}

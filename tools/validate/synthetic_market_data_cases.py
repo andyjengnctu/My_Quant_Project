@@ -2312,8 +2312,47 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("local_due_projection_persists_wait_publish_status", "WAIT_PUBLISH", price_projection["status"])
         check("local_due_projection_persists_next_check_at", "2026-09-08T17:45:00+08:00", price_projection["next_check_at"])
         check("local_due_projection_needs_no_provider_before_publication", False, "TaiwanStockPrice" in projected_plan.due_datasets)
-        tampered_state = dict(projected_state)
-        tampered_datasets = {key: dict(value) for key, value in projected_state["datasets"].items()}
+        contaminated_force_state = record_market_data_sync_success(
+            state_root,
+            target_date="2026-09-08",
+            finished_at=datetime(2026, 9, 8, 17, 31, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockPrice": {
+                    "row_count": 1,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+            },
+            attempted_datasets={"TaiwanStockPrice"},
+        )
+        check("pre_fix_force_shape_can_carry_early_publication_retry_budget", 1, contaminated_force_state["datasets"]["TaiwanStockPrice"]["publication_retry_count"])
+        _, repaired_before_publish = refresh_market_data_due_state(
+            state_root,
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 8, 17, 32, tzinfo=ZoneInfo("Asia/Taipei")),
+        )
+        repaired_price_state = repaired_before_publish["datasets"]["TaiwanStockPrice"]
+        check("before_publication_projection_repairs_early_retry_budget", 0, repaired_price_state["publication_retry_count"])
+        check("before_publication_projection_clears_stale_force_error", None, repaired_price_state["last_error"])
+        force_observation_state = record_market_data_sync_success(
+            state_root,
+            target_date="2026-09-08",
+            finished_at=datetime(2026, 9, 8, 17, 33, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockPrice": {
+                    "row_count": 1,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+            },
+            attempted_datasets={"TaiwanStockPrice"},
+            count_publication_retry=False,
+        )
+        force_price_state = force_observation_state["datasets"]["TaiwanStockPrice"]
+        check("manual_force_wait_publish_does_not_consume_publication_retry_budget", 0, force_price_state["publication_retry_count"])
+        check("manual_force_wait_publish_preserves_scheduler_publication_window", "2026-09-08T17:45:00+08:00", force_price_state["next_check_at"])
+        tampered_state = dict(force_observation_state)
+        tampered_datasets = {key: dict(value) for key, value in force_observation_state["datasets"].items()}
         tampered_datasets["TaiwanStockPrice"]["status"] = "ERROR"
         tampered_state["datasets"] = tampered_datasets
         atomic_write_json(state_path, tampered_state)
@@ -2406,9 +2445,24 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("auto_updater_no_due_reports_provider_not_required", False, auto_no_due["provider_requests_required"])
         force_calls = []
         all_names = tuple(sorted(spec.dataset for spec in get_market_dataset_specs(included_only=True)))
-        with patch(
-            "services.trading.market_data_auto_update.sync_market_data_v2_due_datasets",
-            side_effect=lambda **kwargs: force_calls.append(dict(kwargs)) or {
+
+        def _force_sync_stub(**kwargs):
+            force_calls.append(dict(kwargs))
+            record_market_data_sync_success(
+                auto_root,
+                target_date="2026-09-07",
+                finished_at=datetime(2026, 9, 8, 2, 5, tzinfo=ZoneInfo("Asia/Taipei")),
+                observations={
+                    "TaiwanStockPrice": {
+                        "row_count": 1,
+                        "observed_min_date": "2026-09-06",
+                        "observed_max_date": "2026-09-06",
+                    }
+                },
+                attempted_datasets={"TaiwanStockPrice"},
+                count_publication_retry=False,
+            )
+            return {
                 "status": "DONE",
                 "target_date": "2026-09-07",
                 "batch_fingerprint": "a" * 64,
@@ -2421,8 +2475,15 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 "process_data_requests": 51,
                 "process_usage_requests": 1,
                 "verification": {},
-            },
-        ):
+            }
+
+        with patch(
+            "services.trading.market_data_auto_update.sync_market_data_v2_due_datasets",
+            side_effect=_force_sync_stub,
+        ), patch(
+            "services.trading.market_data_auto_update.schedule_market_data_auto_update_outcomes",
+            side_effect=AssertionError("manual force refresh must not schedule automatic publication backoff"),
+        ) as force_schedule:
             force_result = run_trading_market_data_auto_update(
                 project_root=auto_root,
                 target_date="2026-09-07",
@@ -2434,6 +2495,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("auto_force_refresh_selects_all_archive_datasets", set(all_names), set(force_calls[0]["due_datasets"]))
         check("auto_force_refresh_passes_non_reuse_contract", True, bool(force_calls[0]["force_refresh_current_target"]) and bool(force_calls[0]["refresh_token"]))
         check("auto_force_refresh_result_is_labeled", True, bool(force_result.get("force_refresh")))
+        check("auto_force_refresh_does_not_reschedule_automatic_publication_retry", 0, force_schedule.call_count)
+        force_price_after = load_market_data_dataset_state(auto_root, required=True)["datasets"]["TaiwanStockPrice"]
+        check("auto_force_refresh_keeps_publication_retry_budget_unconsumed", 0, force_price_after["publication_retry_count"])
 
     from unittest.mock import patch
 

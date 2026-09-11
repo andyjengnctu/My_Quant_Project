@@ -229,8 +229,14 @@ def record_market_data_sync_success(
     finished_at: datetime,
     observations: Mapping[str, Mapping[str, object]] | None = None,
     attempted_datasets: Iterable[str] | None = None,
+    count_publication_retry: bool = True,
 ) -> dict[str, Any]:
-    """Persist dynamic evidence from a fully completed Trading V2 sync batch."""
+    """Persist dynamic evidence from a fully completed Trading V2 sync batch.
+
+    Manual force-refresh observations must not consume or reschedule the
+    automatic publication retry lifecycle.  Callers can therefore persist fresh
+    provider evidence while preserving the scheduler-owned retry counters/timing.
+    """
 
     previous = load_market_data_dataset_state(project_root, required=False)
     state = previous or build_initial_market_data_dataset_state(updated_at=finished_at)
@@ -346,8 +352,11 @@ def record_market_data_sync_success(
         else:
             prior_count = prior_publication_retry_count if prior_attempt_target == str(target_date) else 0
             row["status"] = FRESHNESS_STATUS_WAIT_PUBLISH
-            row["publication_retry_count"] = prior_count + 1
-            row["next_check_at"] = None
+            if count_publication_retry:
+                row["publication_retry_count"] = prior_count + 1
+                row["next_check_at"] = None
+            else:
+                row["publication_retry_count"] = prior_count
             row["last_error"] = "sync requests completed but canonical freshness/request-scope evidence is not yet present"
         datasets[dataset] = row
 
@@ -483,6 +492,12 @@ def refresh_market_data_due_state(
         row["latest_expected_date"] = decision.latest_expected_date
         row["expected_publish_at"] = decision.expected_publish_at
         row["next_check_at"] = decision.next_check_at
+        if decision.reason == "before_publication_window":
+            # No automatic provider attempt is legal before this timestamp, so
+            # any accumulated publication retry budget can only be stale/legacy
+            # state or a prior manual force observation.  Repair it locally.
+            row["publication_retry_count"] = 0
+            row["last_error"] = None
         datasets[decision.dataset] = row
     persisted = publish_market_data_dataset_state(
         project_root,

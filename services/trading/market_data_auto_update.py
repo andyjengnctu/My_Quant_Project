@@ -457,7 +457,7 @@ def run_trading_market_data_auto_update(
             for dataset in completed
             if str(dict(rows.get(dataset) or {}).get("status") or "") == FRESHNESS_STATUS_WAIT_PUBLISH
         }
-        if wait_publish:
+        if wait_publish and not force_refresh_current_target:
             schedule_market_data_auto_update_outcomes(
                 root,
                 target_date=resolved_target,
