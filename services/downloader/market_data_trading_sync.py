@@ -270,6 +270,10 @@ def sync_market_data_v2_due_datasets(
     sink=None,
     now_fn: Callable[[], datetime] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
+    progress_fn: Callable[[dict[str, object]], None] | None = None,
+    quota_wait_fn: Callable[[dict[str, object]], None] | None = None,
+    force_refresh_current_target: bool = False,
+    refresh_token: str | None = None,
 ) -> dict[str, object]:
     """Execute one non-blocking partial V2 batch for locally planned due datasets.
 
@@ -335,6 +339,8 @@ def sync_market_data_v2_due_datasets(
         policy=policy,
         selected_datasets=selected,
         previous_ready_dates_by_dataset=previous_ready,
+        force_refresh_current_target=bool(force_refresh_current_target),
+        refresh_token=refresh_token,
     )
     ledger_path = resolve_trading_market_data_v2_ledger_path(root, manifest.manifest_fingerprint)
     ledger = MarketDataJobLedger(ledger_path, workload_namespace="market_data_v2_trading_auto_due")
@@ -345,6 +351,17 @@ def sync_market_data_v2_due_datasets(
     http = client or FinMindHttpClient(token=token)
     data_request_count_before = int(getattr(http, "data_request_count", 0))
     usage_request_count_before = int(getattr(http, "usage_request_count", 0))
+    if progress_fn is not None:
+        progress_fn(
+            {
+                "kind": "PLAN",
+                "target_date": manifest.as_of_date,
+                "dataset_count": len(selected),
+                "total": manifest.total_requests,
+                "force_refresh": bool(force_refresh_current_target),
+                **_request_geometry_summary(manifest.requests),
+            }
+        )
     executor = MarketDataBootstrapExecutor(
         ledger=ledger,
         client=http,
@@ -352,6 +369,9 @@ def sync_market_data_v2_due_datasets(
         now_fn=now_fn,
         sleep_fn=sleep_fn,
         blocking_waits=False,
+        quota_wait_observer=quota_wait_fn,
+        progress_observer=progress_fn,
+        force_uncached_data_requests=bool(force_refresh_current_target),
     )
     summary = executor.run(manifest=manifest, sink=storage)
     quota_snapshot = executor.quota_progress_snapshot()
@@ -381,10 +401,14 @@ def sync_market_data_v2_due_datasets(
             observations=observations,
             attempted_datasets=completed,
         )
+    verification_reader = getattr(storage, "verification_summary", None)
+    verification = verification_reader() if callable(verification_reader) else {}
     return {
         "status": str(summary.workload_status),
         "target_date": manifest.as_of_date,
         "batch_fingerprint": manifest.manifest_fingerprint,
+        "refresh_token": manifest.refresh_token,
+        "force_refresh": bool(force_refresh_current_target),
         "request_count": manifest.total_requests,
         "done": summary.done,
         "blocked": summary.blocked,
@@ -400,6 +424,7 @@ def sync_market_data_v2_due_datasets(
         "quota_usable_remaining": quota_snapshot.get("quota_usable_remaining"),
         "dataset_state_fingerprint": dataset_state.get("state_fingerprint") if dataset_state else None,
         "ledger_path": project_relative_display_path(ledger_path, project_root=root),
+        "verification": verification,
         **_request_geometry_summary(manifest.requests),
     }
 

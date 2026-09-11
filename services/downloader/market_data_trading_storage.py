@@ -9,6 +9,9 @@ from typing import Callable
 import pandas as pd
 
 from core.file_integrity import atomic_write_json, compute_file_sha256, load_json_strict
+from core.market_data_dataset_registry import get_market_dataset_spec
+from core.market_data_freshness_contract import EXPECTED_DATE_TRADING_TARGET, get_market_data_freshness_contract
+from core.market_data_instrument_universe import build_current_stock_etf_universe
 from core.market_data_storage_contract import (
     MARKET_DATA_DATASET_SCHEMA_FILENAME,
     MarketDataCommitError,
@@ -54,6 +57,9 @@ class MarketDataTradingStorageSink:
         self.batch_dir.mkdir(parents=True, exist_ok=True)
         self._requests = {request.request_id: request for request in manifest.requests}
         self._dataset_observations: dict[str, dict[str, object]] = {}
+        self._target_instrument_ids: dict[str, set[str]] = {}
+        self._schema_columns: dict[str, tuple[str, ...]] = {}
+        self._stock_info_frame: pd.DataFrame | None = None
         if len(self._requests) != manifest.total_requests:
             raise ValueError("Trading V2 storage manifest request identity 重複")
         self._ensure_batch_manifest()
@@ -132,8 +138,91 @@ class MarketDataTradingStorageSink:
             current = str(row.get("observed_max_date") or "").strip()
             row["observed_max_date"] = observed_max_date if not current else max(current, observed_max_date)
 
+    def _capture_verification_frame(self, request, frame: pd.DataFrame) -> None:
+        dataset = str(request.dataset)
+        columns = tuple(str(value) for value in frame.columns)
+        if columns:
+            existing = self._schema_columns.get(dataset)
+            if existing is not None and existing != columns:
+                raise MarketDataCommitError(
+                    f"{dataset} 同一 batch 內 schema columns 不一致: first={existing}, current={columns}"
+                )
+            self._schema_columns[dataset] = columns
+        if dataset == "TaiwanStockInfo" and not frame.empty:
+            self._stock_info_frame = frame.copy(deep=True)
+        if frame.empty or "date" not in frame.columns or "stock_id" not in frame.columns:
+            return
+        parsed = pd.to_datetime(frame["date"], errors="coerce")
+        mask = parsed.dt.strftime("%Y-%m-%d") == str(self.manifest.as_of_date)
+        if not mask.any():
+            return
+        ids = {str(value or "").strip() for value in frame.loc[mask, "stock_id"].tolist()}
+        ids.discard("")
+        self._target_instrument_ids.setdefault(dataset, set()).update(ids)
+
     def dataset_observations(self) -> dict[str, dict[str, object]]:
-        return {dataset: dict(values) for dataset, values in self._dataset_observations.items()}
+        payload: dict[str, dict[str, object]] = {}
+        for dataset, values in self._dataset_observations.items():
+            row = dict(values)
+            columns = self._schema_columns.get(dataset, ())
+            instruments = self._target_instrument_ids.get(dataset, set())
+            row["schema_column_count"] = len(columns)
+            row["schema_columns"] = list(columns)
+            row["target_instrument_count"] = len(instruments)
+            row["target_instrument_sample"] = sorted(instruments)[:20]
+            payload[dataset] = row
+        return payload
+
+    def verification_summary(self) -> dict[str, object]:
+        observations = self.dataset_observations()
+        schema_verified = sum(bool(row.get("schema_column_count")) for row in observations.values())
+        reference_ids: set[str] = set()
+        reference_error = None
+        if self._stock_info_frame is not None:
+            try:
+                reference_ids = set(
+                    build_current_stock_etf_universe(
+                        self._stock_info_frame,
+                        pd.DataFrame(columns=["date", "stock_id"]),
+                        as_of_date=self.manifest.as_of_date,
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                reference_error = f"{type(exc).__name__}: {exc}"
+
+        coverage_rows: list[dict[str, object]] = []
+        if reference_ids:
+            for dataset, observed_ids in sorted(self._target_instrument_ids.items()):
+                spec = get_market_dataset_spec(dataset)
+                contract = get_market_data_freshness_contract(dataset)
+                if not spec.full_market_exact_date_expected or contract.expected_date_mode != EXPECTED_DATE_TRADING_TARGET:
+                    continue
+                missing = sorted(reference_ids - observed_ids)
+                extra = sorted(observed_ids - reference_ids)
+                coverage_rows.append(
+                    {
+                        "dataset": dataset,
+                        "mode": "NON_BLOCKING_STOCKINFO_REFERENCE",
+                        "reference_instrument_count": len(reference_ids),
+                        "observed_instrument_count": len(observed_ids),
+                        "missing_reference_count": len(missing),
+                        "extra_observed_count": len(extra),
+                        "missing_reference_sample": missing[:20],
+                        "extra_observed_sample": extra[:20],
+                        "status": "MATCH" if not missing and not extra else "REFERENCE_DIFF",
+                    }
+                )
+        return {
+            "schema_verified_dataset_count": int(schema_verified),
+            "observed_dataset_count": len(observations),
+            "current_stockinfo_reference_status": "AVAILABLE" if reference_ids else "UNAVAILABLE",
+            "current_stockinfo_reference_count": len(reference_ids),
+            "current_stockinfo_reference_error": reference_error,
+            "instrument_reference_is_blocking": False,
+            "instrument_reference_rows": coverage_rows,
+            "instrument_reference_match_count": sum(row["status"] == "MATCH" for row in coverage_rows),
+            "instrument_reference_diff_count": sum(row["status"] == "REFERENCE_DIFF" for row in coverage_rows),
+        }
 
     def _schema_owner_path(self, dataset: str) -> Path:
         root = resolve_trading_market_data_v2_root(self.project_root) / "schemas"
@@ -227,7 +316,7 @@ class MarketDataTradingStorageSink:
                 )
 
     def _expected_identity(self, request) -> dict[str, object]:
-        return {
+        identity: dict[str, object] = {
             "batch_fingerprint": self.manifest.manifest_fingerprint,
             "validation_contract_version": int(self.manifest.validation_contract_version),
             "registry_fingerprint": self.manifest.registry_fingerprint,
@@ -240,6 +329,9 @@ class MarketDataTradingStorageSink:
             "start_date": request.start_date,
             "end_date": request.end_date,
         }
+        if self.manifest.refresh_token is not None:
+            identity["refresh_token"] = self.manifest.refresh_token
+        return identity
 
     def recover_committed(self, request) -> MarketDataCommitReceipt | None:
         self._validate_request(request)
@@ -258,6 +350,8 @@ class MarketDataTradingStorageSink:
             )
         if int(metadata.get("row_count", -1)) != inspection.row_count:
             raise MarketDataCommitError("既有 Trading V2 Parquet row_count metadata 與實體不一致")
+        if inspection.columns:
+            self._schema_columns[str(request.dataset)] = tuple(inspection.columns)
         self._record_observation(
             request=request,
             row_count=inspection.row_count,
@@ -302,6 +396,7 @@ class MarketDataTradingStorageSink:
             codec=self.codec,
             disk_usage_fn=self.disk_usage_fn,
         )
+        self._capture_verification_frame(request, frame)
         self._record_observation(
             request=request,
             row_count=len(frame),

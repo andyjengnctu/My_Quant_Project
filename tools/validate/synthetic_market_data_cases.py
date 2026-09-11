@@ -430,6 +430,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
     clock = _Clock()
     quota_client = _QuotaThenSuccessClient()
     quota_wait_events = []
+    executor_progress_events = []
     committed = []
 
     def _sink(request, frame):
@@ -446,6 +447,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             sleep_fn=clock.sleep,
             owner_id="quota-worker",
             quota_wait_observer=quota_wait_events.append,
+            progress_observer=executor_progress_events.append,
         )
         execution_summary = executor.run(manifest=manifest, sink=_sink)
         check("quota_402_waits_and_resumes_to_done", WORKLOAD_DONE, execution_summary.workload_status)
@@ -461,6 +463,10 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         check("quota_wait_heartbeat_reports_resume_threshold", 2, last_wait.get("quota_resume_used_max"))
         check("quota_wait_heartbeat_reports_required_drop", 2, last_wait.get("quota_needed_drop"))
         check("quota_wait_heartbeat_accumulates_wait_time", True, float(last_wait.get("waited_seconds") or 0.0) >= policy.quota_poll_seconds)
+        done_progress = [event for event in executor_progress_events if event.get("phase") == "DONE"]
+        check("executor_progress_reports_every_committed_request", manifest.total_requests, len(done_progress))
+        check("executor_progress_reports_provider_request_usage", True, all("process_data_requests" in event and "process_usage_requests" in event for event in done_progress))
+        check("executor_progress_reports_quota_snapshot", True, any(event.get("quota_limit") == 4 for event in done_progress))
 
         sponsor_policy = MarketDataExecutionPolicy(
             quota_reserve_requests=50,
@@ -1625,6 +1631,45 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("selective_due_manifest_keeps_full_registry_identity", manifest_a.registry_fingerprint, selective_manifest.registry_fingerprint)
     check("selective_due_manifest_only_contains_due_datasets", {"TaiwanStockPrice", "TaiwanStockPER"}, {request.dataset for request in selective_manifest.requests})
     check("selective_due_manifest_is_smaller_than_full_daily_manifest", True, 0 < selective_manifest.total_requests < manifest_a.total_requests)
+    force_manifest_a = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"TaiwanStockPriceAdj", "GovernmentBondsYield"},
+        previous_ready_dates_by_dataset={"TaiwanStockPriceAdj": "2026-09-07", "GovernmentBondsYield": "2026-09-07"},
+        force_refresh_current_target=True,
+        refresh_token="synthetic-force-a",
+    )
+    force_manifest_b = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"TaiwanStockPriceAdj", "GovernmentBondsYield"},
+        previous_ready_dates_by_dataset={"TaiwanStockPriceAdj": "2026-09-07", "GovernmentBondsYield": "2026-09-07"},
+        force_refresh_current_target=True,
+        refresh_token="synthetic-force-b",
+    )
+    force_price = [request for request in force_manifest_a.requests if request.dataset == "TaiwanStockPriceAdj"]
+    force_bonds = [request for request in force_manifest_a.requests if request.dataset == "GovernmentBondsYield"]
+    check("force_refresh_target_price_is_exact_current_target", [("2026-09-07", "2026-09-07", None)], [(r.start_date, r.end_date, r.data_id) for r in force_price])
+    check("force_refresh_latest_available_uses_bounded_recent_window", True, bool(force_bonds) and all(r.end_date == "2026-09-07" and r.start_date < r.end_date for r in force_bonds))
+    check("force_refresh_token_creates_non_reusable_batch_identity", True, force_manifest_a.manifest_fingerprint != force_manifest_b.manifest_fingerprint)
+    check("force_refresh_manifest_preserves_logical_request_geometry_across_tokens", [r.request_id for r in force_manifest_a.requests], [r.request_id for r in force_manifest_b.requests])
+    from core.market_data_instrument_universe import build_current_stock_etf_universe
+    current_reference = build_current_stock_etf_universe(
+        pd.DataFrame([
+            {"stock_id": "2330", "type": "twse", "industry_category": "半導體"},
+            {"stock_id": "6488", "type": "tpex", "industry_category": "半導體"},
+            {"stock_id": "TAIEX", "type": "twse", "industry_category": "大盤"},
+        ]),
+        pd.DataFrame([{"date": "2026-09-01", "stock_id": "6488"}]),
+        as_of_date="2026-09-07",
+    )
+    check("current_stockinfo_reference_is_independent_of_price_payload", ("2330",), current_reference)
 
     # Shared provider request identity remains process-local optimization only.
     # Round 8 no longer has a Legacy CSV producer; this block verifies the
@@ -1727,6 +1772,36 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("executor_cache_hit_consumes_zero_provider_data_calls", 0, executor_base.data_request_count)
     check("executor_cache_hit_does_not_increment_http_attempts", 0, cached_summary.http_attempts)
     check("executor_cache_hit_still_commits_logical_job", 1, cached_summary.done)
+    with TemporaryDirectory() as force_executor_temp:
+        force_base = _SharedBaseClient()
+        force_shared = SharedFinMindRequestClient(force_base)
+        force_shared.seed_data(
+            dataset=cached_request.dataset,
+            start_date=cached_request.start_date,
+            end_date=cached_request.end_date,
+            frame=pd.DataFrame({"date": ["2026-09-07"], "value": [1]}),
+        )
+        force_ledger = MarketDataJobLedger(Path(force_executor_temp) / "ledger.sqlite3", workload_namespace="synthetic_force")
+        force_events = []
+        force_executor = MarketDataBootstrapExecutor(
+            ledger=force_ledger,
+            client=force_shared,
+            policy=get_market_data_execution_policy(),
+            now_fn=lambda: datetime(2026, 9, 7, 10, 0, tzinfo=timezone.utc),
+            sleep_fn=lambda _seconds: None,
+            blocking_waits=False,
+            progress_observer=force_events.append,
+            force_uncached_data_requests=True,
+        )
+        force_summary = force_executor.run(
+            manifest=cached_manifest,
+            sink=lambda _request, frame: MarketDataCommitReceipt(
+                committed=True, row_count=len(frame), content_sha256="f" * 64
+            ),
+        )
+    check("executor_force_refresh_bypasses_seeded_shared_cache", 1, force_base.data_request_count)
+    check("executor_force_refresh_records_real_http_attempt", 1, force_summary.http_attempts)
+    check("executor_force_refresh_progress_marks_fresh_not_reuse", False, any(bool(event.get("recovered")) for event in force_events if event.get("phase") == "DONE"))
 
     # Repair windows are minimum re-query horizons.  A long scheduler outage
     # must not leave a silent hole between the Provider Snapshot and the recent
@@ -2187,6 +2262,36 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("auto_updater_no_due_consumes_zero_data_requests", 0, auto_no_due["data_requests"])
         check("auto_updater_no_due_consumes_zero_usage_requests", 0, auto_no_due["usage_requests"])
         check("auto_updater_no_due_reports_provider_not_required", False, auto_no_due["provider_requests_required"])
+        force_calls = []
+        all_names = tuple(sorted(spec.dataset for spec in get_market_dataset_specs(included_only=True)))
+        with patch(
+            "services.trading.market_data_auto_update.sync_market_data_v2_due_datasets",
+            side_effect=lambda **kwargs: force_calls.append(dict(kwargs)) or {
+                "status": "DONE",
+                "target_date": "2026-09-07",
+                "batch_fingerprint": "a" * 64,
+                "refresh_token": kwargs.get("refresh_token"),
+                "request_count": 51,
+                "done": 51,
+                "blocked": 0,
+                "completed_datasets": all_names,
+                "incomplete_datasets": (),
+                "process_data_requests": 51,
+                "process_usage_requests": 1,
+                "verification": {},
+            },
+        ):
+            force_result = run_trading_market_data_auto_update(
+                project_root=auto_root,
+                target_date="2026-09-07",
+                client=_AutoNoCallClient(),
+                now_fn=lambda: datetime(2026, 9, 8, 2, 5, tzinfo=ZoneInfo("Asia/Taipei")),
+                force_refresh_current_target=True,
+            )
+        check("auto_force_refresh_does_not_exit_on_no_due_state", 1, len(force_calls))
+        check("auto_force_refresh_selects_all_archive_datasets", set(all_names), set(force_calls[0]["due_datasets"]))
+        check("auto_force_refresh_passes_non_reuse_contract", True, bool(force_calls[0]["force_refresh_current_target"]) and bool(force_calls[0]["refresh_token"]))
+        check("auto_force_refresh_result_is_labeled", True, bool(force_result.get("force_refresh")))
 
     from unittest.mock import patch
 
@@ -2685,6 +2790,15 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("smart_downloader_runtime_calls_canonical_v2_daily_update_owner", 0, smart_exit)
     check("smart_downloader_runtime_passes_project_root_to_v2_owner", [str(downloader_main.PROJECT_ROOT)], [str(item.get("project_root")) for item in smart_calls])
     check("smart_downloader_manual_v2_update_forces_one_market_date_discovery", [True], [bool(item.get("force_market_date_discovery")) for item in smart_calls])
+    force_smart_calls = []
+    with patch("builtins.input", return_value="R"), patch(
+        "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
+        side_effect=lambda **kwargs: force_smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
+    ):
+        force_smart_exit = downloader_main._run_market_data_v2_daily_update(prompt_mode=True)
+    check("smart_downloader_force_refresh_mode_exits_cleanly", 0, force_smart_exit)
+    check("smart_downloader_r_mode_passes_force_refresh_contract", [True], [bool(item.get("force_refresh_current_target")) for item in force_smart_calls])
+    check("smart_downloader_option1_passes_progress_and_quota_observers", True, all(callable(item.get("progress_fn")) and callable(item.get("quota_wait_fn")) for item in force_smart_calls))
     check("v2_auto_updater_does_not_import_legacy_trading_update_owner", False, "services.trading.market_data_update" in auto_update_source)
     check("v2_auto_updater_does_not_read_legacy_trading_snapshot_for_target", False, "load_trading_market_data_snapshot" in auto_update_source)
     check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "find_latest_ready_provider_snapshot" in auto_update_source and "load_trading_market_data_v2_state" in auto_update_source and "load_market_date_discovery_state" in auto_update_source)

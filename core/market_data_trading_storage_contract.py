@@ -94,6 +94,8 @@ def build_trading_sync_batch_manifest_payload(manifest: TradingSyncRequestManife
         "request_count": manifest.total_requests,
         "request_ids": [request.request_id for request in manifest.requests],
     }
+    if manifest.refresh_token is not None:
+        identity["refresh_token"] = manifest.refresh_token
     return {**identity, "identity_fingerprint": canonical_json_sha256(identity)}
 
 
@@ -140,7 +142,7 @@ def build_trading_request_metadata(
     observed_min_date: str | None = None,
     observed_max_date: str | None = None,
 ) -> dict[str, object]:
-    return {
+    metadata: dict[str, object] = {
         "storage_layout_version": TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
         "role": "trading_market_data_v2_archive_sync",
         "batch_fingerprint": manifest.manifest_fingerprint,
@@ -160,6 +162,9 @@ def build_trading_request_metadata(
         "column_fingerprint": schema_payload["column_fingerprint"],
         "schema_fingerprint": schema_payload["schema_fingerprint"],
     }
+    if manifest.refresh_token is not None:
+        metadata["refresh_token"] = manifest.refresh_token
+    return metadata
 
 
 __all__ = [

@@ -20,7 +20,14 @@ from core.market_data_dataset_registry import (
     TRADING_QUERY_RECENT_DATES,
     MarketDatasetSpec,
 )
-from core.market_data_freshness_contract import validate_market_data_freshness_contracts
+from core.market_data_freshness_contract import (
+    EXPECTED_DATE_LATEST_AVAILABLE,
+    EXPECTED_DATE_NONE,
+    EXPECTED_DATE_PERIOD_DUE,
+    EXPECTED_DATE_TRADING_TARGET,
+    get_market_data_freshness_contracts,
+    validate_market_data_freshness_contracts,
+)
 from core.market_data_trading_sync_policy import MarketDataTradingSyncPolicy
 
 TRADING_SYNC_QUERY_STATIC = "trading_static_refresh"
@@ -44,6 +51,7 @@ class TradingSyncRequestManifest:
     base_as_of_date: str
     previous_sync_date: str | None
     validation_contract_version: int
+    refresh_token: str | None = None
 
     @property
     def total_requests(self) -> int:
@@ -146,11 +154,19 @@ def build_trading_sync_request_manifest(
     policy: MarketDataTradingSyncPolicy,
     selected_datasets: Iterable[str] | None = None,
     previous_ready_dates_by_dataset: Mapping[str, str | None] | None = None,
+    force_refresh_current_target: bool = False,
+    refresh_token: str | None = None,
 ) -> TradingSyncRequestManifest:
     included = tuple(spec for spec in specs if spec.included)
     if not included:
         raise ValueError("Trading Market Data V2 沒有 included dataset")
     validate_market_data_freshness_contracts(specs=included)
+    freshness_by_dataset = {item.dataset: item for item in get_market_data_freshness_contracts(specs=included)}
+    refresh_text = str(refresh_token or "").strip() or None
+    if force_refresh_current_target and refresh_text is None:
+        raise ValueError("force_refresh_current_target 需要 refresh_token 以建立不可 REUSE 的 batch identity")
+    if refresh_text is not None and not force_refresh_current_target:
+        raise ValueError("refresh_token 只能用於 force_refresh_current_target")
     included_names = {spec.dataset for spec in included}
     if selected_datasets is None:
         selected_names = included_names
@@ -202,6 +218,26 @@ def build_trading_sync_request_manifest(
                     f"{spec.dataset} previous ready date 必須落在 provider snapshot 與 target_date 之間"
                 )
         incremental_start = date.fromisoformat(dataset_previous or base_as_of) + timedelta(days=1)
+        contract = freshness_by_dataset[spec.dataset]
+        if force_refresh_current_target:
+            if contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET:
+                if spec.full_market_exact_date_expected:
+                    requests.extend(_exact_date_requests(spec, TRADING_SYNC_QUERY_RECENT, (target_text,)))
+                elif spec.bootstrap_mode == "single_no_dates" and not (spec.trading_fixed_data_ids or spec.fixed_data_ids):
+                    requests.append(BootstrapHttpRequest(spec.dataset, TRADING_SYNC_QUERY_RECENT, None, None, None))
+                else:
+                    requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_RECENT, target_text, target_text))
+                continue
+            if contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
+                refresh_start = target - timedelta(days=policy.recent_repair_calendar_days - 1)
+                requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_RECENT, refresh_start.isoformat(), target_text))
+                continue
+            if contract.expected_date_mode == EXPECTED_DATE_PERIOD_DUE:
+                requests.extend(_periodic_requests(spec, target=target))
+                continue
+            if contract.expected_date_mode != EXPECTED_DATE_NONE:
+                raise ValueError(f"{spec.dataset} force-refresh freshness mode 未支援: {contract.expected_date_mode}")
+            # No-row/event/static datasets keep their normal refresh geometry below.
         if spec.daily_mode == DAILY_STATIC_REFRESH:
             requests.append(BootstrapHttpRequest(spec.dataset, TRADING_SYNC_QUERY_STATIC, None, None, None))
         elif spec.daily_mode == DAILY_INCREMENTAL:
@@ -242,19 +278,20 @@ def build_trading_sync_request_manifest(
     request_ids = tuple(request.request_id for request in requests)
     if len(set(request_ids)) != len(request_ids):
         raise ValueError("Trading V2 sync request manifest 含重複 logical request identity")
-    manifest_fp = canonical_json_sha256(
-        {
-            "role": "trading_market_data_v2_archive_sync",
-            "base_provider_snapshot_fingerprint": provider_fp,
-            "base_provider_manifest_fingerprint": provider_manifest_fp,
-            "base_as_of_date": base_as_of,
-            "previous_sync_date": previous_text,
-            "target_date": target_text,
-            "registry_fingerprint": registry_fp,
-            "validation_contract_version": TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
-            "request_ids": request_ids,
-        }
-    )
+    manifest_identity: dict[str, object] = {
+        "role": "trading_market_data_v2_archive_sync",
+        "base_provider_snapshot_fingerprint": provider_fp,
+        "base_provider_manifest_fingerprint": provider_manifest_fp,
+        "base_as_of_date": base_as_of,
+        "previous_sync_date": previous_text,
+        "target_date": target_text,
+        "registry_fingerprint": registry_fp,
+        "validation_contract_version": TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
+        "request_ids": request_ids,
+    }
+    if refresh_text is not None:
+        manifest_identity["refresh_token"] = refresh_text
+    manifest_fp = canonical_json_sha256(manifest_identity)
     return TradingSyncRequestManifest(
         as_of_date=target_text,
         full_range_start=base_as_of,
@@ -267,6 +304,7 @@ def build_trading_sync_request_manifest(
         base_as_of_date=base_as_of,
         previous_sync_date=previous_text,
         validation_contract_version=TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
+        refresh_token=refresh_text,
     )
 
 

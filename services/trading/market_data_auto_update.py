@@ -15,7 +15,15 @@ from typing import Callable
 from uuid import uuid4
 
 from core.market_data_auto_update_policy import get_market_data_auto_update_policy
-from core.market_data_dataset_readiness import is_market_data_dataset_ready
+from core.market_data_dataset_readiness import (
+    MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
+    VALID_DATASET_VALIDATION_STATUSES,
+    has_current_market_data_dataset_validation,
+    is_market_data_dataset_ready,
+)
+from core.market_data_dataset_registry import get_market_dataset_specs
+from core.trading_data_dependencies import get_trading_data_dependency_spec
+from core.trading_policy import get_trading_strategy_profile
 from core.market_data_freshness_contract import (
     FRESHNESS_STATUS_READY,
     FRESHNESS_STATUS_WAIT_PUBLISH,
@@ -107,6 +115,54 @@ def _client_counts(client) -> tuple[int, int]:
         int(getattr(client, "data_request_count", 0)) if client is not None else 0,
         int(getattr(client, "usage_request_count", 0)) if client is not None else 0,
     )
+
+
+def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
+    rows = dict((state or {}).get("datasets") or {})
+    total = len(rows)
+    archive_ready = sum(
+        is_market_data_dataset_ready(dict(row or {}), target_date=target_date)
+        for row in rows.values()
+    )
+    schema_ready = 0
+    coverage_ready = 0
+    validation_current = 0
+    for raw in rows.values():
+        row = dict(raw or {})
+        try:
+            current = int(row.get("validation_contract_version", -1)) == MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
+        except (TypeError, ValueError):
+            current = False
+        if current:
+            validation_current += 1
+            if str(row.get("schema_status") or "") in VALID_DATASET_VALIDATION_STATUSES:
+                schema_ready += 1
+            if str(row.get("coverage_status") or "") in VALID_DATASET_VALIDATION_STATUSES:
+                coverage_ready += 1
+
+    strategy_id = get_trading_strategy_profile().strategy_id
+    dependency = get_trading_data_dependency_spec(strategy_id)
+    required = tuple(dependency.required_v2_datasets)
+    required_ready = sum(
+        is_market_data_dataset_ready(dict(rows.get(dataset) or {}), target_date=target_date)
+        for dataset in required
+    )
+    blocking_required = tuple(
+        dataset
+        for dataset in required
+        if not is_market_data_dataset_ready(dict(rows.get(dataset) or {}), target_date=target_date)
+    )
+    return {
+        "archive_ready_dataset_count": int(archive_ready),
+        "archive_dataset_count": int(total),
+        "current_validation_dataset_count": int(validation_current),
+        "schema_ready_dataset_count": int(schema_ready),
+        "coverage_ready_dataset_count": int(coverage_ready),
+        "trading_strategy_id": strategy_id,
+        "trading_required_ready_dataset_count": int(required_ready),
+        "trading_required_dataset_count": len(required),
+        "trading_blocking_datasets": blocking_required,
+    }
 
 
 def _discover_new_market_date_if_due(
@@ -237,6 +293,9 @@ def run_trading_market_data_auto_update(
     now_fn: Callable[[], datetime] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
     force_market_date_discovery: bool = False,
+    force_refresh_current_target: bool = False,
+    progress_fn: Callable[[dict[str, object]], None] | None = None,
+    quota_wait_fn: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     """Run exactly one scheduler-safe auto-update iteration."""
 
@@ -291,12 +350,17 @@ def run_trading_market_data_auto_update(
                 }
 
         plan, _state = refresh_market_data_due_state(root, target_date=resolved_target, now=now)
-        due = tuple(plan.due_datasets)
+        due = (
+            tuple(sorted(spec.dataset for spec in get_market_dataset_specs(included_only=True)))
+            if force_refresh_current_target
+            else tuple(plan.due_datasets)
+        )
         if not due:
             data_after, usage_after = _client_counts(client)
             local_next = _next_check_at(plan)
             candidates = [value for value in (local_next, discovery_next_check) if value]
             next_check = min(candidates) if candidates else None
+            state_summary = _dataset_readiness_summary(_state, target_date=resolved_target)
             return {
                 "status": AUTO_UPDATE_STATUS_TARGET_ADVANCED if target_advanced else AUTO_UPDATE_STATUS_NO_DUE,
                 "target_date": resolved_target,
@@ -314,6 +378,9 @@ def run_trading_market_data_auto_update(
                 "undated_request_count": 0,
                 "request_date_start": None,
                 "request_date_end": None,
+                "force_refresh": False,
+                "verification": {},
+                **state_summary,
             }
 
         if client is None:
@@ -334,6 +401,10 @@ def run_trading_market_data_auto_update(
                 sink=sink,
                 now_fn=now_fn,
                 sleep_fn=sleep_fn,
+                progress_fn=progress_fn,
+                quota_wait_fn=quota_wait_fn,
+                force_refresh_current_target=bool(force_refresh_current_target),
+                refresh_token=(f"manual-refresh:{now.isoformat()}:{uuid4().hex[:8]}" if force_refresh_current_target else None),
             )
         except (FinMindHttpError, OSError, ValueError, RuntimeError, ImportError) as exc:
             schedule_market_data_auto_update_outcomes(
@@ -422,10 +493,8 @@ def run_trading_market_data_auto_update(
 
         final_state = load_market_data_dataset_state(root, required=True)
         final_rows = dict(final_state["datasets"])
-        ready_count = sum(
-            is_market_data_dataset_ready(dict(row or {}), target_date=resolved_target)
-            for row in final_rows.values()
-        )
+        state_summary = _dataset_readiness_summary(final_state, target_date=resolved_target)
+        ready_count = int(state_summary["archive_ready_dataset_count"])
         rollup = publish_trading_market_data_v2_auto_rollup(root, target_date=resolved_target, updated_at=now, batch_result=batch)
         post_plan = build_market_data_due_plan(root, target_date=resolved_target, now=now)
         overall = AUTO_UPDATE_STATUS_UPDATED if ready_count == len(final_rows) else AUTO_UPDATE_STATUS_DEFERRED
@@ -455,12 +524,16 @@ def run_trading_market_data_auto_update(
             ),
             "archive_status": None if rollup is None else rollup.get("status"),
             "batch_fingerprint": batch.get("batch_fingerprint"),
+            "force_refresh": bool(force_refresh_current_target),
+            "refresh_token": batch.get("refresh_token"),
+            "verification": dict(batch.get("verification") or {}),
             "request_date_start": batch.get("request_date_start"),
             "request_date_end": batch.get("request_date_end"),
             "unique_exact_date_count": int(batch.get("unique_exact_date_count") or 0),
             "full_market_exact_date_request_count": int(batch.get("full_market_exact_date_request_count") or 0),
             "range_request_count": int(batch.get("range_request_count") or 0),
             "undated_request_count": int(batch.get("undated_request_count") or 0),
+            **state_summary,
         }
 
 

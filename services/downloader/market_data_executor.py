@@ -47,6 +47,8 @@ class MarketDataBootstrapExecutor:
         owner_id: str | None = None,
         blocking_waits: bool = True,
         quota_wait_observer: Callable[[dict[str, object]], None] | None = None,
+        progress_observer: Callable[[dict[str, object]], None] | None = None,
+        force_uncached_data_requests: bool = False,
     ):
         self.ledger = ledger
         self.client = client
@@ -56,6 +58,10 @@ class MarketDataBootstrapExecutor:
         self.owner_id = str(owner_id or f"executor-{uuid4().hex}")
         self.blocking_waits = bool(blocking_waits)
         self.quota_wait_observer = quota_wait_observer
+        self.progress_observer = progress_observer
+        self.force_uncached_data_requests = bool(force_uncached_data_requests)
+        self._initial_client_data_requests = int(getattr(client, "data_request_count", 0))
+        self._initial_client_usage_requests = int(getattr(client, "usage_request_count", 0))
         self._quota = _QuotaState()
         self._quota_wait_started_at: datetime | None = None
         self._quota_wait_accumulated_seconds = 0.0
@@ -148,6 +154,35 @@ class MarketDataBootstrapExecutor:
                     "quota_needed_drop": max(0, effective_used - resume_used_max),
                 }
             )
+        observer(event)
+
+    def _emit_progress(
+        self,
+        workload_id: str,
+        *,
+        request: BootstrapHttpRequest,
+        phase: str,
+        recovered: bool = False,
+    ) -> None:
+        observer = self.progress_observer
+        if observer is None:
+            return
+        summary = self.ledger.get_summary(workload_id)
+        event: dict[str, object] = {
+            "kind": "REQUEST_PROGRESS",
+            "phase": str(phase),
+            "done": int(summary.done),
+            "total": int(summary.total),
+            "dataset": request.dataset,
+            "data_id": request.data_id,
+            "start_date": request.start_date,
+            "end_date": request.end_date,
+            "recovered": bool(recovered),
+            "http_attempts": int(summary.http_attempts),
+            "process_data_requests": int(getattr(self.client, "data_request_count", 0)) - self._initial_client_data_requests,
+            "process_usage_requests": int(getattr(self.client, "usage_request_count", 0)) - self._initial_client_usage_requests,
+        }
+        event.update(self.quota_progress_snapshot())
         observer(event)
 
     def _effective_reserve(self, limit: int) -> int:
@@ -280,6 +315,15 @@ class MarketDataBootstrapExecutor:
         return True
 
     def _fetch(self, request: BootstrapHttpRequest) -> pd.DataFrame:
+        if self.force_uncached_data_requests:
+            uncached = getattr(self.client, "get_data_uncached", None)
+            if callable(uncached):
+                return uncached(
+                    dataset=request.dataset,
+                    data_id=request.data_id,
+                    start_date=request.start_date,
+                    end_date=request.end_date,
+                )
         return self.client.get_data(
             dataset=request.dataset,
             data_id=request.data_id,
@@ -341,6 +385,7 @@ class MarketDataBootstrapExecutor:
                     raise RuntimeError("Market Data ledger 有 unfinished jobs，但沒有可執行或可等待的 request")
 
                 request = job.to_request()
+                self._emit_progress(workload_id, request=request, phase="RUN")
                 recover_fn = getattr(sink, "recover_committed", None)
                 if callable(recover_fn):
                     try:
@@ -371,11 +416,12 @@ class MarketDataBootstrapExecutor:
                             content_sha256=recovered.content_sha256,
                             now=self._now(),
                         )
+                        self._emit_progress(workload_id, request=request, phase="DONE", recovered=True)
                         continue
 
                 will_issue = True
                 cache_probe = getattr(self.client, "will_issue_data_request", None)
-                if callable(cache_probe):
+                if not self.force_uncached_data_requests and callable(cache_probe):
                     will_issue = bool(
                         cache_probe(
                             dataset=request.dataset,
@@ -468,6 +514,7 @@ class MarketDataBootstrapExecutor:
                     content_sha256=receipt.content_sha256,
                     now=self._now(),
                 )
+                self._emit_progress(workload_id, request=request, phase="DONE", recovered=False)
         finally:
             self.ledger.release_executor_lock(workload_id, owner_id=self.owner_id)
 

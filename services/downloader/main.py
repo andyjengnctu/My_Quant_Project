@@ -67,30 +67,118 @@ def _estimate_bootstrap_eta_seconds(
 
 
 
-def _run_market_data_v2_daily_update() -> int:
+def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
     try:
         from services.trading.market_data_auto_update import run_trading_market_data_auto_update
     except (ImportError, ModuleNotFoundError) as exc:
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
+    force_refresh = False
+    if prompt_mode:
+        print("-" * 88)
+        print(" Daily Update 模式")
+        print("-" * 88)
+        print("[Enter] 正常更新：只處理目前 due datasets")
+        print("[R]     重新下載 current target：新 batch、禁止 artifact/cache REUSE，重新驗證")
+        print("[0]     返回")
+        while True:
+            try:
+                mode = input("模式: ").strip().upper()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if mode == "":
+                break
+            if mode == "R":
+                force_refresh = True
+                break
+            if mode == "0":
+                return 0
+            print("請按 Enter、輸入 R 或 0。")
+
+    progress_line_open = False
+    progress_line_width = 0
+
+    def _close_progress_line() -> None:
+        nonlocal progress_line_open, progress_line_width
+        if progress_line_open:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            progress_line_open = False
+            progress_line_width = 0
+
+    def _write_progress_line(text: str) -> None:
+        nonlocal progress_line_open, progress_line_width
+        rendered = str(text)
+        padding = " " * max(0, progress_line_width - len(rendered))
+        sys.stdout.write("\r" + rendered + padding)
+        sys.stdout.flush()
+        progress_line_open = True
+        progress_line_width = max(progress_line_width, len(rendered))
+
+    def _progress(event: dict[str, object]) -> None:
+        kind = str(event.get("kind") or "")
+        if kind == "PLAN":
+            _close_progress_line()
+            mode = "FORCE REFRESH" if event.get("force_refresh") else "DUE ONLY"
+            print(
+                f"[Daily] {mode} | target={event.get('target_date')}"
+                f" | datasets={event.get('dataset_count')} | requests={event.get('total')}"
+            )
+            return
+        if kind != "REQUEST_PROGRESS":
+            return
+        done = int(event.get("done") or 0)
+        total = int(event.get("total") or 0)
+        pct = (100.0 * done / total) if total else 0.0
+        dataset = str(event.get("dataset") or "-")
+        data_id = event.get("data_id")
+        target = dataset + (f"/{data_id}" if data_id else "")
+        phase = str(event.get("phase") or "RUN")
+        if bool(event.get("recovered")):
+            phase = "REUSE"
+        data_used = int(event.get("process_data_requests") or 0)
+        usage_used = int(event.get("process_usage_requests") or 0)
+        q_used = event.get("quota_user_count")
+        q_limit = event.get("quota_limit")
+        quota = "quota=--" if q_used is None or q_limit is None else f"quota≈{int(q_used)}/{int(q_limit)}"
+        _write_progress_line(
+            f"[Daily] {done}/{total} ({pct:5.1f}%) | {target} | {phase}"
+            f" | data={data_used} usage={usage_used} | {quota}"
+        )
+
+    def _quota_wait(event: dict[str, object]) -> None:
+        _close_progress_line()
+        print(
+            f"[WAIT] {event.get('done')}/{event.get('total')}"
+            f" | quota={event.get('quota_user_count') or '-'} / {event.get('quota_limit') or '-'}"
+            f" | reason={event.get('reason') or 'quota'}"
+        )
+
     try:
         result = run_trading_market_data_auto_update(
             project_root=PROJECT_ROOT,
             force_market_date_discovery=True,
+            force_refresh_current_target=force_refresh,
+            progress_fn=_progress,
+            quota_wait_fn=_quota_wait,
         )
     except (RuntimeError, FileNotFoundError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
+        _close_progress_line()
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+    _close_progress_line()
 
     status = str(result.get("status") or "UNKNOWN")
     print("=" * 88)
     print(" Market Data V2｜Daily Update")
     print("=" * 88)
     print(f"狀態                    : {status}")
+    print(f"模式                    : {'FORCE REFRESH' if result.get('force_refresh') else 'DUE ONLY'}")
     print(f"V2 target date          : {result.get('target_date') or '-'}")
     print(f"新 completed day        : {'YES' if result.get('v2_target_advanced') else 'NO'}")
-    print(f"Due datasets            : {result.get('due_dataset_count', 0)}")
+    print(f"Due/selected datasets   : {result.get('due_dataset_count', 0)}")
     print(f"Logical requests        : {result.get('request_count', 0)}")
     print(f"Provider data requests  : {result.get('data_requests', 0)}")
     print(f"Provider usage requests : {result.get('usage_requests', 0)}")
@@ -102,10 +190,57 @@ def _run_market_data_v2_daily_update() -> int:
     print(f"Full-market exact-date  : {result.get('full_market_exact_date_request_count', 0)} requests")
     print(f"Range requests          : {result.get('range_request_count', 0)}")
     print(f"Undated/static requests : {result.get('undated_request_count', 0)}")
-    ready = result.get("ready_dataset_count")
-    total = result.get("dataset_count")
-    if ready is not None or total is not None:
-        print(f"Dataset READY           : {ready or 0} / {total or 0}")
+
+    archive_ready = result.get("archive_ready_dataset_count", result.get("ready_dataset_count"))
+    archive_total = result.get("archive_dataset_count", result.get("dataset_count"))
+    if archive_ready is not None or archive_total is not None:
+        print(f"Archive datasets READY  : {archive_ready or 0} / {archive_total or 0}")
+    trading_ready = result.get("trading_required_ready_dataset_count")
+    trading_total = result.get("trading_required_dataset_count")
+    strategy_id = result.get("trading_strategy_id")
+    if trading_ready is not None or trading_total is not None:
+        print(f"Trading required READY  : {trading_ready or 0} / {trading_total or 0} ({strategy_id or '-'})")
+    schema_ready = result.get("schema_ready_dataset_count")
+    coverage_ready = result.get("coverage_ready_dataset_count")
+    validation_count = result.get("current_validation_dataset_count")
+    if validation_count is not None:
+        print(f"Current validation      : {validation_count} datasets")
+        print(f"Canonical schema valid  : {schema_ready or 0} datasets")
+        print(f"Request coverage valid  : {coverage_ready or 0} datasets")
+
+    verification = dict(result.get("verification") or {})
+    if verification:
+        print("-" * 88)
+        print(" Force-refresh verification（instrument comparison 是非阻擋 reference diagnostic）")
+        print("-" * 88)
+        print(f"Fresh batch observed    : {verification.get('observed_dataset_count', 0)} datasets")
+        print(f"Schema observed         : {verification.get('schema_verified_dataset_count', 0)} datasets")
+        ref_status = verification.get("current_stockinfo_reference_status") or "UNAVAILABLE"
+        ref_count = int(verification.get("current_stockinfo_reference_count") or 0)
+        print(f"StockInfo reference     : {ref_status} ({ref_count} instruments)")
+        rows = list(verification.get("instrument_reference_rows") or [])
+        if rows:
+            print(
+                "Instrument reference    : "
+                f"MATCH {verification.get('instrument_reference_match_count', 0)} / "
+                f"DIFF {verification.get('instrument_reference_diff_count', 0)}"
+            )
+            for row in rows:
+                print(
+                    f"  - {row.get('dataset')}: observed={row.get('observed_instrument_count')}"
+                    f" / reference={row.get('reference_instrument_count')}"
+                    f" / missing_ref={row.get('missing_reference_count')}"
+                    f" / extra={row.get('extra_observed_count')}"
+                    f" / {row.get('status')}"
+                )
+                missing = list(row.get("missing_reference_sample") or [])
+                if missing:
+                    print(f"      missing sample: {', '.join(missing)}")
+        print("說明                    : StockInfo reference 用來找異常缺口；因停牌/資料集規則可能合法少列，不作 READY 硬 gate。")
+
+    blockers = tuple(result.get("trading_blocking_datasets") or ())
+    if blockers:
+        print(f"Trading blockers        : {', '.join(blockers)}")
     if result.get("next_check_at"):
         print(f"Next check              : {result.get('next_check_at')}")
     if result.get("error"):
@@ -458,7 +593,7 @@ def _interactive_menu() -> int:
             print()
             return 0
         if choice == "1":
-            return _run_market_data_v2_daily_update()
+            return _run_market_data_v2_daily_update(prompt_mode=True)
         if choice == "2":
             return _run_market_data_v2_preflight()
         if choice == "3":

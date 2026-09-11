@@ -136,6 +136,54 @@ def build_historical_market_state_guard(
     return boundaries
 
 
+
+def build_current_stock_etf_universe(
+    stock_info: pd.DataFrame,
+    delisting: pd.DataFrame,
+    *,
+    as_of_date: str,
+) -> tuple[str, ...]:
+    """Build an independent current equity reference universe for diagnostics.
+
+    This is intentionally not a Trading execution gate.  It uses current-vintage
+    ``TaiwanStockInfo`` plus delisting evidence, and therefore can diagnose large
+    provider coverage gaps without self-validating against the target-day price
+    payload.  Suspensions and provider dataset-specific omission rules may still
+    produce legitimate differences, so consumers must label this as reference
+    coverage rather than absolute completeness.
+    """
+
+    target = pd.to_datetime(as_of_date, errors="raise").date()
+    required = {"stock_id", "type", "industry_category"}
+    missing = required.difference(stock_info.columns)
+    if missing:
+        raise ValueError(f"TaiwanStockInfo current universe 缺少欄位: {sorted(missing)}")
+    frame = stock_info.loc[:, ["stock_id", "type", "industry_category"]].copy()
+    frame["stock_id"] = frame["stock_id"].astype(str).str.strip()
+    frame["type"] = frame["type"].astype(str).str.strip().str.lower()
+    frame["category"] = frame["industry_category"].map(_normalize_category)
+    excluded_categories = {_normalize_category(value) for value in MARKET_DATA_EXCLUDED_INDUSTRY_CATEGORIES}
+    eligible = (
+        frame["type"].isin(MARKET_DATA_EQUITY_MARKET_TYPES)
+        & ~frame["category"].isin(excluded_categories)
+        & ~frame["stock_id"].isin(MARKET_DATA_EXCLUDED_STOCK_IDS)
+    )
+    ids = {value for value in frame.loc[eligible, "stock_id"].tolist() if value}
+
+    if not delisting.empty:
+        if "stock_id" not in delisting.columns or "date" not in delisting.columns:
+            raise ValueError("TaiwanStockDelisting current universe 需要 date + stock_id")
+        d = delisting.loc[:, ["date", "stock_id"]].copy()
+        d["parsed_date"] = pd.to_datetime(d["date"], errors="coerce")
+        d["stock_id"] = d["stock_id"].astype(str).str.strip()
+        ended = {
+            sid
+            for sid, parsed in zip(d["stock_id"], d["parsed_date"])
+            if sid and not pd.isna(parsed) and parsed.date() <= target
+        }
+        ids.difference_update(ended)
+    return tuple(sorted(ids))
+
 def historical_market_state_guard_fingerprint(boundaries: dict[str, str]) -> str:
     normalized = {str(key): str(value) for key, value in sorted(boundaries.items())}
     return canonical_json_sha256(
@@ -174,6 +222,7 @@ __all__ = [
     "historical_stock_etf_universe_contract_fingerprint",
     "build_historical_stock_etf_universe",
     "build_historical_market_state_guard",
+    "build_current_stock_etf_universe",
     "historical_market_state_guard_fingerprint",
     "is_historical_market_state_eligible",
 ]
