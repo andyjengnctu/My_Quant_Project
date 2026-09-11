@@ -231,6 +231,20 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
         print(f"Instrument completeness : {completeness}")
         print("說明                    : 不同 dataset 的合法 instrument universe 不同；目前沒有 authoritative dataset-specific expected universe，因此不再用同一 StockInfo 集合產生假 MATCH/DIFF。")
 
+    archive_incomplete = tuple(result.get("archive_incomplete_datasets") or ())
+    if archive_incomplete:
+        print("Archive incomplete      :")
+        for item in archive_incomplete:
+            row = dict(item or {})
+            print(
+                "  - "
+                f"{row.get('dataset')}: status={row.get('status')}, "
+                f"latest={row.get('latest_data_date') or '-'}, "
+                f"schema={row.get('schema_status')}, coverage={row.get('coverage_status')}"
+            )
+            if row.get("last_error"):
+                print(f"      reason: {row.get('last_error')}")
+
     blockers = tuple(result.get("trading_blocking_datasets") or ())
     if blockers:
         print(f"Trading blockers        : {', '.join(blockers)}")

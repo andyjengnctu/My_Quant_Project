@@ -152,6 +152,18 @@ def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
         for dataset in required
         if not is_market_data_dataset_ready(dict(rows.get(dataset) or {}), target_date=target_date)
     )
+    archive_incomplete = tuple(
+        {
+            "dataset": dataset,
+            "status": str(dict(rows.get(dataset) or {}).get("status") or "UNKNOWN"),
+            "latest_data_date": dict(rows.get(dataset) or {}).get("latest_data_date"),
+            "schema_status": str(dict(rows.get(dataset) or {}).get("schema_status") or "UNKNOWN"),
+            "coverage_status": str(dict(rows.get(dataset) or {}).get("coverage_status") or "UNKNOWN"),
+            "last_error": dict(rows.get(dataset) or {}).get("last_error"),
+        }
+        for dataset in sorted(rows)
+        if not is_market_data_dataset_ready(dict(rows.get(dataset) or {}), target_date=target_date)
+    )
     return {
         "archive_ready_dataset_count": int(archive_ready),
         "archive_dataset_count": int(total),
@@ -162,6 +174,7 @@ def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
         "trading_required_ready_dataset_count": int(required_ready),
         "trading_required_dataset_count": len(required),
         "trading_blocking_datasets": blocking_required,
+        "archive_incomplete_datasets": archive_incomplete,
     }
 
 

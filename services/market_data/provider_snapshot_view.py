@@ -86,6 +86,59 @@ class ProviderSnapshotView:
                 raise TypeError("Market Data V2 provider frame reader 必須回傳 pandas.DataFrame")
             yield frame
 
+
+    def latest_data_dates(self, dataset: str) -> dict[str, object]:
+        """Return immutable provider-snapshot latest-date evidence by request lane.
+
+        This is intentionally derived from the committed Provider Snapshot
+        artifacts rather than from the snapshot as-of date.  A latest-available
+        dataset may legitimately lag the snapshot target date (for example, a
+        delayed macro series), so ``as_of_date`` is not a valid substitute for
+        the latest observed row.
+        """
+
+        name = str(dataset or "").strip()
+        artifacts = self.dataset_artifacts(name)
+        lane_latest: dict[str, str] = {}
+        dataset_latest: str | None = None
+        for artifact in artifacts:
+            request = artifact.to_request()
+            path = resolve_market_data_request_parquet_path(
+                self.project_root,
+                self.archive.manifest_fingerprint,
+                request,
+            )
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"Provider Snapshot artifact 不存在: {project_relative_display_path(path, project_root=self.project_root)}"
+                )
+            actual_hash = str(self._hash_fn(path) or "").strip().lower()
+            if actual_hash != artifact.content_sha256:
+                raise ValueError(f"Provider Snapshot artifact SHA256 drift: {request.request_id}")
+            frame = self._frame_reader(path, ("date",))
+            if not isinstance(frame, pd.DataFrame):
+                raise TypeError("Market Data V2 provider frame reader 必須回傳 pandas.DataFrame")
+            if frame.empty:
+                continue
+            if "date" not in frame.columns:
+                raise ValueError(f"{name} Provider Snapshot latest-date evidence 缺少 date 欄位")
+            parsed = pd.to_datetime(frame["date"], errors="coerce")
+            if parsed.isna().any():
+                raise ValueError(f"{name} Provider Snapshot latest-date evidence 含不合法 date")
+            latest = parsed.max().strftime("%Y-%m-%d")
+            if latest > self.archive.as_of_date:
+                raise ValueError(
+                    f"{name} Provider Snapshot row date 超出 snapshot as_of_date: {latest} > {self.archive.as_of_date}"
+                )
+            lane_key = str(request.data_id) if request.data_id is not None else "__ALL__"
+            prior_lane = lane_latest.get(lane_key)
+            lane_latest[lane_key] = latest if prior_lane is None else max(prior_lane, latest)
+            dataset_latest = latest if dataset_latest is None else max(dataset_latest, latest)
+        return {
+            "latest_data_date": dataset_latest,
+            "latest_data_date_by_data_id": lane_latest,
+        }
+
     def historical_instruments(self, *, source_dataset: str) -> tuple[str, ...]:
         ids = sorted(
             {

@@ -9,6 +9,7 @@ from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, atomic_write_text, canonical_json_sha256
 from core.market_data_dataset_readiness import has_current_market_data_dataset_validation
 from core.market_data_dataset_registry import get_market_dataset_specs
+from core.market_data_freshness_contract import EXPECTED_DATE_LATEST_AVAILABLE, get_market_data_freshness_contracts
 from core.market_data_execution_policy import get_market_data_execution_policy
 from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_ledger_path
 from core.market_data_trading_sync import build_trading_sync_request_manifest
@@ -26,8 +27,73 @@ from services.trading.market_data_v2_state import (
     publish_trading_market_data_v2_state,
 )
 from services.downloader.market_data_trading_storage import MarketDataTradingStorageSink
+from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
+from services.market_data.provider_snapshot_view import ProviderSnapshotView
 
 TRADING_SYNC_REPORT_PREFIX = "market_data_v2_trading_sync_"
+
+
+def _merge_latest_available_provider_snapshot_evidence(
+    *,
+    project_root: Path,
+    provider_payload: dict[str, object],
+    selected_datasets: tuple[str, ...],
+    dynamic_rows: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Seed missing latest-available lane dates from immutable provider evidence."""
+
+    specs = {spec.dataset: spec for spec in get_market_dataset_specs(included_only=True)}
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
+    wanted: list[str] = []
+    for dataset in selected_datasets:
+        contract = contracts.get(dataset)
+        if contract is None or contract.expected_date_mode != EXPECTED_DATE_LATEST_AVAILABLE:
+            continue
+        spec = specs[dataset]
+        row = dict(dynamic_rows.get(dataset) or {})
+        lane_map = dict(row.get("latest_data_date_by_data_id") or {})
+        expected_lanes = tuple(spec.trading_fixed_data_ids or spec.fixed_data_ids)
+        lane_missing = any(not str(lane_map.get(str(lane)) or "").strip() for lane in expected_lanes)
+        dataset_missing = not str(row.get("latest_data_date") or "").strip()
+        if dataset_missing or lane_missing:
+            wanted.append(dataset)
+    if not wanted:
+        return {}
+
+    snapshot_fingerprint = str(provider_payload.get("snapshot_fingerprint") or "").strip()
+    archive = load_ready_provider_snapshot_archive(
+        project_root,
+        snapshot_fingerprint=snapshot_fingerprint,
+    )
+    view = ProviderSnapshotView(project_root=project_root, archive=archive)
+    evidence: dict[str, dict[str, object]] = {}
+    for dataset in wanted:
+        evidence[dataset] = view.latest_data_dates(dataset)
+    return evidence
+
+
+def _merge_latest_date_evidence(
+    operational: dict[str, object],
+    provider: dict[str, object] | None,
+) -> dict[str, object]:
+    provider_row = dict(provider or {})
+    operational_row = dict(operational or {})
+    provider_lanes = dict(provider_row.get("latest_data_date_by_data_id") or {})
+    operational_lanes = dict(operational_row.get("latest_data_date_by_data_id") or {})
+    merged_lanes = {**provider_lanes, **operational_lanes}
+    dates = [
+        str(value).strip()
+        for value in (
+            provider_row.get("latest_data_date"),
+            operational_row.get("latest_data_date"),
+            *merged_lanes.values(),
+        )
+        if str(value or "").strip()
+    ]
+    return {
+        "latest_data_date": max(dates) if dates else None,
+        "latest_data_date_by_data_id": merged_lanes,
+    }
 
 
 def _request_geometry_summary(requests) -> dict[str, object]:
@@ -324,14 +390,28 @@ def sync_market_data_v2_due_datasets(
     recovery_floor = date.fromisoformat(str(target_date)) - timedelta(days=int(policy.recent_repair_calendar_days))
     base_as_of = date.fromisoformat(str(provider_payload.get("as_of_date")))
     recovery_anchor = max(base_as_of, recovery_floor).isoformat()
+    provider_latest = (
+        _merge_latest_available_provider_snapshot_evidence(
+            project_root=root,
+            provider_payload=provider_payload,
+            selected_datasets=selected,
+            dynamic_rows=rows,
+        )
+        if force_refresh_current_target
+        else {}
+    )
     previous_ready: dict[str, str | None] = {}
     previous_latest: dict[str, dict[str, object]] = {}
     for dataset in selected:
         row = dict(rows.get(dataset) or {})
-        previous_latest[dataset] = {
+        operational_latest = {
             "latest_data_date": str(row.get("latest_data_date") or "").strip() or None,
             "latest_data_date_by_data_id": dict(row.get("latest_data_date_by_data_id") or {}),
         }
+        previous_latest[dataset] = _merge_latest_date_evidence(
+            operational_latest,
+            provider_latest.get(dataset),
+        )
         if has_current_market_data_dataset_validation(row):
             previous_ready[dataset] = str(row.get("last_ready_target_date") or "").strip() or None
         else:

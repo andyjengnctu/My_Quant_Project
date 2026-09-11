@@ -1669,7 +1669,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     force_bonds = [request for request in force_manifest_a.requests if request.dataset == "GovernmentBondsYield"]
     check("force_refresh_target_price_is_exact_current_target", [("2026-09-07", "2026-09-07", None)], [(r.start_date, r.end_date, r.data_id) for r in force_price])
     bond_starts = {r.data_id: r.start_date for r in force_bonds}
-    check("force_refresh_latest_available_never_requeries_before_provider_anchor", "2026-09-01", bond_starts.get("United States 10-Year"))
+    check("force_refresh_latest_available_uses_observed_lane_even_before_provider_asof", "2026-08-29", bond_starts.get("United States 10-Year"))
     check("force_refresh_latest_available_other_lanes_use_recent_anchor", "2026-09-01", bond_starts.get("United States 30-Year"))
     older_provider = dict(provider)
     older_provider["as_of_date"] = "2026-08-20"
@@ -1708,6 +1708,76 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         refresh_token="synthetic-force-no-latest",
     )
     check("force_refresh_latest_available_without_operational_date_falls_back_to_provider_anchor", True, all(r.start_date == "2026-09-04" and r.end_date == "2026-09-07" for r in force_no_latest.requests))
+    force_snapshot_seeded_crude = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"CrudeOilPrices"},
+        previous_ready_dates_by_dataset={"CrudeOilPrices": "2026-09-07"},
+        previous_latest_data_dates_by_dataset={
+            "CrudeOilPrices": {
+                "latest_data_date": "2026-09-01",
+                "latest_data_date_by_data_id": {"WTI": "2026-09-01", "Brent": "2026-09-01"},
+            }
+        },
+        force_refresh_current_target=True,
+        refresh_token="synthetic-force-snapshot-seeded-crude",
+    )
+    check(
+        "force_refresh_latest_available_snapshot_evidence_can_precede_provider_asof",
+        {"WTI": "2026-09-01", "Brent": "2026-09-01"},
+        {r.data_id: r.start_date for r in force_snapshot_seeded_crude.requests},
+    )
+
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest
+    from core.market_data_storage_contract import resolve_market_data_request_parquet_path
+    from services.downloader.market_data_ledger import LedgerCommittedArtifact
+    from services.market_data.provider_snapshot_repository import ReadyProviderSnapshotArchive
+    from services.market_data.provider_snapshot_view import ProviderSnapshotView
+    with TemporaryDirectory() as provider_latest_dir:
+        provider_root = Path(provider_latest_dir)
+        provider_manifest_fp = "c" * 64
+        provider_requests = (
+            BootstrapHttpRequest("CrudeOilPrices", "fixed_data_id_full_range", "WTI", "1900-01-01", "2026-09-04"),
+            BootstrapHttpRequest("CrudeOilPrices", "fixed_data_id_full_range", "Brent", "1900-01-01", "2026-09-04"),
+        )
+        provider_frames = {
+            provider_requests[0].request_id: pd.DataFrame({"date": ["2026-08-31", "2026-09-01"]}),
+            provider_requests[1].request_id: pd.DataFrame({"date": ["2026-08-29", "2026-08-31"]}),
+        }
+        provider_artifacts = []
+        for ordinal, request in enumerate(provider_requests):
+            path = resolve_market_data_request_parquet_path(provider_root, provider_manifest_fp, request)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"synthetic")
+            provider_artifacts.append(LedgerCommittedArtifact(
+                workload_id="synthetic", request_id=request.request_id, ordinal=ordinal,
+                dataset=request.dataset, bootstrap_mode=request.bootstrap_mode, data_id=request.data_id,
+                start_date=request.start_date, end_date=request.end_date, row_count=len(provider_frames[request.request_id]),
+                content_sha256="d" * 64, completed_at=None,
+            ))
+        provider_archive = ReadyProviderSnapshotArchive(
+            path=provider_root / "provider_snapshot_manifest.json",
+            payload={
+                "snapshot_fingerprint": "e" * 64,
+                "manifest_fingerprint": provider_manifest_fp,
+                "as_of_date": "2026-09-04",
+            },
+            ledger_path=provider_root / "ledger.sqlite3",
+            workload_id="synthetic",
+            artifacts=tuple(provider_artifacts),
+        )
+        provider_view = ProviderSnapshotView(
+            project_root=provider_root,
+            archive=provider_archive,
+            frame_reader=lambda path, columns: provider_frames[path.stem].loc[:, list(columns)] if columns else provider_frames[path.stem].copy(),
+            hash_fn=lambda _path: "d" * 64,
+        )
+        provider_latest = provider_view.latest_data_dates("CrudeOilPrices")
+        check("provider_snapshot_latest_available_reads_actual_dataset_latest", "2026-09-01", provider_latest["latest_data_date"])
+        check("provider_snapshot_latest_available_reads_actual_lane_latest", {"WTI": "2026-09-01", "Brent": "2026-08-31"}, provider_latest["latest_data_date_by_data_id"])
     from core.market_data_instrument_universe import build_current_stock_etf_universe
     current_reference = build_current_stock_etf_universe(
         pd.DataFrame([

@@ -171,8 +171,9 @@ def _resolved_latest_available_anchor(
             parsed = date.fromisoformat(chosen)
         except ValueError as exc:
             raise ValueError(f"{dataset} latest available anchor 不合法: {chosen!r}") from exc
-        if parsed < base_date:
-            parsed = base_date
+        # ``latest_available`` evidence may legitimately predate the immutable
+        # Provider Snapshot as-of date.  Do not clamp it upward to base_date;
+        # doing so would exclude delayed provider rows from the refresh window.
         if parsed > target:
             parsed = target
         return min(recent_start, parsed)
