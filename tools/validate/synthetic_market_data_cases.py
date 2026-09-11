@@ -3576,6 +3576,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("smart_downloader_does_not_report_missing_stockinfo_as_zero_broad_reference", True, "StockInfo in fresh batch" in downloader_source and "NOT_IN_BATCH" in downloader_source)
     check("smart_downloader_displays_execution_pool_at_common_ready_horizon", True, "Trading safe horizon" in downloader_source and "safe_date = min(target_date, str(horizon.training_through_date))" in downloader_source)
     check("smart_downloader_labels_target_freshness_without_claiming_archive_completeness", True, "Target freshness READY" in downloader_source and "Archive datasets READY" not in downloader_source)
+    check("smart_downloader_labels_market_date_target_advance_without_claiming_completed_day", True, "V2 target 推進" in downloader_source and "新 completed day" not in downloader_source)
     check("smart_downloader_displays_dynamic_request_window_policy_source", True, "Window start policy" in downloader_source and "request_date_start_sources" in auto_update_source and '"request_mode"' in v2_sync_source)
     check("smart_downloader_uses_shared_console_color_contract", True, "console_color_enabled" in downloader_source and "C_GREEN" in downloader_source and "C_YELLOW" in downloader_source and "C_RED" in downloader_source)
     check("canonical_consumer_market_date_is_capped_by_common_ready_horizon", True, "return min(target_date, ready_through)" in update_source)

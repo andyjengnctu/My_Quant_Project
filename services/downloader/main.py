@@ -275,7 +275,7 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
     print(f"模式                    : {_paint(mode_label, C_CYAN)}")
     print(f"V2 target date          : {_paint(result.get('target_date') or '-', C_CYAN)}")
     advanced = "YES" if result.get("v2_target_advanced") else "NO"
-    print(f"新 completed day        : {_paint(advanced, _status_color(advanced))}")
+    print(f"V2 target 推進          : {_paint(advanced, _status_color(advanced))}")
     print(f"Due/selected datasets   : {result.get('due_dataset_count', 0)}")
     print(f"Logical requests        : {result.get('request_count', 0)}")
     print(f"Provider data requests  : {result.get('data_requests', 0)}")
