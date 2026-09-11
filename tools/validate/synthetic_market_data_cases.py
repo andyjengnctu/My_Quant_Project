@@ -4956,7 +4956,10 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
         resolve_trading_market_data_v2_ledger_path,
         resolve_trading_market_data_v2_request_path,
     )
-    from core.market_data_trading_sync import TradingSyncRequestManifest
+    from core.market_data_trading_sync import (
+        TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
+        TradingSyncRequestManifest,
+    )
     from services.downloader.market_data_ledger import MarketDataJobLedger
     from services.trading.market_data_v2_view import TradingMarketDataV2View
 
@@ -5019,7 +5022,7 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
             base_provider_manifest_fingerprint=provider_manifest_fp,
             base_as_of_date="2026-03-02",
             previous_sync_date=None,
-            validation_contract_version=2,
+            validation_contract_version=TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
         )
         atomic_write_json(
             resolve_trading_market_data_v2_batch_manifest_path(root, batch_fp),
