@@ -858,8 +858,12 @@ def _run_market_data_v2_full_integrity_audit() -> int:
             reason_code = str(date_row.get("reason") or "-")
             missing = tuple(date_row.get("missing_dates") or ())
             unexpected = tuple(date_row.get("unexpected_dates") or ())
+            unverified_dates = tuple(date_row.get("unverified_dates") or ())
             if date_status == "UNVERIFIED":
                 reason = "無 authoritative dataset-specific calendar"
+            elif date_status == "PARTIAL" and unverified_dates:
+                sample = ",".join(str(value) for value in unverified_dates[:5]) or "-"
+                reason = f"歷史週末交易日無 authoritative provider row-presence 保證={len(unverified_dates)} [{sample}]"
             elif date_status == "PARTIAL":
                 reason = "authoritative calendar 僅覆蓋部分 observed span"
             elif missing or unexpected:

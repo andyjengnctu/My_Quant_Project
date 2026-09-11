@@ -596,3 +596,11 @@ Active generation採durable fail-closed semantics：hidden sibling stage directo
 Optimizer 的 effective-policy fingerprint 與 Study DB 在 promoted V2 時綁定 canonical generation identity；V1 的 legacy fingerprint 與 `optimizer_study_full_full.db` path 不變。Strategy Compare 的 preparation status/run payload/pair-cache fingerprint在 V2 時保存同一 canonical generation identity，因此 V1 cache、V2-A cache、V2-B cache不得互相 REUSE。Breakout Quality 的 scientific MR/profile identity不因 generation 改名，但 promoted V2 的 model/output physical namespace固定增加 `research_generations/<generation_namespace>/`；V1既有 model/report/score/PIT artifacts留在原路徑作 historical evidence，V2不得 fallback讀取或覆寫它們。此層是 fitting/data-source identity isolation，不是新的 MR/architecture/profile research decision。
 
 Final Closure 另把 execution-only raw/prepared cache 與 Research generation 的 physical source identity閉環：Optimizer raw cache 與 Portfolio prepared cache 除 ticker/file stat 與既有策略contract外，必須把 resolved dataset root 納入 cache identity。這些 cache 是可重建效能工件，不建立新的 scientific identity；但即使 V1/V2 檔名、大小與mtime碰巧相同，也不得跨 physical generation REUSE。FinMind raw/adjusted price provider identity則統一引用 `core/market_data_contract.py` 的 canonical constants，Research scope與dataset registry不得再各自重新宣告同一 price dataset literal。
+
+
+### Market Data V2 semantic integrity evidence boundary
+
+- Full Database Integrity Audit separates local physical/request corruption from provider-semantic evidence limits.
+- Stock-session density uses `TaiwanStockTradingDate` corroborated by independent market-activity anchors; exceptional closures are not treated as sessions merely because the schedule feed contains the date.
+- Historical weekend sessions are an evidence-limited scope: an observed Saturday/Sunday row is accepted, but absence is not labeled a provider gap without authoritative dataset-specific weekend row-presence guarantees. Such cases are `PARTIAL`, not `ATTENTION`/`FAIL`.
+- Sparse stock-session feeds remain presence-optional; derivatives/periodic feeds without authoritative calendars remain `UNVERIFIED`.

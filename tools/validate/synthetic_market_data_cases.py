@@ -1617,6 +1617,26 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     )
     check("date_semantic_dense_presence_reports_provider_gap_without_local_corruption", DATE_SEMANTIC_ATTENTION, date_gap.status)
     check("date_semantic_gap_reports_missing_date", ("2026-09-08",), date_gap.missing_dates)
+    historical_weekend_limit = evaluate_date_semantics(
+        mode=DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
+        observed_dates=("2007-03-02", "2007-03-05"),
+        trading_calendar_dates=("2007-03-02", "2007-03-03", "2007-03-05"),
+    )
+    check(
+        "historical_weekend_session_absence_is_evidence_limit_not_provider_gap",
+        DATE_SEMANTIC_PARTIAL,
+        historical_weekend_limit.status,
+    )
+    check(
+        "historical_weekend_session_is_reported_as_unverified_scope",
+        ("2007-03-03",),
+        historical_weekend_limit.unverified_dates,
+    )
+    check(
+        "historical_weekend_session_is_not_reported_as_missing_provider_date",
+        (),
+        historical_weekend_limit.missing_dates,
+    )
     date_unverified = evaluate_date_semantics(
         mode=DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
         observed_dates=("2026-09-06", "2026-09-07"),

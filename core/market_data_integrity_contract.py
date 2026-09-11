@@ -14,6 +14,7 @@ Important evidence boundary:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Iterable
 
 from core.market_data_dataset_registry import MarketDatasetSpec, get_market_dataset_specs
@@ -71,6 +72,7 @@ class DateSemanticResult:
     compared_end_date: str | None = None
     missing_dates: tuple[str, ...] = ()
     unexpected_dates: tuple[str, ...] = ()
+    unverified_dates: tuple[str, ...] = ()
     reason: str = ""
 
     def as_dict(self) -> dict[str, object]:
@@ -85,6 +87,7 @@ class DateSemanticResult:
             "compared_end_date": self.compared_end_date,
             "missing_dates": list(self.missing_dates),
             "unexpected_dates": list(self.unexpected_dates),
+            "unverified_dates": list(self.unverified_dates),
             "reason": self.reason,
         }
 
@@ -218,11 +221,22 @@ def evaluate_date_semantics(
     expected = tuple(value for value in calendar if compare_start <= value <= compare_end)
     expected_set = set(expected)
     observed_in_scope = {value for value in observed_set if compare_start <= value <= compare_end}
-    missing = (
+    missing_candidates = (
         tuple(sorted(expected_set - observed_in_scope))
         if mode == DATE_SEMANTIC_TRADING_CALENDAR_DENSE
         else ()
     )
+    # Historical Taiwan stock sessions could occur on Saturdays before the 2019
+    # policy change, but a market-session anchor does not prove that every
+    # provider dataset promised a row on those weekend sessions.  Treat absence
+    # there as an evidence limit rather than a provider gap.  Observed weekend
+    # rows remain valid evidence and are never discarded.
+    weekend_missing = tuple(
+        value
+        for value in missing_candidates
+        if date.fromisoformat(value).weekday() >= 5
+    )
+    missing = tuple(value for value in missing_candidates if value not in set(weekend_missing))
     unexpected = tuple(sorted(observed_in_scope - expected_set))
     full_span_covered = first_observed >= calendar[0] and last_observed <= calendar[-1]
 
@@ -233,6 +247,9 @@ def evaluate_date_semantics(
             if mode == DATE_SEMANTIC_TRADING_CALENDAR_DENSE
             else "provider_observed_noncorroborated_stock_session"
         )
+    elif weekend_missing:
+        status = DATE_SEMANTIC_PARTIAL
+        reason = "historical_weekend_sessions_have_no_authoritative_provider_row_presence_guarantee"
     elif not full_span_covered:
         status = DATE_SEMANTIC_PARTIAL
         reason = (
@@ -258,6 +275,7 @@ def evaluate_date_semantics(
         compared_end_date=compare_end,
         missing_dates=missing,
         unexpected_dates=unexpected,
+        unverified_dates=weekend_missing,
         reason=reason,
     )
 
