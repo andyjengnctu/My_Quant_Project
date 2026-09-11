@@ -3207,23 +3207,29 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     from unittest.mock import patch
     downloader_main = importlib.import_module("services.downloader.main")
     smart_calls = []
-    with patch(
-        "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
-        side_effect=lambda **kwargs: smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
-    ):
-        smart_exit = downloader_main._run_market_data_v2_daily_update()
-    check("smart_downloader_runtime_calls_canonical_v2_daily_update_owner", 0, smart_exit)
-    check("smart_downloader_runtime_passes_project_root_to_v2_owner", [str(downloader_main.PROJECT_ROOT)], [str(item.get("project_root")) for item in smart_calls])
-    check("smart_downloader_manual_v2_update_forces_one_market_date_discovery", [True], [bool(item.get("force_market_date_discovery")) for item in smart_calls])
     force_smart_calls = []
-    with patch("builtins.input", return_value="R"), patch(
-        "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
-        side_effect=lambda **kwargs: force_smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
-    ):
-        force_smart_exit = downloader_main._run_market_data_v2_daily_update(prompt_mode=True)
-    check("smart_downloader_force_refresh_mode_exits_cleanly", 0, force_smart_exit)
-    check("smart_downloader_r_mode_passes_force_refresh_contract", [True], [bool(item.get("force_refresh_current_target")) for item in force_smart_calls])
-    check("smart_downloader_option1_passes_progress_and_quota_observers", True, all(callable(item.get("progress_fn")) and callable(item.get("quota_wait_fn")) for item in force_smart_calls))
+    with TemporaryDirectory() as menu_project_dir:
+        isolated_menu_root = Path(menu_project_dir)
+        with patch.object(downloader_main, "PROJECT_ROOT", isolated_menu_root), patch(
+            "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
+            side_effect=lambda **kwargs: smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
+        ):
+            smart_exit = downloader_main._run_market_data_v2_daily_update()
+        with patch.object(downloader_main, "PROJECT_ROOT", isolated_menu_root), patch("builtins.input", return_value="R"), patch(
+            "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
+            side_effect=lambda **kwargs: force_smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
+        ):
+            force_smart_exit = downloader_main._run_market_data_v2_daily_update(prompt_mode=True)
+
+        check("smart_downloader_runtime_calls_canonical_v2_daily_update_owner", 0, smart_exit)
+        check("smart_downloader_runtime_uses_isolated_synthetic_project_root", True, isolated_menu_root != project_root)
+        check("smart_downloader_runtime_passes_project_root_to_v2_owner", [str(isolated_menu_root)], [str(item.get("project_root")) for item in smart_calls])
+        check("smart_downloader_force_refresh_passes_isolated_project_root", [str(isolated_menu_root)], [str(item.get("project_root")) for item in force_smart_calls])
+        check("smart_downloader_manual_v2_update_forces_one_market_date_discovery", [True], [bool(item.get("force_market_date_discovery")) for item in smart_calls])
+        check("smart_downloader_force_refresh_mode_exits_cleanly", 0, force_smart_exit)
+        check("smart_downloader_r_mode_passes_force_refresh_contract", [True], [bool(item.get("force_refresh_current_target")) for item in force_smart_calls])
+        check("smart_downloader_option1_passes_progress_and_quota_observers", True, all(callable(item.get("progress_fn")) and callable(item.get("quota_wait_fn")) for item in force_smart_calls))
+        check("smart_downloader_execution_pool_uses_injected_project_root", True, "TradingMarketDataV2View.open(PROJECT_ROOT)" in downloader_source)
     check("smart_downloader_daily_progress_displays_request_date_scope", True, "request_scope" in downloader_source and "date=STATIC" in downloader_source and "date={start_date}~{end_date}" in downloader_source)
     check("smart_downloader_daily_summary_separates_exact_request_types", True, "Exact-date total" in downloader_source and "Data-id exact" in downloader_source and "Unique exact dates" in downloader_source)
     check("smart_downloader_does_not_render_false_stockinfo_match_diff_completeness", False, "Instrument reference    : " in downloader_source or "REFERENCE_DIFF" in downloader_source)

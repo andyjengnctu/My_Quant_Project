@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import time
-from functools import lru_cache
 from typing import Iterable, Mapping
 
 from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
@@ -169,26 +168,10 @@ def build_market_data_freshness_contract(spec: MarketDatasetSpec) -> MarketDataF
     )
 
 
-@lru_cache(maxsize=8)
-def _default_market_data_freshness_contracts(
-    specs: tuple[MarketDatasetSpec, ...],
-) -> tuple[MarketDataFreshnessContract, ...]:
-    # Key the cache by the actual immutable registry tuple.  Normal production uses
-    # one canonical tuple, while an in-process registry replacement naturally gets
-    # a different cache entry instead of inheriting stale contracts.
-    included = tuple(spec for spec in specs if spec.included)
-    contracts = tuple(build_market_data_freshness_contract(spec) for spec in included)
-    validate_market_data_freshness_contracts(specs=included, contracts=contracts)
-    return contracts
-
-
 def get_market_data_freshness_contracts(
     *, specs: Iterable[MarketDatasetSpec] | None = None,
 ) -> tuple[MarketDataFreshnessContract, ...]:
-    if specs is None:
-        default_specs = tuple(get_market_dataset_specs(included_only=True))
-        return _default_market_data_freshness_contracts(default_specs)
-    source = tuple(specs)
+    source = tuple(specs) if specs is not None else get_market_dataset_specs(included_only=True)
     included = tuple(spec for spec in source if spec.included)
     contracts = tuple(build_market_data_freshness_contract(spec) for spec in included)
     validate_market_data_freshness_contracts(specs=included, contracts=contracts)
@@ -208,16 +191,11 @@ def validate_market_data_freshness_contracts(
     specs: Iterable[MarketDatasetSpec] | None = None,
     contracts: Iterable[MarketDataFreshnessContract] | None = None,
 ) -> dict[str, int]:
-    if specs is None:
-        included = get_market_dataset_specs(included_only=True)
-    else:
-        included = tuple(spec for spec in tuple(specs) if spec.included)
-    if contracts is not None:
-        values = tuple(contracts)
-    elif specs is None:
-        values = _default_market_data_freshness_contracts(tuple(included))
-    else:
-        values = tuple(build_market_data_freshness_contract(spec) for spec in included)
+    included = tuple(
+        spec for spec in (tuple(specs) if specs is not None else get_market_dataset_specs(included_only=True))
+        if spec.included
+    )
+    values = tuple(contracts) if contracts is not None else tuple(build_market_data_freshness_contract(spec) for spec in included)
     spec_ids = [spec.dataset for spec in included]
     contract_ids = [item.dataset for item in values]
     if len(contract_ids) != len(set(contract_ids)):

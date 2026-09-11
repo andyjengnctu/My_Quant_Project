@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -101,17 +100,8 @@ def _empty_dataset_row() -> dict[str, object]:
     }
 
 
-@lru_cache(maxsize=8)
-def _registry_fingerprint_for_specs(specs: tuple) -> str:
-    return build_registry_fingerprint(specs)
-
-
 def _canonical_registry_fingerprint() -> str:
-    # Key by the actual immutable registry tuple, so a changed registry naturally
-    # receives a new fingerprint while repeated state validation avoids rebuilding
-    # the same canonical JSON payload.
-    specs = tuple(get_market_dataset_specs(included_only=True))
-    return _registry_fingerprint_for_specs(specs)
+    return build_registry_fingerprint(get_market_dataset_specs(included_only=True))
 
 
 def _validate_state_payload(payload: Mapping[str, object]) -> dict[str, Any]:
