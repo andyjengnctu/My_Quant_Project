@@ -80,7 +80,6 @@ def _verify_overlay_metadata(*, inspection, payload: dict[str, object], ledger_i
     request = ledger_item.to_request()
     expected = {
         "batch_fingerprint": str(payload["batch_fingerprint"]),
-        "validation_contract_version": int(payload["validation_contract_version"]),
         "registry_fingerprint": str(payload["registry_fingerprint"]),
         "base_provider_snapshot_fingerprint": str(payload["base_provider_snapshot_fingerprint"]),
         "base_provider_manifest_fingerprint": str(payload["base_provider_manifest_fingerprint"]),
@@ -91,9 +90,16 @@ def _verify_overlay_metadata(*, inspection, payload: dict[str, object], ledger_i
         "start_date": request.start_date,
         "end_date": request.end_date,
     }
+    metadata = dict(inspection.metadata or {})
+    if "validation_contract_version" in payload:
+        expected["validation_contract_version"] = int(payload["validation_contract_version"])
+    elif metadata.get("validation_contract_version") not in (None, ""):
+        raise ValueError(
+            "Trading V2 pre-versioned artifact 不應含 validation contract metadata: "
+            f"request={request.request_id}"
+        )
     if payload.get("refresh_token") is not None:
         expected["refresh_token"] = payload.get("refresh_token")
-    metadata = dict(inspection.metadata or {})
     actual = {key: metadata.get(key) for key in expected}
     if actual != expected:
         raise ValueError(

@@ -104,6 +104,7 @@ def _validate_trading_sync_batch_manifest_payload(
     payload: dict[str, object],
     *,
     allowed_validation_contract_versions: tuple[int, ...],
+    allow_pre_versioned_read: bool = False,
 ) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("Trading V2 batch manifest 必須是 object")
@@ -113,16 +114,6 @@ def _validate_trading_sync_batch_manifest_payload(
         raise ValueError("Trading V2 batch manifest role 不合法")
     if str(payload.get("status") or "") != "READY":
         raise ValueError("Trading V2 batch manifest 尚未 READY")
-    try:
-        validation_version = int(payload.get("validation_contract_version", -1))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Trading V2 batch manifest validation contract 不合法") from exc
-    if validation_version not in allowed_validation_contract_versions:
-        allowed_text = ",".join(str(value) for value in allowed_validation_contract_versions)
-        raise ValueError(
-            "Trading V2 batch manifest validation contract 不相容: "
-            f"version={validation_version}, allowed={allowed_text}"
-        )
     batch_fingerprint = _hex64(str(payload.get("batch_fingerprint") or ""), field="batch_fingerprint")
     _hex64(str(payload.get("base_provider_snapshot_fingerprint") or ""), field="base_provider_snapshot_fingerprint")
     _hex64(str(payload.get("base_provider_manifest_fingerprint") or ""), field="base_provider_manifest_fingerprint")
@@ -138,11 +129,30 @@ def _validate_trading_sync_batch_manifest_payload(
         raise ValueError("Trading V2 batch manifest request_count 不合法") from exc
     if request_count != len(request_ids):
         raise ValueError("Trading V2 batch manifest request_count 不一致")
+
+    # Verify the exact immutable manifest identity before applying any legacy
+    # read compatibility.  A current manifest cannot become legacy merely by
+    # deleting the version field because its stored fingerprint would drift.
     identity = {key: value for key, value in payload.items() if key != "identity_fingerprint"}
     if str(payload.get("identity_fingerprint") or "").strip().lower() != canonical_json_sha256(identity):
         raise ValueError("Trading V2 batch manifest identity fingerprint 不一致")
     if str(identity.get("batch_fingerprint") or "").lower() != batch_fingerprint:
         raise ValueError("Trading V2 batch manifest batch fingerprint drift")
+
+    if "validation_contract_version" not in payload:
+        if not allow_pre_versioned_read:
+            raise ValueError("Trading V2 batch manifest 缺少 validation contract version")
+        return payload
+    try:
+        validation_version = int(payload["validation_contract_version"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Trading V2 batch manifest validation contract 不合法") from exc
+    if validation_version not in allowed_validation_contract_versions:
+        allowed_text = ",".join(str(value) for value in allowed_validation_contract_versions)
+        raise ValueError(
+            "Trading V2 batch manifest validation contract 不相容: "
+            f"version={validation_version}, allowed={allowed_text}"
+        )
     return payload
 
 
@@ -175,6 +185,7 @@ def validate_trading_sync_batch_manifest_payload_for_read(payload: dict[str, obj
     return _validate_trading_sync_batch_manifest_payload(
         payload,
         allowed_validation_contract_versions=allowed,
+        allow_pre_versioned_read=True,
     )
 
 

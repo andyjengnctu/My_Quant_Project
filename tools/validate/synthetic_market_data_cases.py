@@ -5257,6 +5257,101 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
             validate_trading_sync_batch_manifest_payload_for_read(legacy_payload),
         )
 
+    pre_versioned_payload = _legacy_batch_payload(1)
+    pre_versioned_payload.pop("validation_contract_version")
+    pre_versioned_identity = {
+        key: value for key, value in pre_versioned_payload.items() if key != "identity_fingerprint"
+    }
+    pre_versioned_payload["identity_fingerprint"] = canonical_json_sha256(pre_versioned_identity)
+    try:
+        validate_trading_sync_batch_manifest_payload(pre_versioned_payload)
+    except ValueError:
+        strict_accepts_pre_versioned = False
+    else:
+        strict_accepts_pre_versioned = True
+    check(
+        "current_producer_validator_rejects_pre_versioned_batch",
+        False,
+        strict_accepts_pre_versioned,
+    )
+    check(
+        "read_validator_accepts_fingerprinted_pre_versioned_batch",
+        pre_versioned_payload,
+        validate_trading_sync_batch_manifest_payload_for_read(pre_versioned_payload),
+    )
+
+    downgraded_current_payload = _legacy_batch_payload(TRADING_SYNC_VALIDATION_CONTRACT_VERSION)
+    downgraded_current_payload.pop("validation_contract_version")
+    try:
+        validate_trading_sync_batch_manifest_payload_for_read(downgraded_current_payload)
+    except ValueError:
+        downgraded_current_rejected = True
+    else:
+        downgraded_current_rejected = False
+    check(
+        "read_validator_rejects_version_field_deletion_without_matching_fingerprint",
+        True,
+        downgraded_current_rejected,
+    )
+
+    from types import SimpleNamespace
+    from core.market_data_bootstrap_requests import BootstrapHttpRequest
+    from services.downloader.market_data_integrity_audit import _verify_overlay_metadata
+
+    pre_versioned_request = BootstrapHttpRequest(
+        "TaiwanStockPriceAdj",
+        "trading_recent_repair",
+        None,
+        "2026-03-02",
+        "2026-03-02",
+    )
+    pre_versioned_metadata = {
+        "batch_fingerprint": pre_versioned_payload["batch_fingerprint"],
+        "registry_fingerprint": pre_versioned_payload["registry_fingerprint"],
+        "base_provider_snapshot_fingerprint": pre_versioned_payload["base_provider_snapshot_fingerprint"],
+        "base_provider_manifest_fingerprint": pre_versioned_payload["base_provider_manifest_fingerprint"],
+        "request_id": pre_versioned_request.request_id,
+        "dataset": pre_versioned_request.dataset,
+        "bootstrap_mode": pre_versioned_request.bootstrap_mode,
+        "data_id": pre_versioned_request.data_id,
+        "start_date": pre_versioned_request.start_date,
+        "end_date": pre_versioned_request.end_date,
+    }
+    pre_versioned_ledger_item = SimpleNamespace(to_request=lambda: pre_versioned_request)
+    try:
+        _verify_overlay_metadata(
+            inspection=SimpleNamespace(metadata=pre_versioned_metadata),
+            payload=pre_versioned_payload,
+            ledger_item=pre_versioned_ledger_item,
+        )
+    except ValueError:
+        audit_accepts_pre_versioned_metadata = False
+    else:
+        audit_accepts_pre_versioned_metadata = True
+    check(
+        "integrity_audit_accepts_matching_pre_versioned_artifact_metadata",
+        True,
+        audit_accepts_pre_versioned_metadata,
+    )
+
+    unexpected_versioned_metadata = dict(pre_versioned_metadata)
+    unexpected_versioned_metadata["validation_contract_version"] = TRADING_SYNC_VALIDATION_CONTRACT_VERSION
+    try:
+        _verify_overlay_metadata(
+            inspection=SimpleNamespace(metadata=unexpected_versioned_metadata),
+            payload=pre_versioned_payload,
+            ledger_item=pre_versioned_ledger_item,
+        )
+    except ValueError:
+        audit_rejects_pre_versioned_metadata_drift = True
+    else:
+        audit_rejects_pre_versioned_metadata_drift = False
+    check(
+        "integrity_audit_rejects_versioned_metadata_under_pre_versioned_manifest",
+        True,
+        audit_rejects_pre_versioned_metadata_drift,
+    )
+
     legacy_payload = _legacy_batch_payload(1)
     tampered_legacy = dict(legacy_payload)
     tampered_legacy["request_count"] = 2
