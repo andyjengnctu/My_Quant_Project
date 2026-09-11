@@ -145,6 +145,81 @@ def _periodic_requests(spec: MarketDatasetSpec, *, target: date) -> list[Bootstr
     raise ValueError(f"{spec.dataset} periodic Trading query policy 未登記: {query_mode}")
 
 
+def _resolved_latest_available_anchor(
+    *,
+    dataset: str,
+    data_id: str | None,
+    target: date,
+    base_date: date,
+    latest_by_dataset: Mapping[str, object],
+    recent_start: date,
+) -> date:
+    raw = latest_by_dataset.get(dataset)
+    dataset_latest = None
+    lane_latest = None
+    if isinstance(raw, Mapping):
+        dataset_latest = str(raw.get("latest_data_date") or "").strip() or None
+        lanes = raw.get("latest_data_date_by_data_id")
+        if isinstance(lanes, Mapping):
+            lane_key = str(data_id) if data_id is not None else "__ALL__"
+            lane_latest = str(lanes.get(lane_key) or "").strip() or None
+    elif raw:
+        dataset_latest = str(raw).strip() or None
+    chosen = lane_latest or dataset_latest
+    if chosen:
+        try:
+            parsed = date.fromisoformat(chosen)
+        except ValueError as exc:
+            raise ValueError(f"{dataset} latest available anchor 不合法: {chosen!r}") from exc
+        if parsed < base_date:
+            parsed = base_date
+        if parsed > target:
+            parsed = target
+        return min(recent_start, parsed)
+    # No operational evidence yet: fall back to the immutable Provider Snapshot
+    # anchor so a force refresh can still discover the provider's latest row.
+    return base_date
+
+
+def _latest_available_force_refresh_requests(
+    spec: MarketDatasetSpec,
+    *,
+    target: date,
+    target_text: str,
+    base_date: date,
+    recent_start: date,
+    latest_by_dataset: Mapping[str, object],
+) -> list[BootstrapHttpRequest]:
+    data_ids = tuple(spec.trading_fixed_data_ids or spec.fixed_data_ids)
+    if data_ids:
+        return [
+            BootstrapHttpRequest(
+                spec.dataset,
+                TRADING_SYNC_QUERY_RECENT,
+                data_id,
+                _resolved_latest_available_anchor(
+                    dataset=spec.dataset,
+                    data_id=data_id,
+                    target=target,
+                    base_date=base_date,
+                    latest_by_dataset=latest_by_dataset,
+                    recent_start=recent_start,
+                ).isoformat(),
+                target_text,
+            )
+            for data_id in data_ids
+        ]
+    start = _resolved_latest_available_anchor(
+        dataset=spec.dataset,
+        data_id=None,
+        target=target,
+        base_date=base_date,
+        latest_by_dataset=latest_by_dataset,
+        recent_start=recent_start,
+    )
+    return [BootstrapHttpRequest(spec.dataset, TRADING_SYNC_QUERY_RECENT, None, start.isoformat(), target_text)]
+
+
 def build_trading_sync_request_manifest(
     *,
     specs: Iterable[MarketDatasetSpec],
@@ -154,6 +229,7 @@ def build_trading_sync_request_manifest(
     policy: MarketDataTradingSyncPolicy,
     selected_datasets: Iterable[str] | None = None,
     previous_ready_dates_by_dataset: Mapping[str, str | None] | None = None,
+    previous_latest_data_dates_by_dataset: Mapping[str, object] | None = None,
     force_refresh_current_target: bool = False,
     refresh_token: str | None = None,
 ) -> TradingSyncRequestManifest:
@@ -181,6 +257,10 @@ def build_trading_sync_request_manifest(
     unknown_previous = set(previous_by_dataset) - included_names
     if unknown_previous:
         raise ValueError(f"Trading V2 previous_ready_dates_by_dataset 含未知 dataset: {sorted(unknown_previous)}")
+    latest_by_dataset = dict(previous_latest_data_dates_by_dataset or {})
+    unknown_latest = set(latest_by_dataset) - included_names
+    if unknown_latest:
+        raise ValueError(f"Trading V2 previous_latest_data_dates_by_dataset 含未知 dataset: {sorted(unknown_latest)}")
     target_text = _iso(target_date, field="target_date")
     target = date.fromisoformat(target_text)
     base_as_of = _iso(provider_snapshot.get("as_of_date"), field="provider_snapshot.as_of_date")
@@ -229,8 +309,16 @@ def build_trading_sync_request_manifest(
                     requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_RECENT, target_text, target_text))
                 continue
             if contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
-                refresh_start = target - timedelta(days=policy.recent_repair_calendar_days - 1)
-                requests.extend(_range_requests(spec, TRADING_SYNC_QUERY_RECENT, refresh_start.isoformat(), target_text))
+                requests.extend(
+                    _latest_available_force_refresh_requests(
+                        spec,
+                        target=target,
+                        target_text=target_text,
+                        base_date=base_date,
+                        recent_start=recent_start,
+                        latest_by_dataset=latest_by_dataset,
+                    )
+                )
                 continue
             if contract.expected_date_mode == EXPECTED_DATE_PERIOD_DUE:
                 requests.extend(_periodic_requests(spec, target=target))

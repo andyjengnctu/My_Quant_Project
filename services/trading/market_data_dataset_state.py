@@ -84,6 +84,7 @@ def _empty_dataset_row() -> dict[str, object]:
         "last_ready_at": None,
         "last_ready_target_date": None,
         "latest_data_date": None,
+        "latest_data_date_by_data_id": {},
         "latest_expected_date": None,
         "expected_publish_at": None,
         "next_check_at": None,
@@ -253,6 +254,8 @@ def record_market_data_sync_success(
         evidence = observed.get(dataset) if isinstance(observed.get(dataset), Mapping) else {}
         row_count = int(evidence.get("row_count") or 0)
         observed_max = str(evidence.get("observed_max_date") or "").strip() or None
+        observed_lanes = evidence.get("observed_max_date_by_data_id")
+        observed_lanes = dict(observed_lanes) if isinstance(observed_lanes, Mapping) else {}
         request_count = int(evidence.get("request_count") or (1 if row_count > 0 else 0))
         nonempty_request_count = int(evidence.get("nonempty_request_count") or (1 if row_count > 0 else 0))
         target_covering_request_count = int(
@@ -269,6 +272,14 @@ def record_market_data_sync_success(
         row["last_success_at"] = finished_at.isoformat()
         row["last_success_target_date"] = str(target_date)
         row["latest_data_date"] = _later_date(row.get("latest_data_date"), observed_max)
+        lane_dates = dict(row.get("latest_data_date_by_data_id") or {})
+        for lane_key, lane_value in observed_lanes.items():
+            lane_text = str(lane_value or "").strip()
+            if not lane_text:
+                continue
+            prior_lane = str(lane_dates.get(str(lane_key)) or "").strip()
+            lane_dates[str(lane_key)] = lane_text if not prior_lane else max(prior_lane, lane_text)
+        row["latest_data_date_by_data_id"] = lane_dates
         if contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}:
             row["latest_expected_date"] = None
         elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:

@@ -113,6 +113,7 @@ class MarketDataTradingStorageSink:
                 "row_count": 0,
                 "observed_min_date": None,
                 "observed_max_date": None,
+                "observed_max_date_by_data_id": {},
             },
         )
         row["request_count"] = int(row["request_count"]) + 1
@@ -137,6 +138,11 @@ class MarketDataTradingStorageSink:
         if observed_max_date:
             current = str(row.get("observed_max_date") or "").strip()
             row["observed_max_date"] = observed_max_date if not current else max(current, observed_max_date)
+            lane_key = str(request.data_id) if request.data_id is not None else "__ALL__"
+            lane_map = dict(row.get("observed_max_date_by_data_id") or {})
+            prior_lane = str(lane_map.get(lane_key) or "").strip()
+            lane_map[lane_key] = observed_max_date if not prior_lane else max(prior_lane, observed_max_date)
+            row["observed_max_date_by_data_id"] = lane_map
 
     def _capture_verification_frame(self, request, frame: pd.DataFrame) -> None:
         dataset = str(request.dataset)
@@ -190,38 +196,31 @@ class MarketDataTradingStorageSink:
             except (TypeError, ValueError) as exc:
                 reference_error = f"{type(exc).__name__}: {exc}"
 
-        coverage_rows: list[dict[str, object]] = []
-        if reference_ids:
-            for dataset, observed_ids in sorted(self._target_instrument_ids.items()):
-                spec = get_market_dataset_spec(dataset)
-                contract = get_market_data_freshness_contract(dataset)
-                if not spec.full_market_exact_date_expected or contract.expected_date_mode != EXPECTED_DATE_TRADING_TARGET:
-                    continue
-                missing = sorted(reference_ids - observed_ids)
-                extra = sorted(observed_ids - reference_ids)
-                coverage_rows.append(
-                    {
-                        "dataset": dataset,
-                        "mode": "NON_BLOCKING_STOCKINFO_REFERENCE",
-                        "reference_instrument_count": len(reference_ids),
-                        "observed_instrument_count": len(observed_ids),
-                        "missing_reference_count": len(missing),
-                        "extra_observed_count": len(extra),
-                        "missing_reference_sample": missing[:20],
-                        "extra_observed_sample": extra[:20],
-                        "status": "MATCH" if not missing and not extra else "REFERENCE_DIFF",
-                    }
-                )
+        # StockInfo is an independent broad stock/ETF identity reference, but it
+        # is not an authoritative expected-membership set for dataset-specific
+        # feeds such as PER, margin, short-sale, institutional flows or raw
+        # Price (which can include warrants and other security types).  Do not
+        # render false MATCH/DIFF completeness verdicts from incomparable sets.
+        target_counts = [
+            {
+                "dataset": dataset,
+                "observed_target_instrument_count": len(ids),
+                "comparison_status": "UNVERIFIED",
+                "reason": "no_authoritative_dataset_specific_expected_universe",
+            }
+            for dataset, ids in sorted(self._target_instrument_ids.items())
+            if ids
+        ]
         return {
             "schema_verified_dataset_count": int(schema_verified),
             "observed_dataset_count": len(observations),
             "current_stockinfo_reference_status": "AVAILABLE" if reference_ids else "UNAVAILABLE",
             "current_stockinfo_reference_count": len(reference_ids),
             "current_stockinfo_reference_error": reference_error,
-            "instrument_reference_is_blocking": False,
-            "instrument_reference_rows": coverage_rows,
-            "instrument_reference_match_count": sum(row["status"] == "MATCH" for row in coverage_rows),
-            "instrument_reference_diff_count": sum(row["status"] == "REFERENCE_DIFF" for row in coverage_rows),
+            "instrument_completeness_status": "UNVERIFIED",
+            "instrument_completeness_is_blocking": False,
+            "instrument_completeness_reason": "no_authoritative_dataset_specific_expected_universe",
+            "instrument_target_observation_rows": target_counts,
         }
 
     def _schema_owner_path(self, dataset: str) -> Path:

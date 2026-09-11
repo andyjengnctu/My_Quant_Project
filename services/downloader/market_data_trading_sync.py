@@ -39,11 +39,14 @@ def _request_geometry_summary(requests) -> dict[str, object]:
     start_dates = [str(request.start_date) for request in dated]
     end_dates = [str(request.end_date) for request in dated]
     exact_dates = sorted({str(request.start_date) for request in exact})
+    fixed_id_exact = [request for request in exact if request.data_id is not None]
     return {
         "request_date_start": min(start_dates) if start_dates else None,
         "request_date_end": max(end_dates) if end_dates else None,
         "unique_exact_date_count": len(exact_dates),
+        "exact_date_request_count": len(exact),
         "full_market_exact_date_request_count": len(full_market_exact),
+        "fixed_data_id_exact_date_request_count": len(fixed_id_exact),
         "range_request_count": len(range_requests),
         "undated_request_count": len(undated),
     }
@@ -322,8 +325,13 @@ def sync_market_data_v2_due_datasets(
     base_as_of = date.fromisoformat(str(provider_payload.get("as_of_date")))
     recovery_anchor = max(base_as_of, recovery_floor).isoformat()
     previous_ready: dict[str, str | None] = {}
+    previous_latest: dict[str, dict[str, object]] = {}
     for dataset in selected:
         row = dict(rows.get(dataset) or {})
+        previous_latest[dataset] = {
+            "latest_data_date": str(row.get("latest_data_date") or "").strip() or None,
+            "latest_data_date_by_data_id": dict(row.get("latest_data_date_by_data_id") or {}),
+        }
         if has_current_market_data_dataset_validation(row):
             previous_ready[dataset] = str(row.get("last_ready_target_date") or "").strip() or None
         else:
@@ -339,6 +347,7 @@ def sync_market_data_v2_due_datasets(
         policy=policy,
         selected_datasets=selected,
         previous_ready_dates_by_dataset=previous_ready,
+        previous_latest_data_dates_by_dataset=previous_latest,
         force_refresh_current_target=bool(force_refresh_current_target),
         refresh_token=refresh_token,
     )

@@ -1639,6 +1639,12 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         policy=policy,
         selected_datasets={"TaiwanStockPriceAdj", "GovernmentBondsYield"},
         previous_ready_dates_by_dataset={"TaiwanStockPriceAdj": "2026-09-07", "GovernmentBondsYield": "2026-09-07"},
+        previous_latest_data_dates_by_dataset={
+            "GovernmentBondsYield": {
+                "latest_data_date": "2026-09-02",
+                "latest_data_date_by_data_id": {"United States 10-Year": "2026-08-29"},
+            }
+        },
         force_refresh_current_target=True,
         refresh_token="synthetic-force-a",
     )
@@ -1650,15 +1656,58 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         policy=policy,
         selected_datasets={"TaiwanStockPriceAdj", "GovernmentBondsYield"},
         previous_ready_dates_by_dataset={"TaiwanStockPriceAdj": "2026-09-07", "GovernmentBondsYield": "2026-09-07"},
+        previous_latest_data_dates_by_dataset={
+            "GovernmentBondsYield": {
+                "latest_data_date": "2026-09-02",
+                "latest_data_date_by_data_id": {"United States 10-Year": "2026-08-29"},
+            }
+        },
         force_refresh_current_target=True,
         refresh_token="synthetic-force-b",
     )
     force_price = [request for request in force_manifest_a.requests if request.dataset == "TaiwanStockPriceAdj"]
     force_bonds = [request for request in force_manifest_a.requests if request.dataset == "GovernmentBondsYield"]
     check("force_refresh_target_price_is_exact_current_target", [("2026-09-07", "2026-09-07", None)], [(r.start_date, r.end_date, r.data_id) for r in force_price])
-    check("force_refresh_latest_available_uses_bounded_recent_window", True, bool(force_bonds) and all(r.end_date == "2026-09-07" and r.start_date < r.end_date for r in force_bonds))
+    bond_starts = {r.data_id: r.start_date for r in force_bonds}
+    check("force_refresh_latest_available_never_requeries_before_provider_anchor", "2026-09-01", bond_starts.get("United States 10-Year"))
+    check("force_refresh_latest_available_other_lanes_use_recent_anchor", "2026-09-01", bond_starts.get("United States 30-Year"))
+    older_provider = dict(provider)
+    older_provider["as_of_date"] = "2026-08-20"
+    force_crude = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=older_provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"CrudeOilPrices"},
+        previous_ready_dates_by_dataset={"CrudeOilPrices": "2026-09-07"},
+        previous_latest_data_dates_by_dataset={
+            "CrudeOilPrices": {
+                "latest_data_date": "2026-09-01",
+                "latest_data_date_by_data_id": {"WTI": "2026-08-28", "Brent": "2026-09-01"},
+            }
+        },
+        force_refresh_current_target=True,
+        refresh_token="synthetic-force-crude",
+    )
+    crude_starts = {r.data_id: r.start_date for r in force_crude.requests}
+    check("force_refresh_latest_available_uses_lane_last_observed_date_when_older_than_recent_window", "2026-08-28", crude_starts.get("WTI"))
+    check("force_refresh_latest_available_uses_recent_window_when_lane_is_newer", "2026-09-01", crude_starts.get("Brent"))
     check("force_refresh_token_creates_non_reusable_batch_identity", True, force_manifest_a.manifest_fingerprint != force_manifest_b.manifest_fingerprint)
     check("force_refresh_manifest_preserves_logical_request_geometry_across_tokens", [r.request_id for r in force_manifest_a.requests], [r.request_id for r in force_manifest_b.requests])
+    force_no_latest = build_trading_sync_request_manifest(
+        specs=specs,
+        provider_snapshot=provider,
+        target_date="2026-09-07",
+        previous_sync_date=None,
+        policy=policy,
+        selected_datasets={"GovernmentBondsYield"},
+        previous_ready_dates_by_dataset={"GovernmentBondsYield": "2026-09-07"},
+        previous_latest_data_dates_by_dataset={},
+        force_refresh_current_target=True,
+        refresh_token="synthetic-force-no-latest",
+    )
+    check("force_refresh_latest_available_without_operational_date_falls_back_to_provider_anchor", True, all(r.start_date == "2026-09-04" and r.end_date == "2026-09-07" for r in force_no_latest.requests))
     from core.market_data_instrument_universe import build_current_stock_etf_universe
     current_reference = build_current_stock_etf_universe(
         pd.DataFrame([
@@ -2103,6 +2152,29 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             },
         )
         check("multi_lane_target_freshness_requires_every_target_lane", "READY", complete_lane["datasets"]["TaiwanStockTotalReturnIndex"]["status"])
+
+    with TemporaryDirectory() as latest_lane_state_dir:
+        latest_lane_root = Path(latest_lane_state_dir)
+        latest_lane_state = record_market_data_sync_success(
+            latest_lane_root,
+            target_date="2026-09-10",
+            finished_at=datetime(2026, 9, 11, 13, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            attempted_datasets={"CrudeOilPrices"},
+            observations={
+                "CrudeOilPrices": {
+                    "row_count": 11,
+                    "request_count": 2,
+                    "nonempty_request_count": 2,
+                    "observed_min_date": "2026-08-26",
+                    "observed_max_date": "2026-09-01",
+                    "observed_max_date_by_data_id": {"WTI": "2026-09-01", "Brent": "2026-08-31"},
+                }
+            },
+        )
+        crude_row = latest_lane_state["datasets"]["CrudeOilPrices"]
+        check("latest_available_state_persists_dataset_latest_date", "2026-09-01", crude_row.get("latest_data_date"))
+        check("latest_available_state_persists_per_data_id_latest_dates", {"WTI": "2026-09-01", "Brent": "2026-08-31"}, crude_row.get("latest_data_date_by_data_id"))
+        check("latest_available_nonempty_all_lanes_is_ready_even_behind_taiwan_target", "READY", crude_row.get("status"))
 
     with TemporaryDirectory() as v2_state_dir:
         v2_root = Path(v2_state_dir)
@@ -2799,6 +2871,10 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("smart_downloader_force_refresh_mode_exits_cleanly", 0, force_smart_exit)
     check("smart_downloader_r_mode_passes_force_refresh_contract", [True], [bool(item.get("force_refresh_current_target")) for item in force_smart_calls])
     check("smart_downloader_option1_passes_progress_and_quota_observers", True, all(callable(item.get("progress_fn")) and callable(item.get("quota_wait_fn")) for item in force_smart_calls))
+    check("smart_downloader_daily_progress_displays_request_date_scope", True, "request_scope" in downloader_source and "date=STATIC" in downloader_source and "date={start_date}~{end_date}" in downloader_source)
+    check("smart_downloader_daily_summary_separates_exact_request_types", True, "Exact-date total" in downloader_source and "Data-id exact" in downloader_source and "Unique exact dates" in downloader_source)
+    check("smart_downloader_does_not_render_false_stockinfo_match_diff_completeness", False, "Instrument reference    : " in downloader_source or "REFERENCE_DIFF" in downloader_source)
+    check("smart_downloader_labels_instrument_completeness_unverified_without_authoritative_universe", True, "Instrument completeness" in downloader_source and "authoritative dataset-specific expected universe" in downloader_source)
     check("v2_auto_updater_does_not_import_legacy_trading_update_owner", False, "services.trading.market_data_update" in auto_update_source)
     check("v2_auto_updater_does_not_read_legacy_trading_snapshot_for_target", False, "load_trading_market_data_snapshot" in auto_update_source)
     check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "find_latest_ready_provider_snapshot" in auto_update_source and "load_trading_market_data_v2_state" in auto_update_source and "load_market_date_discovery_state" in auto_update_source)

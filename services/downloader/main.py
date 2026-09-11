@@ -135,6 +135,12 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
         dataset = str(event.get("dataset") or "-")
         data_id = event.get("data_id")
         target = dataset + (f"/{data_id}" if data_id else "")
+        start_date = event.get("start_date")
+        end_date = event.get("end_date")
+        if start_date and end_date:
+            request_scope = f"date={start_date}" if start_date == end_date else f"date={start_date}~{end_date}"
+        else:
+            request_scope = "date=STATIC"
         phase = str(event.get("phase") or "RUN")
         if bool(event.get("recovered")):
             phase = "REUSE"
@@ -144,7 +150,7 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
         q_limit = event.get("quota_limit")
         quota = "quota=--" if q_used is None or q_limit is None else f"quota≈{int(q_used)}/{int(q_limit)}"
         _write_progress_line(
-            f"[Daily] {done}/{total} ({pct:5.1f}%) | {target} | {phase}"
+            f"[Daily] {done}/{total} ({pct:5.1f}%) | {target} | {request_scope} | {phase}"
             f" | data={data_used} usage={usage_used} | {quota}"
         )
 
@@ -187,7 +193,10 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             "Request date window      : "
             f"{result.get('request_date_start') or '-'} ~ {result.get('request_date_end') or '-'}"
         )
-    print(f"Full-market exact-date  : {result.get('full_market_exact_date_request_count', 0)} requests")
+    print(f"Exact-date total        : {result.get('exact_date_request_count', 0)} requests")
+    print(f"  Full-market exact     : {result.get('full_market_exact_date_request_count', 0)}")
+    print(f"  Data-id exact         : {result.get('fixed_data_id_exact_date_request_count', 0)}")
+    print(f"Unique exact dates      : {result.get('unique_exact_date_count', 0)}")
     print(f"Range requests          : {result.get('range_request_count', 0)}")
     print(f"Undated/static requests : {result.get('undated_request_count', 0)}")
 
@@ -217,26 +226,10 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
         print(f"Schema observed         : {verification.get('schema_verified_dataset_count', 0)} datasets")
         ref_status = verification.get("current_stockinfo_reference_status") or "UNAVAILABLE"
         ref_count = int(verification.get("current_stockinfo_reference_count") or 0)
-        print(f"StockInfo reference     : {ref_status} ({ref_count} instruments)")
-        rows = list(verification.get("instrument_reference_rows") or [])
-        if rows:
-            print(
-                "Instrument reference    : "
-                f"MATCH {verification.get('instrument_reference_match_count', 0)} / "
-                f"DIFF {verification.get('instrument_reference_diff_count', 0)}"
-            )
-            for row in rows:
-                print(
-                    f"  - {row.get('dataset')}: observed={row.get('observed_instrument_count')}"
-                    f" / reference={row.get('reference_instrument_count')}"
-                    f" / missing_ref={row.get('missing_reference_count')}"
-                    f" / extra={row.get('extra_observed_count')}"
-                    f" / {row.get('status')}"
-                )
-                missing = list(row.get("missing_reference_sample") or [])
-                if missing:
-                    print(f"      missing sample: {', '.join(missing)}")
-        print("說明                    : StockInfo reference 用來找異常缺口；因停牌/資料集規則可能合法少列，不作 READY 硬 gate。")
+        print(f"StockInfo broad ref     : {ref_status} ({ref_count} stock/ETF identities)")
+        completeness = verification.get("instrument_completeness_status") or "UNVERIFIED"
+        print(f"Instrument completeness : {completeness}")
+        print("說明                    : 不同 dataset 的合法 instrument universe 不同；目前沒有 authoritative dataset-specific expected universe，因此不再用同一 StockInfo 集合產生假 MATCH/DIFF。")
 
     blockers = tuple(result.get("trading_blocking_datasets") or ())
     if blockers:
