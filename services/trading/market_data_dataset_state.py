@@ -7,19 +7,22 @@ from typing import Any, Iterable, Mapping
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.market_data_bootstrap_requests import build_registry_fingerprint
-from core.market_data_dataset_registry import get_market_dataset_specs
+from core.market_data_dataset_registry import get_market_dataset_spec, get_market_dataset_specs
 from core.market_data_dataset_readiness import (
     MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
     VALIDATION_STATUS_NO_ROW_VALID,
     VALIDATION_STATUS_READY,
+    has_current_market_data_dataset_validation,
 )
 from core.market_data_due_planner import (
     plan_market_data_due_datasets,
     resolve_market_data_expected_publish_at,
 )
 from core.market_data_freshness_contract import (
+    EXPECTED_DATE_LATEST_AVAILABLE,
     EXPECTED_DATE_NONE,
     EXPECTED_DATE_PERIOD_DUE,
+    EXPECTED_DATE_TRADING_TARGET,
     FRESHNESS_STATUS_BLOCKED,
     FRESHNESS_STATUS_ERROR,
     FRESHNESS_STATUS_NOT_APPLICABLE,
@@ -36,6 +39,39 @@ TRADING_MARKET_DATA_DATASET_STATE_SCHEMA_VERSION = 2
 TRADING_MARKET_DATA_DATASET_STATE_LEGACY_SCHEMA_VERSION = 1
 VALIDATION_STATUS_NOT_EVALUATED = "NOT_EVALUATED"
 VALIDATION_STATUS_UNKNOWN = "UNKNOWN"
+PREVIOUS_MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION = 2
+
+
+def _effective_trading_data_ids(dataset: str) -> tuple[str, ...]:
+    spec = get_market_dataset_spec(dataset)
+    return tuple(spec.trading_fixed_data_ids or spec.fixed_data_ids)
+
+
+def _v2_ready_evidence_is_safe_to_upgrade(dataset: str, row: Mapping[str, object]) -> bool:
+    """Upgrade only v2 READY evidence that already proved the whole target scope.
+
+    v2 tracked only aggregate max-date evidence.  That was sufficient for
+    full-market exact-date requests and single-lane range requests, but not for
+    multi-data-id target-date ranges where one fresh lane could mask another.
+    """
+
+    contract = next(item for item in get_market_data_freshness_contracts() if item.dataset == dataset)
+    spec = get_market_dataset_spec(dataset)
+    if spec.full_market_exact_date_expected:
+        return True
+    # v2 aggregate evidence could not prove every lane of a multi-data-id
+    # request set, regardless of READY/WAIT state.  Keep those rows on v2 so
+    # the next sync performs one targeted revalidation under lane coverage v3.
+    if len(_effective_trading_data_ids(dataset)) > 1:
+        return False
+    if str(row.get("status") or "") != FRESHNESS_STATUS_READY:
+        return True
+    return contract.expected_date_mode in {
+        EXPECTED_DATE_TRADING_TARGET,
+        EXPECTED_DATE_LATEST_AVAILABLE,
+        EXPECTED_DATE_NONE,
+        EXPECTED_DATE_PERIOD_DUE,
+    }
 
 
 def _empty_dataset_row() -> dict[str, object]:
@@ -107,13 +143,36 @@ def _validate_state_payload(payload: Mapping[str, object]) -> dict[str, Any]:
         }
         return {**migrated_core, "state_fingerprint": canonical_json_sha256(migrated_core)}
 
+    migrated_rows: dict[str, dict[str, object]] = {}
+    migrated = False
     for dataset, raw in datasets.items():
         if not isinstance(raw, Mapping):
             raise ValueError(f"Trading Market Data dataset state row 不是 object: {dataset}")
+        row = dict(raw)
         try:
-            int(raw.get("validation_contract_version", -1))
+            validation_version = int(row.get("validation_contract_version", -1))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Trading Market Data dataset validation contract 不合法: {dataset}") from exc
+        if validation_version > MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION:
+            raise ValueError(f"Trading Market Data dataset validation contract 來自較新版本: {dataset}")
+        if validation_version == PREVIOUS_MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION:
+            migrated = True
+            if _v2_ready_evidence_is_safe_to_upgrade(str(dataset), row):
+                row["validation_contract_version"] = MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
+            else:
+                # Keep the old validation version so canonical readiness forces a
+                # one-time targeted re-query under request-lane coverage v3.
+                row["validation_contract_version"] = PREVIOUS_MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
+            if str(row.get("status") or "") != FRESHNESS_STATUS_READY or int(row["validation_contract_version"]) != MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION:
+                row["next_check_at"] = None
+                row["publication_retry_count"] = 0
+        migrated_rows[str(dataset)] = row
+    if migrated:
+        migrated_core = {
+            **{key: value for key, value in state.items() if key not in {"state_fingerprint", "datasets"}},
+            "datasets": migrated_rows,
+        }
+        return {**migrated_core, "state_fingerprint": canonical_json_sha256(migrated_core)}
     return state
 
 
@@ -188,38 +247,80 @@ def record_market_data_sync_success(
         row = dict(datasets[dataset])
         prior_attempt_target = str(row.get("last_attempt_target_date") or "")
         prior_publication_retry_count = int(row.get("publication_retry_count") or 0)
+        prior_validation_current = has_current_market_data_dataset_validation(row)
+        prior_schema_status = str(row.get("schema_status") or VALIDATION_STATUS_UNKNOWN)
+        prior_coverage_status = str(row.get("coverage_status") or VALIDATION_STATUS_NOT_EVALUATED)
         evidence = observed.get(dataset) if isinstance(observed.get(dataset), Mapping) else {}
         row_count = int(evidence.get("row_count") or 0)
         observed_max = str(evidence.get("observed_max_date") or "").strip() or None
+        request_count = int(evidence.get("request_count") or (1 if row_count > 0 else 0))
+        nonempty_request_count = int(evidence.get("nonempty_request_count") or (1 if row_count > 0 else 0))
+        target_covering_request_count = int(
+            evidence.get("target_covering_request_count")
+            or (1 if observed_max is not None else 0)
+        )
+        target_fresh_request_count = int(
+            evidence.get("target_fresh_request_count")
+            or (1 if observed_max is not None and observed_max >= str(target_date) else 0)
+        )
+
         row["last_attempt_at"] = finished_at.isoformat()
         row["last_attempt_target_date"] = str(target_date)
         row["last_success_at"] = finished_at.isoformat()
         row["last_success_target_date"] = str(target_date)
         row["latest_data_date"] = _later_date(row.get("latest_data_date"), observed_max)
-        row["latest_expected_date"] = (
-            None
-            if contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}
-            else str(target_date)
-        )
+        if contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}:
+            row["latest_expected_date"] = None
+        elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
+            row["latest_expected_date"] = row.get("latest_data_date")
+        else:
+            row["latest_expected_date"] = str(target_date)
         row["expected_publish_at"] = resolve_market_data_expected_publish_at(
             contract, target_date=str(target_date)
         ).isoformat()
         row["validation_contract_version"] = MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
-        row["schema_status"] = (
-            VALIDATION_STATUS_READY
-            if row_count > 0
-            else (VALIDATION_STATUS_NO_ROW_VALID if contract.row_expectation == ROW_EXPECTATION_OPTIONAL else VALIDATION_STATUS_UNKNOWN)
-        )
-        row["coverage_status"] = (
-            VALIDATION_STATUS_NO_ROW_VALID
-            if row_count == 0 and contract.row_expectation == ROW_EXPECTATION_OPTIONAL
-            else (VALIDATION_STATUS_READY if row_count > 0 else VALIDATION_STATUS_NOT_EVALUATED)
-        )
 
-        if contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}:
-            ready = row_count > 0 or contract.row_expectation == ROW_EXPECTATION_OPTIONAL
+        if row_count > 0:
+            schema_status = VALIDATION_STATUS_READY
+        elif contract.row_expectation == ROW_EXPECTATION_OPTIONAL:
+            schema_status = VALIDATION_STATUS_NO_ROW_VALID
+        elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE and prior_validation_current:
+            schema_status = prior_schema_status
         else:
-            ready = bool(observed_max and observed_max >= str(target_date))
+            schema_status = VALIDATION_STATUS_UNKNOWN
+
+        if contract.row_expectation == ROW_EXPECTATION_OPTIONAL and row_count == 0:
+            coverage_status = VALIDATION_STATUS_NO_ROW_VALID
+        elif contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET:
+            target_scope_ready = bool(
+                target_covering_request_count > 0
+                and target_fresh_request_count == target_covering_request_count
+            )
+            coverage_status = VALIDATION_STATUS_READY if target_scope_ready else VALIDATION_STATUS_NOT_EVALUATED
+        elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
+            latest_scope_ready = bool(
+                request_count > 0
+                and (
+                    prior_validation_current
+                    or (nonempty_request_count > 0 and nonempty_request_count == request_count)
+                )
+            )
+            coverage_status = VALIDATION_STATUS_READY if latest_scope_ready else prior_coverage_status if prior_validation_current else VALIDATION_STATUS_NOT_EVALUATED
+        else:
+            coverage_status = VALIDATION_STATUS_READY if row_count > 0 else VALIDATION_STATUS_NOT_EVALUATED
+
+        row["schema_status"] = schema_status
+        row["coverage_status"] = coverage_status
+        validation_ready = bool(
+            schema_status in {VALIDATION_STATUS_READY, VALIDATION_STATUS_NO_ROW_VALID}
+            and coverage_status in {VALIDATION_STATUS_READY, VALIDATION_STATUS_NO_ROW_VALID}
+        )
+        if contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}:
+            ready = bool(validation_ready and (row_count > 0 or contract.row_expectation == ROW_EXPECTATION_OPTIONAL))
+        elif contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
+            ready = bool(validation_ready and str(row.get("latest_data_date") or "").strip())
+        else:
+            ready = validation_ready
 
         row["last_attempt_result"] = "SUCCESS"
         row["quota_defer_count"] = 0
@@ -236,7 +337,7 @@ def record_market_data_sync_success(
             row["status"] = FRESHNESS_STATUS_WAIT_PUBLISH
             row["publication_retry_count"] = prior_count + 1
             row["next_check_at"] = None
-            row["last_error"] = "sync requests completed but target-date freshness evidence is not yet present"
+            row["last_error"] = "sync requests completed but canonical freshness/request-scope evidence is not yet present"
         datasets[dataset] = row
 
     return publish_market_data_dataset_state(

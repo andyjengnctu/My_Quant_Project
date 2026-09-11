@@ -28,7 +28,7 @@ TRADING_SYNC_QUERY_INCREMENTAL = "trading_incremental"
 TRADING_SYNC_QUERY_RECENT = "trading_recent_repair"
 TRADING_SYNC_QUERY_EVENT = "trading_event_repair"
 TRADING_SYNC_QUERY_PERIODIC = "trading_periodic_repair"
-TRADING_SYNC_VALIDATION_CONTRACT_VERSION = 2
+TRADING_SYNC_VALIDATION_CONTRACT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -115,8 +115,9 @@ def _exact_date_requests(spec: MarketDatasetSpec, mode: str, dates: Iterable[str
 
 
 def _range_requests(spec: MarketDatasetSpec, mode: str, start_date: str, end_date: str) -> list[BootstrapHttpRequest]:
-    if spec.fixed_data_ids:
-        return [BootstrapHttpRequest(spec.dataset, mode, data_id, start_date, end_date) for data_id in spec.fixed_data_ids]
+    data_ids = spec.trading_fixed_data_ids or spec.fixed_data_ids
+    if data_ids:
+        return [BootstrapHttpRequest(spec.dataset, mode, data_id, start_date, end_date) for data_id in data_ids]
     return [BootstrapHttpRequest(spec.dataset, mode, None, start_date, end_date)]
 
 

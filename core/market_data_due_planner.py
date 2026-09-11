@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
 from core.market_data_dataset_readiness import is_market_data_dataset_ready
 from core.market_data_freshness_contract import (
+    EXPECTED_DATE_LATEST_AVAILABLE,
     FRESHNESS_STATUS_BLOCKED,
     FRESHNESS_STATUS_DUE,
     FRESHNESS_STATUS_ERROR,
@@ -100,11 +101,19 @@ def _dataset_state_map(state: Mapping[str, object] | None) -> Mapping[str, objec
     return datasets if isinstance(datasets, Mapping) else {}
 
 
-def _expected_date(contract: MarketDataFreshnessContract, target_date: str) -> str | None:
-    # Even event/current-vintage datasets are refreshed once per Trading target
-    # cycle, but they do not claim that a row *for* target_date must exist.
+def _expected_date(
+    contract: MarketDataFreshnessContract,
+    target_date: str,
+    item: Mapping[str, object],
+) -> str | None:
+    # Event/current-vintage datasets do not claim a row for target_date.
+    # ``latest_available`` means the provider's newest observed row as of this
+    # poll, not the Taiwan Trading target date.
     if contract.expected_date_mode in {"none", "period_due"}:
         return None
+    if contract.expected_date_mode == EXPECTED_DATE_LATEST_AVAILABLE:
+        value = str(item.get("latest_data_date") or "").strip()
+        return value or None
     return target_date
 
 
@@ -128,7 +137,7 @@ def plan_market_data_due_datasets(
         item = row if isinstance(row, Mapping) else {}
         expected_publish = resolve_market_data_expected_publish_at(contract, target_date=target_text)
         ready_target = str(item.get("last_ready_target_date") or "").strip()
-        latest_expected = _expected_date(contract, target_text)
+        latest_expected = _expected_date(contract, target_text, item)
 
         if is_market_data_dataset_ready(item, target_date=target_text):
             decisions.append(

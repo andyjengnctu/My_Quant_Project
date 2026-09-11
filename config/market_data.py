@@ -178,6 +178,7 @@ MARKET_DATA_V2_PUBLICATION_POLICY = {
         "TaiwanStockMarketValue": {"first_check_time": "23:45", "day_offset": 0, "source": "provider_documentation:fundamental"},
         "TaiwanStockMarketValueWeight": {"first_check_time": "23:55", "day_offset": 0, "source": "provider_documentation:fundamental"},
         "TaiwanFuturesDaily": {"first_check_time": "16:45", "day_offset": 0, "source": "provider_documentation:derivatives"},
+        "TaiwanFuturesOpenInterestLargeTraders": {"first_check_time": "16:45", "day_offset": 0, "source": "provider_documentation:derivatives"},
         "TaiwanFuturesInstitutionalInvestors": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:derivatives"},
         "TaiwanOptionInstitutionalInvestors": {"first_check_time": "16:15", "day_offset": 0, "source": "provider_documentation:derivatives"},
         "TaiwanOptionVix": {"first_check_time": "18:15", "day_offset": 0, "source": "provider_documentation:derivatives"},

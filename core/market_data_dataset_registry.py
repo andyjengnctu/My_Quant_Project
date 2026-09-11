@@ -56,6 +56,7 @@ class MarketDatasetSpec:
     rationale: str = ""
     trading_query_mode: str = TRADING_QUERY_AUTO
     trading_lookback_periods: int = 0
+    trading_fixed_data_ids: tuple[str, ...] = ()
     bootstrap_start_date: str | None = None
     bootstrap_chunk_years: int = 0
     bootstrap_chunk_months: int = 0
@@ -80,6 +81,7 @@ def _include(
     rationale: str = "",
     trading_query_mode: str = TRADING_QUERY_AUTO,
     trading_lookback_periods: int = 0,
+    trading_fixed_data_ids: tuple[str, ...] = (),
     bootstrap_start_date: str | None = None,
     bootstrap_chunk_years: int = 0,
     bootstrap_chunk_months: int = 0,
@@ -99,6 +101,7 @@ def _include(
         rationale=rationale,
         trading_query_mode=trading_query_mode,
         trading_lookback_periods=int(trading_lookback_periods),
+        trading_fixed_data_ids=tuple(trading_fixed_data_ids),
         bootstrap_start_date=bootstrap_start_date,
         bootstrap_chunk_years=int(bootstrap_chunk_years),
         bootstrap_chunk_months=int(bootstrap_chunk_months),
@@ -176,7 +179,8 @@ MARKET_DATASET_SPECS: tuple[MarketDatasetSpec, ...] = (
     _include("TaiwanFutOptDailyInfo", "derivative_master", BOOTSTRAP_SINGLE_NO_DATES, DAILY_STATIC_REFRESH, PIT_REVIEW_REQUIRED, primary_key_hint=("code", "type", "name"), rationale="Canonical derivative product/code inventory used to interpret futures/options datasets; no scientific product selection is implied."),
     _include("TaiwanFuturesDaily", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TX",)),
     _include("TaiwanFuturesInstitutionalInvestors", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TX",)),
-    _include("TaiwanFuturesOpenInterestLargeTraders", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXF",), rationale="This dataset uses futures product code TXF; it is not the TX code used by FuturesDaily/InstitutionalInvestors."),
+# FinMind package/bootstrap alias remains TXF; raw Data API daily rows expose the TAIEX futures product as TX.
+    _include("TaiwanFuturesOpenInterestLargeTraders", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXF",), trading_fixed_data_ids=("TX",), rationale="This dataset uses futures product code TXF; it is not the TX code used by FuturesDaily/InstitutionalInvestors."),
     _include("TaiwanOptionDaily", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",), bootstrap_start_date="2001-12-01", bootstrap_chunk_months=1, preflight_probe_calendar_days=2, rationale="High-density strike/expiry option history is chunked by calendar month; capability preflight uses only the latest two completed-market calendar days to avoid oversized provider responses."),
     _include("TaiwanOptionInstitutionalInvestors", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",)),
     _include("TaiwanOptionOpenInterestLargeTraders", "derivative_context", BOOTSTRAP_FIXED_DATA_ID_FULL_RANGE, DAILY_RECENT_REPAIR, PIT_REVIEW_REQUIRED, fixed_data_ids=("TXO",)),
@@ -254,6 +258,12 @@ def validate_market_dataset_registry() -> dict[str, int]:
             raise ValueError(f"{spec.dataset} trading_query_mode 已指定但 trading_lookback_periods < 1")
         if spec.trading_query_mode == TRADING_QUERY_AUTO and spec.trading_lookback_periods != 0:
             raise ValueError(f"{spec.dataset} trading_query_mode=auto 時不得設定 trading_lookback_periods")
+        if len(set(spec.trading_fixed_data_ids)) != len(spec.trading_fixed_data_ids):
+            raise ValueError(f"{spec.dataset} trading_fixed_data_ids 不得重複")
+        if any(not str(value or "").strip() for value in spec.trading_fixed_data_ids):
+            raise ValueError(f"{spec.dataset} trading_fixed_data_ids 不得包含空白 identity")
+        if spec.trading_fixed_data_ids and not spec.fixed_data_ids:
+            raise ValueError(f"{spec.dataset} trading_fixed_data_ids 只能覆寫 fixed-data-id dataset")
         if spec.daily_mode == DAILY_PERIODIC_REPAIR and spec.trading_query_mode == TRADING_QUERY_AUTO:
             raise ValueError(f"{spec.dataset} periodic_repair 必須明確登記 Trading query policy")
         if spec.trading_query_mode in exact_date_query_modes and not spec.full_market_exact_date_expected:

@@ -91,16 +91,19 @@ class MarketDataTradingStorageSink:
     def _record_observation(
         self,
         *,
-        dataset: str,
+        request,
         row_count: int,
         observed_min_date: str | None,
         observed_max_date: str | None,
     ) -> None:
+        dataset = str(request.dataset)
         row = self._dataset_observations.setdefault(
             dataset,
             {
                 "request_count": 0,
                 "nonempty_request_count": 0,
+                "target_covering_request_count": 0,
+                "target_fresh_request_count": 0,
                 "row_count": 0,
                 "observed_min_date": None,
                 "observed_max_date": None,
@@ -110,6 +113,18 @@ class MarketDataTradingStorageSink:
         row["row_count"] = int(row["row_count"]) + int(row_count)
         if int(row_count) > 0:
             row["nonempty_request_count"] = int(row["nonempty_request_count"]) + 1
+
+        target = str(self.manifest.as_of_date)
+        covers_target = bool(
+            request.start_date is not None
+            and request.end_date is not None
+            and str(request.start_date) <= target <= str(request.end_date)
+        )
+        if covers_target:
+            row["target_covering_request_count"] = int(row["target_covering_request_count"]) + 1
+            if observed_max_date and str(observed_max_date) >= target:
+                row["target_fresh_request_count"] = int(row["target_fresh_request_count"]) + 1
+
         if observed_min_date:
             current = str(row.get("observed_min_date") or "").strip()
             row["observed_min_date"] = observed_min_date if not current else min(current, observed_min_date)
@@ -244,7 +259,7 @@ class MarketDataTradingStorageSink:
         if int(metadata.get("row_count", -1)) != inspection.row_count:
             raise MarketDataCommitError("既有 Trading V2 Parquet row_count metadata 與實體不一致")
         self._record_observation(
-            dataset=request.dataset,
+            request=request,
             row_count=inspection.row_count,
             observed_min_date=str(metadata.get("observed_min_date") or "").strip() or None,
             observed_max_date=str(metadata.get("observed_max_date") or "").strip() or None,
@@ -288,7 +303,7 @@ class MarketDataTradingStorageSink:
             disk_usage_fn=self.disk_usage_fn,
         )
         self._record_observation(
-            dataset=request.dataset,
+            request=request,
             row_count=len(frame),
             observed_min_date=observed_min_date,
             observed_max_date=observed_max_date,

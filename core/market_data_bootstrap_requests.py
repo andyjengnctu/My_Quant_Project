@@ -158,6 +158,7 @@ def build_registry_fingerprint(specs: Iterable[MarketDatasetSpec]) -> str:
         item = asdict(spec)
         item.pop("trading_query_mode", None)
         item.pop("trading_lookback_periods", None)
+        item.pop("trading_fixed_data_ids", None)
         ordered.append(item)
     ordered.sort(
         key=lambda item: (str(item.get("dataset") or ""), str(item.get("archive_policy") or "")),

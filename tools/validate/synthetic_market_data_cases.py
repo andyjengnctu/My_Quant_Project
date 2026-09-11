@@ -121,7 +121,9 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
     check("industry_chain_classification_is_archived", True, "TaiwanStockIndustryChain" in datasets)
     check("derivative_product_master_is_archived", True, "TaiwanFutOptDailyInfo" in datasets)
     check("price_limit_bootstrap_is_per_instrument", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, get_market_dataset_spec("TaiwanStockPriceLimit").bootstrap_mode)
-    check("futures_large_trader_uses_dataset_product_code", ("TXF",), get_market_dataset_spec("TaiwanFuturesOpenInterestLargeTraders").fixed_data_ids)
+    large_trader_spec = get_market_dataset_spec("TaiwanFuturesOpenInterestLargeTraders")
+    check("futures_large_trader_bootstrap_identity_retains_provider_alias", ("TXF",), large_trader_spec.fixed_data_ids)
+    check("futures_large_trader_trading_query_uses_raw_api_product_code", ("TX",), large_trader_spec.trading_fixed_data_ids)
 
     stock_info = pd.DataFrame(
         [
@@ -1602,7 +1604,12 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     )
     check("trading_manifest_is_deterministic", manifest_a.manifest_fingerprint, manifest_b.manifest_fingerprint)
     check("trading_manifest_covers_every_included_dataset", {spec.dataset for spec in specs}, {request.dataset for request in manifest_a.requests})
-    check("trading_manifest_never_expands_to_historical_stock_universe", True, all(request.data_id is None or request.data_id in next(spec for spec in specs if spec.dataset == request.dataset).fixed_data_ids for request in manifest_a.requests))
+    def _allowed_trading_data_ids(dataset):
+        spec = next(item for item in specs if item.dataset == dataset)
+        return spec.trading_fixed_data_ids or spec.fixed_data_ids
+    check("trading_manifest_never_expands_to_historical_stock_universe", True, all(request.data_id is None or request.data_id in _allowed_trading_data_ids(request.dataset) for request in manifest_a.requests))
+    large_trader_requests = [request for request in manifest_a.requests if request.dataset == "TaiwanFuturesOpenInterestLargeTraders"]
+    check("trading_large_trader_manifest_uses_raw_api_tx_code", True, bool(large_trader_requests) and {request.data_id for request in large_trader_requests} == {"TX"})
     price_adj_requests = [request for request in manifest_a.requests if request.dataset == "TaiwanStockPriceAdj"]
     check("trading_priceadj_daily_sync_uses_full_market_exact_date_requests", True, bool(price_adj_requests) and all(request.data_id is None and request.start_date == request.end_date for request in price_adj_requests))
     check("trading_policy_is_non_blocking_for_current_execution", False, policy.execution_fail_closed)
@@ -1837,6 +1844,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         CADENCE_EVENT_DRIVEN,
         CADENCE_PERIODIC,
         COMPLETENESS_EVENT_NO_ROW_VALID,
+        EXPECTED_DATE_LATEST_AVAILABLE,
         EXPECTED_DATE_NONE,
         EXPECTED_DATE_PERIOD_DUE,
         FRESHNESS_STATUSES,
@@ -1866,6 +1874,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("documented_price_schedule_uses_grace", ("17:45", 0, True), (by_dataset["TaiwanStockPrice"].publication_first_check_time, by_dataset["TaiwanStockPrice"].publication_day_offset, by_dataset["TaiwanStockPrice"].publication_schedule_verified))
     check("documented_per_schedule_uses_grace", ("18:15", 0, True), (by_dataset["TaiwanStockPER"].publication_first_check_time, by_dataset["TaiwanStockPER"].publication_day_offset, by_dataset["TaiwanStockPER"].publication_schedule_verified))
     check("documented_day_trading_schedule_waits_for_close_values", ("21:45", 0, True), (by_dataset["TaiwanStockDayTrading"].publication_first_check_time, by_dataset["TaiwanStockDayTrading"].publication_day_offset, by_dataset["TaiwanStockDayTrading"].publication_schedule_verified))
+    check("documented_large_trader_schedule_uses_derivatives_grace", ("16:45", 0, True), (by_dataset["TaiwanFuturesOpenInterestLargeTraders"].publication_first_check_time, by_dataset["TaiwanFuturesOpenInterestLargeTraders"].publication_day_offset, by_dataset["TaiwanFuturesOpenInterestLargeTraders"].publication_schedule_verified))
     check("undocumented_schedule_uses_next_day_fallback", ("01:45", 1, False), (by_dataset["TaiwanStockHoldingSharesPer"].publication_first_check_time, by_dataset["TaiwanStockHoldingSharesPer"].publication_day_offset, by_dataset["TaiwanStockHoldingSharesPer"].publication_schedule_verified))
 
     from datetime import datetime
@@ -1911,6 +1920,24 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                     "observed_min_date": "2026-09-07",
                     "observed_max_date": "2026-09-07",
                 }
+        observations["CrudeOilPrices"] = {
+            "row_count": 10,
+            "request_count": 2,
+            "nonempty_request_count": 2,
+            "target_covering_request_count": 2,
+            "target_fresh_request_count": 0,
+            "observed_min_date": "2026-08-25",
+            "observed_max_date": "2026-09-01",
+        }
+        observations["GovernmentBondsYield"] = {
+            "row_count": 120,
+            "request_count": 12,
+            "nonempty_request_count": 12,
+            "target_covering_request_count": 12,
+            "target_fresh_request_count": 0,
+            "observed_min_date": "2026-08-25",
+            "observed_max_date": "2026-09-05",
+        }
         dataset_state = record_market_data_sync_success(
             state_root,
             target_date="2026-09-07",
@@ -1922,6 +1949,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("periodic_refresh_can_be_ready_with_older_real_data_date", "READY", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["status"])
         check("periodic_state_preserves_actual_latest_data_date", "2026-06-30", dataset_state["datasets"]["TaiwanStockFinancialStatements"]["latest_data_date"])
         check("event_no_row_window_can_be_ready", "READY", dataset_state["datasets"]["TaiwanStockDelisting"]["status"])
+        check("latest_available_crude_oil_can_be_ready_behind_taiwan_target", ("READY", "2026-09-01"), (dataset_state["datasets"]["CrudeOilPrices"]["status"], dataset_state["datasets"]["CrudeOilPrices"]["latest_expected_date"]))
+        check("latest_available_us_bonds_can_be_ready_behind_taiwan_target", ("READY", "2026-09-05"), (dataset_state["datasets"]["GovernmentBondsYield"]["status"], dataset_state["datasets"]["GovernmentBondsYield"]["latest_expected_date"]))
         same_target_plan = plan_market_data_due_datasets(
             target_date="2026-09-07",
             now=datetime(2026, 9, 8, 2, 1, tzinfo=ZoneInfo("Asia/Taipei")),
@@ -1958,6 +1987,76 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
         loaded_state = load_market_data_dataset_state(state_root, required=True)
         check("dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
+
+    with TemporaryDirectory() as lane_state_dir:
+        lane_root = Path(lane_state_dir)
+        lane_now = datetime(2026, 9, 10, 18, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        partial_lane = record_market_data_sync_success(
+            lane_root,
+            target_date="2026-09-10",
+            finished_at=lane_now,
+            attempted_datasets={"TaiwanStockTotalReturnIndex"},
+            observations={
+                "TaiwanStockTotalReturnIndex": {
+                    "row_count": 20,
+                    "request_count": 2,
+                    "nonempty_request_count": 2,
+                    "target_covering_request_count": 2,
+                    "target_fresh_request_count": 1,
+                    "observed_min_date": "2026-09-05",
+                    "observed_max_date": "2026-09-10",
+                }
+            },
+        )
+        check("multi_lane_target_freshness_does_not_accept_one_fresh_lane", "WAIT_PUBLISH", partial_lane["datasets"]["TaiwanStockTotalReturnIndex"]["status"])
+        check("multi_lane_partial_target_scope_is_not_coverage_ready", "NOT_EVALUATED", partial_lane["datasets"]["TaiwanStockTotalReturnIndex"]["coverage_status"])
+        complete_lane = record_market_data_sync_success(
+            lane_root,
+            target_date="2026-09-10",
+            finished_at=lane_now,
+            attempted_datasets={"TaiwanStockTotalReturnIndex"},
+            observations={
+                "TaiwanStockTotalReturnIndex": {
+                    "row_count": 20,
+                    "request_count": 2,
+                    "nonempty_request_count": 2,
+                    "target_covering_request_count": 2,
+                    "target_fresh_request_count": 2,
+                    "observed_min_date": "2026-09-05",
+                    "observed_max_date": "2026-09-10",
+                }
+            },
+        )
+        check("multi_lane_target_freshness_requires_every_target_lane", "READY", complete_lane["datasets"]["TaiwanStockTotalReturnIndex"]["status"])
+
+    with TemporaryDirectory() as v2_state_dir:
+        v2_root = Path(v2_state_dir)
+        v2_path = resolve_trading_market_data_v2_dataset_state_path(v2_root)
+        v2_state = build_initial_market_data_dataset_state(
+            updated_at=datetime(2026, 9, 10, 18, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        )
+        v2_rows = {key: dict(value) for key, value in v2_state["datasets"].items()}
+        for row in v2_rows.values():
+            row["validation_contract_version"] = 2
+            row["status"] = "READY"
+            row["last_ready_target_date"] = "2026-09-10"
+            row["schema_status"] = "READY"
+            row["coverage_status"] = "READY"
+        v2_core = {
+            **{key: value for key, value in v2_state.items() if key not in {"state_fingerprint", "datasets"}},
+            "datasets": v2_rows,
+        }
+        atomic_write_json(v2_path, {**v2_core, "state_fingerprint": canonical_json_sha256(v2_core)})
+        migrated_v2 = load_market_data_dataset_state(v2_root, required=True)
+        check("v2_single_lane_ready_evidence_upgrades_without_full_redownload", 3, migrated_v2["datasets"]["TaiwanStockPrice"]["validation_contract_version"])
+        check("v2_multi_lane_ready_evidence_requires_targeted_revalidation", 2, migrated_v2["datasets"]["TaiwanStockTotalReturnIndex"]["validation_contract_version"])
+        v2_due = plan_market_data_due_datasets(
+            target_date="2026-09-10",
+            now=datetime(2026, 9, 11, 13, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=migrated_v2,
+            contracts=(by_dataset["TaiwanStockPrice"], by_dataset["TaiwanStockTotalReturnIndex"]),
+        )
+        check("v3_migration_requeries_only_ambiguous_multi_lane_row", ("TaiwanStockTotalReturnIndex",), v2_due.due_datasets)
 
     with TemporaryDirectory() as legacy_state_dir:
         legacy_root = Path(legacy_state_dir)
