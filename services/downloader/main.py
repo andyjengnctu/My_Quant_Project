@@ -34,7 +34,7 @@ def _status_color(status: object) -> str:
         return C_GREEN
     if normalized in {"DEFERRED", "WAIT_PUBLISH", "WAIT_QUOTA", "UNVERIFIED"}:
         return C_YELLOW
-    if normalized in {"NO", "NO_DUE"}:
+    if normalized in {"NO", "NO_DUE", "NOT_IN_BATCH"}:
         return C_GRAY
     if normalized in {"TARGET_ADVANCED"}:
         return C_CYAN
@@ -290,9 +290,13 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
         print(_paint("-" * 88, C_CYAN))
         print(f"Fresh batch observed    : {verification.get('observed_dataset_count', 0)} datasets")
         print(f"Schema observed         : {verification.get('schema_verified_dataset_count', 0)} datasets")
-        ref_status = verification.get("current_stockinfo_reference_status") or "UNAVAILABLE"
-        ref_count = int(verification.get("current_stockinfo_reference_count") or 0)
-        print(f"StockInfo broad ref     : {_paint(ref_status, _status_color(ref_status))} ({ref_count} stock/ETF identities)")
+        ref_status = verification.get("current_stockinfo_reference_status") or "NOT_IN_BATCH"
+        ref_count = verification.get("current_stockinfo_reference_count")
+        if ref_status == "NOT_IN_BATCH":
+            print(f"StockInfo in fresh batch: {_paint('NOT_IN_BATCH', C_GRAY)}")
+        else:
+            count_text = "-" if ref_count is None else f"{int(ref_count)} stock/ETF identities"
+            print(f"StockInfo batch ref     : {_paint(ref_status, _status_color(ref_status))} ({count_text})")
         completeness = verification.get("instrument_completeness_status") or "UNVERIFIED"
         print(f"Instrument completeness : {_paint(completeness, _status_color(completeness))}")
         print(_paint("說明                    : 不同 dataset 的合法 instrument universe 不同；目前沒有 authoritative dataset-specific expected universe，因此不再用同一 StockInfo 集合產生假 MATCH/DIFF。", C_GRAY))

@@ -19,7 +19,7 @@ TRADING_MARKET_DATA_V2_MARKET_DATE_DISCOVERY_STATE_RELATIVE_PATH = Path("state")
 TRADING_MARKET_DATA_V2_LEDGER_RELATIVE_ROOT = Path("state") / "trading" / "market_data_v2" / "ledgers"
 TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME = "batch_manifest.json"
 TRADING_MARKET_DATA_V2_SCHEMA_VERSION = 1
-TRADING_MARKET_DATA_V2_LEGACY_READ_VALIDATION_CONTRACT_VERSIONS = (2,)
+TRADING_MARKET_DATA_V2_MIN_READ_VALIDATION_CONTRACT_VERSION = 1
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _DATASET_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
@@ -118,7 +118,11 @@ def _validate_trading_sync_batch_manifest_payload(
     except (TypeError, ValueError) as exc:
         raise ValueError("Trading V2 batch manifest validation contract 不合法") from exc
     if validation_version not in allowed_validation_contract_versions:
-        raise ValueError("Trading V2 batch manifest validation contract 不相容")
+        allowed_text = ",".join(str(value) for value in allowed_validation_contract_versions)
+        raise ValueError(
+            "Trading V2 batch manifest validation contract 不相容: "
+            f"version={validation_version}, allowed={allowed_text}"
+        )
     batch_fingerprint = _hex64(str(payload.get("batch_fingerprint") or ""), field="batch_fingerprint")
     _hex64(str(payload.get("base_provider_snapshot_fingerprint") or ""), field="base_provider_snapshot_fingerprint")
     _hex64(str(payload.get("base_provider_manifest_fingerprint") or ""), field="base_provider_manifest_fingerprint")
@@ -154,16 +158,20 @@ def validate_trading_sync_batch_manifest_payload(payload: dict[str, object]) -> 
 def validate_trading_sync_batch_manifest_payload_for_read(payload: dict[str, object]) -> dict[str, object]:
     """Validate immutable current or explicitly supported legacy batches for read-only use.
 
-    Legacy versions remain read-only compatibility identities.  New producers must
-    continue to use ``validate_trading_sync_batch_manifest_payload`` and the
-    current contract; this seam does not authorize creation or mutation of old
-    batches.
+    Historical batches that share the current storage schema remain readable from
+    the explicit compatibility floor through the current validation contract.
+    Validation-contract changes govern producer/planner evidence, while an
+    incompatible storage representation must increment ``schema_version``.  New
+    producers still use ``validate_trading_sync_batch_manifest_payload`` only;
+    this seam never authorizes creation or mutation of an old batch.
     """
 
-    allowed = tuple(sorted({
-        TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
-        *TRADING_MARKET_DATA_V2_LEGACY_READ_VALIDATION_CONTRACT_VERSIONS,
-    }))
+    allowed = tuple(
+        range(
+            TRADING_MARKET_DATA_V2_MIN_READ_VALIDATION_CONTRACT_VERSION,
+            TRADING_SYNC_VALIDATION_CONTRACT_VERSION + 1,
+        )
+    )
     return _validate_trading_sync_batch_manifest_payload(
         payload,
         allowed_validation_contract_versions=allowed,
@@ -212,7 +220,6 @@ __all__ = [
     "TRADING_MARKET_DATA_V2_MARKET_DATE_DISCOVERY_STATE_RELATIVE_PATH",
     "TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME",
     "TRADING_MARKET_DATA_V2_SCHEMA_VERSION",
-    "TRADING_MARKET_DATA_V2_LEGACY_READ_VALIDATION_CONTRACT_VERSIONS",
     "resolve_trading_market_data_v2_root",
     "resolve_trading_market_data_v2_state_path",
     "resolve_trading_market_data_v2_dataset_state_path",
@@ -224,6 +231,7 @@ __all__ = [
     "resolve_trading_market_data_v2_request_path",
     "resolve_trading_market_data_v2_ledger_path",
     "build_trading_sync_batch_manifest_payload",
+    "TRADING_MARKET_DATA_V2_MIN_READ_VALIDATION_CONTRACT_VERSION",
     "validate_trading_sync_batch_manifest_payload",
     "validate_trading_sync_batch_manifest_payload_for_read",
     "build_trading_request_metadata",

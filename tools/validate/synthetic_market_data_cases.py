@@ -2947,6 +2947,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("smart_downloader_labels_instrument_completeness_unverified_without_authoritative_universe", True, "Instrument completeness" in downloader_source and "authoritative dataset-specific expected universe" in downloader_source)
     integrity_source = (project_root / "services" / "downloader" / "market_data_integrity_audit.py").read_text(encoding="utf-8")
     check("smart_downloader_displays_execution_pool_funnel", True, all(token in downloader_source for token in ("Trading execution pool", "PIT market members", "Final execution pool")))
+    check("smart_downloader_does_not_report_missing_stockinfo_as_zero_broad_reference", True, "StockInfo in fresh batch" in downloader_source and "NOT_IN_BATCH" in downloader_source)
     check("smart_downloader_displays_execution_pool_at_common_ready_horizon", True, "Trading safe horizon" in downloader_source and "safe_date = min(target_date, str(horizon.training_through_date))" in downloader_source)
     check("smart_downloader_labels_target_freshness_without_claiming_archive_completeness", True, "Target freshness READY" in downloader_source and "Archive datasets READY" not in downloader_source)
     check("smart_downloader_displays_dynamic_request_window_policy_source", True, "Window start policy" in downloader_source and "request_date_start_sources" in auto_update_source and '"request_mode"' in v2_sync_source)
@@ -5213,39 +5214,50 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
     )
 
     from core.file_integrity import canonical_json_sha256
+    from core.market_data_trading_sync import TRADING_SYNC_VALIDATION_CONTRACT_VERSION
     from core.market_data_trading_storage_contract import (
         TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
         validate_trading_sync_batch_manifest_payload,
         validate_trading_sync_batch_manifest_payload_for_read,
     )
-    legacy_identity = {
-        "schema_version": TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
-        "role": "trading_market_data_v2_archive_sync_batch",
-        "status": "READY",
-        "target_date": "2026-03-02",
-        "base_as_of_date": "2026-03-02",
-        "previous_sync_date": None,
-        "base_provider_snapshot_fingerprint": "a" * 64,
-        "base_provider_manifest_fingerprint": "b" * 64,
-        "registry_fingerprint": "c" * 64,
-        "batch_fingerprint": "d" * 64,
-        "validation_contract_version": 2,
-        "request_count": 1,
-        "request_ids": ["e" * 64],
-    }
-    legacy_payload = {**legacy_identity, "identity_fingerprint": canonical_json_sha256(legacy_identity)}
-    try:
-        validate_trading_sync_batch_manifest_payload(legacy_payload)
-    except ValueError:
-        strict_accepts_legacy = False
-    else:
-        strict_accepts_legacy = True
-    check("current_producer_validator_rejects_legacy_v2_batch", False, strict_accepts_legacy)
-    check(
-        "read_validator_accepts_immutable_legacy_v2_batch",
-        legacy_payload,
-        validate_trading_sync_batch_manifest_payload_for_read(legacy_payload),
-    )
+    def _legacy_batch_payload(version: int) -> dict[str, object]:
+        identity = {
+            "schema_version": TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
+            "role": "trading_market_data_v2_archive_sync_batch",
+            "status": "READY",
+            "target_date": "2026-03-02",
+            "base_as_of_date": "2026-03-02",
+            "previous_sync_date": None,
+            "base_provider_snapshot_fingerprint": "a" * 64,
+            "base_provider_manifest_fingerprint": "b" * 64,
+            "registry_fingerprint": "c" * 64,
+            "batch_fingerprint": "d" * 64,
+            "validation_contract_version": int(version),
+            "request_count": 1,
+            "request_ids": ["e" * 64],
+        }
+        return {**identity, "identity_fingerprint": canonical_json_sha256(identity)}
+
+    for legacy_version in (1, 2):
+        legacy_payload = _legacy_batch_payload(legacy_version)
+        try:
+            validate_trading_sync_batch_manifest_payload(legacy_payload)
+        except ValueError:
+            strict_accepts_legacy = False
+        else:
+            strict_accepts_legacy = True
+        check(
+            f"current_producer_validator_rejects_legacy_v{legacy_version}_batch",
+            False,
+            strict_accepts_legacy,
+        )
+        check(
+            f"read_validator_accepts_immutable_legacy_v{legacy_version}_batch",
+            legacy_payload,
+            validate_trading_sync_batch_manifest_payload_for_read(legacy_payload),
+        )
+
+    legacy_payload = _legacy_batch_payload(1)
     tampered_legacy = dict(legacy_payload)
     tampered_legacy["request_count"] = 2
     try:
@@ -5255,6 +5267,19 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
     else:
         tampered_rejected = False
     check("read_validator_still_rejects_tampered_legacy_batch", True, tampered_rejected)
+    for unsupported_version in (0, TRADING_SYNC_VALIDATION_CONTRACT_VERSION + 1):
+        unsupported_payload = _legacy_batch_payload(unsupported_version)
+        try:
+            validate_trading_sync_batch_manifest_payload_for_read(unsupported_payload)
+        except ValueError:
+            unsupported_rejected = True
+        else:
+            unsupported_rejected = False
+        check(
+            f"read_validator_rejects_unsupported_contract_v{unsupported_version}",
+            True,
+            unsupported_rejected,
+        )
 
     # Exercise the actual read seam over one immutable Provider Snapshot plus one
     # completed Trading overlay.  This covers read-only ledger validation and

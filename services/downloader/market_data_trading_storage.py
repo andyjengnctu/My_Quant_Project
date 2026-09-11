@@ -211,11 +211,14 @@ class MarketDataTradingStorageSink:
             for dataset, ids in sorted(self._target_instrument_ids.items())
             if ids
         ]
+        stockinfo_observed = self._stock_info_frame is not None
         return {
             "schema_verified_dataset_count": int(schema_verified),
             "observed_dataset_count": len(observations),
-            "current_stockinfo_reference_status": "AVAILABLE" if reference_ids else "UNAVAILABLE",
-            "current_stockinfo_reference_count": len(reference_ids),
+            "current_stockinfo_reference_status": (
+                "AVAILABLE" if reference_ids else ("UNAVAILABLE" if stockinfo_observed else "NOT_IN_BATCH")
+            ),
+            "current_stockinfo_reference_count": (len(reference_ids) if stockinfo_observed else None),
             "current_stockinfo_reference_error": reference_error,
             "instrument_completeness_status": "UNVERIFIED",
             "instrument_completeness_is_blocking": False,
