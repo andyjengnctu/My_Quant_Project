@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Iterable, Sequence
+from zoneinfo import ZoneInfo
 
 from core.display_common import console_color_enabled
 from core.path_utils import project_relative_display_path
@@ -188,6 +190,27 @@ def render_status_paths(
     )
 
 
+def format_datetime_in_timezone(
+    value: object,
+    *,
+    timezone_name: str,
+    empty: str = "-",
+    output_format: str = "%Y-%m-%d %H:%M",
+) -> str:
+    """Format an ISO datetime in an explicitly declared display timezone."""
+
+    text = str(value or "").strip()
+    if not text:
+        return str(empty)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(ZoneInfo(str(timezone_name)))
+    return parsed.strftime(str(output_format))
+
+
 def strip_ansi(text: object) -> str:
     return _strip_ansi(str(text))
 
@@ -207,5 +230,6 @@ __all__ = [
     "render_artifact_paths",
     "print_artifact_paths",
     "render_status_paths",
+    "format_datetime_in_timezone",
     "strip_ansi",
 ]

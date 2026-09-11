@@ -3,9 +3,7 @@ import os
 import importlib
 import time as _monotonic_time
 import unicodedata
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
@@ -13,6 +11,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, _strip_ansi
 from core.display_common import console_color_enabled
+from core.console_report import format_datetime_in_timezone
 from core.path_utils import project_relative_display_path
 from core.runtime_utils import (
     enable_line_buffered_stdout,
@@ -47,19 +46,10 @@ def _pad_display(value: object, width: int) -> str:
 
 
 def _format_local_datetime(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "-"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return text
-    if parsed.tzinfo is not None:
-        from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
+    from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
 
-        timezone_name = str(MARKET_DATA_V2_PUBLICATION_POLICY.get("timezone") or "Asia/Taipei")
-        parsed = parsed.astimezone(ZoneInfo(timezone_name))
-    return parsed.strftime("%Y-%m-%d %H:%M")
+    timezone_name = str(MARKET_DATA_V2_PUBLICATION_POLICY.get("timezone") or "Asia/Taipei")
+    return format_datetime_in_timezone(value, timezone_name=timezone_name)
 
 
 def _print_console_table(headers: tuple[str, ...], rows: tuple[tuple[object, ...], ...]) -> None:

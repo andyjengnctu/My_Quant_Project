@@ -1586,11 +1586,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("registry_remains_valid_after_trading_query_contract", True, registry["included"] > 0)
     check("periodic_datasets_have_explicit_query_policy", True, all(spec.trading_query_mode != TRADING_QUERY_AUTO for spec in periodic))
     check("periodic_datasets_have_positive_lookback", True, all(spec.trading_lookback_periods > 0 for spec in periodic))
-    from services.downloader.main import _format_local_datetime
+    from core.console_report import format_datetime_in_timezone
     check(
         "pending_console_timestamp_uses_publication_timezone",
         "2026-09-11 19:49",
-        _format_local_datetime("2026-09-11T11:49:00+00:00"),
+        format_datetime_in_timezone(
+            "2026-09-11T11:49:00+00:00",
+            timezone_name="Asia/Taipei",
+        ),
     )
 
     registry_fp = build_registry_fingerprint(specs)
