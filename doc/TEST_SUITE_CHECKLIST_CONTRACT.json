@@ -275,7 +275,7 @@
       "order": 23,
       "category": "Meta",
       "item": "checklist / 測試註冊 / 正式入口一致性",
-      "gap": "已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；`T` 摘要只要求每列維持單一 shipped formal entry，formal step 單一真理來源維持在 `tools/local_regression/formal_pipeline.py`，不再把 command string 的逐字記錄形式上升為獨立 release blocker；另補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard；DONE主表列在「建議落點」宣告的所有Python路徑都必須逐一存在，不得只驗第一個path",
+      "gap": "已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；`T` 摘要只要求每列維持單一 shipped formal entry，formal step 單一真理來源維持在 `tools/local_regression/formal_pipeline.py`，不再把 command string 的逐字記錄形式上升為獨立 release blocker；另補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，以及 domain synthetic 不得 import `apps.*` 或 `services/*/main.py` 互動 composition root 的 import-boundary guard，避免選單／renderer修改把 domain synthetic 的 import graph 擴張成整個 application；DONE主表列在「建議落點」宣告的所有Python路徑都必須逐一存在，不得只驗第一個path",
       "entry": "`tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py`",
       "legacy_initial_status": true
     },
@@ -8276,6 +8276,13 @@
       "b_id": "B418",
       "initial_status": "NEW",
       "order": 529
+    },
+    {
+      "id": "T540",
+      "b_id": "B23",
+      "description": "`validate_domain_synthetic_interactive_import_boundary_case` 驗證domain synthetic不得import `apps.*`或`services/*/main.py`互動composition root，並以fault-injection同時驗證static與dynamic import都會被攔截。",
+      "initial_status": "NEW",
+      "order": 530
     }
   ],
   "transitions": [
@@ -26622,6 +26629,14 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_checklist_generated_view_ssot_contract_case`"
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T540",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "Register the domain-synthetic interactive composition-root import boundary as a permanent B23 formal regression.",
+      "note": "Prevents menu/UI composition-root imports from re-expanding domain synthetic cold-start and coverage runtime."
     }
   ]
 }
