@@ -216,6 +216,19 @@ def validate_local_regression_cli_contract_case(_base_params):
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_unknown_flag_rejected", lambda main_func=main_func, program=program: main_func([program, "--bad"]), "不支援的參數")
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_positional_arg_rejected", lambda main_func=main_func, program=program: main_func([program, "extra"]), "不支援的位置參數")
 
+    menu_stdout = StringIO()
+    with patch.object(
+        downloader_main_module,
+        "_run_market_data_v2_daily_update",
+        return_value=17,
+    ) as daily_handler, patch("builtins.input", return_value="1"), redirect_stdout(menu_stdout):
+        menu_rc = downloader_main_module._interactive_menu()
+    check("smart_downloader_menu_dispatches_option1_to_daily_handler", 17, menu_rc)
+    check_true(
+        "smart_downloader_menu_option1_requests_prompt_mode",
+        daily_handler.call_count == 1 and daily_handler.call_args.kwargs.get("prompt_mode") is True,
+    )
+
     summary["no_arg_case_count"] = len(no_arg_cases)
     return results, summary
 

@@ -5,13 +5,41 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-from .source_index import read_source_ast
+from .source_index import read_source_ast, read_source_text
 
 CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/run_bundle.py`"
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口"
 LEGACY_APP_ENTRY_PATHS = ("apps/local_regression.py", "apps/validate_consistency.py")
 LEGACY_DOC_GUIDANCE_FILES = ("doc/CMD.md", "doc/ARCHITECTURE.md")
 SUSPICIOUS_APP_ENTRY_PATTERN = re.compile(r"(?:test|validate|regression|consistency)", re.IGNORECASE)
+
+# Interactive composition roots are intentionally allowed only for explicit
+# entrypoint-contract probes.  Exemptions are exact file/module pairs so a
+# domain synthetic cannot gain a new menu/application dependency merely because
+# the file already contains one unrelated entrypoint probe.
+SYNTHETIC_INTERACTIVE_IMPORT_PREFILTER = re.compile(
+    r"(?m)^\s*(?:from|import)\s+apps(?:\.|\s)"
+    r"|^\s*(?:from|import)\s+services\.[A-Za-z0-9_]+\.main\b"
+    r"|import_module\(\s*[\"'](?:apps\.|services\.[^\"']+\.main)"
+)
+
+SYNTHETIC_INTERACTIVE_IMPORT_EXEMPTIONS: Dict[str, Tuple[str, ...]] = {
+    "tools/validate/synthetic_breakout_quality_audit_cases.py": ("apps.research",),
+    "tools/validate/synthetic_breakout_quality_strategy_plan_cases.py": ("apps.research",),
+    "tools/validate/synthetic_cli_cases.py": (
+        "apps.package_zip",
+        "apps.smart_downloader",
+        "apps.test_suite",
+        "apps.workbench",
+        "services.downloader.main",
+        "services.portfolio_sim.main",
+    ),
+    "tools/validate/synthetic_contract_cases.py": ("apps.workbench",),
+    "tools/validate/synthetic_error_cases.py": ("services.downloader.main",),
+    "tools/validate/synthetic_market_data_cases.py": ("apps.research",),
+    "tools/validate/synthetic_meta_cases.py": ("apps.test_suite",),
+}
+
 
 CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
     "core/signal_utils.py": (
@@ -56,6 +84,15 @@ CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
         "canonical_json_sha256",
         "compute_file_sha256",
         "load_json_object_or_none",
+    ),
+    "core/market_data_bootstrap_progress.py": (
+        "estimate_bootstrap_eta_seconds",
+        "format_bootstrap_duration",
+    ),
+    "services/downloader/menu_contract.py": (
+        "parse_daily_update_mode",
+        "parse_smart_downloader_menu_choice",
+        "prompt_daily_update_mode",
     ),
     "filters/breakout_quality/continuous_ranker_data.py": (
         "source_data_end",
@@ -135,6 +172,79 @@ def _load_named_string_dict_keys(module_path: Path, constant_name: str) -> List[
                 parsed_keys.append(key_node.value)
         return parsed_keys
     return []
+
+
+def _iter_static_import_module_names(tree: ast.AST) -> List[Tuple[int, str]]:
+    imports: List[Tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            lineno = getattr(node, "lineno", 0)
+            if node.module in {"apps", "services"}:
+                imports.extend(
+                    (lineno, f"{node.module}.{alias.name}")
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+            else:
+                imports.append((lineno, node.module))
+            continue
+        if isinstance(node, ast.Import):
+            imports.extend((getattr(node, "lineno", 0), alias.name) for alias in node.names)
+            continue
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        is_import_module = (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "importlib"
+            and func.attr == "import_module"
+        ) or (isinstance(func, ast.Name) and func.id == "import_module")
+        if not is_import_module:
+            continue
+        first_arg = node.args[0]
+        if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+            imports.append((getattr(node, "lineno", 0), first_arg.value))
+    return imports
+
+
+def _is_interactive_composition_module(module_name: str) -> bool:
+    module = str(module_name or "").strip()
+    if module == "apps" or module.startswith("apps."):
+        return True
+    parts = module.split(".")
+    return len(parts) >= 3 and parts[0] == "services" and parts[-1] == "main"
+
+
+def summarize_domain_synthetic_interactive_import_contract(project_root: Path) -> Dict[str, Any]:
+    """Find domain synthetics that depend on interactive composition roots."""
+
+    violations: List[Dict[str, Any]] = []
+    scanned_files: List[str] = []
+    validate_dir = project_root / "tools" / "validate"
+    for path in sorted(validate_dir.glob("synthetic_*_cases.py")):
+        rel_path = str(path.relative_to(project_root)).replace("\\", "/")
+        source_text = read_source_text(path)
+        if not SYNTHETIC_INTERACTIVE_IMPORT_PREFILTER.search(source_text):
+            continue
+        scanned_files.append(rel_path)
+        exemptions = set(SYNTHETIC_INTERACTIVE_IMPORT_EXEMPTIONS.get(rel_path, ()))
+        tree = _read_python_ast(path)
+        for lineno, module_name in _iter_static_import_module_names(tree):
+            if not _is_interactive_composition_module(module_name):
+                continue
+            if module_name in exemptions:
+                continue
+            violations.append({
+                "path": rel_path,
+                "lineno": lineno,
+                "module": module_name,
+            })
+    return {
+        "exemptions": {key: list(value) for key, value in sorted(SYNTHETIC_INTERACTIVE_IMPORT_EXEMPTIONS.items())},
+        "scanned_files": scanned_files,
+        "violations": violations,
+    }
 
 
 def summarize_dependency_direction_contract(project_root: Path) -> Dict[str, Any]:

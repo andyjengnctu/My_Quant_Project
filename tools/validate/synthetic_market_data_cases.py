@@ -500,9 +500,9 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             sponsor_executor._quota.usage = FinMindUsage(user_count=5450, api_request_limit=6000)
             check("quota_hysteresis_resumes_at_500_safe_headroom", True, sponsor_executor._quota_has_resume_capacity())
 
-        from services.downloader.main import _estimate_bootstrap_eta_seconds
+        from core.market_data_bootstrap_progress import estimate_bootstrap_eta_seconds
 
-        early_resume_eta = _estimate_bootstrap_eta_seconds(
+        early_resume_eta = estimate_bootstrap_eta_seconds(
             done=5700,
             initial_done=5665,
             total=69360,
@@ -512,7 +512,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             quota_reserve=50,
             observed_sample_floor=100,
         )
-        rolling_wait_eta = _estimate_bootstrap_eta_seconds(
+        rolling_wait_eta = estimate_bootstrap_eta_seconds(
             done=5800,
             initial_done=5665,
             total=69360,
@@ -628,8 +628,8 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         check("progress_quota_snapshot_deducts_local_attempt", 99, quota_snapshot["quota_remaining"])
         check("progress_quota_snapshot_applies_reserve", 98, quota_snapshot["quota_usable_remaining"])
 
-        from services.downloader.main import _estimate_bootstrap_eta_seconds, _format_bootstrap_duration
-        eta_seconds = _estimate_bootstrap_eta_seconds(
+        from core.market_data_bootstrap_progress import estimate_bootstrap_eta_seconds, format_bootstrap_duration
+        eta_seconds = estimate_bootstrap_eta_seconds(
             done=3900,
             initial_done=0,
             total=69360,
@@ -637,7 +637,7 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
             quota_limit=6000,
             quota_reserve=50,
         )
-        check("bootstrap_eta_is_capped_by_safe_quota_rate", "11:00:06", _format_bootstrap_duration(eta_seconds))
+        check("bootstrap_eta_is_capped_by_safe_quota_rate", "11:00:06", format_bootstrap_duration(eta_seconds))
 
     class _PermanentClient:
         def __init__(self):
@@ -3511,6 +3511,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
     update_source = (project_root / "services" / "trading" / "market_data_update.py").read_text(encoding="utf-8")
     downloader_source = (project_root / "services" / "downloader" / "main.py").read_text(encoding="utf-8")
+    downloader_menu_source = (project_root / "services" / "downloader" / "menu_contract.py").read_text(encoding="utf-8")
     scanner_source = (project_root / "services" / "trading" / "scanner_state.py").read_text(encoding="utf-8")
     readiness_source = (project_root / "services" / "trading" / "data_readiness.py").read_text(encoding="utf-8")
     operations_source = (project_root / "services" / "trading" / "operations_status.py").read_text(encoding="utf-8")
@@ -3540,33 +3541,28 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
     check("smart_downloader_uses_v2_daily_updater_as_option1_owner", True, "from services.trading.market_data_auto_update import run_trading_market_data_auto_update" in downloader_source and "force_market_date_discovery=True" in downloader_source)
     check("smart_downloader_option1_does_not_call_legacy_provider_update", False, "return _run_trading_dataset_update()" in downloader_source)
-    import importlib
-    from unittest.mock import patch
-    downloader_main = importlib.import_module("services.downloader.main")
-    smart_calls = []
-    force_smart_calls = []
-    with TemporaryDirectory() as menu_project_dir:
-        isolated_menu_root = Path(menu_project_dir)
-        with patch.object(downloader_main, "PROJECT_ROOT", isolated_menu_root), patch(
-            "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
-            side_effect=lambda **kwargs: smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
-        ):
-            smart_exit = downloader_main._run_market_data_v2_daily_update()
-        with patch.object(downloader_main, "PROJECT_ROOT", isolated_menu_root), patch("builtins.input", return_value="R"), patch(
-            "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
-            side_effect=lambda **kwargs: force_smart_calls.append(dict(kwargs)) or {"status": "NO_DUE", "target_date": "2026-09-08"},
-        ):
-            force_smart_exit = downloader_main._run_market_data_v2_daily_update(prompt_mode=True)
-
-        check("smart_downloader_runtime_calls_canonical_v2_daily_update_owner", 0, smart_exit)
-        check("smart_downloader_runtime_uses_isolated_synthetic_project_root", True, isolated_menu_root != project_root)
-        check("smart_downloader_runtime_passes_project_root_to_v2_owner", [str(isolated_menu_root)], [str(item.get("project_root")) for item in smart_calls])
-        check("smart_downloader_force_refresh_passes_isolated_project_root", [str(isolated_menu_root)], [str(item.get("project_root")) for item in force_smart_calls])
-        check("smart_downloader_manual_v2_update_forces_one_market_date_discovery", [True], [bool(item.get("force_market_date_discovery")) for item in smart_calls])
-        check("smart_downloader_force_refresh_mode_exits_cleanly", 0, force_smart_exit)
-        check("smart_downloader_r_mode_passes_force_refresh_contract", [True], [bool(item.get("force_refresh_current_target")) for item in force_smart_calls])
-        check("smart_downloader_option1_passes_progress_and_quota_observers", True, all(callable(item.get("progress_fn")) and callable(item.get("quota_wait_fn")) for item in force_smart_calls))
-        check("smart_downloader_execution_pool_uses_injected_project_root", True, "TradingMarketDataV2View.open(PROJECT_ROOT)" in downloader_source)
+    from services.downloader.menu_contract import (
+        ACTION_DAILY_UPDATE,
+        ACTION_EXIT,
+        SMART_DOWNLOADER_MENU_OPTIONS,
+        parse_daily_update_mode,
+        parse_smart_downloader_menu_choice,
+        prompt_daily_update_mode,
+    )
+    check("smart_downloader_menu_option1_maps_to_daily_update_action", ACTION_DAILY_UPDATE, parse_smart_downloader_menu_choice("1"))
+    check("smart_downloader_menu_option0_maps_to_exit_action", ACTION_EXIT, parse_smart_downloader_menu_choice("0"))
+    check("smart_downloader_menu_contract_keeps_unique_keys", len(SMART_DOWNLOADER_MENU_OPTIONS), len({item.key for item in SMART_DOWNLOADER_MENU_OPTIONS}))
+    check("smart_downloader_enter_mode_is_due_only", (False, False), (parse_daily_update_mode("").force_refresh_current_target, parse_daily_update_mode("").return_to_menu))
+    check("smart_downloader_r_mode_is_force_refresh", (True, False), (parse_daily_update_mode("R").force_refresh_current_target, parse_daily_update_mode("R").return_to_menu))
+    check("smart_downloader_zero_mode_returns_to_menu", (False, True), (parse_daily_update_mode("0").force_refresh_current_target, parse_daily_update_mode("0").return_to_menu))
+    menu_output = []
+    prompted_selection = prompt_daily_update_mode(input_fn=lambda _prompt: "r", output_fn=menu_output.append)
+    check("smart_downloader_daily_prompt_uses_lightweight_menu_contract", (True, False), (prompted_selection.force_refresh_current_target, prompted_selection.return_to_menu))
+    check("smart_downloader_daily_prompt_exposes_enter_r_zero_contract", True, any("[Enter]" in line for line in menu_output) and any("[R]" in line for line in menu_output) and any("[0]" in line for line in menu_output))
+    check("smart_downloader_runtime_consumes_lightweight_daily_prompt_contract", True, "selection = prompt_daily_update_mode()" in downloader_source and "force_refresh = bool(selection.force_refresh_current_target)" in downloader_source)
+    check("smart_downloader_runtime_passes_force_refresh_contract", True, "force_refresh_current_target=force_refresh" in downloader_source)
+    check("smart_downloader_option1_passes_progress_and_quota_observers", True, "progress_fn=_progress" in downloader_source and "quota_wait_fn=_quota_wait" in downloader_source)
+    check("smart_downloader_top_menu_is_declarative_contract_driven", True, "SMART_DOWNLOADER_MENU_OPTIONS" in downloader_source and "parse_smart_downloader_menu_choice" in downloader_source and "expected_actions" in downloader_source)
     check("smart_downloader_daily_progress_displays_request_date_scope", True, "request_scope" in downloader_source and "date=STATIC" in downloader_source and "date={start_date}~{end_date}" in downloader_source)
     check("smart_downloader_daily_summary_separates_exact_request_types", True, "Exact-date total" in downloader_source and "Data-id exact" in downloader_source and "Unique exact dates" in downloader_source)
     check("smart_downloader_does_not_render_false_stockinfo_match_diff_completeness", False, "Instrument reference    : " in downloader_source or "REFERENCE_DIFF" in downloader_source)
@@ -3580,7 +3576,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("smart_downloader_displays_dynamic_request_window_policy_source", True, "Window start policy" in downloader_source and "request_date_start_sources" in auto_update_source and '"request_mode"' in v2_sync_source)
     check("smart_downloader_uses_shared_console_color_contract", True, "console_color_enabled" in downloader_source and "C_GREEN" in downloader_source and "C_YELLOW" in downloader_source and "C_RED" in downloader_source)
     check("canonical_consumer_market_date_is_capped_by_common_ready_horizon", True, "return min(target_date, ready_through)" in update_source)
-    check("smart_downloader_exposes_local_only_full_database_integrity_audit", True, "Full Database Integrity Audit" in downloader_source and "run_market_data_v2_full_integrity_audit" in downloader_source)
+    check("smart_downloader_exposes_local_only_full_database_integrity_audit", True, "Full Database Integrity Audit" in downloader_menu_source and "run_market_data_v2_full_integrity_audit" in downloader_source)
     check("full_integrity_audit_does_not_claim_absolute_instrument_completeness", True, '"absolute_instrument_completeness": "UNVERIFIED"' in integrity_source and "no_authoritative_dataset_specific_expected_universe" in integrity_source)
     check("full_integrity_audit_adds_date_semantic_and_natural_key_layers", True, all(token in integrity_source for token in ("semantic_integrity", "evaluate_date_semantics", "_natural_key_issue_counts")))
     check("full_integrity_audit_has_no_provider_client_dependency", False, "FinMindHttpClient" in integrity_source or "request_finmind" in integrity_source)

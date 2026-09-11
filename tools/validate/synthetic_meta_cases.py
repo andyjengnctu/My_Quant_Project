@@ -33,6 +33,7 @@ from .meta_contracts import (
     load_synthetic_registry_entries_from_source,
     summarize_critical_helper_single_source_contract,
     summarize_dependency_direction_contract,
+    summarize_domain_synthetic_interactive_import_contract,
     summarize_legacy_app_entry_doc_reference_contract,
     summarize_no_reverse_app_import_contract,
     summarize_no_top_level_import_cycles_contract,
@@ -678,6 +679,51 @@ def validate_no_reverse_app_layer_dependencies_case(_base_params):
 
     summary["violation_count"] = len(reverse_violations) + len(direction_violations)
     summary["violations"] = [*reverse_violations, *direction_violations]
+    return results, summary
+
+
+def validate_domain_synthetic_interactive_import_boundary_case(_base_params):
+    case_id = "META_DOMAIN_SYNTHETIC_INTERACTIVE_IMPORT_BOUNDARY"
+    results, summary = _new_synthetic_case(case_id)
+
+    contract = summarize_domain_synthetic_interactive_import_contract(PROJECT_ROOT)
+    violations = [
+        f"{item['path']}:{item['lineno']} -> {item['module']}"
+        for item in contract["violations"]
+    ]
+    add_check(
+        results,
+        "meta_entry_contract",
+        case_id,
+        "domain_synthetics_do_not_import_interactive_composition_roots",
+        [],
+        violations,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="synthetic_interactive_import_boundary_") as temp_dir:
+        fixture_root = Path(temp_dir)
+        validate_dir = fixture_root / "tools" / "validate"
+        validate_dir.mkdir(parents=True)
+        (validate_dir / "synthetic_domain_cases.py").write_text(
+            "import services.downloader.main\n"
+            "import importlib\n"
+            "APP = importlib.import_module('apps.smart_downloader')\n",
+            encoding="utf-8",
+        )
+        fixture_contract = summarize_domain_synthetic_interactive_import_contract(fixture_root)
+    fixture_modules = sorted(item["module"] for item in fixture_contract["violations"])
+    add_check(
+        results,
+        "meta_entry_contract",
+        case_id,
+        "interactive_import_boundary_fixture_detects_static_and_dynamic_composition_roots",
+        ["apps.smart_downloader", "services.downloader.main"],
+        fixture_modules,
+    )
+
+    summary["scanned_file_count"] = len(contract["scanned_files"])
+    summary["violation_count"] = len(violations)
+    summary["interactive_import_exemptions"] = contract["exemptions"]
     return results, summary
 
 

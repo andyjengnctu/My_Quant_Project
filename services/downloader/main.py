@@ -12,7 +12,22 @@ if PROJECT_ROOT not in sys.path:
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, _strip_ansi
 from core.display_common import console_color_enabled
 from core.console_report import format_datetime_in_timezone
+from core.market_data_bootstrap_progress import (
+    estimate_bootstrap_eta_seconds as _estimate_bootstrap_eta_seconds,
+    format_bootstrap_duration as _format_bootstrap_duration,
+)
 from core.path_utils import project_relative_display_path
+from services.downloader.menu_contract import (
+    ACTION_BOOTSTRAP,
+    ACTION_DAILY_UPDATE,
+    ACTION_EXIT,
+    ACTION_FULL_INTEGRITY_AUDIT,
+    ACTION_PREFLIGHT,
+    ACTION_PROVIDER_SNAPSHOT,
+    SMART_DOWNLOADER_MENU_OPTIONS,
+    parse_smart_downloader_menu_choice,
+    prompt_daily_update_mode,
+)
 from core.runtime_utils import (
     enable_line_buffered_stdout,
     has_help_flag,
@@ -105,55 +120,6 @@ def _format_ready_count(ready: object, total: object) -> tuple[str, str]:
     return f"{ready_i} / {total_i}", color
 
 
-def _format_bootstrap_duration(seconds: float | None) -> str:
-    if seconds is None or seconds < 0 or seconds == float("inf"):
-        return "--:--:--"
-    total_seconds = int(round(seconds))
-    hours, rem = divmod(total_seconds, 3600)
-    minutes, secs = divmod(rem, 60)
-    if hours < 100:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    return f"{hours}h{minutes:02d}m"
-
-
-def _estimate_bootstrap_eta_seconds(
-    *,
-    done: int,
-    initial_done: int,
-    total: int,
-    elapsed_seconds: float,
-    quota_wait_seconds: float = 0.0,
-    quota_limit: int | None,
-    quota_reserve: int | None,
-    observed_sample_floor: int = 1,
-) -> float | None:
-    """Estimate remaining wall-clock time without treating quota wait as slow I/O.
-
-    The sustainable provider quota is always an upper bound on throughput.  An
-    observed active-processing rate is used only after enough jobs have finished
-    in this process; quota wait time is removed from that active-rate sample.
-    """
-
-    remaining = max(0, int(total) - int(done))
-    if remaining == 0:
-        return 0.0
-    process_done = max(0, int(done) - int(initial_done))
-    active_elapsed = max(0.0, float(elapsed_seconds) - max(0.0, float(quota_wait_seconds)))
-    observed_rate = None
-    if process_done >= max(1, int(observed_sample_floor)) and active_elapsed > 0:
-        observed_rate = process_done / active_elapsed
-    quota_rate = None
-    if quota_limit is not None and int(quota_limit) > 0:
-        safe_per_hour = max(1, int(quota_limit) - max(0, int(quota_reserve or 0)))
-        quota_rate = safe_per_hour / 3600.0
-    rates = [rate for rate in (observed_rate, quota_rate) if rate is not None and rate > 0]
-    if not rates:
-        return None
-    effective_rate = min(rates)
-    return remaining / effective_rate
-
-
-
 def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
     try:
         from services.trading.market_data_auto_update import run_trading_market_data_auto_update
@@ -163,26 +129,10 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
 
     force_refresh = False
     if prompt_mode:
-        print("-" * 88)
-        print(" Daily Update 模式")
-        print("-" * 88)
-        print("[Enter] 正常更新：只處理目前 due datasets")
-        print("[R]     重新下載 current target：新 batch、禁止 artifact/cache REUSE，重新驗證")
-        print("[0]     返回")
-        while True:
-            try:
-                mode = input("模式: ").strip().upper()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return 0
-            if mode == "":
-                break
-            if mode == "R":
-                force_refresh = True
-                break
-            if mode == "0":
-                return 0
-            print("請按 Enter、輸入 R 或 0。")
+        selection = prompt_daily_update_mode()
+        if selection.return_to_menu:
+            return 0
+        force_refresh = bool(selection.force_refresh_current_target)
 
     progress_line_open = False
     progress_line_width = 0
@@ -907,31 +857,41 @@ def _interactive_menu() -> int:
     print(_paint("=" * 72, C_CYAN))
     print(_paint(" Smart Downloader", C_CYAN))
     print(_paint("=" * 72, C_CYAN))
-    print(f"{_paint('[1]', C_GREEN)} Market Data V2｜Daily Update（Canonical：dataset × date bulk）")
-    print(f"{_paint('[2]', C_CYAN)} Market Data V2｜Backer Preflight + Exact Bootstrap Plan")
-    print(f"{_paint('[3]', C_CYAN)} Market Data V2｜開始 / 續傳完整 Bootstrap")
-    print(f"{_paint('[4]', C_CYAN)} Market Data V2｜驗證 / 重建 Provider Snapshot（不使用 API quota）")
-    print(f"{_paint('[5]', C_CYAN)} Market Data V2｜Full Database Integrity Audit（不使用 API quota）")
-    print(f"{_paint('[0]', C_GRAY)} 離開")
+
+    tone_colors = {"green": C_GREEN, "cyan": C_CYAN, "gray": C_GRAY}
+    for option in SMART_DOWNLOADER_MENU_OPTIONS:
+        print(f"{_paint(f'[{option.key}]', tone_colors.get(option.tone, C_CYAN))} {option.label}")
+
+    handlers = {
+        ACTION_DAILY_UPDATE: lambda: _run_market_data_v2_daily_update(prompt_mode=True),
+        ACTION_PREFLIGHT: _run_market_data_v2_preflight,
+        ACTION_BOOTSTRAP: _run_market_data_v2_bootstrap,
+        ACTION_PROVIDER_SNAPSHOT: _run_market_data_v2_provider_snapshot_finalize,
+        ACTION_FULL_INTEGRITY_AUDIT: _run_market_data_v2_full_integrity_audit,
+    }
+    expected_actions = {
+        option.action for option in SMART_DOWNLOADER_MENU_OPTIONS if option.action != ACTION_EXIT
+    }
+    if set(handlers) != expected_actions:
+        raise RuntimeError(
+            "Smart Downloader menu/handler contract mismatch: "
+            f"expected={sorted(expected_actions)}, actual={sorted(handlers)}"
+        )
+
     while True:
         try:
-            choice = input("請選擇: ").strip()
+            raw_choice = input("請選擇: ")
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
-        if choice == "1":
-            return _run_market_data_v2_daily_update(prompt_mode=True)
-        if choice == "2":
-            return _run_market_data_v2_preflight()
-        if choice == "3":
-            return _run_market_data_v2_bootstrap()
-        if choice == "4":
-            return _run_market_data_v2_provider_snapshot_finalize()
-        if choice == "5":
-            return _run_market_data_v2_full_integrity_audit()
-        if choice == "0":
+        try:
+            action = parse_smart_downloader_menu_choice(raw_choice)
+        except ValueError as exc:
+            print(str(exc))
+            continue
+        if action == ACTION_EXIT:
             return 0
-        print("請輸入 0、1、2、3、4 或 5。")
+        return handlers[action]()
 
 
 def main(argv=None):
