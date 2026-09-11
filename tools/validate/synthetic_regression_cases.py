@@ -180,6 +180,9 @@ def validate_optimizer_raw_cache_rerun_consistency_case(_base_params):
 
 
 def validate_research_generation_execution_cache_isolation_case(_base_params):
+    from core.data_utils import OHLCV_SANITIZATION_CONTRACT_VERSION
+    from filters.breakout_quality import source_inventory
+
     case_id = "RESEARCH_GENERATION_EXECUTION_CACHE_ISOLATION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
@@ -218,6 +221,44 @@ def validate_research_generation_execution_cache_isolation_case(_base_params):
         portfolio_v1 = _build_portfolio_prepared_cache_paths(str(v1_dir), v1_inputs, params)
         portfolio_v2 = _build_portfolio_prepared_cache_paths(str(v2_dir), v2_inputs, params)
         portfolio_v1_repeat = _build_portfolio_prepared_cache_paths(str(v1_dir), v1_inputs, params)
+
+        # AI: The same source bytes must not reuse derived data after a cleaning
+        # contract change; exercise the generic owner without fixing its version.
+        with patch.object(source_inventory, "get_dataset_dir", return_value=str(v1_dir)):
+            inventory = source_inventory.build_source_data_inventory(root, "reduced")
+            inventory_repeat = source_inventory.build_source_data_inventory(root, "reduced")
+            with contextlib.ExitStack() as patches:
+                for owner in (
+                    "services.optimizer.raw_cache",
+                    "services.portfolio_replay",
+                    "filters.breakout_quality.source_inventory",
+                ):
+                    patches.enter_context(patch(
+                        f"{owner}.OHLCV_SANITIZATION_CONTRACT_VERSION",
+                        OHLCV_SANITIZATION_CONTRACT_VERSION + 1,
+                    ))
+                raw_next, _ = _build_raw_cache_signature(v1_inputs, 300, data_dir=str(v1_dir))
+                portfolio_next = _build_portfolio_prepared_cache_paths(str(v1_dir), v1_inputs, params)
+                inventory_next = source_inventory.build_source_data_inventory(root, "reduced")
+
+        for label, payload in (
+            ("raw_cache", raw_payload_v1),
+            ("prepared_cache", portfolio_v1["meta"]),
+            ("source_inventory", inventory),
+        ):
+            add_check(results, "synthetic_regression", case_id,
+                      f"{label}_uses_canonical_cleaning_contract",
+                      OHLCV_SANITIZATION_CONTRACT_VERSION,
+                      payload.get("ohlcv_sanitization_contract_version"))
+        for label, before, after in (
+            ("raw_cache", raw_v1, raw_next),
+            ("prepared_cache", portfolio_v1["payload_path"], portfolio_next["payload_path"]),
+            ("source_inventory", inventory["csv_inventory_sha256"], inventory_next["csv_inventory_sha256"]),
+        ):
+            add_check(results, "synthetic_regression", case_id,
+                      f"{label}_invalidates_on_cleaning_contract_change", True, before != after)
+        add_check(results, "synthetic_regression", case_id,
+                  "source_inventory_same_contract_is_deterministic", inventory, inventory_repeat)
 
     add_check(
         results,

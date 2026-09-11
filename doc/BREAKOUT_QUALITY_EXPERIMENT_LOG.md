@@ -12007,3 +12007,14 @@ Decision：`MR13BV_IMPLEMENTED_RESULT_PENDING / ADAPTIVE_30_60_120_300BAR_PAST_C
 - **Closure supplement**：交付前獨立重查發現Strategy Compare completed-result fallback仍有generation旁路；normal pair、legacy score-projection migration、archived completed pair、shared baseline與continuous-OOS frozen-score recovery現統一先驗證同一canonical Research dataset-generation identity。V1/reduced歷史結果在current亦無generation identity時維持相容；任一側進入generation-scoped identity後，missing或不同identity一律fail closed。Repair-4 synthetic已加入上述實際旁路regression。
 
 Decision：`ENGINEERING_ONLY / DOWNSTREAM_DATASET_GENERATION_IDENTITY_CLOSED / COMPLETED_RESULT_FALLBACK_GENERATION_GUARD_CLOSED / V1_EVIDENCE_PRESERVED / V2_NAMESPACE_ISOLATED / MR13BV_RESULT_PENDING_UNCHANGED`。
+
+## 2026-09-12 — Full-project inspection / runtime wiring and canonical input correction
+
+- **Baseline**：`test-branch-1_20260912_002916_15994029.zip`；SHA256=`8d984ed197d1db7f7902fad91e79183facd09e4a8dc5cf26e0c8d755a945cd70`。
+- **Runtime defect**：Strategy Compare canonical runtime resolver 在所有合法 ranking policy 共用路徑引用未匯入的 stale-guard constant，於 artifact loading 前即發生 `NameError`。修正為直接匯入 `core.buy_sort` 的既有 owner；既有 registry-driven regression 直接呼叫 resolver 驗證，不新增 experiment-specific branch。
+- **Input defects**：canonical OHLCV sanitizer 原本可能保留 `High=+inf`／`Volume=+inf`，或將 `Volume=-inf` 修成零；不穩定日期排序亦可能使 duplicate-date `keep='last'` 留下較早來源列。現在拒絕 non-finite OHLCV，有限負成交量仍修成零，日期使用 stable sort 保留真正最後來源列。
+- **Reuse closure**：`core/data_utils.py` 持有唯一 `OHLCV_SANITIZATION_CONTRACT_VERSION`；Optimizer raw cache、portfolio prepared cache、Breakout Quality source inventory 均納入此版本。來源 CSV 不變亦不得 REUSE 修正前的清洗結果。這是 correctness-driven input-contract correction，會改變 derived-data identity；依賴舊 source identity 的 dataset／fit／score／parameter artifacts 可能需依既有 authorization 與 canonical dependency plan 重建，不宣稱既有模型與參數一律可沿用。
+- **Independent evidence**：Strategy Compare 102 checks、OHLCV 47 checks、cache contract 11 checks 通過；實體舊快取拒收／新版快取可重用等 8 項檢查通過。隨附 reduced 10 檔共 55,983 列的清洗輸出與統計，修正前後完全一致。上述為定向工程證據，並非本機 formal suite、完整資料績效或 GPU training 結果。
+- **Research state**：未執行模型訓練、Optimizer search、robustness 或 promotion；未改 target／loss／architecture／seed／OOS 邊界／常駐報表契約。既有 scientific identities 與歷史 evidence 保留；`MR-13BV` 仍為 `IMPLEMENTED / RESULT_PENDING`，Registry 與 Queue 的研究決策不變。
+
+Decision：`ENGINEERING_CORRECTION / CANONICAL_INPUT_CONTRACT_VERSIONED / STALE_DERIVED_DATA_REJECTED / LOCAL_FORMAL_UNVERIFIED / MR13BV_RESULT_PENDING_UNCHANGED`。

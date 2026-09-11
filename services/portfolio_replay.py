@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
+from core.data_utils import OHLCV_SANITIZATION_CONTRACT_VERSION, discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
 from core.dataset_profiles import (
     build_missing_dataset_dir_message,
     infer_dataset_profile_key_from_data_dir,
@@ -405,6 +405,7 @@ def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, inclu
     params_sig = build_portfolio_params_signature(params)
     combined_payload = {
         "schema_version": PORTFOLIO_PREP_CACHE_SCHEMA_VERSION,
+        "ohlcv_sanitization_contract_version": OHLCV_SANITIZATION_CONTRACT_VERSION,
         "profile_key": str(profile_key),
         # A Research generation switch changes the physical dataset root even
         # when the public profile key remains ``full``.  Bind this local cache
@@ -440,6 +441,7 @@ def _load_portfolio_prepared_cache(cache_paths):
     if int(meta.get("schema_version", 0) or 0) != PORTFOLIO_PREP_CACHE_SCHEMA_VERSION:
         return None
     for key in (
+        "ohlcv_sanitization_contract_version",
         "profile_key",
         "data_root",
         "data_signature",

@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from core.data_utils import discover_unique_csv_inputs
+from core.data_utils import OHLCV_SANITIZATION_CONTRACT_VERSION, discover_unique_csv_inputs
 from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir, normalize_dataset_profile_key
 
 SOURCE_DATA_INVENTORY_SCHEMA_VERSION = 1
@@ -42,7 +42,10 @@ def build_source_data_inventory(project_root: str | Path, dataset: str) -> dict[
             digest.update(b"\0")
 
     generation_lineage = None
-    fingerprint_algorithm = SOURCE_DATA_INVENTORY_ALGORITHM
+    # AI: Derived datasets and fits must not reuse pre-fix cleaned inputs merely
+    # because the provider's CSV metadata is unchanged.
+    digest.update(f"ohlcv_sanitization_contract={OHLCV_SANITIZATION_CONTRACT_VERSION}\0".encode("utf-8"))
+    fingerprint_algorithm = SOURCE_DATA_INVENTORY_ALGORITHM + "+ohlcv_sanitization_contract"
     if profile == DATASET_PROFILE_FULL:
         from config.market_data import RESEARCH_DATA_GENERATION_V2
         from core.market_data_research_promotion import (
@@ -72,6 +75,7 @@ def build_source_data_inventory(project_root: str | Path, dataset: str) -> dict[
 
     payload = {
         "schema_version": SOURCE_DATA_INVENTORY_SCHEMA_VERSION,
+        "ohlcv_sanitization_contract_version": OHLCV_SANITIZATION_CONTRACT_VERSION,
         "dataset_profile": profile,
         "csv_file_count": int(len(csv_inputs)),
         "csv_total_bytes": int(total_size_bytes),

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.data_utils import discover_unique_csv_inputs, sanitize_ohlcv_dataframe
+from core.data_utils import OHLCV_SANITIZATION_CONTRACT_VERSION, discover_unique_csv_inputs, sanitize_ohlcv_dataframe
 from core.display import C_GRAY, C_GREEN, C_RESET, C_YELLOW
 from core.log_utils import format_exception_summary, write_issue_log
 from core.dataset_profiles import (
@@ -49,6 +49,7 @@ def _build_raw_cache_paths(output_dir, profile_key, required_min_rows):
 def _build_raw_cache_signature(csv_inputs, required_min_rows, *, data_dir):
     signature_payload = {
         "schema_version": RAW_CACHE_SCHEMA_VERSION,
+        "ohlcv_sanitization_contract_version": OHLCV_SANITIZATION_CONTRACT_VERSION,
         "required_min_rows": int(required_min_rows),
         # Execution caches are local implementation artifacts, so the resolved
         # physical dataset root is part of their identity.  This prevents a

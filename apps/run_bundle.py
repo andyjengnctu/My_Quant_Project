@@ -10,8 +10,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def run_cmd(cmd: list[str], step_name: str, *, check: bool = True) -> subprocess.CompletedProcess:
-    result = subprocess.run(cmd, cwd=REPO_ROOT)
+def run_cmd(cmd: list[str], step_name: str, *, check: bool = True, quiet_stdout: bool = False) -> subprocess.CompletedProcess:
+    result = subprocess.run(
+        cmd, cwd=REPO_ROOT, stdout=subprocess.DEVNULL if quiet_stdout else None
+    )
     if check and result.returncode != 0:
         raise SystemExit(f"{step_name} failed with exit code {result.returncode}")
     return result
@@ -35,7 +37,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print("[1/5] Repo root: .")
-    run_cmd(["git", "rev-parse", "--show-toplevel"], "git rev-parse")
+    run_cmd(["git", "rev-parse", "--show-toplevel"], "git rev-parse", quiet_stdout=True)
 
     staged_changes = False
     if not args.no_commit:

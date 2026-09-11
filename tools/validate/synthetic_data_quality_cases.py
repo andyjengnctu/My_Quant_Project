@@ -41,6 +41,37 @@ def validate_sanitize_ohlcv_expected_behavior_case(_base_params):
     add_check(results, "synthetic_data_quality", case_id, "expected_zero_volume_row_still_present", 0.0, float(cleaned.loc[pd.Timestamp("2024-01-04"), "Volume"]), tol=1e-12)
     add_check(results, "synthetic_data_quality", case_id, "expected_columns_preserved", ["Open", "High", "Low", "Close", "Volume"], list(cleaned.columns))
 
+    # AI: Every OHLCV field must reject non-finite values, including -inf volume
+    # before the existing finite-negative-volume correction can turn it into zero.
+    valid_row = {"Date": "2024-02-01", "Open": 10, "High": 11, "Low": 9, "Close": 10, "Volume": 100}
+    for column in ("Open", "High", "Low", "Close", "Volume"):
+        for label, value in (("positive_inf", float("inf")), ("negative_inf", float("-inf")), ("nan", float("nan"))):
+            invalid_row = {**valid_row, "Date": "2024-02-02", column: value}
+            finite_only, finite_stats = sanitize_ohlcv_dataframe(
+                pd.DataFrame([valid_row, invalid_row]), "DQ_FINITE", min_rows=1
+            )
+            add_check(
+                results, "synthetic_data_quality", case_id,
+                f"nonfinite_{column}_{label}_removed", [pd.Timestamp("2024-02-01")], list(finite_only.index),
+            )
+            add_check(
+                results, "synthetic_data_quality", case_id,
+                f"nonfinite_{column}_{label}_counted", 1, finite_stats["invalid_row_count"],
+            )
+
+    # AI: Stable date sorting must preserve source order before keep='last'.
+    repeated_rows = [
+        {**valid_row, "Date": f"2024-03-{index % 7 + 1:02d}", "Volume": index + 1}
+        for index in range(60)
+    ]
+    last_volume_by_date = {row["Date"]: float(row["Volume"]) for row in repeated_rows}
+    deduplicated, duplicate_stats = sanitize_ohlcv_dataframe(
+        pd.DataFrame(repeated_rows), "DQ_DUPLICATE_ORDER", min_rows=1
+    )
+    actual_last_volumes = {date.strftime("%Y-%m-%d"): float(value) for date, value in deduplicated["Volume"].items()}
+    add_check(results, "synthetic_data_quality", case_id, "duplicate_date_preserves_last_source_row", last_volume_by_date, actual_last_volumes)
+    add_check(results, "synthetic_data_quality", case_id, "duplicate_date_exact_drop_count", len(repeated_rows) - len(last_volume_by_date), duplicate_stats["duplicate_date_count"])
+
     summary["cleaned_rows"] = len(cleaned)
     return results, summary
 

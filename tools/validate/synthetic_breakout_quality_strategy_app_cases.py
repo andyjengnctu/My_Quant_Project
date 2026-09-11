@@ -194,6 +194,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         resolve_arm_runtime_dl_source_ids,
     )
 
+    # AI: Exercise the real resolver's shared validation path for every registered
+    # policy before artifact I/O; source-text assertions cannot detect missing imports.
+    from services.research import strategy_compare_runtime_contract as runtime_contract
+    for ranking_policy in sorted(runtime_contract.SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES):
+        with patch.object(runtime_contract, "load_runtime_artifact_contract") as artifact_loader:
+            validation_error = None
+            try:
+                runtime_contract.resolve_strategy_compare_runtime_contract(
+                    root=project_root,
+                    comparison_mode=runtime_contract.COMPARISON_MODE_HARD_FILTER,
+                    ranking_policy=ranking_policy,
+                    ranking_options={"stale_score_membership_guard_max_age_days": 0},
+                    optional_entry_filter_policy="__invalid_optional_policy__",
+                    score_source=runtime_contract.SCORE_SOURCE_CANONICAL_RUNTIME,
+                    filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                    model_architecture="validation_fixture",
+                    experiment_profile="validation_fixture",
+                    threshold=None,
+                    hard_filter_source=None,
+                )
+            except Exception as exc:
+                validation_error = exc
+            check_true(
+                f"runtime_resolver_validates_optional_policy_before_artifact_io:{ranking_policy}",
+                isinstance(validation_error, ValueError)
+                and "__invalid_optional_policy__" in str(validation_error)
+                and not artifact_loader.called,
+                note=f"error={type(validation_error).__name__}: {validation_error}",
+            )
+
     modes = strategy_config.get_strategy_rolling_test_modes()
     settings_by_mode = {
         str(mode["profile_id"]): strategy_config.get_strategy_comparison_settings(

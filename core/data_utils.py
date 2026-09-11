@@ -1,9 +1,12 @@
 import os
+import numpy as np
 import pandas as pd
 
 LOAD_DATA_MIN_ROWS = 50
 LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
 BACKTEST_EXTRA_MIN_ROWS = 10
+# AI: Invalidate derived artifacts when canonical OHLCV cleaning semantics change.
+OHLCV_SANITIZATION_CONTRACT_VERSION = 2
 
 
 # # (AI註: 單一真理來源 - 統一各類 lookback 對資料長度的最低要求，
@@ -172,18 +175,16 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
 
     working[date_col] = pd.to_datetime(working[date_col], errors='coerce')
 
-    negative_volume_mask = working['Volume'] < 0
+    # AI: Reject non-finite provider values before finite negative-volume repair.
+    nonfinite_mask = ~np.isfinite(working[required_cols].to_numpy(copy=False)).all(axis=1)
+    negative_volume_mask = (working['Volume'] < 0) & np.isfinite(working['Volume'])
     negative_volume_corrected_count = int(negative_volume_mask.sum())
     if negative_volume_corrected_count > 0:
         working.loc[negative_volume_mask, 'Volume'] = 0.0
 
     invalid_mask = (
         working[date_col].isna() |
-        working['Open'].isna() |
-        working['High'].isna() |
-        working['Low'].isna() |
-        working['Close'].isna() |
-        working['Volume'].isna() |
+        nonfinite_mask |
         (working['Open'] <= 0) |
         (working['High'] <= 0) |
         (working['Low'] <= 0) |
@@ -201,7 +202,7 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
         raise ValueError(f"{ticker} 清洗後無有效資料")
 
     working.set_index(date_col, inplace=True)
-    working.sort_index(inplace=True)
+    working.sort_index(kind='stable', inplace=True)
 
     duplicate_date_count = int(working.index.duplicated(keep='last').sum())
     if duplicate_date_count > 0:
