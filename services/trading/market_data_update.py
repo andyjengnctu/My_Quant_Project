@@ -18,17 +18,25 @@ from services.trading.market_data_v2_view import TradingMarketDataV2View
 
 
 def _resolve_consumer_market_date(project_root: Path, update_result: dict[str, Any]) -> str:
-    target_date = str(update_result.get("target_date") or "").strip()
-    if target_date:
-        return target_date
+    """Resolve the latest execution-safe date from the exact Trading dependencies.
+
+    A newly discovered provider target may be ahead of one or more required
+    datasets while they are still waiting for publication.  Consumer state must
+    therefore never advance past the common READY horizon merely because the
+    archive target advanced.
+    """
+
     profile = get_trading_strategy_profile()
     spec = get_trading_data_dependency_spec(profile.strategy_id)
     view = TradingMarketDataV2View.open(project_root)
     horizon = view.training_horizon(required_datasets=spec.required_v2_datasets)
-    resolved = str(horizon.training_through_date or "").strip()
-    if not resolved:
+    ready_through = str(horizon.training_through_date or "").strip()
+    if not ready_through:
         raise RuntimeError("Trading V2 required datasets 尚未形成可發布 consumer state 的共同 READY horizon")
-    return resolved
+    target_date = str(update_result.get("target_date") or "").strip()
+    if not target_date:
+        return ready_through
+    return min(target_date, ready_through)
 
 
 def run_trading_market_data_update(

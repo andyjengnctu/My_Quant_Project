@@ -123,6 +123,7 @@ def _request_geometry_summary(requests) -> dict[str, object]:
             seen.add(key)
             start_sources.append({
                 "dataset": str(request.dataset),
+                "request_mode": str(request.bootstrap_mode or ""),
                 "trading_query_mode": mode,
                 "trading_lookback_periods": lookback,
             })
