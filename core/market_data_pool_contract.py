@@ -30,7 +30,13 @@ class TradingExecutionPoolStats:
     price_exact_date_count: int
     market_value_exact_date_count: int
     listed_without_exact_price_count: int
+    listed_with_exact_price_count: int
+    below_min_volume_count: int
     high_volume_count: int
+    high_volume_etf_count: int
+    high_volume_stock_count: int
+    market_cap_pass_stock_count: int
+    market_cap_below_min_stock_count: int
     qualified_count: int
 
     def as_dict(self) -> dict[str, int]:
@@ -39,7 +45,13 @@ class TradingExecutionPoolStats:
             "price_exact_date_count": int(self.price_exact_date_count),
             "market_value_exact_date_count": int(self.market_value_exact_date_count),
             "listed_without_exact_price_count": int(self.listed_without_exact_price_count),
+            "listed_with_exact_price_count": int(self.listed_with_exact_price_count),
+            "below_min_volume_count": int(self.below_min_volume_count),
             "high_volume_count": int(self.high_volume_count),
+            "high_volume_etf_count": int(self.high_volume_etf_count),
+            "high_volume_stock_count": int(self.high_volume_stock_count),
+            "market_cap_pass_stock_count": int(self.market_cap_pass_stock_count),
+            "market_cap_below_min_stock_count": int(self.market_cap_below_min_stock_count),
             "qualified_count": int(self.qualified_count),
         }
 
@@ -187,7 +199,12 @@ def screen_daily_trading_execution_pool(
     qualified: list[str] = []
     missing_market_value_for_high_volume_stock: list[str] = []
     listed_without_exact_price = 0
+    below_min_volume_count = 0
     high_volume_count = 0
+    high_volume_etf_count = 0
+    high_volume_stock_count = 0
+    market_cap_pass_stock_count = 0
+    market_cap_below_min_stock_count = 0
     for sid, is_etf in universe_by_sid.items():
         volume = volume_by_sid.get(sid)
         if volume is None:
@@ -195,17 +212,23 @@ def screen_daily_trading_execution_pool(
             listed_without_exact_price += 1
             continue
         if volume < volume_floor:
+            below_min_volume_count += 1
             continue
         high_volume_count += 1
         if is_etf:
+            high_volume_etf_count += 1
             qualified.append(sid)
             continue
+        high_volume_stock_count += 1
         cap = market_value_by_sid.get(sid)
         if cap is None or cap <= 0:
             missing_market_value_for_high_volume_stock.append(sid)
             continue
         if cap >= market_cap_floor:
+            market_cap_pass_stock_count += 1
             qualified.append(sid)
+        else:
+            market_cap_below_min_stock_count += 1
 
     if missing_market_value_for_high_volume_stock:
         sample = ",".join(missing_market_value_for_high_volume_stock[:20])
@@ -219,7 +242,13 @@ def screen_daily_trading_execution_pool(
         price_exact_date_count=len(volume_by_sid),
         market_value_exact_date_count=len(market_value_by_sid),
         listed_without_exact_price_count=int(listed_without_exact_price),
+        listed_with_exact_price_count=len(universe_by_sid) - int(listed_without_exact_price),
+        below_min_volume_count=int(below_min_volume_count),
         high_volume_count=int(high_volume_count),
+        high_volume_etf_count=int(high_volume_etf_count),
+        high_volume_stock_count=int(high_volume_stock_count),
+        market_cap_pass_stock_count=int(market_cap_pass_stock_count),
+        market_cap_below_min_stock_count=int(market_cap_below_min_stock_count),
         qualified_count=len(qualified),
     )
     return qualified, stats.as_dict()

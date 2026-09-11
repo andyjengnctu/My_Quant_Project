@@ -106,8 +106,29 @@ def _request_geometry_summary(requests) -> dict[str, object]:
     end_dates = [str(request.end_date) for request in dated]
     exact_dates = sorted({str(request.start_date) for request in exact})
     fixed_id_exact = [request for request in exact if request.data_id is not None]
+    request_date_start = min(start_dates) if start_dates else None
+    specs = {spec.dataset: spec for spec in get_market_dataset_specs(included_only=True)}
+    start_sources: list[dict[str, object]] = []
+    if request_date_start is not None:
+        seen: set[tuple[str, str, int]] = set()
+        for request in dated:
+            if str(request.start_date) != request_date_start:
+                continue
+            spec = specs.get(str(request.dataset))
+            mode = str(getattr(spec, "trading_query_mode", "") or "") if spec is not None else ""
+            lookback = int(getattr(spec, "trading_lookback_periods", 0) or 0) if spec is not None else 0
+            key = (str(request.dataset), mode, lookback)
+            if key in seen:
+                continue
+            seen.add(key)
+            start_sources.append({
+                "dataset": str(request.dataset),
+                "trading_query_mode": mode,
+                "trading_lookback_periods": lookback,
+            })
     return {
-        "request_date_start": min(start_dates) if start_dates else None,
+        "request_date_start": request_date_start,
+        "request_date_start_sources": start_sources,
         "request_date_end": max(end_dates) if end_dates else None,
         "unique_exact_date_count": len(exact_dates),
         "exact_date_request_count": len(exact),

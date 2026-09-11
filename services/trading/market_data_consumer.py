@@ -20,6 +20,7 @@ from core.file_integrity import atomic_write_json, canonical_json_sha256, comput
 from core.log_utils import write_issue_log
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET, FINMIND_RAW_PRICE_ARCHIVE_DATASET
 from core.market_data_ohlcv_compatibility import build_market_data_v2_ohlcv_compatibility_frame
+from core.market_data_instrument_universe import build_current_stock_etf_universe
 from core.market_data_pool_contract import screen_daily_trading_execution_pool
 from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_identity import normalize_trading_ticker
@@ -36,7 +37,11 @@ def _required_v2_datasets() -> tuple[str, ...]:
     return tuple(get_trading_data_dependency_spec("full_rule_based_no_dl").required_v2_datasets)
 
 
-def _current_market_member_records(view: TradingMarketDataV2View, *, market_date: str) -> list[dict[str, object]]:
+def _current_market_member_records(
+    view: TradingMarketDataV2View,
+    *,
+    market_date: str,
+) -> tuple[list[dict[str, object]], int]:
     members = tuple(view.daily_pit_market_members(market_date))
     member_set = set(members)
     info = view.read_dataset_frame(
@@ -45,6 +50,15 @@ def _current_market_member_records(view: TradingMarketDataV2View, *, market_date
     )
     if info.empty:
         raise RuntimeError("Trading V2 execution consumer 無 TaiwanStockInfo identity evidence")
+    delisting = view.read_dataset_frame(
+        "TaiwanStockDelisting",
+        columns=("date", "stock_id"),
+    )
+    broad_reference = build_current_stock_etf_universe(
+        info,
+        delisting,
+        as_of_date=str(market_date),
+    )
     info = info.copy()
     info["stock_id"] = info["stock_id"].astype("string").str.strip()
     info["type"] = info["type"].astype("string").str.strip().str.lower()
@@ -58,7 +72,8 @@ def _current_market_member_records(view: TradingMarketDataV2View, *, market_date
             f"count={len(missing_identity)} sample={missing_identity[:20]}"
         )
     etf_ids = set(listed.loc[listed["industry_category"] == "etf", "stock_id"].astype(str).tolist())
-    return [{"stock_id": sid, "is_etf": sid in etf_ids} for sid in members]
+    records = [{"stock_id": sid, "is_etf": sid in etf_ids} for sid in members]
+    return records, len(broad_reference)
 
 
 def resolve_trading_v2_current_execution_pool(
@@ -68,7 +83,7 @@ def resolve_trading_v2_current_execution_pool(
 ) -> tuple[list[str], dict[str, int]]:
     """Resolve today's new-entry execution pool from V2-only local evidence."""
 
-    members = _current_market_member_records(view, market_date=market_date)
+    members, broad_reference_count = _current_market_member_records(view, market_date=market_date)
     price = view.read_dataset_frame(
         FINMIND_ADJUSTED_PRICE_DATASET,
         columns=("date", "stock_id", "Trading_Volume"),
@@ -88,7 +103,11 @@ def resolve_trading_v2_current_execution_pool(
         min_volume=DOWNLOADER_MIN_VOLUME,
         min_market_cap=DOWNLOADER_MIN_MARKET_CAP,
     )
-    return sorted(normalize_trading_ticker(item) for item in tickers), dict(stats)
+    diagnostics = {
+        "stockinfo_broad_reference_count": int(broad_reference_count),
+        **dict(stats),
+    }
+    return sorted(normalize_trading_ticker(item) for item in tickers), diagnostics
 
 
 def build_trading_v2_ohlcv_frame(

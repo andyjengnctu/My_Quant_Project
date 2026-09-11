@@ -545,6 +545,7 @@ def run_trading_market_data_auto_update(
             "verification": dict(batch.get("verification") or {}),
             "request_date_start": batch.get("request_date_start"),
             "request_date_end": batch.get("request_date_end"),
+            "request_date_start_sources": list(batch.get("request_date_start_sources") or []),
             "unique_exact_date_count": int(batch.get("unique_exact_date_count") or 0),
             "exact_date_request_count": int(batch.get("exact_date_request_count") or 0),
             "fixed_data_id_exact_date_request_count": int(batch.get("fixed_data_id_exact_date_request_count") or 0),

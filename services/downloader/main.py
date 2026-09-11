@@ -193,6 +193,20 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             "Request date window      : "
             f"{result.get('request_date_start') or '-'} ~ {result.get('request_date_end') or '-'}"
         )
+        start_sources = list(result.get("request_date_start_sources") or [])
+        if start_sources:
+            grouped: dict[tuple[str, int], list[str]] = {}
+            for row in start_sources:
+                item = dict(row or {})
+                key = (
+                    str(item.get("trading_query_mode") or "-"),
+                    int(item.get("trading_lookback_periods") or 0),
+                )
+                grouped.setdefault(key, []).append(str(item.get("dataset") or "-"))
+            parts = []
+            for (mode, lookback), datasets in sorted(grouped.items()):
+                parts.append(f"{','.join(sorted(datasets))} [{mode} × {lookback}]")
+            print(f"Window start policy     : {'; '.join(parts)}")
     print(f"Exact-date total        : {result.get('exact_date_request_count', 0)} requests")
     print(f"  Full-market exact     : {result.get('full_market_exact_date_request_count', 0)}")
     print(f"  Data-id exact         : {result.get('fixed_data_id_exact_date_request_count', 0)}")
@@ -244,6 +258,49 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             )
             if row.get("last_error"):
                 print(f"      reason: {row.get('last_error')}")
+
+    if (
+        result.get("target_date")
+        and int(result.get("trading_required_ready_dataset_count") or 0)
+        == int(result.get("trading_required_dataset_count") or -1)
+        and int(result.get("trading_required_dataset_count") or 0) > 0
+    ):
+        try:
+            from config.downloader import DOWNLOADER_MIN_MARKET_CAP, DOWNLOADER_MIN_VOLUME
+            from services.trading.market_data_consumer import resolve_trading_v2_current_execution_pool
+            from services.trading.market_data_v2_view import TradingMarketDataV2View
+
+            local_view = TradingMarketDataV2View.open(PROJECT_ROOT)
+            _tickers, pool = resolve_trading_v2_current_execution_pool(
+                local_view,
+                market_date=str(result.get("target_date")),
+            )
+            print("-" * 88)
+            print(f" Trading execution pool｜{result.get('target_date')}")
+            print("-" * 88)
+            print(f"StockInfo broad ref     : {int(pool.get('stockinfo_broad_reference_count') or 0)}")
+            print(f"PIT market members      : {int(pool.get('listed_count') or 0)}")
+            print(
+                f"Exact-date price        : {int(pool.get('listed_with_exact_price_count') or 0)}"
+                f"  (excluded {int(pool.get('listed_without_exact_price_count') or 0)})"
+            )
+            print(
+                f"Volume >= {int(DOWNLOADER_MIN_VOLUME):,}     : {int(pool.get('high_volume_count') or 0)}"
+                f"  (excluded {int(pool.get('below_min_volume_count') or 0)})"
+            )
+            print(f"  ETF pass              : {int(pool.get('high_volume_etf_count') or 0)}")
+            print(f"  Stock to cap gate     : {int(pool.get('high_volume_stock_count') or 0)}")
+            print(
+                f"Stock cap >= {int(DOWNLOADER_MIN_MARKET_CAP):,}: "
+                f"{int(pool.get('market_cap_pass_stock_count') or 0)}"
+                f"  (excluded {int(pool.get('market_cap_below_min_stock_count') or 0)})"
+            )
+            print(f"Final execution pool    : {int(pool.get('qualified_count') or 0)}")
+        except (RuntimeError, FileNotFoundError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
+            print("-" * 88)
+            print(" Trading execution pool")
+            print("-" * 88)
+            print(f"狀態                    : UNAVAILABLE ({type(exc).__name__}: {exc})")
 
     blockers = tuple(result.get("trading_blocking_datasets") or ())
     if blockers:
@@ -584,6 +641,55 @@ def _run_market_data_v2_provider_snapshot_finalize() -> int:
     return _finalize_market_data_v2_provider_snapshot(activation=activation, output_dir=output_dir, rt=rt)
 
 
+def _run_market_data_v2_full_integrity_audit() -> int:
+    try:
+        from services.downloader.market_data_integrity_audit import run_market_data_v2_full_integrity_audit
+    except (ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    def _progress(event: dict[str, object]) -> None:
+        phase = str(event.get("phase") or "VERIFY")
+        verified = int(event.get("verified") or 0)
+        total = event.get("total")
+        target = str(event.get("dataset") or "-")
+        data_id = event.get("data_id")
+        if data_id:
+            target += f"/{data_id}"
+        if total is None:
+            print(f"[Integrity:{phase}] {verified} | {target}")
+        else:
+            print(f"[Integrity:{phase}] {verified}/{int(total)} | {target}")
+
+    try:
+        result = run_market_data_v2_full_integrity_audit(
+            project_root=PROJECT_ROOT,
+            progress_fn=_progress,
+        )
+    except (RuntimeError, FileNotFoundError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    validation = dict(result.get("dataset_validation") or {})
+    print("=" * 88)
+    print(" Market Data V2｜Full Database Integrity（Local-only / no API quota）")
+    print("=" * 88)
+    print(f"Local canonical integrity : {result.get('status')}")
+    print(f"Provider Snapshot          : {result.get('provider_snapshot_status')} | requests={result.get('provider_requests_verified')} rows={result.get('provider_rows_verified')}")
+    print(f"Trading DONE overlays      : {result.get('overlay_status')} | batches={result.get('overlay_done_batches_verified')} requests={result.get('overlay_requests_verified')} rows={result.get('overlay_rows_verified')}")
+    print(f"Incomplete overlay batches : {result.get('overlay_incomplete_batches_ignored')} (resumable, not part of canonical read view)")
+    print(f"Validation target          : {result.get('target_date')}")
+    print(f"Dataset registry/state     : {validation.get('state_dataset_count', 0)} / {validation.get('dataset_count', 0)}")
+    print(f"Current validation         : {validation.get('current_validation_count', 0)} / {validation.get('dataset_count', 0)}")
+    print(f"Canonical schema valid     : {validation.get('schema_valid_count', 0)} / {validation.get('dataset_count', 0)}")
+    print(f"Request coverage valid     : {validation.get('coverage_valid_count', 0)} / {validation.get('dataset_count', 0)}")
+    print(f"Dataset READY              : {validation.get('ready_count', 0)} / {validation.get('dataset_count', 0)}")
+    print(f"Absolute completeness      : {result.get('absolute_instrument_completeness')}")
+    print("Reason                     : provider 未提供每個 dataset 的 authoritative expected instrument universe；不可把 StockInfo broad ref 當所有 feed 的應有集合。")
+    print(f"Provider API requests      : {result.get('provider_requests_made', 0)}")
+    return 0 if str(result.get("status")) == "PASS" else 1
+
+
 def _interactive_menu() -> int:
     print("=" * 72)
     print(" Smart Downloader")
@@ -592,6 +698,7 @@ def _interactive_menu() -> int:
     print("[2] Market Data V2｜Backer Preflight + Exact Bootstrap Plan")
     print("[3] Market Data V2｜開始 / 續傳完整 Bootstrap")
     print("[4] Market Data V2｜驗證 / 重建 Provider Snapshot（不使用 API quota）")
+    print("[5] Market Data V2｜Full Database Integrity Audit（不使用 API quota）")
     print("[0] 離開")
     while True:
         try:
@@ -607,9 +714,11 @@ def _interactive_menu() -> int:
             return _run_market_data_v2_bootstrap()
         if choice == "4":
             return _run_market_data_v2_provider_snapshot_finalize()
+        if choice == "5":
+            return _run_market_data_v2_full_integrity_audit()
         if choice == "0":
             return 0
-        print("請輸入 0、1、2、3 或 4。")
+        print("請輸入 0、1、2、3、4 或 5。")
 
 
 def main(argv=None):
@@ -619,7 +728,7 @@ def main(argv=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "services/downloader/main.py")
         print(f"用法: python {program_name}")
-        print("說明: [1] 為 Market Data V2 canonical Daily Update；[2]-[4] 提供 Backer Preflight、完整 Bootstrap 與 Provider Snapshot 本機驗證。")
+        print("說明: [1] 為 Market Data V2 canonical Daily Update；[2]-[4] 提供 Backer Preflight、完整 Bootstrap 與 Provider Snapshot 驗證；[5] 執行全庫本機完整性稽核。")
         print("非互動環境直接執行 Market Data V2 Daily Update；不再由 Smart Downloader 先更新 Legacy Trading CSV。")
         return 0
 
