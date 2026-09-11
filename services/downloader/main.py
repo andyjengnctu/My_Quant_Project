@@ -2,7 +2,10 @@ import sys
 import os
 import importlib
 import time as _monotonic_time
+import unicodedata
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
@@ -26,6 +29,52 @@ _COLOR_ENABLED = console_color_enabled()
 def _paint(value: object, color: str) -> str:
     text = str(value)
     return f"{color}{text}{C_RESET}" if _COLOR_ENABLED else text
+
+
+def _display_width(value: object) -> int:
+    text = _strip_ansi(str(value))
+    width = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+    return width
+
+
+def _pad_display(value: object, width: int) -> str:
+    text = str(value)
+    return text + (" " * max(0, int(width) - _display_width(text)))
+
+
+def _format_local_datetime(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is not None:
+        from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
+
+        timezone_name = str(MARKET_DATA_V2_PUBLICATION_POLICY.get("timezone") or "Asia/Taipei")
+        parsed = parsed.astimezone(ZoneInfo(timezone_name))
+    return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def _print_console_table(headers: tuple[str, ...], rows: tuple[tuple[object, ...], ...]) -> None:
+    normalized_rows = tuple(tuple(str(cell) for cell in row) for row in rows)
+    widths = [
+        max(_display_width(headers[index]), *(_display_width(row[index]) for row in normalized_rows))
+        for index in range(len(headers))
+    ]
+    separator = "+-" + "-+-".join("-" * width for width in widths) + "-+"
+    print(separator)
+    print("| " + " | ".join(_pad_display(headers[index], widths[index]) for index in range(len(headers))) + " |")
+    print(separator)
+    for row in normalized_rows:
+        print("| " + " | ".join(_pad_display(row[index], widths[index]) for index in range(len(headers))) + " |")
+    print(separator)
 
 
 def _status_color(status: object) -> str:
@@ -304,21 +353,36 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
     archive_incomplete = tuple(result.get("archive_incomplete_datasets") or ())
     if archive_incomplete:
         print("Target freshness pending:")
+        table_rows = []
+        reason_groups: dict[str, list[str]] = {}
         for item in archive_incomplete:
             row = dict(item or {})
             status_text = str(row.get("status") or "-")
             schema_text = str(row.get("schema_status") or "-")
             coverage_text = str(row.get("coverage_status") or "-")
-            print(
-                "  - "
-                f"{row.get('dataset')}: "
-                f"status={_paint(status_text, _status_color(status_text))}, "
-                f"latest={row.get('latest_data_date') or '-'}, "
-                f"schema={_paint(schema_text, _status_color(schema_text))}, "
-                f"coverage={_paint(coverage_text, _status_color(coverage_text))}"
-            )
-            if row.get("last_error"):
-                print(f"      reason: {row.get('last_error')}")
+            table_rows.append((
+                row.get("dataset") or "-",
+                row.get("display_name_zh") or "-",
+                _paint(status_text, _status_color(status_text)),
+                row.get("latest_data_date") or "-",
+                _format_local_datetime(row.get("last_success_at")),
+                _format_local_datetime(row.get("expected_publish_at")),
+                _format_local_datetime(row.get("next_check_at")),
+                _paint(schema_text, _status_color(schema_text)),
+                _paint(coverage_text, _status_color(coverage_text)),
+            ))
+            reason = str(row.get("last_error") or "").strip()
+            if reason:
+                reason_groups.setdefault(reason, []).append(str(row.get("dataset") or "-"))
+        _print_console_table(
+            ("Dataset", "中文名稱", "Status", "最新資料日", "最後成功時間", "預期可查時間", "下次檢查時間", "Schema", "Coverage"),
+            tuple(table_rows),
+        )
+        if reason_groups:
+            print("Pending reason:")
+            for reason, datasets in reason_groups.items():
+                label = "All pending datasets" if len(datasets) == len(archive_incomplete) else ",".join(datasets)
+                print(f"  {label}: {reason}")
 
     if result.get("target_date"):
         try:

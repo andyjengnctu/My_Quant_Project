@@ -41,6 +41,64 @@ PIT_ARCHIVE_ONLY = "archive_only"
 PIT_CURRENT_VINTAGE = "current_vintage"
 
 
+# Provider-facing Traditional Chinese dataset labels used by operator UIs.
+# This mapping lives beside the canonical dataset registry so console/Workbench
+# renderers do not maintain their own identity-to-label tables.
+MARKET_DATASET_DISPLAY_NAMES_ZH: dict[str, str] = {
+    "TaiwanStockInfo": "台股總覽",
+    "TaiwanStockTradingDate": "台股交易日",
+    "TaiwanStockDelisting": "台灣股票下市櫃表",
+    "TaiwanStockIndustryChain": "個體公司所屬產業鏈",
+    "TaiwanStockActiveETFInfo": "主動式ETF清單",
+    "TaiwanStockPrice": "股價日成交資訊",
+    "TaiwanStockPriceAdj": "台灣還原股價資料表",
+    "TaiwanStockPER": "個股 PER、PBR 資料表",
+    "TaiwanStockDayTrading": "當日沖銷交易標的及成交量值",
+    "TaiwanStockPriceLimit": "每日漲跌停價",
+    "TaiwanStockSuspended": "台股暫停交易公告",
+    "TaiwanStockDayTradingSuspension": "暫停先賣後買當沖預告表",
+    "TaiwanStockTotalReturnIndex": "加權、櫃買報酬指數",
+    "TaiwanStockMarginPurchaseShortSale": "個股融資融劵表",
+    "TaiwanStockTotalMarginPurchaseShortSale": "整體市場融資融劵表",
+    "TaiwanStockInstitutionalInvestorsBuySellWide": "個股三大法人買賣表（寬表）",
+    "TaiwanStockTotalInstitutionalInvestors": "整體三大市場法人買賣表",
+    "TaiwanStockShareholding": "外資持股表",
+    "TaiwanStockHoldingSharesPer": "股權持股分級表",
+    "TaiwanStockSecuritiesLending": "借券成交明細",
+    "TaiwanStockMarginShortSaleSuspension": "暫停融券賣出表",
+    "TaiwanDailyShortSaleBalances": "信用額度總量管制餘額表",
+    "TaiwanTotalExchangeMarginMaintenance": "台灣大盤融資維持率",
+    "TaiwanStockDispositionSecuritiesPeriod": "公布處置有價證券表",
+    "TaiwanStockDayTradingBorrowingFeeRate": "現股當日沖銷券差借券費率",
+    "TaiwanStockFinancialStatements": "綜合損益表",
+    "TaiwanStockBalanceSheet": "資產負債表",
+    "TaiwanStockCashFlowsStatement": "現金流量表",
+    "TaiwanStockDividend": "股利政策表",
+    "TaiwanStockDividendResult": "除權除息結果表",
+    "TaiwanStockMonthRevenue": "月營收表",
+    "TaiwanStockCapitalReductionReferencePrice": "減資恢復買賣參考價格",
+    "TaiwanStockMarketValue": "台灣股價市值表",
+    "TaiwanStockMarketValueWeight": "台股市值比重表",
+    "TaiwanStockSplitPrice": "台股分割後參考價",
+    "TaiwanStockParValueChange": "台灣股票變更面額恢復買賣參考價格",
+    "TaiwanBusinessIndicator": "台灣每月景氣對策信號表",
+    "CnnFearGreedIndex": "CNN 恐懼與貪婪指數",
+    "TaiwanExchangeRate": "外幣對台幣匯率",
+    "InterestRate": "央行利率",
+    "GovernmentBondsYield": "美國國債殖利率",
+    "GoldPrice": "黃金價格",
+    "CrudeOilPrices": "原油價格",
+    "TaiwanFutOptDailyInfo": "期貨、選擇權日成交資訊總覽",
+    "TaiwanFuturesDaily": "期貨日成交資訊",
+    "TaiwanFuturesInstitutionalInvestors": "期貨三大法人買賣",
+    "TaiwanFuturesOpenInterestLargeTraders": "期貨大額交易人未沖銷部位",
+    "TaiwanOptionDaily": "選擇權日成交資訊",
+    "TaiwanOptionInstitutionalInvestors": "選擇權三大法人買賣",
+    "TaiwanOptionOpenInterestLargeTraders": "選擇權大額交易人未沖銷部位",
+    "TaiwanOptionVix": "臺指選擇權波動率指數",
+}
+
+
 @dataclass(frozen=True)
 class MarketDatasetSpec:
     dataset: str
@@ -216,11 +274,30 @@ def get_market_dataset_spec(dataset: str) -> MarketDatasetSpec:
     return matches[0]
 
 
+def get_market_dataset_display_name_zh(dataset: str) -> str:
+    key = str(dataset or "").strip()
+    try:
+        return MARKET_DATASET_DISPLAY_NAMES_ZH[key]
+    except KeyError as exc:
+        raise ValueError(f"Market Data dataset 缺少中文顯示名稱: {key!r}") from exc
+
+
 def validate_market_dataset_registry() -> dict[str, int]:
     datasets = [spec.dataset for spec in MARKET_DATASET_SPECS]
     duplicates = sorted({dataset for dataset in datasets if datasets.count(dataset) > 1})
     if duplicates:
         raise ValueError(f"Market Data dataset identity 重複: {duplicates}")
+
+    included_datasets = {spec.dataset for spec in MARKET_DATASET_SPECS if spec.included}
+    display_name_datasets = set(MARKET_DATASET_DISPLAY_NAMES_ZH)
+    missing_display_names = sorted(included_datasets - display_name_datasets)
+    extra_display_names = sorted(display_name_datasets - included_datasets)
+    if missing_display_names:
+        raise ValueError(f"Market Data included datasets 缺少中文顯示名稱: {missing_display_names}")
+    if extra_display_names:
+        raise ValueError(f"Market Data 中文顯示名稱包含非 included dataset: {extra_display_names}")
+    if any(not str(value or "").strip() for value in MARKET_DATASET_DISPLAY_NAMES_ZH.values()):
+        raise ValueError("Market Data 中文顯示名稱不得空白")
 
     supported_bootstrap_modes = {
         BOOTSTRAP_SINGLE_NO_DATES,
@@ -319,7 +396,9 @@ __all__ = [
     "DEFAULT_EQUITY_PROBE_DATA_ID",
     "MarketDatasetSpec",
     "MARKET_DATASET_SPECS",
+    "MARKET_DATASET_DISPLAY_NAMES_ZH",
     "get_market_dataset_specs",
     "get_market_dataset_spec",
+    "get_market_dataset_display_name_zh",
     "validate_market_dataset_registry",
 ]

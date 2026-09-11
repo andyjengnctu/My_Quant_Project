@@ -118,6 +118,8 @@ def _client_counts(client) -> tuple[int, int]:
 
 
 def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
+    from core.market_data_dataset_registry import get_market_dataset_display_name_zh
+
     rows = dict((state or {}).get("datasets") or {})
     total = len(rows)
     archive_ready = sum(
@@ -155,8 +157,12 @@ def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
     archive_incomplete = tuple(
         {
             "dataset": dataset,
+            "display_name_zh": get_market_dataset_display_name_zh(dataset),
             "status": str(dict(rows.get(dataset) or {}).get("status") or "UNKNOWN"),
             "latest_data_date": dict(rows.get(dataset) or {}).get("latest_data_date"),
+            "last_success_at": dict(rows.get(dataset) or {}).get("last_success_at"),
+            "expected_publish_at": dict(rows.get(dataset) or {}).get("expected_publish_at"),
+            "next_check_at": dict(rows.get(dataset) or {}).get("next_check_at"),
             "schema_status": str(dict(rows.get(dataset) or {}).get("schema_status") or "UNKNOWN"),
             "coverage_status": str(dict(rows.get(dataset) or {}).get("coverage_status") or "UNKNOWN"),
             "last_error": dict(rows.get(dataset) or {}).get("last_error"),

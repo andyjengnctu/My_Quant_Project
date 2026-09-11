@@ -97,6 +97,7 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
         BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE,
         BOOTSTRAP_SINGLE_FULL_RANGE,
         BOOTSTRAP_SINGLE_NO_DATES,
+        get_market_dataset_display_name_zh,
         get_market_dataset_spec,
         get_market_dataset_specs,
         validate_market_dataset_registry,
@@ -120,6 +121,8 @@ def validate_market_data_v2_preflight_planner_contract_case(_base_params):
     check("sponsor_margin_maintenance_is_not_backer_required", True, "TaiwanStockMarginMaintenance" in excluded_ids)
     check("industry_chain_classification_is_archived", True, "TaiwanStockIndustryChain" in datasets)
     check("derivative_product_master_is_archived", True, "TaiwanFutOptDailyInfo" in datasets)
+    check("market_data_display_names_cover_all_included_datasets", len(specs), sum(bool(get_market_dataset_display_name_zh(spec.dataset)) for spec in specs))
+    check("market_value_uses_canonical_zh_display_name", "台灣股價市值表", get_market_dataset_display_name_zh("TaiwanStockMarketValue"))
     check("price_limit_bootstrap_is_per_instrument", BOOTSTRAP_PER_INSTRUMENT_FULL_RANGE, get_market_dataset_spec("TaiwanStockPriceLimit").bootstrap_mode)
     large_trader_spec = get_market_dataset_spec("TaiwanFuturesOpenInterestLargeTraders")
     check("futures_large_trader_bootstrap_identity_retains_provider_alias", ("TXF",), large_trader_spec.fixed_data_ids)
@@ -1583,6 +1586,12 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("registry_remains_valid_after_trading_query_contract", True, registry["included"] > 0)
     check("periodic_datasets_have_explicit_query_policy", True, all(spec.trading_query_mode != TRADING_QUERY_AUTO for spec in periodic))
     check("periodic_datasets_have_positive_lookback", True, all(spec.trading_lookback_periods > 0 for spec in periodic))
+    from services.downloader.main import _format_local_datetime
+    check(
+        "pending_console_timestamp_uses_publication_timezone",
+        "2026-09-11 19:49",
+        _format_local_datetime("2026-09-11T11:49:00+00:00"),
+    )
 
     registry_fp = build_registry_fingerprint(specs)
     provider = {
@@ -2499,6 +2508,27 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 locally_repaired_market_value["coverage_status"],
                 locally_repaired_market_value["last_ready_target_date"],
                 locally_repaired_market_value["next_check_at"],
+            ),
+        )
+        from services.trading.market_data_auto_update import _dataset_readiness_summary
+        repaired_summary = _dataset_readiness_summary(locally_repaired_state, target_date="2026-09-11")
+        market_value_pending = next(
+            row for row in repaired_summary["archive_incomplete_datasets"]
+            if row["dataset"] == "TaiwanStockMarketValue"
+        )
+        check(
+            "pending_summary_exposes_operator_name_and_timestamps",
+            (
+                "台灣股價市值表",
+                "2026-09-11T19:20:00+08:00",
+                "2026-09-11T23:45:00+08:00",
+                "2026-09-11T23:45:00+08:00",
+            ),
+            (
+                market_value_pending["display_name_zh"],
+                market_value_pending["last_success_at"],
+                market_value_pending["expected_publish_at"],
+                market_value_pending["next_check_at"],
             ),
         )
 
