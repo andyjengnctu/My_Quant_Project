@@ -8,6 +8,11 @@ from typing import Any, Iterable, Mapping
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.market_data_bootstrap_requests import build_registry_fingerprint
 from core.market_data_dataset_registry import get_market_dataset_specs
+from core.market_data_dataset_readiness import (
+    MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
+    VALIDATION_STATUS_NO_ROW_VALID,
+    VALIDATION_STATUS_READY,
+)
 from core.market_data_due_planner import (
     plan_market_data_due_datasets,
     resolve_market_data_expected_publish_at,
@@ -27,9 +32,8 @@ from core.market_data_freshness_contract import (
 )
 from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_dataset_state_path
 
-TRADING_MARKET_DATA_DATASET_STATE_SCHEMA_VERSION = 1
-VALIDATION_STATUS_READY = "READY"
-VALIDATION_STATUS_NO_ROW_VALID = "NO_ROW_VALID"
+TRADING_MARKET_DATA_DATASET_STATE_SCHEMA_VERSION = 2
+TRADING_MARKET_DATA_DATASET_STATE_LEGACY_SCHEMA_VERSION = 1
 VALIDATION_STATUS_NOT_EVALUATED = "NOT_EVALUATED"
 VALIDATION_STATUS_UNKNOWN = "UNKNOWN"
 
@@ -47,6 +51,7 @@ def _empty_dataset_row() -> dict[str, object]:
         "latest_expected_date": None,
         "expected_publish_at": None,
         "next_check_at": None,
+        "validation_contract_version": MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
         "schema_status": VALIDATION_STATUS_UNKNOWN,
         "coverage_status": VALIDATION_STATUS_NOT_EVALUATED,
         "publication_retry_count": 0,
@@ -63,7 +68,11 @@ def _canonical_registry_fingerprint() -> str:
 
 def _validate_state_payload(payload: Mapping[str, object]) -> dict[str, Any]:
     state = dict(payload)
-    if int(state.get("schema_version", -1)) != TRADING_MARKET_DATA_DATASET_STATE_SCHEMA_VERSION:
+    schema_version = int(state.get("schema_version", -1))
+    if schema_version not in {
+        TRADING_MARKET_DATA_DATASET_STATE_LEGACY_SCHEMA_VERSION,
+        TRADING_MARKET_DATA_DATASET_STATE_SCHEMA_VERSION,
+    }:
         raise ValueError("Trading Market Data dataset state schema 不相容")
     registry_fp = str(state.get("registry_fingerprint") or "")
     if registry_fp != _canonical_registry_fingerprint():
@@ -80,6 +89,31 @@ def _validate_state_payload(payload: Mapping[str, object]) -> dict[str, Any]:
         raise ValueError(
             f"Trading Market Data dataset state coverage drift: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}"
         )
+
+    if schema_version == TRADING_MARKET_DATA_DATASET_STATE_LEGACY_SCHEMA_VERSION:
+        # Preserve dates as resume evidence but do not let the legacy
+        # "date reached == READY" contract authorize current Trading.  The next
+        # due-plan will revalidate these rows under the current request-scope
+        # contract and persist schema v2.
+        migrated_rows: dict[str, dict[str, object]] = {}
+        for dataset, raw in datasets.items():
+            row = dict(raw) if isinstance(raw, Mapping) else _empty_dataset_row()
+            row["validation_contract_version"] = TRADING_MARKET_DATA_DATASET_STATE_LEGACY_SCHEMA_VERSION
+            migrated_rows[str(dataset)] = row
+        migrated_core = {
+            **{key: value for key, value in state.items() if key not in {"schema_version", "state_fingerprint", "datasets"}},
+            "schema_version": TRADING_MARKET_DATA_DATASET_STATE_SCHEMA_VERSION,
+            "datasets": migrated_rows,
+        }
+        return {**migrated_core, "state_fingerprint": canonical_json_sha256(migrated_core)}
+
+    for dataset, raw in datasets.items():
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"Trading Market Data dataset state row 不是 object: {dataset}")
+        try:
+            int(raw.get("validation_contract_version", -1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Trading Market Data dataset validation contract 不合法: {dataset}") from exc
     return state
 
 
@@ -170,6 +204,7 @@ def record_market_data_sync_success(
         row["expected_publish_at"] = resolve_market_data_expected_publish_at(
             contract, target_date=str(target_date)
         ).isoformat()
+        row["validation_contract_version"] = MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
         row["schema_status"] = (
             VALIDATION_STATUS_READY
             if row_count > 0
@@ -178,7 +213,7 @@ def record_market_data_sync_success(
         row["coverage_status"] = (
             VALIDATION_STATUS_NO_ROW_VALID
             if row_count == 0 and contract.row_expectation == ROW_EXPECTATION_OPTIONAL
-            else VALIDATION_STATUS_NOT_EVALUATED
+            else (VALIDATION_STATUS_READY if row_count > 0 else VALIDATION_STATUS_NOT_EVALUATED)
         )
 
         if contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}:

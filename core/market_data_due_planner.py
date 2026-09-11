@@ -13,6 +13,7 @@ from typing import Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
+from core.market_data_dataset_readiness import is_market_data_dataset_ready
 from core.market_data_freshness_contract import (
     FRESHNESS_STATUS_BLOCKED,
     FRESHNESS_STATUS_DUE,
@@ -129,7 +130,7 @@ def plan_market_data_due_datasets(
         ready_target = str(item.get("last_ready_target_date") or "").strip()
         latest_expected = _expected_date(contract, target_text)
 
-        if ready_target and ready_target >= target_text:
+        if is_market_data_dataset_ready(item, target_date=target_text):
             decisions.append(
                 MarketDataDueDecision(
                     dataset=contract.dataset,

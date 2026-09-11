@@ -12,6 +12,7 @@ from typing import Any
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.market_data_auto_update_policy import MarketDataAutoUpdatePolicy
+from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.market_data_trading_storage_contract import (
     resolve_trading_market_data_v2_market_date_discovery_state_path,
 )
@@ -56,6 +57,11 @@ def default_next_market_date_probe_at(
     """
 
     today = now.date().isoformat()
+    latest_allowed = latest_allowed_completed_daily_date(now=now)
+    if str(current_market_date) < str(latest_allowed):
+        # Local state is already behind a completed market day.  Catch up now;
+        # do not wait for today's publication window.
+        return now
     if str(current_market_date) >= today:
         return _next_weekday_first_check(now, policy, include_today=False)
     if now.weekday() >= 5:
@@ -138,15 +144,28 @@ def record_market_date_probe_result(
 
     if result == DISCOVERY_RESULT_NEW_DATE:
         retry_count = 0
-        next_at = _next_weekday_first_check(now, policy, include_today=False)
+        next_at = default_next_market_date_probe_at(
+            now=now,
+            current_market_date=str(current_market_date),
+            policy=policy,
+        )
     elif result == DISCOVERY_RESULT_NO_NEW_DATE:
-        retry_count = prior_retry + 1
-        if retry_count <= policy.market_date_discovery_max_retries:
-            delay = policy.market_date_discovery_retry_delay_minutes(retry_count)
-            next_at = now + timedelta(minutes=delay)
-        else:
+        latest_allowed = latest_allowed_completed_daily_date(now=now)
+        if str(current_market_date) >= str(latest_allowed):
             retry_count = 0
-            next_at = _next_weekday_first_check(now, policy, include_today=False)
+            next_at = default_next_market_date_probe_at(
+                now=now,
+                current_market_date=str(current_market_date),
+                policy=policy,
+            )
+        else:
+            retry_count = prior_retry + 1
+            if retry_count <= policy.market_date_discovery_max_retries:
+                delay = policy.market_date_discovery_retry_delay_minutes(retry_count)
+                next_at = now + timedelta(minutes=delay)
+            else:
+                retry_count = 0
+                next_at = _next_weekday_first_check(now, policy, include_today=False)
     elif result == DISCOVERY_RESULT_WAIT_QUOTA:
         retry_count = prior_retry
         next_at = now + timedelta(minutes=policy.quota_defer_minutes)

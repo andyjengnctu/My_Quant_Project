@@ -8,6 +8,7 @@ from core.console_report import project_relative_display_path
 from typing import Any
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from core.market_data_dataset_readiness import is_market_data_dataset_ready
 from core.market_data_freshness_contract import build_market_data_freshness_contract_summary
 from services.market_data.provider_snapshot_repository import (
     find_latest_ready_provider_snapshot,
@@ -114,7 +115,7 @@ def publish_trading_market_data_v2_auto_rollup(
     ready = [
         dataset
         for dataset, raw in rows.items()
-        if str(dict(raw or {}).get("last_ready_target_date") or "") >= str(target_date)
+        if is_market_data_dataset_ready(dict(raw or {}), target_date=str(target_date))
     ]
     total = len(rows)
     all_ready = bool(total and len(ready) == total)

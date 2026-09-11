@@ -1,12 +1,13 @@
 """Non-blocking Trading Market Data V2 archive synchronization service."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterable
 
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, atomic_write_text, canonical_json_sha256
+from core.market_data_dataset_readiness import has_current_market_data_dataset_validation
 from core.market_data_dataset_registry import get_market_dataset_specs
 from core.market_data_execution_policy import get_market_data_execution_policy
 from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_ledger_path
@@ -313,10 +314,19 @@ def sync_market_data_v2_due_datasets(
 
     dynamic = load_market_data_dataset_state(root, required=False)
     rows = dict((dynamic or {}).get("datasets") or {})
-    previous_ready = {
-        dataset: (dict(rows.get(dataset) or {}).get("last_ready_target_date") or None)
-        for dataset in selected
-    }
+    recovery_floor = date.fromisoformat(str(target_date)) - timedelta(days=int(policy.recent_repair_calendar_days))
+    base_as_of = date.fromisoformat(str(provider_payload.get("as_of_date")))
+    recovery_anchor = max(base_as_of, recovery_floor).isoformat()
+    previous_ready: dict[str, str | None] = {}
+    for dataset in selected:
+        row = dict(rows.get(dataset) or {})
+        if has_current_market_data_dataset_validation(row):
+            previous_ready[dataset] = str(row.get("last_ready_target_date") or "").strip() or None
+        else:
+            # Legacy/incomplete validation evidence may be used only as a bounded
+            # resume hint.  Re-query at least the configured recent window so a
+            # pre-contract target date cannot silently authorize current data.
+            previous_ready[dataset] = recovery_anchor
     manifest = build_trading_sync_request_manifest(
         specs=get_market_dataset_specs(included_only=True),
         provider_snapshot=provider_payload,

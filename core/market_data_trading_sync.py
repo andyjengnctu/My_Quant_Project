@@ -28,6 +28,7 @@ TRADING_SYNC_QUERY_INCREMENTAL = "trading_incremental"
 TRADING_SYNC_QUERY_RECENT = "trading_recent_repair"
 TRADING_SYNC_QUERY_EVENT = "trading_event_repair"
 TRADING_SYNC_QUERY_PERIODIC = "trading_periodic_repair"
+TRADING_SYNC_VALIDATION_CONTRACT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class TradingSyncRequestManifest:
     base_provider_manifest_fingerprint: str
     base_as_of_date: str
     previous_sync_date: str | None
+    validation_contract_version: int
 
     @property
     def total_requests(self) -> int:
@@ -248,6 +250,7 @@ def build_trading_sync_request_manifest(
             "previous_sync_date": previous_text,
             "target_date": target_text,
             "registry_fingerprint": registry_fp,
+            "validation_contract_version": TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
             "request_ids": request_ids,
         }
     )
@@ -262,6 +265,7 @@ def build_trading_sync_request_manifest(
         base_provider_manifest_fingerprint=provider_manifest_fp,
         base_as_of_date=base_as_of,
         previous_sync_date=previous_text,
+        validation_contract_version=TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
     )
 
 
@@ -271,6 +275,7 @@ __all__ = [
     "TRADING_SYNC_QUERY_RECENT",
     "TRADING_SYNC_QUERY_EVENT",
     "TRADING_SYNC_QUERY_PERIODIC",
+    "TRADING_SYNC_VALIDATION_CONTRACT_VERSION",
     "TradingSyncRequestManifest",
     "build_trading_sync_request_manifest",
 ]

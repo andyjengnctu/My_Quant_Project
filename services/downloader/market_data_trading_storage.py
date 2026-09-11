@@ -177,9 +177,44 @@ class MarketDataTradingStorageSink:
                 f"Trading Market Data V2 startup free-space gate: free={free} bytes < required={required} bytes"
             )
 
+    def _validate_request_payload_scope(self, request, frame: pd.DataFrame) -> None:
+        """Fail closed when a dated provider response escapes its request window."""
+
+        if request.start_date is None and request.end_date is None:
+            return
+        if request.start_date is None or request.end_date is None:
+            raise MarketDataCommitError(
+                f"{request.dataset} dated request 必須同時具有 start_date/end_date"
+            )
+        if frame.empty:
+            return
+        if "date" not in frame.columns:
+            raise MarketDataCommitError(
+                f"{request.dataset} dated request payload 缺少 date 欄位，無法驗證 request scope"
+            )
+        parsed = pd.to_datetime(frame["date"], errors="coerce")
+        if parsed.isna().any():
+            raise MarketDataCommitError(f"{request.dataset} dated request payload 含不合法 date")
+        observed = parsed.dt.strftime("%Y-%m-%d")
+        outside = (observed < str(request.start_date)) | (observed > str(request.end_date))
+        if outside.any():
+            sample = sorted(set(observed.loc[outside].head(10).tolist()))
+            raise MarketDataCommitError(
+                f"{request.dataset} provider payload 超出 request date scope: "
+                f"requested={request.start_date}~{request.end_date}, observed={sample}"
+            )
+        if request.start_date == request.end_date:
+            unique_dates = set(observed.tolist())
+            if unique_dates != {str(request.start_date)}:
+                raise MarketDataCommitError(
+                    f"{request.dataset} exact-date payload scope 不一致: "
+                    f"requested={request.start_date}, observed={sorted(unique_dates)}"
+                )
+
     def _expected_identity(self, request) -> dict[str, object]:
         return {
             "batch_fingerprint": self.manifest.manifest_fingerprint,
+            "validation_contract_version": int(self.manifest.validation_contract_version),
             "registry_fingerprint": self.manifest.registry_fingerprint,
             "base_provider_snapshot_fingerprint": self.manifest.base_provider_snapshot_fingerprint,
             "base_provider_manifest_fingerprint": self.manifest.base_provider_manifest_fingerprint,
@@ -223,6 +258,7 @@ class MarketDataTradingStorageSink:
     def __call__(self, request, frame: pd.DataFrame) -> MarketDataCommitReceipt:
         self._validate_request(request)
         validate_market_data_raw_frame(frame)
+        self._validate_request_payload_scope(request, frame)
         existing = self.recover_committed(request)
         if existing is not None:
             if existing.row_count != len(frame):

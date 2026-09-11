@@ -6,7 +6,10 @@ import re
 
 from core.file_integrity import canonical_json_sha256
 from core.market_data_bootstrap_requests import BootstrapHttpRequest
-from core.market_data_trading_sync import TradingSyncRequestManifest
+from core.market_data_trading_sync import (
+    TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
+    TradingSyncRequestManifest,
+)
 
 TRADING_MARKET_DATA_V2_RELATIVE_ROOT = Path("data") / "trading" / "market_data_v2"
 TRADING_MARKET_DATA_V2_STATE_RELATIVE_PATH = Path("state") / "trading" / "market_data_v2" / "archive_state.json"
@@ -87,6 +90,7 @@ def build_trading_sync_batch_manifest_payload(manifest: TradingSyncRequestManife
         "base_provider_manifest_fingerprint": manifest.base_provider_manifest_fingerprint,
         "registry_fingerprint": manifest.registry_fingerprint,
         "batch_fingerprint": manifest.manifest_fingerprint,
+        "validation_contract_version": int(manifest.validation_contract_version),
         "request_count": manifest.total_requests,
         "request_ids": [request.request_id for request in manifest.requests],
     }
@@ -102,6 +106,8 @@ def validate_trading_sync_batch_manifest_payload(payload: dict[str, object]) -> 
         raise ValueError("Trading V2 batch manifest role 不合法")
     if str(payload.get("status") or "") != "READY":
         raise ValueError("Trading V2 batch manifest 尚未 READY")
+    if int(payload.get("validation_contract_version", -1)) != TRADING_SYNC_VALIDATION_CONTRACT_VERSION:
+        raise ValueError("Trading V2 batch manifest validation contract 不相容")
     batch_fingerprint = _hex64(str(payload.get("batch_fingerprint") or ""), field="batch_fingerprint")
     _hex64(str(payload.get("base_provider_snapshot_fingerprint") or ""), field="base_provider_snapshot_fingerprint")
     _hex64(str(payload.get("base_provider_manifest_fingerprint") or ""), field="base_provider_manifest_fingerprint")
@@ -138,6 +144,7 @@ def build_trading_request_metadata(
         "storage_layout_version": TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
         "role": "trading_market_data_v2_archive_sync",
         "batch_fingerprint": manifest.manifest_fingerprint,
+        "validation_contract_version": int(manifest.validation_contract_version),
         "registry_fingerprint": manifest.registry_fingerprint,
         "base_provider_snapshot_fingerprint": manifest.base_provider_snapshot_fingerprint,
         "base_provider_manifest_fingerprint": manifest.base_provider_manifest_fingerprint,

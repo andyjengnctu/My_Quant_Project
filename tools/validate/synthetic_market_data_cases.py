@@ -1873,6 +1873,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     from core.market_data_due_planner import plan_market_data_due_datasets
     from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_dataset_state_path
     from services.trading.market_data_dataset_state import (
+        build_initial_market_data_dataset_state,
         build_market_data_dataset_state_read_model,
         load_market_data_dataset_state,
         record_market_data_sync_success,
@@ -1957,6 +1958,35 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
         loaded_state = load_market_data_dataset_state(state_root, required=True)
         check("dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
+
+    with TemporaryDirectory() as legacy_state_dir:
+        legacy_root = Path(legacy_state_dir)
+        legacy_path = resolve_trading_market_data_v2_dataset_state_path(legacy_root)
+        legacy_state = build_initial_market_data_dataset_state(
+            updated_at=datetime(2026, 9, 10, 18, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        )
+        legacy_rows = {key: dict(value) for key, value in legacy_state["datasets"].items()}
+        for row in legacy_rows.values():
+            row.pop("validation_contract_version", None)
+            row["status"] = "READY"
+            row["last_ready_target_date"] = "2026-09-10"
+            row["schema_status"] = "READY"
+            row["coverage_status"] = "READY"
+        legacy_core = {
+            **{key: value for key, value in legacy_state.items() if key not in {"schema_version", "state_fingerprint", "datasets"}},
+            "schema_version": 1,
+            "datasets": legacy_rows,
+        }
+        atomic_write_json(legacy_path, {**legacy_core, "state_fingerprint": canonical_json_sha256(legacy_core)})
+        migrated_state = load_market_data_dataset_state(legacy_root, required=True)
+        check("legacy_dataset_state_migrates_without_authorizing_old_ready_date", 1, migrated_state["datasets"]["TaiwanStockPrice"]["validation_contract_version"])
+        legacy_due = plan_market_data_due_datasets(
+            target_date="2026-09-10",
+            now=datetime(2026, 9, 11, 11, 51, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=migrated_state,
+            contracts=(by_dataset["TaiwanStockPrice"],),
+        )
+        check("legacy_ready_date_requires_current_validation_before_reuse", ("TaiwanStockPrice",), legacy_due.due_datasets)
         projected_plan, projected_state = refresh_market_data_due_state(
             state_root,
             target_date="2026-09-08",
@@ -2066,6 +2096,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     # --target-date remains the deterministic test/recovery override above.
     from core.market_data_auto_update_policy import get_market_data_auto_update_policy
     from services.trading.market_data_market_date_discovery import (
+        DISCOVERY_RESULT_NEW_DATE,
         DISCOVERY_RESULT_NO_NEW_DATE,
         load_market_date_discovery_state,
         plan_market_date_discovery,
@@ -2099,6 +2130,53 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         )
         check("market_date_discovery_no_new_date_uses_bounded_first_retry", "2026-09-08T18:01:00+08:00", deferred["next_probe_at"])
         check("market_date_discovery_state_is_persisted_and_fingerprinted", "NO_NEW_DATE", load_market_date_discovery_state(discovery_root, required=True)["last_probe_result"])
+
+    with TemporaryDirectory() as stale_discovery_dir:
+        stale_root = Path(stale_discovery_dir)
+        stale_now = datetime(2026, 9, 11, 11, 51, tzinfo=ZoneInfo("Asia/Taipei"))
+        stale_plan = plan_market_date_discovery(
+            stale_root,
+            current_market_date="2026-09-04",
+            now=stale_now,
+            policy=discovery_policy,
+        )
+        check("market_date_discovery_stale_target_is_due_immediately", True, stale_plan["due"])
+        check("market_date_discovery_stale_target_does_not_wait_for_same_day_close", stale_now.isoformat(), stale_plan["next_probe_at"])
+        advanced = record_market_date_probe_result(
+            stale_root,
+            current_market_date="2026-09-10",
+            observed_market_date="2026-09-10",
+            now=stale_now,
+            policy=discovery_policy,
+            result=DISCOVERY_RESULT_NEW_DATE,
+        )
+        check("market_date_discovery_morning_catchup_rechecks_same_day_after_publication", "2026-09-11T17:45:00+08:00", advanced["next_probe_at"])
+
+    from services.downloader.trading_price_refresh import probe_latest_adjusted_price_market_date
+    class _ExactDateDiscoveryClient:
+        def __init__(self):
+            self.calls = []
+        def get_data(self, *, dataset, data_id=None, start_date=None, end_date=None):
+            self.calls.append((dataset, data_id, start_date, end_date))
+            if start_date == end_date == "2026-09-10":
+                return pd.DataFrame([{
+                    "date": "2026-09-10", "stock_id": "2330",
+                    "open": 2450.0, "max": 2460.0, "min": 2440.0, "close": 2450.0,
+                    "Trading_Volume": 1000,
+                }])
+            return pd.DataFrame()
+    exact_client = _ExactDateDiscoveryClient()
+    exact_probe = probe_latest_adjusted_price_market_date(
+        client=exact_client,
+        now=datetime(2026, 9, 11, 11, 51, tzinfo=ZoneInfo("Asia/Taipei")),
+        current_market_date="2026-09-04",
+    )
+    check("market_date_discovery_exact_date_probe_finds_20260910", "2026-09-10", exact_probe.market_date)
+    check(
+        "market_date_discovery_never_uses_long_range_for_latest_day",
+        [("TaiwanStockPriceAdj", None, "2026-09-10", "2026-09-10")],
+        exact_client.calls,
+    )
 
     with TemporaryDirectory() as scheduler_local_dir:
         scheduler_root = Path(scheduler_local_dir)
@@ -2156,7 +2234,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 self.data_request_count = 0
                 self.usage_request_count = 0
         discovery_base = _DiscoveryBaseClient()
-        def _fake_probe(*, client, now):
+        def _fake_probe(*, client, now, current_market_date=None):
             client.base_client.data_request_count += 1
             from services.downloader.trading_price_refresh import PriceRange, TradingPriceProbe
             return TradingPriceProbe(
@@ -2374,6 +2452,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         validate_trading_data_dependency_registry,
     )
     from services.trading import data_readiness as trading_data_readiness
+    from core.market_data_dataset_readiness import MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
     from services.trading.market_data_dataset_state import (
         VALIDATION_STATUS_NOT_EVALUATED,
         VALIDATION_STATUS_READY,
@@ -2391,6 +2470,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 "latest_data_date": "2026-09-07",
                 "schema_status": VALIDATION_STATUS_READY,
                 "coverage_status": VALIDATION_STATUS_READY,
+                "validation_contract_version": MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
             }
             for dataset in current_dependency.required_v2_datasets
         }
@@ -2431,6 +2511,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                 "latest_data_date": "2026-09-07",
                 "schema_status": VALIDATION_STATUS_READY,
                 "coverage_status": VALIDATION_STATUS_NOT_EVALUATED,
+                "validation_contract_version": MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
             }
         }
     }
@@ -4839,6 +4920,7 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
             base_provider_manifest_fingerprint=provider_manifest_fp,
             base_as_of_date="2026-03-02",
             previous_sync_date=None,
+            validation_contract_version=2,
         )
         atomic_write_json(
             resolve_trading_market_data_v2_batch_manifest_path(root, batch_fp),

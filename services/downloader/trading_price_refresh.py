@@ -131,41 +131,107 @@ def _seed_exact_date_cache(
         )
 
 
-def probe_latest_adjusted_price_market_date(*, client, now: datetime | None = None) -> TradingPriceProbe:
+def _validate_exact_date_probe_frame(frame: pd.DataFrame, *, expected_date: str) -> pd.DataFrame:
+    """Validate one full-market exact-date PriceAdj discovery response.
+
+    Discovery must never infer latest-market-date from a wider range because a
+    provider may sparsely/truncatedly materialize that range.  A non-empty
+    exact-date response is accepted only when every row belongs to the requested
+    date; empty responses are legal for weekends/exchange holidays.
+    """
+
+    if frame is None or not isinstance(frame, pd.DataFrame):
+        raise TradingBulkPriceUnsupported("TaiwanStockPriceAdj provider payload 不是 DataFrame")
+    if frame.empty:
+        return frame.copy()
+    columns = _provider_columns(frame)
+    date_column = columns.get("date")
+    if date_column is None:
+        raise TradingBulkPriceUnsupported("TaiwanStockPriceAdj exact-date probe 缺少 date 欄位")
+    parsed = pd.to_datetime(frame[date_column], errors="coerce")
+    if parsed.isna().any():
+        raise TradingBulkPriceUnsupported("TaiwanStockPriceAdj exact-date probe 含不合法 date")
+    observed = set(parsed.dt.strftime("%Y-%m-%d").tolist())
+    if observed != {str(expected_date)}:
+        raise TradingBulkPriceUnsupported(
+            "TaiwanStockPriceAdj exact-date probe scope 不一致："
+            f"requested={expected_date}, observed={sorted(observed)}"
+        )
+    return frame.copy()
+
+
+def probe_latest_adjusted_price_market_date(
+    *,
+    client,
+    now: datetime | None = None,
+    current_market_date: str | None = None,
+) -> TradingPriceProbe:
+    """Discover the latest completed Trading day using exact-date probes only.
+
+    ``current_market_date`` is already trusted local evidence.  Discovery walks
+    backward only through dates newer than that floor and stops at the first
+    non-empty exact-date response, so weekends/holidays remain bounded without
+    ever issuing the former sparse long-range query.
+    """
+
     resolved_now = rt.get_taipei_now() if now is None else now
     candidate = latest_allowed_completed_daily_date(now=resolved_now)
-    ranges = build_price_history_ranges(
-        start_date=rt.PRICE_HISTORY_START_DATE,
-        end_date=candidate,
-        chunk_months=rt.CANONICAL_PRICE_BULK_CHUNK_MONTHS,
-    )
-    current_range = ranges[-1]
-    frame = request_finmind_data_with_retry(
-        client,
-        dataset=rt.FINMIND_PRICE_DATASET,
-        start_date=current_range.start_date,
-        end_date=current_range.end_date,
-    )
-    normalized = normalize_adjusted_price_frame(frame)
-    market_date = select_latest_completed_daily_date(normalized["Date"].tolist(), now=resolved_now)
-    if market_date is None:
-        raise TradingBulkPriceUnsupported(
-            "無法由 FinMind TaiwanStockPriceAdj full-market current range 確認最新完整交易日；"
-            f"range={current_range.start_date}~{current_range.end_date}"
+    floor = None if current_market_date is None else _iso(current_market_date)
+    cursor = date.fromisoformat(str(candidate))
+    floor_date = None if floor is None else date.fromisoformat(floor)
+
+    if floor_date is not None and cursor <= floor_date:
+        empty = pd.DataFrame()
+        return TradingPriceProbe(
+            candidate_date=str(candidate),
+            market_date=floor,
+            current_range=PriceRange(str(candidate), str(candidate)),
+            current_frame=empty,
         )
-    recent_start = date.fromisoformat(market_date) - timedelta(days=6)
-    _seed_exact_date_cache(
-        client,
-        raw_frame=frame,
-        dates=((recent_start + timedelta(days=offset)).isoformat() for offset in range(7)),
-        coverage_start=current_range.start_date,
-        coverage_end=current_range.end_date,
-    )
-    return TradingPriceProbe(
-        candidate_date=str(candidate),
-        market_date=str(market_date),
-        current_range=current_range,
-        current_frame=frame,
+
+    last_range = PriceRange(str(candidate), str(candidate))
+    while floor_date is None or cursor > floor_date:
+        probe_date = cursor.isoformat()
+        last_range = PriceRange(probe_date, probe_date)
+        frame = request_finmind_data_with_retry(
+            client,
+            dataset=rt.FINMIND_PRICE_DATASET,
+            start_date=probe_date,
+            end_date=probe_date,
+        )
+        frame = _validate_exact_date_probe_frame(frame, expected_date=probe_date)
+        if not frame.empty:
+            normalized = normalize_adjusted_price_frame(frame)
+            market_date = select_latest_completed_daily_date(normalized["Date"].tolist(), now=resolved_now)
+            if market_date != probe_date:
+                raise TradingBulkPriceUnsupported(
+                    "TaiwanStockPriceAdj exact-date probe 未能確認 requested completed day："
+                    f"requested={probe_date}, resolved={market_date}"
+                )
+            _seed_exact_date_cache(
+                client,
+                raw_frame=frame,
+                dates=(probe_date,),
+                coverage_start=probe_date,
+                coverage_end=probe_date,
+            )
+            return TradingPriceProbe(
+                candidate_date=str(candidate),
+                market_date=probe_date,
+                current_range=last_range,
+                current_frame=frame,
+            )
+        cursor -= timedelta(days=1)
+
+    if floor is not None:
+        return TradingPriceProbe(
+            candidate_date=str(candidate),
+            market_date=floor,
+            current_range=last_range,
+            current_frame=pd.DataFrame(),
+        )
+    raise TradingBulkPriceUnsupported(
+        "無法由 FinMind TaiwanStockPriceAdj full-market exact-date probes 確認最新完整交易日"
     )
 
 __all__ = [

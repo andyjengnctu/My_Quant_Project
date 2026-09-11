@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.market_data_auto_update_policy import get_market_data_auto_update_policy
+from core.market_data_dataset_readiness import is_market_data_dataset_ready
 from core.market_data_due_planner import plan_market_data_due_datasets
 from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
 from services.trading.data_readiness import build_trading_data_readiness
@@ -110,8 +111,8 @@ def build_market_data_ops_read_model(
     ready_count = sum(
         1
         for row in rows
-        if str(row.get("last_ready_target_date") or "") >= str(target_date or "")
-        and target_date is not None
+        if target_date is not None
+        and is_market_data_dataset_ready(row, target_date=str(target_date))
     )
     due_count = sum(bool(row.get("due")) for row in rows)
     dataset_next_check_at = _earliest_iso(row.get("next_check_at") for row in rows)

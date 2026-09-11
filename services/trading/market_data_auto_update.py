@@ -15,6 +15,7 @@ from typing import Callable
 from uuid import uuid4
 
 from core.market_data_auto_update_policy import get_market_data_auto_update_policy
+from core.market_data_dataset_readiness import is_market_data_dataset_ready
 from core.market_data_freshness_contract import (
     FRESHNESS_STATUS_READY,
     FRESHNESS_STATUS_WAIT_PUBLISH,
@@ -129,7 +130,11 @@ def _discover_new_market_date_if_due(
 
     token, client = _prepare_provider_client(root=root, token=token, client=client)
     try:
-        probe = probe_latest_adjusted_price_market_date(client=client, now=now)
+        probe = probe_latest_adjusted_price_market_date(
+            client=client,
+            now=now,
+            current_market_date=current_target,
+        )
     except FinMindHttpError as exc:
         result = DISCOVERY_RESULT_WAIT_QUOTA if exc.quota_exhausted else DISCOVERY_RESULT_ERROR
         state = record_market_date_probe_result(
@@ -418,7 +423,7 @@ def run_trading_market_data_auto_update(
         final_state = load_market_data_dataset_state(root, required=True)
         final_rows = dict(final_state["datasets"])
         ready_count = sum(
-            str(dict(row or {}).get("last_ready_target_date") or "") >= resolved_target
+            is_market_data_dataset_ready(dict(row or {}), target_date=resolved_target)
             for row in final_rows.values()
         )
         rollup = publish_trading_market_data_v2_auto_rollup(root, target_date=resolved_target, updated_at=now, batch_result=batch)

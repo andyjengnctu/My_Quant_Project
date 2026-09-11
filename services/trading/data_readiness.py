@@ -10,22 +10,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from core.market_data_dataset_readiness import (
+    MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
+    VALID_DATASET_VALIDATION_STATUSES,
+    is_market_data_dataset_ready,
+)
 from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
 from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_policy import get_trading_strategy_profile
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
-from services.trading.market_data_dataset_state import (
-    VALIDATION_STATUS_NO_ROW_VALID,
-    VALIDATION_STATUS_READY,
-    load_market_data_dataset_state,
-)
+from services.trading.market_data_dataset_state import load_market_data_dataset_state
 
 READINESS_STATUS_READY = "READY"
 READINESS_STATUS_BLOCKED = "BLOCKED"
-_VALID_REQUIRED_VALIDATION_STATUSES = {
-    VALIDATION_STATUS_READY,
-    VALIDATION_STATUS_NO_ROW_VALID,
-}
+_VALID_REQUIRED_VALIDATION_STATUSES = VALID_DATASET_VALIDATION_STATUSES
 
 
 def _evaluate_v2_dependency(
@@ -39,6 +37,7 @@ def _evaluate_v2_dependency(
     ready_target = str(row.get("last_ready_target_date") or "") or None
     schema_status = str(row.get("schema_status") or "UNKNOWN")
     coverage_status = str(row.get("coverage_status") or "UNKNOWN")
+    validation_contract_version = row.get("validation_contract_version")
     reasons: list[str] = []
     if not target_date:
         reasons.append("Trading V2 consumer target date 尚未建立")
@@ -53,6 +52,12 @@ def _evaluate_v2_dependency(
             reasons.append(f"schema={schema_status}")
         if coverage_status not in _VALID_REQUIRED_VALIDATION_STATUSES:
             reasons.append(f"coverage={coverage_status}")
+        if not is_market_data_dataset_ready(row, target_date=str(target_date or "")):
+            if validation_contract_version is None:
+                reasons.append("validation_contract=missing")
+            elif not any(text.startswith("validation_contract=") for text in reasons):
+                if str(validation_contract_version) != str(MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION):
+                    reasons.append(f"validation_contract={validation_contract_version}")
     return {
         "dataset": dataset,
         "ready": not reasons,
@@ -61,6 +66,7 @@ def _evaluate_v2_dependency(
         "latest_data_date": row.get("latest_data_date"),
         "schema_status": schema_status,
         "coverage_status": coverage_status,
+        "validation_contract_version": validation_contract_version,
         "reason": None if not reasons else "; ".join(reasons),
     }
 
