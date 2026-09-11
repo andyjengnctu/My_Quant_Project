@@ -496,16 +496,18 @@ Research Market Data generation由`apps/research.py`單一正式入口管理；�
 ```powershell
 python apps/research.py market-data status
 python apps/research.py market-data freeze
+python apps/research.py market-data precheck <freeze_candidate_fingerprint>
 python apps/research.py market-data promote <freeze_candidate_fingerprint>
 python apps/research.py market-data verify
 ```
 
 - `status`：顯示effective generation、fixed cutoff、freeze candidates、promotion/materialization identity與目前full Research data dir；不呼叫provider。
 - `freeze`：對目前READY Provider Snapshot建立／REUSE Round-15 immutable freeze candidate；不切active、不授權promotion。
-- `promote <fingerprint>`：明確指定一個freeze candidate後才執行promotion；若存在多個candidate，禁止自動選latest。Promotion先建立／驗證immutable compatibility OHLCV materialization，成功後才atomic publish active pointer。
+- `precheck <fingerprint>`：promotion前的local-only驗收；deep驗freeze candidate、common-complete cutoff與adjusted-price revision proof，衍生將來promotion會使用的compatibility materialization fingerprint，並檢查既有published promotion/pointer state。此步驟provider calls=0，且不得materialize、寫active pointer或切換Research generation。
+- `promote <fingerprint>`：明確指定一個freeze candidate後才執行promotion；CLI與互動入口都會先執行同一precheck。若存在多個candidate，禁止自動選latest。Promotion先建立／驗證immutable compatibility OHLCV materialization，成功後才atomic publish active pointer。
 - `verify`：對active compatibility materialization做deep file-set/SHA驗證。
 
-互動入口：`python apps/research.py` → `Market Data generation／Research V2 lifecycle`。互動promotion必須輸入完整freeze fingerprint並再輸入精確`PROMOTE`確認。Compatibility view的OHLC直接來自FinMind `TaiwanStockPriceAdj`，Volume只來自raw `TaiwanStockPrice.Trading_Volume`；不得建立第二套adjusted-price engine，也不得讀Trading overlay。
+互動入口：`python apps/research.py` → `Market Data generation／Research V2 lifecycle`。互動入口在promotion前會先顯示precheck結果；只有非`MANUAL_AUDIT_REQUIRED`狀態才可進入精確`PROMOTE`確認。Precheck不以raw V1/V2數值建立新的scientific gate，而是重用freeze已持久化的required-scope/common-complete與positive-scalar adjusted-price equivalence evidence，因此不形成第二套Research decision。Compatibility view的OHLC直接來自FinMind `TaiwanStockPriceAdj`，Volume只來自raw `TaiwanStockPrice.Trading_Volume`；不得建立第二套adjusted-price engine，也不得讀Trading overlay。
 
 ### Market Data Rounds 1–16 Audit Repair 1（2026-09-08）
 

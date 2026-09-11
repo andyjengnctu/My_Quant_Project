@@ -3876,6 +3876,202 @@ def validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_ca
     return results, summary
 
 
+def validate_market_data_v2_research_promotion_readiness_contract_case(_base_params):
+    """Pre-promotion validation must be explicit, local-only and mutation-free."""
+
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from core.file_integrity import canonical_json_sha256
+    from core.market_data_adjusted_price_revision_proof import ADJUSTED_PRICE_REVISION_STATUS_READY
+    from core.market_data_research_materialization import (
+        build_research_v2_compatibility_materialization_identity_payload,
+    )
+    from core.market_data_research_storage_contract import resolve_research_v2_materialization_dir
+    from services.research.market_data_generation import validate_research_v2_promotion_readiness
+
+    case_id = "MARKET_DATA_V2_RESEARCH_PROMOTION_READINESS"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "market_data", training_performed=False)
+
+    h = lambda ch: ch * 64
+    freeze_fp = h("a")
+    common_fp = h("b")
+    universe_sha = h("c")
+    proof_fp = h("d")
+    freeze = {
+        "schema_version": 3,
+        "generation_id": "research_v2",
+        "status": "FREEZE_CANDIDATE_READY",
+        "required_cutoff": "2026-03-02",
+        "frozen_cutoff": "2026-03-02",
+        "freeze_candidate_fingerprint": freeze_fp,
+        "candidate_fingerprint": h("e"),
+        "required_source_projection_fingerprint": h("f"),
+        "daily_universe_file_sha256": universe_sha,
+        "research_scope_contract_fingerprint": h("1"),
+        "adjusted_price_representation_contract_fingerprint": h("2"),
+        "adjusted_price_revision_proof_fingerprint": proof_fp,
+        "required_common_complete_fingerprint": common_fp,
+        "required_common_complete_start_date": "2003-01-02",
+        "required_common_complete_tail_date_count": 5800,
+        "provider_as_of_date": "2026-09-01",
+        "provider_snapshot_fingerprint": h("3"),
+        "promotion_authorized": False,
+        "active_research_generation_changed": False,
+        "required_common_complete": {
+            "required_cutoff_complete": True,
+            "common_complete_cutoff": "2026-03-02",
+            "coverage_fingerprint": common_fp,
+        },
+    }
+    proof = {
+        "status": ADJUSTED_PRICE_REVISION_STATUS_READY,
+        "required_cutoff": "2026-03-02",
+        "daily_universe_file_sha256": universe_sha,
+        "required_stock_count": 2,
+        "proven_stock_count": 2,
+        "required_stock_day_count": 4,
+        "proven_stock_day_count": 4,
+        "missing_legacy_stock_count": 0,
+        "missing_legacy_stock_day_count": 0,
+        "missing_current_stock_day_count": 0,
+        "non_scalar_mismatch_count": 0,
+    }
+    expected_materialization_fp = canonical_json_sha256(
+        build_research_v2_compatibility_materialization_identity_payload(freeze)
+    )
+
+    with TemporaryDirectory(prefix="research_v2_promotion_readiness_") as tmp:
+        root = Path(tmp)
+        with (
+            patch("services.research.market_data_generation.load_research_v2_freeze_candidate", return_value=dict(freeze)),
+            patch("services.research.market_data_generation.load_adjusted_price_revision_proof", return_value=dict(proof)),
+            patch("services.research.market_data_generation.load_active_research_v2_promotion", return_value=None),
+            patch("services.research.market_data_generation.discover_published_research_v2_promotion_fingerprints", return_value=()),
+        ):
+            ready = validate_research_v2_promotion_readiness(
+                root, freeze_candidate_fingerprint=freeze_fp
+            )
+        check("precheck_reports_ready_without_promotion", "READY_FOR_PROMOTION", ready["status"])
+        check("precheck_derives_exact_materialization_identity", expected_materialization_fp, ready["materialization_fingerprint"])
+        check("precheck_does_not_materialize", "NOT_BUILT", ready["materialization_status"])
+        check("precheck_performs_zero_provider_calls", 0, ready["provider_calls"])
+        check("precheck_reports_no_mutation", False, ready["mutation_performed"])
+        check("precheck_does_not_create_project_files", [], sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()))
+        check("precheck_surfaces_adjusted_price_stock_equivalence", (2, 2), (ready["adjusted_price_proven_stock_count"], ready["adjusted_price_required_stock_count"]))
+        check("precheck_surfaces_adjusted_price_stock_day_equivalence", (4, 4), (ready["adjusted_price_proven_stock_day_count"], ready["adjusted_price_required_stock_day_count"]))
+        check("precheck_surfaces_zero_adjusted_price_gaps", (0, 0, 0, 0), (
+            ready["adjusted_price_missing_legacy_stock_count"],
+            ready["adjusted_price_missing_legacy_stock_day_count"],
+            ready["adjusted_price_missing_current_stock_day_count"],
+            ready["adjusted_price_non_scalar_mismatch_count"],
+        ))
+
+        active = SimpleNamespace(freeze_candidate_fingerprint=freeze_fp)
+        active_pointer = root / "active_research_generation.json"
+        active_pointer.write_text("{}", encoding="utf-8")
+        with (
+            patch("services.research.market_data_generation.load_research_v2_freeze_candidate", return_value=dict(freeze)),
+            patch("services.research.market_data_generation.load_adjusted_price_revision_proof", return_value=dict(proof)),
+            patch("services.research.market_data_generation.resolve_active_research_generation_path", return_value=active_pointer),
+            patch("services.research.market_data_generation.load_active_research_v2_promotion", return_value=active),
+            patch("services.research.market_data_generation.discover_published_research_v2_promotion_fingerprints", return_value=()),
+        ):
+            already = validate_research_v2_promotion_readiness(root, freeze_candidate_fingerprint=freeze_fp)
+        active_pointer.unlink()
+        check("precheck_same_active_candidate_is_idempotent", "ALREADY_ACTIVE", already["status"])
+
+        published_fp = h("7")
+        published_manifest = root / "published_promotion_manifest.json"
+        published_manifest.write_text("{}", encoding="utf-8")
+        published_promotion = SimpleNamespace(freeze_candidate_fingerprint=freeze_fp)
+        with (
+            patch("services.research.market_data_generation.load_research_v2_freeze_candidate", return_value=dict(freeze)),
+            patch("services.research.market_data_generation.load_adjusted_price_revision_proof", return_value=dict(proof)),
+            patch("services.research.market_data_generation.discover_published_research_v2_promotion_fingerprints", return_value=(published_fp,)),
+            patch("services.research.market_data_generation.resolve_research_v2_promotion_manifest_path", return_value=published_manifest),
+            patch("services.research.market_data_generation.load_research_v2_promotion_artifact", return_value=published_promotion),
+        ):
+            recovery = validate_research_v2_promotion_readiness(root, freeze_candidate_fingerprint=freeze_fp)
+        published_manifest.unlink()
+        check("precheck_complete_same_candidate_publication_requires_pointer_recovery", "POINTER_RECOVERY_REQUIRED", recovery["status"])
+
+        with (
+            patch("services.research.market_data_generation.load_research_v2_freeze_candidate", return_value=dict(freeze)),
+            patch("services.research.market_data_generation.load_adjusted_price_revision_proof", return_value=dict(proof)),
+            patch("services.research.market_data_generation.load_active_research_v2_promotion", return_value=None),
+            patch("services.research.market_data_generation.discover_published_research_v2_promotion_fingerprints", return_value=(h("9"),)),
+        ):
+            incomplete = validate_research_v2_promotion_readiness(root, freeze_candidate_fingerprint=freeze_fp)
+        check("precheck_single_incomplete_publication_preserves_safe_recovery_path", "PROMOTION_RECOVERY_CHECK_REQUIRED", incomplete["status"])
+
+        with (
+            patch("services.research.market_data_generation.load_research_v2_freeze_candidate", return_value=dict(freeze)),
+            patch("services.research.market_data_generation.load_adjusted_price_revision_proof", return_value=dict(proof)),
+            patch("services.research.market_data_generation.discover_published_research_v2_promotion_fingerprints", return_value=(h("8"), h("9"))),
+        ):
+            multiple_incomplete = validate_research_v2_promotion_readiness(root, freeze_candidate_fingerprint=freeze_fp)
+        check("precheck_multiple_incomplete_publications_require_manual_audit", "MANUAL_AUDIT_REQUIRED", multiple_incomplete["status"])
+
+        blocked_proof = dict(proof)
+        blocked_proof["status"] = "REVISION_EQUIVALENCE_NOT_PROVEN"
+        proof_rejected = False
+        with (
+            patch("services.research.market_data_generation.load_research_v2_freeze_candidate", return_value=dict(freeze)),
+            patch("services.research.market_data_generation.load_adjusted_price_revision_proof", return_value=blocked_proof),
+        ):
+            try:
+                validate_research_v2_promotion_readiness(root, freeze_candidate_fingerprint=freeze_fp)
+            except ValueError:
+                proof_rejected = True
+        check("precheck_rejects_non_ready_adjusted_price_proof", True, proof_rejected)
+
+        materialization_dir = resolve_research_v2_materialization_dir(root, expected_materialization_fp)
+        materialization_dir.mkdir(parents=True, exist_ok=True)
+        collision_rejected = False
+        with (
+            patch("services.research.market_data_generation.load_research_v2_freeze_candidate", return_value=dict(freeze)),
+            patch("services.research.market_data_generation.load_adjusted_price_revision_proof", return_value=dict(proof)),
+        ):
+            try:
+                validate_research_v2_promotion_readiness(root, freeze_candidate_fingerprint=freeze_fp)
+            except ValueError:
+                collision_rejected = True
+        check("precheck_rejects_materialization_path_without_manifest", True, collision_rejected)
+
+    from unittest.mock import Mock
+    from apps import research as research_app
+
+    promoted = Mock()
+    ready_cli_payload = {"status": "READY_FOR_PROMOTION"}
+    with (
+        patch.object(research_app, "_resolve_market_data_freeze_candidate", return_value=freeze_fp),
+        patch.object(research_app, "_validate_market_data_freeze_candidate", return_value=ready_cli_payload),
+        patch.object(research_app, "_promote_market_data_freeze_candidate", promoted),
+    ):
+        cli_status = research_app._run_market_data_cli(["precheck", freeze_fp])
+    check("cli_precheck_returns_success_without_promotion", 0, cli_status)
+    check("cli_precheck_never_calls_promotion", 0, promoted.call_count)
+
+    promoted.reset_mock()
+    blocked_cli = False
+    with (
+        patch.object(research_app, "_resolve_market_data_freeze_candidate", return_value=freeze_fp),
+        patch.object(research_app, "_validate_market_data_freeze_candidate", return_value={"status": "MANUAL_AUDIT_REQUIRED"}),
+        patch.object(research_app, "_promote_market_data_freeze_candidate", promoted),
+    ):
+        try:
+            research_app._run_market_data_cli(["promote", freeze_fp])
+        except RuntimeError:
+            blocked_cli = True
+    check("cli_promotion_cannot_bypass_failed_precheck", True, blocked_cli)
+    check("blocked_cli_promotion_never_calls_promotion_service", 0, promoted.call_count)
+
+    summary.update({"checks": len(results), "provider_calls": 0})
+    return results, summary
+
 def validate_market_data_rounds_1_16_repair1_contract_case(_base_params):
     """Audit Repair 1 keeps date identity and historical eligibility fail closed."""
 

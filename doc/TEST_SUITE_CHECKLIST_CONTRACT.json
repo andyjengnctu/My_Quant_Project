@@ -4485,6 +4485,17 @@
       "entry": "`core/trading_data_dependencies.py`, `core/market_data_contract.py`, `config/market_data.py`, `services/trading/market_data_update.py`, `services/trading/market_data_consumer.py`, `services/trading/data_readiness.py`, `services/trading/strategy_param_state.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/operations_status.py`, `tools/validate/synthetic_market_data_cases.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 404
+    },
+    {
+      "id": "B417",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Research V2 pre-promotion activation validation",
+      "item": "An explicit Research V2 freeze candidate must have a local-only promotion-readiness seam that deep-validates frozen/common-complete/adjusted-price-revision evidence, derives the exact future compatibility-materialization identity, and audits existing promotion publication state without provider calls, materialization writes, pointer publication or active-generation mutation.",
+      "gap": "Rounds 9–16 already build fail-closed freeze/promotion contracts, but the user-facing lifecycle previously jumped directly from freeze creation to explicit PROMOTE. Activation validation must expose the already-authorized legality evidence before the irreversible generation switch without inventing a second V1/V2 scientific gate or allowing candidate auto-selection.",
+      "entry": "`apps/research.py`, `services/research/market_data_generation.py`, `tools/validate/synthetic_market_data_cases.py`",
+      "initial_status": "NEW",
+      "order": 405
     }
   ],
   "tests": [
@@ -8240,6 +8251,13 @@
       "description": "`validate_trading_market_data_lineage_contract_case` 覆蓋 Market Data V2 consumer-state/source-view lineage、Params/Scanner exact identity、Legacy CSV/snapshot drift 不影響 V2 truth、V2 state drift 使 Params/Scanner/candidate/proposed artifact fail-closed，以及 Scanner/Params producer TOCTOU publication guard。",
       "initial_status": "NEW",
       "order": 527
+    },
+    {
+      "id": "T538",
+      "b_id": "B417",
+      "description": "`validate_market_data_v2_research_promotion_readiness_contract_case` 驗證precheck只消費明確freeze fingerprint、重用common-complete與adjusted-price positive-scalar proof、衍生deterministic materialization identity、provider calls=0/無任何Research mutation，並對same-active candidate、incomplete publication、non-READY proof與immutable-path collision fail-closed。",
+      "initial_status": "NEW",
+      "order": 528
     }
   ],
   "transitions": [
@@ -26522,6 +26540,22 @@
       "to_status": "DONE",
       "description": "將既有 Data→Params→Scanner lineage regression 重新綁定到 Round 8 V2-only terminal contract。",
       "note": "Supersedes retired T503/B383 Legacy CSV lineage binding; validator function identity unchanged."
+    },
+    {
+      "date": "2026-09-11",
+      "id": "B417",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增Research V2 promotion前local-only readiness seam與正式Research menu/CLI入口；不改scientific identity、不自動promotion。",
+      "note": "Freeze data缺失時仍由既有provider-snapshot contract fail-fast；precheck本身不補資料。"
+    },
+    {
+      "date": "2026-09-11",
+      "id": "T538",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "新增Research V2 promotion-readiness dedicated synthetic並納入正式DONE測試摘要。",
+      "note": "Locks zero-provider/zero-mutation pre-promotion semantics and publication-state handling."
     }
   ]
 }

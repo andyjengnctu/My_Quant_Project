@@ -27,6 +27,9 @@ from core.file_integrity import (
     compute_file_sha256,
     load_json_strict,
 )
+from core.market_data_adjusted_price_revision_proof import (
+    ADJUSTED_PRICE_REVISION_STATUS_READY,
+)
 from core.market_data_research_materialization import (
     RESEARCH_V2_COMPAT_MATERIALIZATION_STATUS_READY,
     RESEARCH_V2_COMPAT_OUTPUT_COLUMNS,
@@ -60,6 +63,7 @@ from core.market_data_research_storage_contract import (
     resolve_research_v2_promotion_manifest_path,
 )
 from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
+from services.research.adjusted_price_revision_proof import load_adjusted_price_revision_proof
 from services.research.market_data_v2 import (
     FrameReader,
     HashFn,
@@ -502,6 +506,150 @@ def discover_research_v2_freeze_candidates(project_root) -> tuple[dict[str, obje
     return tuple(rows)
 
 
+def validate_research_v2_promotion_readiness(
+    project_root,
+    *,
+    freeze_candidate_fingerprint: str,
+) -> dict[str, object]:
+    """Validate one explicit freeze candidate before promotion without mutating Research truth.
+
+    This seam intentionally performs no provider calls, materialization writes or
+    active-generation publication.  It deep-validates immutable freeze/proof
+    evidence, derives the exact compatibility-materialization identity that a
+    later explicit promotion would use, and reports any existing publication
+    state that needs recovery/manual audit.
+    """
+
+    root = Path(project_root).resolve()
+    requested_freeze_fp = str(freeze_candidate_fingerprint or "").strip().lower()
+    freeze = load_research_v2_freeze_candidate(
+        root,
+        freeze_candidate_fingerprint=requested_freeze_fp,
+        required=True,
+    )
+
+    proof_fp = str(freeze.get("adjusted_price_revision_proof_fingerprint") or "").strip().lower()
+    proof = load_adjusted_price_revision_proof(root, proof_fingerprint=proof_fp, required=True)
+    if str(proof.get("status") or "") != ADJUSTED_PRICE_REVISION_STATUS_READY:
+        raise ValueError("Research V2 promotion readiness requires READY adjusted-price revision proof")
+    if str(proof.get("daily_universe_file_sha256") or "") != str(
+        freeze.get("daily_universe_file_sha256") or ""
+    ):
+        raise ValueError("Research V2 promotion readiness adjusted-price proof / daily universe drift")
+    if str(proof.get("required_cutoff") or "") != str(freeze.get("required_cutoff") or ""):
+        raise ValueError("Research V2 promotion readiness adjusted-price proof cutoff drift")
+
+    common = freeze.get("required_common_complete")
+    if not isinstance(common, dict):
+        raise ValueError("Research V2 promotion readiness required_common_complete evidence missing")
+    if not bool(common.get("required_cutoff_complete")):
+        raise ValueError("Research V2 promotion readiness common-complete cutoff is not complete")
+    if str(common.get("common_complete_cutoff") or "") != str(freeze.get("frozen_cutoff") or ""):
+        raise ValueError("Research V2 promotion readiness common-complete cutoff drift")
+    if str(common.get("coverage_fingerprint") or "") != str(
+        freeze.get("required_common_complete_fingerprint") or ""
+    ):
+        raise ValueError("Research V2 promotion readiness common-complete fingerprint drift")
+
+    materialization_identity = build_research_v2_compatibility_materialization_identity_payload(freeze)
+    materialization_fp = canonical_json_sha256(materialization_identity)
+    materialization_manifest_path = resolve_research_v2_materialization_manifest_path(root, materialization_fp)
+    materialization_dir = resolve_research_v2_materialization_dir(root, materialization_fp)
+    if materialization_manifest_path.is_file():
+        materialization = validate_research_v2_compatibility_materialization(
+            root,
+            materialization_fingerprint=materialization_fp,
+            deep=True,
+        )
+        materialization_status = str(materialization.get("status") or "")
+    else:
+        if materialization_dir.exists():
+            raise ValueError("Research V2 promotion readiness found immutable materialization path without manifest")
+        materialization_status = "NOT_BUILT"
+
+    pointer_path = resolve_active_research_generation_path(root)
+    active = load_active_research_v2_promotion(root, required=True) if pointer_path.is_file() else None
+    published = discover_published_research_v2_promotion_fingerprints(root)
+    complete_published: list[str] = []
+    incomplete_published: list[str] = []
+    published_freezes: dict[str, str] = {}
+    for promotion_fp in published:
+        manifest_path = resolve_research_v2_promotion_manifest_path(root, promotion_fp)
+        if not manifest_path.is_file():
+            incomplete_published.append(promotion_fp)
+            continue
+        promotion = load_research_v2_promotion_artifact(root, promotion_fingerprint=promotion_fp)
+        complete_published.append(promotion_fp)
+        published_freezes[promotion_fp] = promotion.freeze_candidate_fingerprint
+
+    if active is not None:
+        if active.freeze_candidate_fingerprint != requested_freeze_fp:
+            raise RuntimeError(
+                "Research V2 promotion readiness blocked: a different freeze candidate is already ACTIVE"
+            )
+        readiness_status = "ALREADY_ACTIVE"
+    elif incomplete_published:
+        readiness_status = (
+            "PROMOTION_RECOVERY_CHECK_REQUIRED"
+            if len(incomplete_published) == 1 and not complete_published
+            else "MANUAL_AUDIT_REQUIRED"
+        )
+    elif complete_published:
+        same = [fp for fp in complete_published if published_freezes.get(fp) == requested_freeze_fp]
+        other = [fp for fp in complete_published if published_freezes.get(fp) != requested_freeze_fp]
+        if len(same) == 1 and not other:
+            readiness_status = "POINTER_RECOVERY_REQUIRED"
+        else:
+            readiness_status = "MANUAL_AUDIT_REQUIRED"
+    else:
+        effective = get_effective_research_data_generation(root)
+        if effective.generation_id != RESEARCH_DATA_GENERATION_V1:
+            raise RuntimeError(
+                f"Research V2 promotion readiness prior generation invalid: {effective.generation_id}"
+            )
+        readiness_status = "READY_FOR_PROMOTION"
+
+    return {
+        "status": readiness_status,
+        "freeze_candidate_fingerprint": requested_freeze_fp,
+        "frozen_cutoff": str(freeze.get("frozen_cutoff") or ""),
+        "provider_as_of_date": str(freeze.get("provider_as_of_date") or ""),
+        "provider_snapshot_fingerprint": str(freeze.get("provider_snapshot_fingerprint") or ""),
+        "required_source_projection_fingerprint": str(
+            freeze.get("required_source_projection_fingerprint") or ""
+        ),
+        "daily_universe_file_sha256": str(freeze.get("daily_universe_file_sha256") or ""),
+        "required_common_complete_start_date": str(
+            freeze.get("required_common_complete_start_date") or ""
+        ),
+        "required_common_complete_tail_date_count": int(
+            freeze.get("required_common_complete_tail_date_count") or 0
+        ),
+        "required_common_complete_cutoff": str(common.get("common_complete_cutoff") or ""),
+        "adjusted_price_revision_proof_fingerprint": proof_fp,
+        "adjusted_price_revision_status": str(proof.get("status") or ""),
+        "adjusted_price_required_stock_count": int(proof.get("required_stock_count") or 0),
+        "adjusted_price_proven_stock_count": int(proof.get("proven_stock_count") or 0),
+        "adjusted_price_required_stock_day_count": int(proof.get("required_stock_day_count") or 0),
+        "adjusted_price_proven_stock_day_count": int(proof.get("proven_stock_day_count") or 0),
+        "adjusted_price_missing_legacy_stock_count": int(proof.get("missing_legacy_stock_count") or 0),
+        "adjusted_price_missing_legacy_stock_day_count": int(
+            proof.get("missing_legacy_stock_day_count") or 0
+        ),
+        "adjusted_price_missing_current_stock_day_count": int(
+            proof.get("missing_current_stock_day_count") or 0
+        ),
+        "adjusted_price_non_scalar_mismatch_count": int(proof.get("non_scalar_mismatch_count") or 0),
+        "materialization_fingerprint": materialization_fp,
+        "materialization_status": materialization_status,
+        "published_promotion_count": len(published),
+        "incomplete_promotion_count": len(incomplete_published),
+        "active_generation_changed": active is not None,
+        "provider_calls": 0,
+        "mutation_performed": False,
+    }
+
+
 def promote_research_v2(
     project_root,
     *,
@@ -791,6 +939,7 @@ __all__ = [
     "build_research_v2_compatibility_materialization",
     "validate_research_v2_compatibility_materialization",
     "discover_research_v2_freeze_candidates",
+    "validate_research_v2_promotion_readiness",
     "promote_research_v2",
     "load_active_research_v2_read_view",
     "collect_research_market_data_status",

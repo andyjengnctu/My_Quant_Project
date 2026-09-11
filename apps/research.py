@@ -517,6 +517,38 @@ def _build_market_data_freeze_candidate() -> dict:
     return result
 
 
+def _validate_market_data_freeze_candidate(fingerprint: str) -> dict:
+    from services.research.market_data_generation import validate_research_v2_promotion_readiness
+
+    result = validate_research_v2_promotion_readiness(
+        PROJECT_ROOT,
+        freeze_candidate_fingerprint=str(fingerprint),
+    )
+    print("\n=== Research V2 Promotion Readiness ===")
+    print(f"Status                 ：{result.get('status')}")
+    print(f"Freeze candidate       ：{result.get('freeze_candidate_fingerprint')}")
+    print(f"Frozen cutoff          ：{result.get('frozen_cutoff')}")
+    print(f"Provider as-of         ：{result.get('provider_as_of_date')}")
+    print(f"Common-complete cutoff ：{result.get('required_common_complete_cutoff')}")
+    print(
+        "Adjusted-price proof   ："
+        f"{result.get('adjusted_price_proven_stock_count')}/{result.get('adjusted_price_required_stock_count')} stocks, "
+        f"{result.get('adjusted_price_proven_stock_day_count')}/{result.get('adjusted_price_required_stock_day_count')} stock-days"
+    )
+    print(
+        "Adjusted-price gaps    ："
+        f"legacy_stocks={result.get('adjusted_price_missing_legacy_stock_count')}, "
+        f"legacy_days={result.get('adjusted_price_missing_legacy_stock_day_count')}, "
+        f"current_days={result.get('adjusted_price_missing_current_stock_day_count')}, "
+        f"non_scalar={result.get('adjusted_price_non_scalar_mismatch_count')}"
+    )
+    print(f"Materialization        ：{result.get('materialization_status')} | {result.get('materialization_fingerprint')}")
+    print(f"Published promotions   ：{result.get('published_promotion_count')} (incomplete={result.get('incomplete_promotion_count')})")
+    print("Provider calls         ：0")
+    print("Mutation               ：none；此驗收不會 materialize、promotion 或切換 active generation。")
+    return result
+
+
 def _promote_market_data_freeze_candidate(fingerprint: str) -> dict:
     from services.research.market_data_generation import promote_research_v2
 
@@ -544,8 +576,9 @@ def _market_data_menu() -> int:
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             print(f"[狀態不可用] {type(exc).__name__}: {exc}")
         print(render_menu_item(1, "建立／REUSE Research V2 freeze candidate", default=True))
-        print(render_menu_item(2, "明確 promotion Research V2"))
-        print(render_menu_item(3, "Deep 驗證目前 active materialization"))
+        print(render_menu_item(2, "驗證 Research V2 promotion readiness"))
+        print(render_menu_item(3, "明確 promotion Research V2"))
+        print(render_menu_item(4, "Deep 驗證目前 active materialization"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -557,7 +590,7 @@ def _market_data_menu() -> int:
         if choice == "1":
             _build_market_data_freeze_candidate()
             continue
-        if choice == "2":
+        if choice in {"2", "3"}:
             from services.research.market_data_generation import discover_research_v2_freeze_candidates
 
             rows = discover_research_v2_freeze_candidates(PROJECT_ROOT)
@@ -570,12 +603,19 @@ def _market_data_menu() -> int:
                     f"provider_as_of={row.get('provider_as_of_date')}"
                 )
             try:
-                selected = input("👉 輸入要 promotion 的完整 fingerprint（禁止自動選 latest；0 返回）：").strip().lower()
+                selected = input("👉 輸入完整 freeze candidate fingerprint（禁止自動選 latest；0 返回）：").strip().lower()
             except EOFError:
                 return 0
             if selected in {"0", "q", "quit", "exit", ""}:
                 continue
             fingerprint = _resolve_market_data_freeze_candidate(selected)
+            readiness = _validate_market_data_freeze_candidate(fingerprint)
+            if choice == "2":
+                continue
+            readiness_status = str(readiness.get("status") or "")
+            if readiness_status == "MANUAL_AUDIT_REQUIRED":
+                print("Promotion readiness 尚未通過；請先處理 published/incomplete promotion state。")
+                continue
             print(f"將 promotion freeze candidate：{fingerprint}")
             try:
                 confirm = input("👉 輸入 PROMOTE 確認切換 active Research generation：").strip()
@@ -586,18 +626,18 @@ def _market_data_menu() -> int:
                 continue
             _promote_market_data_freeze_candidate(fingerprint)
             continue
-        if choice == "3":
+        if choice == "4":
             _render_market_data_status(deep=True)
             continue
-        print("無效選項，請輸入 0～3。")
+        print("無效選項，請輸入 0～4。")
 
 
 def _run_market_data_cli(args: list[str]) -> int:
     action = str(args[0]).strip().lower() if args else "status"
     rest = args[1:]
     if action in {"-h", "--help", "help"}:
-        print("用法: python apps/research.py market-data [status|freeze|promote <freeze_fingerprint>|verify]")
-        print("說明: freeze 不切 active；promote 是明確授權動作，且多 candidate 時禁止自動選 latest。")
+        print("用法: python apps/research.py market-data [status|freeze|precheck <freeze_fingerprint>|promote <freeze_fingerprint>|verify]")
+        print("說明: freeze/precheck 不切 active；promote 是明確授權動作，且 candidate 必須明確指定。")
         return 0
     if action in {"status", "show"}:
         if rest:
@@ -614,13 +654,23 @@ def _run_market_data_cli(args: list[str]) -> int:
             raise ValueError(f"market-data freeze不支援額外參數: {' '.join(rest)}")
         _build_market_data_freeze_candidate()
         return 0
+    if action in {"precheck", "validate", "readiness"}:
+        if len(rest) != 1:
+            raise ValueError("market-data precheck 必須明確提供一個 freeze_candidate_fingerprint")
+        fingerprint = _resolve_market_data_freeze_candidate(rest[0])
+        result = _validate_market_data_freeze_candidate(fingerprint)
+        return 0 if str(result.get("status") or "") != "MANUAL_AUDIT_REQUIRED" else 1
     if action == "promote":
         if len(rest) != 1:
             raise ValueError("market-data promote 必須明確提供一個 freeze_candidate_fingerprint")
         fingerprint = _resolve_market_data_freeze_candidate(rest[0])
+        readiness = _validate_market_data_freeze_candidate(fingerprint)
+        if str(readiness.get("status") or "") == "MANUAL_AUDIT_REQUIRED":
+            raise RuntimeError("Research V2 promotion readiness 尚未通過；不得 promotion")
         _promote_market_data_freeze_candidate(fingerprint)
         return 0
     raise ValueError(f"market-data不支援的命令: {action}")
+
 
 def _show_research_status() -> int:
     print("\n====================================================================================================")
@@ -714,7 +764,7 @@ def _print_help(program_name: str) -> None:
         f"或 integration {integration_actions}"
     )
     print("  audit      目前 config 指定 Audit module；可接 run、status 或 latest")
-    print("  market-data Research Market Data lifecycle；可接 status/freeze/promote/verify")
+    print("  market-data Research Market Data lifecycle；可接 status/freeze/precheck/promote/verify")
     print("  status     查看目前設定與工件狀態")
 
 
