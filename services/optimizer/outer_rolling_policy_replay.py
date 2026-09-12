@@ -163,6 +163,7 @@ def _build_policy_replay_context(
     max_positions: int,
     enable_rotation: bool,
     raw_universe_required_min_rows=None,
+    raw_data_loader_path: str | None = None,
 ) -> dict:
     """Build the single replay context shared by all policies in a fold.
 
@@ -183,6 +184,7 @@ def _build_policy_replay_context(
         "start_year": int(pd.Timestamp(oos_start_date).year),
         "end_year": int(pd.Timestamp(oos_end_date).year),
         "benchmark_ticker": "0050",
+        "raw_data_loader_path": str(raw_data_loader_path or ""),
     }
 
 def _stable_policy_replay_signature(payload: dict) -> str:
@@ -204,6 +206,12 @@ def _evaluate_active_param_ensemble_replay_payload_task(task: dict) -> dict:
 
     payload = dict(task.get("payload") or {})
     replay_context = dict(task.get("replay_context") or {})
+    raw_data_loader = None
+    raw_data_loader_path = str(replay_context.get("raw_data_loader_path") or "").strip()
+    if raw_data_loader_path:
+        from services.optimizer.callable_ref import load_callable_from_import_path
+
+        raw_data_loader = load_callable_from_import_path(raw_data_loader_path)
     result = run_portfolio_simulation_with_param_ensemble(
         str(replay_context["selected_data_dir"]),
         payload,
@@ -217,6 +225,7 @@ def _evaluate_active_param_ensemble_replay_payload_task(task: dict) -> dict:
         verbose=False,
         use_prepared_cache=False,
         write_prepared_cache=False,
+        raw_data_loader=raw_data_loader,
     )
     return {
         "signature": str(task.get("signature") or ""),

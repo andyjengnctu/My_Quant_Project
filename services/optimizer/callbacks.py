@@ -373,6 +373,12 @@ def _run_static_ensemble_dashboard_replay(session, ensemble_payload: dict, *, st
     data_dir = getattr(session, "raw_data_cache_data_dir", None)
     if not data_dir:
         raise ValueError("session 尚未載入 data_dir，無法建立 ensemble console dashboard")
+    raw_data_loader = None
+    raw_data_loader_path = str(getattr(session, "raw_data_loader_path", None) or "").strip()
+    if raw_data_loader_path:
+        from services.optimizer.callable_ref import load_callable_from_import_path
+
+        raw_data_loader = load_callable_from_import_path(raw_data_loader_path)
     result = run_portfolio_simulation_with_param_ensemble(
         data_dir,
         ensemble_payload,
@@ -385,6 +391,7 @@ def _run_static_ensemble_dashboard_replay(session, ensemble_payload: dict, *, st
         end_date=end_date,
         use_prepared_cache=False,
         write_prepared_cache=False,
+        raw_data_loader=raw_data_loader,
     )
     return _portfolio_replay_metrics_from_result(result, initial_capital=float(initial_capital))
 

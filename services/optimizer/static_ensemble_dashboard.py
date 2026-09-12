@@ -124,6 +124,7 @@ def _build_static_policy_rows_from_paramsets(
         oos_end_date=str(end_date)[:10] if end_date is not None else str(_latest_data_end_text(session))[:10],
         max_positions=int(session.train_max_positions),
         enable_rotation=bool(session.train_enable_rotation),
+        raw_data_loader_path=str(getattr(session, "raw_data_loader_path", None) or ""),
     )
     dedup_enabled = is_optimizer_policy_replay_dedup_by_signature_enabled_default()
     unique_jobs_by_signature: dict[str, dict] = {}

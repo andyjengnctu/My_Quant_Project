@@ -1,5 +1,4 @@
 import inspect
-import importlib
 import json
 import math
 import os
@@ -1300,33 +1299,10 @@ def _clear_nonrolling_local_min_progress_hooks(session) -> None:
             delattr(session, attr_name)
 
 
-def _resolve_importable_callable_path(func) -> str | None:
-    module_name = str(getattr(func, "__module__", "") or "").strip()
-    qualname = str(getattr(func, "__qualname__", "") or "").strip()
-    if not module_name or not qualname or "<locals>" in qualname:
-        return None
-    try:
-        value = importlib.import_module(module_name)
-        for part in qualname.split("."):
-            value = getattr(value, part)
-    except (ImportError, AttributeError):
-        return None
-    if value is not func:
-        return None
-    return f"{module_name}:{qualname}"
-
-
-def _load_callable_from_import_path(path: str):
-    module_name, separator, qualname = str(path or "").partition(":")
-    if not separator or not module_name or not qualname:
-        raise ValueError(f"不合法的 callable import path: {path!r}")
-    value = importlib.import_module(module_name)
-    for part in qualname.split("."):
-        value = getattr(value, part)
-    if not callable(value):
-        raise TypeError(f"import path 不是 callable: {path}")
-    return value
-
+from services.optimizer.callable_ref import (
+    load_callable_from_import_path as _load_callable_from_import_path,
+    resolve_importable_callable_path as _resolve_importable_callable_path,
+)
 
 def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None:
     log_path = str((task or {}).get("log_path") or "")

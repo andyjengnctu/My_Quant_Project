@@ -96,6 +96,9 @@ class OptimizerSession:
         self._cache_lock = threading.RLock()
         self._local_min_stats_lock = threading.RLock()
         self.raw_data_cache_data_dir = None
+        # AI註: 保存 raw loader 的 importable identity，供 policy/dashboard replay
+        # 跨 process 重建同一資料來源；不保存資料內容，也不改 scientific identity。
+        self.raw_data_loader_path = None
         self.current_session_trial = 0
         self.n_trials = 0
         self.prep_summary = {
@@ -535,6 +538,9 @@ class OptimizerSession:
             output_dir=self.output_dir,
             verbose=bool(verbose),
         )
+        from services.optimizer.callable_ref import resolve_importable_callable_path
+
+        self.raw_data_loader_path = resolve_importable_callable_path(load_all_raw_data)
         self.install_raw_data_cache(data_dir, raw_data_cache, required_min_rows=required_min_rows)
 
     def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None, all_dfs_fast=None):

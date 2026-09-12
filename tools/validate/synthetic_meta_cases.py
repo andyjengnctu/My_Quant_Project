@@ -3231,6 +3231,10 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     )
     import core.trading_policy as trading_policy
     import services.optimizer.application as optimizer_application
+    import services.optimizer.outer_rolling_policy_replay as optimizer_policy_replay
+    import services.optimizer.session as optimizer_session
+    import services.optimizer.static_ensemble_dashboard as optimizer_static_dashboard
+    import services.portfolio_replay as portfolio_replay
     from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
     import services.trading.strategy_param_training as trading_training
 
@@ -3336,6 +3340,52 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     process_task_source = inspect.getsource(optimizer_application._run_nonrolling_seed_ensemble_member_process_task)
     add_check(results, "trading_param", case_id, "process_member_uses_caller_injected_loader_path", True, 'task["raw_data_loader_path"]' in process_task_source)
     add_check(results, "trading_param", case_id, "process_member_does_not_hardcode_csv_loader", False, "from services.optimizer.prep import load_all_raw_data" in process_task_source)
+
+    replay_context = optimizer_policy_replay._build_policy_replay_context(
+        selected_data_dir=str(root),
+        oos_year=2099,
+        oos_start_date="2099-01-01",
+        oos_end_date="2099-12-31",
+        max_positions=10,
+        enable_rotation=False,
+        raw_data_loader_path=loader_path,
+    )
+    add_check(
+        results, "trading_param", case_id, "policy_replay_context_preserves_caller_raw_loader_identity",
+        loader_path, str(replay_context.get("raw_data_loader_path") or ""),
+    )
+    captured_replay_kwargs = {}
+    def _fake_replay(*args, **kwargs):
+        captured_replay_kwargs.update(kwargs)
+        captured_replay_kwargs["_args"] = args
+        return tuple([0.0] * 25 + [{}])
+    with patch.object(portfolio_replay, "run_portfolio_simulation_with_param_ensemble", side_effect=_fake_replay), \
+         patch.object(optimizer_policy_replay, "_extract_active_replay_metrics", return_value={"score": 0.0}):
+        optimizer_policy_replay._evaluate_active_param_ensemble_replay_payload_task({
+            "payload": {},
+            "replay_context": replay_context,
+            "signature": "synthetic",
+            "policy_names": ["base"],
+        })
+    add_check(
+        results, "trading_param", case_id, "policy_replay_process_rehydrates_exact_trading_v2_loader",
+        True, captured_replay_kwargs.get("raw_data_loader") is trading_training.load_trading_v2_optimizer_raw_data,
+    )
+    session_load_source = inspect.getsource(optimizer_session.OptimizerSession.load_raw_data)
+    add_check(
+        results, "trading_param", case_id, "optimizer_session_persists_raw_loader_identity_for_post_train_replay",
+        True, "raw_data_loader_path = resolve_importable_callable_path(load_all_raw_data)" in session_load_source,
+    )
+    static_replay_source = inspect.getsource(optimizer_static_dashboard._build_static_policy_rows_from_paramsets)
+    add_check(
+        results, "trading_param", case_id, "static_policy_replay_forwards_session_raw_loader_identity",
+        True, "raw_data_loader_path=str(getattr(session, \"raw_data_loader_path\"" in static_replay_source,
+    )
+    portfolio_replay_source = inspect.getsource(portfolio_replay.run_portfolio_simulation_with_param_ensemble)
+    add_check(
+        results, "trading_param", case_id, "portfolio_ensemble_replay_accepts_injected_raw_loader",
+        True, "raw_data_loader=raw_data_loader" in portfolio_replay_source,
+    )
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_output_root", str(plan["output_dir"]), str(captured_service_kwargs.get("output_dir")))
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_models_root", str(plan["models_root"]), str(captured_service_kwargs.get("models_dir")))
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_strategy_param_root", str(plan["strategy_params_root"]), str(captured_service_kwargs.get("strategy_params_root")))
