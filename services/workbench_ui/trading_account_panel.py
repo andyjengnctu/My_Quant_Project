@@ -30,6 +30,14 @@ from services.trading.strategy_param_state import (
     TRADING_PARAM_USAGE_TRAINED_CURRENT,
 )
 from services.trading.order_planning import build_trading_proposed_order_plan
+from services.trading.proposed_order_state import (
+    get_trading_proposed_order_plan_read_model,
+    load_current_trading_proposed_order_plan,
+)
+from services.trading.scanner_state import (
+    get_trading_candidate_snapshot_read_model,
+    load_trading_candidate_snapshot,
+)
 from services.trading.position_rollforward import run_trading_position_rollforward
 from services.trading.operations_status import build_trading_operations_status
 from services.trading.operational_audit import run_trading_operational_audit
@@ -356,6 +364,8 @@ class TradingAccountPanel(ttk.Frame):
         self._footer_hint_after_id = None
         self._build_ui()
         self.refresh_account()
+        self.refresh_candidate_snapshot_rows()
+        self.refresh_proposed_order_plan()
         self.refresh_order_state()
         self.refresh_protection_plan()
         self.refresh_indicator_exit_plan()
@@ -363,17 +373,29 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_operations_status()
 
     def _build_ui(self):
+        # AI: The Trading page contains several independent detail tables.  A fixed-height
+        # notebook tab used to squeeze the middle rows to ~0px on common 1080p screens,
+        # making Scanner / proposed-order details effectively invisible.  Keep the
+        # existing tables and semantics, but put the whole page in one vertical canvas.
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(5, weight=1)
-        self.rowconfigure(6, weight=1)
-        self.rowconfigure(7, weight=1)
-        self.rowconfigure(8, weight=1)
-        self.rowconfigure(9, weight=1)
-        self.rowconfigure(10, weight=1)
+        self.rowconfigure(0, weight=1)
+        self._page_canvas = tk.Canvas(self, background=WORKBENCH_BG, highlightthickness=0, borderwidth=0)
+        self._page_scrollbar = ttk.Scrollbar(
+            self, orient="vertical", command=self._page_canvas.yview, style=WORKBENCH_VSCROLL_STYLE
+        )
+        self._page_canvas.configure(yscrollcommand=self._page_scrollbar.set, yscrollincrement=36)
+        self._page_canvas.grid(row=0, column=0, sticky="nsew")
+        self._page_scrollbar.grid(row=0, column=1, sticky="ns")
+        content = ttk.Frame(self._page_canvas, style=WORKBENCH_FRAME_STYLE)
+        self._page_content = content
+        self._page_window = self._page_canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind("<Configure>", self._sync_page_scrollregion, add="+")
+        self._page_canvas.bind("<Configure>", self._sync_page_content_width, add="+")
+        content.columnconfigure(0, weight=1)
 
         self._footer_hint_var = tk.StringVar(value="")
 
-        operations_box = ttk.LabelFrame(self, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        operations_box = ttk.LabelFrame(content, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
         operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         operations_box.columnconfigure(0, weight=1)
         self._overview_vars = {key: tk.StringVar(value="-") for key in ("data", "strategy", "params", "account", "pipeline", "orders")}
@@ -424,7 +446,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(operations_buttons, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left")
         ttk.Button(operations_buttons, text="實盤就緒檢查", command=self._run_operational_audit, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
-        workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         workflow_box.columnconfigure(0, weight=1)
         param_mode_row = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
@@ -464,16 +486,16 @@ class TradingAccountPanel(ttk.Frame):
             button.pack(side="left", padx=(0 if not self._workflow_buttons else 8, 0))
             self._workflow_buttons.append(button)
             self._workflow_action_buttons[action] = button
-        ttk.Button(workflow_buttons, text="刷新狀態", command=self.refresh_daily_workflow, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
+        ttk.Button(workflow_buttons, text="刷新狀態", command=self._refresh_workflow_views, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
         self._workflow_status_var = tk.StringVar(value="")
         self._workflow_status_label = _TradingStatusLine(workflow_box, textvariable=self._workflow_status_var, default_tone="muted", max_lines=2)
         self._workflow_status_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
-        header = ttk.LabelFrame(self, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        header = ttk.LabelFrame(content, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
         header.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         ttk.Button(header, text="重新整理帳戶", command=self.refresh_account, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
 
-        cash_box = ttk.LabelFrame(self, text="現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        cash_box = ttk.LabelFrame(content, text="現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
         cash_box.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         ttk.Label(cash_box, text="帳戶現金", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
         self._cash_var = tk.StringVar()
@@ -484,7 +506,7 @@ class TradingAccountPanel(ttk.Frame):
         self._set_cash_button = ttk.Button(cash_box, text="更新現金", command=self._set_cash, style=WORKBENCH_BUTTON_STYLE)
         self._set_cash_button.grid(row=0, column=3)
 
-        form = ttk.LabelFrame(self, text="既有持股（manual adopted broker truth）", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        form = ttk.LabelFrame(content, text="既有持股（manual adopted broker truth）", padding=10, style=WORKBENCH_LABELLF_STYLE)
         form.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         labels = ("股票代號", "股數", "剩餘成本總額", "買入日 YYYY-MM-DD", "備註")
         for col, label in enumerate(labels):
@@ -515,7 +537,7 @@ class TradingAccountPanel(ttk.Frame):
         self._remove_button.pack(side="left", padx=(8, 0))
         ttk.Button(button_row, text="清除輸入", command=self._clear_position_form, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
-        table_box = ttk.LabelFrame(self, text="目前持股", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        table_box = ttk.LabelFrame(content, text="目前持股", padding=8, style=WORKBENCH_LABELLF_STYLE)
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
@@ -541,7 +563,7 @@ class TradingAccountPanel(ttk.Frame):
         scroll.grid(row=0, column=1, sticky="ns")
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
 
-        candidate_box = ttk.LabelFrame(self, text="今日 Scanner 候選（原始策略候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        candidate_box = ttk.LabelFrame(content, text="今日 Scanner 候選（原始策略候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         candidate_box.grid(row=6, column=0, sticky="nsew")
         candidate_box.rowconfigure(0, weight=1)
         candidate_box.columnconfigure(0, weight=1)
@@ -559,27 +581,32 @@ class TradingAccountPanel(ttk.Frame):
         candidate_y.grid(row=0, column=1, sticky="ns")
         candidate_x.grid(row=1, column=0, sticky="ew")
 
-        proposed_box = ttk.LabelFrame(self, text="建議掛單（尚未送單／尚未成交）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        proposed_box = ttk.LabelFrame(content, text="建議掛單（尚未送單／尚未成交）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         proposed_box.grid(row=7, column=0, sticky="nsew", pady=(8, 0))
         proposed_box.rowconfigure(1, weight=1)
         proposed_box.columnconfigure(0, weight=1)
         self._proposed_status_var = tk.StringVar(value="尚未產生建議掛單。")
         self._proposed_status_label = _TradingStatusLine(proposed_box, textvariable=self._proposed_status_var, default_tone="muted", max_lines=2)
         self._proposed_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        proposed_columns = ("rank", "ticker", "kind", "limit", "qty", "reserved", "stop", "target")
-        self._proposed_tree = ttk.Treeview(proposed_box, columns=proposed_columns, show="headings", style=WORKBENCH_TREE_STYLE)
-        proposed_headings = {"rank": "順位", "ticker": "股票", "kind": "類型", "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "Target"}
-        proposed_widths = {"rank": 60, "ticker": 80, "kind": 110, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 100}
+        proposed_columns = ("rank", "ticker", "kind", "agree", "limit", "qty", "reserved", "stop", "target")
+        self._proposed_tree = ttk.Treeview(proposed_box, columns=proposed_columns, show="headings", style=WORKBENCH_TREE_STYLE, height=6)
+        proposed_headings = {
+            "rank": "順位", "ticker": "股票", "kind": "類型", "agree": "同意/成員",
+            "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "Target"
+        }
+        proposed_widths = {"rank": 60, "ticker": 80, "kind": 110, "agree": 115, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 100}
         for key in proposed_columns:
             self._proposed_tree.heading(key, text=proposed_headings[key])
             self._proposed_tree.column(key, width=proposed_widths[key], anchor="center")
         proposed_y = ttk.Scrollbar(proposed_box, orient="vertical", command=self._proposed_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        self._proposed_tree.configure(yscrollcommand=proposed_y.set)
+        proposed_x = ttk.Scrollbar(proposed_box, orient="horizontal", command=self._proposed_tree.xview, style=WORKBENCH_HSCROLL_STYLE)
+        self._proposed_tree.configure(yscrollcommand=proposed_y.set, xscrollcommand=proposed_x.set)
         self._proposed_tree.grid(row=1, column=0, sticky="nsew")
         proposed_y.grid(row=1, column=1, sticky="ns")
+        proposed_x.grid(row=2, column=0, sticky="ew")
 
         submit_row = ttk.Frame(proposed_box, style=WORKBENCH_FRAME_STYLE)
-        submit_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        submit_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Label(submit_row, text="券商委託號（可留空）", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._broker_order_id_var = tk.StringVar()
         ttk.Entry(submit_row, textvariable=self._broker_order_id_var, width=18, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
@@ -594,7 +621,7 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._confirm_ordered_button.pack(side="right")
 
-        pending_box = ttk.LabelFrame(self, text="券商掛單狀態（ORDERED / PARTIAL / FILLED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        pending_box = ttk.LabelFrame(content, text="券商掛單狀態（ORDERED / PARTIAL / FILLED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         pending_box.grid(row=8, column=0, sticky="nsew", pady=(8, 0))
         pending_box.rowconfigure(1, weight=1)
         pending_box.columnconfigure(0, weight=1)
@@ -653,7 +680,7 @@ class TradingAccountPanel(ttk.Frame):
         self._cancel_order_button.pack(side="left")
         ttk.Button(pending_buttons, text="刷新掛單狀態", command=self.refresh_order_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
-        protection_box = ttk.LabelFrame(self, text="成交後 Stop / TP 保護單計畫（logical plan；送單狀態見券商掛單表）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        protection_box = ttk.LabelFrame(content, text="成交後 Stop / TP 保護單計畫（logical plan；送單狀態見券商掛單表）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         protection_box.grid(row=9, column=0, sticky="nsew", pady=(8, 0))
         protection_box.rowconfigure(1, weight=1)
         protection_box.columnconfigure(0, weight=1)
@@ -741,7 +768,7 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._confirm_oco_submitted_button.pack(side="left")
 
-        indicator_box = ttk.LabelFrame(self, text="Indicator SELL 計畫", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        indicator_box = ttk.LabelFrame(content, text="Indicator SELL 計畫", padding=8, style=WORKBENCH_LABELLF_STYLE)
         indicator_box.grid(row=10, column=0, sticky="nsew", pady=(8, 0))
         indicator_box.rowconfigure(1, weight=1)
         indicator_box.columnconfigure(0, weight=1)
@@ -764,7 +791,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Entry(buttons,textvariable=self._indicator_broker_id_var,width=16,style=WORKBENCH_ENTRY_STYLE).pack(side="left",padx=(6,8))
         ttk.Button(buttons,text="確認選取 MARKET SELL 已送單",command=self._confirm_indicator_exit_submitted,style=WORKBENCH_BUTTON_STYLE).pack(side="left")
 
-        hint_box = ttk.LabelFrame(self, text="操作提示", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
+        hint_box = ttk.LabelFrame(content, text="操作提示", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
         hint_box.grid(row=11, column=0, sticky="ew", pady=(8, 0))
         self._footer_hint_label = _TradingStatusLine(hint_box, textvariable=self._footer_hint_var, default_tone="muted", max_lines=3)
         self._footer_hint_label.pack(fill="x")
@@ -775,6 +802,48 @@ class TradingAccountPanel(ttk.Frame):
         self._bind_footer_hint(protection_buttons, PROTECTION_HINT)
         self._bind_footer_hint(protection_oco, OCO_HINT)
         self._bind_footer_hint(indicator_box, INDICATOR_HINT)
+        self._bind_page_mousewheel(content)
+
+    def _sync_page_scrollregion(self, _event=None) -> None:
+        try:
+            self._page_canvas.configure(scrollregion=self._page_canvas.bbox("all"))
+        except tk.TclError as exc:
+            _warn_gui_fallback("Trading page scrollregion", exc)
+
+    def _sync_page_content_width(self, event=None) -> None:
+        try:
+            width = max(1, int(event.width if event is not None else self._page_canvas.winfo_width()))
+            self._page_canvas.itemconfigure(self._page_window, width=width)
+        except (tk.TclError, TypeError, ValueError) as exc:
+            _warn_gui_fallback("Trading page content width", exc)
+
+    def _on_page_mousewheel(self, event):
+        if event.num == 4:
+            delta = -1
+        elif event.num == 5:
+            delta = 1
+        else:
+            delta = -1 * int(event.delta / 120) if event.delta else 0
+        if delta:
+            self._page_canvas.yview_scroll(delta, "units")
+
+    def _bind_page_mousewheel(self, widget) -> None:
+        targets = [widget]
+        index = 0
+        while index < len(targets):
+            target = targets[index]
+            index += 1
+            try:
+                for child in target.winfo_children():
+                    if child not in targets:
+                        targets.append(child)
+                if isinstance(target, (ttk.Treeview, ttk.Combobox)):
+                    continue
+                target.bind("<MouseWheel>", self._on_page_mousewheel, add="+")
+                target.bind("<Button-4>", self._on_page_mousewheel, add="+")
+                target.bind("<Button-5>", self._on_page_mousewheel, add="+")
+            except tk.TclError as exc:
+                _warn_gui_fallback("Trading page mousewheel bind", exc)
 
     def _reload_protection_rows(self, rows):
         for item in self._protection_tree.get_children():
@@ -1109,6 +1178,8 @@ class TradingAccountPanel(ttk.Frame):
         except (TradingFillRevisionConflict, TradingStateBusyError) as exc:
             recovery_error = str(exc)
         self.refresh_account()
+        self.refresh_candidate_snapshot_rows()
+        self.refresh_proposed_order_plan()
         self.refresh_order_state()
         self.refresh_protection_plan()
         self.refresh_indicator_exit_plan()
@@ -1206,6 +1277,60 @@ class TradingAccountPanel(ttk.Frame):
     def _set_workflow_buttons_state(self, state: str):
         for button in self._workflow_buttons:
             button.configure(state=state)
+
+    def refresh_candidate_snapshot_rows(self):
+        try:
+            snapshot = get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._reload_candidate_rows([])
+            self._workflow_status_var.set(f"Scanner snapshot 讀取失敗：{exc}")
+            return
+        if not bool(snapshot.get("fresh")):
+            self._reload_candidate_rows([])
+            return
+        try:
+            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
+        except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
+            self._reload_candidate_rows([])
+            self._workflow_status_var.set(f"Scanner snapshot 讀取失敗：{exc}")
+            return
+        self._reload_candidate_rows(payload.get("candidate_rows") or [])
+
+    def refresh_proposed_order_plan(self):
+        try:
+            snapshot = get_trading_proposed_order_plan_read_model(WORKBENCH_PROJECT_ROOT)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._reload_proposed_order_rows([])
+            self._proposed_status_var.set(f"建議掛單讀取失敗：{exc}")
+            return
+        if not snapshot.get("exists"):
+            self._reload_proposed_order_rows([])
+            self._proposed_status_var.set("尚未產生建議掛單。")
+            return
+        if not snapshot.get("valid"):
+            self._reload_proposed_order_rows([])
+            self._proposed_status_var.set(f"建議掛單 INVALID：{snapshot.get('error') or 'schema 不合法'}")
+            return
+        if not snapshot.get("fresh"):
+            self._reload_proposed_order_rows([])
+            self._proposed_status_var.set("PROPOSED STALE｜請重新執行 3 Scanner 與 4 建議掛單。")
+            return
+        try:
+            payload = load_current_trading_proposed_order_plan(WORKBENCH_PROJECT_ROOT, require_current=False)
+        except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
+            self._reload_proposed_order_rows([])
+            self._proposed_status_var.set(f"建議掛單讀取失敗：{exc}")
+            return
+        self._reload_proposed_order_rows(payload.get("orders") or [])
+        self._proposed_status_var.set(
+            f"PROPOSED | account rev {payload.get('account_revision')} | equity {format_trading_money(payload.get('sizing_equity'))} | "
+            f"預留 {format_trading_money(payload.get('reserved_total'))} | 餘額 {format_trading_money(payload.get('cash_after_reservation'))}"
+        )
+
+    def _refresh_workflow_views(self):
+        self.refresh_daily_workflow()
+        self.refresh_candidate_snapshot_rows()
+        self.refresh_proposed_order_plan()
 
     def refresh_daily_workflow(self):
         try:
@@ -1354,7 +1479,10 @@ class TradingAccountPanel(ttk.Frame):
                 values=(
                     int(row.get("rank") or 0),
                     row.get("ticker") or "-",
-                    row.get("kind") or "-",
+                    {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)", "reentry": "再進場"}.get(
+                        str(row.get("kind") or ""), str(row.get("kind") or "-")
+                    ),
+                    f"{int(row.get('ensemble_vote_count') or 0)}/{int(row.get('ensemble_member_count') or 0)} (門檻{int(row.get('ensemble_min_agree') or 0)})",
                     self._format_candidate_number(row.get("limit_price"), digits=2),
                     f"{int(row.get('qty') or 0):,}",
                     self._format_candidate_number(row.get("reserved_cost"), digits=0),
