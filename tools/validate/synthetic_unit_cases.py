@@ -496,6 +496,17 @@ def validate_strategy_semantic_scanner_portfolio_parity_case(_base_params):
     check_true("scanner_normal_setup_produces_actionable_row", isinstance(scanner_row, dict) and scanner_row.get("kind") == "buy")
     scanner_seed = dict(scanner_row.get("execution_plan_seed") or {})
 
+    timestamp_row = build_history_qualified_row_from_stats(
+        ticker=ticker,
+        stats=stats,
+        params=params,
+        sanitize_stats={},
+        trade_date=pd.Timestamp("2026-09-11 00:00:00"),
+    )
+    timestamp_seed = dict(timestamp_row.get("execution_plan_seed") or {})
+    check("scanner_timestamp_trade_date_is_canonical_iso_date", trade_date, timestamp_row.get("trade_date"))
+    check("scanner_timestamp_seed_trade_date_is_canonical_iso_date", trade_date, timestamp_seed.get("trade_date"))
+
     canonical_plan = build_normal_candidate_plan(
         stats["buy_limit"],
         stats["entry_atr"],

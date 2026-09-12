@@ -49,6 +49,13 @@ def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, as
     )
 
 
+def _normalize_scanner_trade_date(value):
+    if value is None:
+        return None
+    # AI: Scanner artifacts cross process/JSON boundaries; persist calendar dates in one stable form.
+    return pd.Timestamp(value).date().isoformat()
+
+
 def _normalize_execution_plan_seed(candidate_plan, *, ticker, trade_date):
     if not isinstance(candidate_plan, dict):
         return None
@@ -58,7 +65,7 @@ def _normalize_execution_plan_seed(candidate_plan, *, ticker, trade_date):
     )
     seed = {key: candidate_plan.get(key) for key in keys if candidate_plan.get(key) is not None}
     seed['ticker'] = str(ticker)
-    seed['trade_date'] = trade_date
+    seed['trade_date'] = _normalize_scanner_trade_date(trade_date)
     return seed
 
 
@@ -93,7 +100,7 @@ def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_coun
         'win_rate': win_rate_pct,
         'trade_count': trade_count,
         'asset_growth': asset_growth_pct,
-        'trade_date': None if trade_date is None else str(trade_date),
+        'trade_date': _normalize_scanner_trade_date(trade_date),
         'execution_plan_seed': execution_plan_seed,
     }
 
