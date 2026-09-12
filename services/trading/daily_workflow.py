@@ -7,10 +7,16 @@ from typing import Any
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, compute_file_sha256
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
-from core.portfolio_ensemble import annotate_ensemble_candidate, aggregate_ensemble_candidate_rows
+from core.breakout_reentry import BREAKOUT_REENTRY_SOURCE
+from core.portfolio_ensemble import (
+    annotate_ensemble_candidate,
+    aggregate_ensemble_candidate_rows,
+    sort_aggregated_ensemble_candidate_rows,
+)
 from services.trading.market_data_consumer import build_trading_v2_ohlcv_frame
 from services.trading.market_data_update import run_trading_market_data_update
 from services.trading.market_data_v2_view import TradingMarketDataV2View
+from services.trading.live_reentry import build_trading_live_reentry_candidate_rows
 from services.scanner.scan_runner import run_daily_scanner
 from services.trading.scanner_state import (
     TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
@@ -21,6 +27,7 @@ from services.trading.scanner_state import (
     partition_trading_candidate_rows_for_information_date,
     resolve_trading_candidate_snapshot_path,
 )
+from services.trading.strategy_param_runtime import serialize_trading_candidate_member_params
 from services.trading.strategy_param_training import (
     reuse_trading_strategy_params,
     run_trading_strategy_param_training,
@@ -49,6 +56,8 @@ def _json_safe(value):
 
 def _persistable_trading_candidate_row(row: dict[str, Any]) -> dict[str, Any]:
     payload = dict(row)
+    member_params = serialize_trading_candidate_member_params(payload)
+    payload["ensemble_member_params_by_key"] = member_params
     payload.pop("params_obj", None)
     payload.pop("_ensemble_context", None)
     return _json_safe(payload)
@@ -85,6 +94,10 @@ def _run_trading_scanner_param_runtime(
         member_results.append(dict(result))
         member_key = str(member.get("member_key") or member.get("member_index") or member.get("seed") or "")
         for raw_row in list(result.get("candidate_rows") or []):
+            seed = raw_row.get("execution_plan_seed") if isinstance(raw_row, dict) else None
+            entry_source = str((seed or {}).get("entry_source") or raw_row.get("entry_source") or "").strip()
+            if entry_source == BREAKOUT_REENTRY_SOURCE:
+                continue
             annotated_rows.append(
                 annotate_ensemble_candidate(
                     raw_row,
@@ -98,10 +111,12 @@ def _run_trading_scanner_param_runtime(
     if len(members) == 1:
         candidate_rows = list(annotated_rows)
         for row in candidate_rows:
+            member_key = str(row.get("ensemble_member_key") or "1")
             row["ensemble_vote_count"] = 1
             row["ensemble_min_agree"] = 1
             row["ensemble_member_count"] = 1
-            row["ensemble_member_keys"] = [str(row.get("ensemble_member_key") or "1")]
+            row["ensemble_member_keys"] = [member_key]
+            row["ensemble_member_params_by_key"] = {member_key: row.get("params_obj")}
     else:
         candidate_rows = aggregate_ensemble_candidate_rows(annotated_rows, min_agree=min_agree)
 
@@ -143,7 +158,19 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         expected_scanned_tickers=expected_scanned_tickers,
         prepared_frames=prepared_frames,
     )
-    actual_scanned_tickers = list(result.get("scanned_tickers") or [])
+    current_rows = list(result.get("candidate_rows") or [])
+    current_tickers = {str(row.get("ticker") or "") for row in current_rows}
+    live_reentry_rows = build_trading_live_reentry_candidate_rows(
+        root,
+        information_date=str(runtime["latest_data_date"]),
+        excluded_tickers=current_tickers,
+    )
+    result["candidate_rows"] = sort_aggregated_ensemble_candidate_rows(current_rows + live_reentry_rows)
+    result["count_history_qualified"] = len(result["candidate_rows"])
+    result["live_reentry_candidate_count"] = len(live_reentry_rows)
+    live_reentry_tickers = {str(row.get("ticker") or "") for row in live_reentry_rows}
+    actual_scanned_tickers = sorted(set(result.get("scanned_tickers") or []) | live_reentry_tickers)
+    result["scanned_tickers"] = actual_scanned_tickers
     runtime_after = load_trading_scanner_runtime(project_root, verify_dataset_content=True)
     stable_fields = (
         "latest_data_date",

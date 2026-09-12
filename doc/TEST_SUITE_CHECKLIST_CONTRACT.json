@@ -4507,6 +4507,17 @@
       "entry": "`tools/local_regression/checklist_contract.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md`",
       "initial_status": "NEW",
       "order": 406
+    },
+    {
+      "id": "B419",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading strategy semantic parity / broker-truth re-entry",
+      "item": "Research/Portfolio、Scanner 與 live Trading 必須共用 canonical strategy primitives；live STOP→re-entry 只可由 broker-confirmed STOP truth 與原 entry agreeing-voter frozen Params 決定性重建，並重新套用原 finalist min-agree。",
+      "gap": "Scanner/Portfolio normal-entry 與 position-management parity 已新增 fast contract；Trading live re-entry 需排除 single-stock historical hypothetical STOP、保存完整 ensemble voter Params lineage、由 broker-confirmed full STOP 建立 watch，且 checklist/config identity 不得再硬編 current selector。",
+      "entry": "`core/portfolio_ensemble.py`, `core/extended_signals.py`, `core/trading_order_state.py`, `services/trading/live_reentry.py`, `services/trading/daily_workflow.py`, `services/trading/order_planning.py`, `services/trading/entry_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/market_data_consumer.py`, `services/trading/market_data_update.py`, `tools/validate/synthetic_unit_cases.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 407
     }
   ],
   "tests": [
@@ -8283,6 +8294,27 @@
       "description": "`validate_domain_synthetic_interactive_import_boundary_case` 驗證domain synthetic不得import `apps.*`或`services/*/main.py`互動composition root，並以fault-injection同時驗證static與dynamic import都會被攔截。",
       "initial_status": "NEW",
       "order": 530
+    },
+    {
+      "id": "T541",
+      "b_id": "B419",
+      "description": "validate_strategy_semantic_scanner_portfolio_parity_case 鎖定 Scanner/Portfolio normal candidate、entry plan、fill/miss-buy 與 canonical trade_plans delegation 的 strategy-semantic parity。",
+      "initial_status": "NEW",
+      "order": 531
+    },
+    {
+      "id": "T542",
+      "b_id": "B419",
+      "description": "validate_position_management_rollforward_parity_case 鎖定 live completed-bar rollforward 與 execute_bar_step 在 no-exit 情境下的 highest-high/trailing-stop/SL/position state parity。",
+      "initial_status": "NEW",
+      "order": 532
+    },
+    {
+      "id": "T543",
+      "b_id": "B419",
+      "description": "validate_trading_live_reentry_broker_truth_contract_case 鎖定 broker-confirmed full STOP truth、original agreeing-voter frozen Params lineage、canonical finalist re-agreement、historical hypothetical re-entry 排除與 V2 re-entry ticker continuity。",
+      "initial_status": "NEW",
+      "order": 533
     }
   ],
   "transitions": [
@@ -26637,6 +26669,38 @@
       "to_status": "DONE",
       "description": "Register the domain-synthetic interactive composition-root import boundary as a permanent B23 formal regression.",
       "note": "Prevents menu/UI composition-root imports from re-expanding domain synthetic cold-start and coverage runtime."
+    },
+    {
+      "date": "2026-09-12",
+      "id": "B419",
+      "description": "Close cross-orchestrator strategy parity and broker-truth live re-entry semantics.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "No scientific selector/Params retraining semantics changed; Trading live adapter now consumes canonical re-entry primitives."
+    },
+    {
+      "date": "2026-09-12",
+      "id": "T541",
+      "description": "Register Scanner/Portfolio strategy-semantic parity fast contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Canonical normal-entry/fill primitives remain the single source of truth."
+    },
+    {
+      "date": "2026-09-12",
+      "id": "T542",
+      "description": "Register live rollforward/bar-step management parity fast contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Live rollforward remains narrower than historical fill simulation while sharing completed-bar management semantics."
+    },
+    {
+      "date": "2026-09-12",
+      "id": "T543",
+      "description": "Register broker-truth live re-entry fast contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Only confirmed full STOP may seed live re-entry; original entry voters and min-agree are immutable lineage."
     }
   ]
 }

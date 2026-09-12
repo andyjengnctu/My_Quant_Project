@@ -20,7 +20,7 @@ from services.trading.operations_status import (
     build_trading_operations_status,
 )
 from services.trading.order_state import mutate_trading_order_state
-from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime, resolve_trading_candidate_params
+from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime, resolve_trading_candidate_frozen_params
 from services.trading.proposed_order_state import (
     load_current_trading_proposed_order_plan,
     resolve_trading_proposed_orders_json_path,
@@ -67,7 +67,7 @@ def confirm_trading_order_submission(
         raise RuntimeError("Trading proposed plan Params member_count 已與目前 artifact 不一致")
     if int(plan.get("param_min_agree") or 0) != int(param_runtime["min_agree"]):
         raise RuntimeError("Trading proposed plan Params min_agree 已與目前 artifact 不一致")
-    representative_params, _representative_member = resolve_trading_candidate_params(param_runtime, proposal)
+    representative_params, _representative_member = resolve_trading_candidate_frozen_params(proposal)
     frozen_params = params_to_json_dict(representative_params)
 
     account_path = resolve_trading_account_state_path(root)

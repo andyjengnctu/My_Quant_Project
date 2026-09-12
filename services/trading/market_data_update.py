@@ -13,6 +13,7 @@ from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_identity import normalize_trading_ticker
 from core.trading_policy import get_trading_strategy_profile
 from services.trading.account_state import load_trading_account_state
+from services.trading.live_reentry import resolve_trading_live_reentry_required_tickers
 from services.trading.market_data_consumer import publish_trading_v2_consumer_state
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 
@@ -57,6 +58,8 @@ def run_trading_market_data_update(
         if int(((record or {}).get("broker") or {}).get("qty") or 0) > 0
     )
 
+    required_reentry_tickers = resolve_trading_live_reentry_required_tickers(root)
+
     if sync_v2_archive:
         from services.trading.market_data_auto_update import run_trading_market_data_auto_update
 
@@ -88,6 +91,7 @@ def run_trading_market_data_update(
         root,
         market_date=market_date,
         required_position_tickers=required_position_tickers,
+        required_reentry_tickers=required_reentry_tickers,
     )
     return {
         "status": "READY",
@@ -100,6 +104,8 @@ def run_trading_market_data_update(
         "current_execution_pool_ticker_count": int(consumer_state["current_execution_pool_ticker_count"]),
         "required_position_tickers": list(consumer_state["required_position_tickers"]),
         "required_position_ticker_count": len(consumer_state["required_position_tickers"]),
+        "required_reentry_tickers": list(consumer_state.get("required_reentry_tickers") or []),
+        "required_reentry_ticker_count": len(consumer_state.get("required_reentry_tickers") or []),
         "training_tickers": list(consumer_state["training_tickers"]),
         "training_ticker_count": int(consumer_state["training_ticker_count"]),
         "market_data_v2_archive": v2_update,

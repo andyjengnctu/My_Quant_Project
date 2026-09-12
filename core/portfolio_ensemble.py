@@ -250,6 +250,11 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         # #        只保存代表 member 會讓 min_agree>1 的 re-entry 共識或 score 語意分叉。)
         representative["ensemble_member_params_by_key"] = member_params_by_key
         aggregated.append(representative)
+    return _sort_aggregated_ensemble_candidate_rows(aggregated)
+
+
+def _sort_aggregated_ensemble_candidate_rows(rows):
+    aggregated = list(rows or [])
     active_sort_method = get_buy_sort_method()
     quality_ranking = bool(aggregated and aggregated[0].get("use_breakout_quality_ranking", False))
     if any(bool(item.get("use_breakout_quality_ranking", False)) != quality_ranking for item in aggregated):
@@ -309,6 +314,11 @@ def annotate_ensemble_candidate(candidate, *, member, params_obj, member_key, co
 def aggregate_ensemble_candidate_rows(rows, *, min_agree):
     """Public adapter for canonical min-agree/median-representative aggregation."""
     return _aggregate_ensemble_candidate_rows(rows, min_agree=min_agree)
+
+
+def sort_aggregated_ensemble_candidate_rows(rows):
+    """Public adapter for canonical post-agreement candidate ordering."""
+    return _sort_aggregated_ensemble_candidate_rows(rows)
 
 
 def _flatten_ensemble_extended_signals(active_extended_signals_by_member):

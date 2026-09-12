@@ -1325,7 +1325,7 @@ class TradingAccountPanel(ttk.Frame):
         for item in self._candidate_tree.get_children():
             self._candidate_tree.delete(item)
         self._candidate_rows = [dict(row) for row in list(rows or [])]
-        kind_labels = {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)"}
+        kind_labels = {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)", "reentry": "再進場"}
         for idx, row in enumerate(self._candidate_rows, 1):
             self._candidate_tree.insert(
                 "",

@@ -45,7 +45,7 @@ from services.trading.operations_status import (
     assert_trading_new_allocation_allowed,
     build_trading_operations_status,
 )
-from services.trading.strategy_param_runtime import resolve_trading_candidate_params
+from services.trading.strategy_param_runtime import resolve_trading_candidate_frozen_params
 from services.trading.scanner_state import (
     load_trading_candidate_snapshot,
     load_trading_scanner_runtime,
@@ -147,6 +147,10 @@ def _build_allocator_candidate(row: dict[str, Any], *, sizing_equity: float, par
         "ensemble_min_agree": int(row.get("ensemble_min_agree") or 1),
         "ensemble_member_count": int(row.get("ensemble_member_count") or 1),
         "ensemble_member_keys": list(row.get("ensemble_member_keys") or []),
+        "ensemble_member_params_by_key": deepcopy(row.get("ensemble_member_params_by_key") or {}),
+        "ensemble_member_quality_rank_by_key": deepcopy(row.get("ensemble_member_quality_rank_by_key") or {}),
+        "param_lineage_source": str(row.get("param_lineage_source") or "current_selected_artifact"),
+        "source_entry_order_id": row.get("source_entry_order_id"),
         "sort_value": row.get("sort_value"),
         "ev": row.get("expected_value", row.get("ev")),
         "expected_value": row.get("expected_value", row.get("ev")),
@@ -241,7 +245,7 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
         if ticker in held_tickers:
             skipped_held.append(ticker)
             continue
-        candidate_params, _representative_member = resolve_trading_candidate_params(runtime, row)
+        candidate_params, _representative_member = resolve_trading_candidate_frozen_params(row)
         candidate = _build_allocator_candidate(row, sizing_equity=sizing_equity, params=candidate_params)
         if candidate is None:
             skipped_zero_qty.append(ticker)
@@ -280,7 +284,7 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
             "init_trail": float(plan["init_trail"]),
             "target_price": float(plan["target_price"]),
             "entry_atr": None if plan.get("entry_atr") is None else float(plan["entry_atr"]),
-            "entry_type": str(row.get("type") or row.get("kind") or "normal"),
+            "entry_type": str(row.get("entry_source") or row.get("type") or row.get("kind") or "normal"),
             "security_profile": deepcopy(plan.get("security_profile")),
             "sort_value": row.get("sort_value"),
             "expected_value": row.get("expected_value", row.get("ev")),
@@ -290,6 +294,13 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
             "ensemble_min_agree": int(row.get("ensemble_min_agree") or 1),
             "ensemble_member_count": int(row.get("ensemble_member_count") or 1),
             "ensemble_member_keys": list(row.get("ensemble_member_keys") or []),
+            "ensemble_member_params_by_key": deepcopy(row.get("ensemble_member_params_by_key") or {}),
+            "ensemble_member_quality_rank_by_key": deepcopy(row.get("ensemble_member_quality_rank_by_key") or {}),
+            "param_lineage_source": str(row.get("param_lineage_source") or "current_selected_artifact"),
+            "source_entry_order_id": row.get("source_entry_order_id"),
+            "use_breakout_quality_ranking": bool(row.get("use_breakout_quality_ranking", False)),
+            "breakout_quality_ranking_policy": row.get("breakout_quality_ranking_policy"),
+            "breakout_quality_ranking_options": deepcopy(row.get("breakout_quality_ranking_options") or {}),
         })
 
     latest_state = load_trading_account_state(root, required=True)

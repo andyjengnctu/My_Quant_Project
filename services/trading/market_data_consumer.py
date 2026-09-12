@@ -24,6 +24,7 @@ from core.market_data_instrument_universe import build_current_stock_etf_univers
 from core.market_data_pool_contract import screen_daily_trading_execution_pool
 from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_identity import normalize_trading_ticker
+from core.trading_policy import get_trading_strategy_profile
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 
 TRADING_V2_CONSUMER_STATE_SCHEMA_VERSION = 1
@@ -34,7 +35,8 @@ TRADING_V2_CONSUMER_STATE_RELATIVE_PATH = Path(
 
 
 def _required_v2_datasets() -> tuple[str, ...]:
-    return tuple(get_trading_data_dependency_spec("full_rule_based_no_dl").required_v2_datasets)
+    strategy_id = get_trading_strategy_profile().strategy_id
+    return tuple(get_trading_data_dependency_spec(strategy_id).required_v2_datasets)
 
 
 def _current_market_member_records(
@@ -186,9 +188,16 @@ def _validate_consumer_state(payload: dict[str, Any]) -> None:
         normalized = [normalize_trading_ticker(item) for item in values]
         if normalized != sorted(set(normalized)):
             raise ValueError(f"Trading V2 consumer state {field} 必須排序且去重")
+    reentry_tickers = payload.get("required_reentry_tickers") or []
+    if not isinstance(reentry_tickers, list):
+        raise ValueError("Trading V2 consumer state required_reentry_tickers 必須是 list")
+    normalized_reentry = [normalize_trading_ticker(item) for item in reentry_tickers]
+    if normalized_reentry != sorted(set(normalized_reentry)):
+        raise ValueError("Trading V2 consumer state required_reentry_tickers 必須排序且去重")
     expected_training = sorted(
         set(payload["current_execution_pool_tickers"])
         | set(payload["required_position_tickers"])
+        | set(normalized_reentry)
         | set(payload.get("retained_training_tickers") or [])
     )
     if expected_training != list(payload["training_tickers"]):
@@ -232,6 +241,7 @@ def publish_trading_v2_consumer_state(
     *,
     market_date: str,
     required_position_tickers: Iterable[str] = (),
+    required_reentry_tickers: Iterable[str] = (),
     retained_training_tickers: Iterable[str] = (),
     view: TradingMarketDataV2View | None = None,
 ) -> dict[str, Any]:
@@ -249,14 +259,16 @@ def publish_trading_v2_consumer_state(
         )
     execution_tickers, execution_stats = resolve_trading_v2_current_execution_pool(local_view, market_date=date_text)
     required = sorted({normalize_trading_ticker(item) for item in required_position_tickers})
+    required_reentry = sorted({normalize_trading_ticker(item) for item in required_reentry_tickers})
     prior = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     retained = set(normalize_trading_ticker(item) for item in retained_training_tickers)
     if prior is not None:
         retained.update(normalize_trading_ticker(item) for item in prior.get("training_tickers") or [])
     retained.difference_update(execution_tickers)
     retained.difference_update(required)
+    retained.difference_update(required_reentry)
     retained_sorted = sorted(retained)
-    training = sorted(set(execution_tickers) | set(required) | set(retained_sorted))
+    training = sorted(set(execution_tickers) | set(required) | set(required_reentry) | set(retained_sorted))
     if not training:
         raise RuntimeError("Trading V2 consumer state 沒有任何 training/consumer ticker")
 
@@ -276,6 +288,7 @@ def publish_trading_v2_consumer_state(
         "current_execution_pool_ticker_count": len(execution_tickers),
         "current_execution_pool_stats": execution_stats,
         "required_position_tickers": required,
+        "required_reentry_tickers": required_reentry,
         "retained_training_tickers": retained_sorted,
         "training_tickers": training,
         "training_ticker_count": len(training),

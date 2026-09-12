@@ -74,6 +74,7 @@ from .synthetic_trading_cases import (
     validate_trading_live_readiness_hardening_contract_case,
     validate_trading_stop_remainder_forced_exit_contract_case,
     validate_trading_ssot_identity_path_scale_contract_case,
+    validate_trading_live_reentry_broker_truth_contract_case,
     validate_trading_market_data_lineage_contract_case,
     validate_trading_workbench_account_panel_contract_case,
 )
@@ -426,6 +427,7 @@ def get_synthetic_validator_entries():
         _entry(validate_trading_live_readiness_hardening_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_stop_remainder_forced_exit_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_ssot_identity_path_scale_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_live_reentry_broker_truth_contract_case, layer="strategy_contract", cost_class="fast"),
         _entry(validate_trading_market_data_lineage_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_workbench_account_panel_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_policy_single_source_case, layer="core_invariant", cost_class="fast"),

@@ -160,6 +160,39 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
     )
 
 
+def build_extended_scanner_row_from_plan(
+    *,
+    ticker,
+    stats,
+    params,
+    trade_date,
+    candidate_plan,
+    orderable_today,
+    label_prefix,
+    kind_if_orderable,
+    sanitize_issue=None,
+):
+    """Build a scanner row from an externally-owned canonical extended/reentry plan."""
+
+    if not stats or not bool(stats.get("is_candidate")) or candidate_plan is None:
+        return None
+    return _build_extended_like_row(
+        ticker=ticker,
+        expected_value=float(stats["expected_value"]),
+        win_rate_pct=float(stats["win_rate"]),
+        trade_count=int(stats["trade_count"]),
+        asset_growth_pct=float(stats.get("asset_growth", 0.0)),
+        params=params,
+        trade_date=trade_date,
+        sanitize_issue=sanitize_issue,
+        candidate_plan=candidate_plan,
+        orderable_today=bool(orderable_today),
+        label_prefix=label_prefix,
+        kind_if_orderable=kind_if_orderable,
+        prev_close=stats.get("close_last"),
+    )
+
+
 def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_stats, trade_date=None):
     if not stats or not stats['is_candidate']:
         return None

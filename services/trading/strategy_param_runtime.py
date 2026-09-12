@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.active_param_ensemble import get_active_param_ensemble_policy
-from core.portfolio_param_runtime import load_portfolio_param_source_from_json
+from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.portfolio_param_runtime import build_portfolio_params_signature, load_portfolio_param_source_from_json
 
 
 def load_trading_strategy_param_runtime(selected_path: str | Path) -> dict[str, Any]:
@@ -70,6 +71,60 @@ def load_trading_strategy_param_runtime(selected_path: str | Path) -> dict[str, 
     }
 
 
+def serialize_trading_candidate_member_params(candidate: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return JSON-safe immutable voter Params keyed by ensemble member identity."""
+
+    raw = candidate.get("ensemble_member_params_by_key") or {}
+    if not isinstance(raw, Mapping):
+        raise RuntimeError("Trading candidate ensemble_member_params_by_key 必須是 object")
+    serialized: dict[str, dict[str, Any]] = {}
+    for raw_key, value in raw.items():
+        member_key = str(raw_key or "").strip()
+        if not member_key:
+            raise RuntimeError("Trading candidate voter Params 缺少 member key")
+        if isinstance(value, Mapping):
+            params_obj = build_params_from_mapping(dict(value))
+            payload = params_to_json_dict(params_obj)
+        else:
+            payload = params_to_json_dict(value)
+            params_obj = build_params_from_mapping(payload)
+        if build_portfolio_params_signature(params_obj) != build_portfolio_params_signature(build_params_from_mapping(payload)):
+            raise RuntimeError(f"Trading candidate voter Params 無法穩定序列化: member={member_key}")
+        serialized[member_key] = payload
+    return serialized
+
+
+def resolve_trading_candidate_frozen_params(candidate: Mapping[str, Any]):
+    """Resolve representative Params from the candidate's immutable agreeing-voter lineage."""
+
+    member_key = str(candidate.get("ensemble_member_key") or "").strip()
+    signature = str(candidate.get("params_signature") or "").strip()
+    raw_map = candidate.get("ensemble_member_params_by_key") or {}
+    if not isinstance(raw_map, Mapping) or not raw_map:
+        raise RuntimeError("Trading candidate 缺少 immutable ensemble voter Params lineage")
+    if not member_key:
+        if len(raw_map) == 1:
+            member_key = str(next(iter(raw_map)))
+        else:
+            raise RuntimeError("Trading ensemble candidate 缺少 representative member key")
+    payload = raw_map.get(member_key)
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"Trading candidate representative member Params 不存在: member={member_key}")
+    params_obj = build_params_from_mapping(dict(payload))
+    resolved_signature = build_portfolio_params_signature(params_obj)
+    if signature and resolved_signature != signature:
+        raise RuntimeError(
+            "Trading candidate frozen Params signature 不一致；"
+            f"member={member_key}, expected={signature[:12]}, actual={resolved_signature[:12]}"
+        )
+    member = {
+        "member_key": member_key,
+        "params_obj": params_obj,
+        "params_signature": resolved_signature,
+    }
+    return params_obj, member
+
+
 def resolve_trading_candidate_params(param_runtime: Mapping[str, Any], candidate: Mapping[str, Any]):
     """Resolve the exact representative member frozen by canonical ensemble aggregation.
 
@@ -107,5 +162,7 @@ def resolve_trading_candidate_params(param_runtime: Mapping[str, Any], candidate
 
 __all__ = [
     "load_trading_strategy_param_runtime",
+    "serialize_trading_candidate_member_params",
+    "resolve_trading_candidate_frozen_params",
     "resolve_trading_candidate_params",
 ]

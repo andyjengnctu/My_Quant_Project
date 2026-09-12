@@ -222,6 +222,19 @@ def append_ordered_trading_proposal(
         "filled_at": None,
         "frozen_params": frozen_params_payload,
         "frozen_params_sha256": frozen_params_sha256,
+        "params_signature": str(proposal.get("params_signature") or ""),
+        "param_lineage_source": str(proposal.get("param_lineage_source") or "current_selected_artifact"),
+        "ensemble_member_key": str(proposal.get("ensemble_member_key") or ""),
+        "ensemble_member_keys": [str(item) for item in list(proposal.get("ensemble_member_keys") or [])],
+        "ensemble_vote_count": int(proposal.get("ensemble_vote_count") or 1),
+        "ensemble_min_agree": int(proposal.get("ensemble_min_agree") or 1),
+        "ensemble_member_count": int(proposal.get("ensemble_member_count") or 1),
+        "ensemble_member_params_by_key": deepcopy(proposal.get("ensemble_member_params_by_key") or {}),
+        "ensemble_member_quality_rank_by_key": deepcopy(proposal.get("ensemble_member_quality_rank_by_key") or {}),
+        "source_entry_order_id": _normalize_optional_text(proposal.get("source_entry_order_id")),
+        "use_breakout_quality_ranking": bool(proposal.get("use_breakout_quality_ranking", False)),
+        "breakout_quality_ranking_policy": proposal.get("breakout_quality_ranking_policy"),
+        "breakout_quality_ranking_options": deepcopy(proposal.get("breakout_quality_ranking_options") or {}),
         "ordered_at": str(timestamp),
         "broker_order_id": _normalize_optional_text(broker_order_id),
         "cancelled_at": None,
@@ -740,6 +753,9 @@ def record_trading_sell_order_fill(
     order_id: str, fill_id: str, fill_qty: int, fill_price, trade_date: str,
     net_sell_total_milli: int, allocated_cost_milli: int, realized_pnl_milli: int,
     timestamp: str, mutation_id: str,
+    strategy_position_before_fill: dict[str, Any] | None = None,
+    position_qty_before_fill: int | None = None,
+    position_qty_after_fill: int | None = None,
 ) -> dict[str, Any]:
     validate_trading_order_state(state)
     oid = str(order_id or "").strip()
@@ -789,8 +805,23 @@ def record_trading_sell_order_fill(
     net_sell = int(net_sell_total_milli); allocated = int(allocated_cost_milli); pnl = int(realized_pnl_milli)
     if net_sell <= 0 or allocated < 0 or pnl != net_sell - allocated:
         raise ValueError("Trading SELL fill exact-accounting payload 不合法")
-    fills.append({"fill_id": fill_id_text, "qty": qty, "fill_price_milli": fill_price_milli, "trade_date": trade_date_text,
-                  "net_sell_total_milli": net_sell, "allocated_cost_milli": allocated, "realized_pnl_milli": pnl, "confirmed_at": str(timestamp)})
+    fill_record = {
+        "fill_id": fill_id_text,
+        "qty": qty,
+        "fill_price_milli": fill_price_milli,
+        "trade_date": trade_date_text,
+        "net_sell_total_milli": net_sell,
+        "allocated_cost_milli": allocated,
+        "realized_pnl_milli": pnl,
+        "confirmed_at": str(timestamp),
+    }
+    if strategy_position_before_fill is not None:
+        snapshot = deepcopy(strategy_position_before_fill)
+        fill_record["strategy_position_before_fill"] = snapshot
+        fill_record["strategy_position_before_fill_sha256"] = canonical_json_sha256(snapshot)
+        fill_record["position_qty_before_fill"] = int(position_qty_before_fill or 0)
+        fill_record["position_qty_after_fill"] = int(position_qty_after_fill or 0)
+    fills.append(fill_record)
     filled_qty = sum(int(x["qty"]) for x in fills)
     remaining_qty = int(record["qty"]) - filled_qty
     to_status = TRADING_ORDER_STATUS_FILLED if remaining_qty == 0 else TRADING_ORDER_STATUS_PARTIAL
@@ -1000,6 +1031,28 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
                     raise ValueError("Trading BUY fill net_buy_total_milli 不合法")
             if filled_qty > 0 and frozen_params is None:
                 raise ValueError("Trading 已成交 BUY order 必須持有 frozen_params")
+            member_params = record.get("ensemble_member_params_by_key")
+            if member_params not in (None, {}):
+                if not isinstance(member_params, dict):
+                    raise ValueError("Trading BUY order ensemble voter Params lineage 不合法")
+                member_keys = [str(item) for item in list(record.get("ensemble_member_keys") or [])]
+                vote_count = int(record.get("ensemble_vote_count") or 0)
+                min_agree = int(record.get("ensemble_min_agree") or 0)
+                member_count = int(record.get("ensemble_member_count") or 0)
+                if len(set(member_keys)) != vote_count or min_agree < 1 or vote_count < min_agree or vote_count > member_count:
+                    raise ValueError("Trading BUY order ensemble agreement metadata 不合法")
+                if set(member_keys) - set(str(key) for key in member_params):
+                    raise ValueError("Trading BUY order 缺少 agreeing-voter Params")
+                representative_key = str(record.get("ensemble_member_key") or "")
+                if representative_key not in member_params:
+                    raise ValueError("Trading BUY order representative member 不在 voter Params lineage")
+            if str(record.get("entry_type") or "") == "reentry":
+                if not isinstance(member_params, dict) or not member_params:
+                    raise ValueError("Trading re-entry BUY 缺 agreeing-voter frozen Params lineage")
+                if str(record.get("param_lineage_source") or "") != "entry_order_frozen_ensemble":
+                    raise ValueError("Trading re-entry BUY 必須使用 frozen ensemble lineage")
+                if not str(record.get("source_entry_order_id") or ""):
+                    raise ValueError("Trading re-entry BUY 缺 source_entry_order_id")
             for field in (
                 "plan_fingerprint", "information_date", "selected_params_sha256",
                 "candidate_snapshot_sha256", "strategy_id", "param_selector",
@@ -1020,6 +1073,16 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
                     raise ValueError("Trading SELL fill exact-accounting payload 不合法")
                 if int(fill.get("realized_pnl_milli") or 0) != int(fill.get("net_sell_total_milli") or 0) - int(fill.get("allocated_cost_milli") or 0):
                     raise ValueError("Trading SELL fill PnL reconciliation 不一致")
+                position_snapshot = fill.get("strategy_position_before_fill")
+                if position_snapshot is not None:
+                    if not isinstance(position_snapshot, dict):
+                        raise ValueError("Trading SELL fill strategy_position_before_fill 必須是 object")
+                    if str(fill.get("strategy_position_before_fill_sha256") or "") != canonical_json_sha256(position_snapshot):
+                        raise ValueError("Trading SELL fill strategy position snapshot hash 不一致")
+                    qty_before = int(fill.get("position_qty_before_fill") or 0)
+                    qty_after = int(fill.get("position_qty_after_fill") or 0)
+                    if qty_before <= 0 or qty_after < 0 or qty_after != qty_before - int(fill.get("qty") or 0):
+                        raise ValueError("Trading SELL fill position qty snapshot 不一致")
                 if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
                     require_trading_date_after(
                         fill.get("trade_date"),

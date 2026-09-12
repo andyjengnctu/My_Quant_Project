@@ -22,6 +22,8 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "services/trading/order_state.py",
     "services/trading/fill_reconciliation.py",
     "services/trading/daily_workflow.py",
+    "services/trading/live_reentry.py",
+    "services/trading/strategy_param_runtime.py",
     "services/trading/scanner_state.py",
     "services/scanner/scan_runner.py",
     "services/trading/market_data_consumer.py",

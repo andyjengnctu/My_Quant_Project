@@ -18,7 +18,7 @@ from services.trading.scanner_state import (
     resolve_trading_candidate_snapshot_path,
 )
 
-PROPOSED_ORDER_SCHEMA_VERSION = 3
+PROPOSED_ORDER_SCHEMA_VERSION = 4
 PROPOSED_ORDER_STATUS = "PROPOSED"
 
 
@@ -60,13 +60,26 @@ def load_current_trading_proposed_order_plan(
     for order in list(payload.get("orders") or []):
         if not isinstance(order, dict):
             raise RuntimeError("Trading proposed-order order row 不合法")
-        if member_count > 1:
-            if not str(order.get("params_signature") or "").strip():
-                raise RuntimeError("Trading ensemble proposed-order 缺少 representative params_signature")
-            vote_count = int(order.get("ensemble_vote_count") or 0)
-            order_min_agree = int(order.get("ensemble_min_agree") or 0)
-            if order_min_agree != min_agree or vote_count < min_agree:
-                raise RuntimeError("Trading ensemble proposed-order agreement metadata 不合法")
+        row_member_count = int(order.get("ensemble_member_count") or 0)
+        vote_count = int(order.get("ensemble_vote_count") or 0)
+        row_min_agree = int(order.get("ensemble_min_agree") or 0)
+        member_keys = [str(item) for item in list(order.get("ensemble_member_keys") or [])]
+        member_params = order.get("ensemble_member_params_by_key") or {}
+        if row_member_count < 1 or row_min_agree < 1 or vote_count < row_min_agree or vote_count > row_member_count:
+            raise RuntimeError("Trading proposed-order row-level agreement metadata 不合法")
+        if len(set(member_keys)) != vote_count:
+            raise RuntimeError("Trading proposed-order agreeing member keys 與 vote_count 不一致")
+        if not isinstance(member_params, dict) or set(member_keys) - set(str(key) for key in member_params):
+            raise RuntimeError("Trading proposed-order 缺少 agreeing-voter immutable Params lineage")
+        if not str(order.get("params_signature") or "").strip():
+            raise RuntimeError("Trading proposed-order 缺少 representative params_signature")
+        lineage_source = str(order.get("param_lineage_source") or "current_selected_artifact")
+        if lineage_source not in {"current_selected_artifact", "entry_order_frozen_ensemble"}:
+            raise RuntimeError("Trading proposed-order param_lineage_source 不合法")
+        if str(order.get("entry_type") or "") == "reentry" and (
+            lineage_source != "entry_order_frozen_ensemble" or not str(order.get("source_entry_order_id") or "")
+        ):
+            raise RuntimeError("Trading re-entry proposed-order 缺少 broker-truth source entry lineage")
     payload_core = {key: value for key, value in payload.items() if key != "plan_fingerprint"}
     expected_fingerprint = canonical_json_sha256(payload_core)
     if str(payload.get("plan_fingerprint") or "") != expected_fingerprint:

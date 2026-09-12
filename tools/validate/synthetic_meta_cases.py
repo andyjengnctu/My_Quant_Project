@@ -3144,7 +3144,6 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
     canonical_trade_training = get_strategy_parameter_training_policy_snapshot(evaluation_mode="trade")
     canonical_seed_policy = dict(canonical_trade_training.get("random_seed_ensemble") or {})
     add_check(results, "runtime_domain", case_id, "trading_selector_uses_canonical_trade_run_best_selector", str(trading_policy._training_settings.TRADE_MODE_RUN_BEST_SELECTOR), profile.param_selector)
-    add_check(results, "runtime_domain", case_id, "trading_uses_requested_base_finalists_agree_policy", "base_finalists_agree", profile.param_selector)
     add_check(results, "runtime_domain", case_id, "trading_trials_use_canonical_single_fold_budget", int(canonical_trade_training["trials_per_fold"]), profile.optimizer_trials_per_seed)
     add_check(results, "runtime_domain", case_id, "trading_seed_count_uses_canonical_ensemble_size", int(canonical_seed_policy["seed_count"]), profile.optimizer_seed_count)
     add_check(results, "runtime_domain", case_id, "trading_train_window_uses_canonical_trade_window", int(canonical_trade_training["train_window_months"]), profile.optimizer_train_window_months)

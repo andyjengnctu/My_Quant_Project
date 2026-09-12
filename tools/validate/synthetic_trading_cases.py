@@ -3218,6 +3218,297 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
     summary["checks"] = len(results)
     return results, summary
 
+def validate_trading_live_reentry_broker_truth_contract_case(base_params):
+    """Live re-entry must be rebuilt from broker-confirmed STOP truth and frozen entry voters."""
+    case_id = "TRADING_LIVE_REENTRY_BROKER_TRUTH"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "trading_live_reentry")
+
+    from core.params_io import params_to_json_dict
+    from core.portfolio_param_runtime import build_portfolio_params_signature
+    from services.trading.live_reentry import (
+        build_trading_live_reentry_candidate_rows,
+        build_trading_live_reentry_watch_records,
+    )
+    from services.trading.strategy_param_runtime import serialize_trading_candidate_member_params
+    import services.trading.daily_workflow as daily_workflow
+    import services.trading.live_reentry as live_reentry
+
+    params_a = deepcopy(base_params)
+    params_b = deepcopy(base_params)
+    params_a.use_breakout_reclaim_reentry = True
+    params_b.use_breakout_reclaim_reentry = True
+    params_b.high_len = int(params_a.high_len) + 5
+    payload_a = params_to_json_dict(params_a)
+    payload_b = params_to_json_dict(params_b)
+    sig_a = build_portfolio_params_signature(params_a)
+    sig_b = build_portfolio_params_signature(params_b)
+
+    entry_order = {
+        "order_id": "ENTRY-1",
+        "side": "BUY",
+        "purpose": "ENTRY_BUY",
+        "ticker": "2330",
+        "ensemble_member_count": 2,
+        "ensemble_min_agree": 2,
+        "ensemble_member_key": "m1",
+        "ensemble_member_keys": ["m1", "m2"],
+        "ensemble_member_params_by_key": {"m1": payload_a, "m2": payload_b},
+        "ensemble_member_quality_rank_by_key": {},
+        "frozen_params": payload_a,
+        "fills": [{
+            "fill_id": "BUY-1",
+            "trade_date": "2026-09-01",
+            "confirmed_at": "2026-09-01T10:00:00+08:00",
+        }],
+    }
+    first_position = {
+        "ticker": "2330",
+        "entry_type": "normal",
+        "entry_trade_date": "2026-09-01",
+        "entry_fill_price": 100.0,
+        "pure_buy_price": 100.0,
+        "initial_stop": 90.0,
+        "initial_stop_milli": 90_000,
+        "sl": 95.0,
+        "sl_milli": 95_000,
+        "trailing_stop": 95.0,
+        "trailing_stop_milli": 95_000,
+        "qty": 100,
+    }
+    stop_order = {
+        "order_id": "STOP-1",
+        "side": "SELL",
+        "purpose": "PROTECTION_STOP",
+        "ticker": "2330",
+        "entry_order_id": "ENTRY-1",
+        "qty": 100,
+        "fills": [
+            {
+                "fill_id": "STOP-F1",
+                "trade_date": "2026-09-10",
+                "confirmed_at": "2026-09-10T10:00:00+08:00",
+                "qty": 40,
+                "position_qty_before_fill": 100,
+                "position_qty_after_fill": 60,
+                "strategy_position_before_fill": dict(first_position),
+            },
+            {
+                "fill_id": "STOP-F2",
+                "trade_date": "2026-09-10",
+                "confirmed_at": "2026-09-10T10:01:00+08:00",
+                "qty": 60,
+                "position_qty_before_fill": 60,
+                "position_qty_after_fill": 0,
+                "strategy_position_before_fill": {**first_position, "qty": 60},
+            },
+        ],
+    }
+    order_state = {"orders": {"ENTRY-1": entry_order, "STOP-1": stop_order}}
+    empty_account = {"positions": {}}
+    with patch.object(live_reentry, "load_trading_order_state", return_value=order_state), patch.object(
+        live_reentry, "load_trading_account_state", return_value=empty_account
+    ):
+        watches = build_trading_live_reentry_watch_records(Path("/tmp/trading-live-reentry"))
+    check("full_broker_stop_creates_one_live_reentry_watch", 1, len(watches))
+    watch = watches[0]
+    check("live_reentry_watch_uses_original_stop_order_qty", 100, watch.get("exit_qty"))
+    check("partial_stop_reconciliation_preserves_pre_stop_position_snapshot", 100, (watch.get("position_snapshot") or {}).get("qty"))
+    check("live_reentry_watch_preserves_original_voter_keys", ["m1", "m2"], watch.get("member_keys"))
+    check("live_reentry_watch_preserves_original_min_agree", 2, watch.get("min_agree"))
+    check_true("live_reentry_watch_preserves_both_voter_params", set((watch.get("member_params_by_key") or {})) == {"m1", "m2"})
+
+    partial_only = deepcopy(order_state)
+    partial_only["orders"]["STOP-1"]["fills"] = [deepcopy(stop_order["fills"][0])]
+    with patch.object(live_reentry, "load_trading_order_state", return_value=partial_only), patch.object(
+        live_reentry, "load_trading_account_state", return_value=empty_account
+    ):
+        check("partial_stop_does_not_start_reentry_watch", [], build_trading_live_reentry_watch_records(Path("/tmp/trading-live-reentry")))
+
+    tp_only = deepcopy(order_state)
+    tp_only["orders"]["STOP-1"]["purpose"] = "PROTECTION_TP"
+    with patch.object(live_reentry, "load_trading_order_state", return_value=tp_only), patch.object(
+        live_reentry, "load_trading_account_state", return_value=empty_account
+    ):
+        check("tp_fill_does_not_start_reentry_watch", [], build_trading_live_reentry_watch_records(Path("/tmp/trading-live-reentry")))
+
+    later_buy = deepcopy(order_state)
+    later_buy["orders"]["ENTRY-2"] = {
+        **deepcopy(entry_order),
+        "order_id": "ENTRY-2",
+        "fills": [{"fill_id": "BUY-2", "trade_date": "2026-09-11", "confirmed_at": "2026-09-11T10:00:00+08:00"}],
+    }
+    with patch.object(live_reentry, "load_trading_order_state", return_value=later_buy), patch.object(
+        live_reentry, "load_trading_account_state", return_value=empty_account
+    ):
+        check("later_broker_buy_supersedes_old_stop_reentry_watch", [], build_trading_live_reentry_watch_records(Path("/tmp/trading-live-reentry")))
+
+    held_account = {"positions": {"2330": {"broker": {"qty": 100}}}}
+    with patch.object(live_reentry, "load_trading_order_state", return_value=order_state), patch.object(
+        live_reentry, "load_trading_account_state", return_value=held_account
+    ):
+        check("currently_held_ticker_suppresses_reentry_watch", [], build_trading_live_reentry_watch_records(Path("/tmp/trading-live-reentry")))
+
+    legacy_ensemble = deepcopy(order_state)
+    legacy_ensemble["orders"]["ENTRY-1"].pop("ensemble_member_params_by_key", None)
+    with patch.object(live_reentry, "load_trading_order_state", return_value=legacy_ensemble), patch.object(
+        live_reentry, "load_trading_account_state", return_value=empty_account
+    ):
+        try:
+            build_trading_live_reentry_watch_records(Path("/tmp/trading-live-reentry"))
+        except RuntimeError as exc:
+            legacy_fail_closed = "禁止推測 live re-entry" in str(exc)
+        else:
+            legacy_fail_closed = False
+    check("legacy_ensemble_without_voter_lineage_fails_closed", True, legacy_fail_closed)
+
+    candidate_watch = {
+        **watch,
+        "member_params_by_key": {"m1": payload_a, "m2": payload_b},
+        "member_quality_rank_by_key": {},
+    }
+    fake_frame = pd.DataFrame({
+        "Open": [100.0, 101.0], "High": [102.0, 103.0], "Low": [99.0, 100.0],
+        "Close": [101.0, 102.0], "Volume": [1000.0, 1000.0],
+    }, index=pd.to_datetime(["2026-09-10", "2026-09-11"]))
+    plan = {
+        "limit_price": 101.0, "init_sl": 95.0, "init_trail": 95.0, "target_price": 110.0,
+        "entry_atr": 2.0, "entry_source": "reentry", "source_entry_order_id": "ENTRY-1",
+    }
+    row_template = {
+        "ticker": "2330", "kind": "reentry", "sort_value": 1.0,
+        "execution_plan_seed": dict(plan), "entry_source": "reentry", "source_entry_order_id": "ENTRY-1",
+    }
+    with patch.object(live_reentry, "build_trading_live_reentry_watch_records", return_value=[candidate_watch]), patch.object(
+        live_reentry.TradingMarketDataV2View, "open", return_value=object()
+    ), patch.object(live_reentry, "load_trading_v2_sanitized_ohlcv_frame", return_value=fake_frame), patch.object(
+        live_reentry, "_replay_member_reentry_signal", return_value=({"source": "reentry"}, plan, True)
+    ), patch.object(live_reentry, "run_v16_backtest", return_value={}), patch.object(
+        live_reentry, "build_extended_scanner_row_from_plan", return_value=row_template
+    ):
+        live_rows = build_trading_live_reentry_candidate_rows(
+            Path("/tmp/trading-live-reentry"), information_date="2026-09-11"
+        )
+    check("agreeing_frozen_voters_produce_one_live_reentry_candidate", 1, len(live_rows))
+    live_row = live_rows[0]
+    check("live_reentry_candidate_identity_is_explicit", "reentry", live_row.get("kind"))
+    check("live_reentry_candidate_source_entry_is_preserved", "ENTRY-1", live_row.get("source_entry_order_id"))
+    check("live_reentry_candidate_lineage_is_frozen_entry_ensemble", "entry_order_frozen_ensemble", live_row.get("param_lineage_source"))
+    check("live_reentry_candidate_reapplies_original_min_agree", 2, live_row.get("ensemble_min_agree"))
+    check("live_reentry_candidate_records_two_votes", 2, live_row.get("ensemble_vote_count"))
+    persisted_lineage = serialize_trading_candidate_member_params(live_row)
+    check_true("live_reentry_candidate_persists_both_voter_params", set(persisted_lineage) == {"m1", "m2"})
+    check_true("live_reentry_candidate_preserves_representative_signature", str(live_row.get("params_signature") or "") in {sig_a, sig_b})
+
+    from core.file_integrity import canonical_json_sha256
+    from core.runtime_domains import RUNTIME_DOMAIN_TRADING
+    from core.trading_order_state import build_empty_trading_order_state, append_ordered_trading_proposal, validate_trading_order_state
+    from services.trading.proposed_order_state import (
+        PROPOSED_ORDER_SCHEMA_VERSION,
+        PROPOSED_ORDER_STATUS,
+        load_current_trading_proposed_order_plan,
+        resolve_trading_proposed_orders_json_path,
+    )
+    from services.trading.strategy_param_runtime import resolve_trading_candidate_frozen_params
+
+    persisted_live_row = {**live_row, "ensemble_member_params_by_key": persisted_lineage}
+    representative_params, representative_lineage = resolve_trading_candidate_frozen_params(persisted_live_row)
+    representative_payload = params_to_json_dict(representative_params)
+    reentry_proposal = {
+        **persisted_live_row,
+        "rank": 1,
+        "qty": 100,
+        "limit_price": 101.0,
+        "reserved_cost_milli": 10_100_000,
+        "init_sl": 95.0,
+        "init_trail": 95.0,
+        "target_price": 110.0,
+        "entry_atr": 2.0,
+        "entry_type": "reentry",
+        "kind": "reentry",
+        "ensemble_member_params_by_key": persisted_lineage,
+    }
+    order_plan = {
+        "plan_fingerprint": "plan-live-reentry",
+        "information_date": "2026-09-11",
+        "account_revision": 0,
+        "selected_params_sha256": "a" * 64,
+        "candidate_snapshot_sha256": "b" * 64,
+        "strategy_id": "synthetic",
+        "param_selector": "synthetic",
+    }
+    order_state_seed = build_empty_trading_order_state(timestamp="2026-09-11T15:00:00+08:00", mutation_id="init")
+    ordered_state = append_ordered_trading_proposal(
+        order_state_seed, order_id="REENTRY-ORDER-1", proposal=reentry_proposal, plan=order_plan,
+        timestamp="2026-09-11T15:01:00+08:00", mutation_id="ordered", frozen_params=representative_payload,
+    )
+    validate_trading_order_state(ordered_state)
+    ordered = ordered_state["orders"]["REENTRY-ORDER-1"]
+    check("reentry_order_identity_survives_submission", "reentry", ordered.get("entry_type"))
+    check("reentry_order_source_entry_survives_submission", "ENTRY-1", ordered.get("source_entry_order_id"))
+    check("reentry_order_frozen_lineage_source_survives_submission", "entry_order_frozen_ensemble", ordered.get("param_lineage_source"))
+    check("reentry_order_preserves_original_min_agree", 2, ordered.get("ensemble_min_agree"))
+    check_true("reentry_order_persists_all_agreeing_voter_params", set(ordered.get("ensemble_member_params_by_key") or {}) == {"m1", "m2"})
+    check("reentry_order_frozen_params_match_representative_member", representative_payload, ordered.get("frozen_params"))
+    check("reentry_order_representative_key_matches_candidate", live_row.get("ensemble_member_key"), representative_lineage.get("member_key"))
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        proposed_path = resolve_trading_proposed_orders_json_path(temp_root)
+        proposed_path.parent.mkdir(parents=True, exist_ok=True)
+        proposed_payload = {
+            "schema_version": PROPOSED_ORDER_SCHEMA_VERSION,
+            "status": PROPOSED_ORDER_STATUS,
+            "runtime_domain": RUNTIME_DOMAIN_TRADING,
+            "information_date": "2026-09-11",
+            "strategy_id": "synthetic",
+            "param_selector": "synthetic",
+            "selected_params_sha256": "a" * 64,
+            "candidate_snapshot_sha256": "b" * 64,
+            "account_revision": 0,
+            "param_member_count": 8,
+            "param_min_agree": 5,
+            "orders": [reentry_proposal],
+        }
+        proposed_payload["plan_fingerprint"] = canonical_json_sha256(proposed_payload)
+        atomic_write_json(proposed_path, proposed_payload)
+        loaded_proposed = load_current_trading_proposed_order_plan(temp_root, require_current=False)
+    check("reentry_proposed_order_allows_frozen_row_level_ensemble_identity", "reentry", loaded_proposed["orders"][0].get("entry_type"))
+    check("reentry_proposed_order_row_min_agree_is_independent_of_current_artifact", 2, loaded_proposed["orders"][0].get("ensemble_min_agree"))
+
+    historical_reentry = {
+        "ticker": "2330", "kind": "extended", "sort_value": 9.0,
+        "execution_plan_seed": {"entry_source": "reentry"},
+    }
+    normal_row = {
+        "ticker": "2317", "kind": "buy", "sort_value": 1.0,
+        "execution_plan_seed": {"entry_source": "normal"},
+    }
+    member = {"member_key": "m1", "member_index": 1, "params_obj": params_a, "params_signature": sig_a}
+    fake_scan = {"scanned_tickers": ["2330", "2317"], "candidate_rows": [historical_reentry, normal_row], "elapsed_time": 0.1}
+    with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan):
+        filtered = daily_workflow._run_trading_scanner_param_runtime(
+            runtime={"data_dir": Path("/tmp/trading-live-reentry"), "param_members": [member], "param_min_agree": 1},
+            output_dir=Path("/tmp/trading-live-reentry/out"),
+            expected_scanned_tickers=["2330", "2317"],
+            prepared_frames={"2330": fake_frame, "2317": fake_frame},
+        )
+    check("historical_scanner_reentry_is_not_live_candidate_truth", ["2317"], [row.get("ticker") for row in filtered.get("candidate_rows") or []])
+
+    project_root = Path(__file__).resolve().parents[2]
+    fill_source = (project_root / "services" / "trading" / "fill_reconciliation.py").read_text(encoding="utf-8")
+    consumer_source = (project_root / "services" / "trading" / "market_data_consumer.py").read_text(encoding="utf-8")
+    consumer_update_source = (project_root / "services" / "trading" / "market_data_update.py").read_text(encoding="utf-8")
+    check_true("stop_fill_persists_pre_fill_strategy_snapshot", "strategy_position_before_fill=stop_snapshot" in fill_source)
+    check_true("stop_fill_persists_before_after_broker_qty", "position_qty_before_fill=position_qty_before_fill" in fill_source and "position_qty_after_fill=position_qty_after_fill" in fill_source)
+    check_true("reentry_tickers_are_kept_in_v2_training_membership", "set(required_reentry)" in consumer_source and "required_reentry_tickers" in consumer_source)
+    check_true("market_update_derives_reentry_data_obligations_from_broker_truth", "resolve_trading_live_reentry_required_tickers" in consumer_update_source)
+    check("market_data_consumer_has_no_hardcoded_active_strategy_identity", False, 'get_trading_data_dependency_spec("full_rule_based_no_dl")' in consumer_source)
+    check_true("market_data_consumer_uses_canonical_trading_strategy_identity", "get_trading_strategy_profile().strategy_id" in consumer_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
 def validate_trading_market_data_lineage_contract_case(base_params):
     """Trading V2 Data→Params→Scanner lineage is identity-bound and fail-closed."""
     case_id = "TRADING_MARKET_DATA_LINEAGE"

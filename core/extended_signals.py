@@ -408,7 +408,10 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "trade_date": trade_date,
         "signal_date": signal_state.get("signal_date"),
         "max_qty": signal_state.get("max_qty"),
+        "entry_source": str(signal_state.get("source") or "extended"),
     }
+    if signal_state.get("source_entry_order_id"):
+        base_plan["source_entry_order_id"] = str(signal_state.get("source_entry_order_id"))
     if shadow_position is not None:
         base_plan["shadow_position_state"] = clone_shadow_position(shadow_position)
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)

@@ -25,7 +25,7 @@ from services.trading.strategy_param_state import (
 )
 
 
-TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 5
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 6
 
 
 def partition_trading_candidate_rows_for_information_date(
@@ -309,16 +309,28 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
     candidate_rows = list(payload.get("candidate_rows") or [])
     if any(not isinstance(row, dict) for row in candidate_rows):
         raise TypeError("Trading candidate snapshot candidate row 必須是 object")
-    if member_count > 1:
-        for row in candidate_rows:
-            if not str(row.get("params_signature") or "").strip():
-                raise ValueError("Trading ensemble candidate 缺少 representative params_signature")
-            if not str(row.get("ensemble_member_key") or "").strip():
-                raise ValueError("Trading ensemble candidate 缺少 representative member key")
-            if int(row.get("ensemble_min_agree") or 0) != min_agree:
-                raise ValueError("Trading ensemble candidate min_agree 與 snapshot 不一致")
-            if int(row.get("ensemble_vote_count") or 0) < min_agree:
-                raise ValueError("Trading ensemble candidate 未達 canonical min_agree")
+    for row in candidate_rows:
+        row_member_count = int(row.get("ensemble_member_count") or 0)
+        row_min_agree = int(row.get("ensemble_min_agree") or 0)
+        vote_count = int(row.get("ensemble_vote_count") or 0)
+        member_keys = [str(item) for item in list(row.get("ensemble_member_keys") or [])]
+        member_params = row.get("ensemble_member_params_by_key") or {}
+        if row_member_count < 1 or row_min_agree < 1 or vote_count < row_min_agree or vote_count > row_member_count:
+            raise ValueError("Trading candidate row-level ensemble metadata 不合法")
+        if len(set(member_keys)) != vote_count:
+            raise ValueError("Trading candidate agreeing member keys 與 vote_count 不一致")
+        if not isinstance(member_params, dict) or set(member_keys) - set(str(key) for key in member_params):
+            raise ValueError("Trading candidate 缺少 agreeing-voter immutable Params lineage")
+        if not str(row.get("params_signature") or "").strip() or not str(row.get("ensemble_member_key") or "").strip():
+            raise ValueError("Trading candidate 缺少 representative Params identity")
+        lineage_source = str(row.get("param_lineage_source") or "current_selected_artifact")
+        if lineage_source not in {"current_selected_artifact", "entry_order_frozen_ensemble"}:
+            raise ValueError("Trading candidate param_lineage_source 不合法")
+        entry_source = str((row.get("execution_plan_seed") or {}).get("entry_source") or "")
+        if entry_source == "reentry" and (
+            lineage_source != "entry_order_frozen_ensemble" or not str(row.get("source_entry_order_id") or "")
+        ):
+            raise ValueError("Trading live re-entry candidate 缺 broker-truth source entry lineage")
     candidate_tickers = {normalize_trading_ticker(row.get("ticker")) for row in candidate_rows}
     outside_membership = sorted(candidate_tickers - set(normalized_scanned))
     if outside_membership:

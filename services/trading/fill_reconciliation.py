@@ -1,6 +1,7 @@
 """Recoverable reconciliation of externally confirmed Trading BUY/SELL fills."""
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -361,6 +362,9 @@ def _confirm_trading_sell_order_fill(
         event = "STOP"
     else:
         event = "TP_HALF"
+    broker_before = position.get("broker") or {}
+    strategy_position_before_fill = deepcopy((position.get("strategy_management") or {}).get("position_state"))
+    position_qty_before_fill = int(broker_before.get("qty") or 0)
     timestamp = _timestamp()
     account_target = apply_confirmed_sell_fill(
         account, ticker=ticker, qty=fill_qty_int, exec_price=fill_price, params=params,
@@ -368,11 +372,17 @@ def _confirm_trading_sell_order_fill(
         mark_tp_half_complete=tp_half_complete,
     )
     details = account_target["events"][-1].get("details") or {}
+    position_after = ((account_target.get("positions") or {}).get(ticker) or {}).get("broker") or {}
+    position_qty_after_fill = int(position_after.get("qty") or 0)
+    stop_snapshot = strategy_position_before_fill if event == "STOP" else None
     order_target = record_trading_sell_order_fill(
         orders, order_id=oid, fill_id=_mutation_id(), fill_qty=fill_qty_int, fill_price=fill_price,
         trade_date=sell_trade_date, net_sell_total_milli=int(details.get("net_sell_total_milli") or 0),
         allocated_cost_milli=int(details.get("allocated_cost_milli") or 0), realized_pnl_milli=int(details.get("realized_pnl_milli") or 0),
         timestamp=timestamp, mutation_id=_mutation_id(),
+        strategy_position_before_fill=stop_snapshot,
+        position_qty_before_fill=position_qty_before_fill if stop_snapshot is not None else None,
+        position_qty_after_fill=position_qty_after_fill if stop_snapshot is not None else None,
     )
     if int(account_target["revision"]) != int(account["revision"]) + 1 or int(order_target["revision"]) != int(orders["revision"]) + 1:
         raise RuntimeError("Trading SELL fill transaction 每個 state 必須恰好增加一個 revision")
