@@ -3636,7 +3636,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     auto_update_source = (project_root / "services" / "trading" / "market_data_auto_update.py").read_text(encoding="utf-8")
     v2_sync_source = (project_root / "services" / "downloader" / "market_data_trading_sync.py").read_text(encoding="utf-8")
     daily_console_source = (project_root / "services" / "downloader" / "daily_console_progress.py").read_text(encoding="utf-8")
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    data_ops_panel_source = (project_root / "services" / "workbench_ui" / "data_ops_panel.py").read_text(encoding="utf-8")
     state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
     from services.trading import daily_workflow as daily_workflow_module
     from services.trading import market_data_update as market_data_update_module
@@ -3703,7 +3703,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("v2_auto_updater_does_not_read_legacy_trading_snapshot_for_target", False, "load_trading_market_data_snapshot" in auto_update_source)
     check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "resolve_trading_market_data_update_target_date as _resolve_target_date" in auto_update_source and "find_latest_ready_provider_snapshot" in state_source and "load_market_date_discovery_state" in state_source)
     check("v2_failure_state_remains_owned_by_v2_sync_path", True, "publish_trading_market_data_v2_state(" in v2_sync_source and '"last_error": error' in v2_sync_source)
-    check("workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
+    check("workbench_exposes_v2_archive_status", True, "V2 Archive" in data_ops_panel_source)
     check("scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
     check("scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_consumer_evidence" in scanner_source)
     check("operations_status_uses_strategy_data_readiness_not_aggregate_v2_synced", True, "trading_data_ready" in operations_source and "overall_v2_ready" not in operations_source)
