@@ -2115,6 +2115,9 @@ def _run_nonrolling_random_seed_ensemble_training(
     if not bool(policy.get("enabled", False)) or int(policy.get("seed_count", 1)) <= 1:
         return None
 
+    selected_policy_for_progress = str(run_best_selector_override or candidate_selector_override or "").strip()
+    selected_policy_uses_finalist_agreement = _is_finalists_agree_policy_name(selected_policy_for_progress)
+
     seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
     compact_display = True
 
@@ -2173,8 +2176,9 @@ def _run_nonrolling_random_seed_ensemble_training(
             return format_optimizer_seed_ensemble_progress_header(
                 folds=1,
                 seeds=len(seeds),
-                min_agree=int(policy["min_agree"]),
+                min_agree=None if selected_policy_uses_finalist_agreement else int(policy["min_agree"]),
                 parallel_workers=int(parallel_workers),
+                selector=selected_policy_for_progress or None,
                 backend=parallel_backend,
                 completed_folds=int(completed),
                 total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
@@ -2193,7 +2197,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         progress_board.render(force=True)
     else:
         from services.optimizer.outer_rolling_progress import format_optimizer_seed_ensemble_progress_header
-        print(f"{C_GRAY}{format_optimizer_seed_ensemble_progress_header(folds=1, seeds=len(seeds), min_agree=int(policy['min_agree']), parallel_workers=int(parallel_workers), backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0, completed_trials=0)}{C_RESET}")
+        print(f"{C_GRAY}{format_optimizer_seed_ensemble_progress_header(folds=1, seeds=len(seeds), min_agree=None if selected_policy_uses_finalist_agreement else int(policy['min_agree']), parallel_workers=int(parallel_workers), selector=selected_policy_for_progress or None, backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0, completed_trials=0)}{C_RESET}")
     configure_optuna_logging()
 
     def _emit_seed_progress_for_member(member_index: int, seed: int, **kwargs) -> None:
@@ -2592,11 +2596,22 @@ def _run_nonrolling_random_seed_ensemble_training(
         completed_replays = 0
         replay_wall_elapsed_sec = None
         completed_folds = 1
+    selected_policy_payload = dict((_policy_paramset_payloads or {}).get(selected_policy_for_progress) or {})
+    selected_policy_runtime = dict(selected_policy_payload.get("random_seed_ensemble") or {})
+    finalist_count = None
+    finalist_min_agree = None
+    if selected_policy_uses_finalist_agreement and selected_policy_runtime:
+        finalist_count = int(selected_policy_runtime.get("seed_count") or 0) or None
+        finalist_min_agree = int(selected_policy_runtime.get("min_agree") or 0) or None
+
     print(format_optimizer_final_performance_summary(
         folds=1,
         seeds=int(len(seeds)),
-        min_agree=int(policy["min_agree"]),
+        min_agree=None if selected_policy_uses_finalist_agreement else int(policy["min_agree"]),
         completed_folds=int(completed_folds or 1),
+        selector=selected_policy_for_progress or None,
+        finalist_count=finalist_count,
+        finalist_min_agree=finalist_min_agree,
         total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
         completed_trials=int(completed_trials or 0),
         search_wall_elapsed_sec=search_wall_elapsed_sec,
@@ -2648,7 +2663,6 @@ def run_static_strategy_parameter_training(
     selected_policy: str,
     trials_per_seed: int,
     seed_count: int,
-    seed_min_agree,
     trade_train_window_months: int,
     environ=None,
     raw_data_loader=None,
@@ -2720,14 +2734,15 @@ def run_static_strategy_parameter_training(
     optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
     walk_forward_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
     objective_mode = str(walk_forward_policy.get("objective_mode", "split_train_romd"))
-    requested_seed_policy = _resolve_nonrolling_seed_ensemble_policy(
-        enabled=True,
-        seed_count=seeds,
-        min_agree=seed_min_agree,
-    )
     from core.training_policy import get_strategy_parameter_training_policy_snapshot
     manifest_training_policy = get_strategy_parameter_training_policy_snapshot(
         evaluation_mode="trade"
+    )
+    canonical_seed_policy = dict(manifest_training_policy.get("random_seed_ensemble") or {})
+    requested_seed_policy = _resolve_nonrolling_seed_ensemble_policy(
+        enabled=True,
+        seed_count=seeds,
+        min_agree=canonical_seed_policy.get("min_agree_requested"),
     )
     manifest_training_policy.update(
         {
@@ -2845,7 +2860,6 @@ def run_static_strategy_parameter_training(
         "manifest_path": str(manifest_path),
         "trials_per_seed": trials,
         "seed_count": seeds,
-        "seed_min_agree": seed_min_agree,
         "trade_train_window_months": train_window_months,
         "random_seed_ensemble": dict(requested_seed_policy),
     }

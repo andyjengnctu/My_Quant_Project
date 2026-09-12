@@ -35,7 +35,6 @@ class TradingStrategyProfile:
     optimizer_requires_multi_seed: bool
     optimizer_trials_per_seed: int
     optimizer_seed_count: int
-    optimizer_seed_min_agree: object
     optimizer_train_window_months: int
     dl_filter_enabled: bool
     dl_ranking_enabled: bool
@@ -61,7 +60,6 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
     seed_policy = dict(optimizer_policy.get("random_seed_ensemble") or {})
     trials_per_seed = int(optimizer_policy["trials_per_fold"])
     seed_count = int(seed_policy.get("seed_count") or 0)
-    seed_min_agree = seed_policy.get("min_agree_requested")
     train_window_months = int(optimizer_policy["train_window_months"])
     if trials_per_seed < 1:
         raise ValueError("Trading optimizer trials_per_seed必須>=1")
@@ -83,7 +81,6 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
         optimizer_requires_multi_seed=True,
         optimizer_trials_per_seed=trials_per_seed,
         optimizer_seed_count=seed_count,
-        optimizer_seed_min_agree=seed_min_agree,
         optimizer_train_window_months=train_window_months,
         dl_filter_enabled=dl_filter,
         dl_ranking_enabled=dl_ranking,
@@ -125,7 +122,6 @@ def build_trading_strategy_param_training_plan(project_root) -> dict[str, object
         "optimizer_requires_multi_seed": profile.optimizer_requires_multi_seed,
         "optimizer_trials_per_seed": profile.optimizer_trials_per_seed,
         "optimizer_seed_count": profile.optimizer_seed_count,
-        "optimizer_seed_min_agree": profile.optimizer_seed_min_agree,
         "optimizer_train_window_months": profile.optimizer_train_window_months,
         "selected_params_path": resolve_trading_selected_strategy_param_path(project_root),
     }
@@ -142,7 +138,6 @@ def get_trading_policy_snapshot() -> dict[str, object]:
         "optimizer_requires_multi_seed": profile.optimizer_requires_multi_seed,
         "optimizer_trials_per_seed": profile.optimizer_trials_per_seed,
         "optimizer_seed_count": profile.optimizer_seed_count,
-        "optimizer_seed_min_agree": profile.optimizer_seed_min_agree,
         "optimizer_train_window_months": profile.optimizer_train_window_months,
         "dl_filter_enabled": profile.dl_filter_enabled,
         "dl_ranking_enabled": profile.dl_ranking_enabled,

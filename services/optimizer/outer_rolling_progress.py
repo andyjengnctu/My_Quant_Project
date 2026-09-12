@@ -279,8 +279,9 @@ def format_optimizer_seed_ensemble_progress_header(
     *,
     folds: int,
     seeds: int,
-    min_agree: int,
+    min_agree: int | None,
     parallel_workers: int,
+    selector: str | None = None,
     backend: str,
     completed_folds: int | None = None,
     pending_folds: int | None = None,
@@ -299,8 +300,11 @@ def format_optimizer_seed_ensemble_progress_header(
     parts = [
         f"folds={int(folds)}",
         f"seeds={int(seeds)}",
-        f"min_agree={int(min_agree)}",
     ]
+    if selector:
+        parts.append(f"selector={str(selector)}")
+    if min_agree is not None:
+        parts.append(f"seed_min_agree={int(min_agree)}")
     if completed_folds is not None:
         parts.append(f"completed={int(completed_folds)}/{int(folds)}")
     if total_elapsed_sec is not None:
@@ -343,8 +347,11 @@ def format_optimizer_final_performance_summary(
     *,
     folds: int,
     seeds: int,
-    min_agree: int,
+    min_agree: int | None,
     completed_folds: int,
+    selector: str | None = None,
+    finalist_count: int | None = None,
+    finalist_min_agree: int | None = None,
     total_elapsed_sec: float,
     completed_trials: int = 0,
     search_wall_elapsed_sec: float | None = None,
@@ -364,8 +371,9 @@ def format_optimizer_final_performance_summary(
     header = format_optimizer_seed_ensemble_progress_header(
         folds=int(folds),
         seeds=int(seeds),
-        min_agree=int(min_agree),
+        min_agree=None if min_agree is None else int(min_agree),
         parallel_workers=0,
+        selector=selector,
         backend="",
         completed_folds=int(completed_folds),
         total_elapsed_sec=float(total_elapsed_sec),
@@ -377,7 +385,10 @@ def format_optimizer_final_performance_summary(
         replay_wall_elapsed_sec=replay_wall_elapsed_sec,
     )
     ensemble_note = "" if bool(seed_ensemble_enabled) else " | seed_ensemble=off"
-    line = f"📏 訓練效能摘要: {header}{ensemble_note} | {_optimizer_resource_usage_suffix(resource_summary)}"
+    finalist_note = ""
+    if finalist_count is not None and finalist_min_agree is not None:
+        finalist_note = f" | finalists={int(finalist_count)} | finalist_min_agree={int(finalist_min_agree)}"
+    line = f"📏 訓練效能摘要: {header}{finalist_note}{ensemble_note} | {_optimizer_resource_usage_suffix(resource_summary)}"
     return f"{C_CYAN}{line}{C_RESET}" if bool(color) else line
 
 

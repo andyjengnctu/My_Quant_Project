@@ -3254,6 +3254,22 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "training_trials_per_seed_is_valid", True, int(plan["optimizer_trials_per_seed"]) >= 1)
     add_check(results, "trading_param", case_id, "training_window_is_valid", True, int(plan["optimizer_train_window_months"]) >= 1)
     add_check(results, "trading_param", case_id, "selected_policy_is_registry_driven", True, str(plan["param_selector"]) in POLICY_FILENAME_BY_NAME)
+    from services.optimizer.outer_rolling_progress import (
+        format_optimizer_final_performance_summary,
+        format_optimizer_seed_ensemble_progress_header,
+    )
+    finalists_header = format_optimizer_seed_ensemble_progress_header(
+        folds=1, seeds=8, min_agree=None, parallel_workers=8, backend="process",
+        selector="base_finalists_agree", completed_folds=0, total_elapsed_sec=15.0,
+    )
+    add_check(results, "trading_param", case_id, "finalists_agree_progress_names_selected_policy", True, "selector=base_finalists_agree" in finalists_header)
+    add_check(results, "trading_param", case_id, "finalists_agree_progress_does_not_show_seed_min_agree", False, "min_agree=" in finalists_header)
+    finalists_summary = format_optimizer_final_performance_summary(
+        folds=1, seeds=8, min_agree=None, completed_folds=1, selector="base_finalists_agree",
+        finalist_count=10, finalist_min_agree=5, total_elapsed_sec=60.0, color=False,
+    )
+    add_check(results, "trading_param", case_id, "finalists_agree_final_summary_shows_actual_finalist_agreement", True, "finalists=10" in finalists_summary and "finalist_min_agree=5" in finalists_summary)
+    add_check(results, "trading_param", case_id, "finalists_agree_final_summary_does_not_show_seed_min_agree", False, "seed_min_agree=" in finalists_summary)
     add_check(results, "trading_param", case_id, "selected_artifact_is_under_trading_strategy_root", True, trading_selected.is_relative_to(trading_param_root))
     add_check(results, "trading_param", case_id, "selected_artifact_is_not_research_truth", True, trading_selected != research_selected.resolve())
     add_check(results, "trading_param", case_id, "optimizer_output_is_under_trading_outputs", True, Path(str(plan["output_dir"])).resolve().is_relative_to((root / "outputs" / "trading").resolve()))
@@ -3291,7 +3307,6 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
             "manifest_path": str(fake_manifest),
             "trials_per_seed": int(kwargs["trials_per_seed"]),
             "seed_count": int(kwargs["seed_count"]),
-            "seed_min_agree": kwargs["seed_min_agree"],
             "trade_train_window_months": int(kwargs["trade_train_window_months"]),
             "random_seed_ensemble": {},
         }
@@ -3328,6 +3343,8 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_family", str(plan["param_family"]), str(captured_service_kwargs.get("param_family")))
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_selector", str(plan["param_selector"]), str(captured_service_kwargs.get("selected_policy")))
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_seed_count", int(plan["optimizer_seed_count"]), int(captured_service_kwargs.get("seed_count", 0)))
+    add_check(results, "trading_param", case_id, "trading_service_does_not_expose_seed_agreement_as_selected_policy_semantics", False, "seed_min_agree" in captured_service_kwargs)
+    add_check(results, "trading_param", case_id, "trading_plan_does_not_expose_seed_agreement_as_selected_policy_semantics", False, "optimizer_seed_min_agree" in plan)
     add_check(results, "trading_param", case_id, "trading_service_returns_project_relative_paths", False, Path(str(service_result["selected_params_path"])).is_absolute())
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -3378,10 +3395,13 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
             return 0
 
         previous_mode = resolve_optimizer_runtime_model_mode()
+        from core.training_policy import get_strategy_parameter_training_policy_snapshot
+        canonical_trade_training = get_strategy_parameter_training_policy_snapshot(evaluation_mode="trade")
+        canonical_seed_policy = dict(canonical_trade_training.get("random_seed_ensemble") or {})
         seed_policy = build_seed_ensemble_policy_snapshot(
             enabled=True,
             seed_count=int(plan["optimizer_seed_count"]),
-            min_agree=plan["optimizer_seed_min_agree"],
+            min_agree=canonical_seed_policy.get("min_agree_requested"),
         )
         with patch.object(optimizer_application, "_resolve_latest_dataset_date", return_value=fake_latest), patch.object(
             optimizer_application,
@@ -3400,7 +3420,6 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
                 selected_policy=str(plan["param_selector"]),
                 trials_per_seed=int(plan["optimizer_trials_per_seed"]),
                 seed_count=int(plan["optimizer_seed_count"]),
-                seed_min_agree=plan["optimizer_seed_min_agree"],
                 trade_train_window_months=int(plan["optimizer_train_window_months"]),
                 environ={},
             )
@@ -3438,7 +3457,6 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
                     selected_policy=str(plan["param_selector"]),
                     trials_per_seed=int(plan["optimizer_trials_per_seed"]),
                     seed_count=int(plan["optimizer_seed_count"]),
-                    seed_min_agree=plan["optimizer_seed_min_agree"],
                     trade_train_window_months=int(plan["optimizer_train_window_months"]),
                     environ={},
                 )

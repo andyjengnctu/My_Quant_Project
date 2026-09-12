@@ -53,7 +53,6 @@ def run_trading_strategy_param_training(
         selected_policy=str(plan["param_selector"]),
         trials_per_seed=int(plan["optimizer_trials_per_seed"]),
         seed_count=int(plan["optimizer_seed_count"]),
-        seed_min_agree=plan["optimizer_seed_min_agree"],
         trade_train_window_months=int(plan["optimizer_train_window_months"]),
         environ=environ,
         raw_data_loader=load_trading_v2_optimizer_raw_data,
