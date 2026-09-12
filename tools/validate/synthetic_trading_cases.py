@@ -1,4 +1,5 @@
 from copy import deepcopy
+from decimal import Decimal
 import json
 from pathlib import Path
 import tempfile
@@ -1416,7 +1417,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
                     root,
                     order_id=order_id,
                     fill_qty=first_qty,
-                    fill_price=199.0,
+                    fill_price=Decimal("199.0"),
                     trade_date="2026-09-05",
                     expected_order_revision=int(ordered["revision"]),
                     expected_account_revision=int(account["revision"]),
@@ -2612,7 +2613,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_command_finish_applies_bundle_once", 1, command_finish_body.count("self._apply_state_bundle(bundle)"))
     check("workbench_workflow_completion_no_longer_reloads_disk_models", False, "self.refresh_" in workflow_success_body)
     check("workbench_user_refresh_uses_background_executor", True, "def _request_state_refresh" in panel_source and '"全狀態刷新"' in panel_source and "self._submit_trading_command(" in panel_source.split("def _refresh_all_trading_state", 1)[1].split("def _apply_workflow_action_availability", 1)[0])
-    check("workbench_fill_confirmation_runs_through_background_executor", True, "self._submit_trading_command(" in panel_source.split("def _confirm_selected_fill", 1)[1].split("def _cancel_selected_order", 1)[0])
+    fill_confirmation_body = panel_source.split("def _confirm_selected_fill", 1)[1].split("def _cancel_selected_order", 1)[0]
+    check("workbench_fill_confirmation_runs_through_background_executor", True, "self._submit_trading_command(" in fill_confirmation_body)
+    check("workbench_fill_post_plan_errors_are_traceable", True, "indicator_error = str(exc)" in fill_confirmation_body and "Indicator 計畫刷新失敗" in fill_confirmation_body)
     check("workbench_account_mutations_run_through_background_executor", True, "def _submit_account_mutation" in panel_source and "self._submit_trading_command(" in panel_source.split("def _submit_account_mutation", 1)[1].split("def refresh_account", 1)[0])
 
     import queue as _queue

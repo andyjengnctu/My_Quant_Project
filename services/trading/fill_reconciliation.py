@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from services.trading.state_lock import serialized_trading_state_mutation
-from core.exact_accounting import milli_to_price
+from core.exact_accounting import milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping
 from core.runtime_utils import get_taipei_now
 from core.trading_account_state import (
@@ -52,6 +52,20 @@ def _timestamp() -> str:
 
 def _mutation_id() -> str:
     return uuid4().hex
+
+
+def _normalize_external_fill_price(fill_price) -> float:
+    """Normalize broker-entered prices onto the canonical milli-price seam.
+
+    Workbench parsers deliberately return ``Decimal`` for exact user input, while
+    strategy geometry uses canonical float display prices backed by integer milli
+    values.  Converting once here prevents Decimal/float arithmetic from leaking
+    into position construction without changing the exact persisted price.
+    """
+    fill_price_milli = price_to_milli(fill_price)
+    if fill_price_milli <= 0:
+        raise ValueError("Trading fill_price 必須 > 0")
+    return milli_to_price(fill_price_milli)
 
 
 def resolve_trading_fill_transaction_path(project_root) -> Path:
@@ -172,6 +186,7 @@ def confirm_trading_buy_order_fill(
     if not isinstance(frozen_params, dict):
         raise RuntimeError("Trading ORDERED 缺少 frozen_params；禁止用目前新 params 回填舊掛單")
     params = build_params_from_mapping(frozen_params)
+    normalized_fill_price = _normalize_external_fill_price(fill_price)
 
     ticker = str(record["ticker"])
     fill_qty_int = int(fill_qty)
@@ -192,7 +207,7 @@ def confirm_trading_buy_order_fill(
             account,
             ticker=ticker,
             qty=fill_qty_int,
-            buy_price=fill_price,
+            buy_price=normalized_fill_price,
             params=params,
             timestamp=timestamp,
             mutation_id=account_mutation_id,
@@ -212,7 +227,7 @@ def confirm_trading_buy_order_fill(
             entry_order_id=order_id_text,
             ticker=ticker,
             qty=fill_qty_int,
-            buy_price=fill_price,
+            buy_price=normalized_fill_price,
             params=params,
             timestamp=timestamp,
             mutation_id=account_mutation_id,
@@ -235,7 +250,7 @@ def confirm_trading_buy_order_fill(
         order_id=order_id_text,
         fill_id=fill_id,
         fill_qty=fill_qty_int,
-        fill_price=fill_price,
+        fill_price=normalized_fill_price,
         trade_date=buy_trade_date,
         net_buy_total_milli=net_buy_total_milli,
         timestamp=timestamp,
@@ -341,6 +356,7 @@ def _confirm_trading_sell_order_fill(
     if not isinstance(frozen_params, dict):
         raise RuntimeError("Trading SELL 來源 entry order 缺少 frozen_params")
     params = build_params_from_mapping(frozen_params)
+    normalized_fill_price = _normalize_external_fill_price(fill_price)
     fill_qty_int = int(fill_qty)
     tp_half_complete = False
     if purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP:
@@ -367,7 +383,7 @@ def _confirm_trading_sell_order_fill(
     position_qty_before_fill = int(broker_before.get("qty") or 0)
     timestamp = _timestamp()
     account_target = apply_confirmed_sell_fill(
-        account, ticker=ticker, qty=fill_qty_int, exec_price=fill_price, params=params,
+        account, ticker=ticker, qty=fill_qty_int, exec_price=normalized_fill_price, params=params,
         timestamp=timestamp, mutation_id=_mutation_id(), trade_date=sell_trade_date, event=event,
         mark_tp_half_complete=tp_half_complete,
     )
@@ -376,7 +392,7 @@ def _confirm_trading_sell_order_fill(
     position_qty_after_fill = int(position_after.get("qty") or 0)
     stop_snapshot = strategy_position_before_fill if event == "STOP" else None
     order_target = record_trading_sell_order_fill(
-        orders, order_id=oid, fill_id=_mutation_id(), fill_qty=fill_qty_int, fill_price=fill_price,
+        orders, order_id=oid, fill_id=_mutation_id(), fill_qty=fill_qty_int, fill_price=normalized_fill_price,
         trade_date=sell_trade_date, net_sell_total_milli=int(details.get("net_sell_total_milli") or 0),
         allocated_cost_milli=int(details.get("allocated_cost_milli") or 0), realized_pnl_milli=int(details.get("realized_pnl_milli") or 0),
         timestamp=timestamp, mutation_id=_mutation_id(),

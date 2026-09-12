@@ -1964,17 +1964,22 @@ class TradingAccountPanel(ttk.Frame):
                 build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
             except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
                 protection_error = str(exc)
+            indicator_error = None
             try:
                 build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
-            except (ValueError, RuntimeError, OSError, FileNotFoundError):
-                # Indicator plan is separately visible in the consolidated state refresh.
-                pass
-            return {"fill_result": result, "protection_error": protection_error}
+            except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+                indicator_error = str(exc)
+            return {
+                "fill_result": result,
+                "protection_error": protection_error,
+                "indicator_error": indicator_error,
+            }
 
         def on_success(payload):
             payload = dict(payload or {})
             result = dict(payload.get("fill_result") or {})
             protection_error = payload.get("protection_error")
+            indicator_error = payload.get("indicator_error")
             self._fill_qty_var.set("")
             self._fill_price_var.set("")
             self._fill_date_var.set("")
@@ -1986,6 +1991,8 @@ class TradingAccountPanel(ttk.Frame):
                 message += f"\n\n成交已入帳，但保護單計畫建立失敗：{protection_error}"
             else:
                 message += "\n\n已依實際成交後 canonical position state 機械刷新 Stop / TP 保護單計畫；尚未送券商。"
+            if indicator_error:
+                message += f"\n\nIndicator 計畫刷新失敗：{indicator_error}"
             messagebox.showinfo("Trading 成交", message, parent=self)
 
         def on_error(exc):
