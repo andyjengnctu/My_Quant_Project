@@ -190,6 +190,9 @@ class MarketDataOpsPanel(ttk.Frame):
         self._snapshot: dict[str, object] = {}
         self._dataset_by_iid: dict[str, dict[str, object]] = {}
         self._cell_overlays: dict[ttk.Treeview, _TreeCellColorOverlay] = {}
+        self._tree_heading_titles: dict[ttk.Treeview, dict[str, str]] = {}
+        self._tree_sort_state: dict[ttk.Treeview, tuple[str, bool]] = {}
+        self._tree_sort_values: dict[ttk.Treeview, dict[str, dict[str, object]]] = {}
         self._status_var = tk.StringVar(value="讀取 Market Data 狀態…")
         self._detail_var = tk.StringVar(value="選取 dataset 查看詳細狀態。")
         self._kpi_labels: dict[str, tk.Label] = {}
@@ -250,16 +253,50 @@ class MarketDataOpsPanel(ttk.Frame):
 
         meters = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
         meters.pack(fill="x", pady=(0, 6))
-        readiness_box = ttk.LabelFrame(meters, text="V2 Target Freshness", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
-        readiness_box.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        for column in range(3):
+            meters.columnconfigure(column, weight=1, uniform="market_data_meter")
+
+        trading_readiness_box = ttk.LabelFrame(
+            meters,
+            text="Trading Ready",
+            padding=(8, 4),
+            style=WORKBENCH_LABELLF_STYLE,
+        )
+        trading_readiness_box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self._trading_readiness_progress = ttk.Progressbar(
+            trading_readiness_box,
+            maximum=100.0,
+            mode="determinate",
+        )
+        self._trading_readiness_progress.pack(fill="x")
+        self._trading_readiness_text = tk.StringVar(value="-")
+        self._trading_readiness_label = ttk.Label(
+            trading_readiness_box,
+            textvariable=self._trading_readiness_text,
+            style=WORKBENCH_INFO_LABEL_STYLE,
+        )
+        self._trading_readiness_label.pack(anchor="w", pady=(2, 0))
+
+        readiness_box = ttk.LabelFrame(
+            meters,
+            text="V2 Target Freshness",
+            padding=(8, 4),
+            style=WORKBENCH_LABELLF_STYLE,
+        )
+        readiness_box.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
         self._readiness_progress = ttk.Progressbar(readiness_box, maximum=100.0, mode="determinate")
         self._readiness_progress.pack(fill="x")
         self._readiness_text = tk.StringVar(value="-")
         self._readiness_label = ttk.Label(readiness_box, textvariable=self._readiness_text, style=WORKBENCH_INFO_LABEL_STYLE)
         self._readiness_label.pack(anchor="w", pady=(2, 0))
 
-        quota_box = ttk.LabelFrame(meters, text="Last Observed Provider Quota", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
-        quota_box.pack(side="left", fill="x", expand=True)
+        quota_box = ttk.LabelFrame(
+            meters,
+            text="Last Observed Provider Quota",
+            padding=(8, 4),
+            style=WORKBENCH_LABELLF_STYLE,
+        )
+        quota_box.grid(row=0, column=2, sticky="nsew")
         self._quota_progress = ttk.Progressbar(quota_box, maximum=100.0, mode="determinate")
         self._quota_progress.pack(fill="x")
         self._quota_text = tk.StringVar(value="尚無 quota evidence；本頁刷新不會查 provider。")
@@ -327,8 +364,13 @@ class MarketDataOpsPanel(ttk.Frame):
             selectmode="browse",
         )
         for column, title, width, minwidth in columns:
-            tree.heading(column, text=title)
             tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=True)
+        self._register_sortable_tree(
+            tree,
+            columns=tuple((column, title) for column, title, _width, _minwidth in columns),
+            default_column="expected_publish",
+            default_ascending=True,
+        )
         sy = ttk.Scrollbar(frame, orient="vertical", command=tree.yview, style=WORKBENCH_VSCROLL_STYLE)
         sx = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
         tree.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
@@ -361,8 +403,13 @@ class MarketDataOpsPanel(ttk.Frame):
             selectmode="browse",
         )
         for column, title, width, minwidth in columns:
-            self._schedule_tree.heading(column, text=title)
             self._schedule_tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=True)
+        self._register_sortable_tree(
+            self._schedule_tree,
+            columns=tuple((column, title) for column, title, _width, _minwidth in columns),
+            default_column="publish",
+            default_ascending=True,
+        )
         sy = ttk.Scrollbar(top, orient="vertical", command=self._schedule_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
         sx = ttk.Scrollbar(top, orient="horizontal", command=self._schedule_tree.xview)
         self._schedule_tree.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
@@ -383,15 +430,21 @@ class MarketDataOpsPanel(ttk.Frame):
             style=WORKBENCH_TREE_STYLE,
             height=8,
         )
-        for col, title, width, minwidth in (
+        activity_columns = (
             ("at", "At", 145, 110),
             ("dataset", "Dataset", 260, 170),
             ("name_zh", "中文名稱", 220, 140),
             ("result", "Result", 150, 105),
             ("detail", "Detail", 650, 300),
-        ):
-            self._activity_tree.heading(col, text=title)
+        )
+        for col, _title, width, minwidth in activity_columns:
             self._activity_tree.column(col, width=width, minwidth=minwidth, anchor="w", stretch=True)
+        self._register_sortable_tree(
+            self._activity_tree,
+            columns=tuple((column, title) for column, title, _width, _minwidth in activity_columns),
+            default_column="at",
+            default_ascending=False,
+        )
         ay = ttk.Scrollbar(activity_box, orient="vertical", command=self._activity_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
         ax = ttk.Scrollbar(activity_box, orient="horizontal", command=self._activity_tree.xview)
         self._activity_tree.configure(yscrollcommand=ay.set, xscrollcommand=ax.set)
@@ -400,6 +453,86 @@ class MarketDataOpsPanel(ttk.Frame):
         ax.grid(row=1, column=0, sticky="ew")
         activity_box.rowconfigure(0, weight=1)
         activity_box.columnconfigure(0, weight=1)
+
+    def _register_sortable_tree(
+        self,
+        tree: ttk.Treeview,
+        *,
+        columns: tuple[tuple[str, str], ...],
+        default_column: str,
+        default_ascending: bool,
+    ) -> None:
+        titles = {str(column): str(title) for column, title in columns}
+        self._tree_heading_titles[tree] = titles
+        self._tree_sort_values[tree] = {}
+        self._tree_sort_state[tree] = (str(default_column), bool(default_ascending))
+        for column in titles:
+            tree.heading(
+                column,
+                command=lambda selected_column=column, selected_tree=tree: self._sort_tree_by_column(
+                    selected_tree, selected_column
+                ),
+            )
+        self._refresh_sort_headings(tree)
+
+    def _refresh_sort_headings(self, tree: ttk.Treeview) -> None:
+        titles = self._tree_heading_titles.get(tree, {})
+        active_column, ascending = self._tree_sort_state.get(tree, ("", True))
+        for column, title in titles.items():
+            suffix = " ↑" if column == active_column and ascending else " ↓" if column == active_column else ""
+            tree.heading(column, text=f"{title}{suffix}")
+
+    @staticmethod
+    def _normalize_sort_value(value: object) -> object | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float, tuple)):
+            return value
+        text = str(value).strip()
+        if not text or text == "-":
+            return None
+        return text.casefold()
+
+    def _set_tree_sort_values(
+        self,
+        tree: ttk.Treeview,
+        iid: str,
+        values: dict[str, object],
+    ) -> None:
+        self._tree_sort_values.setdefault(tree, {})[str(iid)] = {
+            str(column): self._normalize_sort_value(value)
+            for column, value in values.items()
+        }
+
+    def _apply_tree_sort(self, tree: ttk.Treeview, column: str, ascending: bool) -> None:
+        row_values = self._tree_sort_values.get(tree, {})
+        present: list[tuple[str, object]] = []
+        missing: list[str] = []
+        for iid in tree.get_children(""):
+            value = row_values.get(str(iid), {}).get(str(column))
+            if value is None:
+                missing.append(str(iid))
+            else:
+                present.append((str(iid), value))
+        present.sort(key=lambda item: item[1], reverse=not ascending)
+        ordered = [iid for iid, _value in present] + missing
+        for index, iid in enumerate(ordered):
+            tree.move(iid, "", index)
+        self._tree_sort_state[tree] = (str(column), bool(ascending))
+        self._refresh_sort_headings(tree)
+        overlay = self._cell_overlays.get(tree)
+        if overlay is not None:
+            overlay.schedule_sync()
+
+    def _apply_current_tree_sort(self, tree: ttk.Treeview) -> None:
+        column, ascending = self._tree_sort_state.get(tree, ("", True))
+        if column:
+            self._apply_tree_sort(tree, column, ascending)
+
+    def _sort_tree_by_column(self, tree: ttk.Treeview, column: str) -> None:
+        active_column, active_ascending = self._tree_sort_state.get(tree, ("", True))
+        ascending = not active_ascending if active_column == str(column) else True
+        self._apply_tree_sort(tree, str(column), ascending)
 
     def _bind_overlay_scroll_refresh(self, tree: ttk.Treeview, sx: ttk.Scrollbar, sy: ttk.Scrollbar) -> None:
         overlay = self._cell_overlays[tree]
@@ -459,6 +592,7 @@ class MarketDataOpsPanel(ttk.Frame):
         overlay = self._cell_overlays.get(tree)
         if overlay is not None:
             overlay.clear()
+        self._tree_sort_values.setdefault(tree, {}).clear()
         for iid in tree.get_children():
             tree.delete(iid)
 
@@ -494,6 +628,25 @@ class MarketDataOpsPanel(ttk.Frame):
                 _retry_text(row),
             ),
         )
+        self._set_tree_sort_values(
+            tree,
+            iid,
+            {
+                "dataset": row.get("dataset"),
+                "name_zh": row.get("display_name_zh"),
+                "status": projected_status,
+                "latest": row.get("latest_data_date"),
+                "expected_publish": row.get("expected_publish_at"),
+                "success": row.get("last_success_at"),
+                "next": row.get("next_check_at"),
+                "schema": schema_status,
+                "coverage": coverage_status,
+                "retries": tuple(
+                    int(row.get(key) or 0)
+                    for key in ("publication_retry_count", "quota_defer_count", "error_retry_count")
+                ),
+            },
+        )
         overlay = self._cell_overlays[tree]
         overlay.set_cell(iid, "status", projected_status)
         overlay.set_cell(iid, "schema", schema_status)
@@ -520,6 +673,17 @@ class MarketDataOpsPanel(ttk.Frame):
                 _fmt_datetime(expected_publish_at),
                 source or "-",
             ),
+        )
+        self._set_tree_sort_values(
+            self._schedule_tree,
+            iid,
+            {
+                "dataset": dataset,
+                "name_zh": display_name_zh,
+                "status": status,
+                "publish": expected_publish_at,
+                "source": source,
+            },
         )
         self._cell_overlays[self._schedule_tree].set_cell(iid, "status", status)
 
@@ -576,6 +740,16 @@ class MarketDataOpsPanel(ttk.Frame):
         )
         self._render_scheduler_controls(snapshot)
 
+        trading_readiness_pct = 100.0 * ready_v2 / required_v2 if required_v2 else 0.0
+        self._trading_readiness_progress["value"] = trading_readiness_pct
+        self._trading_readiness_text.set(
+            f"required V2 {ready_v2}/{required_v2} ({trading_readiness_pct:.1f}%) | "
+            f"{'READY' if snapshot.get('trading_ready') else 'BLOCKED'}"
+        )
+        self._trading_readiness_label.configure(
+            style=WORKBENCH_SUCCESS_LABEL_STYLE if snapshot.get("trading_ready") else WORKBENCH_ERROR_LABEL_STYLE
+        )
+
         total = dataset_count
         ready = ready_count
         readiness_pct = 100.0 * ready / total if total else 0.0
@@ -600,8 +774,7 @@ class MarketDataOpsPanel(ttk.Frame):
         self._clear_tree(self._required_dataset_group)
         self._clear_tree(self._other_dataset_group)
         self._clear_tree(self._schedule_tree)
-        for iid in self._activity_tree.get_children():
-            self._activity_tree.delete(iid)
+        self._clear_tree(self._activity_tree)
         self._dataset_by_iid.clear()
 
         datasets = [dict(row) for row in snapshot.get("datasets") or []]
@@ -661,6 +834,9 @@ class MarketDataOpsPanel(ttk.Frame):
                 source=row.get("publication_schedule_source") or "-",
             )
 
+        self._apply_current_tree_sort(self._required_dataset_group)
+        self._apply_current_tree_sort(self._other_dataset_group)
+        self._apply_current_tree_sort(self._schedule_tree)
         for overlay in self._cell_overlays.values():
             overlay.schedule_sync()
 
@@ -691,7 +867,8 @@ class MarketDataOpsPanel(ttk.Frame):
         if quota_activity is not None and not any(row.get("activity_type") == "quota" for row in visible_activity):
             visible_activity = visible_activity[:19] + [quota_activity]
         for row in visible_activity:
-            self._activity_tree.insert(
+            detail = row.get("detail") or row.get("error") or "-"
+            iid = self._activity_tree.insert(
                 "",
                 "end",
                 values=(
@@ -699,9 +876,21 @@ class MarketDataOpsPanel(ttk.Frame):
                     row.get("dataset") or "-",
                     row.get("display_name_zh") or "-",
                     row.get("result") or "-",
-                    row.get("detail") or row.get("error") or "-",
+                    detail,
                 ),
             )
+            self._set_tree_sort_values(
+                self._activity_tree,
+                iid,
+                {
+                    "at": row.get("at"),
+                    "dataset": row.get("dataset"),
+                    "name_zh": row.get("display_name_zh"),
+                    "result": row.get("result"),
+                    "detail": detail,
+                },
+            )
+        self._apply_current_tree_sort(self._activity_tree)
 
     def _render_scheduler_controls(self, snapshot: dict[str, object]):
         if self._action_thread is not None and self._action_thread.is_alive():
