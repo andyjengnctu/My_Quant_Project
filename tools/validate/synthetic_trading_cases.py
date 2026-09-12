@@ -2543,6 +2543,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         check("workbench_snapshot_uses_current_trading_strategy_config", expected_policy["strategy_id"], snapshot["policy"]["strategy_id"])
         check("workbench_snapshot_uses_current_param_selector_config", expected_policy["param_selector"], snapshot["policy"]["param_selector"])
 
+    from services.workbench_ui.trading_account_panel import build_trading_account_panel_initial_bundle
+    with tempfile.TemporaryDirectory() as temp_dir:
+        initial_bundle = build_trading_account_panel_initial_bundle(Path(temp_dir))
+    expected_initial_keys = {"account", "candidate_read", "candidate_payload", "proposed_read", "proposed_payload", "orders", "protection", "indicator", "workflow", "operations"}
+    check("workbench_trading_initial_bundle_has_all_canonical_read_models", expected_initial_keys, set(initial_bundle))
+    check_true("workbench_trading_initial_bundle_reads_empty_state_without_exception", all(bool(value[0]) for value in initial_bundle.values()))
+
     sample_segments = build_trading_status_segments("READY | Data 2026-09-11 | 現金 1,500,000 | 持股 0 | 一般說明")
     sample_tones = {text: tone for text, tone in sample_segments if text.strip()}
     check("workbench_status_highlights_ready_token_only", "success", sample_tones.get("READY"))
@@ -2560,6 +2567,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_proposed_hint_explains_shadow_completion_vs_broker_tp", True, "inherited shadow completion barrier" in panel_source and "tp_percent=0 時不會建立 TP 券商單" in panel_source)
     check("workbench_refresh_reloads_persisted_proposed_plan", True, "def refresh_proposed_order_plan" in panel_source and "load_current_trading_proposed_order_plan" in panel_source)
     check("workbench_refresh_reloads_persisted_scanner_snapshot", True, "def refresh_candidate_snapshot_rows" in panel_source and "load_trading_candidate_snapshot" in panel_source)
+    check("workbench_trading_initial_state_reads_off_tk_thread", True, 'name="workbench-trading-initial-state"' in panel_source and "build_trading_account_panel_initial_bundle" in panel_source and "_initial_state_results.put" in panel_source)
+    check("workbench_trading_background_worker_never_calls_tk_after", True, "self.after(0, self._finish_initial_state_load" not in panel_source and "def _drain_initial_state_results" in panel_source)
+    check("workbench_trading_constructor_defers_state_reads_until_after_paint", True, "self.after(80, self._start_initial_state_load)" in panel_source and "self.refresh_account()\n        self.refresh_candidate_snapshot_rows()" not in panel_source.split("def __init__", 1)[1].split("def _set_initial_loading_state", 1)[0])
+    check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
 
     # AI: Exercise persisted read-model reload without creating a Tk window.
     persisted_rows, persisted_status = [], []

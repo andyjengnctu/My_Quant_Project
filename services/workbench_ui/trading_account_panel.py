@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+import queue
 import re
 import threading
 import tkinter as tk
@@ -342,6 +343,56 @@ def build_trading_account_panel_snapshot(project_root=WORKBENCH_PROJECT_ROOT) ->
     }
 
 
+def _capture_initial_panel_value(loader):
+    try:
+        return True, loader()
+    except Exception as exc:
+        return False, exc
+
+
+def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_ROOT) -> dict[str, object]:
+    """Read the initial Trading page state without touching Tk widgets."""
+
+    root = Path(project_root).resolve()
+    bundle: dict[str, object] = {}
+    bundle["account"] = _capture_initial_panel_value(lambda: build_trading_account_panel_snapshot(root))
+
+    candidate = _capture_initial_panel_value(lambda: get_trading_candidate_snapshot_read_model(root))
+    bundle["candidate_read"] = candidate
+    if candidate[0] and bool(candidate[1].get("fresh")):
+        bundle["candidate_payload"] = _capture_initial_panel_value(
+            lambda: load_trading_candidate_snapshot(root, require_current=False)
+        )
+    else:
+        bundle["candidate_payload"] = (True, None)
+
+    proposed = _capture_initial_panel_value(lambda: get_trading_proposed_order_plan_read_model(root))
+    bundle["proposed_read"] = proposed
+    if proposed[0] and bool(proposed[1].get("exists")) and bool(proposed[1].get("valid")) and bool(proposed[1].get("fresh")):
+        bundle["proposed_payload"] = _capture_initial_panel_value(
+            lambda: load_current_trading_proposed_order_plan(root, require_current=False)
+        )
+    else:
+        bundle["proposed_payload"] = (True, None)
+
+    bundle["orders"] = _capture_initial_panel_value(lambda: get_trading_order_read_model(root))
+    bundle["protection"] = _capture_initial_panel_value(lambda: get_trading_protection_plan_read_model(root))
+    bundle["indicator"] = _capture_initial_panel_value(lambda: get_trading_indicator_exit_plan_read_model(root))
+    bundle["workflow"] = _capture_initial_panel_value(lambda: build_trading_daily_workflow_snapshot(root))
+    bundle["operations"] = _capture_initial_panel_value(lambda: build_trading_operations_status(root))
+    return bundle
+
+
+def _load_panel_value(panel, key: str, loader):
+    cache = getattr(panel, "_initial_preloaded", None)
+    if isinstance(cache, dict) and key in cache:
+        ok, value = cache.pop(key)
+        if not ok:
+            raise value
+        return value
+    return loader()
+
+
 class TradingAccountPanel(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=10, style=WORKBENCH_FRAME_STYLE)
@@ -363,15 +414,92 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_snapshot: dict[str, object] = {}
         self._latest_workflow_snapshot: dict[str, object] = {}
         self._footer_hint_after_id = None
+        self._initial_state_thread = None
+        self._initial_state_token = 0
+        self._initial_state_results: queue.Queue = queue.Queue()
+        self._initial_state_poll_after_id = None
+        self._initial_preloaded: dict[str, object] = {}
+        self._suspend_operations_refresh = False
         self._build_ui()
-        self.refresh_account()
-        self.refresh_candidate_snapshot_rows()
-        self.refresh_proposed_order_plan()
-        self.refresh_order_state()
-        self.refresh_protection_plan()
-        self.refresh_indicator_exit_plan()
-        self.refresh_daily_workflow()
+        self._set_initial_loading_state()
+        # AI: Paint the complete Trading page first.  Canonical state reads may validate
+        # persisted lineage and touch multiple files, so do them off the Tk thread and
+        # apply the already-read snapshots once they are ready.
+        self.after(80, self._start_initial_state_load)
+
+    def _set_initial_loading_state(self):
+        self._operations_next_var.set("LOADING | Trading 狀態載入中…")
+        self._operations_detail_var.set("頁面已可操作捲動；canonical Trading state 正在背景讀取。")
+        self._workflow_status_var.set("Trading 狀態載入中…")
+        self._set_workflow_buttons_state("disabled")
+        for button_name in ("_initialize_button", "_set_cash_button", "_add_button", "_correct_button", "_remove_button", "_confirm_ordered_button"):
+            button = getattr(self, button_name, None)
+            if button is not None:
+                button.configure(state="disabled")
+
+    def _start_initial_state_load(self):
+        if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
+            return
+        self._initial_state_token += 1
+        token = int(self._initial_state_token)
+        thread = threading.Thread(
+            target=self._initial_state_load_worker,
+            args=(token,),
+            name="workbench-trading-initial-state",
+            daemon=True,
+        )
+        self._initial_state_thread = thread
+        thread.start()
+        self._schedule_initial_state_poll()
+
+    def _initial_state_load_worker(self, token: int):
+        bundle = build_trading_account_panel_initial_bundle(WORKBENCH_PROJECT_ROOT)
+        self._initial_state_results.put((int(token), bundle))
+
+    def _schedule_initial_state_poll(self):
+        if self._initial_state_poll_after_id is None:
+            self._initial_state_poll_after_id = self.after(25, self._drain_initial_state_results)
+
+    def _drain_initial_state_results(self):
+        self._initial_state_poll_after_id = None
+        while True:
+            try:
+                token, bundle = self._initial_state_results.get_nowait()
+            except queue.Empty:
+                break
+            self._finish_initial_state_load(token, bundle)
+        if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
+            self._schedule_initial_state_poll()
+
+    def _finish_initial_state_load(self, token: int, bundle: dict[str, object]):
+        if int(token) != int(self._initial_state_token):
+            return
+        self._initial_state_thread = None
+        self._initial_preloaded = dict(bundle or {})
+        self._suspend_operations_refresh = True
+        try:
+            self.refresh_account()
+            self.refresh_candidate_snapshot_rows()
+            self.refresh_proposed_order_plan()
+            self.refresh_order_state()
+            self.refresh_protection_plan()
+            self.refresh_indicator_exit_plan()
+            self.refresh_daily_workflow()
+        finally:
+            self._suspend_operations_refresh = False
         self.refresh_operations_status()
+        if self._workflow_status_var.get() == "Trading 狀態載入中…":
+            self._workflow_status_var.set("Trading 狀態載入完成。")
+        self._initial_preloaded.clear()
+
+    def destroy(self):
+        if self._initial_state_poll_after_id is not None:
+            try:
+                self.after_cancel(self._initial_state_poll_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Trading initial-state poll after_cancel", exc)
+            self._initial_state_poll_after_id = None
+        super().destroy()
 
     def _build_ui(self):
         # AI: The Trading page contains several independent detail tables.  A fixed-height
@@ -955,7 +1083,9 @@ class TradingAccountPanel(ttk.Frame):
 
     def refresh_protection_plan(self):
         try:
-            snapshot = get_trading_protection_plan_read_model(WORKBENCH_PROJECT_ROOT)
+            snapshot = _load_panel_value(
+                self, "protection", lambda: get_trading_protection_plan_read_model(WORKBENCH_PROJECT_ROOT)
+            )
         except (ValueError, RuntimeError, OSError) as exc:
             self._protection_snapshot = {}
             self._reload_protection_rows([])
@@ -1010,7 +1140,9 @@ class TradingAccountPanel(ttk.Frame):
 
     def refresh_indicator_exit_plan(self):
         try:
-            snapshot=get_trading_indicator_exit_plan_read_model(WORKBENCH_PROJECT_ROOT)
+            snapshot=_load_panel_value(
+                self, "indicator", lambda: get_trading_indicator_exit_plan_read_model(WORKBENCH_PROJECT_ROOT)
+            )
         except (ValueError,RuntimeError,OSError) as exc:
             self._indicator_snapshot={}; self._reload_indicator_rows([]); self._indicator_status_var.set(f"Indicator SELL 計畫讀取失敗：{exc}"); return
         self._indicator_snapshot=snapshot; self._reload_indicator_rows(snapshot.get("exits") or [])
@@ -1052,8 +1184,12 @@ class TradingAccountPanel(ttk.Frame):
         self._overview_primary_labels[key].configure(foreground=color)
 
     def refresh_operations_status(self):
+        if bool(getattr(self, "_suspend_operations_refresh", False)):
+            return
         try:
-            snapshot = build_trading_operations_status(WORKBENCH_PROJECT_ROOT)
+            snapshot = _load_panel_value(
+                self, "operations", lambda: build_trading_operations_status(WORKBENCH_PROJECT_ROOT)
+            )
         except (OSError, TypeError, ValueError, RuntimeError) as exc:
             self._operations_snapshot = {}
             for key in self._overview_vars:
@@ -1282,7 +1418,9 @@ class TradingAccountPanel(ttk.Frame):
 
     def refresh_candidate_snapshot_rows(self):
         try:
-            snapshot = get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)
+            snapshot = _load_panel_value(
+                self, "candidate_read", lambda: get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)
+            )
         except (OSError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([])
             self._workflow_status_var.set(f"Scanner snapshot 讀取失敗：{exc}")
@@ -1291,7 +1429,9 @@ class TradingAccountPanel(ttk.Frame):
             self._reload_candidate_rows([])
             return
         try:
-            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
+            payload = _load_panel_value(
+                self, "candidate_payload", lambda: load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
+            )
         except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([])
             self._workflow_status_var.set(f"Scanner snapshot 讀取失敗：{exc}")
@@ -1300,7 +1440,9 @@ class TradingAccountPanel(ttk.Frame):
 
     def refresh_proposed_order_plan(self):
         try:
-            snapshot = get_trading_proposed_order_plan_read_model(WORKBENCH_PROJECT_ROOT)
+            snapshot = _load_panel_value(
+                self, "proposed_read", lambda: get_trading_proposed_order_plan_read_model(WORKBENCH_PROJECT_ROOT)
+            )
         except (OSError, ValueError, RuntimeError) as exc:
             self._reload_proposed_order_rows([])
             self._proposed_status_var.set(f"建議掛單讀取失敗：{exc}")
@@ -1318,7 +1460,9 @@ class TradingAccountPanel(ttk.Frame):
             self._proposed_status_var.set("PROPOSED STALE｜請重新執行 3 Scanner 與 4 建議掛單。")
             return
         try:
-            payload = load_current_trading_proposed_order_plan(WORKBENCH_PROJECT_ROOT, require_current=False)
+            payload = _load_panel_value(
+                self, "proposed_payload", lambda: load_current_trading_proposed_order_plan(WORKBENCH_PROJECT_ROOT, require_current=False)
+            )
         except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
             self._reload_proposed_order_rows([])
             self._proposed_status_var.set(f"建議掛單讀取失敗：{exc}")
@@ -1336,7 +1480,9 @@ class TradingAccountPanel(ttk.Frame):
 
     def refresh_daily_workflow(self):
         try:
-            snapshot = build_trading_daily_workflow_snapshot(WORKBENCH_PROJECT_ROOT)
+            snapshot = _load_panel_value(
+                self, "workflow", lambda: build_trading_daily_workflow_snapshot(WORKBENCH_PROJECT_ROOT)
+            )
         except (OSError, ValueError, RuntimeError) as exc:
             self._latest_workflow_snapshot = {}
             self._param_mode_detail_var.set("Params 狀態讀取失敗")
@@ -1515,7 +1661,9 @@ class TradingAccountPanel(ttk.Frame):
 
     def refresh_order_state(self):
         try:
-            snapshot = get_trading_order_read_model(WORKBENCH_PROJECT_ROOT)
+            snapshot = _load_panel_value(
+                self, "orders", lambda: get_trading_order_read_model(WORKBENCH_PROJECT_ROOT)
+            )
         except (ValueError, RuntimeError, OSError) as exc:
             self._order_snapshot = {}
             self._order_rows = {}
@@ -1810,7 +1958,9 @@ class TradingAccountPanel(ttk.Frame):
 
     def refresh_account(self):
         try:
-            snapshot = build_trading_account_panel_snapshot(WORKBENCH_PROJECT_ROOT)
+            snapshot = _load_panel_value(
+                self, "account", lambda: build_trading_account_panel_snapshot(WORKBENCH_PROJECT_ROOT)
+            )
         except (ValueError, RuntimeError, OSError) as exc:
             self._snapshot = {}
             self._operations_detail_var.set(f"Trading account 狀態讀取失敗：{exc}")

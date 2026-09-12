@@ -683,6 +683,10 @@ class StockToolsWorkbench:
         self._panel_hosts: dict[str, ttk.Frame] = {}
         self._panel_status_labels: dict[str, ttk.Label] = {}
         self._panel_instances: dict[str, object] = {}
+        # AI: Importing a panel may finish after the user has already switched tabs.
+        # Keep the factory ready, but never construct an unselected Tk panel because
+        # hidden constructors still run on the Tk thread and can freeze the visible tab.
+        self._panel_factories: dict[str, object] = {}
         self._panel_loading: set[str] = set()
         self._panel_load_results: queue.Queue = queue.Queue()
         self._panel_poll_after_id = None
@@ -745,6 +749,9 @@ class StockToolsWorkbench:
         panel_id = str(panel_id)
         if panel_id in self._panel_instances or panel_id in self._panel_loading:
             return
+        if panel_id in self._panel_factories:
+            self._construct_ready_panel_if_selected(panel_id)
+            return
         panel_spec = next((row for row in PANEL_SPECS if str(row["panel_id"]) == panel_id), None)
         if panel_spec is None:
             return
@@ -795,13 +802,33 @@ class StockToolsWorkbench:
             if status is not None:
                 status.configure(text=f"頁面載入失敗：{type(error).__name__}: {error}")
             return
+        self._panel_factories[panel_id] = factory
+        if self._selected_panel_id() != panel_id:
+            if status is not None:
+                status.configure(text="頁面已準備｜切換到此頁時顯示")
+            return
+        self._construct_ready_panel_if_selected(panel_id)
+
+    def _construct_ready_panel_if_selected(self, panel_id):
+        panel_id = str(panel_id)
+        if panel_id in self._panel_instances or self._selected_panel_id() != panel_id:
+            return
+        factory = self._panel_factories.get(panel_id)
+        host = self._panel_hosts.get(panel_id)
+        status = self._panel_status_labels.get(panel_id)
+        if factory is None or host is None:
+            return
+        if status is not None:
+            status.configure(text="頁面介面建立中…")
         try:
             panel = factory(host)
             panel.grid(row=0, column=0, sticky="nsew")
         except BaseException as exc:
+            self._panel_factories.pop(panel_id, None)
             if status is not None:
                 status.configure(text=f"頁面建立失敗：{type(exc).__name__}: {exc}")
             return
+        self._panel_factories.pop(panel_id, None)
         if status is not None:
             status.destroy()
             self._panel_status_labels.pop(panel_id, None)
