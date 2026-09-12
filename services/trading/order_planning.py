@@ -175,13 +175,15 @@ def _render_proposed_orders_text(payload: dict[str, Any]) -> str:
         f"Cash remain   : {payload['cash_after_reservation']:,.2f}",
         "",
         "注意：這是盤前建議掛單，不代表已送單或已成交。",
+        "說明：新訊號／再進場的 Target 是盤前 Target 參考；延續／延續(TBD) 的同欄數值是 inherited shadow completion barrier。",
+        "      是否建立券商 TP 仍由成交後 entry order frozen params 的 tp_percent 決定；tp_percent=0 時不建立 TP 券商單。",
         "",
     ]
     orders = list(payload.get("orders") or [])
     if not orders:
         lines.append("今日沒有可建立的建議買單。")
     else:
-        lines.append("#  股票      類型          限價      股數       預留資金       Stop       Target")
+        lines.append("#  股票      類型          限價      股數       預留資金       Stop   Target/完成線")
         for row in orders:
             lines.append(
                 f"{int(row['rank']):>2} {str(row['ticker']):<8} {str(row['kind']):<12} "

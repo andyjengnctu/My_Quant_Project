@@ -2556,6 +2556,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_trading_page_is_vertically_scrollable", True, "self._page_canvas = tk.Canvas" in panel_source and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
     check("workbench_proposed_table_exposes_agreement", True, '"agree": "同意/成員"' in panel_source)
+    check("workbench_proposed_target_heading_distinguishes_completion_barrier", True, '"target": "Target / 完成線"' in panel_source)
+    check("workbench_proposed_hint_explains_shadow_completion_vs_broker_tp", True, "inherited shadow completion barrier" in panel_source and "tp_percent=0 時不會建立 TP 券商單" in panel_source)
     check("workbench_refresh_reloads_persisted_proposed_plan", True, "def refresh_proposed_order_plan" in panel_source and "load_current_trading_proposed_order_plan" in panel_source)
     check("workbench_refresh_reloads_persisted_scanner_snapshot", True, "def refresh_candidate_snapshot_rows" in panel_source and "load_trading_candidate_snapshot" in panel_source)
 

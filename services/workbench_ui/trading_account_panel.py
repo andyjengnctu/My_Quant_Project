@@ -114,6 +114,7 @@ WORKFLOW_HINT = "更新資料後，既有 strategy_fill 持股先用各 entry or
 CASH_HINT = "初始化可留空；更新現金會留下 revision event，不直接改檔。"
 MANUAL_POSITION_HINT = "修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。"
 FILL_HINT = "成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。"
+PROPOSED_ORDER_HINT = "建議掛單的 Target / 完成線是盤前策略參考：新訊號／再進場為 Target 參考；延續／延續(TBD) 為 inherited shadow completion barrier。是否真的建立券商 TP，成交後仍只由該 entry order frozen params 的 tp_percent 決定；tp_percent=0 時不會建立 TP 券商單。"
 PROTECTION_HINT = "只由 confirmed strategy fill 的 canonical position state＋ORDERED 時 frozen params 機械派生；不讀成交後行情、不代表券商已掛出 Stop/TP。"
 OCO_HINT = "系統不預設券商支援 OCO；只有你明確輸入實際券商 OCO/互斥群組 ID 時才允許 Stop full + TP 同時超額共享同一持股。尚未送券商的 logical plan 仍不是 broker truth。"
 INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。"
@@ -592,9 +593,9 @@ class TradingAccountPanel(ttk.Frame):
         self._proposed_tree = ttk.Treeview(proposed_box, columns=proposed_columns, show="headings", style=WORKBENCH_TREE_STYLE, height=6)
         proposed_headings = {
             "rank": "順位", "ticker": "股票", "kind": "類型", "agree": "同意/成員",
-            "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "Target"
+            "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "Target / 完成線"
         }
-        proposed_widths = {"rank": 60, "ticker": 80, "kind": 110, "agree": 115, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 100}
+        proposed_widths = {"rank": 60, "ticker": 80, "kind": 110, "agree": 115, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 135}
         for key in proposed_columns:
             self._proposed_tree.heading(key, text=proposed_headings[key])
             self._proposed_tree.column(key, width=proposed_widths[key], anchor="center")
@@ -798,6 +799,7 @@ class TradingAccountPanel(ttk.Frame):
         self._bind_footer_hint(workflow_box, WORKFLOW_HINT)
         self._bind_footer_hint(cash_box, CASH_HINT)
         self._bind_footer_hint(form, MANUAL_POSITION_HINT)
+        self._bind_footer_hint(proposed_box, PROPOSED_ORDER_HINT)
         self._bind_footer_hint(pending_box, FILL_HINT)
         self._bind_footer_hint(protection_buttons, PROTECTION_HINT)
         self._bind_footer_hint(protection_oco, OCO_HINT)
@@ -1487,7 +1489,10 @@ class TradingAccountPanel(ttk.Frame):
                     f"{int(row.get('qty') or 0):,}",
                     self._format_candidate_number(row.get("reserved_cost"), digits=0),
                     self._format_candidate_number(row.get("init_sl"), digits=2),
-                    self._format_candidate_number(row.get("target_price"), digits=2),
+                    (
+                        ("完成 " if str(row.get("kind") or "") in {"extended", "extended_tbd"} else "Target ")
+                        + self._format_candidate_number(row.get("target_price"), digits=2)
+                    ),
                 ),
             )
 
