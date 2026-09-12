@@ -16,6 +16,7 @@ from core.market_data_dataset_readiness import (
     is_market_data_dataset_ready,
 )
 from core.market_data_due_planner import normalize_market_data_planner_now, plan_market_data_due_datasets
+from core.market_data_dataset_registry import get_market_dataset_display_name_zh
 from core.market_data_freshness_contract import (
     CADENCE_CURRENT_VINTAGE,
     CADENCE_EVENT_DRIVEN,
@@ -166,6 +167,7 @@ def build_market_data_ops_read_model(
         rows.append(
             {
                 **row,
+                "display_name_zh": get_market_dataset_display_name_zh(dataset),
                 "projected_status": projected_status,
                 "expected_publish_at": expected_publish_at,
                 "next_check_at": next_check_at,
@@ -211,20 +213,18 @@ def build_market_data_ops_read_model(
                 policy=auto_policy,
             ).isoformat()
     next_check_at = _earliest_iso((dataset_next_check_at, discovery_next_check_at))
-    recent_activity = sorted(
-        (
-            {
-                "dataset": row.get("dataset"),
-                "at": row.get("last_attempt_at") or row.get("last_success_at"),
-                "result": row.get("last_attempt_result") or row.get("projected_status"),
-                "error": row.get("last_error"),
-            }
-            for row in rows
-            if row.get("last_attempt_at") or row.get("last_success_at")
-        ),
-        key=lambda item: str(item.get("at") or ""),
-        reverse=True,
-    )[:20]
+    recent_activity = [
+        {
+            "activity_type": "dataset",
+            "dataset": row.get("dataset"),
+            "display_name_zh": row.get("display_name_zh"),
+            "at": row.get("last_attempt_at") or row.get("last_success_at"),
+            "result": row.get("last_attempt_result") or row.get("projected_status"),
+            "detail": row.get("last_error") or "-",
+        }
+        for row in rows
+        if row.get("last_attempt_at") or row.get("last_success_at")
+    ]
 
     quota_used = v2.get("quota_user_count")
     quota_limit = v2.get("quota_limit")
@@ -240,6 +240,37 @@ def build_market_data_ops_read_model(
             quota_percent = max(0.0, min(100.0, 100.0 * float(quota_used) / float(quota_limit)))
         except (TypeError, ValueError, ZeroDivisionError):
             quota_percent = None
+
+    if v2.get("quota_observed_at") and quota_limit is not None:
+        percent_text = "-" if quota_percent is None else f"{float(quota_percent):.1f}%"
+        recent_activity.append(
+            {
+                "activity_type": "quota",
+                "dataset": "Provider Quota",
+                "display_name_zh": "FinMind 配額用量",
+                "at": v2.get("quota_observed_at"),
+                "result": quota_observation_status,
+                "detail": (
+                    f"quota={quota_used}/{quota_limit} ({percent_text}) | "
+                    f"last auto data/usage={int(v2.get('latest_auto_data_requests') or 0)}/"
+                    f"{int(v2.get('latest_auto_usage_requests') or 0)}"
+                ),
+            }
+        )
+    quota_activity_present = any(item.get("activity_type") == "quota" for item in recent_activity)
+    recent_activity = sorted(
+        recent_activity,
+        key=lambda item: (
+            str(item.get("at") or ""),
+            1 if item.get("activity_type") == "quota" else 0,
+        ),
+        reverse=True,
+    )
+    if quota_activity_present and not any(item.get("activity_type") == "quota" for item in recent_activity[:20]):
+        latest_quota_activity = next(item for item in recent_activity if item.get("activity_type") == "quota")
+        recent_activity = recent_activity[:19] + [latest_quota_activity]
+    else:
+        recent_activity = recent_activity[:20]
 
     scheduler_status = str(scheduler.get("status") or "")
     auto_sync_active = bool(auto_policy.enabled and scheduler_status == "INSTALLED_ENABLED")

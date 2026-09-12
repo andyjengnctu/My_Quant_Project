@@ -22,7 +22,6 @@ from services.workbench_ui.workbench import (
     WORKBENCH_ERROR,
     WORKBENCH_ERROR_LABEL_STYLE,
     WORKBENCH_FRAME_STYLE,
-    WORKBENCH_HSCROLL_STYLE,
     WORKBENCH_INFO,
     WORKBENCH_INFO_LABEL_STYLE,
     WORKBENCH_LABEL_STYLE,
@@ -49,11 +48,6 @@ def _fmt_datetime(value) -> str:
         timezone_name=str(MARKET_DATA_V2_PUBLICATION_POLICY.get("timezone") or "Asia/Taipei"),
         output_format="%m-%d %H:%M",
     )
-
-
-def _fmt_date(value) -> str:
-    text = str(value or "").strip()
-    return text or "-"
 
 
 def _retry_text(row: dict[str, object]) -> str:
@@ -85,16 +79,6 @@ def _color_for_tag(tag: str) -> str:
         "info": WORKBENCH_INFO,
     }.get(str(tag), WORKBENCH_TEXT)
 
-
-def _attention_tags(value: object) -> tuple[str, ...]:
-    """Color only rows that require attention; routine healthy rows stay neutral."""
-
-    status = str(value or "").strip().upper()
-    if status in {"BLOCKED", "ERROR", "FAIL", "UNAVAILABLE"}:
-        return ("error",)
-    if status in {"DUE", "WAIT_QUOTA", "DEFERRED", "NOT_INSTALLED", "INSTALLED_DISABLED", "STALE"}:
-        return ("warning",)
-    return ()
 
 
 class MarketDataOpsPanel(ttk.Frame):
@@ -189,52 +173,125 @@ class MarketDataOpsPanel(ttk.Frame):
         self._build_schedule_tab(schedule_tab)
 
     def _build_dataset_tab(self, master):
-        columns = ("dataset", "status", "latest", "expected", "success", "next", "schedule", "schema", "coverage", "retries")
+        self._required_dataset_box = ttk.LabelFrame(
+            master,
+            text="Trading 必要資料",
+            padding=4,
+            style=WORKBENCH_LABELLF_STYLE,
+        )
+        self._required_dataset_box.pack(fill="x")
+        self._required_dataset_group = self._build_dataset_table(self._required_dataset_box, height=6)
+
+        self._other_dataset_box = ttk.LabelFrame(
+            master,
+            text="其它完整資料",
+            padding=4,
+            style=WORKBENCH_LABELLF_STYLE,
+        )
+        self._other_dataset_box.pack(fill="both", expand=True, pady=(6, 0))
+        self._other_dataset_group = self._build_dataset_table(self._other_dataset_box, height=15)
+
+        ttk.Label(
+            master,
+            textvariable=self._detail_var,
+            style=WORKBENCH_LABEL_STYLE,
+            foreground=WORKBENCH_MUTED,
+            justify="left",
+            wraplength=1700,
+        ).pack(fill="x", pady=(6, 0))
+
+    def _build_dataset_table(self, master, *, height: int) -> dict[str, object]:
         frame = ttk.Frame(master, style=WORKBENCH_FRAME_STYLE)
         frame.pack(fill="both", expand=True)
-        self._dataset_tree = ttk.Treeview(frame, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, height=22)
-        self._configure_tree_tags(self._dataset_tree)
-        headers = {
-            "dataset": "Dataset", "status": "Status", "latest": "Latest", "expected": "Expected",
-            "success": "Last Success", "next": "Next Check", "schedule": "Publish", "schema": "Schema",
-            "coverage": "Coverage", "retries": "Retry P/Q/E",
-        }
-        widths = {"dataset": 245, "status": 110, "latest": 145, "expected": 165, "success": 125, "next": 180, "schedule": 115, "schema": 100, "coverage": 120, "retries": 90}
-        for col in columns:
-            self._dataset_tree.heading(col, text=headers[col])
-            self._dataset_tree.column(col, width=widths[col], minwidth=70, anchor="w")
-        y = ttk.Scrollbar(frame, orient="vertical", command=self._dataset_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        x = ttk.Scrollbar(frame, orient="horizontal", command=self._dataset_tree.xview, style=WORKBENCH_HSCROLL_STYLE)
-        self._dataset_tree.configure(yscrollcommand=y.set, xscrollcommand=x.set)
-        self._dataset_tree.grid(row=0, column=0, sticky="nsew")
-        y.grid(row=0, column=1, sticky="ns")
-        x.grid(row=1, column=0, sticky="ew")
+        section_specs = (
+            ("identity", (("dataset", "Dataset", 245), ("name_zh", "中文名稱", 210))),
+            ("status", (("status", "Status", 110),)),
+            ("dates", (
+                ("latest", "Latest", 115),
+                ("expected_publish", "Expected Publish", 150),
+                ("success", "Last Success", 125),
+                ("next", "Next Check", 125),
+            )),
+            ("schema", (("schema", "Schema", 105),)),
+            ("coverage", (("coverage", "Coverage", 115),)),
+            ("retries", (("retries", "Retry P/Q/E", 95),)),
+        )
+        trees: dict[str, ttk.Treeview] = {}
+        ordered_trees: list[ttk.Treeview] = []
+        for col_index, (section, columns) in enumerate(section_specs):
+            tree = ttk.Treeview(
+                frame,
+                columns=tuple(item[0] for item in columns),
+                show="headings",
+                style=WORKBENCH_TREE_STYLE,
+                height=height,
+                selectmode="browse",
+            )
+            for column, title, width in columns:
+                tree.heading(column, text=title)
+                tree.column(column, width=width, minwidth=max(70, width // 2), anchor="w", stretch=False)
+            if section in {"status", "schema", "coverage"}:
+                self._configure_status_tree_tags(tree)
+            tree.grid(row=0, column=col_index, sticky="nsew")
+            frame.columnconfigure(col_index, weight=1 if section == "dates" else 0)
+            trees[section] = tree
+            ordered_trees.append(tree)
+
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", style=WORKBENCH_VSCROLL_STYLE)
+        scrollbar.grid(row=0, column=len(section_specs), sticky="ns")
         frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-        self._dataset_tree.bind("<<TreeviewSelect>>", self._on_dataset_select)
-        ttk.Label(master, textvariable=self._detail_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED, justify="left", wraplength=1700).pack(fill="x", pady=(6, 0))
+        self._bind_synced_vertical_scroll(ordered_trees, scrollbar, dataset_selection=True)
+        return {"trees": trees, "ordered_trees": ordered_trees}
 
     def _build_schedule_tab(self, master):
         top = ttk.Frame(master, style=WORKBENCH_FRAME_STYLE)
         top.pack(fill="both", expand=True)
-        self._schedule_tree = ttk.Treeview(top, columns=("next", "dataset", "status", "publish", "source"), show="headings", style=WORKBENCH_TREE_STYLE, height=16)
-        self._configure_tree_tags(self._schedule_tree)
-        for col, title, width in (
-            ("next", "Next Check", 190), ("dataset", "Dataset", 280), ("status", "Status", 120),
-            ("publish", "Expected Publish", 160), ("source", "Schedule Source", 420),
-        ):
-            self._schedule_tree.heading(col, text=title)
-            self._schedule_tree.column(col, width=width, anchor="w")
-        sy = ttk.Scrollbar(top, orient="vertical", command=self._schedule_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        self._schedule_tree.configure(yscrollcommand=sy.set)
-        self._schedule_tree.pack(side="left", fill="both", expand=True)
-        sy.pack(side="left", fill="y")
+        schedule_specs = (
+            ("identity", (("dataset", "Dataset", 300), ("name_zh", "中文名稱", 230))),
+            ("status", (("status", "Status", 150),)),
+            ("detail", (("publish", "Expected Publish", 180), ("source", "Schedule Source", 650))),
+        )
+        self._schedule_trees: dict[str, ttk.Treeview] = {}
+        ordered: list[ttk.Treeview] = []
+        for col_index, (section, columns) in enumerate(schedule_specs):
+            tree = ttk.Treeview(
+                top,
+                columns=tuple(item[0] for item in columns),
+                show="headings",
+                style=WORKBENCH_TREE_STYLE,
+                height=16,
+                selectmode="browse",
+            )
+            for column, title, width in columns:
+                tree.heading(column, text=title)
+                tree.column(column, width=width, minwidth=max(80, width // 2), anchor="w", stretch=section == "detail" and column == "source")
+            if section == "status":
+                self._configure_status_tree_tags(tree)
+            tree.grid(row=0, column=col_index, sticky="nsew")
+            top.columnconfigure(col_index, weight=1 if section == "detail" else 0)
+            self._schedule_trees[section] = tree
+            ordered.append(tree)
+        sy = ttk.Scrollbar(top, orient="vertical", style=WORKBENCH_VSCROLL_STYLE)
+        sy.grid(row=0, column=len(schedule_specs), sticky="ns")
+        top.rowconfigure(0, weight=1)
+        self._bind_synced_vertical_scroll(ordered, sy, dataset_selection=False)
 
         activity_box = ttk.LabelFrame(master, text="Recent Activity", padding=4, style=WORKBENCH_LABELLF_STYLE)
         activity_box.pack(fill="both", expand=True, pady=(6, 0))
-        self._activity_tree = ttk.Treeview(activity_box, columns=("at", "dataset", "result", "error"), show="headings", style=WORKBENCH_TREE_STYLE, height=8)
-        self._configure_tree_tags(self._activity_tree)
-        for col, title, width in (("at", "At", 150), ("dataset", "Dataset", 280), ("result", "Result", 160), ("error", "Error", 700)):
+        self._activity_tree = ttk.Treeview(
+            activity_box,
+            columns=("at", "dataset", "name_zh", "result", "detail"),
+            show="headings",
+            style=WORKBENCH_TREE_STYLE,
+            height=8,
+        )
+        for col, title, width in (
+            ("at", "At", 150),
+            ("dataset", "Dataset", 280),
+            ("name_zh", "中文名稱", 230),
+            ("result", "Result", 150),
+            ("detail", "Detail", 650),
+        ):
             self._activity_tree.heading(col, text=title)
             self._activity_tree.column(col, width=width, anchor="w")
         ay = ttk.Scrollbar(activity_box, orient="vertical", command=self._activity_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
@@ -243,9 +300,67 @@ class MarketDataOpsPanel(ttk.Frame):
         ay.pack(side="left", fill="y")
 
     @staticmethod
-    def _configure_tree_tags(tree: ttk.Treeview):
+    def _configure_status_tree_tags(tree: ttk.Treeview):
+        tree.tag_configure("success", foreground=WORKBENCH_SUCCESS)
         tree.tag_configure("warning", foreground=WORKBENCH_WARNING)
         tree.tag_configure("error", foreground=WORKBENCH_ERROR)
+        tree.tag_configure("muted", foreground=WORKBENCH_MUTED)
+        tree.tag_configure("info", foreground=WORKBENCH_INFO)
+
+    def _bind_synced_vertical_scroll(
+        self,
+        trees: list[ttk.Treeview],
+        scrollbar: ttk.Scrollbar,
+        *,
+        dataset_selection: bool,
+    ) -> None:
+        def _scroll(*args):
+            for tree in trees:
+                tree.yview(*args)
+
+        def _mousewheel(event):
+            delta = int(-event.delta / 120) if event.delta else 0
+            if delta == 0:
+                delta = -1 if event.delta > 0 else 1
+            for tree in trees:
+                tree.yview_scroll(delta, "units")
+            return "break"
+
+        scrollbar.configure(command=_scroll)
+        for tree in trees:
+            tree.configure(yscrollcommand=scrollbar.set)
+            tree.bind("<MouseWheel>", _mousewheel)
+            if dataset_selection:
+                tree.bind("<<TreeviewSelect>>", lambda event, group=trees: self._on_dataset_group_select(event, group))
+
+    def _on_dataset_group_select(self, event, trees: list[ttk.Treeview]) -> None:
+        if getattr(self, "_dataset_selection_syncing", False):
+            return
+        selected = event.widget.selection()
+        if not selected:
+            return
+        iid = selected[0]
+        self._dataset_selection_syncing = True
+        try:
+            for tree in trees:
+                if tree.exists(iid):
+                    tree.selection_set(iid)
+                    tree.see(iid)
+        finally:
+            self._dataset_selection_syncing = False
+        self._show_dataset_detail(iid)
+
+    def _show_dataset_detail(self, iid: str) -> None:
+        row = self._dataset_by_iid.get(iid, {})
+        if not row:
+            return
+        verified = "provider-verified" if row.get("publication_schedule_verified") else "fallback"
+        self._detail_var.set(
+            f"{row.get('dataset')}｜{row.get('display_name_zh') or '-'} | category={row.get('category')} cadence={row.get('cadence')} | "
+            f"publication={row.get('publication_first_check_time')} D+{row.get('publication_day_offset')} ({verified}) | "
+            f"PK={row.get('primary_key_hint') or '-'} | last_result={row.get('last_attempt_result') or '-'} | "
+            f"error={row.get('last_error') or '-'}"
+        )
 
     def refresh_local_status(self):
         try:
@@ -261,14 +376,110 @@ class MarketDataOpsPanel(ttk.Frame):
         self._status_var.set(f"本地狀態已刷新（provider calls={snapshot.get('provider_calls', 0)}）{suffix}")
         self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE if blockers else WORKBENCH_INFO_LABEL_STYLE)
 
+    @staticmethod
+    def _clear_tree_group(group: dict[str, object]) -> None:
+        for tree in group["ordered_trees"]:
+            for iid in tree.get_children():
+                tree.delete(iid)
+
+    @staticmethod
+    def _expected_publish_sort_key(row: dict[str, object]) -> tuple[int, str, str]:
+        value = str(row.get("expected_publish_at") or "").strip()
+        return (0 if value else 1, value, str(row.get("dataset") or ""))
+
+    def _insert_dataset_row(
+        self,
+        group: dict[str, object],
+        *,
+        iid: str,
+        row: dict[str, object],
+    ) -> None:
+        trees = group["trees"]
+        projected_status = row.get("projected_status") or row.get("status") or "-"
+        schema_status = row.get("schema_status") or "-"
+        coverage_status = row.get("coverage_status") or "-"
+        trees["identity"].insert(
+            "",
+            "end",
+            iid=iid,
+            values=(row.get("dataset") or "-", row.get("display_name_zh") or "-"),
+        )
+        trees["status"].insert(
+            "",
+            "end",
+            iid=iid,
+            tags=(_status_tag(projected_status),),
+            values=(projected_status,),
+        )
+        trees["dates"].insert(
+            "",
+            "end",
+            iid=iid,
+            values=(
+                row.get("latest_data_date") or "-",
+                _fmt_datetime(row.get("expected_publish_at")),
+                _fmt_datetime(row.get("last_success_at")),
+                _fmt_datetime(row.get("next_check_at")),
+            ),
+        )
+        trees["schema"].insert(
+            "",
+            "end",
+            iid=iid,
+            tags=(_status_tag(schema_status),),
+            values=(schema_status,),
+        )
+        trees["coverage"].insert(
+            "",
+            "end",
+            iid=iid,
+            tags=(_status_tag(coverage_status),),
+            values=(coverage_status,),
+        )
+        trees["retries"].insert("", "end", iid=iid, values=(_retry_text(row),))
+
+    def _insert_schedule_row(
+        self,
+        *,
+        iid: str,
+        dataset: object,
+        display_name_zh: object,
+        status: object,
+        expected_publish_at: object,
+        source: object,
+    ) -> None:
+        status_value = status or "-"
+        self._schedule_trees["identity"].insert(
+            "",
+            "end",
+            iid=iid,
+            values=(dataset or "-", display_name_zh or "-"),
+        )
+        self._schedule_trees["status"].insert(
+            "",
+            "end",
+            iid=iid,
+            tags=(_status_tag(status_value),),
+            values=(status_value,),
+        )
+        self._schedule_trees["detail"].insert(
+            "",
+            "end",
+            iid=iid,
+            values=(_fmt_datetime(expected_publish_at), source or "-"),
+        )
+
     def _render(self, snapshot: dict[str, object]):
         target = snapshot.get("trading_target_date") or "-"
         strategy_id = snapshot.get("trading_strategy_id") or "-"
         required_v2 = int(snapshot.get("trading_required_v2_count") or 0)
         ready_v2 = int(snapshot.get("trading_ready_v2_count") or 0)
         trading_tag = "success" if snapshot.get("trading_ready") else "error"
-        self._kpi_vars["trading"].set("READY" if snapshot.get("trading_ready") else "BLOCKED")
-        self._kpi_detail_vars["trading"].set(f"{target}\n{strategy_id} | required V2 {ready_v2}/{required_v2}")
+        trading_primary = f"{ready_v2}/{required_v2} READY"
+        if not snapshot.get("trading_ready"):
+            trading_primary += " · BLOCKED"
+        self._kpi_vars["trading"].set(trading_primary)
+        self._kpi_detail_vars["trading"].set(f"{target}\n{strategy_id}")
         self._kpi_labels["trading"].configure(foreground=_color_for_tag(trading_tag))
 
         v2_status = snapshot.get("v2_status") or "-"
@@ -281,7 +492,7 @@ class MarketDataOpsPanel(ttk.Frame):
         due_count = int(snapshot.get("due_count") or 0)
         self._kpi_vars["datasets"].set(f"{ready_count}/{dataset_count} READY")
         self._kpi_detail_vars["datasets"].set(f"Due {due_count}")
-        datasets_ready = int(snapshot.get("ready_count") or 0) == int(snapshot.get("dataset_count") or 0) and int(snapshot.get("due_count") or 0) == 0
+        datasets_ready = ready_count == dataset_count and due_count == 0
         self._kpi_labels["datasets"].configure(foreground=_color_for_tag("success" if datasets_ready else "warning"))
 
         self._kpi_vars["next"].set(_fmt_datetime(snapshot.get("next_check_at")))
@@ -311,8 +522,8 @@ class MarketDataOpsPanel(ttk.Frame):
         )
         self._render_scheduler_controls(snapshot)
 
-        total = int(snapshot.get("dataset_count") or 0)
-        ready = int(snapshot.get("ready_count") or 0)
+        total = dataset_count
+        ready = ready_count
         readiness_pct = 100.0 * ready / total if total else 0.0
         self._readiness_progress["value"] = readiness_pct
         counts = dict(snapshot.get("status_counts") or {})
@@ -332,22 +543,35 @@ class MarketDataOpsPanel(ttk.Frame):
             )
             self._quota_label.configure(style=WORKBENCH_LABEL_STYLE)
 
-        for tree in (self._dataset_tree, self._schedule_tree, self._activity_tree):
+        self._clear_tree_group(self._required_dataset_group)
+        self._clear_tree_group(self._other_dataset_group)
+        for tree in self._schedule_trees.values():
             for iid in tree.get_children():
                 tree.delete(iid)
+        for iid in self._activity_tree.get_children():
+            self._activity_tree.delete(iid)
         self._dataset_by_iid.clear()
 
-        datasets = list(snapshot.get("datasets") or [])
-        for index, row in enumerate(datasets):
-            iid = f"d{index}"
-            self._dataset_by_iid[iid] = dict(row)
-            schedule = f"D+{int(row.get('publication_day_offset') or 0)} {row.get('publication_first_check_time') or '-'}"
-            projected_status = row.get("projected_status") or row.get("status")
-            self._dataset_tree.insert("", "end", iid=iid, tags=_attention_tags(projected_status), values=(
-                row.get("dataset"), projected_status, row.get("latest_display") or "UNKNOWN",
-                row.get("expected_display") or "UNKNOWN", _fmt_datetime(row.get("last_success_at")), _fmt_datetime(row.get("next_check_display")),
-                schedule, row.get("schema_status") or "-", row.get("coverage_status") or "-", _retry_text(row),
-            ))
+        datasets = [dict(row) for row in snapshot.get("datasets") or []]
+        required_names = {str(item) for item in snapshot.get("trading_required_v2_datasets") or []}
+        required_rows = sorted(
+            (row for row in datasets if str(row.get("dataset") or "") in required_names),
+            key=self._expected_publish_sort_key,
+        )
+        other_rows = sorted(
+            (row for row in datasets if str(row.get("dataset") or "") not in required_names),
+            key=self._expected_publish_sort_key,
+        )
+        self._required_dataset_box.configure(text=f"Trading 必要資料（{len(required_rows)}）")
+        self._other_dataset_box.configure(text=f"其它完整資料（{len(other_rows)}）")
+        for section, group, rows in (
+            ("required", self._required_dataset_group, required_rows),
+            ("other", self._other_dataset_group, other_rows),
+        ):
+            for index, row in enumerate(rows):
+                iid = f"{section}:{index}"
+                self._dataset_by_iid[iid] = row
+                self._insert_dataset_row(group, iid=iid, row=row)
 
         scheduler_next = snapshot.get("scheduler_next_run_at")
         scheduler_source = f"{snapshot.get('scheduler_app_path') or 'apps/market_data_auto_update.py'} | {snapshot.get('scheduler_wake_minutes') or '-'}m"
@@ -356,55 +580,73 @@ class MarketDataOpsPanel(ttk.Frame):
             scheduler_source += " | drift=" + ",".join(str(item) for item in drift)
         if snapshot.get("scheduler_error"):
             scheduler_source += " | error=" + str(snapshot.get("scheduler_error"))[:180]
-        self._schedule_tree.insert("", "end", tags=_attention_tags(snapshot.get("scheduler_registration_status")), values=(
-            _fmt_datetime(scheduler_next),
-            "Windows Auto Sync Worker",
-            snapshot.get("scheduler_registration_status") or "-",
-            _fmt_datetime(scheduler_next),
-            scheduler_source,
-        ))
+        self._insert_schedule_row(
+            iid="system:auto_worker",
+            dataset="Windows Auto Sync Worker",
+            display_name_zh="Windows 自動同步排程",
+            status=snapshot.get("scheduler_registration_status") or "-",
+            expected_publish_at=scheduler_next,
+            source=scheduler_source,
+        )
         discovery_next = snapshot.get("market_date_discovery_next_check_at")
         if discovery_next:
-            self._schedule_tree.insert("", "end", values=(
-                _fmt_datetime(discovery_next),
-                "Trading Market Date Discovery",
-                "PROBE",
-                _fmt_datetime(discovery_next),
-                "TaiwanStockPriceAdj canonical completed-day probe",
-            ))
-        schedule_rows = sorted(datasets, key=lambda row: (str(row.get("next_check_at") or "9999"), str(row.get("dataset") or "")))
-        for row in schedule_rows:
-            projected_status = row.get("projected_status") or row.get("status")
-            self._schedule_tree.insert("", "end", tags=_attention_tags(projected_status), values=(
-                _fmt_datetime(row.get("next_check_display")), row.get("dataset"), projected_status,
-                _fmt_datetime(row.get("expected_publish_at")), row.get("publication_schedule_source") or "-",
-            ))
-        if snapshot.get("market_date_discovery_last_probe_at"):
-            discovery_result = snapshot.get("market_date_discovery_last_result") or "-"
-            self._activity_tree.insert("", "end", tags=_attention_tags(discovery_result), values=(
-                _fmt_datetime(snapshot.get("market_date_discovery_last_probe_at")),
-                "Trading Market Date Discovery",
-                discovery_result,
-                "",
-            ))
-        for row in snapshot.get("recent_activity") or []:
-            activity_result = row.get("result") or "-"
-            self._activity_tree.insert("", "end", tags=_attention_tags(activity_result), values=(
-                _fmt_datetime(row.get("at")), row.get("dataset"), activity_result, row.get("error") or "",
-            ))
+            self._insert_schedule_row(
+                iid="system:market_date_discovery",
+                dataset="Trading Market Date Discovery",
+                display_name_zh="交易日探索",
+                status="PROBE",
+                expected_publish_at=discovery_next,
+                source="TaiwanStockPriceAdj canonical completed-day probe",
+            )
+        schedule_rows = sorted(datasets, key=self._expected_publish_sort_key)
+        for index, row in enumerate(schedule_rows):
+            self._insert_schedule_row(
+                iid=f"schedule:{index}",
+                dataset=row.get("dataset"),
+                display_name_zh=row.get("display_name_zh"),
+                status=row.get("projected_status") or row.get("status"),
+                expected_publish_at=row.get("expected_publish_at"),
+                source=row.get("publication_schedule_source") or "-",
+            )
 
-    def _on_dataset_select(self, _event=None):
-        selected = self._dataset_tree.selection()
-        if not selected:
-            return
-        row = self._dataset_by_iid.get(selected[0], {})
-        verified = "provider-verified" if row.get("publication_schedule_verified") else "fallback"
-        self._detail_var.set(
-            f"{row.get('dataset')} | category={row.get('category')} cadence={row.get('cadence')} | "
-            f"publication={row.get('publication_first_check_time')} D+{row.get('publication_day_offset')} ({verified}) | "
-            f"PK={row.get('primary_key_hint') or '-'} | last_result={row.get('last_attempt_result') or '-'} | "
-            f"error={row.get('last_error') or '-'}"
+        activity_rows: list[dict[str, object]] = []
+        if snapshot.get("market_date_discovery_last_probe_at"):
+            activity_rows.append(
+                {
+                    "at": snapshot.get("market_date_discovery_last_probe_at"),
+                    "dataset": "Trading Market Date Discovery",
+                    "display_name_zh": "交易日探索",
+                    "result": snapshot.get("market_date_discovery_last_result") or "-",
+                    "detail": "-",
+                }
+            )
+        activity_rows.extend(dict(row) for row in snapshot.get("recent_activity") or [])
+        activity_rows.sort(
+            key=lambda row: (
+                str(row.get("at") or ""),
+                1 if row.get("activity_type") == "quota" else 0,
+            ),
+            reverse=True,
         )
+        visible_activity = activity_rows[:20]
+        quota_activity = next(
+            (row for row in activity_rows if row.get("activity_type") == "quota"),
+            None,
+        )
+        if quota_activity is not None and not any(row.get("activity_type") == "quota" for row in visible_activity):
+            visible_activity = visible_activity[:19] + [quota_activity]
+        for row in visible_activity:
+            self._activity_tree.insert(
+                "",
+                "end",
+                values=(
+                    _fmt_datetime(row.get("at")),
+                    row.get("dataset") or "-",
+                    row.get("display_name_zh") or "-",
+                    row.get("result") or "-",
+                    row.get("detail") or row.get("error") or "-",
+                ),
+            )
 
     def _render_scheduler_controls(self, snapshot: dict[str, object]):
         if self._action_thread is not None and self._action_thread.is_alive():

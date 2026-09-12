@@ -6,9 +6,21 @@
     - 文字不要跟按鍵overlap
     - 可以選擇延用前一個模型參數，而不是強制daily更新params
 - 資料中心
-    - 重點狀態/文字/數值用色提升可讀性
-    - schedule/Activity, datasheet分頁文字顏色跟淡灰底看不清楚
-    - 相關操作同時在console也顯示donwloader同源的狀態
+    - 6/6 跟51/51一樣獨立一個狀態框
+    - 51/51 read 跟 v2 target freshness 重覆了，留前者就好，狀態用顏色標示
+    - quota 跟 last observed provider quota重覆了，留後者就好，狀態用顏色標示
+    - dataset status
+        - dataset 旁加一欄中文名稱
+        - status/schema/ coverage 用顏色標示狀態
+        - last, expected, next check沒有值就回到之前的"-"精簡呈現
+        - expected + published 合併成expected publish，定義與格式schedule activity的expected publish一樣
+        - 各列依expected publish近到遠排序
+        - trading會有用的6固資料 與完整的其它45個資料用上下兩個分開的表格呈現
+    - schedule activity: 
+        - status 用顏色標示狀態
+        -  欄位順序: dataset, status, expected publish, schedule source
+        - dataset 旁加一欄中文名稱
+        - recent activity包含quota用量紀錄
 
 - restreucture
     - 刪除不再需要的相容層的code，精簡程式也避免之後誤接

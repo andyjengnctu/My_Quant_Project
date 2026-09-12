@@ -2431,10 +2431,28 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         ops_price_row = next(row for row in ops_model["datasets"] if row["dataset"] == "TaiwanStockPrice")
         ops_event_row = next(row for row in ops_model["datasets"] if row["dataset"] == "TaiwanStockDelisting")
         ops_periodic_row = next(row for row in ops_model["datasets"] if row["dataset"] == "TaiwanStockFinancialStatements")
+        check("data_ops_exposes_canonical_dataset_zh_name", "股價日成交資訊", ops_price_row.get("display_name_zh"))
         check("data_ops_ready_dataset_explains_missing_next_check", "READY · await new target", ops_price_row.get("next_check_display"))
         check("data_ops_event_dataset_explains_expected_semantics", "EVENT · when present", ops_event_row.get("expected_display"))
         check("data_ops_periodic_dataset_explains_expected_semantics", "PERIODIC · due window", ops_periodic_row.get("expected_display"))
         check("data_ops_event_no_row_is_explicit_not_dash", "NO ROW · valid", ops_event_row.get("latest_display"))
+        with patch(
+            "services.trading.market_data_ops.build_trading_market_data_v2_read_model",
+            return_value={
+                "quota_user_count": 804,
+                "quota_limit": 6000,
+                "quota_observed_at": state_now.isoformat(),
+                "latest_auto_data_requests": 270,
+                "latest_auto_usage_requests": 1,
+            },
+        ):
+            quota_ops_model = build_market_data_ops_read_model(state_root, now=state_now)
+        quota_activity = next(
+            item for item in quota_ops_model["recent_activity"]
+            if item.get("activity_type") == "quota"
+        )
+        check("data_ops_recent_activity_includes_quota_observation", ("CURRENT", "FinMind 配額用量"), (quota_activity.get("result"), quota_activity.get("display_name_zh")))
+        check("data_ops_quota_activity_keeps_usage_detail", True, "quota=804/6000" in str(quota_activity.get("detail") or "") and "270/1" in str(quota_activity.get("detail") or ""))
         # AI: A lagging execution consumer must not pull the updater's target
         # backwards in the local Due/freshness view.
         with (
