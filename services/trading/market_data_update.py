@@ -65,6 +65,7 @@ def run_trading_market_data_update(
                 project_root=root,
                 client=provider_client,
                 force_market_date_discovery=True,
+                refresh_provider_quota=True,
                 progress_fn=progress_fn,
                 quota_wait_fn=quota_wait_fn,
             )

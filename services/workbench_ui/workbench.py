@@ -36,6 +36,11 @@ WORKBENCH_SIDEBAR_TITLE_BLUE = "#2d7ff9"
 WORKBENCH_FRAME_STYLE = "Workbench.TFrame"
 WORKBENCH_LABELLF_STYLE = "Workbench.TLabelframe"
 WORKBENCH_LABEL_STYLE = "Workbench.TLabel"
+WORKBENCH_INFO_LABEL_STYLE = "Workbench.Info.TLabel"
+WORKBENCH_SUCCESS_LABEL_STYLE = "Workbench.Success.TLabel"
+WORKBENCH_WARNING_LABEL_STYLE = "Workbench.Warning.TLabel"
+WORKBENCH_ERROR_LABEL_STYLE = "Workbench.Error.TLabel"
+WORKBENCH_MUTED_LABEL_STYLE = "Workbench.Muted.TLabel"
 WORKBENCH_BUTTON_STYLE = "Workbench.TButton"
 WORKBENCH_CHECK_STYLE = "Workbench.TCheckbutton"
 WORKBENCH_ENTRY_STYLE = "Workbench.TEntry"
@@ -179,6 +184,11 @@ def configure_workbench_theme(root):
     style.configure(WORKBENCH_LABELLF_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER)
     style.configure(f"{WORKBENCH_LABELLF_STYLE}.Label", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
     style.configure(WORKBENCH_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT)
+    style.configure(WORKBENCH_INFO_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_INFO, font=WORKBENCH_UI_FONT)
+    style.configure(WORKBENCH_SUCCESS_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_SUCCESS, font=WORKBENCH_UI_FONT)
+    style.configure(WORKBENCH_WARNING_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_WARNING, font=WORKBENCH_UI_FONT)
+    style.configure(WORKBENCH_ERROR_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_ERROR, font=WORKBENCH_UI_FONT)
+    style.configure(WORKBENCH_MUTED_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_MUTED, font=WORKBENCH_UI_FONT)
     style.configure(WORKBENCH_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(10, 4), font=WORKBENCH_UI_FONT)
     style.map(WORKBENCH_BUTTON_STYLE, background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
     style.configure(WORKBENCH_SIDEBAR_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(2, 3), font=WORKBENCH_RIGHT_SIDEBAR_BUTTON_FONT)

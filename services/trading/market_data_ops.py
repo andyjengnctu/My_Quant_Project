@@ -11,9 +11,21 @@ from pathlib import Path
 from typing import Any
 
 from core.market_data_auto_update_policy import get_market_data_auto_update_policy
-from core.market_data_dataset_readiness import is_market_data_dataset_ready
+from core.market_data_dataset_readiness import (
+    VALIDATION_STATUS_NO_ROW_VALID,
+    is_market_data_dataset_ready,
+)
 from core.market_data_due_planner import normalize_market_data_planner_now, plan_market_data_due_datasets
-from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
+from core.market_data_freshness_contract import (
+    CADENCE_CURRENT_VINTAGE,
+    CADENCE_EVENT_DRIVEN,
+    EXPECTED_DATE_LATEST_AVAILABLE,
+    EXPECTED_DATE_NONE,
+    EXPECTED_DATE_PERIOD_DUE,
+    EXPECTED_DATE_TRADING_TARGET,
+    FRESHNESS_STATUS_NOT_APPLICABLE,
+    FRESHNESS_STATUS_READY,
+)
 from services.trading.data_readiness import build_trading_data_readiness
 from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
@@ -48,6 +60,59 @@ def _earliest_iso(values) -> str | None:
     if not candidates:
         return None
     return min(candidates).isoformat()
+
+
+def _dataset_display_semantics(row: dict[str, Any]) -> dict[str, str]:
+    """Resolve explicit UI semantics from the canonical freshness contract/state."""
+
+    latest = str(row.get("latest_data_date") or "").strip()
+    expected = str(row.get("latest_expected_date") or "").strip()
+    next_check = str(row.get("next_check_at") or "").strip()
+    status = str(row.get("projected_status") or row.get("status") or "UNKNOWN").strip().upper()
+    cadence = str(row.get("cadence") or "").strip()
+    expected_mode = str(row.get("expected_date_mode") or "").strip()
+    schema_status = str(row.get("schema_status") or "").strip().upper()
+    coverage_status = str(row.get("coverage_status") or "").strip().upper()
+    no_row_valid = VALIDATION_STATUS_NO_ROW_VALID in {schema_status, coverage_status}
+
+    if latest:
+        latest_display = latest
+    elif no_row_valid:
+        latest_display = "NO ROW · valid"
+    elif cadence == CADENCE_CURRENT_VINTAGE:
+        latest_display = "CURRENT · no date"
+    else:
+        latest_display = "UNKNOWN"
+
+    if expected:
+        expected_display = expected
+    elif expected_mode == EXPECTED_DATE_PERIOD_DUE:
+        expected_display = "PERIODIC · due window"
+    elif expected_mode == EXPECTED_DATE_LATEST_AVAILABLE:
+        expected_display = "LATEST AVAILABLE"
+    elif expected_mode == EXPECTED_DATE_NONE and cadence == CADENCE_EVENT_DRIVEN:
+        expected_display = "EVENT · when present"
+    elif expected_mode == EXPECTED_DATE_NONE:
+        expected_display = "N/A · current vintage"
+    elif expected_mode == EXPECTED_DATE_TRADING_TARGET:
+        expected_display = "TARGET · unresolved"
+    else:
+        expected_display = "UNKNOWN"
+
+    if next_check:
+        next_check_display = next_check
+    elif status == FRESHNESS_STATUS_READY:
+        next_check_display = "READY · await new target"
+    elif status == FRESHNESS_STATUS_NOT_APPLICABLE:
+        next_check_display = "N/A"
+    else:
+        next_check_display = "UNSCHEDULED"
+
+    return {
+        "latest_display": latest_display,
+        "expected_display": expected_display,
+        "next_check_display": next_check_display,
+    }
 
 
 def build_market_data_ops_read_model(
@@ -106,6 +171,14 @@ def build_market_data_ops_read_model(
                 "next_check_at": next_check_at,
                 "due": due,
                 "due_reason": due_reason,
+                **_dataset_display_semantics(
+                    {
+                        **row,
+                        "projected_status": projected_status,
+                        "expected_publish_at": expected_publish_at,
+                        "next_check_at": next_check_at,
+                    }
+                ),
             }
         )
 
@@ -155,6 +228,12 @@ def build_market_data_ops_read_model(
 
     quota_used = v2.get("quota_user_count")
     quota_limit = v2.get("quota_limit")
+    quota_observed_at = _parse_datetime(v2.get("quota_observed_at"))
+    quota_observation_status = "NONE"
+    if quota_observed_at is not None:
+        if quota_observed_at.tzinfo is not None:
+            quota_observed_at = quota_observed_at.astimezone(local_now.tzinfo)
+        quota_observation_status = "CURRENT" if quota_observed_at.date() == local_now.date() else "STALE"
     quota_percent = None
     if quota_used is not None and quota_limit not in (None, 0):
         try:
@@ -221,6 +300,7 @@ def build_market_data_ops_read_model(
         "quota_remaining": v2.get("quota_remaining"),
         "quota_usable_remaining": v2.get("quota_usable_remaining"),
         "quota_observed_at": v2.get("quota_observed_at"),
+        "quota_observation_status": quota_observation_status,
         "latest_auto_request_count": v2.get("latest_auto_request_count"),
         "latest_auto_data_requests": v2.get("latest_auto_data_requests"),
         "latest_auto_usage_requests": v2.get("latest_auto_usage_requests"),

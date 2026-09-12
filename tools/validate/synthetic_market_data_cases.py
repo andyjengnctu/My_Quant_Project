@@ -2428,6 +2428,13 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         )
         check("data_ops_local_read_model_exposes_scheduler_status", True, bool(ops_model.get("scheduler_registration_status")))
         check("data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
+        ops_price_row = next(row for row in ops_model["datasets"] if row["dataset"] == "TaiwanStockPrice")
+        ops_event_row = next(row for row in ops_model["datasets"] if row["dataset"] == "TaiwanStockDelisting")
+        ops_periodic_row = next(row for row in ops_model["datasets"] if row["dataset"] == "TaiwanStockFinancialStatements")
+        check("data_ops_ready_dataset_explains_missing_next_check", "READY · await new target", ops_price_row.get("next_check_display"))
+        check("data_ops_event_dataset_explains_expected_semantics", "EVENT · when present", ops_event_row.get("expected_display"))
+        check("data_ops_periodic_dataset_explains_expected_semantics", "PERIODIC · due window", ops_periodic_row.get("expected_display"))
+        check("data_ops_event_no_row_is_explicit_not_dash", "NO ROW · valid", ops_event_row.get("latest_display"))
         # AI: A lagging execution consumer must not pull the updater's target
         # backwards in the local Due/freshness view.
         with (
@@ -2960,6 +2967,32 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("auto_updater_no_due_consumes_zero_data_requests", 0, auto_no_due["data_requests"])
         check("auto_updater_no_due_consumes_zero_usage_requests", 0, auto_no_due["usage_requests"])
         check("auto_updater_no_due_reports_provider_not_required", False, auto_no_due["provider_requests_required"])
+
+        class _AutoQuotaRefreshClient:
+            data_request_count = 0
+            usage_request_count = 0
+
+            def get_usage(self):
+                self.usage_request_count += 1
+                return FinMindUsage(user_count=7, api_request_limit=6000)
+
+            def get_data(self, **_kwargs):
+                raise AssertionError("quota-only refresh 不得呼叫 data endpoint")
+
+        quota_client = _AutoQuotaRefreshClient()
+        quota_events = []
+        auto_quota_refresh = run_trading_market_data_auto_update(
+            project_root=auto_root,
+            target_date="2026-09-07",
+            client=quota_client,
+            now_fn=lambda: datetime(2026, 9, 8, 2, 5, tzinfo=ZoneInfo("Asia/Taipei")),
+            refresh_provider_quota=True,
+            progress_fn=quota_events.append,
+        )
+        check("manual_quota_refresh_no_due_keeps_zero_data_requests", 0, auto_quota_refresh["data_requests"])
+        check("manual_quota_refresh_no_due_uses_one_usage_request", 1, auto_quota_refresh["usage_requests"])
+        check("manual_quota_refresh_returns_current_provider_usage", (7, 6000), (auto_quota_refresh.get("quota_user_count"), auto_quota_refresh.get("quota_limit")))
+        check("manual_quota_refresh_emits_canonical_console_event", "QUOTA_OBSERVATION", quota_events[-1].get("kind"))
         force_calls = []
         all_names = tuple(sorted(spec.dataset for spec in get_market_dataset_specs(included_only=True)))
 
@@ -3584,6 +3617,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     data_ops_source = (project_root / "services" / "trading" / "market_data_ops.py").read_text(encoding="utf-8")
     auto_update_source = (project_root / "services" / "trading" / "market_data_auto_update.py").read_text(encoding="utf-8")
     v2_sync_source = (project_root / "services" / "downloader" / "market_data_trading_sync.py").read_text(encoding="utf-8")
+    daily_console_source = (project_root / "services" / "downloader" / "daily_console_progress.py").read_text(encoding="utf-8")
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
     from services.trading import daily_workflow as daily_workflow_module
@@ -3596,6 +3630,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     executor_source = (project_root / "services" / "downloader" / "market_data_executor.py").read_text(encoding="utf-8")
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
     check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and "legacy_stage_data_requests" not in update_source)
+    check("canonical_full_update_requests_fresh_quota_observation", True, "refresh_provider_quota=True" in update_source)
     check("executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
     check(
         "canonical_price_refresh_consumes_provider_adjusted_price_without_local_reconstruction",
@@ -3629,7 +3664,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("smart_downloader_runtime_passes_force_refresh_contract", True, "force_refresh_current_target=force_refresh" in downloader_source)
     check("smart_downloader_option1_passes_progress_and_quota_observers", True, "progress_fn=_progress" in downloader_source and "quota_wait_fn=_quota_wait" in downloader_source)
     check("smart_downloader_top_menu_is_declarative_contract_driven", True, "SMART_DOWNLOADER_MENU_OPTIONS" in downloader_source and "parse_smart_downloader_menu_choice" in downloader_source and "expected_actions" in downloader_source)
-    check("smart_downloader_daily_progress_displays_request_date_scope", True, "request_scope" in downloader_source and "date=STATIC" in downloader_source and "date={start_date}~{end_date}" in downloader_source)
+    check("smart_downloader_daily_progress_displays_request_date_scope", True, "request_scope" in daily_console_source and "date=STATIC" in daily_console_source and "date={start_date}~{end_date}" in daily_console_source)
     check("smart_downloader_daily_summary_separates_exact_request_types", True, "Exact-date total" in downloader_source and "Data-id exact" in downloader_source and "Unique exact dates" in downloader_source)
     check("smart_downloader_does_not_render_false_stockinfo_match_diff_completeness", False, "Instrument reference    : " in downloader_source or "REFERENCE_DIFF" in downloader_source)
     check("smart_downloader_labels_instrument_completeness_unverified_without_authoritative_universe", True, "Instrument completeness" in downloader_source and "authoritative dataset-specific expected universe" in downloader_source)

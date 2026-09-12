@@ -55,6 +55,21 @@ class MarketDataDailyConsoleProgress:
 
     def progress(self, event: dict[str, object]) -> None:
         kind = str(event.get("kind") or "")
+        if kind == "QUOTA_OBSERVATION":
+            self.close()
+            status = str(event.get("status") or "UNKNOWN")
+            if status == "CURRENT":
+                print(
+                    f"{_paint('[Quota]', C_CYAN)} {_paint(status, _status_color(status))}"
+                    f" | used={event.get('quota_user_count')} / {event.get('quota_limit')}"
+                    f" | remaining={event.get('quota_remaining')}"
+                )
+            else:
+                print(
+                    f"{_paint('[Quota]', C_CYAN)} {_paint(status, _status_color(status))}"
+                    f" | {event.get('error') or '-'}"
+                )
+            return
         if kind == "PLAN":
             self.close()
             mode = "FORCE REFRESH" if event.get("force_refresh") else "DUE ONLY"
@@ -98,6 +113,19 @@ class MarketDataDailyConsoleProgress:
             f"{_paint('[WAIT]', C_YELLOW)} {event.get('done')}/{event.get('total')}"
             f" | quota={event.get('quota_user_count') or '-'} / {event.get('quota_limit') or '-'}"
             f" | reason={event.get('reason') or 'quota'}"
+        )
+
+    def result(self, result: dict[str, object], *, label: str = "Daily Update") -> None:
+        """Render a compact final line from the canonical updater result."""
+
+        self.close()
+        status = str(result.get("status") or "UNKNOWN")
+        print(
+            f"{_paint('[Daily]', C_CYAN)} {label} | status={_paint(status, _status_color(status))}"
+            f" | target={result.get('target_date') or '-'}"
+            f" | due={result.get('due_dataset_count', 0)}"
+            f" | data={result.get('data_requests', 0)} usage={result.get('usage_requests', 0)}"
+            f" | next={result.get('next_check_at') or '-'}"
         )
 
 

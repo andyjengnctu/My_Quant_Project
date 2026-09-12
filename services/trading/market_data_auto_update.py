@@ -96,6 +96,39 @@ def _client_counts(client) -> tuple[int, int]:
     )
 
 
+def _refresh_provider_quota_observation(
+    *,
+    root: Path,
+    token: str | None,
+    client,
+    progress_fn: Callable[[dict[str, object]], None] | None = None,
+):
+    """Observe live provider quota without changing dataset execution semantics."""
+
+    token, client = _prepare_provider_client(root=root, token=token, client=client)
+    try:
+        usage = client.get_usage()
+    except FinMindHttpError as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        if progress_fn is not None:
+            progress_fn({"kind": "QUOTA_OBSERVATION", "status": "ERROR", "error": error})
+        return token, client, {}, error
+    used = int(usage.user_count)
+    limit = int(usage.api_request_limit)
+    observation = {
+        "quota_user_count": used,
+        "quota_limit": limit,
+        "quota_remaining": max(0, limit - used),
+        # This live user_info observation is exact for used/limit/remaining.
+        # Usable remaining additionally depends on executor reserve policy and
+        # is therefore left unset rather than mixing a stale estimate.
+        "quota_usable_remaining": None,
+    }
+    if progress_fn is not None:
+        progress_fn({"kind": "QUOTA_OBSERVATION", "status": "CURRENT", **observation})
+    return token, client, observation, None
+
+
 def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
     from core.market_data_dataset_registry import get_market_dataset_display_name_zh
 
@@ -305,6 +338,7 @@ def run_trading_market_data_auto_update(
     sleep_fn: Callable[[float], None] | None = None,
     force_market_date_discovery: bool = False,
     force_refresh_current_target: bool = False,
+    refresh_provider_quota: bool = False,
     progress_fn: Callable[[dict[str, object]], None] | None = None,
     quota_wait_fn: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
@@ -367,11 +401,32 @@ def run_trading_market_data_auto_update(
             else tuple(plan.due_datasets)
         )
         if not due:
+            quota_observation: dict[str, object] = {}
+            quota_refresh_error = None
+            if refresh_provider_quota:
+                token, client, quota_observation, quota_refresh_error = _refresh_provider_quota_observation(
+                    root=root,
+                    token=token,
+                    client=client,
+                    progress_fn=progress_fn,
+                )
             data_after, usage_after = _client_counts(client)
             local_next = _next_check_at(plan)
             candidates = [value for value in (local_next, discovery_next_check) if value]
             next_check = min(candidates) if candidates else None
             state_summary = _dataset_readiness_summary(_state, target_date=resolved_target)
+            if quota_observation:
+                publish_trading_market_data_v2_auto_rollup(
+                    root,
+                    target_date=resolved_target,
+                    updated_at=now,
+                    batch_result={
+                        "request_count": 0,
+                        "process_data_requests": data_after - data_before,
+                        "process_usage_requests": usage_after - usage_before,
+                        **quota_observation,
+                    },
+                )
             return {
                 "status": AUTO_UPDATE_STATUS_TARGET_ADVANCED if target_advanced else AUTO_UPDATE_STATUS_NO_DUE,
                 "target_date": resolved_target,
@@ -393,6 +448,9 @@ def run_trading_market_data_auto_update(
                 "request_date_start": None,
                 "request_date_end": None,
                 "force_refresh": False,
+                "quota_refresh_requested": bool(refresh_provider_quota),
+                "quota_refresh_error": quota_refresh_error,
+                **quota_observation,
                 "verification": {},
                 **state_summary,
             }
@@ -524,11 +582,38 @@ def run_trading_market_data_auto_update(
                     error_message=f"automatic due batch incomplete: {workload_status}",
                 )
 
+        quota_observation: dict[str, object] = {}
+        quota_refresh_error = None
+        if refresh_provider_quota:
+            token, client, quota_observation, quota_refresh_error = _refresh_provider_quota_observation(
+                root=root,
+                token=token,
+                client=client,
+                progress_fn=progress_fn,
+            )
+
         final_state = load_market_data_dataset_state(root, required=True)
         final_rows = dict(final_state["datasets"])
         state_summary = _dataset_readiness_summary(final_state, target_date=resolved_target)
         ready_count = int(state_summary["archive_ready_dataset_count"])
-        rollup = publish_trading_market_data_v2_auto_rollup(root, target_date=resolved_target, updated_at=now, batch_result=batch)
+        batch_for_rollup = {
+            **batch,
+            "process_data_requests": _client_counts(client)[0] - batch_data_before,
+            "process_usage_requests": _client_counts(client)[1] - batch_usage_before,
+            **quota_observation,
+        }
+        if refresh_provider_quota and quota_refresh_error is not None:
+            # Manual Full Update promises a fresh quota observation. If that
+            # observation failed, preserve the prior exact evidence rather than
+            # stamping an executor estimate as CURRENT at this run's timestamp.
+            for key in ("quota_user_count", "quota_limit", "quota_remaining", "quota_usable_remaining"):
+                batch_for_rollup.pop(key, None)
+        rollup = publish_trading_market_data_v2_auto_rollup(
+            root,
+            target_date=resolved_target,
+            updated_at=now,
+            batch_result=batch_for_rollup,
+        )
         post_plan = build_market_data_due_plan(root, target_date=resolved_target, now=now)
         overall = AUTO_UPDATE_STATUS_UPDATED if ready_count == len(final_rows) else AUTO_UPDATE_STATUS_DEFERRED
         if any(str(dict(final_rows.get(name) or {}).get("status") or "") == "BLOCKED" for name in due):
@@ -559,6 +644,9 @@ def run_trading_market_data_auto_update(
             "archive_status": None if rollup is None else rollup.get("status"),
             "batch_fingerprint": batch.get("batch_fingerprint"),
             "force_refresh": bool(force_refresh_current_target),
+            "quota_refresh_requested": bool(refresh_provider_quota),
+            "quota_refresh_error": quota_refresh_error,
+            **quota_observation,
             "refresh_token": batch.get("refresh_token"),
             "verification": dict(batch.get("verification") or {}),
             "request_date_start": batch.get("request_date_start"),
