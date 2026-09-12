@@ -3095,6 +3095,9 @@ def validate_gui_workbench_contract_case(base_params):
         check,
         (
             ('gui_workbench_registry_lazy_panel_imports', True, 'from services.workbench_ui.single_stock_inspector import' not in workbench_source and 'from services.workbench_ui.portfolio_backtest_inspector import' not in workbench_source and ('from services.workbench_ui.trading_account_panel import' not in workbench_source) and ('from services.workbench_ui.data_ops_panel import' not in workbench_source),),
+            ('gui_workbench_panels_are_first_use_lazy', True, '_request_panel_load' in workbench_source and '_load_panel_factory_worker' in workbench_source and 'panel_factory(notebook)' not in workbench_source,),
+            ('gui_workbench_shell_is_built_before_root_is_shown', True, 'self.root.withdraw()' in workbench_source and 'self._build_ui()' in workbench_source and 'self.root.deiconify()' in workbench_source,),
+            ('gui_workbench_panel_import_is_off_tk_thread', True, 'name=f"workbench-panel-import-{panel_id}"' in workbench_source and 'self._panel_load_results.put' in workbench_source,),
             ('gui_trading_account_panel_uses_account_service_not_raw_json', True, 'services.trading.account_state' in trading_account_panel_source and 'atomic_write_json' not in trading_account_panel_source and ('load_json_strict' not in trading_account_panel_source),),
             ('gui_data_ops_panel_consumes_canonical_read_model', True, 'build_market_data_ops_read_model' in data_ops_panel_source,),
             ('gui_data_ops_panel_uses_canonical_due_worker', True, 'run_trading_market_data_auto_update' in data_ops_panel_source,),

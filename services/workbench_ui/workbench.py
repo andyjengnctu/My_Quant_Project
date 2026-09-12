@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import queue
 import threading
 import tkinter as tk
 import warnings
@@ -671,12 +672,29 @@ class WorkbenchInspectorSharedMixin:
 class StockToolsWorkbench:
     def __init__(self):
         self.root = tk.Tk()
+        # AI: Keep the root hidden until the lightweight notebook shell exists.  The
+        # previous startup called update_idletasks() before building the UI, which let
+        # Windows paint a partially-sized root while expensive panel imports were still
+        # running on the Tk thread.
+        self.root.withdraw()
         configure_workbench_theme(self.root)
         self.root.title(WORKBENCH_TITLE)
         _apply_responsive_window_size(self.root)
-        self.root.update_idletasks()
-        self._maximize_mode = _maximize_root_window(self.root)
+        self._panel_hosts: dict[str, ttk.Frame] = {}
+        self._panel_status_labels: dict[str, ttk.Label] = {}
+        self._panel_instances: dict[str, object] = {}
+        self._panel_loading: set[str] = set()
+        self._panel_load_results: queue.Queue = queue.Queue()
+        self._panel_poll_after_id = None
         self._build_ui()
+        self.root.update_idletasks()
+        self.root.deiconify()
+        self._maximize_mode = _maximize_root_window(self.root)
+        self.root.update_idletasks()
+        # AI: Load only the selected tab after the shell has had a chance to paint.
+        # Other tabs are first-use lazy, so opening Workbench does not import every
+        # charting / portfolio / Trading module up front.
+        self.root.after(60, self._ensure_selected_panel_loaded)
 
     def _build_ui(self):
         container = ttk.Frame(self.root, padding=4, style=WORKBENCH_FRAME_STYLE)
@@ -684,11 +702,110 @@ class StockToolsWorkbench:
 
         notebook = ttk.Notebook(container, style=WORKBENCH_NOTEBOOK_STYLE)
         notebook.pack(fill="both", expand=True)
+        self._notebook = notebook
 
         for panel_spec in PANEL_SPECS:
-            panel_factory = _load_panel_factory(panel_spec["panel_factory_path"])
-            panel = panel_factory(notebook)
-            notebook.add(panel, text=panel_spec["tab_label"])
+            panel_id = str(panel_spec["panel_id"])
+            host = ttk.Frame(notebook, padding=8, style=WORKBENCH_FRAME_STYLE)
+            host.columnconfigure(0, weight=1)
+            host.rowconfigure(0, weight=1)
+            status = ttk.Label(
+                host,
+                text=f"{panel_spec['tab_label']}｜首次開啟時載入",
+                style=WORKBENCH_MUTED_LABEL_STYLE,
+                anchor="center",
+            )
+            status.grid(row=0, column=0, sticky="nsew")
+            notebook.add(host, text=panel_spec["tab_label"])
+            self._panel_hosts[panel_id] = host
+            self._panel_status_labels[panel_id] = status
+
+        notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
+
+    def _selected_panel_id(self):
+        selected = str(self._notebook.select() or "")
+        if not selected:
+            return None
+        for panel_spec in PANEL_SPECS:
+            panel_id = str(panel_spec["panel_id"])
+            host = self._panel_hosts.get(panel_id)
+            if host is not None and str(host) == selected:
+                return panel_id
+        return None
+
+    def _on_notebook_tab_changed(self, _event=None):
+        self._ensure_selected_panel_loaded()
+
+    def _ensure_selected_panel_loaded(self):
+        panel_id = self._selected_panel_id()
+        if panel_id is not None:
+            self._request_panel_load(panel_id)
+
+    def _request_panel_load(self, panel_id):
+        panel_id = str(panel_id)
+        if panel_id in self._panel_instances or panel_id in self._panel_loading:
+            return
+        panel_spec = next((row for row in PANEL_SPECS if str(row["panel_id"]) == panel_id), None)
+        if panel_spec is None:
+            return
+        self._panel_loading.add(panel_id)
+        status = self._panel_status_labels.get(panel_id)
+        if status is not None:
+            status.configure(text=f"{panel_spec['tab_label']}｜載入中…")
+        thread = threading.Thread(
+            target=self._load_panel_factory_worker,
+            args=(panel_id, str(panel_spec["panel_factory_path"])),
+            name=f"workbench-panel-import-{panel_id}",
+            daemon=True,
+        )
+        thread.start()
+        self._schedule_panel_result_poll()
+
+    def _load_panel_factory_worker(self, panel_id, factory_path):
+        try:
+            factory = _load_panel_factory(factory_path)
+        except BaseException as exc:  # propagated to the Tk thread for visible error state
+            self._panel_load_results.put((panel_id, None, exc))
+        else:
+            self._panel_load_results.put((panel_id, factory, None))
+
+    def _schedule_panel_result_poll(self):
+        if self._panel_poll_after_id is None:
+            self._panel_poll_after_id = self.root.after(25, self._drain_panel_load_results)
+
+    def _drain_panel_load_results(self):
+        self._panel_poll_after_id = None
+        while True:
+            try:
+                panel_id, factory, error = self._panel_load_results.get_nowait()
+            except queue.Empty:
+                break
+            self._finish_panel_load(panel_id, factory, error)
+        if self._panel_loading:
+            self._schedule_panel_result_poll()
+
+    def _finish_panel_load(self, panel_id, factory, error):
+        panel_id = str(panel_id)
+        self._panel_loading.discard(panel_id)
+        host = self._panel_hosts.get(panel_id)
+        status = self._panel_status_labels.get(panel_id)
+        if host is None:
+            return
+        if error is not None:
+            if status is not None:
+                status.configure(text=f"頁面載入失敗：{type(error).__name__}: {error}")
+            return
+        try:
+            panel = factory(host)
+            panel.grid(row=0, column=0, sticky="nsew")
+        except BaseException as exc:
+            if status is not None:
+                status.configure(text=f"頁面建立失敗：{type(exc).__name__}: {exc}")
+            return
+        if status is not None:
+            status.destroy()
+            self._panel_status_labels.pop(panel_id, None)
+        self._panel_instances[panel_id] = panel
 
     def run(self):
         self.root.mainloop()
