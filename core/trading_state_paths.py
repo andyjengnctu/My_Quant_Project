@@ -28,9 +28,14 @@ def resolve_trading_fill_transaction_path(project_root) -> Path:
     return resolve_trading_state_root(project_root) / TRADING_FILL_TRANSACTION_FILENAME
 
 
+def resolve_trading_state_mutation_lock_path(project_root) -> Path:
+    return resolve_trading_state_root(project_root) / "state_mutation_lock.sqlite3"
+
+
 __all__ = [
     "resolve_trading_state_root",
     "resolve_trading_account_state_path",
     "resolve_trading_order_state_path",
     "resolve_trading_fill_transaction_path",
+    "resolve_trading_state_mutation_lock_path",
 ]

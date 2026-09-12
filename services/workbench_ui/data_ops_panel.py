@@ -97,7 +97,7 @@ class MarketDataOpsPanel(ttk.Frame):
 
         meters = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
         meters.pack(fill="x", pady=(0, 6))
-        readiness_box = ttk.LabelFrame(meters, text="V2 Archive Readiness", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
+        readiness_box = ttk.LabelFrame(meters, text="V2 Target Freshness", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
         readiness_box.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self._readiness_progress = ttk.Progressbar(readiness_box, maximum=100.0, mode="determinate")
         self._readiness_progress.pack(fill="x")
@@ -212,7 +212,7 @@ class MarketDataOpsPanel(ttk.Frame):
         self._readiness_progress["value"] = readiness_pct
         counts = dict(snapshot.get("status_counts") or {})
         count_text = " | ".join(f"{key} {counts[key]}" for key in sorted(counts))
-        self._readiness_text.set(f"{ready}/{total} ({readiness_pct:.1f}%) | {count_text or '-'}")
+        self._readiness_text.set(f"target {snapshot.get('update_target_date') or '-'} | {ready}/{total} ({readiness_pct:.1f}%) | {count_text or '-'}")
 
         quota_pct = snapshot.get("quota_percent")
         self._quota_progress["value"] = float(quota_pct or 0.0)

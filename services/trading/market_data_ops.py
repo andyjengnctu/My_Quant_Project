@@ -17,7 +17,10 @@ from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
 from services.trading.data_readiness import build_trading_data_readiness
 from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
-from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
+from services.trading.market_data_v2_state import (
+    build_trading_market_data_v2_read_model,
+    resolve_trading_market_data_update_target_date,
+)
 from services.trading.market_data_market_date_discovery import (
     default_next_market_date_probe_at,
     load_market_date_discovery_state,
@@ -58,6 +61,9 @@ def build_market_data_ops_read_model(
     local_now = normalize_market_data_planner_now(now or datetime.now().astimezone())
     consumer_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     target_date = None if consumer_state is None else str(consumer_state.get("market_date") or "") or None
+    # AI: Execution may remain at the common READY horizon while the updater
+    # already targets a newer date. Due/freshness must use the updater's owner.
+    update_target_date = resolve_trading_market_data_update_target_date(root)
     trading_readiness = build_trading_data_readiness(root, verify_consumer_view=False)
     dataset_state = build_market_data_dataset_state_read_model(root)
     v2 = build_trading_market_data_v2_read_model(root)
@@ -66,13 +72,13 @@ def build_market_data_ops_read_model(
 
     dynamic_rows = {str(row.get("dataset")): dict(row) for row in dataset_state.get("datasets") or []}
     decisions = {}
-    if target_date:
+    if update_target_date:
         state_payload = None
         if dataset_state.get("state_ready"):
             from services.trading.market_data_dataset_state import load_market_data_dataset_state
 
             state_payload = load_market_data_dataset_state(root, required=False)
-        plan = plan_market_data_due_datasets(target_date=target_date, now=local_now, state=state_payload)
+        plan = plan_market_data_due_datasets(target_date=update_target_date, now=local_now, state=state_payload)
         decisions = {item.dataset: item for item in plan.decisions}
     else:
         plan = None
@@ -111,8 +117,8 @@ def build_market_data_ops_read_model(
     ready_count = sum(
         1
         for row in rows
-        if target_date is not None
-        and is_market_data_dataset_ready(row, target_date=str(target_date))
+        if update_target_date is not None
+        and is_market_data_dataset_ready(row, target_date=str(update_target_date))
     )
     due_count = sum(bool(row.get("due")) for row in rows)
     dataset_next_check_at = _earliest_iso(row.get("next_check_at") for row in rows)
@@ -120,15 +126,15 @@ def build_market_data_ops_read_model(
     discovery_next_check_at = None
     discovery_last_result = None
     discovery_last_probe_at = None
-    if target_date:
-        if discovery_state is not None and str(discovery_state.get("current_market_date") or "") == target_date:
+    if update_target_date:
+        if discovery_state is not None and str(discovery_state.get("current_market_date") or "") == update_target_date:
             discovery_next_check_at = discovery_state.get("next_probe_at")
             discovery_last_result = discovery_state.get("last_probe_result")
             discovery_last_probe_at = discovery_state.get("last_probe_at")
         else:
             discovery_next_check_at = default_next_market_date_probe_at(
                 now=local_now,
-                current_market_date=target_date,
+                current_market_date=update_target_date,
                 policy=auto_policy,
             ).isoformat()
     next_check_at = _earliest_iso((dataset_next_check_at, discovery_next_check_at))
@@ -163,6 +169,7 @@ def build_market_data_ops_read_model(
         "generated_at": local_now.isoformat(),
         "provider_calls": 0,
         "trading_target_date": target_date,
+        "update_target_date": update_target_date,
         "trading_consumer_state_exists": consumer_state is not None,
         "trading_market_data_source": None if consumer_state is None else consumer_state.get("source"),
         "trading_strategy_id": trading_readiness.get("strategy_id"),
@@ -219,7 +226,7 @@ def build_market_data_ops_read_model(
         "latest_auto_usage_requests": v2.get("latest_auto_usage_requests"),
         "latest_request_count": v2.get("latest_request_count"),
         "latest_row_count": v2.get("latest_row_count"),
-        "overall_v2_ready": bool(target_date and len(rows) and ready_count == len(rows)),
+        "overall_v2_ready": bool(update_target_date and len(rows) and ready_count == len(rows)),
         "datasets": rows,
         "recent_activity": recent_activity,
     }

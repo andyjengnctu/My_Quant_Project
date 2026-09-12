@@ -696,6 +696,37 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         check("permanent_4xx_no_hidden_retry", 1, blocked_summary.http_attempts)
         check("permanent_block_leaves_unstarted_jobs_pending", True, blocked_summary.pending > 0)
 
+    # AI: A slow sink must retain ownership after both ledger leases expire.
+    # The contender must fail before provider use or a duplicate commit.
+    with TemporaryDirectory() as td:
+        live_clock = _Clock()
+        live_ledger = MarketDataJobLedger(Path(td) / "live.sqlite3")
+        first_client, second_client = _QuotaThenSuccessClient(), _QuotaThenSuccessClient()
+        first_client.quota_raised = second_client.quota_raised = True
+        first_client.usage_values = second_client.usage_values = []
+        first_executor = MarketDataBootstrapExecutor(ledger=live_ledger, client=first_client, policy=policy, now_fn=live_clock.now, sleep_fn=live_clock.sleep, owner_id="live-first")
+        second_executor = MarketDataBootstrapExecutor(ledger=live_ledger, client=second_client, policy=policy, now_fn=live_clock.now, sleep_fn=live_clock.sleep, owner_id="live-second")
+        attempts = []
+
+        def slow_sink(request, frame):
+            if not attempts:
+                live_clock.sleep(max(policy.executor_lock_seconds, policy.job_lease_seconds) + 1)
+                try:
+                    second_executor.run(manifest=manifest, sink=_sink)
+                except RuntimeError:
+                    attempts.append("blocked")
+                else:
+                    attempts.append("entered")
+            return MarketDataCommitReceipt(committed=True, row_count=len(frame), content_sha256="a" * 64)
+
+        live_summary = first_executor.run(manifest=manifest, sink=slow_sink)
+        check("slow_commit_retains_live_executor_ownership_past_lease", ["blocked"], attempts)
+        check("slow_commit_finishes_every_request_once", (WORKLOAD_DONE, manifest.total_requests), (live_summary.workload_status, live_summary.http_attempts))
+        check("live_executor_contender_uses_zero_provider_calls", (0, 0), (second_client.data_request_count, second_client.usage_request_count))
+        resumed_done = second_executor.run(manifest=manifest, sink=_sink)
+        check("completed_executor_releases_lock_for_done_resume", WORKLOAD_DONE, resumed_done.workload_status)
+        check("done_resume_still_uses_zero_provider_calls", (0, 0), (second_client.data_request_count, second_client.usage_request_count))
+
     summary.update(
         {
             "logical_requests": manifest.total_requests,
@@ -2397,6 +2428,21 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         )
         check("data_ops_local_read_model_exposes_scheduler_status", True, bool(ops_model.get("scheduler_registration_status")))
         check("data_ops_read_model_covers_all_51_datasets", len(freshness_contracts), ops_model.get("dataset_count"))
+        # AI: A lagging execution consumer must not pull the updater's target
+        # backwards in the local Due/freshness view.
+        with (
+            patch("services.trading.market_data_v2_state.find_latest_ready_provider_snapshot", return_value=(Path("provider.json"), {"as_of_date": "2026-09-07"})),
+            patch("services.trading.market_data_v2_state.load_trading_market_data_v2_state", return_value={"last_attempt_target_date": "2026-09-08"}),
+            patch("services.trading.market_data_ops.load_trading_v2_consumer_state", return_value={"market_date": "2026-09-07"}),
+            patch("services.trading.market_data_ops.build_trading_data_readiness", return_value={}),
+            patch("services.trading.market_data_ops.build_trading_market_data_v2_read_model", return_value={}),
+            patch("services.trading.market_data_ops.plan_market_data_due_datasets", wraps=plan_market_data_due_datasets) as due_planner,
+        ):
+            advanced_ops = build_market_data_ops_read_model(state_root, now=datetime(2026, 9, 8, 17, 50, tzinfo=ZoneInfo("Asia/Taipei")))
+        check("data_ops_preserves_execution_consumer_date", "2026-09-07", advanced_ops["trading_target_date"])
+        check("data_ops_uses_shared_update_target_date", "2026-09-08", advanced_ops["update_target_date"])
+        check("data_ops_due_plan_follows_update_target", "2026-09-08", due_planner.call_args.kwargs["target_date"])
+        check("data_ops_price_becomes_due_at_new_update_target", True, next(row for row in advanced_ops["datasets"] if row["dataset"] == "TaiwanStockPrice")["due"])
         loaded_state = load_market_data_dataset_state(state_root, required=True)
         check("dataset_state_round_trip_preserves_fingerprint", dataset_state["state_fingerprint"], loaded_state["state_fingerprint"])
 
@@ -3167,7 +3213,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             def __getattr__(self, name):
                 raise AssertionError(f"discovery 尚未 due 時不得呼叫 provider: {name}")
         with patch(
-            "services.trading.market_data_auto_update.find_latest_ready_provider_snapshot",
+            "services.trading.market_data_v2_state.find_latest_ready_provider_snapshot",
             return_value=(Path("provider_snapshot_manifest.json"), {"as_of_date": "2026-09-07"}),
         ):
             scheduler_local = run_trading_market_data_auto_update(
@@ -3220,7 +3266,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             )
         with (
             patch(
-                "services.trading.market_data_auto_update.find_latest_ready_provider_snapshot",
+                "services.trading.market_data_v2_state.find_latest_ready_provider_snapshot",
                 return_value=(Path("provider_snapshot_manifest.json"), {"as_of_date": "2026-09-07"}),
             ),
             patch(
@@ -3516,6 +3562,17 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         )
         check("future_v2_dependency_fails_closed_on_same_target_error", False, future_error["ready"])
 
+    from datetime import timedelta
+    from services.trading.market_data_auto_update import _auto_update_lock
+    with TemporaryDirectory() as live_worker_dir:
+        live_root = Path(live_worker_dir)
+        lock_now = datetime(2026, 9, 8, 18, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        with _auto_update_lock(live_root, now=lock_now, lease_minutes=1) as first_owner:
+            with _auto_update_lock(live_root, now=lock_now + timedelta(minutes=2), lease_minutes=1) as late_contender:
+                check("auto_update_live_worker_cannot_be_replaced_after_lease_expiry", (True, False), (first_owner, late_contender))
+        with _auto_update_lock(live_root, now=lock_now + timedelta(minutes=2), lease_minutes=1) as next_owner:
+            check("auto_update_finished_worker_releases_process_lock", True, next_owner)
+
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
     update_source = (project_root / "services" / "trading" / "market_data_update.py").read_text(encoding="utf-8")
@@ -3591,7 +3648,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("full_integrity_audit_has_no_provider_client_dependency", False, "FinMindHttpClient" in integrity_source or "request_finmind" in integrity_source)
     check("v2_auto_updater_does_not_import_legacy_trading_update_owner", False, "services.trading.market_data_update" in auto_update_source)
     check("v2_auto_updater_does_not_read_legacy_trading_snapshot_for_target", False, "load_trading_market_data_snapshot" in auto_update_source)
-    check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "find_latest_ready_provider_snapshot" in auto_update_source and "load_trading_market_data_v2_state" in auto_update_source and "load_market_date_discovery_state" in auto_update_source)
+    check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "resolve_trading_market_data_update_target_date as _resolve_target_date" in auto_update_source and "find_latest_ready_provider_snapshot" in state_source and "load_market_date_discovery_state" in state_source)
     check("v2_failure_state_remains_owned_by_v2_sync_path", True, "publish_trading_market_data_v2_state(" in v2_sync_source and '"last_error": error' in v2_sync_source)
     check("workbench_exposes_v2_archive_status", True, "V2 Archive" in panel_source)
     check("scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)

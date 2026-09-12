@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import time
 from typing import Callable
 from uuid import uuid4
@@ -17,6 +18,7 @@ import pandas as pd
 from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
 from core.market_data_execution_policy import MarketDataExecutionPolicy, get_market_data_execution_policy
 from core.market_data_storage_contract import MarketDataCommitError, MarketDataCommitReceipt
+from core.process_lock import try_process_lock
 from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError, FinMindUsage
 from services.downloader.market_data_ledger import (
     JOB_BLOCKED,
@@ -337,6 +339,22 @@ class MarketDataBootstrapExecutor:
         manifest: BootstrapRequestManifest,
         sink: Callable[[BootstrapHttpRequest, pd.DataFrame], MarketDataCommitReceipt],
     ) -> LedgerSummary:
+        # AI: A lease may expire during a slow storage commit. Keep live owners
+        # exclusive through publication and DONE; hash the key for Windows paths.
+        workload_key = self.ledger.workload_id_for_manifest(manifest)
+        lock_key = sha256(workload_key.encode("utf-8")).hexdigest()
+        lock_dir = self.ledger.path.with_name(self.ledger.path.name + ".locks")
+        with try_process_lock(lock_dir / f"{lock_key}.sqlite3") as acquired:
+            if not acquired:
+                raise RuntimeError("Market Data workload 已有執行中的 executor；請等待完成後重試")
+            return self._run_exclusive(manifest=manifest, sink=sink)
+
+    def _run_exclusive(
+        self,
+        *,
+        manifest: BootstrapRequestManifest,
+        sink: Callable[[BootstrapHttpRequest, pd.DataFrame], MarketDataCommitReceipt],
+    ) -> LedgerSummary:
         workload_id = self.ledger.seed_manifest(manifest, now=self._now())
         now = self._now()
         self.ledger.acquire_executor_lock(
@@ -345,8 +363,8 @@ class MarketDataBootstrapExecutor:
             now=now,
             lease_until=self._lock_until(now),
         )
-        self.ledger.recover_orphaned_running_jobs(workload_id, owner_id=self.owner_id, now=now)
         try:
+            self.ledger.recover_orphaned_running_jobs(workload_id, owner_id=self.owner_id, now=now)
             summary = self.ledger.get_summary(workload_id)
             if summary.blocked:
                 return summary

@@ -7,6 +7,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, load_json_strict
+from services.trading.state_lock import serialized_trading_state_mutation
 from core.runtime_utils import get_taipei_now
 from core.trading_state_paths import (
     resolve_trading_account_state_path as _resolve_trading_account_state_path,
@@ -103,6 +104,7 @@ def load_trading_account_state(project_root, *, required: bool = True) -> dict[s
     return state
 
 
+@serialized_trading_state_mutation
 def initialize_trading_account_state(project_root, *, cash=None) -> dict[str, Any]:
     path = resolve_trading_account_state_path(project_root)
     if path.exists():
@@ -116,6 +118,7 @@ def initialize_trading_account_state(project_root, *, cash=None) -> dict[str, An
     return load_trading_account_state(project_root)
 
 
+@serialized_trading_state_mutation
 def _mutate_account(
     project_root,
     *,

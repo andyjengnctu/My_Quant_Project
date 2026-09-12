@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, load_json_strict
+from services.trading.state_lock import serialized_trading_state_mutation
 from core.runtime_utils import get_taipei_now
 from core.trading_state_paths import (
     resolve_trading_fill_transaction_path,
@@ -106,6 +107,7 @@ def _persist_mutation(
     return load_trading_order_state(project_root, required=True)
 
 
+@serialized_trading_state_mutation
 def mutate_trading_order_state(
     project_root,
     *,
@@ -131,6 +133,7 @@ def mutate_trading_order_state(
     )
 
 
+@serialized_trading_state_mutation
 def confirm_trading_order_cancellation(
     project_root,
     *,

@@ -20,6 +20,7 @@ from services.trading.daily_workflow import (
     run_trading_market_data_update,
 )
 from services.trading.strategy_param_training import run_trading_strategy_param_training
+from services.trading.state_lock import TradingStateBusyError
 from services.trading.order_planning import build_trading_proposed_order_plan
 from services.trading.position_rollforward import run_trading_position_rollforward
 from services.trading.operations_status import build_trading_operations_status
@@ -815,7 +816,7 @@ class TradingAccountPanel(ttk.Frame):
         recovery_error = None
         try:
             recover_trading_fill_transaction(WORKBENCH_PROJECT_ROOT)
-        except TradingFillRevisionConflict as exc:
+        except (TradingFillRevisionConflict, TradingStateBusyError) as exc:
             recovery_error = str(exc)
         self.refresh_account()
         self.refresh_order_state()
@@ -926,6 +927,12 @@ class TradingAccountPanel(ttk.Frame):
             return
         self._workflow_thread = None
         self.refresh_daily_workflow()
+        self.refresh_order_state()
+        if action in {"all", "rollforward"}:
+            # AI: Earlier workflow stages may already have committed state.
+            self.refresh_account()
+            self.refresh_protection_plan()
+            self.refresh_indicator_exit_plan()
         self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
         self.refresh_operations_status()
         messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
@@ -1231,20 +1238,23 @@ class TradingAccountPanel(ttk.Frame):
             )
         self.refresh_daily_workflow()
         self.refresh_order_state()
+        if action in {"all", "rollforward"}:
+            self.refresh_account()
+            self.refresh_protection_plan()
+            self.refresh_indicator_exit_plan()
         if action == "data":
             v2 = dict(result.get("market_data_v2_archive") or {})
             self._workflow_status_var.set(
-                f"資料更新完成：market {result.get('market_date') or '-'} | 成功 {result.get('count_success', 0)} | "
-                f"已最新 {result.get('count_skipped_latest', 0)} | 下載失敗 {result.get('download_error_count', 0)} | "
-                f"V2 Archive {v2.get('status') or 'NOT_BOOTSTRAPPED'}"
+                f"資料更新完成：market {result.get('market_date') or '-'} | "
+                f"新進場池 {result.get('current_execution_pool_ticker_count', 0)} 檔 | "
+                f"訓練池 {result.get('training_ticker_count', 0)} 檔 | "
+                f"V2 {v2.get('status') or '-'} | "
+                f"data/usage requests {v2.get('data_requests', 0)}/{v2.get('usage_requests', 0)}"
             )
         elif action == "rollforward":
             self._workflow_status_var.set(
                 f"持股日終推進完成：持股 {result.get('processed_position_count', 0)} 檔 | completed bars {result.get('processed_bar_count', 0)} | account rev {result.get('account_revision', '-')}"
             )
-            self.refresh_account()
-            self.refresh_protection_plan()
-            self.refresh_indicator_exit_plan()
         elif action == "params":
             self._workflow_status_var.set(
                 f"Params 更新完成：through {result.get('latest_data_date') or '-'} | {result.get('selected_policy') or result.get('param_selector') or '-'}"

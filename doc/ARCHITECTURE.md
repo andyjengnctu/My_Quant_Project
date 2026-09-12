@@ -86,6 +86,7 @@ project/
 │  ├─ console_report.py               # 全專案簡易console格式SSOT
 │  ├─ path_utils.py                   # 跨平台path判定／project-relative顯示path SSOT
 │  ├─ file_integrity.py               # file／canonical-JSON hash SSOT
+│  ├─ process_lock.py                 # local process-owned SQLite mutex；跨 thread/process 的 non-blocking critical section
 │  ├─ serialization_utils.py          # 共用output text／JSON-native serialization SSOT
 │  ├─ runtime_utils.py                # 共用runtime／environment flag helper
 │  ├─ model_paths.py                  # models 目錄與預設參數來源解析
@@ -550,6 +551,16 @@ Selected-dataset Trading manifests retain the full current registry fingerprint;
 
 Daily executor 的 progress event 是 execution SSOT 的 observer，不新增第二套 request/quota 計數：console 會即時顯示 completed/total、dataset/data_id、RUN/DONE/REUSE、process data/usage request 與 executor 已知 quota snapshot；WAIT_QUOTA 亦沿用 executor quota observation，不為 UI 額外打 usage request。Daily final summary 必須分開顯示 **Target freshness READY x/51** 與 active strategy 的 **Trading target READY x/N**；前者只描述 current target freshness，不得冒充歷史 archive completeness，後者也不得取代 common-ready execution horizon。Force-refresh 另輸出 schema-observed 與 non-blocking StockInfo broad-reference diagnostics；不同 dataset 在沒有 authoritative dataset-specific expected universe 時，instrument completeness 必須維持 `UNVERIFIED`，不能因停牌或 provider 合法缺列而製造假 MATCH/DIFF。Research PIT universe與scientific membership contract完全不變。
 Daily final summary 的 `Target freshness pending` 使用表格化 operator view：dataset identity 的繁體中文名稱只由 `core/market_data_dataset_registry.py` 的 canonical display-name mapping 提供，renderer 不得另建對照表；pending row 同時呈現 provider 最新資料日、最後成功 sync timestamp、publication first-check timestamp、下一次檢查 timestamp、schema 與 request coverage。日期資料與 observation timestamp 必須分欄保存／顯示，不能因最後成功查詢時間較新就把較舊 `latest_data_date` 誤判為 target READY。過長 `last_error` 不擠入主表，console 以相同原因分組輸出，保留完整診斷內容。
+
+### Downloader／Trading mutation ownership 與 Workbench 狀態銜接
+
+AI：2026-09-12 工程修正。`core/process_lock.py` 以獨立 SQLite `BEGIN IMMEDIATE` transaction 持有 local mutex；正常退出、例外或程序終止後由 connection／OS 釋放。lock database 是同步工件，不是帳務真理，也不能在持有期間 unlink，否則可能產生兩個 inode／兩把鎖。busy 立即回傳，其他 SQLite／I/O 問題繼續拋出。
+
+AI：V2 auto updater 在檢查、建立與清除 JSON lease 的整個執行期持有 process mutex；即使 lease 時間已到，仍在工作的 owner 不能被接管。通用 `MarketDataBootstrapExecutor.run` 另對 ledger path＋workload identity 持有同一 primitive，範圍包含 orphan recovery、provider request、Parquet publication 及 ledger DONE，避免慢速 commit 超過 lease 後重複提交。每個 workload 的 lock filename 使用 identity hash，以相容 Windows 路徑。既有 quota／retry／lease recovery policy 不變；不同 workload 不共用 executor mutex。
+
+AI：`services/trading/state_lock.py` 是 account／orders／confirmed fill mutation 的共用 serialization owner；路徑由 `core/trading_state_paths.py` 唯一解析為 `state/trading/state_mutation_lock.sqlite3`。初始化、現金／持股修正、掛單／取消、BUY／SELL fill 與 fill journal recovery 必須在同一 mutex 中完成讀取、revision／SHA 檢查、journal／state 寫入與收尾。同 thread 的 fill → recovery 可以重入，其他 thread／process 收到 busy 後須等待並刷新再試。既有 revision、hash chain、兩檔 write-ahead recovery 與帳務公式保留；mutex 不取代它們。read model 仍依 journal 與 lineage 規則拒絕不完整狀態。
+
+AI：`services/trading/market_data_v2_state.py::resolve_trading_market_data_update_target_date` 統一持有 Provider Snapshot／V2 operational state／market-date discovery 的更新目標解析。Data Ops 的 `update_target_date` 與 Due／Target Freshness 採用此 owner；`trading_target_date` 繼續表示 execution consumer 的共同 READY 日期，兩者可以不同。此本機 read model 不消耗 provider quota。Workbench 更新完成摘要直接使用 V2 request counts、execution pool 與 training pool；完整每日流程／日終推進完成或中途失敗後，都刷新可能已提交的帳戶、掛單、保護單與指標出場狀態。上述變更不修改 Research frozen views、模型／策略設定或常駐 Research report contract。
 
 ### Trading Canonical Provider Fetch Ownership（Round 6；歷史，Round 8 已 supersede）
 

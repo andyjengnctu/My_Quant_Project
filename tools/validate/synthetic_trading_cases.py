@@ -507,6 +507,45 @@ def validate_trading_account_state_contract_case(base_params):
         check("persisted_state_is_single_account_file", True, state_path.is_file())
         check("separate_positions_truth_file_is_not_created", False, (state_path.parent / "positions.json").exists())
 
+    # AI: Pause a real commit after its revision checks; another caller must
+    # not accept the same revision and overwrite that pending commit.
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from services.trading.state_lock import TradingStateBusyError
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        initialize_trading_account_state(root, cash=100)
+        writing, release = Event(), Event()
+
+        def paused_write(path, payload):
+            writing.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("synthetic commit was not released")
+            atomic_write_json(path, payload)
+
+        with patch("services.trading.account_state.atomic_write_json", side_effect=paused_write):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(set_trading_cash_balance, root, cash=90, expected_revision=0)
+                try:
+                    check("concurrent_cash_test_reaches_commit_window", True, writing.wait(timeout=5))
+                    try:
+                        set_trading_cash_balance(root, cash=80, expected_revision=0)
+                    except TradingStateBusyError:
+                        busy_rejected = True
+                    else:
+                        busy_rejected = False
+                    check("concurrent_cash_change_rejects_before_lost_update", True, busy_rejected)
+                finally:
+                    release.set()
+                committed = pending.result(timeout=5)
+        actual = load_trading_account_state(root)
+        check("concurrent_cash_change_keeps_one_committed_revision", 1, actual["revision"])
+        check("concurrent_cash_change_preserves_first_commit", money_to_milli(90), actual["cash_milli"])
+        check("concurrent_cash_change_preserves_event_chain", [0, 1], [row["revision"] for row in actual["events"]])
+        next_state = set_trading_cash_balance(root, cash=80, expected_revision=committed["revision"])
+        check("completed_commit_releases_lock_for_next_revision", 2, next_state["revision"])
+
     summary["checks"] = len(results)
     return results, summary
 
@@ -2350,6 +2389,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_workbench')
 
     from services.workbench_ui.trading_account_panel import (
+        TradingAccountPanel,
         build_trading_account_panel_snapshot,
         parse_trading_money_text,
         parse_trading_qty_text,
@@ -2401,6 +2441,48 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         expected_policy = get_trading_policy_snapshot()
         check("workbench_snapshot_uses_current_trading_strategy_config", expected_policy["strategy_id"], snapshot["policy"]["strategy_id"])
         check("workbench_snapshot_uses_current_param_selector_config", expected_policy["param_selector"], snapshot["policy"]["param_selector"])
+
+    # AI: Exercise the real completion callbacks without creating a Tk window.
+    from types import SimpleNamespace
+    refreshed, messages = [], []
+    panel = SimpleNamespace(
+        _workflow_token=7, _workflow_thread=object(),
+        _workflow_status_var=SimpleNamespace(set=messages.append),
+        _reload_candidate_rows=lambda rows: refreshed.append("candidates"),
+    )
+    for method in (
+        "refresh_daily_workflow", "refresh_order_state", "refresh_account",
+        "refresh_protection_plan", "refresh_indicator_exit_plan", "refresh_operations_status",
+    ):
+        setattr(panel, method, lambda name=method: refreshed.append(name))
+    TradingAccountPanel._finish_workflow_success(panel, "data", 7, {
+        "market_date": "2026-09-09", "current_execution_pool_ticker_count": 17,
+        "training_ticker_count": 23,
+        "market_data_v2_archive": {"status": "UPDATED", "data_requests": 31, "usage_requests": 2},
+    })
+    check("workbench_data_completion_uses_v2_result_fields", True, all(
+        text in messages[-1] for text in ("2026-09-09", "新進場池 17", "訓練池 23", "V2 UPDATED", "31/2")
+    ))
+    check("workbench_data_completion_drops_retired_download_counts", False, "成功 0" in messages[-1])
+    required_refreshes = {"refresh_account", "refresh_order_state", "refresh_protection_plan", "refresh_indicator_exit_plan"}
+    for action in ("all", "rollforward"):
+        refreshed.clear()
+        TradingAccountPanel._finish_workflow_success(panel, action, 7, {})
+        check(f"workbench_{action}_success_refreshes_committed_trading_state", True, required_refreshes.issubset(refreshed))
+        refreshed.clear()
+        with patch("services.workbench_ui.trading_account_panel.messagebox.showerror"):
+            TradingAccountPanel._finish_workflow_error(panel, action, 7, RuntimeError("synthetic later-stage failure"))
+        check(f"workbench_{action}_failure_refreshes_earlier_committed_stages", True, required_refreshes.issubset(refreshed))
+    refreshed.clear()
+    TradingAccountPanel._finish_workflow_success(panel, "all", 6, {})
+    check("workbench_ignores_stale_worker_completion", [], refreshed)
+    from services.trading.state_lock import TradingStateBusyError
+    with (
+        patch("services.workbench_ui.trading_account_panel.recover_trading_fill_transaction", side_effect=TradingStateBusyError("synthetic concurrent commit")),
+        patch("services.workbench_ui.trading_account_panel.messagebox.showerror") as notice,
+    ):
+        TradingAccountPanel._refresh_all_trading_state(panel)
+    check("workbench_local_refresh_handles_busy_recovery", True, notice.called and required_refreshes.issubset(refreshed))
 
     summary["checks"] = len(results)
     return results, summary

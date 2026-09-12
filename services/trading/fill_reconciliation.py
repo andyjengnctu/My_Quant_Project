@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from services.trading.state_lock import serialized_trading_state_mutation
 from core.exact_accounting import milli_to_price
 from core.params_io import build_params_from_mapping
 from core.runtime_utils import get_taipei_now
@@ -72,6 +73,7 @@ def _read_orders(path: Path) -> dict[str, Any]:
     return state
 
 
+@serialized_trading_state_mutation
 def recover_trading_fill_transaction(project_root) -> bool:
     """Finish a previously prepared two-state fill commit after interruption.
 
@@ -119,6 +121,7 @@ def recover_trading_fill_transaction(project_root) -> bool:
     return True
 
 
+@serialized_trading_state_mutation
 def confirm_trading_buy_order_fill(
     project_root,
     *,
@@ -284,6 +287,7 @@ def confirm_trading_buy_order_fill(
     }
 
 
+@serialized_trading_state_mutation
 def _confirm_trading_sell_order_fill(
     project_root,
     *,

@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
+from core.process_lock import try_process_lock
+
 from core.market_data_auto_update_policy import get_market_data_auto_update_policy
 from core.market_data_dataset_readiness import (
     MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
@@ -41,8 +43,7 @@ from services.trading.market_data_dataset_state import (
     schedule_market_data_auto_update_outcomes,
 )
 from services.trading.market_data_v2_state import (
-    find_latest_ready_provider_snapshot,
-    load_trading_market_data_v2_state,
+    resolve_trading_market_data_update_target_date as _resolve_target_date,
     publish_trading_market_data_v2_auto_rollup,
 )
 from services.trading.market_data_market_date_discovery import (
@@ -50,7 +51,6 @@ from services.trading.market_data_market_date_discovery import (
     DISCOVERY_RESULT_NEW_DATE,
     DISCOVERY_RESULT_NO_NEW_DATE,
     DISCOVERY_RESULT_WAIT_QUOTA,
-    load_market_date_discovery_state,
     plan_market_date_discovery,
     record_market_date_probe_result,
 )
@@ -70,27 +70,6 @@ def _local_now(now_fn: Callable[[], datetime] | None) -> datetime:
     if value.tzinfo is None:
         return value.astimezone()
     return value
-
-
-def _resolve_target_date(project_root: Path, explicit: str | None) -> str | None:
-    if explicit:
-        return str(explicit)
-    provider = find_latest_ready_provider_snapshot(project_root)
-    if provider is None:
-        return None
-    _provider_path, provider_payload = provider
-    candidates = [str(provider_payload.get("as_of_date") or "").strip()]
-    archive_state = load_trading_market_data_v2_state(project_root, required=False)
-    if archive_state is not None:
-        candidates.extend(
-            str(archive_state.get(key) or "").strip()
-            for key in ("latest_sync_target_date", "last_attempt_target_date")
-        )
-    discovery_state = load_market_date_discovery_state(project_root, required=False)
-    if discovery_state is not None:
-        candidates.append(str(discovery_state.get("current_market_date") or "").strip())
-    resolved = [value for value in candidates if value]
-    return max(resolved) if resolved else None
 
 
 def _next_check_at(plan) -> str | None:
@@ -259,6 +238,19 @@ def _discover_new_market_date_if_due(
 
 @contextmanager
 def _auto_update_lock(project_root: Path, *, now: datetime, lease_minutes: int):
+    path = resolve_trading_market_data_v2_auto_update_lock_path(project_root)
+    # AI: The lease is crash-recovery metadata, not proof a live worker stopped.
+    # Hold a process-owned mutex while checking/publishing/removing that metadata.
+    with try_process_lock(path.with_suffix(path.suffix + ".sqlite3")) as acquired:
+        if not acquired:
+            yield False
+            return
+        with _auto_update_lease(project_root, now=now, lease_minutes=lease_minutes) as leased:
+            yield leased
+
+
+@contextmanager
+def _auto_update_lease(project_root: Path, *, now: datetime, lease_minutes: int):
     path = resolve_trading_market_data_v2_auto_update_lock_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     owner = f"auto-{uuid4().hex}"

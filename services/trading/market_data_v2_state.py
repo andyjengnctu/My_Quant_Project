@@ -42,6 +42,30 @@ def load_trading_market_data_v2_state(project_root, *, required: bool = False) -
     return payload
 
 
+def resolve_trading_market_data_update_target_date(project_root: Path, explicit: str | None = None) -> str | None:
+    from services.trading.market_data_market_date_discovery import load_market_date_discovery_state
+
+    if explicit:
+        return str(explicit)
+    provider = find_latest_ready_provider_snapshot(project_root)
+    if provider is None:
+        return None
+    _provider_path, provider_payload = provider
+    candidates = [str(provider_payload.get("as_of_date") or "").strip()]
+    archive_state = load_trading_market_data_v2_state(project_root, required=False)
+    if archive_state is not None:
+        candidates.extend(
+            str(archive_state.get(key) or "").strip()
+            for key in ("latest_sync_target_date", "last_attempt_target_date")
+        )
+    discovery_state = load_market_date_discovery_state(project_root, required=False)
+    if discovery_state is not None:
+        candidates.append(str(discovery_state.get("current_market_date") or "").strip())
+    resolved = [value for value in candidates if value]
+    return max(resolved) if resolved else None
+
+
+
 def publish_trading_market_data_v2_state(project_root, payload: dict[str, Any]) -> dict[str, Any]:
     state = {
         "schema_version": TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
@@ -225,6 +249,7 @@ __all__ = [
     "find_latest_ready_provider_snapshot",
     "find_ready_provider_snapshot_by_fingerprint",
     "load_trading_market_data_v2_state",
+    "resolve_trading_market_data_update_target_date",
     "publish_trading_market_data_v2_state",
     "publish_trading_market_data_v2_failure",
     "publish_trading_market_data_v2_auto_rollup",
