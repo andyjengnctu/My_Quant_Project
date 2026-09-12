@@ -17,6 +17,7 @@ from services.trading.market_data_scheduler import (
 )
 from services.trading.market_data_update import run_trading_market_data_update
 from services.workbench_ui.workbench import (
+    WORKBENCH_ACCENT,
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
     WORKBENCH_ERROR,
@@ -30,6 +31,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_MUTED_LABEL_STYLE,
     WORKBENCH_NOTEBOOK_STYLE,
     WORKBENCH_SUCCESS,
+    WORKBENCH_SURFACE,
     WORKBENCH_SUCCESS_LABEL_STYLE,
     WORKBENCH_TREE_STYLE,
     WORKBENCH_UI_FONT,
@@ -80,20 +82,105 @@ def _color_for_tag(tag: str) -> str:
     }.get(str(tag), WORKBENCH_TEXT)
 
 
-_STATUS_MARKERS = {
-    "success": "🟢",
-    "warning": "🟡",
-    "error": "🔴",
-    "muted": "⚪",
-    "info": "🔵",
-}
+class _TreeCellColorOverlay:
+    """Render true per-cell status colors over a single Treeview without splitting the table."""
 
+    def __init__(self, tree: ttk.Treeview, colored_columns: tuple[str, ...]):
+        self._tree = tree
+        self._colored_columns = frozenset(str(column) for column in colored_columns)
+        self._cells: dict[tuple[str, str], tuple[str, str]] = {}
+        self._labels: dict[tuple[str, str], tk.Label] = {}
+        self._sync_job: str | None = None
+        for sequence in ("<Configure>", "<B1-Motion>", "<ButtonRelease-1>", "<<TreeviewSelect>>"):
+            tree.bind(sequence, self.schedule_sync, add="+")
 
-def _status_display(value: object) -> str:
-    text = str(value or "-").strip() or "-"
-    if text == "-":
-        return text
-    return f"{_STATUS_MARKERS[_status_tag(text)]} {text}"
+    def set_cell(self, iid: str, column: str, value: object) -> None:
+        column_name = str(column)
+        if column_name not in self._colored_columns:
+            raise ValueError(f"Unsupported colored Treeview column: {column_name}")
+        text = str(value or "-").strip() or "-"
+        self._cells[(str(iid), column_name)] = (text, _color_for_tag(_status_tag(text)))
+        self.schedule_sync()
+
+    def clear(self) -> None:
+        self._cells.clear()
+        for label in self._labels.values():
+            try:
+                label.destroy()
+            except tk.TclError:
+                pass
+        self._labels.clear()
+        self.schedule_sync()
+
+    def schedule_sync(self, *_args) -> None:
+        if self._sync_job is not None:
+            return
+        try:
+            self._sync_job = self._tree.after_idle(self._sync)
+        except tk.TclError:
+            self._sync_job = None
+
+    def _sync(self) -> None:
+        self._sync_job = None
+        try:
+            if not self._tree.winfo_exists():
+                return
+            selected = set(self._tree.selection())
+            for key, (text, color) in tuple(self._cells.items()):
+                iid, column = key
+                bbox = self._tree.bbox(iid, column)
+                if not bbox:
+                    label = self._labels.get(key)
+                    if label is not None:
+                        label.place_forget()
+                    continue
+                x, y, width, height = (int(part) for part in bbox)
+                if width <= 2 or height <= 2:
+                    continue
+                label = self._labels.get(key)
+                if label is None:
+                    label = tk.Label(
+                        self._tree,
+                        borderwidth=0,
+                        highlightthickness=0,
+                        padx=3,
+                        pady=0,
+                        anchor="w",
+                        font=WORKBENCH_UI_FONT,
+                        cursor="arrow",
+                        takefocus=0,
+                    )
+                    label.bind("<Button-1>", lambda _event, row_iid=iid: self._select_row(row_iid))
+                    label.bind("<MouseWheel>", self._on_mousewheel)
+                    self._labels[key] = label
+                label.configure(
+                    text=text,
+                    foreground=color,
+                    background=WORKBENCH_ACCENT if iid in selected else WORKBENCH_SURFACE,
+                )
+                label.place(x=x + 1, y=y + 1, width=max(1, width - 2), height=max(1, height - 2))
+        except tk.TclError:
+            return
+
+    def _select_row(self, iid: str):
+        try:
+            self._tree.selection_set(iid)
+            self._tree.focus(iid)
+            self._tree.event_generate("<<TreeviewSelect>>")
+        except tk.TclError:
+            return "break"
+        self.schedule_sync()
+        return "break"
+
+    def _on_mousewheel(self, event):
+        try:
+            delta = int(getattr(event, "delta", 0) or 0)
+            if delta:
+                self._tree.yview_scroll(-1 if delta > 0 else 1, "units")
+                self.schedule_sync()
+        except tk.TclError:
+            pass
+        return "break"
 
 
 class MarketDataOpsPanel(ttk.Frame):
@@ -102,6 +189,7 @@ class MarketDataOpsPanel(ttk.Frame):
         self._action_thread: threading.Thread | None = None
         self._snapshot: dict[str, object] = {}
         self._dataset_by_iid: dict[str, dict[str, object]] = {}
+        self._cell_overlays: dict[ttk.Treeview, _TreeCellColorOverlay] = {}
         self._status_var = tk.StringVar(value="讀取 Market Data 狀態…")
         self._detail_var = tk.StringVar(value="選取 dataset 查看詳細狀態。")
         self._kpi_labels: dict[str, tk.Label] = {}
@@ -250,6 +338,8 @@ class MarketDataOpsPanel(ttk.Frame):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         tree.bind("<<TreeviewSelect>>", self._on_dataset_select)
+        self._cell_overlays[tree] = _TreeCellColorOverlay(tree, ("status", "schema", "coverage"))
+        self._bind_overlay_scroll_refresh(tree, sx, sy)
         return tree
 
     def _build_schedule_tab(self, master):
@@ -281,6 +371,8 @@ class MarketDataOpsPanel(ttk.Frame):
         sx.grid(row=1, column=0, sticky="ew")
         top.rowconfigure(0, weight=1)
         top.columnconfigure(0, weight=1)
+        self._cell_overlays[self._schedule_tree] = _TreeCellColorOverlay(self._schedule_tree, ("status",))
+        self._bind_overlay_scroll_refresh(self._schedule_tree, sx, sy)
 
         activity_box = ttk.LabelFrame(master, text="Recent Activity", padding=4, style=WORKBENCH_LABELLF_STYLE)
         activity_box.pack(fill="both", expand=True, pady=(6, 0))
@@ -308,6 +400,29 @@ class MarketDataOpsPanel(ttk.Frame):
         ax.grid(row=1, column=0, sticky="ew")
         activity_box.rowconfigure(0, weight=1)
         activity_box.columnconfigure(0, weight=1)
+
+    def _bind_overlay_scroll_refresh(self, tree: ttk.Treeview, sx: ttk.Scrollbar, sy: ttk.Scrollbar) -> None:
+        overlay = self._cell_overlays[tree]
+
+        def on_xscroll(first, last):
+            sx.set(first, last)
+            overlay.schedule_sync()
+
+        def on_yscroll(first, last):
+            sy.set(first, last)
+            overlay.schedule_sync()
+
+        def xview(*args):
+            tree.xview(*args)
+            overlay.schedule_sync()
+
+        def yview(*args):
+            tree.yview(*args)
+            overlay.schedule_sync()
+
+        tree.configure(xscrollcommand=on_xscroll, yscrollcommand=on_yscroll)
+        sx.configure(command=xview)
+        sy.configure(command=yview)
 
     def _on_dataset_select(self, event) -> None:
         selected = event.widget.selection()
@@ -340,8 +455,10 @@ class MarketDataOpsPanel(ttk.Frame):
         self._status_var.set(f"本地狀態已刷新（provider calls={snapshot.get('provider_calls', 0)}）{suffix}")
         self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE if blockers else WORKBENCH_INFO_LABEL_STYLE)
 
-    @staticmethod
-    def _clear_tree(tree: ttk.Treeview) -> None:
+    def _clear_tree(self, tree: ttk.Treeview) -> None:
+        overlay = self._cell_overlays.get(tree)
+        if overlay is not None:
+            overlay.clear()
         for iid in tree.get_children():
             tree.delete(iid)
 
@@ -367,16 +484,20 @@ class MarketDataOpsPanel(ttk.Frame):
             values=(
                 row.get("dataset") or "-",
                 row.get("display_name_zh") or "-",
-                _status_display(projected_status),
+                str(projected_status),
                 row.get("latest_data_date") or "-",
                 _fmt_datetime(row.get("expected_publish_at")),
                 _fmt_datetime(row.get("last_success_at")),
                 _fmt_datetime(row.get("next_check_at")),
-                _status_display(schema_status),
-                _status_display(coverage_status),
+                str(schema_status),
+                str(coverage_status),
                 _retry_text(row),
             ),
         )
+        overlay = self._cell_overlays[tree]
+        overlay.set_cell(iid, "status", projected_status)
+        overlay.set_cell(iid, "schema", schema_status)
+        overlay.set_cell(iid, "coverage", coverage_status)
 
     def _insert_schedule_row(
         self,
@@ -395,11 +516,12 @@ class MarketDataOpsPanel(ttk.Frame):
             values=(
                 dataset or "-",
                 display_name_zh or "-",
-                _status_display(status),
+                str(status or "-"),
                 _fmt_datetime(expected_publish_at),
                 source or "-",
             ),
         )
+        self._cell_overlays[self._schedule_tree].set_cell(iid, "status", status)
 
     def _render(self, snapshot: dict[str, object]):
         target = snapshot.get("trading_target_date") or "-"
@@ -538,6 +660,9 @@ class MarketDataOpsPanel(ttk.Frame):
                 expected_publish_at=row.get("expected_publish_at"),
                 source=row.get("publication_schedule_source") or "-",
             )
+
+        for overlay in self._cell_overlays.values():
+            overlay.schedule_sync()
 
         activity_rows: list[dict[str, object]] = []
         if snapshot.get("market_date_discovery_last_probe_at"):
