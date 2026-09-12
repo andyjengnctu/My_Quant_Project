@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+import re
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import font as tkfont, messagebox, ttk
 
 from core.console_report import project_relative_display_path
 from core.trading_policy import get_trading_policy_snapshot
@@ -72,6 +73,7 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 from services.workbench_ui.workbench import (
+    WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
     WORKBENCH_COMBO_STYLE,
     WORKBENCH_ERROR,
@@ -85,6 +87,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_SUCCESS,
     WORKBENCH_TEXT,
     WORKBENCH_TREE_STYLE,
+    WORKBENCH_UI_FONT,
     WORKBENCH_VSCROLL_STYLE,
     WORKBENCH_WARNING,
 )
@@ -98,6 +101,163 @@ PARAM_MODE_BY_LABEL = {
     PARAM_MODE_REUSE_LABEL: TRADING_PARAM_MODE_REUSE,
     PARAM_MODE_TRAIN_LABEL: TRADING_PARAM_MODE_TRAIN,
 }
+
+_STATUS_TOKEN_TONES = {
+    "READY": "success",
+    "IDLE": "success",
+    "FRESH": "success",
+    "CLEAR": "success",
+    "SYNCED": "success",
+    "UPDATED": "success",
+    "NO_DUE": "success",
+    "FILLED": "success",
+    "CANCELLED": "success",
+    "完成": "success",
+    "可沿用": "success",
+    "NOT READY": "warning",
+    "ACTION_REQUIRED": "warning",
+    "NOT_BOOTSTRAPPED": "warning",
+    "STALE/EMPTY": "warning",
+    "STALE": "warning",
+    "ORDERED": "warning",
+    "PARTIAL": "warning",
+    "PROPOSED": "warning",
+    "未綁定": "warning",
+    "尚無資料": "warning",
+    "尚無 Params": "warning",
+    "尚未": "warning",
+    "注意": "warning",
+    "WAIT": "warning",
+    "BLOCKED": "error",
+    "LIVE_BLOCKED": "error",
+    "FAIL": "error",
+    "FAILED": "error",
+    "ERROR": "error",
+    "BLOCK": "error",
+    "失敗": "error",
+    "執行中": "info",
+    "沿用既有": "info",
+    "重新訓練": "info",
+    "ON": "info",
+    "OFF": "info",
+}
+_STATUS_WORDS = sorted(_STATUS_TOKEN_TONES, key=len, reverse=True)
+_STATUS_TOKEN_PATTERN = re.compile(
+    "("
+    + "|".join(re.escape(token) for token in _STATUS_WORDS)
+    + r"|20\d{2}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:[.+-]\d{2}:?\d{2})?)?"
+    + r"|(?<![A-Za-z0-9_])(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:/\d+(?:\.\d+)?)?(?![A-Za-z0-9_])"
+    + ")",
+    re.IGNORECASE,
+)
+
+
+def build_trading_status_segments(text: str, *, default_tone: str = "text") -> list[tuple[str, str]]:
+    """Split a status line into neutral text plus highlighted status/date/value tokens."""
+    value = str(text or "")
+    segments: list[tuple[str, str]] = []
+    cursor = 0
+    for match in _STATUS_TOKEN_PATTERN.finditer(value):
+        if match.start() > cursor:
+            segments.append((value[cursor:match.start()], default_tone))
+        token = match.group(0)
+        tone = _STATUS_TOKEN_TONES.get(token.upper())
+        if tone is None:
+            tone = _STATUS_TOKEN_TONES.get(token, "info")
+        segments.append((token, tone))
+        cursor = match.end()
+    if cursor < len(value):
+        segments.append((value[cursor:], default_tone))
+    if not segments:
+        segments.append((value, default_tone))
+    return segments
+
+
+class _TradingStatusLine(tk.Text):
+    """Read-only wrapping status text with token-level emphasis instead of whole-line coloring."""
+
+    _TONE_COLORS = {
+        "text": WORKBENCH_TEXT,
+        "muted": WORKBENCH_MUTED,
+        "info": WORKBENCH_INFO,
+        "success": WORKBENCH_SUCCESS,
+        "warning": WORKBENCH_WARNING,
+        "error": WORKBENCH_ERROR,
+    }
+
+    def __init__(self, master, *, textvariable: tk.StringVar, default_tone: str = "text", min_lines: int = 1, max_lines: int = 3):
+        self._textvariable = textvariable
+        self._default_tone = default_tone
+        self._min_lines = max(1, int(min_lines))
+        self._max_lines = max(self._min_lines, int(max_lines))
+        self._trace_id = None
+        super().__init__(
+            master,
+            height=self._min_lines,
+            width=1,
+            wrap="word",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
+            background=WORKBENCH_BG,
+            foreground=WORKBENCH_TEXT,
+            insertbackground=WORKBENCH_TEXT,
+            font=WORKBENCH_UI_FONT,
+            takefocus=0,
+            cursor="arrow",
+        )
+        self._measure_font = tkfont.Font(font=WORKBENCH_UI_FONT)
+        for tone, color in self._TONE_COLORS.items():
+            self.tag_configure(tone, foreground=color)
+        self._trace_id = self._textvariable.trace_add("write", self._on_text_changed)
+        self.bind("<Configure>", self._schedule_height_sync, add="+")
+        self.set_status_text(self._textvariable.get())
+
+    def _on_text_changed(self, *_args) -> None:
+        self.set_status_text(self._textvariable.get())
+
+    def set_status_text(self, text: str) -> None:
+        self.configure(state="normal")
+        self.delete("1.0", "end")
+        for segment, tone in build_trading_status_segments(text, default_tone=self._default_tone):
+            self.insert("end", segment, tone)
+        self.configure(state="disabled")
+        self._schedule_height_sync()
+
+    def _schedule_height_sync(self, *_args) -> None:
+        try:
+            self.after_idle(self._sync_height)
+        except tk.TclError:
+            return
+
+    def _sync_height(self) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+            available_width = int(self.winfo_width()) - 12
+            if available_width <= 40:
+                return
+            display_lines = 0
+            logical_lines = str(self._textvariable.get() or "").splitlines() or [""]
+            for logical_line in logical_lines:
+                measured = max(1, int(self._measure_font.measure(logical_line)))
+                display_lines += max(1, (measured + available_width - 1) // available_width)
+            target = max(self._min_lines, min(self._max_lines, display_lines))
+            if int(self.cget("height")) != target:
+                self.configure(height=target)
+        except (tk.TclError, TypeError, ValueError):
+            return
+
+    def destroy(self) -> None:
+        if self._trace_id is not None:
+            try:
+                self._textvariable.trace_remove("write", self._trace_id)
+            except tk.TclError:
+                pass
+            self._trace_id = None
+        super().destroy()
 
 
 def parse_trading_money_text(raw_value, field_name: str, *, allow_blank: bool = False, allow_zero: bool = True):
@@ -205,32 +365,28 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_next_var = tk.StringVar(value="下一步：-")
         self._operations_detail_var = tk.StringVar(value="-")
         self._live_audit_var = tk.StringVar(value="實盤就緒：尚未執行實盤就緒檢查")
-        self._operations_status_label = ttk.Label(operations_box, textvariable=self._operations_status_var, foreground=WORKBENCH_SUCCESS, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._operations_status_label.grid(row=0, column=0, sticky="w")
-        self._operations_next_label = ttk.Label(operations_box, textvariable=self._operations_next_var, foreground=WORKBENCH_INFO, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._operations_next_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self._operations_detail_label = ttk.Label(operations_box, textvariable=self._operations_detail_var, foreground=WORKBENCH_TEXT, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._operations_detail_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        self._live_audit_label = ttk.Label(operations_box, textvariable=self._live_audit_var, foreground=WORKBENCH_WARNING, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._live_audit_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self._operations_status_label = _TradingStatusLine(operations_box, textvariable=self._operations_status_var, max_lines=2)
+        self._operations_status_label.grid(row=0, column=0, sticky="ew")
+        self._operations_next_label = _TradingStatusLine(operations_box, textvariable=self._operations_next_var, max_lines=2)
+        self._operations_next_label.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._operations_detail_label = _TradingStatusLine(operations_box, textvariable=self._operations_detail_var, max_lines=3)
+        self._operations_detail_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        self._live_audit_label = _TradingStatusLine(operations_box, textvariable=self._live_audit_var, max_lines=2)
+        self._live_audit_label.grid(row=3, column=0, sticky="ew", pady=(4, 0))
         operations_buttons = ttk.Frame(operations_box, style=WORKBENCH_FRAME_STYLE)
         operations_buttons.grid(row=4, column=0, pady=(8, 0), sticky="e")
         ttk.Button(operations_buttons, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left")
         ttk.Button(operations_buttons, text="實盤就緒檢查", command=self._run_operational_audit, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
-        operations_box.bind("<Configure>", lambda event: self._set_wraplength(
-            (self._operations_status_label, self._operations_next_label, self._operations_detail_label, self._live_audit_label),
-            event.width,
-        ))
 
         workflow_box = ttk.LabelFrame(self, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         workflow_box.columnconfigure(0, weight=1)
         self._workflow_status_var = tk.StringVar(value="讀取 Trading workflow 狀態...")
         self._workflow_freshness_var = tk.StringVar(value="-")
-        self._workflow_status_label = ttk.Label(workflow_box, textvariable=self._workflow_status_var, foreground=WORKBENCH_WARNING, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._workflow_status_label.grid(row=0, column=0, sticky="w")
-        self._workflow_freshness_label = ttk.Label(workflow_box, textvariable=self._workflow_freshness_var, foreground=WORKBENCH_INFO, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._workflow_freshness_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self._workflow_status_label = _TradingStatusLine(workflow_box, textvariable=self._workflow_status_var, max_lines=2)
+        self._workflow_status_label.grid(row=0, column=0, sticky="ew")
+        self._workflow_freshness_label = _TradingStatusLine(workflow_box, textvariable=self._workflow_freshness_var, default_tone="muted", max_lines=2)
+        self._workflow_freshness_label.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         param_mode_row = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
         param_mode_row.grid(row=2, column=0, sticky="w", pady=(8, 0))
         ttk.Label(param_mode_row, text="Params 模式", foreground=WORKBENCH_TEXT, style=WORKBENCH_LABEL_STYLE).pack(side="left")
@@ -273,10 +429,7 @@ class TradingAccountPanel(ttk.Frame):
             justify="left",
         )
         self._workflow_note_label.grid(row=4, column=0, sticky="w", pady=(6, 0))
-        workflow_box.bind("<Configure>", lambda event: self._set_wraplength(
-            (self._workflow_status_label, self._workflow_freshness_label, self._workflow_note_label),
-            event.width,
-        ))
+        workflow_box.bind("<Configure>", lambda event: self._set_wraplength((self._workflow_note_label,), event.width))
 
         header = ttk.LabelFrame(self, text="Trading 帳戶", padding=10, style=WORKBENCH_LABELLF_STYLE)
         header.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -284,17 +437,13 @@ class TradingAccountPanel(ttk.Frame):
         self._status_var = tk.StringVar(value="讀取中...")
         self._policy_var = tk.StringVar(value="-")
         self._path_var = tk.StringVar(value="-")
-        self._account_status_label = ttk.Label(header, textvariable=self._status_var, foreground=WORKBENCH_SUCCESS, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._account_status_label.grid(row=0, column=0, sticky="w")
-        self._account_policy_label = ttk.Label(header, textvariable=self._policy_var, foreground=WORKBENCH_INFO, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._account_policy_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self._account_path_label = ttk.Label(header, textvariable=self._path_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE, justify="left")
-        self._account_path_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self._account_status_label = _TradingStatusLine(header, textvariable=self._status_var, max_lines=2)
+        self._account_status_label.grid(row=0, column=0, sticky="ew")
+        self._account_policy_label = _TradingStatusLine(header, textvariable=self._policy_var, max_lines=2)
+        self._account_policy_label.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._account_path_label = _TradingStatusLine(header, textvariable=self._path_var, default_tone="muted", max_lines=2)
+        self._account_path_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
         ttk.Button(header, text="重新整理", command=self.refresh_account, style=WORKBENCH_BUTTON_STYLE).grid(row=3, column=0, pady=(8, 0), sticky="e")
-        header.bind("<Configure>", lambda event: self._set_wraplength(
-            (self._account_status_label, self._account_policy_label, self._account_path_label),
-            event.width,
-        ))
 
         cash_box = ttk.LabelFrame(self, text="現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
         cash_box.grid(row=3, column=0, sticky="ew", pady=(0, 8))
@@ -389,7 +538,8 @@ class TradingAccountPanel(ttk.Frame):
         proposed_box.rowconfigure(1, weight=1)
         proposed_box.columnconfigure(0, weight=1)
         self._proposed_status_var = tk.StringVar(value="尚未產生建議掛單。")
-        ttk.Label(proposed_box, textvariable=self._proposed_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self._proposed_status_label = _TradingStatusLine(proposed_box, textvariable=self._proposed_status_var, default_tone="muted", max_lines=2)
+        self._proposed_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         proposed_columns = ("rank", "ticker", "kind", "limit", "qty", "reserved", "stop", "target")
         self._proposed_tree = ttk.Treeview(proposed_box, columns=proposed_columns, show="headings", style=WORKBENCH_TREE_STYLE)
         proposed_headings = {"rank": "順位", "ticker": "股票", "kind": "類型", "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "Target"}
@@ -423,7 +573,8 @@ class TradingAccountPanel(ttk.Frame):
         pending_box.rowconfigure(1, weight=1)
         pending_box.columnconfigure(0, weight=1)
         self._order_status_var = tk.StringVar(value="尚無實際送單紀錄。")
-        ttk.Label(pending_box, textvariable=self._order_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self._order_status_label = _TradingStatusLine(pending_box, textvariable=self._order_status_var, default_tone="muted", max_lines=2)
+        self._order_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         order_columns = ("ticker", "side", "purpose", "status", "order_type", "price", "qty", "filled", "remaining", "avg_fill", "broker_id", "info_date", "ordered_at", "filled_at", "cancelled_at")
         self._order_tree = ttk.Treeview(pending_box, columns=order_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
         order_headings = {
@@ -487,12 +638,8 @@ class TradingAccountPanel(ttk.Frame):
         protection_box.rowconfigure(1, weight=1)
         protection_box.columnconfigure(0, weight=1)
         self._protection_status_var = tk.StringVar(value="尚未建立成交後保護單計畫。")
-        ttk.Label(
-            protection_box,
-            textvariable=self._protection_status_var,
-            foreground=WORKBENCH_MUTED,
-            style=WORKBENCH_LABEL_STYLE,
-        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self._protection_status_label = _TradingStatusLine(protection_box, textvariable=self._protection_status_var, default_tone="muted", max_lines=2)
+        self._protection_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         protection_columns = ("ticker", "qty", "entry", "stop_qty", "stop", "tp_qty", "target", "entry_order_status", "priority")
         self._protection_tree = ttk.Treeview(
             protection_box,
@@ -590,7 +737,8 @@ class TradingAccountPanel(ttk.Frame):
         indicator_box.rowconfigure(1, weight=1)
         indicator_box.columnconfigure(0, weight=1)
         self._indicator_status_var = tk.StringVar(value="尚未建立 Indicator SELL 計畫。")
-        ttk.Label(indicator_box, textvariable=self._indicator_status_var, foreground=WORKBENCH_MUTED, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self._indicator_status_label = _TradingStatusLine(indicator_box, textvariable=self._indicator_status_var, default_tone="muted", max_lines=2)
+        self._indicator_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         columns=("ticker","signal","qty","entry_date","type","carried")
         self._indicator_tree=ttk.Treeview(indicator_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
         headings={"ticker":"股票","signal":"Signal日","qty":"賣出股數","entry_date":"Entry日","type":"委託","carried":"狀態"}
@@ -807,21 +955,9 @@ class TradingAccountPanel(ttk.Frame):
             self._operations_status_var.set(f"BLOCKED | Trading 整體狀態讀取失敗：{exc}")
             self._operations_next_var.set("下一步：先修正狀態讀取錯誤")
             self._operations_detail_var.set("-")
-            self._operations_status_label.configure(foreground=WORKBENCH_ERROR)
-            self._operations_next_label.configure(foreground=WORKBENCH_WARNING)
-            self._operations_detail_label.configure(foreground=WORKBENCH_ERROR)
             self._set_workflow_buttons_state("disabled")
             return
         self._operations_snapshot = snapshot
-        overall = str(snapshot.get("overall_status") or "")
-        if overall in {"READY", "IDLE"}:
-            overall_color = WORKBENCH_SUCCESS
-        elif overall in {"BLOCKED", "LIVE_BLOCKED"}:
-            overall_color = WORKBENCH_ERROR
-        else:
-            overall_color = WORKBENCH_WARNING
-        self._operations_status_label.configure(foreground=overall_color)
-        self._operations_next_label.configure(foreground=WORKBENCH_INFO)
         self._operations_status_var.set(
             f"{snapshot.get('overall_status') or '-'} | Data {snapshot.get('latest_data_date') or '-'} | "
             f"Account rev {snapshot.get('account_revision') if snapshot.get('account_revision') is not None else '-'} | "
@@ -853,12 +989,8 @@ class TradingAccountPanel(ttk.Frame):
         blockers = list(snapshot.get('blockers') or [])
         if blockers:
             details.append("BLOCK: " + "；".join(blockers))
-            self._operations_detail_label.configure(foreground=WORKBENCH_ERROR)
         elif warnings:
             details.append("注意: " + "；".join(warnings[:3]))
-            self._operations_detail_label.configure(foreground=WORKBENCH_WARNING)
-        else:
-            self._operations_detail_label.configure(foreground=WORKBENCH_TEXT)
         self._operations_detail_var.set(" | ".join(details))
         self._apply_workflow_action_availability()
 
@@ -867,7 +999,6 @@ class TradingAccountPanel(ttk.Frame):
             audit = run_trading_operational_audit(WORKBENCH_PROJECT_ROOT)
         except (OSError, TypeError, ValueError, RuntimeError) as exc:
             self._live_audit_var.set(f"實盤就緒：LIVE_BLOCKED｜Audit 失敗：{exc}")
-            self._live_audit_label.configure(foreground=WORKBENCH_ERROR)
             messagebox.showerror("Trading 實盤就緒檢查失敗", str(exc), parent=self)
             return
         blockers = list(audit.get("blockers") or [])
@@ -876,7 +1007,6 @@ class TradingAccountPanel(ttk.Frame):
         if blockers:
             summary = "；".join(blockers[:2])
             self._live_audit_var.set(f"實盤就緒：{audit.get('status')}｜{summary}")
-            self._live_audit_label.configure(foreground=WORKBENCH_ERROR)
             messagebox.showwarning(
                 "Trading 尚不可實盤",
                 f"{summary}\n\n完整報告：{report_path}",
@@ -885,7 +1015,6 @@ class TradingAccountPanel(ttk.Frame):
         else:
             suffix = f"｜警告 {len(warnings)} 項" if warnings else ""
             self._live_audit_var.set(f"實盤就緒：{audit.get('status')}{suffix}｜{report_path}")
-            self._live_audit_label.configure(foreground=WORKBENCH_WARNING if warnings else WORKBENCH_SUCCESS)
             messagebox.showinfo("Trading 實盤就緒檢查", f"{audit.get('status')}\n\n報告：{report_path}", parent=self)
 
     def _refresh_all_trading_state(self):
@@ -944,7 +1073,6 @@ class TradingAccountPanel(ttk.Frame):
         except (OSError, ValueError, RuntimeError) as exc:
             self._workflow_status_var.set(f"Workflow 狀態讀取失敗：{exc}")
             self._workflow_freshness_var.set("-")
-            self._workflow_status_label.configure(foreground=WORKBENCH_ERROR)
             return
         latest = snapshot.get("latest_data_date") or "尚無資料"
         param_latest = snapshot.get("param_latest_data_date") or "尚無 Params"
@@ -965,7 +1093,6 @@ class TradingAccountPanel(ttk.Frame):
             f"使用模式 {usage_mode} | UI 選擇 {selected_mode} | V2 Archive {v2_status} {v2_date} | "
             f"selector {snapshot.get('param_selector') or '-'}"
         )
-        self._workflow_status_label.configure(foreground=WORKBENCH_SUCCESS if ready else WORKBENCH_WARNING)
         member_count = int(snapshot.get("param_member_count") or 0)
         param_error = snapshot.get("param_error")
         binding_error = snapshot.get("param_binding_error")
@@ -974,7 +1101,6 @@ class TradingAccountPanel(ttk.Frame):
             suffix += " | 可沿用"
         if param_error:
             suffix += f" | {param_error}"
-            self._workflow_status_label.configure(foreground=WORKBENCH_ERROR)
         elif binding_error:
             suffix += f" | 尚未綁定目前 Data: {binding_error}"
         self._workflow_freshness_var.set(
@@ -1063,7 +1189,6 @@ class TradingAccountPanel(ttk.Frame):
             self.refresh_protection_plan()
             self.refresh_indicator_exit_plan()
         self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
-        self._workflow_status_label.configure(foreground=WORKBENCH_ERROR)
         self.refresh_operations_status()
         messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
 
@@ -1401,7 +1526,6 @@ class TradingAccountPanel(ttk.Frame):
             self._workflow_status_var.set(
                 f"每日 Scanner 完成：候選 {len(scan_result.get('candidate_rows') or [])} 檔 | data {scan_result.get('latest_data_date') or '-'}"
             )
-        self._workflow_status_label.configure(foreground=WORKBENCH_SUCCESS)
         self.refresh_operations_status()
 
 
@@ -1439,7 +1563,6 @@ class TradingAccountPanel(ttk.Frame):
         except (ValueError, RuntimeError, OSError) as exc:
             self._snapshot = {}
             self._status_var.set(f"狀態讀取失敗：{exc}")
-            self._account_status_label.configure(foreground=WORKBENCH_ERROR)
             return
         self._snapshot = snapshot
         initialized = bool(snapshot.get("initialized"))
@@ -1453,10 +1576,8 @@ class TradingAccountPanel(ttk.Frame):
             self._status_var.set(
                 f"READY | revision {snapshot.get('revision')} | 現金 {format_trading_money(snapshot.get('cash'))} | 持股 {snapshot.get('position_count', 0)} | 更新 {snapshot.get('updated_at') or '-'}"
             )
-            self._account_status_label.configure(foreground=WORKBENCH_SUCCESS)
         else:
             self._status_var.set("尚未初始化 Trading account")
-            self._account_status_label.configure(foreground=WORKBENCH_WARNING)
         self._initialize_button.configure(state="disabled" if initialized else "normal")
         self._set_cash_button.configure(state="normal" if initialized else "disabled")
         self._add_button.configure(state="normal" if initialized else "disabled")

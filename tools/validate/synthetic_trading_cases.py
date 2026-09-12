@@ -2132,7 +2132,18 @@ def validate_trading_position_rollforward_contract_case(base_params):
     check("read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
     check("rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
     check("workbench_exposes_explicit_position_rollforward_action", True, '"持股日終推進", "rollforward"' in panel_source and 'elif action == "rollforward"' in panel_source)
-    check("daily_workflow_orders_rollforward_and_indicator_after_data_before_param_training", True, daily_source.index("data_result = run_trading_market_data_update") < daily_source.index("rollforward_result = run_trading_position_rollforward") < daily_source.index("indicator_result = build_trading_indicator_exit_plan") < daily_source.index("param_result = run_trading_strategy_param_training"))
+    workflow_step_tokens = (
+        "data_result = run_trading_market_data_update",
+        "rollforward_result = run_trading_position_rollforward",
+        "indicator_result = build_trading_indicator_exit_plan",
+        "param_result = run_trading_param_step",
+    )
+    workflow_step_positions = [daily_source.find(token) for token in workflow_step_tokens]
+    check(
+        "daily_workflow_orders_rollforward_and_indicator_after_data_before_param_step",
+        True,
+        all(position >= 0 for position in workflow_step_positions) and workflow_step_positions == sorted(workflow_step_positions),
+    )
 
     summary["checks"] = len(results)
     return results, summary
@@ -2418,10 +2429,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.workbench_ui.trading_account_panel import (
         TradingAccountPanel,
         build_trading_account_panel_snapshot,
+        build_trading_status_segments,
         parse_trading_money_text,
         parse_trading_qty_text,
     )
-    from services.workbench_ui.workbench import PANEL_SPECS, WORKBENCH_ERROR, WORKBENCH_SUCCESS, build_workbench_spec
+    from services.workbench_ui.workbench import PANEL_SPECS, build_workbench_spec
 
     workbench_spec = build_workbench_spec()
     panel_specs = {row["panel_id"]: row for row in workbench_spec.get("panels", [])}
@@ -2469,13 +2481,23 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         check("workbench_snapshot_uses_current_trading_strategy_config", expected_policy["strategy_id"], snapshot["policy"]["strategy_id"])
         check("workbench_snapshot_uses_current_param_selector_config", expected_policy["param_selector"], snapshot["policy"]["param_selector"])
 
+    sample_segments = build_trading_status_segments("READY | Data 2026-09-11 | 現金 1,500,000 | 持股 0 | 一般說明")
+    sample_tones = {text: tone for text, tone in sample_segments if text.strip()}
+    check("workbench_status_highlights_ready_token_only", "success", sample_tones.get("READY"))
+    check("workbench_status_highlights_date_value", "info", sample_tones.get("2026-09-11"))
+    check("workbench_status_highlights_money_value", "info", sample_tones.get("1,500,000"))
+    check("workbench_status_keeps_explanatory_text_neutral", True, any(tone == "text" and "一般說明" in text for text, tone in sample_segments))
+    warning_segments = build_trading_status_segments("NOT READY | STALE/EMPTY | FAIL：synthetic")
+    warning_tones = {text: tone for text, tone in warning_segments if text.strip()}
+    check("workbench_status_distinguishes_warning_and_error_tokens", ["warning", "warning", "error"], [warning_tones.get("NOT READY"), warning_tones.get("STALE/EMPTY"), warning_tones.get("FAIL")])
+
     # AI: Exercise the real completion callbacks without creating a Tk window.
     from types import SimpleNamespace
-    refreshed, messages, status_colors = [], [], []
+    refreshed, messages = [], []
     panel = SimpleNamespace(
         _workflow_token=7, _workflow_thread=object(),
         _workflow_status_var=SimpleNamespace(set=messages.append),
-        _workflow_status_label=SimpleNamespace(configure=lambda **kwargs: status_colors.append(kwargs.get("foreground"))),
+        _workflow_status_label=SimpleNamespace(),
         _reload_candidate_rows=lambda rows: refreshed.append("candidates"),
     )
     for method in (
@@ -2492,7 +2514,6 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         text in messages[-1] for text in ("2026-09-09", "新進場池 17", "訓練池 23", "V2 UPDATED", "31/2")
     ))
     check("workbench_data_completion_drops_retired_download_counts", False, "成功 0" in messages[-1])
-    check("workbench_success_status_uses_readable_success_color", WORKBENCH_SUCCESS, status_colors[-1])
     required_refreshes = {"refresh_account", "refresh_order_state", "refresh_protection_plan", "refresh_indicator_exit_plan"}
     for action in ("all", "rollforward"):
         refreshed.clear()
@@ -2502,7 +2523,6 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         with patch("services.workbench_ui.trading_account_panel.messagebox.showerror"):
             TradingAccountPanel._finish_workflow_error(panel, action, 7, RuntimeError("synthetic later-stage failure"))
         check(f"workbench_{action}_failure_refreshes_earlier_committed_stages", True, required_refreshes.issubset(refreshed))
-        check(f"workbench_{action}_failure_uses_readable_error_color", WORKBENCH_ERROR, status_colors[-1])
     refreshed.clear()
     TradingAccountPanel._finish_workflow_success(panel, "all", 6, {})
     check("workbench_ignores_stale_worker_completion", [], refreshed)
