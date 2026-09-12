@@ -269,9 +269,52 @@ def _mutate_synthetic_trading_v2_consumer_membership(root: Path, *, ticker: str 
 
 
 def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
+    """Build a schema-current Trading candidate fixture from canonical Params runtime identity.
+
+    AI note: production Scanner annotates every candidate with immutable agreeing-voter
+    Params lineage before persistence.  Synthetic fixtures that construct candidate rows
+    directly must pass through the same identity seam instead of weakening snapshot
+    validation or hard-coding current signatures.
+    """
+    from core.portfolio_ensemble import annotate_ensemble_candidate
     from services.trading.scanner_state import TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION, load_trading_scanner_runtime
+    from services.trading.strategy_param_runtime import serialize_trading_candidate_member_params
 
     runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
+    members = list(runtime.get("param_members") or [])
+    normalized_rows = []
+    for raw_row in list(candidate_rows or []):
+        row = dict(raw_row)
+        has_lineage = bool(
+            str(row.get("ensemble_member_key") or "").strip()
+            and str(row.get("params_signature") or "").strip()
+            and isinstance(row.get("ensemble_member_params_by_key"), dict)
+            and row.get("ensemble_member_params_by_key")
+        )
+        if not has_lineage:
+            if len(members) != 1:
+                raise RuntimeError(
+                    "Synthetic candidate fixture 若使用 multi-member Params，必須明確提供 agreeing-voter lineage"
+                )
+            member = dict(members[0])
+            member_key = str(member.get("member_key") or member.get("member_index") or member.get("seed") or "1")
+            row = annotate_ensemble_candidate(
+                row,
+                member=member,
+                params_obj=member["params_obj"],
+                member_key=member_key,
+            )
+            row["ensemble_vote_count"] = 1
+            row["ensemble_min_agree"] = 1
+            row["ensemble_member_count"] = 1
+            row["ensemble_member_keys"] = [member_key]
+            row["ensemble_member_params_by_key"] = {member_key: member["params_obj"]}
+            row["param_lineage_source"] = "current_selected_artifact"
+        row["ensemble_member_params_by_key"] = serialize_trading_candidate_member_params(row)
+        row.pop("params_obj", None)
+        row.pop("_ensemble_context", None)
+        normalized_rows.append(row)
+
     return {
         "schema_version": TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
         "runtime_domain": "trading",
@@ -286,7 +329,7 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
         "market_data_source_view_fingerprint": runtime["market_data_source_view_fingerprint"],
         "param_binding_sha256": runtime["param_binding_sha256"],
         "scanned_tickers": list(runtime.get("current_universe_tickers") or []),
-        "candidate_rows": list(candidate_rows),
+        "candidate_rows": normalized_rows,
         "stale_candidate_rows_skipped": [],
     }
 
