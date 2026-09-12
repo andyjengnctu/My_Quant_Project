@@ -2589,21 +2589,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_persisted_proposed_plan_reloads_rows", "2820", persisted_rows[0]["ticker"] if persisted_rows else None)
     check_true("workbench_persisted_proposed_plan_refreshes_status", bool(persisted_status and "PROPOSED" in persisted_status[-1]))
 
-    # AI: Exercise the real completion callbacks without creating a Tk window.
-    refreshed, messages = [], []
-    panel = SimpleNamespace(
-        _workflow_token=7, _workflow_thread=object(),
-        _workflow_status_var=SimpleNamespace(set=messages.append),
-        _workflow_status_label=SimpleNamespace(),
-        _reload_candidate_rows=lambda rows: refreshed.append("candidates"),
-    )
-    for method in (
-        "refresh_daily_workflow", "refresh_candidate_snapshot_rows", "refresh_proposed_order_plan",
-        "refresh_order_state", "refresh_account", "refresh_protection_plan",
-        "refresh_indicator_exit_plan", "refresh_operations_status",
-    ):
-        setattr(panel, method, lambda name=method: refreshed.append(name))
-    TradingAccountPanel._finish_workflow_success(panel, "data", 7, {
+    # AI: Completion callbacks now only render command results; canonical state refresh is
+    # applied once by the shared background command executor.
+    messages = []
+    panel = SimpleNamespace(_workflow_status_var=SimpleNamespace(set=messages.append))
+    TradingAccountPanel._finish_workflow_success(panel, "data", {
         "market_date": "2026-09-09", "current_execution_pool_ticker_count": 17,
         "training_ticker_count": 23,
         "market_data_v2_archive": {"status": "UPDATED", "data_requests": 31, "usage_requests": 2},
@@ -2612,25 +2602,26 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         text in messages[-1] for text in ("2026-09-09", "新進場池 17", "訓練池 23", "V2 UPDATED", "31/2")
     ))
     check("workbench_data_completion_drops_retired_download_counts", False, "成功 0" in messages[-1])
-    required_refreshes = {"refresh_account", "refresh_order_state", "refresh_protection_plan", "refresh_indicator_exit_plan"}
-    for action in ("all", "rollforward"):
-        refreshed.clear()
-        TradingAccountPanel._finish_workflow_success(panel, action, 7, {})
-        check(f"workbench_{action}_success_refreshes_committed_trading_state", True, required_refreshes.issubset(refreshed))
-        refreshed.clear()
-        with patch("services.workbench_ui.trading_account_panel.messagebox.showerror"):
-            TradingAccountPanel._finish_workflow_error(panel, action, 7, RuntimeError("synthetic later-stage failure"))
-        check(f"workbench_{action}_failure_refreshes_earlier_committed_stages", True, required_refreshes.issubset(refreshed))
-    refreshed.clear()
-    TradingAccountPanel._finish_workflow_success(panel, "all", 6, {})
-    check("workbench_ignores_stale_worker_completion", [], refreshed)
-    from services.trading.state_lock import TradingStateBusyError
-    with (
-        patch("services.workbench_ui.trading_account_panel.recover_trading_fill_transaction", side_effect=TradingStateBusyError("synthetic concurrent commit")),
-        patch("services.workbench_ui.trading_account_panel.messagebox.showerror") as notice,
-    ):
-        TradingAccountPanel._refresh_all_trading_state(panel)
-    check("workbench_local_refresh_handles_busy_recovery", True, notice.called and required_refreshes.issubset(refreshed))
+
+    command_worker_body = panel_source.split("def _trading_command_worker", 1)[1].split("def _schedule_command_poll", 1)[0]
+    command_finish_body = panel_source.split("def _finish_trading_command", 1)[1].split("def _request_state_refresh", 1)[0]
+    workflow_success_body = panel_source.split("def _finish_workflow_success", 1)[1].split("def _current_revision", 1)[0]
+    check("workbench_trading_commands_use_single_background_executor", True, "def _submit_trading_command" in panel_source and "_command_results.put" in panel_source)
+    check("workbench_trading_command_worker_never_calls_tk", False, "self.after(" in command_worker_body or "messagebox." in command_worker_body)
+    check("workbench_trading_command_builds_one_consolidated_state_bundle", True, "build_trading_account_panel_initial_bundle" in command_worker_body)
+    check("workbench_trading_command_finish_applies_bundle_once", 1, command_finish_body.count("self._apply_state_bundle(bundle)"))
+    check("workbench_workflow_completion_no_longer_reloads_disk_models", False, "self.refresh_" in workflow_success_body)
+    check("workbench_user_refresh_uses_background_executor", True, "def _request_state_refresh" in panel_source and '"全狀態刷新"' in panel_source and "self._submit_trading_command(" in panel_source.split("def _refresh_all_trading_state", 1)[1].split("def _apply_workflow_action_availability", 1)[0])
+    check("workbench_fill_confirmation_runs_through_background_executor", True, "self._submit_trading_command(" in panel_source.split("def _confirm_selected_fill", 1)[1].split("def _cancel_selected_order", 1)[0])
+    check("workbench_account_mutations_run_through_background_executor", True, "def _submit_account_mutation" in panel_source and "self._submit_trading_command(" in panel_source.split("def _submit_account_mutation", 1)[1].split("def refresh_account", 1)[0])
+
+    import queue as _queue
+    background_panel = SimpleNamespace(_command_results=_queue.Queue())
+    with patch("services.workbench_ui.trading_account_panel.build_trading_account_panel_initial_bundle", return_value={"operations": (True, {"overall_status": "READY"})}):
+        TradingAccountPanel._trading_command_worker(background_panel, 9, lambda: {"ok": True}, True)
+    token, result, command_error, bundle, bundle_error = background_panel._command_results.get_nowait()
+    check("workbench_background_command_preserves_result", [9, True, None, None], [token, bool(result.get("ok")), command_error, bundle_error])
+    check("workbench_background_command_returns_consolidated_bundle", True, isinstance(bundle, dict) and "operations" in bundle)
 
     summary["checks"] = len(results)
     return results, summary

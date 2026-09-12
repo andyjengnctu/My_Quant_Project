@@ -25,7 +25,6 @@ from services.trading.daily_workflow import (
     run_trading_param_step,
 )
 from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
-from services.trading.state_lock import TradingStateBusyError
 from services.trading.strategy_param_state import (
     TRADING_PARAM_USAGE_REUSE_EXISTING,
     TRADING_PARAM_USAGE_TRAINED_CURRENT,
@@ -406,8 +405,12 @@ class TradingAccountPanel(ttk.Frame):
         self._protection_rows: list[dict[str, object]] = []
         self._indicator_snapshot: dict[str, object] = {}
         self._indicator_rows: list[dict[str, object]] = []
-        self._workflow_thread = None
-        self._workflow_token = 0
+        self._command_thread = None
+        self._command_token = 0
+        self._command_results: queue.Queue = queue.Queue()
+        self._command_poll_after_id = None
+        self._command_context: dict[int, dict[str, object]] = {}
+        self._command_saved_button_states: dict[object, str] = {}
         self._param_mode_user_selected = False
         self._workflow_buttons = []
         self._workflow_action_buttons: dict[str, object] = {}
@@ -471,10 +474,8 @@ class TradingAccountPanel(ttk.Frame):
         if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
             self._schedule_initial_state_poll()
 
-    def _finish_initial_state_load(self, token: int, bundle: dict[str, object]):
-        if int(token) != int(self._initial_state_token):
-            return
-        self._initial_state_thread = None
+    def _apply_state_bundle(self, bundle: dict[str, object]) -> None:
+        """Apply an already-read canonical Trading state bundle on the Tk thread only."""
         self._initial_preloaded = dict(bundle or {})
         self._suspend_operations_refresh = True
         try:
@@ -488,17 +489,153 @@ class TradingAccountPanel(ttk.Frame):
         finally:
             self._suspend_operations_refresh = False
         self.refresh_operations_status()
-        if self._workflow_status_var.get() == "Trading 狀態載入中…":
-            self._workflow_status_var.set("Trading 狀態載入完成。")
         self._initial_preloaded.clear()
 
-    def destroy(self):
-        if self._initial_state_poll_after_id is not None:
+    def _finish_initial_state_load(self, token: int, bundle: dict[str, object]):
+        if int(token) != int(self._initial_state_token):
+            return
+        self._initial_state_thread = None
+        self._apply_state_bundle(bundle)
+        if self._workflow_status_var.get() == "Trading 狀態載入中…":
+            self._workflow_status_var.set("Trading 狀態載入完成。")
+
+    def _iter_action_buttons(self):
+        stack = [self]
+        while stack:
+            parent = stack.pop()
+            for child in parent.winfo_children():
+                stack.append(child)
+                if isinstance(child, ttk.Button):
+                    yield child
+
+    def _set_command_busy(self, busy: bool, *, label: str = "") -> None:
+        if busy:
+            self._command_saved_button_states = {}
+            for button in self._iter_action_buttons():
+                try:
+                    state = str(button.cget("state") or "normal")
+                    self._command_saved_button_states[button] = state
+                    button.configure(state="disabled")
+                except tk.TclError as exc:
+                    _warn_gui_fallback("Trading command disable button", exc)
+            self._operations_next_var.set(f"BUSY | {label} 執行中…")
+            self._operations_detail_var.set("背景執行 canonical Trading command；Workbench 可正常捲動與重繪，完成後只刷新一次 canonical state。")
+            return
+        saved = dict(self._command_saved_button_states)
+        self._command_saved_button_states.clear()
+        for button, state in saved.items():
             try:
-                self.after_cancel(self._initial_state_poll_after_id)
+                if button.winfo_exists():
+                    button.configure(state=state)
             except tk.TclError as exc:
-                _warn_gui_fallback("Trading initial-state poll after_cancel", exc)
-            self._initial_state_poll_after_id = None
+                _warn_gui_fallback("Trading command restore button", exc)
+
+    def _submit_trading_command(
+        self,
+        label: str,
+        worker,
+        *,
+        on_success=None,
+        on_error=None,
+        error_title: str = "Trading 操作失敗",
+        refresh_state: bool = True,
+    ) -> bool:
+        if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
+            self._operations_next_var.set("WAIT | Trading 初始狀態仍在載入中…")
+            return False
+        if self._command_thread is not None and self._command_thread.is_alive():
+            self._operations_next_var.set(f"BUSY | {label} 尚未執行；目前已有 Trading command 執行中。")
+            return False
+        self._command_token += 1
+        token = int(self._command_token)
+        self._command_context[token] = {
+            "label": str(label),
+            "on_success": on_success,
+            "on_error": on_error,
+            "error_title": str(error_title),
+        }
+        self._set_command_busy(True, label=str(label))
+        thread = threading.Thread(
+            target=self._trading_command_worker,
+            args=(token, worker, bool(refresh_state)),
+            name=f"workbench-trading-command-{token}",
+            daemon=True,
+        )
+        self._command_thread = thread
+        thread.start()
+        self._schedule_command_poll()
+        return True
+
+    def _trading_command_worker(self, token: int, worker, refresh_state: bool) -> None:
+        result = None
+        command_error = None
+        try:
+            result = worker()
+        except Exception as exc:  # surfaced on Tk thread with the command context
+            command_error = exc
+
+        bundle = None
+        bundle_error = None
+        if refresh_state:
+            try:
+                bundle = build_trading_account_panel_initial_bundle(WORKBENCH_PROJECT_ROOT)
+            except Exception as exc:
+                bundle_error = exc
+        self._command_results.put((int(token), result, command_error, bundle, bundle_error))
+
+    def _schedule_command_poll(self) -> None:
+        if self._command_poll_after_id is None:
+            self._command_poll_after_id = self.after(25, self._drain_command_results)
+
+    def _drain_command_results(self) -> None:
+        self._command_poll_after_id = None
+        while True:
+            try:
+                payload = self._command_results.get_nowait()
+            except queue.Empty:
+                break
+            self._finish_trading_command(*payload)
+        if self._command_thread is not None and self._command_thread.is_alive():
+            self._schedule_command_poll()
+
+    def _finish_trading_command(self, token: int, result, command_error, bundle, bundle_error) -> None:
+        context = self._command_context.pop(int(token), {})
+        if int(token) != int(self._command_token):
+            return
+        self._command_thread = None
+        self._set_command_busy(False)
+        if isinstance(bundle, dict):
+            self._apply_state_bundle(bundle)
+
+        on_error = context.get("on_error")
+        on_success = context.get("on_success")
+        if command_error is not None:
+            if callable(on_error):
+                on_error(command_error)
+            else:
+                messagebox.showerror(str(context.get("error_title") or "Trading 操作失敗"), str(command_error), parent=self)
+            return
+        if bundle_error is not None:
+            messagebox.showwarning(
+                "Trading 狀態刷新失敗",
+                f"{context.get('label') or 'Trading command'} 已完成，但 canonical state 背景刷新失敗：{bundle_error}",
+                parent=self,
+            )
+        if callable(on_success):
+            on_success(result)
+
+    def _request_state_refresh(self, label: str = "Trading 狀態刷新") -> None:
+        self._submit_trading_command(label, lambda: None, refresh_state=True)
+
+    def destroy(self):
+        for attr_name, label in (("_initial_state_poll_after_id", "initial-state"), ("_command_poll_after_id", "command")):
+            after_id = getattr(self, attr_name, None)
+            if after_id is not None:
+                try:
+                    self.after_cancel(after_id)
+                except tk.TclError as exc:
+                    _warn_gui_fallback(f"Trading {label} poll after_cancel", exc)
+                setattr(self, attr_name, None)
         super().destroy()
 
     def _build_ui(self):
@@ -615,14 +752,14 @@ class TradingAccountPanel(ttk.Frame):
             button.pack(side="left", padx=(0 if not self._workflow_buttons else 8, 0))
             self._workflow_buttons.append(button)
             self._workflow_action_buttons[action] = button
-        ttk.Button(workflow_buttons, text="刷新狀態", command=self._refresh_workflow_views, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
+        ttk.Button(workflow_buttons, text="刷新狀態", command=lambda: self._request_state_refresh("Workflow 狀態刷新"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
         self._workflow_status_var = tk.StringVar(value="")
         self._workflow_status_label = _TradingStatusLine(workflow_box, textvariable=self._workflow_status_var, default_tone="muted", max_lines=2)
         self._workflow_status_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
         header = ttk.LabelFrame(content, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
         header.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        ttk.Button(header, text="重新整理帳戶", command=self.refresh_account, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
+        ttk.Button(header, text="重新整理帳戶", command=lambda: self._request_state_refresh("帳戶狀態刷新"), style=WORKBENCH_BUTTON_STYLE).pack(side="right")
 
         cash_box = ttk.LabelFrame(content, text="現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
         cash_box.grid(row=3, column=0, sticky="ew", pady=(0, 8))
@@ -807,7 +944,7 @@ class TradingAccountPanel(ttk.Frame):
             style=WORKBENCH_BUTTON_STYLE,
         )
         self._cancel_order_button.pack(side="left")
-        ttk.Button(pending_buttons, text="刷新掛單狀態", command=self.refresh_order_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
+        ttk.Button(pending_buttons, text="刷新掛單狀態", command=lambda: self._request_state_refresh("券商掛單狀態刷新"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
         protection_box = ttk.LabelFrame(content, text="成交後 Stop / TP 保護單計畫（logical plan；送單狀態見券商掛單表）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         protection_box.grid(row=9, column=0, sticky="nsew", pady=(8, 0))
@@ -859,7 +996,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(
             protection_buttons,
             text="刷新計畫狀態",
-            command=self.refresh_protection_plan,
+            command=lambda: self._request_state_refresh("保護單計畫狀態刷新"),
             style=WORKBENCH_BUTTON_STYLE,
         ).pack(side="left", padx=(8, 0))
 
@@ -914,7 +1051,7 @@ class TradingAccountPanel(ttk.Frame):
         self._indicator_tree.configure(yscrollcommand=iy.set); self._indicator_tree.grid(row=1,column=0,sticky="nsew"); iy.grid(row=1,column=1,sticky="ns")
         buttons=ttk.Frame(indicator_box,style=WORKBENCH_FRAME_STYLE); buttons.grid(row=2,column=0,columnspan=2,sticky="w",pady=(8,0))
         ttk.Button(buttons,text="建立／刷新 Indicator SELL 計畫",command=self._rebuild_indicator_exit_plan,style=WORKBENCH_BUTTON_STYLE).pack(side="left")
-        ttk.Button(buttons,text="刷新 Indicator SELL 狀態",command=self.refresh_indicator_exit_plan,style=WORKBENCH_BUTTON_STYLE).pack(side="left",padx=(8,0))
+        ttk.Button(buttons,text="刷新 Indicator SELL 狀態",command=lambda: self._request_state_refresh("Indicator SELL 狀態刷新"),style=WORKBENCH_BUTTON_STYLE).pack(side="left",padx=(8,0))
         ttk.Label(buttons,text="券商委託號",style=WORKBENCH_LABEL_STYLE).pack(side="left",padx=(14,0))
         self._indicator_broker_id_var=tk.StringVar()
         ttk.Entry(buttons,textvariable=self._indicator_broker_id_var,width=16,style=WORKBENCH_ENTRY_STYLE).pack(side="left",padx=(6,8))
@@ -1024,24 +1161,29 @@ class TradingAccountPanel(ttk.Frame):
             parent=self,
         ):
             return
-        try:
-            confirm_trading_protection_leg_submission(
+        expected_revision = int(self._current_order_revision())
+        broker_order_id = self._protection_broker_id_var.get().strip() or None
+
+        def worker():
+            return confirm_trading_protection_leg_submission(
                 WORKBENCH_PROJECT_ROOT,
                 ticker=ticker,
                 action=action,
-                expected_order_revision=int(self._current_order_revision()),
-                broker_order_id=self._protection_broker_id_var.get().strip() or None,
+                expected_order_revision=expected_revision,
+                broker_order_id=broker_order_id,
                 note="Workbench confirmed protection SELL submission",
             )
-        except (TradingOrderRevisionConflict, ValueError, RuntimeError, FileNotFoundError) as exc:
-            messagebox.showerror("Trading 保護 SELL 送單失敗", str(exc), parent=self)
-            self.refresh_order_state()
-            self.refresh_protection_plan()
-            return
-        self._protection_broker_id_var.set("")
-        self.refresh_order_state()
-        self.refresh_protection_plan()
-        messagebox.showinfo("Trading 保護 SELL", f"{ticker} {label} 已記錄為 ORDERED；account 未修改。", parent=self)
+
+        def on_success(_result):
+            self._protection_broker_id_var.set("")
+            messagebox.showinfo("Trading 保護 SELL", f"{ticker} {label} 已記錄為 ORDERED；account 未修改。", parent=self)
+
+        self._submit_trading_command(
+            f"{ticker} {label} 送單確認",
+            worker,
+            on_success=on_success,
+            error_title="Trading 保護 SELL 送單失敗",
+        )
 
     def _confirm_protection_oco_submitted(self):
         row = self._selected_protection_row()
@@ -1059,27 +1201,33 @@ class TradingAccountPanel(ttk.Frame):
             parent=self,
         ):
             return
-        try:
-            confirm_trading_protection_oco_submission(
+        expected_revision = int(self._current_order_revision())
+        stop_broker_order_id = self._protection_stop_broker_id_var.get().strip() or None
+        tp_broker_order_id = self._protection_tp_broker_id_var.get().strip() or None
+
+        def worker():
+            return confirm_trading_protection_oco_submission(
                 WORKBENCH_PROJECT_ROOT,
                 ticker=ticker,
-                expected_order_revision=int(self._current_order_revision()),
+                expected_order_revision=expected_revision,
                 broker_oco_group_id=group_id,
-                stop_broker_order_id=self._protection_stop_broker_id_var.get().strip() or None,
-                tp_broker_order_id=self._protection_tp_broker_id_var.get().strip() or None,
+                stop_broker_order_id=stop_broker_order_id,
+                tp_broker_order_id=tp_broker_order_id,
                 note="Workbench confirmed broker-native OCO protection submission",
             )
-        except (TradingOrderRevisionConflict, ValueError, RuntimeError, FileNotFoundError) as exc:
-            messagebox.showerror("Trading 保護 OCO 送單失敗", str(exc), parent=self)
-            self.refresh_order_state()
-            self.refresh_protection_plan()
-            return
-        self._protection_oco_group_var.set("")
-        self._protection_stop_broker_id_var.set("")
-        self._protection_tp_broker_id_var.set("")
-        self.refresh_order_state()
-        self.refresh_protection_plan()
-        messagebox.showinfo("Trading 保護 OCO", f"{ticker} Stop+TP 已依使用者確認記錄為券商 OCO ORDERED；account 未修改。", parent=self)
+
+        def on_success(_result):
+            self._protection_oco_group_var.set("")
+            self._protection_stop_broker_id_var.set("")
+            self._protection_tp_broker_id_var.set("")
+            messagebox.showinfo("Trading 保護 OCO", f"{ticker} Stop+TP 已依使用者確認記錄為券商 OCO ORDERED；account 未修改。", parent=self)
+
+        self._submit_trading_command(
+            f"{ticker} OCO 送單確認",
+            worker,
+            on_success=on_success,
+            error_title="Trading 保護 OCO 送單失敗",
+        )
 
     def refresh_protection_plan(self):
         try:
@@ -1109,17 +1257,18 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_operations_status()
 
     def _rebuild_protection_plan(self):
-        try:
-            result = build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
-        except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
-            messagebox.showerror("Trading 保護單計畫", str(exc), parent=self)
-            self.refresh_protection_plan()
-            return None
-        self.refresh_protection_plan()
-        self._protection_status_var.set(
-            f"FRESH | {result.get('status')} / {result.get('broker_status')} | positions {len(result.get('positions') or [])}"
+        def on_success(result):
+            result = dict(result or {})
+            self._protection_status_var.set(
+                f"FRESH | {result.get('status')} / {result.get('broker_status')} | positions {len(result.get('positions') or [])}"
+            )
+
+        self._submit_trading_command(
+            "建立／刷新保護單計畫",
+            lambda: build_trading_protection_plan(WORKBENCH_PROJECT_ROOT),
+            on_success=on_success,
+            error_title="Trading 保護單計畫",
         )
-        return result
 
     def _reload_indicator_rows(self, rows):
         for item in self._indicator_tree.get_children():
@@ -1151,24 +1300,47 @@ class TradingAccountPanel(ttk.Frame):
         self._indicator_status_var.set(f"{'FRESH' if snapshot.get('fresh') else 'STALE'} | exits {int(snapshot.get('exit_count') or 0)} | active broker Indicator SELL {int(snapshot.get('active_indicator_exit_order_count') or 0)}")
 
     def _rebuild_indicator_exit_plan(self):
-        try:
-            result=build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
-        except (ValueError,RuntimeError,OSError,FileNotFoundError) as exc:
-            messagebox.showerror("Trading Indicator SELL 計畫",str(exc),parent=self); self.refresh_indicator_exit_plan(); return None
-        self.refresh_indicator_exit_plan(); self.refresh_operations_status(); return result
+        self._submit_trading_command(
+            "建立／刷新 Indicator SELL 計畫",
+            lambda: build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT),
+            error_title="Trading Indicator SELL 計畫",
+        )
 
     def _confirm_indicator_exit_submitted(self):
-        row=self._selected_indicator_row()
+        row = self._selected_indicator_row()
         if not row:
-            messagebox.showerror("Trading Indicator SELL","請先選取一筆 Indicator SELL 計畫。",parent=self); return
-        ticker=str(row.get("ticker") or "")
-        if not messagebox.askyesno("確認 Indicator MARKET SELL 已送券商",f"確認已在券商實際送出 {ticker} 全倉 MARKET SELL？\n\n此動作只建立 ORDERED broker truth，不代表成交；若仍有 active Stop/TP 必須先在券商取消並於掛單表確認。",parent=self): return
-        try:
-            confirm_trading_indicator_exit_submission(WORKBENCH_PROJECT_ROOT,signal_key=str(row.get("signal_key") or ""),expected_order_revision=int(self._current_order_revision()),broker_order_id=self._indicator_broker_id_var.get().strip() or None,note="Workbench confirmed Indicator MARKET SELL submission")
-        except (TradingOrderRevisionConflict,ValueError,RuntimeError,FileNotFoundError) as exc:
-            messagebox.showerror("Trading Indicator SELL 送單失敗",str(exc),parent=self); self.refresh_order_state(); self.refresh_indicator_exit_plan(); return
-        self._indicator_broker_id_var.set(""); self.refresh_order_state(); self.refresh_indicator_exit_plan(); self.refresh_operations_status()
-        messagebox.showinfo("Trading Indicator SELL",f"{ticker} Indicator MARKET SELL 已記錄為 ORDERED；account 未修改。",parent=self)
+            messagebox.showerror("Trading Indicator SELL", "請先選取一筆 Indicator SELL 計畫。", parent=self)
+            return
+        ticker = str(row.get("ticker") or "")
+        if not messagebox.askyesno(
+            "確認 Indicator MARKET SELL 已送券商",
+            f"確認已在券商實際送出 {ticker} 全倉 MARKET SELL？\n\n此動作只建立 ORDERED broker truth，不代表成交；若仍有 active Stop/TP 必須先在券商取消並於掛單表確認。",
+            parent=self,
+        ):
+            return
+        signal_key = str(row.get("signal_key") or "")
+        expected_revision = int(self._current_order_revision())
+        broker_order_id = self._indicator_broker_id_var.get().strip() or None
+
+        def worker():
+            return confirm_trading_indicator_exit_submission(
+                WORKBENCH_PROJECT_ROOT,
+                signal_key=signal_key,
+                expected_order_revision=expected_revision,
+                broker_order_id=broker_order_id,
+                note="Workbench confirmed Indicator MARKET SELL submission",
+            )
+
+        def on_success(_result):
+            self._indicator_broker_id_var.set("")
+            messagebox.showinfo("Trading Indicator SELL", f"{ticker} Indicator MARKET SELL 已記錄為 ORDERED；account 未修改。", parent=self)
+
+        self._submit_trading_command(
+            f"{ticker} Indicator SELL 送單確認",
+            worker,
+            on_success=on_success,
+            error_title="Trading Indicator SELL 送單失敗",
+        )
 
     def _set_overview_card(self, key: str, primary: object, detail: object = "", *, tone: str = "text") -> None:
         self._overview_vars[key].set(str(primary if primary not in (None, "") else "-"))
@@ -1288,50 +1460,40 @@ class TradingAccountPanel(ttk.Frame):
         self._apply_workflow_action_availability()
 
     def _run_operational_audit(self):
-        try:
-            audit = run_trading_operational_audit(WORKBENCH_PROJECT_ROOT)
-        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+        def on_success(audit):
+            blockers = list((audit or {}).get("blockers") or [])
+            warnings = list((audit or {}).get("warnings") or [])
+            if blockers:
+                summary = "；".join(blockers[:2])
+                self._live_audit_var.set(f"實盤就緒：{audit.get('status')}｜{summary}")
+                messagebox.showwarning("Trading 尚不可實盤", summary, parent=self)
+            else:
+                suffix = f"｜警告 {len(warnings)} 項" if warnings else ""
+                self._live_audit_var.set(f"實盤就緒：{audit.get('status')}{suffix}")
+                messagebox.showinfo("Trading 實盤就緒檢查", f"{audit.get('status')}{suffix}", parent=self)
+
+        def on_error(exc):
             self._live_audit_var.set(f"實盤就緒：LIVE_BLOCKED｜Audit 失敗：{exc}")
             messagebox.showerror("Trading 實盤就緒檢查失敗", str(exc), parent=self)
-            return
-        blockers = list(audit.get("blockers") or [])
-        warnings = list(audit.get("warnings") or [])
-        if blockers:
-            summary = "；".join(blockers[:2])
-            self._live_audit_var.set(f"實盤就緒：{audit.get('status')}｜{summary}")
-            messagebox.showwarning(
-                "Trading 尚不可實盤",
-                summary,
-                parent=self,
-            )
-        else:
-            suffix = f"｜警告 {len(warnings)} 項" if warnings else ""
-            self._live_audit_var.set(f"實盤就緒：{audit.get('status')}{suffix}")
-            messagebox.showinfo("Trading 實盤就緒檢查", f"{audit.get('status')}{suffix}", parent=self)
+
+        self._submit_trading_command(
+            "實盤就緒檢查",
+            lambda: run_trading_operational_audit(WORKBENCH_PROJECT_ROOT),
+            on_success=on_success,
+            on_error=on_error,
+            refresh_state=True,
+        )
 
     def _refresh_all_trading_state(self):
-        recovery_error = None
-        try:
-            recover_trading_fill_transaction(WORKBENCH_PROJECT_ROOT)
-        except (TradingFillRevisionConflict, TradingStateBusyError) as exc:
-            recovery_error = str(exc)
-        self.refresh_account()
-        self.refresh_candidate_snapshot_rows()
-        self.refresh_proposed_order_plan()
-        self.refresh_order_state()
-        self.refresh_protection_plan()
-        self.refresh_indicator_exit_plan()
-        self.refresh_daily_workflow()
-        self.refresh_operations_status()
-        if recovery_error:
-            messagebox.showerror(
-                "Trading fill recovery 失敗",
-                recovery_error,
-                parent=self,
-            )
+        self._submit_trading_command(
+            "全狀態刷新",
+            lambda: recover_trading_fill_transaction(WORKBENCH_PROJECT_ROOT),
+            error_title="Trading fill recovery 失敗",
+            refresh_state=True,
+        )
 
     def _apply_workflow_action_availability(self):
-        if self._workflow_thread is not None and self._workflow_thread.is_alive():
+        if self._command_thread is not None and self._command_thread.is_alive():
             self._set_workflow_buttons_state("disabled")
             return
         availability = dict(self._operations_snapshot.get("workflow_action_availability") or {})
@@ -1502,12 +1664,16 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_operations_status()
 
     def _start_workflow_action(self, action: str):
-        if self._workflow_thread is not None and self._workflow_thread.is_alive():
-            self._workflow_status_var.set("Trading workflow 執行中；請等待目前工作完成。")
-            return
         param_mode = self._selected_param_mode()
         param_label = "沿用既有 Trading Params" if param_mode == TRADING_PARAM_MODE_REUSE else "重新訓練 Trading Params"
-        labels = {"data": "更新 Trading 資料", "rollforward": "持股日終推進", "params": param_label, "scanner": "Scanner 候選", "orders": "產生建議掛單", "all": f"每日流程 1→2→3（{param_label}）"}
+        labels = {
+            "data": "更新 Trading 資料",
+            "rollforward": "持股日終推進",
+            "params": param_label,
+            "scanner": "Scanner 候選",
+            "orders": "產生建議掛單",
+            "all": f"每日流程 1→2→3（{param_label}）",
+        }
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
             return
@@ -1519,71 +1685,53 @@ class TradingAccountPanel(ttk.Frame):
                 parent=self,
             )
             return
-        self._workflow_token += 1
-        token = self._workflow_token
-        self._set_workflow_buttons_state("disabled")
         self._workflow_status_var.set(f"執行中：{labels[action]}")
-        thread = threading.Thread(
-            target=self._run_workflow_worker,
-            args=(action, token, param_mode),
-            name=f"workbench-trading-{action}",
-            daemon=True,
-        )
-        self._workflow_thread = thread
-        thread.start()
 
-    def _run_workflow_worker(self, action: str, token: int, param_mode: str):
+        def on_success(result):
+            self._finish_workflow_success(action, result)
+
+        def on_error(exc):
+            self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
+            messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
+
+        self._submit_trading_command(
+            labels[action],
+            lambda: self._run_workflow_command(action, param_mode),
+            on_success=on_success,
+            on_error=on_error,
+            refresh_state=True,
+        )
+
+    @staticmethod
+    def _run_workflow_command(action: str, param_mode: str):
         console_progress = MarketDataDailyConsoleProgress() if action in {"data", "all"} else None
         try:
             if action == "data":
-                result = run_trading_market_data_update(
+                return run_trading_market_data_update(
                     project_root=WORKBENCH_PROJECT_ROOT,
                     progress_fn=console_progress.progress,
                     quota_wait_fn=console_progress.quota_wait,
                 )
-            elif action == "rollforward":
+            if action == "rollforward":
                 result = run_trading_position_rollforward(project_root=WORKBENCH_PROJECT_ROOT)
                 if str(result.get("status") or "") != "NO_ACCOUNT":
                     build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
-            elif action == "params":
-                result = run_trading_param_step(
-                    project_root=WORKBENCH_PROJECT_ROOT,
-                    mode=param_mode,
-                )
-            elif action == "scanner":
-                result = run_trading_candidate_scan(project_root=WORKBENCH_PROJECT_ROOT)
-            elif action == "orders":
-                result = build_trading_proposed_order_plan(project_root=WORKBENCH_PROJECT_ROOT)
-            else:
-                result = run_trading_daily_workflow(
-                    project_root=WORKBENCH_PROJECT_ROOT,
-                    param_mode=param_mode,
-                    data_progress_fn=console_progress.progress,
-                    data_quota_wait_fn=console_progress.quota_wait,
-                )
-        except Exception as exc:
+                return result
+            if action == "params":
+                return run_trading_param_step(project_root=WORKBENCH_PROJECT_ROOT, mode=param_mode)
+            if action == "scanner":
+                return run_trading_candidate_scan(project_root=WORKBENCH_PROJECT_ROOT)
+            if action == "orders":
+                return build_trading_proposed_order_plan(project_root=WORKBENCH_PROJECT_ROOT)
+            return run_trading_daily_workflow(
+                project_root=WORKBENCH_PROJECT_ROOT,
+                param_mode=param_mode,
+                data_progress_fn=console_progress.progress,
+                data_quota_wait_fn=console_progress.quota_wait,
+            )
+        finally:
             if console_progress is not None:
                 console_progress.close()
-            self.after(0, self._finish_workflow_error, action, token, exc)
-            return
-        if console_progress is not None:
-            console_progress.close()
-        self.after(0, self._finish_workflow_success, action, token, result)
-
-    def _finish_workflow_error(self, action: str, token: int, exc: Exception):
-        if token != self._workflow_token:
-            return
-        self._workflow_thread = None
-        self.refresh_daily_workflow()
-        self.refresh_order_state()
-        if action in {"all", "rollforward"}:
-            # AI: Earlier workflow stages may already have committed state.
-            self.refresh_account()
-            self.refresh_protection_plan()
-            self.refresh_indicator_exit_plan()
-        self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
-        self.refresh_operations_status()
-        messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
 
     @staticmethod
     def _format_candidate_number(value, *, digits=2):
@@ -1730,27 +1878,37 @@ class TradingAccountPanel(ttk.Frame):
             parent=self,
         ):
             return
-        try:
-            confirm_trading_order_submission(
+        rank = int(row.get("rank") or 0)
+        expected_revision = self._current_order_revision()
+        broker_order_id = self._broker_order_id_var.get().strip() or None
+        note = self._order_note_var.get().strip() or None
+
+        def worker():
+            return confirm_trading_order_submission(
                 WORKBENCH_PROJECT_ROOT,
-                rank=int(row.get("rank") or 0),
+                rank=rank,
                 ticker=ticker,
-                expected_revision=self._current_order_revision(),
-                broker_order_id=self._broker_order_id_var.get().strip() or None,
-                note=self._order_note_var.get().strip() or None,
+                expected_revision=expected_revision,
+                broker_order_id=broker_order_id,
+                note=note,
             )
-        except TradingOrderRevisionConflict as exc:
-            messagebox.showerror("Trading 掛單已更新", f"{exc}\n\n已重新讀取最新掛單狀態。", parent=self)
-            self.refresh_order_state()
-            return
-        except (ValueError, RuntimeError, FileNotFoundError) as exc:
-            messagebox.showerror("Trading 掛單失敗", str(exc), parent=self)
-            self.refresh_order_state()
-            return
-        self._broker_order_id_var.set("")
-        self._order_note_var.set("")
-        self.refresh_order_state()
-        messagebox.showinfo("Trading 掛單", f"{ticker} 已記錄為 ORDERED；account cash／positions 未變更。", parent=self)
+
+        def on_success(_result):
+            self._broker_order_id_var.set("")
+            self._order_note_var.set("")
+            messagebox.showinfo("Trading 掛單", f"{ticker} 已記錄為 ORDERED；account cash／positions 未變更。", parent=self)
+
+        def on_error(exc):
+            title = "Trading 掛單已更新" if isinstance(exc, TradingOrderRevisionConflict) else "Trading 掛單失敗"
+            suffix = "\n\n已重新讀取最新掛單狀態。" if isinstance(exc, TradingOrderRevisionConflict) else ""
+            messagebox.showerror(title, f"{exc}{suffix}", parent=self)
+
+        self._submit_trading_command(
+            f"{ticker} BUY 送單確認",
+            worker,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     def _confirm_selected_fill(self):
         selected = self._order_tree.selection()
@@ -1758,7 +1916,7 @@ class TradingAccountPanel(ttk.Frame):
             messagebox.showerror("Trading 成交", "請先選取一筆 ORDERED / PARTIAL 掛單。", parent=self)
             return
         order_id = str(selected[0])
-        row = self._order_rows.get(order_id) or {}
+        row = dict(self._order_rows.get(order_id) or {})
         if str(row.get("status")) not in TRADING_ACTIVE_ORDER_STATUSES:
             messagebox.showerror("Trading 成交", "只有 ORDERED / PARTIAL 掛單可確認成交。", parent=self)
             return
@@ -1782,53 +1940,65 @@ class TradingAccountPanel(ttk.Frame):
             parent=self,
         ):
             return
-        try:
-            if str(row.get("side") or "BUY") == "BUY":
-                fill_fn = confirm_trading_buy_order_fill
-            elif str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
-                fill_fn = confirm_trading_indicator_sell_order_fill
-            else:
-                fill_fn = confirm_trading_protection_sell_order_fill
+        if str(row.get("side") or "BUY") == "BUY":
+            fill_fn = confirm_trading_buy_order_fill
+        elif str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
+            fill_fn = confirm_trading_indicator_sell_order_fill
+        else:
+            fill_fn = confirm_trading_protection_sell_order_fill
+        expected_order_revision = int(self._current_order_revision())
+        expected_account_revision = int(self._current_revision())
+
+        def worker():
             result = fill_fn(
                 WORKBENCH_PROJECT_ROOT,
                 order_id=order_id,
                 fill_qty=fill_qty,
                 fill_price=fill_price,
                 trade_date=trade_date,
-                expected_order_revision=int(self._current_order_revision()),
-                expected_account_revision=int(self._current_revision()),
+                expected_order_revision=expected_order_revision,
+                expected_account_revision=expected_account_revision,
             )
-        except TradingFillRevisionConflict as exc:
-            messagebox.showerror("Trading 成交狀態已更新", f"{exc}\n\n已重新讀取最新 account／order state。", parent=self)
-            self.refresh_account()
-            self.refresh_order_state()
-            return
-        except (ValueError, RuntimeError, FileNotFoundError) as exc:
-            messagebox.showerror("Trading 成交失敗", str(exc), parent=self)
-            self.refresh_account()
-            self.refresh_order_state()
-            return
-        self._fill_qty_var.set("")
-        self._fill_price_var.set("")
-        self._fill_date_var.set("")
-        self.refresh_account()
-        self.refresh_order_state()
-        protection_error = None
-        try:
-            build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
-        except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
-            protection_error = str(exc)
-        self.refresh_protection_plan()
-        self.refresh_indicator_exit_plan()
-        message = (
-            f"{ticker} 已更新為 {result.get('status')}；累計成交 {int(result.get('filled_qty') or 0):,}，"
-            f"未成交 {int(result.get('remaining_qty') or 0):,}。"
+            protection_error = None
+            try:
+                build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
+            except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+                protection_error = str(exc)
+            try:
+                build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
+            except (ValueError, RuntimeError, OSError, FileNotFoundError):
+                # Indicator plan is separately visible in the consolidated state refresh.
+                pass
+            return {"fill_result": result, "protection_error": protection_error}
+
+        def on_success(payload):
+            payload = dict(payload or {})
+            result = dict(payload.get("fill_result") or {})
+            protection_error = payload.get("protection_error")
+            self._fill_qty_var.set("")
+            self._fill_price_var.set("")
+            self._fill_date_var.set("")
+            message = (
+                f"{ticker} 已更新為 {result.get('status')}；累計成交 {int(result.get('filled_qty') or 0):,}，"
+                f"未成交 {int(result.get('remaining_qty') or 0):,}。"
+            )
+            if protection_error:
+                message += f"\n\n成交已入帳，但保護單計畫建立失敗：{protection_error}"
+            else:
+                message += "\n\n已依實際成交後 canonical position state 機械刷新 Stop / TP 保護單計畫；尚未送券商。"
+            messagebox.showinfo("Trading 成交", message, parent=self)
+
+        def on_error(exc):
+            title = "Trading 成交狀態已更新" if isinstance(exc, TradingFillRevisionConflict) else "Trading 成交失敗"
+            suffix = "\n\n已重新讀取最新 account／order state。" if isinstance(exc, TradingFillRevisionConflict) else ""
+            messagebox.showerror(title, f"{exc}{suffix}", parent=self)
+
+        self._submit_trading_command(
+            f"{ticker} 成交確認",
+            worker,
+            on_success=on_success,
+            on_error=on_error,
         )
-        if protection_error:
-            message += f"\n\n成交已入帳，但保護單計畫建立失敗：{protection_error}"
-        else:
-            message += "\n\n已依實際成交後 canonical position state 機械刷新 Stop / TP 保護單計畫；尚未送券商。"
-        messagebox.showinfo("Trading 成交", message, parent=self)
 
     def _cancel_selected_order(self):
         selected = self._order_tree.selection()
@@ -1836,7 +2006,7 @@ class TradingAccountPanel(ttk.Frame):
             messagebox.showerror("Trading 掛單", "請先選取一筆 ORDERED / PARTIAL 掛單。", parent=self)
             return
         order_id = str(selected[0])
-        row = self._order_rows.get(order_id) or {}
+        row = dict(self._order_rows.get(order_id) or {})
         if str(row.get("status")) not in TRADING_ACTIVE_ORDER_STATUSES:
             messagebox.showerror("Trading 掛單", "只有 ORDERED / PARTIAL 掛單可確認取消剩餘委託。", parent=self)
             return
@@ -1847,56 +2017,48 @@ class TradingAccountPanel(ttk.Frame):
             parent=self,
         ):
             return
-        try:
-            confirm_trading_order_cancellation(
+        expected_revision = int(self._current_order_revision())
+        note = self._order_note_var.get().strip() or "Workbench confirmed broker cancellation"
+        filled_qty = int(row.get("filled_qty") or 0)
+
+        def worker():
+            result = confirm_trading_order_cancellation(
                 WORKBENCH_PROJECT_ROOT,
                 order_id=order_id,
-                expected_revision=int(self._current_order_revision()),
-                note=self._order_note_var.get().strip() or "Workbench confirmed broker cancellation",
+                expected_revision=expected_revision,
+                note=note,
             )
-        except TradingOrderRevisionConflict as exc:
-            messagebox.showerror("Trading 掛單已更新", f"{exc}\n\n已重新讀取最新掛單狀態。", parent=self)
-            self.refresh_order_state()
-            return
-        except (ValueError, RuntimeError, FileNotFoundError) as exc:
-            messagebox.showerror("Trading 掛單失敗", str(exc), parent=self)
-            self.refresh_order_state()
-            return
-        self._order_note_var.set("")
-        self.refresh_order_state()
-        protection_refresh_error = None
-        if int(row.get("filled_qty") or 0) > 0:
-            try:
-                build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
-            except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
-                protection_refresh_error = str(exc)
-        self.refresh_protection_plan()
-        self.refresh_indicator_exit_plan()
-        message = f"{ticker} 已記錄為 CANCELLED。"
-        if protection_refresh_error:
-            message += f"\n\n取消已記錄，但保護單計畫刷新失敗：{protection_refresh_error}"
-        messagebox.showinfo("Trading 掛單", message, parent=self)
+            protection_refresh_error = None
+            if filled_qty > 0:
+                try:
+                    build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
+                except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+                    protection_refresh_error = str(exc)
+            return {"cancel_result": result, "protection_error": protection_refresh_error}
 
-    def _finish_workflow_success(self, action: str, token: int, result):
-        if token != self._workflow_token:
-            return
-        self._workflow_thread = None
+        def on_success(payload):
+            self._order_note_var.set("")
+            protection_error = dict(payload or {}).get("protection_error")
+            message = f"{ticker} 已記錄為 CANCELLED。"
+            if protection_error:
+                message += f"\n\n取消已記錄，但保護單計畫刷新失敗：{protection_error}"
+            messagebox.showinfo("Trading 掛單", message, parent=self)
+
+        def on_error(exc):
+            title = "Trading 掛單已更新" if isinstance(exc, TradingOrderRevisionConflict) else "Trading 掛單失敗"
+            suffix = "\n\n已重新讀取最新掛單狀態。" if isinstance(exc, TradingOrderRevisionConflict) else ""
+            messagebox.showerror(title, f"{exc}{suffix}", parent=self)
+
+        self._submit_trading_command(
+            f"{ticker} 取消委託確認",
+            worker,
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    def _finish_workflow_success(self, action: str, result):
+        result = dict(result or {})
         scan_result = dict(result.get("scanner") or {}) if action == "all" else (dict(result) if action == "scanner" else {})
-        if scan_result:
-            self._reload_candidate_rows(scan_result.get("candidate_rows") or [])
-        if action == "orders":
-            order_result = dict(result)
-            self._reload_proposed_order_rows(order_result.get("orders") or [])
-            self._proposed_status_var.set(
-                f"PROPOSED | account rev {order_result.get('account_revision')} | equity {format_trading_money(order_result.get('sizing_equity'))} | "
-                f"預留 {format_trading_money(order_result.get('reserved_total'))} | 餘額 {format_trading_money(order_result.get('cash_after_reservation'))}"
-            )
-        self.refresh_daily_workflow()
-        self.refresh_order_state()
-        if action in {"all", "rollforward"}:
-            self.refresh_account()
-            self.refresh_protection_plan()
-            self.refresh_indicator_exit_plan()
         if action == "data":
             v2 = dict(result.get("market_data_v2_archive") or {})
             self._workflow_status_var.set(
@@ -1925,7 +2087,6 @@ class TradingAccountPanel(ttk.Frame):
             self._workflow_status_var.set(
                 f"每日 Scanner 完成：候選 {len(scan_result.get('candidate_rows') or [])} 檔 | data {scan_result.get('latest_data_date') or '-'}"
             )
-        self.refresh_operations_status()
 
 
     def _current_revision(self) -> int:
@@ -1934,27 +2095,29 @@ class TradingAccountPanel(ttk.Frame):
             raise RuntimeError("Trading account 尚未初始化")
         return int(revision)
 
-    def _run_mutation(self, action):
-        try:
-            action()
-        except TradingAccountRevisionConflict as exc:
-            messagebox.showerror("Trading 帳戶已更新", f"{exc}\n\n已重新讀取最新狀態，請確認後再操作。", parent=self)
-            self.refresh_account()
-            self.refresh_order_state()
-            return False
-        except (ValueError, RuntimeError, FileNotFoundError, FileExistsError) as exc:
-            messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
-            self.refresh_account()
-            self.refresh_order_state()
-            return False
-        self.refresh_account()
-        self.refresh_order_state()
-        self.refresh_protection_plan()
-        self.refresh_indicator_exit_plan()
-        self._reload_proposed_order_rows([])
-        self._proposed_status_var.set("帳戶已變更；既有建議掛單已失效，請重新執行 4 建議掛單。")
-        self.refresh_operations_status()
-        return True
+    def _submit_account_mutation(self, label: str, worker, *, success_message: str, clear_form: bool = False) -> None:
+        def on_success(_result):
+            if clear_form:
+                self._clear_position_form()
+            messagebox.showinfo("Trading 帳戶", success_message, parent=self)
+
+        def on_error(exc):
+            if isinstance(exc, TradingAccountRevisionConflict):
+                messagebox.showerror(
+                    "Trading 帳戶已更新",
+                    f"{exc}\n\n已重新讀取最新狀態，請確認後再操作。",
+                    parent=self,
+                )
+            else:
+                messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
+
+        self._submit_trading_command(
+            label,
+            worker,
+            on_success=on_success,
+            on_error=on_error,
+            refresh_state=True,
+        )
 
     def refresh_account(self):
         try:
@@ -2045,23 +2208,34 @@ class TradingAccountPanel(ttk.Frame):
         self._set_position_action_state(None)
 
     def _initialize_account(self):
-        def action():
+        try:
             cash = parse_trading_money_text(self._cash_var.get(), "帳戶現金", allow_blank=True, allow_zero=True)
-            initialize_trading_account_state(WORKBENCH_PROJECT_ROOT, cash=cash)
-        if self._run_mutation(action):
-            messagebox.showinfo("Trading 帳戶", "Trading account 已初始化。", parent=self)
+        except ValueError as exc:
+            messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
+            return
+        self._submit_account_mutation(
+            "初始化 Trading account",
+            lambda: initialize_trading_account_state(WORKBENCH_PROJECT_ROOT, cash=cash),
+            success_message="Trading account 已初始化。",
+        )
 
     def _set_cash(self):
-        def action():
+        try:
             cash = parse_trading_money_text(self._cash_var.get(), "帳戶現金", allow_blank=False, allow_zero=True)
-            set_trading_cash_balance(
+            expected_revision = self._current_revision()
+        except (ValueError, RuntimeError) as exc:
+            messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
+            return
+        self._submit_account_mutation(
+            "更新 Trading 現金",
+            lambda: set_trading_cash_balance(
                 WORKBENCH_PROJECT_ROOT,
                 cash=cash,
-                expected_revision=self._current_revision(),
+                expected_revision=expected_revision,
                 note="Workbench cash reconciliation",
-            )
-        if self._run_mutation(action):
-            messagebox.showinfo("Trading 帳戶", "現金餘額已更新。", parent=self)
+            ),
+            success_message="現金餘額已更新。",
+        )
 
     def _position_form_values(self):
         ticker = self._ticker_var.get().strip().upper()
@@ -2076,33 +2250,45 @@ class TradingAccountPanel(ttk.Frame):
         }
 
     def _adopt_position(self):
-        def action():
+        try:
             values = self._position_form_values()
-            adopt_existing_trading_position(
+            expected_revision = self._current_revision()
+        except (ValueError, RuntimeError) as exc:
+            messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
+            return
+        self._submit_account_mutation(
+            f"登記既有持股 {values['ticker']}",
+            lambda: adopt_existing_trading_position(
                 WORKBENCH_PROJECT_ROOT,
-                expected_revision=self._current_revision(),
+                expected_revision=expected_revision,
                 **values,
-            )
-        if self._run_mutation(action):
-            self._clear_position_form()
-            messagebox.showinfo("Trading 帳戶", "既有持股已登記；現金未變更。", parent=self)
+            ),
+            success_message="既有持股已登記；現金未變更。",
+            clear_form=True,
+        )
 
     def _correct_position(self):
         selected = self._selected_ticker()
         if not selected:
             messagebox.showerror("Trading 帳戶操作失敗", "請先選取要修正的持股。", parent=self)
             return
-        def action():
+        try:
             values = self._position_form_values()
             if values["ticker"] != selected:
                 raise ValueError("修正持股時不可變更股票代號；如代號輸入錯誤，請移除後重新新增。")
-            correct_existing_trading_position(
+            expected_revision = self._current_revision()
+        except (ValueError, RuntimeError) as exc:
+            messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
+            return
+        self._submit_account_mutation(
+            f"修正既有持股 {selected}",
+            lambda: correct_existing_trading_position(
                 WORKBENCH_PROJECT_ROOT,
-                expected_revision=self._current_revision(),
+                expected_revision=expected_revision,
                 **values,
-            )
-        if self._run_mutation(action):
-            messagebox.showinfo("Trading 帳戶", "既有持股 broker truth 已修正；現金未變更。", parent=self)
+            ),
+            success_message="既有持股 broker truth 已修正；現金未變更。",
+        )
 
     def _remove_position(self):
         selected = self._selected_ticker()
@@ -2116,16 +2302,23 @@ class TradingAccountPanel(ttk.Frame):
             parent=self,
         ):
             return
-        def action():
-            remove_existing_trading_position(
+        try:
+            expected_revision = self._current_revision()
+        except RuntimeError as exc:
+            messagebox.showerror("Trading 帳戶操作失敗", str(exc), parent=self)
+            return
+        note = self._note_var.get().strip() or "Workbench manual position removal"
+        self._submit_account_mutation(
+            f"移除既有持股 {selected}",
+            lambda: remove_existing_trading_position(
                 WORKBENCH_PROJECT_ROOT,
                 ticker=selected,
-                expected_revision=self._current_revision(),
-                note=self._note_var.get().strip() or "Workbench manual position removal",
-            )
-        if self._run_mutation(action):
-            self._clear_position_form()
-            messagebox.showinfo("Trading 帳戶", "既有持股已移除；現金未變更。", parent=self)
+                expected_revision=expected_revision,
+                note=note,
+            ),
+            success_message="既有持股已移除；現金未變更。",
+            clear_form=True,
+        )
 
 
 __all__ = [
