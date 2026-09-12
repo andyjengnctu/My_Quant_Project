@@ -17,6 +17,7 @@ from services.trading.market_data_scheduler import (
 )
 from services.trading.market_data_update import run_trading_market_data_update
 from services.workbench_ui.workbench import (
+    WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
     WORKBENCH_ERROR,
     WORKBENCH_ERROR_LABEL_STYLE,
@@ -32,9 +33,11 @@ from services.workbench_ui.workbench import (
     WORKBENCH_SUCCESS,
     WORKBENCH_SUCCESS_LABEL_STYLE,
     WORKBENCH_TREE_STYLE,
+    WORKBENCH_UI_FONT,
     WORKBENCH_VSCROLL_STYLE,
     WORKBENCH_WARNING,
     WORKBENCH_WARNING_LABEL_STYLE,
+    WORKBENCH_TEXT,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -73,13 +76,25 @@ def _status_tag(value: object) -> str:
     return "info"
 
 
-def _style_for_tag(tag: str) -> str:
+def _color_for_tag(tag: str) -> str:
     return {
-        "success": WORKBENCH_SUCCESS_LABEL_STYLE,
-        "warning": WORKBENCH_WARNING_LABEL_STYLE,
-        "error": WORKBENCH_ERROR_LABEL_STYLE,
-        "muted": WORKBENCH_MUTED_LABEL_STYLE,
-    }.get(str(tag), WORKBENCH_INFO_LABEL_STYLE)
+        "success": WORKBENCH_SUCCESS,
+        "warning": WORKBENCH_WARNING,
+        "error": WORKBENCH_ERROR,
+        "muted": WORKBENCH_MUTED,
+        "info": WORKBENCH_INFO,
+    }.get(str(tag), WORKBENCH_TEXT)
+
+
+def _attention_tags(value: object) -> tuple[str, ...]:
+    """Color only rows that require attention; routine healthy rows stay neutral."""
+
+    status = str(value or "").strip().upper()
+    if status in {"BLOCKED", "ERROR", "FAIL", "UNAVAILABLE"}:
+        return ("error",)
+    if status in {"DUE", "WAIT_QUOTA", "DEFERRED", "NOT_INSTALLED", "INSTALLED_DISABLED", "STALE"}:
+        return ("warning",)
+    return ()
 
 
 class MarketDataOpsPanel(ttk.Frame):
@@ -90,10 +105,11 @@ class MarketDataOpsPanel(ttk.Frame):
         self._dataset_by_iid: dict[str, dict[str, object]] = {}
         self._status_var = tk.StringVar(value="讀取 Market Data 狀態…")
         self._detail_var = tk.StringVar(value="選取 dataset 查看詳細狀態。")
-        self._kpi_labels: dict[str, ttk.Label] = {}
+        self._kpi_labels: dict[str, tk.Label] = {}
         self._kpi_vars = {key: tk.StringVar(value="-") for key in (
             "trading", "v2", "datasets", "next", "quota", "auto"
         )}
+        self._kpi_detail_vars = {key: tk.StringVar(value="-") for key in self._kpi_vars}
         self._build_ui()
         self.refresh_local_status()
 
@@ -127,9 +143,22 @@ class MarketDataOpsPanel(ttk.Frame):
         for col, (title, key) in enumerate(labels):
             box = ttk.LabelFrame(kpi, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
             box.grid(row=0, column=col, padx=(0, 6), sticky="nsew")
-            label = ttk.Label(box, textvariable=self._kpi_vars[key], style=WORKBENCH_INFO_LABEL_STYLE, justify="center")
-            label.pack(fill="x")
-            self._kpi_labels[key] = label
+            primary = tk.Label(
+                box,
+                textvariable=self._kpi_vars[key],
+                background=WORKBENCH_BG,
+                foreground=WORKBENCH_TEXT,
+                font=(WORKBENCH_UI_FONT[0], WORKBENCH_UI_FONT[1], "bold"),
+                justify="center",
+            )
+            primary.pack(fill="x")
+            ttk.Label(
+                box,
+                textvariable=self._kpi_detail_vars[key],
+                style=WORKBENCH_MUTED_LABEL_STYLE,
+                justify="center",
+            ).pack(fill="x", pady=(1, 0))
+            self._kpi_labels[key] = primary
             kpi.columnconfigure(col, weight=1)
 
         meters = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
@@ -215,11 +244,8 @@ class MarketDataOpsPanel(ttk.Frame):
 
     @staticmethod
     def _configure_tree_tags(tree: ttk.Treeview):
-        tree.tag_configure("success", foreground=WORKBENCH_SUCCESS)
         tree.tag_configure("warning", foreground=WORKBENCH_WARNING)
         tree.tag_configure("error", foreground=WORKBENCH_ERROR)
-        tree.tag_configure("info", foreground=WORKBENCH_INFO)
-        tree.tag_configure("muted", foreground=WORKBENCH_MUTED)
 
     def refresh_local_status(self):
         try:
@@ -240,35 +266,49 @@ class MarketDataOpsPanel(ttk.Frame):
         strategy_id = snapshot.get("trading_strategy_id") or "-"
         required_v2 = int(snapshot.get("trading_required_v2_count") or 0)
         ready_v2 = int(snapshot.get("trading_ready_v2_count") or 0)
-        self._kpi_vars["trading"].set(
-            f"{'READY' if snapshot.get('trading_ready') else 'BLOCKED'} | {target}\n"
-            f"{strategy_id} | required V2 {ready_v2}/{required_v2}"
-        )
-        self._kpi_labels["trading"].configure(style=_style_for_tag("success" if snapshot.get("trading_ready") else "error"))
-        self._kpi_vars["v2"].set(f"{snapshot.get('v2_status') or '-'}\n{snapshot.get('v2_latest_sync_target_date') or '-'}")
-        self._kpi_labels["v2"].configure(style=_style_for_tag(_status_tag(snapshot.get("v2_status"))))
-        self._kpi_vars["datasets"].set(f"{int(snapshot.get('ready_count') or 0)}/{int(snapshot.get('dataset_count') or 0)} READY\nDue {int(snapshot.get('due_count') or 0)}")
+        trading_tag = "success" if snapshot.get("trading_ready") else "error"
+        self._kpi_vars["trading"].set("READY" if snapshot.get("trading_ready") else "BLOCKED")
+        self._kpi_detail_vars["trading"].set(f"{target}\n{strategy_id} | required V2 {ready_v2}/{required_v2}")
+        self._kpi_labels["trading"].configure(foreground=_color_for_tag(trading_tag))
+
+        v2_status = snapshot.get("v2_status") or "-"
+        self._kpi_vars["v2"].set(v2_status)
+        self._kpi_detail_vars["v2"].set(str(snapshot.get("v2_latest_sync_target_date") or "-"))
+        self._kpi_labels["v2"].configure(foreground=_color_for_tag(_status_tag(v2_status)))
+
+        ready_count = int(snapshot.get("ready_count") or 0)
+        dataset_count = int(snapshot.get("dataset_count") or 0)
+        due_count = int(snapshot.get("due_count") or 0)
+        self._kpi_vars["datasets"].set(f"{ready_count}/{dataset_count} READY")
+        self._kpi_detail_vars["datasets"].set(f"Due {due_count}")
         datasets_ready = int(snapshot.get("ready_count") or 0) == int(snapshot.get("dataset_count") or 0) and int(snapshot.get("due_count") or 0) == 0
-        self._kpi_labels["datasets"].configure(style=_style_for_tag("success" if datasets_ready else "warning"))
+        self._kpi_labels["datasets"].configure(foreground=_color_for_tag("success" if datasets_ready else "warning"))
+
         self._kpi_vars["next"].set(_fmt_datetime(snapshot.get("next_check_at")))
-        self._kpi_labels["next"].configure(style=WORKBENCH_INFO_LABEL_STYLE)
+        self._kpi_detail_vars["next"].set("next global check")
+        self._kpi_labels["next"].configure(foreground=WORKBENCH_INFO)
+
         quota_used, quota_limit = snapshot.get("quota_user_count"), snapshot.get("quota_limit")
         quota_state = str(snapshot.get("quota_observation_status") or "NONE")
-        self._kpi_vars["quota"].set(
-            "-\nNO EVIDENCE"
+        self._kpi_vars["quota"].set("NO EVIDENCE" if quota_limit is None else f"{quota_used}/{quota_limit}")
+        self._kpi_detail_vars["quota"].set(
+            "provider usage unknown"
             if quota_limit is None
-            else f"{quota_used}/{quota_limit}\n{quota_state} · {_fmt_datetime(snapshot.get('quota_observed_at'))}"
+            else f"{quota_state} · {_fmt_datetime(snapshot.get('quota_observed_at'))}"
         )
         quota_tag = "success" if quota_state == "CURRENT" else "warning" if quota_state == "STALE" else "muted"
-        self._kpi_labels["quota"].configure(style=_style_for_tag(quota_tag))
+        self._kpi_labels["quota"].configure(foreground=_color_for_tag(quota_tag))
+
         auto_text = "ON" if snapshot.get("auto_sync_active") else "OFF"
         scheduler_status = str(snapshot.get("scheduler_registration_status") or "-")
         scheduler_next = _fmt_datetime(snapshot.get("scheduler_next_run_at"))
-        self._kpi_vars["auto"].set(
-            f"Auto Sync {auto_text} | wake {snapshot.get('scheduler_wake_minutes') or '-'}m\n"
-            f"Task: {scheduler_status} | next {scheduler_next}"
+        self._kpi_vars["auto"].set(auto_text)
+        self._kpi_detail_vars["auto"].set(
+            f"wake {snapshot.get('scheduler_wake_minutes') or '-'}m\nTask: {scheduler_status} | next {scheduler_next}"
         )
-        self._kpi_labels["auto"].configure(style=_style_for_tag("success" if snapshot.get("auto_sync_active") else _status_tag(scheduler_status)))
+        self._kpi_labels["auto"].configure(
+            foreground=_color_for_tag("success" if snapshot.get("auto_sync_active") else _status_tag(scheduler_status))
+        )
         self._render_scheduler_controls(snapshot)
 
         total = int(snapshot.get("dataset_count") or 0)
@@ -278,7 +318,7 @@ class MarketDataOpsPanel(ttk.Frame):
         counts = dict(snapshot.get("status_counts") or {})
         count_text = " | ".join(f"{key} {counts[key]}" for key in sorted(counts))
         self._readiness_text.set(f"target {snapshot.get('update_target_date') or '-'} | {ready}/{total} ({readiness_pct:.1f}%) | {count_text or '-'}")
-        self._readiness_label.configure(style=WORKBENCH_SUCCESS_LABEL_STYLE if total and ready == total else WORKBENCH_WARNING_LABEL_STYLE)
+        self._readiness_label.configure(style=WORKBENCH_LABEL_STYLE)
 
         quota_pct = snapshot.get("quota_percent")
         self._quota_progress["value"] = float(quota_pct or 0.0)
@@ -290,7 +330,7 @@ class MarketDataOpsPanel(ttk.Frame):
                 f"{quota_state} | quota={quota_used}/{quota_limit} ({float(quota_pct or 0):.1f}%) | observed {_fmt_datetime(snapshot.get('quota_observed_at'))} | "
                 f"last auto data/usage={snapshot.get('latest_auto_data_requests') or 0}/{snapshot.get('latest_auto_usage_requests') or 0}"
             )
-            self._quota_label.configure(style=_style_for_tag(quota_tag))
+            self._quota_label.configure(style=WORKBENCH_LABEL_STYLE)
 
         for tree in (self._dataset_tree, self._schedule_tree, self._activity_tree):
             for iid in tree.get_children():
@@ -303,7 +343,7 @@ class MarketDataOpsPanel(ttk.Frame):
             self._dataset_by_iid[iid] = dict(row)
             schedule = f"D+{int(row.get('publication_day_offset') or 0)} {row.get('publication_first_check_time') or '-'}"
             projected_status = row.get("projected_status") or row.get("status")
-            self._dataset_tree.insert("", "end", iid=iid, tags=(_status_tag(projected_status),), values=(
+            self._dataset_tree.insert("", "end", iid=iid, tags=_attention_tags(projected_status), values=(
                 row.get("dataset"), projected_status, row.get("latest_display") or "UNKNOWN",
                 row.get("expected_display") or "UNKNOWN", _fmt_datetime(row.get("last_success_at")), _fmt_datetime(row.get("next_check_display")),
                 schedule, row.get("schema_status") or "-", row.get("coverage_status") or "-", _retry_text(row),
@@ -316,7 +356,7 @@ class MarketDataOpsPanel(ttk.Frame):
             scheduler_source += " | drift=" + ",".join(str(item) for item in drift)
         if snapshot.get("scheduler_error"):
             scheduler_source += " | error=" + str(snapshot.get("scheduler_error"))[:180]
-        self._schedule_tree.insert("", "end", tags=(_status_tag(snapshot.get("scheduler_registration_status")),), values=(
+        self._schedule_tree.insert("", "end", tags=_attention_tags(snapshot.get("scheduler_registration_status")), values=(
             _fmt_datetime(scheduler_next),
             "Windows Auto Sync Worker",
             snapshot.get("scheduler_registration_status") or "-",
@@ -325,7 +365,7 @@ class MarketDataOpsPanel(ttk.Frame):
         ))
         discovery_next = snapshot.get("market_date_discovery_next_check_at")
         if discovery_next:
-            self._schedule_tree.insert("", "end", tags=("info",), values=(
+            self._schedule_tree.insert("", "end", values=(
                 _fmt_datetime(discovery_next),
                 "Trading Market Date Discovery",
                 "PROBE",
@@ -335,13 +375,13 @@ class MarketDataOpsPanel(ttk.Frame):
         schedule_rows = sorted(datasets, key=lambda row: (str(row.get("next_check_at") or "9999"), str(row.get("dataset") or "")))
         for row in schedule_rows:
             projected_status = row.get("projected_status") or row.get("status")
-            self._schedule_tree.insert("", "end", tags=(_status_tag(projected_status),), values=(
+            self._schedule_tree.insert("", "end", tags=_attention_tags(projected_status), values=(
                 _fmt_datetime(row.get("next_check_display")), row.get("dataset"), projected_status,
                 _fmt_datetime(row.get("expected_publish_at")), row.get("publication_schedule_source") or "-",
             ))
         if snapshot.get("market_date_discovery_last_probe_at"):
             discovery_result = snapshot.get("market_date_discovery_last_result") or "-"
-            self._activity_tree.insert("", "end", tags=(_status_tag(discovery_result),), values=(
+            self._activity_tree.insert("", "end", tags=_attention_tags(discovery_result), values=(
                 _fmt_datetime(snapshot.get("market_date_discovery_last_probe_at")),
                 "Trading Market Date Discovery",
                 discovery_result,
@@ -349,7 +389,7 @@ class MarketDataOpsPanel(ttk.Frame):
             ))
         for row in snapshot.get("recent_activity") or []:
             activity_result = row.get("result") or "-"
-            self._activity_tree.insert("", "end", tags=(_status_tag(activity_result),), values=(
+            self._activity_tree.insert("", "end", tags=_attention_tags(activity_result), values=(
                 _fmt_datetime(row.get("at")), row.get("dataset"), activity_result, row.get("error") or "",
             ))
 

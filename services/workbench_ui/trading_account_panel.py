@@ -90,6 +90,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_UI_FONT,
     WORKBENCH_VSCROLL_STYLE,
     WORKBENCH_WARNING,
+    _warn_gui_fallback,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -229,7 +230,8 @@ class _TradingStatusLine(tk.Text):
     def _schedule_height_sync(self, *_args) -> None:
         try:
             self.after_idle(self._sync_height)
-        except tk.TclError:
+        except tk.TclError as exc:
+            _warn_gui_fallback("TradingStatusText.after_idle(_sync_height)", exc)
             return
 
     def _sync_height(self) -> None:
@@ -247,14 +249,16 @@ class _TradingStatusLine(tk.Text):
             target = max(self._min_lines, min(self._max_lines, display_lines))
             if int(self.cget("height")) != target:
                 self.configure(height=target)
-        except (tk.TclError, TypeError, ValueError):
+        except (tk.TclError, TypeError, ValueError) as exc:
+            _warn_gui_fallback("TradingStatusText._sync_height()", exc)
             return
 
     def destroy(self) -> None:
         if self._trace_id is not None:
             try:
                 self._textvariable.trace_remove("write", self._trace_id)
-            except tk.TclError:
+            except tk.TclError as exc:
+                _warn_gui_fallback("TradingStatusText.trace_remove(write)", exc)
                 pass
             self._trace_id = None
         super().destroy()
