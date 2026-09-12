@@ -80,6 +80,21 @@ def _color_for_tag(tag: str) -> str:
     }.get(str(tag), WORKBENCH_TEXT)
 
 
+_STATUS_MARKERS = {
+    "success": "🟢",
+    "warning": "🟡",
+    "error": "🔴",
+    "muted": "⚪",
+    "info": "🔵",
+}
+
+
+def _status_display(value: object) -> str:
+    text = str(value or "-").strip() or "-"
+    if text == "-":
+        return text
+    return f"{_STATUS_MARKERS[_status_tag(text)]} {text}"
+
 
 class MarketDataOpsPanel(ttk.Frame):
     def __init__(self, master):
@@ -200,81 +215,72 @@ class MarketDataOpsPanel(ttk.Frame):
             wraplength=1700,
         ).pack(fill="x", pady=(6, 0))
 
-    def _build_dataset_table(self, master, *, height: int) -> dict[str, object]:
+    def _build_dataset_table(self, master, *, height: int) -> ttk.Treeview:
         frame = ttk.Frame(master, style=WORKBENCH_FRAME_STYLE)
         frame.pack(fill="both", expand=True)
-        section_specs = (
-            ("identity", (("dataset", "Dataset", 245), ("name_zh", "中文名稱", 210))),
-            ("status", (("status", "Status", 110),)),
-            ("dates", (
-                ("latest", "Latest", 115),
-                ("expected_publish", "Expected Publish", 150),
-                ("success", "Last Success", 125),
-                ("next", "Next Check", 125),
-            )),
-            ("schema", (("schema", "Schema", 105),)),
-            ("coverage", (("coverage", "Coverage", 115),)),
-            ("retries", (("retries", "Retry P/Q/E", 95),)),
+        columns = (
+            ("dataset", "Dataset", 205, 135),
+            ("name_zh", "中文名稱", 190, 120),
+            ("status", "Status", 115, 90),
+            ("latest", "Latest", 110, 85),
+            ("expected_publish", "Expected Publish", 140, 110),
+            ("success", "Last Success", 120, 95),
+            ("next", "Next Check", 120, 95),
+            ("schema", "Schema", 115, 90),
+            ("coverage", "Coverage", 120, 90),
+            ("retries", "Retry P/Q/E", 95, 80),
         )
-        trees: dict[str, ttk.Treeview] = {}
-        ordered_trees: list[ttk.Treeview] = []
-        for col_index, (section, columns) in enumerate(section_specs):
-            tree = ttk.Treeview(
-                frame,
-                columns=tuple(item[0] for item in columns),
-                show="headings",
-                style=WORKBENCH_TREE_STYLE,
-                height=height,
-                selectmode="browse",
-            )
-            for column, title, width in columns:
-                tree.heading(column, text=title)
-                tree.column(column, width=width, minwidth=max(70, width // 2), anchor="w", stretch=False)
-            if section in {"status", "schema", "coverage"}:
-                self._configure_status_tree_tags(tree)
-            tree.grid(row=0, column=col_index, sticky="nsew")
-            frame.columnconfigure(col_index, weight=1 if section == "dates" else 0)
-            trees[section] = tree
-            ordered_trees.append(tree)
-
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", style=WORKBENCH_VSCROLL_STYLE)
-        scrollbar.grid(row=0, column=len(section_specs), sticky="ns")
+        tree = ttk.Treeview(
+            frame,
+            columns=tuple(item[0] for item in columns),
+            show="headings",
+            style=WORKBENCH_TREE_STYLE,
+            height=height,
+            selectmode="browse",
+        )
+        for column, title, width, minwidth in columns:
+            tree.heading(column, text=title)
+            tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=True)
+        sy = ttk.Scrollbar(frame, orient="vertical", command=tree.yview, style=WORKBENCH_VSCROLL_STYLE)
+        sx = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        sy.grid(row=0, column=1, sticky="ns")
+        sx.grid(row=1, column=0, sticky="ew")
         frame.rowconfigure(0, weight=1)
-        self._bind_synced_vertical_scroll(ordered_trees, scrollbar, dataset_selection=True)
-        return {"trees": trees, "ordered_trees": ordered_trees}
+        frame.columnconfigure(0, weight=1)
+        tree.bind("<<TreeviewSelect>>", self._on_dataset_select)
+        return tree
 
     def _build_schedule_tab(self, master):
         top = ttk.Frame(master, style=WORKBENCH_FRAME_STYLE)
         top.pack(fill="both", expand=True)
-        schedule_specs = (
-            ("identity", (("dataset", "Dataset", 300), ("name_zh", "中文名稱", 230))),
-            ("status", (("status", "Status", 150),)),
-            ("detail", (("publish", "Expected Publish", 180), ("source", "Schedule Source", 650))),
+        columns = (
+            ("dataset", "Dataset", 285, 180),
+            ("name_zh", "中文名稱", 215, 140),
+            ("status", "Status", 150, 105),
+            ("publish", "Expected Publish", 175, 125),
+            ("source", "Schedule Source", 650, 300),
         )
-        self._schedule_trees: dict[str, ttk.Treeview] = {}
-        ordered: list[ttk.Treeview] = []
-        for col_index, (section, columns) in enumerate(schedule_specs):
-            tree = ttk.Treeview(
-                top,
-                columns=tuple(item[0] for item in columns),
-                show="headings",
-                style=WORKBENCH_TREE_STYLE,
-                height=16,
-                selectmode="browse",
-            )
-            for column, title, width in columns:
-                tree.heading(column, text=title)
-                tree.column(column, width=width, minwidth=max(80, width // 2), anchor="w", stretch=section == "detail" and column == "source")
-            if section == "status":
-                self._configure_status_tree_tags(tree)
-            tree.grid(row=0, column=col_index, sticky="nsew")
-            top.columnconfigure(col_index, weight=1 if section == "detail" else 0)
-            self._schedule_trees[section] = tree
-            ordered.append(tree)
-        sy = ttk.Scrollbar(top, orient="vertical", style=WORKBENCH_VSCROLL_STYLE)
-        sy.grid(row=0, column=len(schedule_specs), sticky="ns")
+        self._schedule_tree = ttk.Treeview(
+            top,
+            columns=tuple(item[0] for item in columns),
+            show="headings",
+            style=WORKBENCH_TREE_STYLE,
+            height=16,
+            selectmode="browse",
+        )
+        for column, title, width, minwidth in columns:
+            self._schedule_tree.heading(column, text=title)
+            self._schedule_tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=True)
+        sy = ttk.Scrollbar(top, orient="vertical", command=self._schedule_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
+        sx = ttk.Scrollbar(top, orient="horizontal", command=self._schedule_tree.xview)
+        self._schedule_tree.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
+        self._schedule_tree.grid(row=0, column=0, sticky="nsew")
+        sy.grid(row=0, column=1, sticky="ns")
+        sx.grid(row=1, column=0, sticky="ew")
         top.rowconfigure(0, weight=1)
-        self._bind_synced_vertical_scroll(ordered, sy, dataset_selection=False)
+        top.columnconfigure(0, weight=1)
 
         activity_box = ttk.LabelFrame(master, text="Recent Activity", padding=4, style=WORKBENCH_LABELLF_STYLE)
         activity_box.pack(fill="both", expand=True, pady=(6, 0))
@@ -285,70 +291,28 @@ class MarketDataOpsPanel(ttk.Frame):
             style=WORKBENCH_TREE_STYLE,
             height=8,
         )
-        for col, title, width in (
-            ("at", "At", 150),
-            ("dataset", "Dataset", 280),
-            ("name_zh", "中文名稱", 230),
-            ("result", "Result", 150),
-            ("detail", "Detail", 650),
+        for col, title, width, minwidth in (
+            ("at", "At", 145, 110),
+            ("dataset", "Dataset", 260, 170),
+            ("name_zh", "中文名稱", 220, 140),
+            ("result", "Result", 150, 105),
+            ("detail", "Detail", 650, 300),
         ):
             self._activity_tree.heading(col, text=title)
-            self._activity_tree.column(col, width=width, anchor="w")
+            self._activity_tree.column(col, width=width, minwidth=minwidth, anchor="w", stretch=True)
         ay = ttk.Scrollbar(activity_box, orient="vertical", command=self._activity_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        self._activity_tree.configure(yscrollcommand=ay.set)
-        self._activity_tree.pack(side="left", fill="both", expand=True)
-        ay.pack(side="left", fill="y")
+        ax = ttk.Scrollbar(activity_box, orient="horizontal", command=self._activity_tree.xview)
+        self._activity_tree.configure(yscrollcommand=ay.set, xscrollcommand=ax.set)
+        self._activity_tree.grid(row=0, column=0, sticky="nsew")
+        ay.grid(row=0, column=1, sticky="ns")
+        ax.grid(row=1, column=0, sticky="ew")
+        activity_box.rowconfigure(0, weight=1)
+        activity_box.columnconfigure(0, weight=1)
 
-    @staticmethod
-    def _configure_status_tree_tags(tree: ttk.Treeview):
-        tree.tag_configure("success", foreground=WORKBENCH_SUCCESS)
-        tree.tag_configure("warning", foreground=WORKBENCH_WARNING)
-        tree.tag_configure("error", foreground=WORKBENCH_ERROR)
-        tree.tag_configure("muted", foreground=WORKBENCH_MUTED)
-        tree.tag_configure("info", foreground=WORKBENCH_INFO)
-
-    def _bind_synced_vertical_scroll(
-        self,
-        trees: list[ttk.Treeview],
-        scrollbar: ttk.Scrollbar,
-        *,
-        dataset_selection: bool,
-    ) -> None:
-        def _scroll(*args):
-            for tree in trees:
-                tree.yview(*args)
-
-        def _mousewheel(event):
-            delta = int(-event.delta / 120) if event.delta else 0
-            if delta == 0:
-                delta = -1 if event.delta > 0 else 1
-            for tree in trees:
-                tree.yview_scroll(delta, "units")
-            return "break"
-
-        scrollbar.configure(command=_scroll)
-        for tree in trees:
-            tree.configure(yscrollcommand=scrollbar.set)
-            tree.bind("<MouseWheel>", _mousewheel)
-            if dataset_selection:
-                tree.bind("<<TreeviewSelect>>", lambda event, group=trees: self._on_dataset_group_select(event, group))
-
-    def _on_dataset_group_select(self, event, trees: list[ttk.Treeview]) -> None:
-        if getattr(self, "_dataset_selection_syncing", False):
-            return
+    def _on_dataset_select(self, event) -> None:
         selected = event.widget.selection()
-        if not selected:
-            return
-        iid = selected[0]
-        self._dataset_selection_syncing = True
-        try:
-            for tree in trees:
-                if tree.exists(iid):
-                    tree.selection_set(iid)
-                    tree.see(iid)
-        finally:
-            self._dataset_selection_syncing = False
-        self._show_dataset_detail(iid)
+        if selected:
+            self._show_dataset_detail(selected[0])
 
     def _show_dataset_detail(self, iid: str) -> None:
         row = self._dataset_by_iid.get(iid, {})
@@ -377,10 +341,9 @@ class MarketDataOpsPanel(ttk.Frame):
         self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE if blockers else WORKBENCH_INFO_LABEL_STYLE)
 
     @staticmethod
-    def _clear_tree_group(group: dict[str, object]) -> None:
-        for tree in group["ordered_trees"]:
-            for iid in tree.get_children():
-                tree.delete(iid)
+    def _clear_tree(tree: ttk.Treeview) -> None:
+        for iid in tree.get_children():
+            tree.delete(iid)
 
     @staticmethod
     def _expected_publish_sort_key(row: dict[str, object]) -> tuple[int, str, str]:
@@ -389,54 +352,31 @@ class MarketDataOpsPanel(ttk.Frame):
 
     def _insert_dataset_row(
         self,
-        group: dict[str, object],
+        tree: ttk.Treeview,
         *,
         iid: str,
         row: dict[str, object],
     ) -> None:
-        trees = group["trees"]
         projected_status = row.get("projected_status") or row.get("status") or "-"
         schema_status = row.get("schema_status") or "-"
         coverage_status = row.get("coverage_status") or "-"
-        trees["identity"].insert(
-            "",
-            "end",
-            iid=iid,
-            values=(row.get("dataset") or "-", row.get("display_name_zh") or "-"),
-        )
-        trees["status"].insert(
-            "",
-            "end",
-            iid=iid,
-            tags=(_status_tag(projected_status),),
-            values=(projected_status,),
-        )
-        trees["dates"].insert(
+        tree.insert(
             "",
             "end",
             iid=iid,
             values=(
+                row.get("dataset") or "-",
+                row.get("display_name_zh") or "-",
+                _status_display(projected_status),
                 row.get("latest_data_date") or "-",
                 _fmt_datetime(row.get("expected_publish_at")),
                 _fmt_datetime(row.get("last_success_at")),
                 _fmt_datetime(row.get("next_check_at")),
+                _status_display(schema_status),
+                _status_display(coverage_status),
+                _retry_text(row),
             ),
         )
-        trees["schema"].insert(
-            "",
-            "end",
-            iid=iid,
-            tags=(_status_tag(schema_status),),
-            values=(schema_status,),
-        )
-        trees["coverage"].insert(
-            "",
-            "end",
-            iid=iid,
-            tags=(_status_tag(coverage_status),),
-            values=(coverage_status,),
-        )
-        trees["retries"].insert("", "end", iid=iid, values=(_retry_text(row),))
 
     def _insert_schedule_row(
         self,
@@ -448,25 +388,17 @@ class MarketDataOpsPanel(ttk.Frame):
         expected_publish_at: object,
         source: object,
     ) -> None:
-        status_value = status or "-"
-        self._schedule_trees["identity"].insert(
+        self._schedule_tree.insert(
             "",
             "end",
             iid=iid,
-            values=(dataset or "-", display_name_zh or "-"),
-        )
-        self._schedule_trees["status"].insert(
-            "",
-            "end",
-            iid=iid,
-            tags=(_status_tag(status_value),),
-            values=(status_value,),
-        )
-        self._schedule_trees["detail"].insert(
-            "",
-            "end",
-            iid=iid,
-            values=(_fmt_datetime(expected_publish_at), source or "-"),
+            values=(
+                dataset or "-",
+                display_name_zh or "-",
+                _status_display(status),
+                _fmt_datetime(expected_publish_at),
+                source or "-",
+            ),
         )
 
     def _render(self, snapshot: dict[str, object]):
@@ -479,7 +411,7 @@ class MarketDataOpsPanel(ttk.Frame):
         if not snapshot.get("trading_ready"):
             trading_primary += " · BLOCKED"
         self._kpi_vars["trading"].set(trading_primary)
-        self._kpi_detail_vars["trading"].set(f"{target}\n{strategy_id}")
+        self._kpi_detail_vars["trading"].set(f"{target} | {strategy_id}")
         self._kpi_labels["trading"].configure(foreground=_color_for_tag(trading_tag))
 
         v2_status = snapshot.get("v2_status") or "-"
@@ -515,7 +447,7 @@ class MarketDataOpsPanel(ttk.Frame):
         scheduler_next = _fmt_datetime(snapshot.get("scheduler_next_run_at"))
         self._kpi_vars["auto"].set(auto_text)
         self._kpi_detail_vars["auto"].set(
-            f"wake {snapshot.get('scheduler_wake_minutes') or '-'}m\nTask: {scheduler_status} | next {scheduler_next}"
+            f"wake {snapshot.get('scheduler_wake_minutes') or '-'}m | Task: {scheduler_status} | next {scheduler_next}"
         )
         self._kpi_labels["auto"].configure(
             foreground=_color_for_tag("success" if snapshot.get("auto_sync_active") else _status_tag(scheduler_status))
@@ -543,11 +475,9 @@ class MarketDataOpsPanel(ttk.Frame):
             )
             self._quota_label.configure(style=WORKBENCH_LABEL_STYLE)
 
-        self._clear_tree_group(self._required_dataset_group)
-        self._clear_tree_group(self._other_dataset_group)
-        for tree in self._schedule_trees.values():
-            for iid in tree.get_children():
-                tree.delete(iid)
+        self._clear_tree(self._required_dataset_group)
+        self._clear_tree(self._other_dataset_group)
+        self._clear_tree(self._schedule_tree)
         for iid in self._activity_tree.get_children():
             self._activity_tree.delete(iid)
         self._dataset_by_iid.clear()
