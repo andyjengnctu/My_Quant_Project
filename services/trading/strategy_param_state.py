@@ -6,15 +6,15 @@ from typing import Any
 
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
-from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
 from services.trading.market_data_consumer import (
     get_trading_v2_consumer_state_sha256,
     load_trading_v2_consumer_state,
 )
 
-TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 4
+TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 5
 TRADING_STRATEGY_PARAM_BINDING_FILENAME = "trading_param_binding.json"
 TRADING_PARAM_USAGE_TRAINED_CURRENT = "trained_current"
 TRADING_PARAM_USAGE_REUSE_EXISTING = "reuse_existing"
@@ -44,11 +44,17 @@ def _validate_binding(payload: dict[str, Any]) -> None:
         "latest_data_date",
         "param_training_data_date",
         "usage_mode",
+        "param_member_count",
+        "param_min_agree",
     ):
         if not str(payload.get(field) or ""):
             raise ValueError(f"Trading param binding 缺少 {field}")
     if str(payload.get("usage_mode")) not in TRADING_PARAM_USAGE_MODES:
         raise ValueError("Trading param binding usage_mode 不合法")
+    member_count = int(payload.get("param_member_count") or 0)
+    min_agree = int(payload.get("param_min_agree") or 0)
+    if member_count < 1 or min_agree < 1 or min_agree > member_count:
+        raise ValueError("Trading param binding Params ensemble metadata 不合法")
     if str(payload.get("param_training_data_date")) > str(payload.get("latest_data_date")):
         raise ValueError("Trading param binding 的 Params 訓練資料日晚於使用資料日")
     if (
@@ -61,21 +67,23 @@ def _validate_binding(payload: dict[str, Any]) -> None:
         raise ValueError("Trading param binding fingerprint 不一致")
 
 
-def _selected_param_training_data_date(selected_path: Path, *, expected_selector: str) -> str:
+def _selected_param_metadata(selected_path: Path, *, expected_selector: str) -> dict[str, Any]:
     selected_payload = load_json_strict(selected_path)
     if not isinstance(selected_payload, dict):
         raise TypeError("Trading selected strategy params payload 必須是 object")
     if str(selected_payload.get("selector") or "").strip() != str(expected_selector):
         raise RuntimeError("Trading selected strategy params selector 與目前 Trading 設定不一致")
-    param_source = load_portfolio_param_source_from_json(selected_path)
-    if int(param_source.get("member_count") or 0) != 1:
-        raise RuntimeError("Trading selected strategy params 必須解析成單一參數 member")
+    param_runtime = load_trading_strategy_param_runtime(selected_path)
     meta = dict(selected_payload.get("meta") or {})
     walk_forward_policy = dict(meta.get("walk_forward_policy") or {})
     training_date = str(walk_forward_policy.get("latest_data_date") or "").strip()
     if not training_date:
         raise ValueError("Trading selected strategy params 缺少訓練資料日")
-    return training_date
+    return {
+        "training_date": training_date,
+        "member_count": int(param_runtime["member_count"]),
+        "min_agree": int(param_runtime["min_agree"]),
+    }
 
 
 def publish_trading_strategy_param_binding(
@@ -93,10 +101,11 @@ def publish_trading_strategy_param_binding(
         raise FileNotFoundError("Trading selected strategy params 尚未產生")
     consumer_state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
     current_data_date = str(consumer_state["market_date"])
-    param_training_data_date = _selected_param_training_data_date(
+    param_metadata = _selected_param_metadata(
         selected_path,
         expected_selector=profile.param_selector,
     )
+    param_training_data_date = str(param_metadata["training_date"])
     if param_training_data_date > current_data_date:
         raise RuntimeError(
             "Trading selected strategy params 訓練資料日晚於目前 Trading data；禁止使用未來 Params"
@@ -118,6 +127,8 @@ def publish_trading_strategy_param_binding(
         "latest_data_date": current_data_date,
         "param_training_data_date": param_training_data_date,
         "usage_mode": normalized_usage_mode,
+        "param_member_count": int(param_metadata["member_count"]),
+        "param_min_agree": int(param_metadata["min_agree"]),
     }
     payload["binding_fingerprint"] = canonical_json_sha256(payload)
     path = resolve_trading_strategy_param_binding_path(root)
@@ -160,12 +171,16 @@ def load_trading_strategy_param_binding(
         raise RuntimeError("Trading V2 view identity 與 params binding 不一致")
     if str(payload.get("latest_data_date") or "") != str(consumer_state.get("market_date") or ""):
         raise RuntimeError("Trading params binding data date 已過期")
-    training_date = _selected_param_training_data_date(
+    param_metadata = _selected_param_metadata(
         selected_path,
         expected_selector=profile.param_selector,
     )
-    if str(payload.get("param_training_data_date") or "") != training_date:
+    if str(payload.get("param_training_data_date") or "") != str(param_metadata["training_date"]):
         raise RuntimeError("Trading Params artifact 訓練資料日已與 param binding 不一致")
+    if int(payload.get("param_member_count") or 0) != int(param_metadata["member_count"]):
+        raise RuntimeError("Trading Params artifact member_count 已與 param binding 不一致")
+    if int(payload.get("param_min_agree") or 0) != int(param_metadata["min_agree"]):
+        raise RuntimeError("Trading Params artifact min_agree 已與 param binding 不一致")
     return payload
 
 

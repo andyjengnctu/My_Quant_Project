@@ -45,6 +45,7 @@ from services.trading.operations_status import (
     assert_trading_new_allocation_allowed,
     build_trading_operations_status,
 )
+from services.trading.strategy_param_runtime import resolve_trading_candidate_params
 from services.trading.scanner_state import (
     load_trading_candidate_snapshot,
     load_trading_scanner_runtime,
@@ -140,6 +141,12 @@ def _build_allocator_candidate(row: dict[str, Any], *, sizing_equity: float, par
         "entry_source": resized.get("entry_source", candidate_type),
         "is_orderable": True,
         "params_obj": params,
+        "params_signature": str(row.get("params_signature") or ""),
+        "ensemble_member_key": str(row.get("ensemble_member_key") or ""),
+        "ensemble_vote_count": int(row.get("ensemble_vote_count") or 1),
+        "ensemble_min_agree": int(row.get("ensemble_min_agree") or 1),
+        "ensemble_member_count": int(row.get("ensemble_member_count") or 1),
+        "ensemble_member_keys": list(row.get("ensemble_member_keys") or []),
         "sort_value": row.get("sort_value"),
         "ev": row.get("expected_value", row.get("ev")),
         "expected_value": row.get("expected_value", row.get("ev")),
@@ -234,7 +241,8 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
         if ticker in held_tickers:
             skipped_held.append(ticker)
             continue
-        candidate = _build_allocator_candidate(row, sizing_equity=sizing_equity, params=runtime["params"])
+        candidate_params, _representative_member = resolve_trading_candidate_params(runtime, row)
+        candidate = _build_allocator_candidate(row, sizing_equity=sizing_equity, params=candidate_params)
         if candidate is None:
             skipped_zero_qty.append(ticker)
             continue
@@ -276,6 +284,12 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
             "security_profile": deepcopy(plan.get("security_profile")),
             "sort_value": row.get("sort_value"),
             "expected_value": row.get("expected_value", row.get("ev")),
+            "params_signature": str(row.get("params_signature") or ""),
+            "ensemble_member_key": str(row.get("ensemble_member_key") or ""),
+            "ensemble_vote_count": int(row.get("ensemble_vote_count") or 1),
+            "ensemble_min_agree": int(row.get("ensemble_min_agree") or 1),
+            "ensemble_member_count": int(row.get("ensemble_member_count") or 1),
+            "ensemble_member_keys": list(row.get("ensemble_member_keys") or []),
         })
 
     latest_state = load_trading_account_state(root, required=True)
@@ -298,6 +312,8 @@ def build_trading_proposed_order_plan(*, project_root: str | Path) -> dict[str, 
         "information_date": str(runtime["latest_data_date"]),
         "account_revision": account_revision,
         "selected_params_sha256": current_param_sha,
+        "param_member_count": int(runtime["member_count"]),
+        "param_min_agree": int(runtime["param_min_agree"]),
         "candidate_snapshot_sha256": candidate_snapshot_sha,
         "max_positions": max_positions,
         "rotation": str(DEFAULT_PORTFOLIO_ROTATION),

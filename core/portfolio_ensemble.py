@@ -295,6 +295,22 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
     return aggregated
 
 
+def annotate_ensemble_candidate(candidate, *, member, params_obj, member_key, context=None):
+    """Public adapter for canonical ensemble candidate identity annotation."""
+    return _annotate_ensemble_candidate(
+        candidate,
+        member=member,
+        params_obj=params_obj,
+        member_key=member_key,
+        context={} if context is None else context,
+    )
+
+
+def aggregate_ensemble_candidate_rows(rows, *, min_agree):
+    """Public adapter for canonical min-agree/median-representative aggregation."""
+    return _aggregate_ensemble_candidate_rows(rows, min_agree=min_agree)
+
+
 def _flatten_ensemble_extended_signals(active_extended_signals_by_member):
     flattened = {}
     for member_signals in (active_extended_signals_by_member or {}).values():

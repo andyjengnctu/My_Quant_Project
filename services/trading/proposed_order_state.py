@@ -18,7 +18,7 @@ from services.trading.scanner_state import (
     resolve_trading_candidate_snapshot_path,
 )
 
-PROPOSED_ORDER_SCHEMA_VERSION = 2
+PROPOSED_ORDER_SCHEMA_VERSION = 3
 PROPOSED_ORDER_STATUS = "PROPOSED"
 
 
@@ -53,6 +53,20 @@ def load_current_trading_proposed_order_plan(
         raise RuntimeError("Trading proposed-order status 不合法")
     if str(payload.get("runtime_domain") or "") != RUNTIME_DOMAIN_TRADING:
         raise RuntimeError("Trading proposed-order runtime domain 不合法")
+    member_count = int(payload.get("param_member_count") or 0)
+    min_agree = int(payload.get("param_min_agree") or 0)
+    if member_count < 1 or min_agree < 1 or min_agree > member_count:
+        raise RuntimeError("Trading proposed-order Params ensemble metadata 不合法")
+    for order in list(payload.get("orders") or []):
+        if not isinstance(order, dict):
+            raise RuntimeError("Trading proposed-order order row 不合法")
+        if member_count > 1:
+            if not str(order.get("params_signature") or "").strip():
+                raise RuntimeError("Trading ensemble proposed-order 缺少 representative params_signature")
+            vote_count = int(order.get("ensemble_vote_count") or 0)
+            order_min_agree = int(order.get("ensemble_min_agree") or 0)
+            if order_min_agree != min_agree or vote_count < min_agree:
+                raise RuntimeError("Trading ensemble proposed-order agreement metadata 不合法")
     payload_core = {key: value for key, value in payload.items() if key != "plan_fingerprint"}
     expected_fingerprint = canonical_json_sha256(payload_core)
     if str(payload.get("plan_fingerprint") or "") != expected_fingerprint:
@@ -69,6 +83,10 @@ def load_current_trading_proposed_order_plan(
         raise RuntimeError("Trading 建議掛單 selector 與目前設定不一致")
     if str(payload.get("selected_params_sha256") or "") != compute_file_sha256(runtime["selected_path"]):
         raise RuntimeError("Trading 建議掛單對應的 params 已改變；請重新執行 Scanner／建議掛單")
+    if int(payload.get("param_member_count") or 0) != int(runtime["member_count"]):
+        raise RuntimeError("Trading 建議掛單 Params member_count 已改變；請重新執行 Scanner／建議掛單")
+    if int(payload.get("param_min_agree") or 0) != int(runtime["param_min_agree"]):
+        raise RuntimeError("Trading 建議掛單 Params min_agree 已改變；請重新執行 Scanner／建議掛單")
     snapshot_path = resolve_trading_candidate_snapshot_path(root)
     if not snapshot_path.is_file() or str(payload.get("candidate_snapshot_sha256") or "") != compute_file_sha256(snapshot_path):
         raise RuntimeError("Trading 建議掛單對應的 Scanner snapshot 已改變；請重新執行建議掛單")

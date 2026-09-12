@@ -6,7 +6,6 @@ from typing import Any
 
 from core.console_report import project_relative_display_path
 from core.file_integrity import compute_file_sha256, load_json_strict
-from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
@@ -19,13 +18,14 @@ from services.trading.market_data_consumer import (
     load_trading_v2_consumer_state,
 )
 from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
+from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
 from services.trading.strategy_param_state import (
     get_trading_strategy_param_binding_sha256,
     load_trading_strategy_param_binding,
 )
 
 
-TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 4
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 5
 
 
 def partition_trading_candidate_rows_for_information_date(
@@ -111,13 +111,9 @@ def load_trading_scanner_runtime(
             "Trading selected strategy params selector與目前Trading設定不一致；請重新訓練。"
         )
 
-    param_source = load_portfolio_param_source_from_json(selected_path)
-    member_count = int(param_source.get("member_count") or 0)
-    if member_count != 1:
-        raise RuntimeError(
-            "Trading Scanner目前要求selector解析成單一參數member；"
-            f"目前artifact共有 {member_count} members，禁止靜默只取第一組。"
-        )
+    param_runtime = load_trading_strategy_param_runtime(selected_path)
+    member_count = int(param_runtime["member_count"])
+    param_min_agree = int(param_runtime["min_agree"])
 
     param_latest_data_date = _selected_payload_latest_data_date(payload)
     if not param_latest_data_date:
@@ -143,7 +139,9 @@ def load_trading_scanner_runtime(
         "param_latest_data_date": param_latest_data_date,
         "param_usage_mode": str(param_binding.get("usage_mode") or ""),
         "member_count": member_count,
-        "params": param_source["primary_params"],
+        "param_min_agree": param_min_agree,
+        "param_members": list(param_runtime["members"]),
+        "params": param_runtime["primary_params"],
         "market_data_consumer_state_sha256": get_trading_v2_consumer_state_sha256(root),
         "market_data_source_view_fingerprint": str(market_state["source_view_fingerprint"]),
         "market_data_source": str(market_state.get("source") or "trading_market_data_v2_historical_latest_view"),
@@ -173,6 +171,7 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     param_latest_data_date = ""
     member_count = 0
+    param_min_agree = 0
     param_error = ""
     param_binding_error = ""
     param_binding = None
@@ -182,8 +181,9 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             if not isinstance(payload, dict):
                 raise ValueError("selected params root必須是object")
             param_latest_data_date = _selected_payload_latest_data_date(payload)
-            param_source = load_portfolio_param_source_from_json(selected_path)
-            member_count = int(param_source.get("member_count") or 0)
+            param_runtime = load_trading_strategy_param_runtime(selected_path)
+            member_count = int(param_runtime["member_count"])
+            param_min_agree = int(param_runtime["min_agree"])
             if str(payload.get("selector") or "").strip() != str(profile.param_selector):
                 raise RuntimeError("selector mismatch")
             if not param_latest_data_date:
@@ -212,7 +212,8 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         and latest_data_date
         and selected_path.is_file()
         and not param_error
-        and member_count == 1
+        and member_count >= 1
+        and 1 <= param_min_agree <= member_count
         and param_latest_data_date
         and param_latest_data_date <= latest_data_date
     )
@@ -260,6 +261,7 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "selected_params_exists": selected_path.is_file(),
         "param_latest_data_date": param_latest_data_date or None,
         "param_member_count": member_count,
+        "param_min_agree": param_min_agree or None,
         "param_error": param_error or None,
         "param_binding_error": param_binding_error or None,
         "param_usage_mode": None if param_binding is None else param_binding.get("usage_mode"),
@@ -289,6 +291,10 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
         raise ValueError("Trading candidate snapshot 缺少 latest_data_date")
     if not str(payload.get("selected_params_sha256") or "").strip():
         raise ValueError("Trading candidate snapshot 缺少 selected_params_sha256")
+    member_count = int(payload.get("param_member_count") or 0)
+    min_agree = int(payload.get("param_min_agree") or 0)
+    if member_count < 1 or min_agree < 1 or min_agree > member_count:
+        raise ValueError("Trading candidate snapshot Params ensemble metadata 不合法")
     for field in ("market_data_consumer_state_sha256", "market_data_source_view_fingerprint", "param_binding_sha256"):
         if not str(payload.get(field) or "").strip():
             raise ValueError(f"Trading candidate snapshot 缺少 {field}")
@@ -303,6 +309,16 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
     candidate_rows = list(payload.get("candidate_rows") or [])
     if any(not isinstance(row, dict) for row in candidate_rows):
         raise TypeError("Trading candidate snapshot candidate row 必須是 object")
+    if member_count > 1:
+        for row in candidate_rows:
+            if not str(row.get("params_signature") or "").strip():
+                raise ValueError("Trading ensemble candidate 缺少 representative params_signature")
+            if not str(row.get("ensemble_member_key") or "").strip():
+                raise ValueError("Trading ensemble candidate 缺少 representative member key")
+            if int(row.get("ensemble_min_agree") or 0) != min_agree:
+                raise ValueError("Trading ensemble candidate min_agree 與 snapshot 不一致")
+            if int(row.get("ensemble_vote_count") or 0) < min_agree:
+                raise ValueError("Trading ensemble candidate 未達 canonical min_agree")
     candidate_tickers = {normalize_trading_ticker(row.get("ticker")) for row in candidate_rows}
     outside_membership = sorted(candidate_tickers - set(normalized_scanned))
     if outside_membership:
@@ -343,6 +359,10 @@ def load_trading_candidate_snapshot(
         raise RuntimeError("Trading candidate snapshot params date 與目前設定不一致；請重新執行 Scanner")
     if str(payload.get("selected_params_sha256") or "") != str(runtime["selected_params_sha256"]):
         raise RuntimeError("Trading candidate snapshot 對應的 params 已改變；請重新執行 Scanner")
+    if int(payload.get("param_member_count") or 0) != int(runtime["member_count"]):
+        raise RuntimeError("Trading candidate snapshot Params member_count 已改變；請重新執行 Scanner")
+    if int(payload.get("param_min_agree") or 0) != int(runtime["param_min_agree"]):
+        raise RuntimeError("Trading candidate snapshot Params min_agree 已改變；請重新執行 Scanner")
     if str(payload.get("market_data_consumer_state_sha256") or "") != str(runtime["market_data_consumer_state_sha256"]):
         raise RuntimeError("Trading candidate snapshot 對應的 market-data membership 已改變；請重新執行 Scanner")
     if list(payload.get("scanned_tickers") or []) != list(runtime.get("current_universe_tickers") or []):

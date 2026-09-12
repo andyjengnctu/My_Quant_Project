@@ -11,7 +11,6 @@ from uuid import uuid4
 
 from core.file_integrity import compute_file_sha256
 from core.params_io import params_to_json_dict
-from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.trading_identity import normalize_trading_ticker
 from core.trading_order_state import active_trading_entry_orders, append_ordered_trading_proposal
 from core.trading_policy import resolve_trading_selected_strategy_param_path
@@ -21,6 +20,7 @@ from services.trading.operations_status import (
     build_trading_operations_status,
 )
 from services.trading.order_state import mutate_trading_order_state
+from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime, resolve_trading_candidate_params
 from services.trading.proposed_order_state import (
     load_current_trading_proposed_order_plan,
     resolve_trading_proposed_orders_json_path,
@@ -62,10 +62,13 @@ def confirm_trading_order_submission(
         raise FileNotFoundError("Trading selected strategy params 已不存在；禁止建立無法重現的 ORDERED")
     if compute_file_sha256(selected_path) != str(plan.get("selected_params_sha256") or ""):
         raise RuntimeError("Trading selected strategy params 已與 proposed plan 不一致；請重新建立建議掛單")
-    param_source = load_portfolio_param_source_from_json(selected_path)
-    if int(param_source.get("member_count") or 0) != 1:
-        raise RuntimeError("Trading ORDERED 只能凍結單一參數 member")
-    frozen_params = params_to_json_dict(param_source["primary_params"])
+    param_runtime = load_trading_strategy_param_runtime(selected_path)
+    if int(plan.get("param_member_count") or 0) != int(param_runtime["member_count"]):
+        raise RuntimeError("Trading proposed plan Params member_count 已與目前 artifact 不一致")
+    if int(plan.get("param_min_agree") or 0) != int(param_runtime["min_agree"]):
+        raise RuntimeError("Trading proposed plan Params min_agree 已與目前 artifact 不一致")
+    representative_params, _representative_member = resolve_trading_candidate_params(param_runtime, proposal)
+    frozen_params = params_to_json_dict(representative_params)
 
     account_path = resolve_trading_account_state_path(root)
     account_sha_before = compute_file_sha256(account_path)

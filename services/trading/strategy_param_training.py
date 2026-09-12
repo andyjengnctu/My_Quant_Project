@@ -91,6 +91,8 @@ def run_trading_strategy_param_training(
         "param_binding_fingerprint": binding["binding_fingerprint"],
         "param_usage_mode": binding["usage_mode"],
         "param_training_data_date": binding["param_training_data_date"],
+        "param_member_count": int(binding["param_member_count"]),
+        "param_min_agree": int(binding["param_min_agree"]),
     }
 
 
@@ -126,6 +128,8 @@ def reuse_trading_strategy_params(
         "latest_data_date": str(market_state["market_date"]),
         "param_training_data_date": str(binding["param_training_data_date"]),
         "param_usage_mode": str(binding["usage_mode"]),
+        "param_member_count": int(binding["param_member_count"]),
+        "param_min_agree": int(binding["param_min_agree"]),
         "market_data_consumer_state_sha256": get_trading_v2_consumer_state_sha256(root),
         "market_data_source_view_fingerprint": str(market_state["source_view_fingerprint"]),
         "param_binding_fingerprint": str(binding["binding_fingerprint"]),

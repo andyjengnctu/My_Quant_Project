@@ -4,19 +4,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import config.training_policy as _training_settings
 from config.trading import (
     TRADING_ACTIVE_STRATEGY_ID,
     TRADING_DATASET_PROFILE,
     TRADING_DL_FILTER_ENABLED,
     TRADING_DL_RANKING_ENABLED,
-    TRADING_OPTIMIZER_MULTI_SEED_REQUIRED,
-    TRADING_OPTIMIZER_TRIALS_PER_SEED,
-    TRADING_OPTIMIZER_SEED_COUNT,
-    TRADING_OPTIMIZER_SEED_MIN_AGREE,
-    TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS,
     TRADING_PARAM_FAMILY,
-    TRADING_PARAM_SELECTOR,
 )
+from core.training_policy import get_strategy_parameter_training_policy_snapshot
 from core.dataset_profiles import DATASET_PROFILE_SPECS, normalize_dataset_profile_key
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
@@ -57,17 +53,20 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
         raise ValueError(f"不支援的Trading dataset profile: {dataset_profile!r}")
 
     family = normalize_strategy_param_family(TRADING_PARAM_FAMILY)
-    selector = str(TRADING_PARAM_SELECTOR).strip()
+    optimizer_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode="trade")
+    selector = str(_training_settings.TRADE_MODE_RUN_BEST_SELECTOR).strip()
     if selector not in POLICY_FILENAME_BY_NAME:
         raise ValueError(f"不支援的Trading strategy param selector: {selector!r}")
 
-    trials_per_seed = int(TRADING_OPTIMIZER_TRIALS_PER_SEED)
-    seed_count = int(TRADING_OPTIMIZER_SEED_COUNT)
-    train_window_months = int(TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS)
+    seed_policy = dict(optimizer_policy.get("random_seed_ensemble") or {})
+    trials_per_seed = int(optimizer_policy["trials_per_fold"])
+    seed_count = int(seed_policy.get("seed_count") or 0)
+    seed_min_agree = seed_policy.get("min_agree_requested")
+    train_window_months = int(optimizer_policy["train_window_months"])
     if trials_per_seed < 1:
         raise ValueError("Trading optimizer trials_per_seed必須>=1")
-    if seed_count < 2 and bool(TRADING_OPTIMIZER_MULTI_SEED_REQUIRED):
-        raise ValueError("Trading multi-seed策略要求seed_count>=2")
+    if seed_count < 2:
+        raise ValueError("Trading multi-seed producer 要求 canonical seed_count>=2")
     if train_window_months < 1:
         raise ValueError("Trading optimizer train_window_months必須>=1")
 
@@ -81,10 +80,10 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
         dataset_profile=dataset_profile,
         param_family=family,
         param_selector=selector,
-        optimizer_requires_multi_seed=bool(TRADING_OPTIMIZER_MULTI_SEED_REQUIRED),
+        optimizer_requires_multi_seed=True,
         optimizer_trials_per_seed=trials_per_seed,
         optimizer_seed_count=seed_count,
-        optimizer_seed_min_agree=TRADING_OPTIMIZER_SEED_MIN_AGREE,
+        optimizer_seed_min_agree=seed_min_agree,
         optimizer_train_window_months=train_window_months,
         dl_filter_enabled=dl_filter,
         dl_ranking_enabled=dl_ranking,

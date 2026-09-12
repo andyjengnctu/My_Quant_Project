@@ -279,6 +279,8 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
         "param_selector": runtime["profile"].param_selector,
         "latest_data_date": runtime["latest_data_date"],
         "param_latest_data_date": runtime["param_latest_data_date"],
+        "param_member_count": runtime["member_count"],
+        "param_min_agree": runtime["param_min_agree"],
         "selected_params_sha256": runtime["selected_params_sha256"],
         "market_data_consumer_state_sha256": runtime["market_data_consumer_state_sha256"],
         "market_data_source_view_fingerprint": runtime["market_data_source_view_fingerprint"],
@@ -601,7 +603,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
         snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
         check("workflow_snapshot_reads_latest_trading_data", "2026-09-04", snapshot.get("latest_data_date"))
         check("workflow_snapshot_reads_param_latest_date", "2026-09-04", snapshot.get("param_latest_data_date"))
-        check("workflow_snapshot_requires_single_member", 1, snapshot.get("param_member_count"))
+        check("workflow_snapshot_supports_single_member_identity", 1, snapshot.get("param_member_count"))
+        check("workflow_snapshot_single_member_min_agree_is_one", 1, snapshot.get("param_min_agree"))
         check("workflow_snapshot_ready_when_data_and_params_match", True, snapshot.get("params_ready_for_scan"))
         check("workflow_snapshot_requires_canonical_v2_consumer_state", True, snapshot.get("market_data_ready"))
         check("workflow_snapshot_exposes_market_data_source_view_identity", 64, len(str(snapshot.get("market_data_source_view_fingerprint") or "")))
@@ -666,13 +669,22 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("explicit_reuse_allows_scanner_without_retraining", "2026-09-04", reused_scan.get("latest_data_date"))
 
         _write_param_payload("2026-09-04", 2)
-        try:
-            daily_workflow.run_trading_candidate_scan(project_root=root)
-        except RuntimeError as exc:
-            multi_member_rejected = "禁止靜默只取第一組" in str(exc)
-        else:
-            multi_member_rejected = False
-        check("multi_member_selector_is_failfast_until_scanner_has_ensemble_semantics", True, multi_member_rejected)
+        from services.trading.strategy_param_state import publish_trading_strategy_param_binding
+        publish_trading_strategy_param_binding(root)
+        ensemble_snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
+        check("multi_member_selector_is_supported_by_trading_runtime", 2, ensemble_snapshot.get("param_member_count"))
+        check("multi_member_selector_uses_canonical_auto_min_agree", 2, ensemble_snapshot.get("param_min_agree"))
+        check("multi_member_selector_is_ready_for_scan", True, ensemble_snapshot.get("params_ready_for_scan"))
+        ensemble_scan_a = dict(fake_scan)
+        ensemble_scan_b = dict(fake_scan)
+        with patch.object(daily_workflow, "run_daily_scanner", side_effect=[ensemble_scan_a, ensemble_scan_b]) as ensemble_scanner_mock:
+            ensemble_scan = daily_workflow.run_trading_candidate_scan(project_root=root)
+        check("multi_member_scanner_executes_each_finalist_member", 2, ensemble_scanner_mock.call_count)
+        check("multi_member_scanner_applies_canonical_agreement", 1, len(ensemble_scan.get("candidate_rows") or []))
+        ensemble_row = dict((ensemble_scan.get("candidate_rows") or [{}])[0])
+        check("multi_member_candidate_records_vote_count", 2, ensemble_row.get("ensemble_vote_count"))
+        check("multi_member_candidate_records_min_agree", 2, ensemble_row.get("ensemble_min_agree"))
+        check("multi_member_candidate_keeps_representative_params_identity", True, bool(ensemble_row.get("params_signature")) and bool(ensemble_row.get("ensemble_member_key")))
 
     call_order = []
     with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: call_order.append("data") or {"status": "READY"}), \
@@ -705,6 +717,12 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_keeps_scanner_candidates_separate_from_proposed_orders", True, "今日 Scanner 候選" in panel_source and "建議掛單（尚未送單／尚未成交）" in panel_source)
+    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and "Trading Data" in panel_source and "Pipeline" in panel_source)
+    check("workbench_fixed_notes_move_to_bottom_hover_slot", True, "_footer_hint_var" in panel_source and "_bind_footer_hint(workflow_box, WORKFLOW_HINT)" in panel_source)
+    check("workbench_reuse_mode_shows_original_param_training_date", True, "沿用既有 Params｜訓練至" in panel_source)
+    check("workbench_page_does_not_render_artifact_paths", False, any(token in panel_source for token in ("_path_var", "snapshot.get('text_path')", "snapshot.get('json_path')", "scanner_output_dir")))
+    audit_body = panel_source.split("def _run_operational_audit", 1)[1].split("def _refresh_all_trading_state", 1)[0]
+    check("workbench_operational_audit_dialog_does_not_render_report_path", False, "markdown_path" in audit_body or "report_path" in audit_body)
 
     summary["checks"] = len(results)
     return results, summary
@@ -3370,6 +3388,8 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             "strategy_id": current_runtime["profile"].strategy_id,
             "param_selector": current_runtime["profile"].param_selector,
             "selected_params_sha256": current_runtime["selected_params_sha256"],
+            "param_member_count": int(current_runtime["member_count"]),
+            "param_min_agree": int(current_runtime["param_min_agree"]),
             "candidate_snapshot_sha256": compute_file_sha256(resolve_trading_candidate_snapshot_path(root)),
             "account_revision": int(account["revision"]),
             "reserved_total": 0.0,

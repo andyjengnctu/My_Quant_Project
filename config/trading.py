@@ -1,18 +1,13 @@
-"""Trading declarative configuration.
+"""Trading declarative product configuration.
 
 Trading state/artifacts are physically isolated from Research while consuming the
-same canonical strategy/execution semantics.
+same canonical Strategy Optimizer training semantics from ``config.training_policy``
+and execution/performance semantics from the canonical performance policy.
 """
 
 TRADING_ACTIVE_STRATEGY_ID = "full_rule_based_no_dl"
 TRADING_DATASET_PROFILE = "full"
 TRADING_PARAM_FAMILY = "full"
-TRADING_PARAM_SELECTOR = "base_finalists_agree"
-TRADING_OPTIMIZER_MULTI_SEED_REQUIRED = True
-TRADING_OPTIMIZER_TRIALS_PER_SEED = 1000
-TRADING_OPTIMIZER_SEED_COUNT = 8
-TRADING_OPTIMIZER_SEED_MIN_AGREE = "auto"
-TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS = 120
 TRADING_DL_FILTER_ENABLED = False
 TRADING_DL_RANKING_ENABLED = False
 
@@ -20,12 +15,6 @@ __all__ = [
     "TRADING_ACTIVE_STRATEGY_ID",
     "TRADING_DATASET_PROFILE",
     "TRADING_PARAM_FAMILY",
-    "TRADING_PARAM_SELECTOR",
-    "TRADING_OPTIMIZER_MULTI_SEED_REQUIRED",
-    "TRADING_OPTIMIZER_TRIALS_PER_SEED",
-    "TRADING_OPTIMIZER_SEED_COUNT",
-    "TRADING_OPTIMIZER_SEED_MIN_AGREE",
-    "TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS",
     "TRADING_DL_FILTER_ENABLED",
     "TRADING_DL_RANKING_ENABLED",
 ]

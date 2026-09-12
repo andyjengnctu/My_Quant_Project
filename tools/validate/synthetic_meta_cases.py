@@ -2326,10 +2326,16 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "BUY_SORT_METHOD",
             "SCORE_CALC_METHOD",
             "TRAINING_SPLIT_POLICY",
+            "TRADE_MODE_RUN_BEST_SELECTOR",
+            "OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT",
+            "OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE",
+            "OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE",
+            "OUTER_ROLLING_TRAIN_WINDOW_MONTHS",
         },
         "core.training_policy": {
             "build_training_threshold_snapshot",
             "build_training_score_policy_snapshot",
+            "get_strategy_parameter_training_policy_snapshot",
             "resolve_robustness_benchmark_seeds",
         },
         "config.training_performance_policy": {
@@ -2400,12 +2406,9 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "config.trading": {
             "TRADING_ACTIVE_STRATEGY_ID",
             "TRADING_DATASET_PROFILE",
-            "TRADING_PARAM_SELECTOR",
-            "TRADING_OPTIMIZER_MULTI_SEED_REQUIRED",
-            "TRADING_OPTIMIZER_TRIALS_PER_SEED",
-            "TRADING_OPTIMIZER_SEED_COUNT",
-            "TRADING_OPTIMIZER_SEED_MIN_AGREE",
-            "TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS",
+            "TRADING_PARAM_FAMILY",
+            "TRADING_DL_FILTER_ENABLED",
+            "TRADING_DL_RANKING_ENABLED",
         },
         "core.trading_policy": {
             "TradingStrategyProfile",
@@ -3137,10 +3140,62 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
     add_check(results, "runtime_domain", case_id, "trading_param_selector_supported", True, profile.param_selector in __import__("core.strategy_param_artifacts", fromlist=["POLICY_FILENAME_BY_NAME"]).POLICY_FILENAME_BY_NAME)
     add_check(results, "runtime_domain", case_id, "no_dl_strategy_disables_filter", False, profile.dl_filter_enabled)
     add_check(results, "runtime_domain", case_id, "no_dl_strategy_disables_ranking", False, profile.dl_ranking_enabled)
+    from core.training_policy import get_strategy_parameter_training_policy_snapshot
+    canonical_trade_training = get_strategy_parameter_training_policy_snapshot(evaluation_mode="trade")
+    canonical_seed_policy = dict(canonical_trade_training.get("random_seed_ensemble") or {})
+    add_check(results, "runtime_domain", case_id, "trading_selector_uses_canonical_trade_run_best_selector", str(trading_policy._training_settings.TRADE_MODE_RUN_BEST_SELECTOR), profile.param_selector)
+    add_check(results, "runtime_domain", case_id, "trading_uses_requested_base_finalists_agree_policy", "base_finalists_agree", profile.param_selector)
+    add_check(results, "runtime_domain", case_id, "trading_trials_use_canonical_single_fold_budget", int(canonical_trade_training["trials_per_fold"]), profile.optimizer_trials_per_seed)
+    add_check(results, "runtime_domain", case_id, "trading_seed_count_uses_canonical_ensemble_size", int(canonical_seed_policy["seed_count"]), profile.optimizer_seed_count)
+    add_check(results, "runtime_domain", case_id, "trading_train_window_uses_canonical_trade_window", int(canonical_trade_training["train_window_months"]), profile.optimizer_train_window_months)
+    trading_config_source = (PROJECT_ROOT / "config" / "trading.py").read_text(encoding="utf-8")
+    add_check(results, "runtime_domain", case_id, "trading_config_does_not_duplicate_optimizer_training_knobs", False, "TRADING_OPTIMIZER_" in trading_config_source or "TRADING_PARAM_SELECTOR" in trading_config_source)
 
-    with patch.object(trading_policy, "TRADING_PARAM_SELECTOR", "base_finalists_agree"):
+    with patch.object(trading_policy._training_settings, "TRADE_MODE_RUN_BEST_SELECTOR", "base_finalist_best"):
         patched_profile = trading_policy.get_trading_strategy_profile()
-    add_check(results, "runtime_domain", case_id, "trading_selector_runtime_follows_config_override", "base_finalists_agree", patched_profile.param_selector)
+    add_check(results, "runtime_domain", case_id, "trading_selector_runtime_follows_canonical_training_policy_override", "base_finalist_best", patched_profile.param_selector)
+
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.params_io import params_to_json_dict
+    from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
+    from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime, resolve_trading_candidate_params
+    from core.portfolio_ensemble import annotate_ensemble_candidate, aggregate_ensemble_candidate_rows
+    with tempfile.TemporaryDirectory() as temp_dir:
+        ensemble_path = Path(temp_dir) / "base_finalists_agree.json"
+        params_payload = params_to_json_dict(_base_params)
+        ensemble_payload = build_static_active_param_ensemble_payload(
+            members=[
+                {"member_index": idx, "seed": 100 + idx, "params": params_payload}
+                for idx in (1, 2, 3)
+            ],
+            random_seed_ensemble=build_seed_ensemble_policy_snapshot(enabled=True, seed_count=3, min_agree=2),
+            selector="base_finalists_agree",
+            meta={"walk_forward_policy": {"latest_data_date": "2026-09-11"}},
+        )
+        ensemble_path.write_text(json.dumps(ensemble_payload, ensure_ascii=False), encoding="utf-8")
+        param_runtime = load_trading_strategy_param_runtime(ensemble_path)
+        add_check(results, "runtime_domain", case_id, "trading_runtime_accepts_static_finalist_ensemble", 3, param_runtime["member_count"])
+        add_check(results, "runtime_domain", case_id, "trading_runtime_uses_artifact_min_agree", 2, param_runtime["min_agree"])
+        candidate_rows = []
+        for member in param_runtime["members"][:2]:
+            candidate_rows.append(annotate_ensemble_candidate(
+                {"ticker": "2330", "kind": "buy", "sort_value": float(member["member_index"]), "trade_date": "2026-09-11"},
+                member=member, params_obj=member["params_obj"], member_key=member["member_key"],
+            ))
+        aggregated = aggregate_ensemble_candidate_rows(candidate_rows, min_agree=2)
+        add_check(results, "runtime_domain", case_id, "trading_ensemble_candidate_uses_canonical_min_agree", 1, len(aggregated))
+        representative_params, representative_member = resolve_trading_candidate_params(param_runtime, aggregated[0])
+        add_check(results, "runtime_domain", case_id, "trading_ensemble_candidate_resolves_representative_member", str(aggregated[0]["ensemble_member_key"]), str(representative_member["member_key"]))
+        add_check(results, "runtime_domain", case_id, "trading_ensemble_candidate_freezes_resolved_params_object", True, representative_params is representative_member["params_obj"])
+        scanner_wrapped_runtime = {
+            "param_members": list(param_runtime["members"]),
+            "param_min_agree": int(param_runtime["min_agree"]),
+            "member_count": int(param_runtime["member_count"]),
+            "params": param_runtime["primary_params"],
+        }
+        scanner_params, scanner_member = resolve_trading_candidate_params(scanner_wrapped_runtime, aggregated[0])
+        add_check(results, "runtime_domain", case_id, "trading_scanner_runtime_wrapper_resolves_same_representative_member", str(representative_member["member_key"]), str(scanner_member["member_key"]))
+        add_check(results, "runtime_domain", case_id, "trading_scanner_runtime_wrapper_resolves_same_params_object", True, scanner_params is representative_params)
 
     with patch.object(trading_policy, "TRADING_DL_FILTER_ENABLED", True):
         try:
@@ -3206,7 +3261,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
 
     alternate_policies = [name for name in POLICY_FILENAME_BY_NAME if name != profile.param_selector]
     alternate_policy = alternate_policies[0] if alternate_policies else profile.param_selector
-    with patch.object(trading_policy, "TRADING_PARAM_SELECTOR", alternate_policy):
+    with patch.object(trading_policy._training_settings, "TRADE_MODE_RUN_BEST_SELECTOR", alternate_policy):
         alternate_path = Path(trading_policy.resolve_trading_selected_strategy_param_path(root)).resolve()
         alternate_profile = trading_policy.get_trading_strategy_profile()
     expected_alternate_path = resolve_strategy_param_artifact_path(
@@ -3250,6 +3305,8 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         "binding_fingerprint": "c" * 64,
         "usage_mode": "trained_current",
         "param_training_data_date": "2099-01-01",
+        "param_member_count": 3,
+        "param_min_agree": 2,
     }
     with patch.object(trading_training, "run_static_strategy_parameter_training", side_effect=_fake_canonical_runner), \
          patch.object(trading_training, "load_trading_v2_consumer_state", return_value=synthetic_market), \
