@@ -454,6 +454,201 @@ def validate_exact_accounting_display_leg_reconciliation_case(_base_params):
     return results, summary
 
 
+def validate_strategy_semantic_scanner_portfolio_parity_case(_base_params):
+    params = V16StrategyParams()
+    params.scanner_live_capital = 2_000_000.0
+    case_id = "UNIT_STRATEGY_SCANNER_PORTFOLIO_PARITY"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "strategy_semantic_parity")
+
+    from pathlib import Path
+
+    from core.capital_policy import resolve_scanner_live_capital
+    from core.portfolio_entry_plans import build_candidate_plan_seed
+    from core.trade_plans import build_cash_capped_entry_plan, build_normal_candidate_plan, execute_pre_market_entry_plan
+    from services.scanner.stock_processor import build_history_qualified_row_from_stats
+
+    ticker = "2330"
+    trade_date = "2026-09-11"
+    sizing_capital = resolve_scanner_live_capital(params)
+    stats = {
+        "is_candidate": True,
+        "hasOpenPositionAtEnd": False,
+        "current_position": 0,
+        "expected_value": 0.55,
+        "win_rate": 62.5,
+        "trade_count": 40,
+        "asset_growth": 12.0,
+        "close_last": 99.0,
+        "is_setup_today": True,
+        "buy_limit": 100.0,
+        "stop_loss": 94.0,
+        "entry_atr": 2.0,
+        "extended_candidate_today": None,
+        "extended_candidate_tbd_today": None,
+    }
+    scanner_row = build_history_qualified_row_from_stats(
+        ticker=ticker,
+        stats=stats,
+        params=params,
+        sanitize_stats={},
+        trade_date=trade_date,
+    )
+    check_true("scanner_normal_setup_produces_actionable_row", isinstance(scanner_row, dict) and scanner_row.get("kind") == "buy")
+    scanner_seed = dict(scanner_row.get("execution_plan_seed") or {})
+
+    canonical_plan = build_normal_candidate_plan(
+        stats["buy_limit"],
+        stats["entry_atr"],
+        sizing_capital,
+        params,
+        ticker=ticker,
+        trade_date=trade_date,
+    )
+    check_true("canonical_normal_candidate_plan_exists", isinstance(canonical_plan, dict))
+    portfolio_candidate = {
+        "ticker": ticker,
+        "limit_px": canonical_plan["limit_price"],
+        "init_sl": canonical_plan["init_sl"],
+        "init_trail": canonical_plan["init_trail"],
+        "target_price": canonical_plan["target_price"],
+        "entry_atr": canonical_plan["entry_atr"],
+        "security_profile": canonical_plan.get("security_profile"),
+        "trade_date": trade_date,
+        "sizing_capital": sizing_capital,
+        "orig_limit": canonical_plan.get("orig_limit"),
+        "orig_atr": canonical_plan.get("orig_atr"),
+        "max_qty": canonical_plan.get("max_qty"),
+    }
+    portfolio_seed = build_candidate_plan_seed(portfolio_candidate, sizing_equity=sizing_capital)
+
+    parity_fields = (
+        "limit_price",
+        "init_sl",
+        "init_trail",
+        "target_price",
+        "entry_atr",
+        "ticker",
+        "trade_date",
+    )
+    for field in parity_fields:
+        check(f"scanner_portfolio_{field}_parity", portfolio_seed.get(field), scanner_seed.get(field))
+
+    scanner_entry_plan = build_cash_capped_entry_plan(scanner_seed, sizing_capital, params)
+    portfolio_entry_plan = build_cash_capped_entry_plan(portfolio_seed, sizing_capital, params)
+    check_true("scanner_cash_capped_entry_plan_exists", isinstance(scanner_entry_plan, dict))
+    check_true("portfolio_cash_capped_entry_plan_exists", isinstance(portfolio_entry_plan, dict))
+    for field in ("qty", "limit_price", "init_sl", "init_trail", "target_price", "reserved_cost_milli"):
+        check(f"scanner_portfolio_entry_plan_{field}_parity", portfolio_entry_plan.get(field), scanner_entry_plan.get(field))
+
+    scenarios = (
+        ("filled", {"t_open": 99.0, "t_high": 101.0, "t_low": 98.0, "t_close": 100.0, "t_volume": 1_000_000.0, "y_close": 98.0}),
+        ("missed_buy", {"t_open": 102.0, "t_high": 103.0, "t_low": 101.0, "t_close": 102.0, "t_volume": 1_000_000.0, "y_close": 98.0}),
+    )
+    for label, market in scenarios:
+        scanner_exec = execute_pre_market_entry_plan(
+            entry_plan=scanner_entry_plan, params=params, entry_type="normal", ticker=ticker, trade_date=trade_date, **market
+        )
+        portfolio_exec = execute_pre_market_entry_plan(
+            entry_plan=portfolio_entry_plan, params=params, entry_type="normal", ticker=ticker, trade_date=trade_date, **market
+        )
+        for field in (
+            "filled",
+            "count_as_missed_buy",
+            "is_worse_than_initial_stop",
+            "entry_fill_price",
+            "entry_price",
+            "tp_half",
+            "entry_day_pending_action",
+            "net_buy_total_milli",
+        ):
+            scanner_value = scanner_exec.get(field)
+            portfolio_value = portfolio_exec.get(field)
+            if isinstance(scanner_value, float) and np.isnan(scanner_value):
+                check_true(f"{label}_{field}_parity", isinstance(portfolio_value, float) and np.isnan(portfolio_value))
+            else:
+                check(f"{label}_{field}_parity", portfolio_value, scanner_value)
+
+    project_root = Path(__file__).resolve().parents[2]
+    scanner_source = (project_root / "services" / "scanner" / "stock_processor.py").read_text(encoding="utf-8")
+    portfolio_candidates_source = (project_root / "core" / "portfolio_candidates.py").read_text(encoding="utf-8")
+    backtest_source = (project_root / "core" / "backtest_core.py").read_text(encoding="utf-8")
+    portfolio_entries_source = (project_root / "core" / "portfolio_entries.py").read_text(encoding="utf-8")
+    check_true("scanner_delegates_normal_plan_to_core_trade_plans", "from core.trade_plans import build_normal_candidate_plan" in scanner_source)
+    check_true("portfolio_delegates_normal_plan_to_core_trade_plans", "build_normal_candidate_plan," in portfolio_candidates_source and "from core.trade_plans import" in portfolio_candidates_source)
+    check_true("single_backtest_delegates_entry_execution_to_core_trade_plans", "execute_pre_market_entry_plan," in backtest_source and "from core.trade_plans import" in backtest_source)
+    check_true("portfolio_delegates_entry_execution_to_core_trade_plans", "execute_pre_market_entry_plan," in portfolio_entries_source and "from core.trade_plans import" in portfolio_entries_source)
+    check("scanner_does_not_redefine_normal_candidate_plan", False, "def build_normal_candidate_plan(" in scanner_source)
+    check("portfolio_does_not_redefine_normal_candidate_plan", False, "def build_normal_candidate_plan(" in portfolio_candidates_source)
+    check("single_backtest_does_not_redefine_entry_execution", False, "def execute_pre_market_entry_plan(" in backtest_source)
+    check("portfolio_does_not_redefine_entry_execution", False, "def execute_pre_market_entry_plan(" in portfolio_entries_source)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+def validate_position_management_rollforward_parity_case(_base_params):
+    params = V16StrategyParams()
+    case_id = "UNIT_POSITION_MANAGEMENT_ROLLFORWARD_PARITY"
+    results, summary, check, check_true = bind_synthetic_case(case_id, "strategy_semantic_parity")
+
+    from core.entry_plans import build_position_from_entry_fill
+    from core.position_step import execute_bar_step, rollforward_position_management_from_completed_bar
+
+    base_position = build_position_from_entry_fill(
+        100.0,
+        100,
+        init_sl=90.0,
+        init_trail=90.0,
+        params=params,
+        target_price=140.0,
+        ticker="2454",
+        trade_date="2026-09-03",
+    )
+    live_management = copy.deepcopy(base_position)
+    historical_management = copy.deepcopy(base_position)
+    completed_high = 105.0
+    completed_atr = 2.0
+
+    rollforward_position_management_from_completed_bar(
+        live_management,
+        completed_high=completed_high,
+        completed_atr=completed_atr,
+        params=params,
+    )
+    historical_management, freed_cash, realized_pnl, events = execute_bar_step(
+        historical_management,
+        y_atr=completed_atr,
+        y_ind_sell=False,
+        y_close=104.0,
+        t_open=106.0,
+        t_high=108.0,
+        t_low=104.0,
+        t_close=107.0,
+        t_volume=1_000_000.0,
+        params=params,
+        current_date=pd.Timestamp("2026-09-04"),
+        y_high=completed_high,
+    )
+    check("no_exit_fixture_events", [], events)
+    check("no_exit_fixture_freed_cash", 0.0, freed_cash)
+    check("no_exit_fixture_realized_pnl", 0.0, realized_pnl)
+    for field in (
+        "qty",
+        "highest_high_since_entry_milli",
+        "trailing_stop_milli",
+        "sl_milli",
+        "highest_high_since_entry",
+        "trailing_stop",
+        "sl",
+        "sold_half",
+        "pending_exit_action",
+    ):
+        check(f"live_rollforward_matches_execute_bar_step_{field}", historical_management.get(field), live_management.get(field))
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
 def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
     params = V16StrategyParams()
     case_id = "UNIT_EXACT_SINGLE_PORTFOLIO_PARITY"
