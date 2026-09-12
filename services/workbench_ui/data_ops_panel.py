@@ -39,6 +39,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_WARNING,
     WORKBENCH_WARNING_LABEL_STYLE,
     WORKBENCH_TEXT,
+    _warn_gui_fallback,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -107,7 +108,8 @@ class _TreeCellColorOverlay:
         for label in self._labels.values():
             try:
                 label.destroy()
-            except tk.TclError:
+            except tk.TclError as exc:
+                _warn_gui_fallback("TreeCellColorOverlay.label.destroy()", exc)
                 pass
         self._labels.clear()
         self.schedule_sync()
@@ -117,7 +119,8 @@ class _TreeCellColorOverlay:
             return
         try:
             self._sync_job = self._tree.after_idle(self._sync)
-        except tk.TclError:
+        except tk.TclError as exc:
+            _warn_gui_fallback("TreeCellColorOverlay.after_idle(_sync)", exc)
             self._sync_job = None
 
     def _sync(self) -> None:
@@ -159,7 +162,8 @@ class _TreeCellColorOverlay:
                     background=WORKBENCH_ACCENT if iid in selected else WORKBENCH_SURFACE,
                 )
                 label.place(x=x + 1, y=y + 1, width=max(1, width - 2), height=max(1, height - 2))
-        except tk.TclError:
+        except tk.TclError as exc:
+            _warn_gui_fallback("TreeCellColorOverlay._sync()", exc)
             return
 
     def _select_row(self, iid: str):
@@ -167,7 +171,8 @@ class _TreeCellColorOverlay:
             self._tree.selection_set(iid)
             self._tree.focus(iid)
             self._tree.event_generate("<<TreeviewSelect>>")
-        except tk.TclError:
+        except tk.TclError as exc:
+            _warn_gui_fallback("TreeCellColorOverlay._select_row()", exc)
             return "break"
         self.schedule_sync()
         return "break"
@@ -178,7 +183,8 @@ class _TreeCellColorOverlay:
             if delta:
                 self._tree.yview_scroll(-1 if delta > 0 else 1, "units")
                 self.schedule_sync()
-        except tk.TclError:
+        except tk.TclError as exc:
+            _warn_gui_fallback("TreeCellColorOverlay._on_mousewheel()", exc)
             pass
         return "break"
 
@@ -220,8 +226,8 @@ class MarketDataOpsPanel(ttk.Frame):
         self._status_label = ttk.Label(controls, textvariable=self._status_var, style=WORKBENCH_INFO_LABEL_STYLE)
         self._status_label.pack(side="left", fill="x", expand=True)
 
-        kpi = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
-        kpi.pack(fill="x", pady=(0, 6))
+        summary_grid = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
+        summary_grid.pack(fill="x", pady=(0, 6))
         labels = (
             ("Trading Ready", "trading"),
             ("V2 Archive", "v2"),
@@ -231,7 +237,7 @@ class MarketDataOpsPanel(ttk.Frame):
             ("Auto Worker", "auto"),
         )
         for col, (title, key) in enumerate(labels):
-            box = ttk.LabelFrame(kpi, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
+            box = ttk.LabelFrame(summary_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
             box.grid(row=0, column=col, padx=(0, 6), sticky="nsew")
             primary = tk.Label(
                 box,
@@ -249,20 +255,17 @@ class MarketDataOpsPanel(ttk.Frame):
                 justify="center",
             ).pack(fill="x", pady=(1, 0))
             self._kpi_labels[key] = primary
-            kpi.columnconfigure(col, weight=1)
+            summary_grid.columnconfigure(col, weight=1)
 
-        meters = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
-        meters.pack(fill="x", pady=(0, 6))
-        for column in range(3):
-            meters.columnconfigure(column, weight=1, uniform="market_data_meter")
-
+        # The meter row shares the exact six KPI columns above.  This keeps its
+        # outer boundaries pixel-aligned even when KPI content changes column widths.
         trading_readiness_box = ttk.LabelFrame(
-            meters,
+            summary_grid,
             text="Trading Ready",
             padding=(8, 4),
             style=WORKBENCH_LABELLF_STYLE,
         )
-        trading_readiness_box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        trading_readiness_box.grid(row=1, column=0, columnspan=1, sticky="nsew", padx=(0, 6), pady=(6, 0))
         self._trading_readiness_progress = ttk.Progressbar(
             trading_readiness_box,
             maximum=100.0,
@@ -278,12 +281,12 @@ class MarketDataOpsPanel(ttk.Frame):
         self._trading_readiness_label.pack(anchor="w", pady=(2, 0))
 
         readiness_box = ttk.LabelFrame(
-            meters,
+            summary_grid,
             text="V2 Target Freshness",
             padding=(8, 4),
             style=WORKBENCH_LABELLF_STYLE,
         )
-        readiness_box.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
+        readiness_box.grid(row=1, column=1, columnspan=3, sticky="nsew", padx=(0, 6), pady=(6, 0))
         self._readiness_progress = ttk.Progressbar(readiness_box, maximum=100.0, mode="determinate")
         self._readiness_progress.pack(fill="x")
         self._readiness_text = tk.StringVar(value="-")
@@ -291,12 +294,12 @@ class MarketDataOpsPanel(ttk.Frame):
         self._readiness_label.pack(anchor="w", pady=(2, 0))
 
         quota_box = ttk.LabelFrame(
-            meters,
+            summary_grid,
             text="Last Observed Provider Quota",
             padding=(8, 4),
             style=WORKBENCH_LABELLF_STYLE,
         )
-        quota_box.grid(row=0, column=2, sticky="nsew")
+        quota_box.grid(row=1, column=4, columnspan=2, sticky="nsew", padx=(0, 6), pady=(6, 0))
         self._quota_progress = ttk.Progressbar(quota_box, maximum=100.0, mode="determinate")
         self._quota_progress.pack(fill="x")
         self._quota_text = tk.StringVar(value="尚無 quota evidence；本頁刷新不會查 provider。")
