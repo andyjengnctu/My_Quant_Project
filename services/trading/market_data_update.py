@@ -44,6 +44,8 @@ def run_trading_market_data_update(
     project_root: str | Path,
     provider_client=None,
     sync_v2_archive: bool = True,
+    progress_fn=None,
+    quota_wait_fn=None,
 ) -> dict[str, Any]:
     """Refresh V2 if requested, then publish canonical execution consumer state."""
 
@@ -63,6 +65,8 @@ def run_trading_market_data_update(
                 project_root=root,
                 client=provider_client,
                 force_market_date_discovery=True,
+                progress_fn=progress_fn,
+                quota_wait_fn=quota_wait_fn,
             )
         )
         if str(v2_update.get("status") or "") in {"NO_TARGET", "BLOCKED", "DISABLED"}:

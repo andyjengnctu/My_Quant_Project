@@ -16,6 +16,10 @@ from services.trading.market_data_consumer import (
     load_trading_v2_optimizer_raw_data,
 )
 from services.trading.strategy_param_state import publish_trading_strategy_param_binding
+from services.trading.strategy_param_state import (
+    TRADING_PARAM_USAGE_REUSE_EXISTING,
+    TRADING_PARAM_USAGE_TRAINED_CURRENT,
+)
 
 
 def _display_path(project_root: str | os.PathLike[str], path: str | os.PathLike[str]) -> str:
@@ -64,7 +68,10 @@ def run_trading_strategy_param_training(
         raise RuntimeError("Trading V2 latest date 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
     selected_path = Path(str(result["selected_params_path"]))
     selected_sha = compute_file_sha256(selected_path)
-    binding = publish_trading_strategy_param_binding(root)
+    binding = publish_trading_strategy_param_binding(
+        root,
+        usage_mode=TRADING_PARAM_USAGE_TRAINED_CURRENT,
+    )
     if str(binding.get("selected_params_sha256") or "") != selected_sha:
         raise RuntimeError("Trading Params binding 與剛產生的 selected params 不一致")
 
@@ -82,7 +89,47 @@ def run_trading_strategy_param_training(
         "market_data_consumer_state_sha256": consumer_state_sha_before,
         "market_data_source_view_fingerprint": source_view_fingerprint_before,
         "param_binding_fingerprint": binding["binding_fingerprint"],
+        "param_usage_mode": binding["usage_mode"],
+        "param_training_data_date": binding["param_training_data_date"],
     }
 
 
-__all__ = ["run_trading_strategy_param_training"]
+def reuse_trading_strategy_params(
+    *,
+    project_root: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Explicitly bind the existing canonical Trading Params to current Trading data.
+
+    The selected Params artifact is not rewritten.  Its training-date lineage stays
+    intact; only the Trading usage binding advances to the current information date.
+    """
+
+    root = Path(project_root).resolve()
+    plan = build_trading_strategy_param_training_plan(root)
+    market_state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
+    selected_path = Path(str(plan["selected_params_path"]))
+    if not selected_path.is_file():
+        raise FileNotFoundError(
+            "目前沒有可沿用的 Trading Params；請先選擇「重新訓練 Params」建立第一份正式參數。"
+        )
+    binding = publish_trading_strategy_param_binding(
+        root,
+        usage_mode=TRADING_PARAM_USAGE_REUSE_EXISTING,
+    )
+    return {
+        "status": "READY",
+        "runtime_domain": "trading",
+        "strategy_id": str(plan["strategy_id"]),
+        "param_selector": str(plan["param_selector"]),
+        "selected_params_path": _display_path(root, selected_path),
+        "selected_params_sha256": compute_file_sha256(selected_path),
+        "latest_data_date": str(market_state["market_date"]),
+        "param_training_data_date": str(binding["param_training_data_date"]),
+        "param_usage_mode": str(binding["usage_mode"]),
+        "market_data_consumer_state_sha256": get_trading_v2_consumer_state_sha256(root),
+        "market_data_source_view_fingerprint": str(market_state["source_view_fingerprint"]),
+        "param_binding_fingerprint": str(binding["binding_fingerprint"]),
+    }
+
+
+__all__ = ["run_trading_strategy_param_training", "reuse_trading_strategy_params"]

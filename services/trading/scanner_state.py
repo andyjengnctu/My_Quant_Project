@@ -100,7 +100,7 @@ def load_trading_scanner_runtime(
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     if not selected_path.is_file():
         raise FileNotFoundError(
-            "Trading strategy params尚未產生；請先在Workbench執行「更新 Trading Params」。"
+            "Trading strategy params尚未產生；請先在 Workbench 執行「2 套用 Params」，並選擇重新訓練。"
         )
 
     payload = load_json_strict(selected_path)
@@ -120,11 +120,14 @@ def load_trading_scanner_runtime(
         )
 
     param_latest_data_date = _selected_payload_latest_data_date(payload)
-    if param_latest_data_date != latest_data_date:
+    if not param_latest_data_date:
         raise RuntimeError(
-            "Trading strategy params不是目前最新Trading資料的產物；"
-            f"data={latest_data_date}, params={param_latest_data_date or '-'}。"
-            "請先執行「更新 Trading Params」。"
+            "Trading selected strategy params 缺少訓練資料日；請重新訓練。"
+        )
+    if param_latest_data_date > latest_data_date:
+        raise RuntimeError(
+            "Trading strategy params 訓練資料日晚於目前 Trading data；"
+            f"data={latest_data_date}, params={param_latest_data_date}。"
         )
     param_binding = load_trading_strategy_param_binding(
         root, required=True, verify_current=True, verify_dataset_content=verify_dataset_content
@@ -138,6 +141,7 @@ def load_trading_scanner_runtime(
         "selected_path": selected_path,
         "selected_params_sha256": compute_file_sha256(selected_path),
         "param_latest_data_date": param_latest_data_date,
+        "param_usage_mode": str(param_binding.get("usage_mode") or ""),
         "member_count": member_count,
         "params": param_source["primary_params"],
         "market_data_consumer_state_sha256": get_trading_v2_consumer_state_sha256(root),
@@ -170,6 +174,7 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
     param_latest_data_date = ""
     member_count = 0
     param_error = ""
+    param_binding_error = ""
     param_binding = None
     if selected_path.is_file():
         try:
@@ -181,11 +186,19 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             member_count = int(param_source.get("member_count") or 0)
             if str(payload.get("selector") or "").strip() != str(profile.param_selector):
                 raise RuntimeError("selector mismatch")
-            param_binding = load_trading_strategy_param_binding(
-                root, required=True, verify_current=True, verify_dataset_content=False
-            )
+            if not param_latest_data_date:
+                raise RuntimeError("selected params 缺少訓練資料日")
+            if latest_data_date and param_latest_data_date > latest_data_date:
+                raise RuntimeError("selected params 訓練資料日晚於目前 Trading data")
         except (OSError, ValueError, RuntimeError) as exc:
             param_error = f"{type(exc).__name__}: {exc}"
+        if not param_error:
+            try:
+                param_binding = load_trading_strategy_param_binding(
+                    root, required=True, verify_current=True, verify_dataset_content=False
+                )
+            except (OSError, ValueError, RuntimeError) as exc:
+                param_binding_error = f"{type(exc).__name__}: {exc}"
     data_readiness = build_trading_data_readiness_for_consumer_evidence(
         root,
         strategy_id=profile.strategy_id,
@@ -194,13 +207,18 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         consumer_state_reason=market_error or (None if market_ready else "Trading V2 execution consumer state 尚未就緒"),
     )
     trading_data_ready = bool(data_readiness.get("ready"))
-    params_ready = bool(
+    params_reusable = bool(
         trading_data_ready
         and latest_data_date
         and selected_path.is_file()
         and not param_error
         and member_count == 1
-        and param_latest_data_date == latest_data_date
+        and param_latest_data_date
+        and param_latest_data_date <= latest_data_date
+    )
+    params_ready = bool(
+        params_reusable
+        and not param_binding_error
         and param_binding is not None
     )
     try:
@@ -243,6 +261,9 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "param_latest_data_date": param_latest_data_date or None,
         "param_member_count": member_count,
         "param_error": param_error or None,
+        "param_binding_error": param_binding_error or None,
+        "param_usage_mode": None if param_binding is None else param_binding.get("usage_mode"),
+        "params_reusable": params_reusable,
         "param_binding_sha256": (
             get_trading_strategy_param_binding_sha256(root) if param_binding is not None and not param_error else None
         ),

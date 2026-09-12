@@ -644,13 +644,26 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("trading_scanner_carries_param_binding_identity", 64, len(str(scan_result.get("param_binding_sha256") or "")))
 
         _write_param_payload("2026-09-03", 1)
+        stale_snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
+        check("older_trading_params_are_reusable_but_not_implicitly_current", True, stale_snapshot.get("params_reusable"))
+        check("older_trading_params_require_explicit_current_binding", False, stale_snapshot.get("params_ready_for_scan"))
         try:
             daily_workflow.run_trading_candidate_scan(project_root=root)
-        except RuntimeError as exc:
-            stale_rejected = "不是目前最新Trading資料" in str(exc)
+        except RuntimeError:
+            stale_rejected = True
         else:
             stale_rejected = False
-        check("stale_trading_params_are_rejected_before_scan", True, stale_rejected)
+        check("older_trading_params_are_rejected_before_explicit_reuse_binding", True, stale_rejected)
+
+        reuse_result = daily_workflow.reuse_trading_strategy_params(project_root=root)
+        check("explicit_reuse_preserves_original_param_training_date", "2026-09-03", reuse_result.get("param_training_data_date"))
+        check("explicit_reuse_binds_current_trading_data_date", "2026-09-04", reuse_result.get("latest_data_date"))
+        check("explicit_reuse_records_usage_mode", "reuse_existing", reuse_result.get("param_usage_mode"))
+        rebound_snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
+        check("explicit_reuse_makes_params_ready_for_scan", True, rebound_snapshot.get("params_ready_for_scan"))
+        with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan):
+            reused_scan = daily_workflow.run_trading_candidate_scan(project_root=root)
+        check("explicit_reuse_allows_scanner_without_retraining", "2026-09-04", reused_scan.get("latest_data_date"))
 
         _write_param_payload("2026-09-04", 2)
         try:
@@ -671,9 +684,23 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("daily_workflow_executes_data_rollforward_indicator_params_scanner_in_order", ["data", "rollforward", "indicator", "params", "scanner"], call_order)
     check("daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
 
+    reuse_call_order = []
+    with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: reuse_call_order.append("data") or {"status": "READY"}), \
+         patch("services.trading.position_rollforward.run_trading_position_rollforward", side_effect=lambda **_kwargs: reuse_call_order.append("rollforward") or {"status": "UP_TO_DATE"}), \
+         patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", side_effect=lambda **_kwargs: reuse_call_order.append("indicator") or {"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}), \
+         patch.object(daily_workflow, "reuse_trading_strategy_params", side_effect=lambda **_kwargs: reuse_call_order.append("reuse") or {"status": "READY"}), \
+         patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: reuse_call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
+        reuse_workflow_result = daily_workflow.run_trading_daily_workflow(
+            project_root=project_root, environ={}, param_mode=daily_workflow.TRADING_PARAM_MODE_REUSE
+        )
+    check("daily_workflow_reuse_mode_skips_param_retraining", ["data", "rollforward", "indicator", "reuse", "scanner"], reuse_call_order)
+    check("daily_workflow_reuse_mode_returns_ready", "READY", reuse_workflow_result.get("status"))
+
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
-    check("workbench_exposes_separate_param_button", True, '"2 更新 Params"' in panel_source)
+    check("workbench_exposes_separate_param_button", True, '"2 套用 Params"' in panel_source)
+    check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
+    check("workbench_uses_shared_downloader_console_progress", True, "MarketDataDailyConsoleProgress" in panel_source)
     check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
@@ -2394,7 +2421,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         parse_trading_money_text,
         parse_trading_qty_text,
     )
-    from services.workbench_ui.workbench import PANEL_SPECS, build_workbench_spec
+    from services.workbench_ui.workbench import PANEL_SPECS, WORKBENCH_ERROR, WORKBENCH_SUCCESS, build_workbench_spec
 
     workbench_spec = build_workbench_spec()
     panel_specs = {row["panel_id"]: row for row in workbench_spec.get("panels", [])}
@@ -2444,10 +2471,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     # AI: Exercise the real completion callbacks without creating a Tk window.
     from types import SimpleNamespace
-    refreshed, messages = [], []
+    refreshed, messages, status_colors = [], [], []
     panel = SimpleNamespace(
         _workflow_token=7, _workflow_thread=object(),
         _workflow_status_var=SimpleNamespace(set=messages.append),
+        _workflow_status_label=SimpleNamespace(configure=lambda **kwargs: status_colors.append(kwargs.get("foreground"))),
         _reload_candidate_rows=lambda rows: refreshed.append("candidates"),
     )
     for method in (
@@ -2464,6 +2492,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         text in messages[-1] for text in ("2026-09-09", "新進場池 17", "訓練池 23", "V2 UPDATED", "31/2")
     ))
     check("workbench_data_completion_drops_retired_download_counts", False, "成功 0" in messages[-1])
+    check("workbench_success_status_uses_readable_success_color", WORKBENCH_SUCCESS, status_colors[-1])
     required_refreshes = {"refresh_account", "refresh_order_state", "refresh_protection_plan", "refresh_indicator_exit_plan"}
     for action in ("all", "rollforward"):
         refreshed.clear()
@@ -2473,6 +2502,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         with patch("services.workbench_ui.trading_account_panel.messagebox.showerror"):
             TradingAccountPanel._finish_workflow_error(panel, action, 7, RuntimeError("synthetic later-stage failure"))
         check(f"workbench_{action}_failure_refreshes_earlier_committed_stages", True, required_refreshes.issubset(refreshed))
+        check(f"workbench_{action}_failure_uses_readable_error_color", WORKBENCH_ERROR, status_colors[-1])
     refreshed.clear()
     TradingAccountPanel._finish_workflow_success(panel, "all", 6, {})
     check("workbench_ignores_stale_worker_completion", [], refreshed)

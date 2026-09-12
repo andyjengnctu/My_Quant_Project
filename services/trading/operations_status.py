@@ -589,8 +589,11 @@ def derive_trading_operations_status(
     elif not bool(workflow.get("params_ready_for_scan")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_PARAMS
-        next_label = "2 更新 Trading Params"
-        next_detail = "Trading Params 必須與目前 Trading data 同一最新交易日且解析為單一 runtime member。"
+        next_label = "2 套用 Trading Params"
+        if bool(workflow.get("params_reusable")):
+            next_detail = "可選擇沿用既有 Params 綁定至目前 Trading data，或重新訓練 Params；兩者皆須解析為單一 runtime member。"
+        else:
+            next_detail = "目前沒有可沿用的合法 Params；請先重新訓練並綁定目前 Trading data。"
     elif not bool(candidate.get("fresh")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_RUN_SCANNER
@@ -654,6 +657,8 @@ def derive_trading_operations_status(
         "market_data_v2_archive_latest_date": workflow.get("market_data_v2_archive_latest_date"),
         "market_data_v2_archive_error": workflow.get("market_data_v2_archive_error"),
         "params_ready_for_scan": bool(workflow.get("params_ready_for_scan")),
+        "params_reusable": bool(workflow.get("params_reusable")),
+        "param_usage_mode": workflow.get("param_usage_mode"),
         "account_initialized": bool(account.get("initialized")),
         "account_revision": account.get("revision"),
         "cash": account.get("cash"),

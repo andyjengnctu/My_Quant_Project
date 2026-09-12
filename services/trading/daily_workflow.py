@@ -20,7 +20,15 @@ from services.trading.scanner_state import (
     partition_trading_candidate_rows_for_information_date,
     resolve_trading_candidate_snapshot_path,
 )
-from services.trading.strategy_param_training import run_trading_strategy_param_training
+from services.trading.strategy_param_training import (
+    reuse_trading_strategy_params,
+    run_trading_strategy_param_training,
+)
+
+
+TRADING_PARAM_MODE_REUSE = "reuse"
+TRADING_PARAM_MODE_TRAIN = "train"
+TRADING_PARAM_MODES = frozenset({TRADING_PARAM_MODE_REUSE, TRADING_PARAM_MODE_TRAIN})
 
 
 def _json_safe(value):
@@ -126,17 +134,41 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     }
 
 
-def run_trading_daily_workflow(*, project_root: str | Path, environ=None) -> dict[str, Any]:
+def run_trading_param_step(*, project_root: str | Path, mode: str, environ=None) -> dict[str, Any]:
+    normalized = str(mode or "").strip().lower()
+    if normalized == TRADING_PARAM_MODE_REUSE:
+        return reuse_trading_strategy_params(project_root=project_root)
+    if normalized == TRADING_PARAM_MODE_TRAIN:
+        return run_trading_strategy_param_training(project_root=project_root, environ=environ)
+    raise ValueError(f"不支援的 Trading Params 模式: {mode!r}")
+
+
+def run_trading_daily_workflow(
+    *,
+    project_root: str | Path,
+    environ=None,
+    param_mode: str = TRADING_PARAM_MODE_TRAIN,
+    data_progress_fn=None,
+    data_quota_wait_fn=None,
+) -> dict[str, Any]:
     from services.trading.indicator_exit_planning import build_trading_indicator_exit_plan
     from services.trading.position_rollforward import run_trading_position_rollforward
 
-    data_result = run_trading_market_data_update(project_root=project_root)
+    data_result = run_trading_market_data_update(
+        project_root=project_root,
+        progress_fn=data_progress_fn,
+        quota_wait_fn=data_quota_wait_fn,
+    )
     rollforward_result = run_trading_position_rollforward(project_root=project_root)
     if str(rollforward_result.get("status") or "") == "NO_ACCOUNT":
         indicator_result = {"status": "NO_ACCOUNT", "exit_count": 0, "exits": []}
     else:
         indicator_result = build_trading_indicator_exit_plan(project_root=project_root)
-    param_result = run_trading_strategy_param_training(project_root=project_root, environ=environ)
+    param_result = run_trading_param_step(
+        project_root=project_root,
+        mode=param_mode,
+        environ=environ,
+    )
     scan_result = run_trading_candidate_scan(project_root=project_root)
     return {
         "status": "READY",
@@ -158,5 +190,9 @@ __all__ = [
     "resolve_trading_candidate_snapshot_path",
     "run_trading_market_data_update",
     "run_trading_candidate_scan",
+    "run_trading_param_step",
     "run_trading_daily_workflow",
+    "TRADING_PARAM_MODE_REUSE",
+    "TRADING_PARAM_MODE_TRAIN",
+    "TRADING_PARAM_MODES",
 ]

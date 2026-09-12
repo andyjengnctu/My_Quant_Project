@@ -134,87 +134,22 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             return 0
         force_refresh = bool(selection.force_refresh_current_target)
 
-    progress_line_open = False
-    progress_line_width = 0
+    from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
 
-    def _close_progress_line() -> None:
-        nonlocal progress_line_open, progress_line_width
-        if progress_line_open:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            progress_line_open = False
-            progress_line_width = 0
-
-    def _write_progress_line(text: str) -> None:
-        nonlocal progress_line_open, progress_line_width
-        rendered = str(text)
-        visible_width = len(_strip_ansi(rendered))
-        padding = " " * max(0, progress_line_width - visible_width)
-        sys.stdout.write("\r" + rendered + padding)
-        sys.stdout.flush()
-        progress_line_open = True
-        progress_line_width = max(progress_line_width, visible_width)
-
-    def _progress(event: dict[str, object]) -> None:
-        kind = str(event.get("kind") or "")
-        if kind == "PLAN":
-            _close_progress_line()
-            mode = "FORCE REFRESH" if event.get("force_refresh") else "DUE ONLY"
-            print(
-                _paint("[Daily]", C_CYAN)
-                + f" {mode} | target={event.get('target_date')}"
-                f" | datasets={event.get('dataset_count')} | requests={event.get('total')}"
-            )
-            return
-        if kind != "REQUEST_PROGRESS":
-            return
-        done = int(event.get("done") or 0)
-        total = int(event.get("total") or 0)
-        pct = (100.0 * done / total) if total else 0.0
-        dataset = str(event.get("dataset") or "-")
-        data_id = event.get("data_id")
-        target = dataset + (f"/{data_id}" if data_id else "")
-        start_date = event.get("start_date")
-        end_date = event.get("end_date")
-        if start_date and end_date:
-            request_scope = f"date={start_date}" if start_date == end_date else f"date={start_date}~{end_date}"
-        else:
-            request_scope = "date=STATIC"
-        phase = str(event.get("phase") or "RUN")
-        if bool(event.get("recovered")):
-            phase = "REUSE"
-        data_used = int(event.get("process_data_requests") or 0)
-        usage_used = int(event.get("process_usage_requests") or 0)
-        q_used = event.get("quota_user_count")
-        q_limit = event.get("quota_limit")
-        quota = "quota=--" if q_used is None or q_limit is None else f"quota≈{int(q_used)}/{int(q_limit)}"
-        rendered_phase = _paint(phase, _status_color(phase))
-        _write_progress_line(
-            f"{_paint('[Daily]', C_CYAN)} {done}/{total} ({pct:5.1f}%) | {target} | {request_scope} | {rendered_phase}"
-            f" | data={data_used} usage={usage_used} | {quota}"
-        )
-
-    def _quota_wait(event: dict[str, object]) -> None:
-        _close_progress_line()
-        print(
-            f"{_paint('[WAIT]', C_YELLOW)} {event.get('done')}/{event.get('total')}"
-            f" | quota={event.get('quota_user_count') or '-'} / {event.get('quota_limit') or '-'}"
-            f" | reason={event.get('reason') or 'quota'}"
-        )
-
+    console_progress = MarketDataDailyConsoleProgress()
     try:
         result = run_trading_market_data_auto_update(
             project_root=PROJECT_ROOT,
             force_market_date_discovery=True,
             force_refresh_current_target=force_refresh,
-            progress_fn=_progress,
-            quota_wait_fn=_quota_wait,
+            progress_fn=console_progress.progress,
+            quota_wait_fn=console_progress.quota_wait,
         )
     except (RuntimeError, FileNotFoundError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
-        _close_progress_line()
+        console_progress.close()
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
-    _close_progress_line()
+    console_progress.close()
 
     status = str(result.get("status") or "UNKNOWN")
     print(_paint("=" * 88, C_CYAN))

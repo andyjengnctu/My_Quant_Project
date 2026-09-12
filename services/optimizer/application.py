@@ -1,4 +1,5 @@
 import inspect
+import importlib
 import json
 import math
 import os
@@ -1299,11 +1300,38 @@ def _clear_nonrolling_local_min_progress_hooks(session) -> None:
             delattr(session, attr_name)
 
 
+def _resolve_importable_callable_path(func) -> str | None:
+    module_name = str(getattr(func, "__module__", "") or "").strip()
+    qualname = str(getattr(func, "__qualname__", "") or "").strip()
+    if not module_name or not qualname or "<locals>" in qualname:
+        return None
+    try:
+        value = importlib.import_module(module_name)
+        for part in qualname.split("."):
+            value = getattr(value, part)
+    except (ImportError, AttributeError):
+        return None
+    if value is not func:
+        return None
+    return f"{module_name}:{qualname}"
+
+
+def _load_callable_from_import_path(path: str):
+    module_name, separator, qualname = str(path or "").partition(":")
+    if not separator or not module_name or not qualname:
+        raise ValueError(f"不合法的 callable import path: {path!r}")
+    value = importlib.import_module(module_name)
+    for part in qualname.split("."):
+        value = getattr(value, part)
+    if not callable(value):
+        raise TypeError(f"import path 不是 callable: {path}")
+    return value
+
+
 def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None:
     log_path = str((task or {}).get("log_path") or "")
 
     def _execute() -> dict | None:
-        from services.optimizer.prep import load_all_raw_data as load_all_raw_data_func
         from services.optimizer.runtime import create_optimizer_study, resolve_optimizer_single_fold_search_parallel_trials
         from services.optimizer.robustness import print_local_min_score_finalist_review, print_local_min_score_winner_summary
         from services.optimizer.session import close_study_storage
@@ -1318,6 +1346,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         seed = int(task["seed"])
         member_index = int(task["member_index"])
         member_count = int(task["member_count"])
+        load_all_raw_data_func = _load_callable_from_import_path(str(task["raw_data_loader_path"]))
         started_at = time.perf_counter()
         study = None
         member_session = build_optimizer_session(
@@ -2098,7 +2127,12 @@ def _run_nonrolling_random_seed_ensemble_training(
     resource_sampler.start()
     parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))
     parallel_backend = resolve_optimizer_random_seed_ensemble_parallel_backend_default()
-    process_parallel_enabled = bool(int(parallel_workers) > 1 and parallel_backend == "process")
+    raw_data_loader_path = _resolve_importable_callable_path(load_all_raw_data)
+    process_parallel_enabled = bool(
+        int(parallel_workers) > 1
+        and parallel_backend == "process"
+        and raw_data_loader_path is not None
+    )
     runtime_output_dir = str(output_dir or OUTPUT_DIR)
     runtime_models_dir = str(models_dir or MODELS_DIR)
     process_log_dir = os.path.join(runtime_output_dir, "seed_ensemble_logs", get_taipei_now().strftime("%Y%m%d_%H%M%S_%f"))
@@ -2365,6 +2399,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "seed": int(seed),
                 "walk_forward_policy": dict(walk_forward_policy),
                 "selected_data_dir": str(selected_data_dir),
+                "raw_data_loader_path": str(raw_data_loader_path),
                 "optimizer_required_min_rows": int(optimizer_required_min_rows),
                 "objective_mode": str(objective_mode),
                 "requested_trials": int(requested_trials),

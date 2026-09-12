@@ -3,6 +3,7 @@ from contextlib import redirect_stdout
 import io
 from pathlib import Path
 import importlib
+import inspect
 import json
 import re
 import shlex
@@ -3247,6 +3248,8 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     synthetic_binding = {
         "selected_params_sha256": synthetic_selected_sha,
         "binding_fingerprint": "c" * 64,
+        "usage_mode": "trained_current",
+        "param_training_data_date": "2099-01-01",
     }
     with patch.object(trading_training, "run_static_strategy_parameter_training", side_effect=_fake_canonical_runner), \
          patch.object(trading_training, "load_trading_v2_consumer_state", return_value=synthetic_market), \
@@ -3256,6 +3259,12 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         service_result = trading_training.run_trading_strategy_param_training(project_root=root, environ={})
     add_check(results, "trading_param", case_id, "trading_service_delegates_to_canonical_optimizer", str(root), str(captured_service_kwargs.get("selected_data_dir")))
     add_check(results, "trading_param", case_id, "trading_service_uses_v2_optimizer_raw_data_loader", True, captured_service_kwargs.get("raw_data_loader") is trading_training.load_trading_v2_optimizer_raw_data)
+    loader_path = optimizer_application._resolve_importable_callable_path(trading_training.load_trading_v2_optimizer_raw_data)
+    add_check(results, "trading_param", case_id, "trading_v2_loader_is_process_importable", "services.trading.market_data_consumer:load_trading_v2_optimizer_raw_data", loader_path)
+    add_check(results, "trading_param", case_id, "process_loader_roundtrip_preserves_exact_trading_loader", True, optimizer_application._load_callable_from_import_path(loader_path) is trading_training.load_trading_v2_optimizer_raw_data)
+    process_task_source = inspect.getsource(optimizer_application._run_nonrolling_seed_ensemble_member_process_task)
+    add_check(results, "trading_param", case_id, "process_member_uses_caller_injected_loader_path", True, 'task["raw_data_loader_path"]' in process_task_source)
+    add_check(results, "trading_param", case_id, "process_member_does_not_hardcode_csv_loader", False, "from services.optimizer.prep import load_all_raw_data" in process_task_source)
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_output_root", str(plan["output_dir"]), str(captured_service_kwargs.get("output_dir")))
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_models_root", str(plan["models_root"]), str(captured_service_kwargs.get("models_dir")))
     add_check(results, "trading_param", case_id, "trading_service_injects_trading_strategy_param_root", str(plan["strategy_params_root"]), str(captured_service_kwargs.get("strategy_params_root")))
