@@ -7,7 +7,7 @@ same canonical strategy/execution semantics.
 TRADING_ACTIVE_STRATEGY_ID = "full_rule_based_no_dl"
 TRADING_DATASET_PROFILE = "full"
 TRADING_PARAM_FAMILY = "full"
-TRADING_PARAM_SELECTOR = "base_finalist_best"
+TRADING_PARAM_SELECTOR = "base_finalists_agree"
 TRADING_OPTIMIZER_MULTI_SEED_REQUIRED = True
 TRADING_OPTIMIZER_TRIALS_PER_SEED = 1000
 TRADING_OPTIMIZER_SEED_COUNT = 8
