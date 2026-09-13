@@ -11,6 +11,7 @@ from core.breakout_reentry import BREAKOUT_REENTRY_SOURCE
 from core.portfolio_ensemble import (
     annotate_ensemble_candidate,
     aggregate_ensemble_candidate_rows,
+    build_ensemble_candidate_display_metrics,
     sort_aggregated_ensemble_candidate_rows,
 )
 from services.trading.market_data_consumer import build_trading_v2_ohlcv_frame
@@ -191,6 +192,9 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         raw_candidate_rows,
         information_date=runtime['latest_data_date'],
     )
+    candidate_display_metrics = build_ensemble_candidate_display_metrics(
+        total_member_count=runtime['member_count']
+    )
     snapshot_path = resolve_trading_candidate_snapshot_path(root)
     snapshot_payload = {
         'schema_version': TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
@@ -201,6 +205,7 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         'param_latest_data_date': runtime['param_latest_data_date'],
         'param_member_count': runtime['member_count'],
         'param_min_agree': runtime['param_min_agree'],
+        'candidate_display_metrics': candidate_display_metrics,
         'selected_params_path': project_relative_display_path(runtime['selected_path'], project_root=root),
         'selected_params_sha256': runtime['selected_params_sha256'],
         'market_data_consumer_state_sha256': runtime['market_data_consumer_state_sha256'],
@@ -224,6 +229,7 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         "param_latest_data_date": runtime["param_latest_data_date"],
         "param_member_count": runtime["member_count"],
         "param_min_agree": runtime["param_min_agree"],
+        "candidate_display_metrics": candidate_display_metrics,
         "market_data_consumer_state_sha256": runtime["market_data_consumer_state_sha256"],
         "market_data_source_view_fingerprint": runtime["market_data_source_view_fingerprint"],
         "param_binding_sha256": runtime["param_binding_sha256"],

@@ -2938,6 +2938,12 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     warning_tones = {text: tone for text, tone in warning_segments if text.strip()}
     check("workbench_status_distinguishes_warning_and_error_tokens", ["warning", "warning", "error"], [warning_tones.get("NOT READY"), warning_tones.get("STALE/EMPTY"), warning_tones.get("FAIL")])
 
+    from core.portfolio_ensemble import build_ensemble_candidate_display_metrics
+    ensemble_metrics = build_ensemble_candidate_display_metrics(total_member_count=8)
+    check("scanner_pool_ensemble_dynamic_metric_labels", ["共識", "中位超限幅"], [row.get("label") for row in ensemble_metrics])
+    check("scanner_pool_consensus_uses_total_member_denominator", 8, ensemble_metrics[0].get("denominator"))
+    check("scanner_pool_single_member_has_no_ensemble_dynamic_columns", [], build_ensemble_candidate_display_metrics(total_member_count=1))
+
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_trading_page_is_vertically_scrollable", True, "self._page_canvas = tk.Canvas" in panel_source and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
     check("workbench_proposed_table_exposes_agreement", True, '"agree": "同意/成員"' in panel_source)
@@ -2962,6 +2968,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_date_inputs_open_calendar_from_date_field", True, "DatePickerField" in panel_source and "DatePickerField" in accounting_source and 'self.entry.bind("<Button-1>", self._on_entry_click' in date_picker_source and 'text="日曆"' not in date_picker_source)
     paged_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "paged_table.py").read_text(encoding="utf-8")
     check("workbench_tables_share_sort_toggle_page_and_stock_open_contract", True, all(text in paged_source for text in ("page_size", "上一頁", "下一頁", "_header_click", "_row_click", "_open_stock")) and "ttk.Scrollbar" not in paged_source)
+    check("workbench_paged_table_supports_runtime_dynamic_columns", True, "def set_columns(" in paged_source)
+    check("workbench_scanner_dynamic_columns_are_descriptor_driven_not_selector_named", True, "candidate_display_metrics" in panel_source and "_candidate_metric_formatter" in panel_source and "if selector ==" not in panel_source)
     check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'self._page_scrollbar = ttk.Scrollbar' in accounting_source)
     check("workbench_trading_scanner_pages_at_twelve_without_inner_scrollbar", True, "page_size=12" in panel_source and panel_source.count("ttk.Scrollbar(") == 1 and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
     check("workbench_buy_success_navigates_to_refreshed_accounting_center", True, '_open_accounting_center' in panel_source and 'callback(refresh=True)' in panel_source and "已切換至帳務中心並重新整理" in panel_source)
@@ -3003,7 +3011,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_daily_workflow_does_not_repeat_status_rows", True, '_workflow_status_label' not in workflow_schema and '_param_mode_detail_label' not in workflow_schema)
     check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_detail_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
     scanner_schema = panel_source.split('candidate_box = ttk.LabelFrame(content, text="今日 Scanner Pool"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="買入成交登錄"', 1)[0]
-    check("workbench_scanner_pool_uses_take_profit_reference_qty_cost_without_summary", True, 'TableColumn("target_price", "停利線"' in scanner_schema and 'TableColumn("proj_qty", "參考股數"' in scanner_schema and 'TableColumn("proj_cost", "參考投入"' in scanner_schema and 'Scanner 摘要' not in scanner_schema and scanner_schema.index('"停利線"') < scanner_schema.index('"參考股數"') < scanner_schema.index('"參考投入"'))
+    candidate_static_schema = panel_source.split('def _candidate_static_columns_after_dynamic', 1)[1].split('def _candidate_metric_formatter', 1)[0]
+    check("workbench_scanner_pool_uses_take_profit_reference_qty_cost_without_summary", True, 'TableColumn("target_price", "停利線"' in candidate_static_schema and 'TableColumn("proj_qty", "參考股數"' in candidate_static_schema and 'TableColumn("proj_cost", "參考投入"' in candidate_static_schema and 'Scanner 摘要' not in scanner_schema and candidate_static_schema.index('"停利線"') < candidate_static_schema.index('"參考股數"') < candidate_static_schema.index('"參考投入"'))
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))

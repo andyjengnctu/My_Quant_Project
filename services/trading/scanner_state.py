@@ -308,6 +308,23 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
     min_agree = int(payload.get("param_min_agree") or 0)
     if member_count < 1 or min_agree < 1 or min_agree > member_count:
         raise ValueError("Trading candidate snapshot Params ensemble metadata 不合法")
+    display_metrics = payload.get("candidate_display_metrics")
+    if display_metrics is not None:
+        if not isinstance(display_metrics, list) or any(not isinstance(item, dict) for item in display_metrics):
+            raise TypeError("Trading candidate snapshot candidate_display_metrics 必須是 object list")
+        metric_keys = [str(item.get("key") or "").strip() for item in display_metrics]
+        if any(not key for key in metric_keys) or len(metric_keys) != len(set(metric_keys)):
+            raise ValueError("Trading candidate snapshot candidate display metric key 不合法")
+        for item in display_metrics:
+            if not str(item.get("label") or "").strip() or not str(item.get("value_field") or "").strip():
+                raise ValueError("Trading candidate snapshot candidate display metric descriptor 不完整")
+            format_kind = str(item.get("format_kind") or "")
+            if format_kind not in {"text", "integer", "integer_grouped", "number", "percent", "r", "fraction"}:
+                raise ValueError("Trading candidate snapshot candidate display metric formatter 不支援")
+            if format_kind == "fraction":
+                denominator = int(item.get("denominator") or 0)
+                if denominator != member_count:
+                    raise ValueError("Trading candidate snapshot candidate display metric denominator 與 Params members 不一致")
     for field in ("market_data_consumer_state_sha256", "market_data_source_view_fingerprint", "param_binding_sha256"):
         if not str(payload.get(field) or "").strip():
             raise ValueError(f"Trading candidate snapshot 缺少 {field}")
@@ -443,6 +460,7 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
         "fresh": freshness_error is None,
         "candidate_count": len(candidate_rows),
         "candidate_tickers": candidate_tickers,
+        "candidate_display_metrics": list(payload.get("candidate_display_metrics") or []),
         "scanned_tickers": list(payload.get("scanned_tickers") or []),
         "scanned_ticker_count": len(payload.get("scanned_tickers") or []),
         "stale_candidate_rows_skipped": list(payload.get("stale_candidate_rows_skipped") or []),

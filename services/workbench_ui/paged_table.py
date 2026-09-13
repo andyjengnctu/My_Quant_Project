@@ -107,6 +107,18 @@ class PagedTable(ttk.Frame):
         if callable(self.on_pointer_leave):
             widget.bind("<Leave>", self.on_pointer_leave, add="+")
 
+    def set_columns(self, columns: Iterable[TableColumn]) -> None:
+        """Replace the visible schema while preserving rows/selection when possible."""
+        normalized = tuple(columns)
+        keys = {column.key for column in normalized}
+        self.columns = normalized
+        if self._sort_key not in keys:
+            self._sort_key = self.default_sort_key if self.default_sort_key in keys else None
+            self._sort_desc = False
+            self._sort_user_clicked = False
+        self._page = min(self._page, max(0, self.page_count - 1))
+        self._render()
+
     def set_rows(self, rows: Iterable[dict[str, Any]], *, preserve_selection: bool = True) -> None:
         normalized: list[dict[str, Any]] = []
         for idx, raw in enumerate(rows):

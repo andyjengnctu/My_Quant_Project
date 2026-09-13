@@ -463,6 +463,19 @@ def get_buy_sort_metric_label(method=None):
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
+def get_buy_sort_metric_format_kind(method=None):
+    active_method = get_buy_sort_method() if method is None else method
+    if active_method == 'EV':
+        return 'r'
+    if active_method == 'PROJ_COST':
+        return 'integer_grouped'
+    if active_method == 'HIST_WIN_X_TRADES':
+        return 'number'
+    if active_method in {'ASSET_GROWTH', BUY_LIMIT_OVERAGE_SORT_METHOD, ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD}:
+        return 'percent'
+    raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
+
+
 def format_buy_sort_metric_value(value, method=None):
     active_method = get_buy_sort_method() if method is None else method
     numeric_value = float(value)

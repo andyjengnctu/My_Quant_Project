@@ -835,20 +835,7 @@ class TradingAccountPanel(ttk.Frame):
         candidate_box.columnconfigure(0, weight=1)
         self._candidate_tree = PagedTable(
             candidate_box,
-            columns=(
-                TableColumn("rank", "順位", 5, sort_kind="numeric"),
-                TableColumn("ticker", "股票", 7),
-                TableColumn("kind_label", "類型", 10),
-                TableColumn("limit_price", "買入限價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
-                TableColumn("stop_price", "初始Stop", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
-                TableColumn("target_price", "停利線", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
-                TableColumn("proj_qty", "參考股數", 9, sort_kind="numeric", formatter=lambda v, _r: "-" if v is None else f"{int(v):,}"),
-                TableColumn("proj_cost", "參考投入", 10, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=0)),
-                TableColumn("ev_value", "EV", 7, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=3)),
-                TableColumn("win_rate", "歷史勝率", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
-                TableColumn("trade_count", "交易次數", 8, sort_kind="numeric", formatter=lambda v, _r: f"{int(v or 0):,}"),
-                TableColumn("asset_growth", "資產成長", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
-            ),
+            columns=self._build_candidate_table_columns([]),
             page_size=12,
             default_sort_key="rank",
             empty_text="目前沒有 Scanner 候選",
@@ -1646,21 +1633,21 @@ class TradingAccountPanel(ttk.Frame):
                 self, "candidate_read", lambda: get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)
             )
         except (OSError, ValueError, RuntimeError) as exc:
-            self._reload_candidate_rows([])
+            self._reload_candidate_rows([], candidate_payload=None)
             self._operations_detail_var.set(f"Scanner snapshot 讀取失敗：{exc}")
             return
         if not bool(snapshot.get("fresh")):
-            self._reload_candidate_rows([])
+            self._reload_candidate_rows([], candidate_payload=None)
             return
         try:
             payload = _load_panel_value(
                 self, "candidate_payload", lambda: load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
             )
         except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
-            self._reload_candidate_rows([])
+            self._reload_candidate_rows([], candidate_payload=None)
             self._operations_detail_var.set(f"Scanner snapshot 讀取失敗：{exc}")
             return
-        self._reload_candidate_rows(payload.get("candidate_rows") or [])
+        self._reload_candidate_rows(payload.get("candidate_rows") or [], candidate_payload=payload)
 
     def refresh_proposed_order_plan(self):
         try:
@@ -1788,7 +1775,71 @@ class TradingAccountPanel(ttk.Frame):
         except (TypeError, ValueError):
             return str(value)
 
-    def _reload_candidate_rows(self, rows):
+    @staticmethod
+    def _candidate_static_columns_before_dynamic():
+        return (
+            TableColumn("rank", "順位", 5, sort_kind="numeric"),
+            TableColumn("ticker", "股票", 7),
+            TableColumn("kind_label", "類型", 10),
+        )
+
+    def _candidate_static_columns_after_dynamic(self):
+        return (
+            TableColumn("limit_price", "買入限價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+            TableColumn("stop_price", "初始Stop", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+            TableColumn("target_price", "停利線", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+            TableColumn("proj_qty", "參考股數", 9, sort_kind="numeric", formatter=lambda v, _r: "-" if v is None else f"{int(v):,}"),
+            TableColumn("proj_cost", "參考投入", 10, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=0)),
+            TableColumn("ev_value", "EV", 7, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=3)),
+            TableColumn("win_rate", "歷史勝率", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
+            TableColumn("trade_count", "交易次數", 8, sort_kind="numeric", formatter=lambda v, _r: f"{int(v or 0):,}"),
+            TableColumn("asset_growth", "資產成長", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
+        )
+
+    @staticmethod
+    def _candidate_metric_formatter(metric):
+        spec = dict(metric or {})
+        format_kind = str(spec.get("format_kind") or "")
+        if format_kind == "fraction":
+            denominator = int(spec.get("denominator") or 0)
+            return lambda value, _row, total=denominator: "-" if value is None or total < 1 else f"{int(value)}/{total}"
+        if format_kind == "integer":
+            return lambda value, _row: "-" if value is None else str(int(value))
+        if format_kind == "integer_grouped":
+            return lambda value, _row: "-" if value is None else f"{int(round(float(value))):,}"
+        if format_kind == "number":
+            return lambda value, _row: "-" if value is None else f"{float(value):.2f}"
+        if format_kind == "percent":
+            return lambda value, _row: "-" if value is None else f"{float(value):.2f}%"
+        if format_kind == "r":
+            return lambda value, _row: "-" if value is None else f"{float(value):.2f}R"
+        return lambda value, _row: "-" if value is None else str(value)
+
+    def _build_candidate_table_columns(self, display_metrics):
+        dynamic_columns = tuple(
+            TableColumn(
+                str(metric.get("key") or ""),
+                str(metric.get("label") or ""),
+                int(metric.get("width") or 8),
+                sort_kind=str(metric.get("sort_kind") or "text"),
+                formatter=self._candidate_metric_formatter(metric),
+            )
+            for metric in list(display_metrics or [])
+            if str(metric.get("key") or "").strip() and str(metric.get("label") or "").strip()
+        )
+        return self._candidate_static_columns_before_dynamic() + dynamic_columns + self._candidate_static_columns_after_dynamic()
+
+    @staticmethod
+    def _candidate_display_metrics(candidate_payload):
+        payload = dict(candidate_payload or {})
+        metrics = payload.get("candidate_display_metrics")
+        if isinstance(metrics, list):
+            return [dict(item) for item in metrics if isinstance(item, dict)]
+        return []
+
+    def _reload_candidate_rows(self, rows, *, candidate_payload=None):
+        display_metrics = self._candidate_display_metrics(candidate_payload)
+        self._candidate_tree.set_columns(self._build_candidate_table_columns(display_metrics))
         self._candidate_rows = [dict(row) for row in list(rows or [])]
         self._candidate_by_ticker = {
             str(row.get("ticker") or "").strip().upper(): row
@@ -1800,7 +1851,7 @@ class TradingAccountPanel(ttk.Frame):
         for idx, row in enumerate(self._candidate_rows, 1):
             seed = dict(row.get("execution_plan_seed") or {})
             ticker = str(row.get("ticker") or "-").strip().upper()
-            display_rows.append({
+            display_row = {
                 "_table_id": f"candidate:{ticker}",
                 "rank": idx,
                 "ticker": ticker,
@@ -1814,7 +1865,13 @@ class TradingAccountPanel(ttk.Frame):
                 "win_rate": row.get("win_rate"),
                 "trade_count": row.get("trade_count"),
                 "asset_growth": row.get("asset_growth"),
-            })
+            }
+            for metric in display_metrics:
+                metric_key = str(metric.get("key") or "").strip()
+                value_field = str(metric.get("value_field") or "").strip()
+                if metric_key and value_field:
+                    display_row[metric_key] = row.get(value_field)
+            display_rows.append(display_row)
         self._candidate_tree.set_rows(display_rows, preserve_selection=True)
 
     def _selected_candidate_ticker(self):
