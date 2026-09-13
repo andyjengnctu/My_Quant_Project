@@ -21,6 +21,7 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_
 from core.runtime_utils import get_taipei_now
 from core.trading_policy import resolve_trading_selected_strategy_param_path
 from services.trading.account_state import load_trading_account_state, resolve_trading_account_state_path
+from core.trading_account_state import effective_trading_account_events
 from services.trading.accounting_policy import (
     build_standalone_trading_accounting_params,
     overlay_trading_accounting_params,
@@ -89,7 +90,7 @@ def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Reconstruct closed position lifecycles only from immutable account events."""
     active: dict[str, dict[str, Any]] = {}
     closed: list[dict[str, Any]] = []
-    for event in list(state.get("events") or []):
+    for event in effective_trading_account_events(state):
         mutation = str(event.get("mutation_type") or "")
         details = dict(event.get("details") or {})
         ticker = str(details.get("ticker") or "").strip().upper()
@@ -178,11 +179,32 @@ def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
 def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     buys: list[dict[str, Any]] = []
     sells: list[dict[str, Any]] = []
-    for event in list(state.get("events") or []):
+    events = effective_trading_account_events(state)
+    trade_mutations = {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment", "confirm_sell_fill"}
+    latest_trade_revision_by_ticker: dict[str, int] = {}
+    for event in events:
+        if str(event.get("mutation_type") or "") not in trade_mutations:
+            continue
+        details = dict(event.get("details") or {})
+        ticker = str(details.get("ticker") or "").strip().upper()
+        if ticker:
+            latest_trade_revision_by_ticker[ticker] = max(
+                int(event.get("revision") or 0), latest_trade_revision_by_ticker.get(ticker, -1)
+            )
+
+    active_source: dict[str, str] = {}
+    for event in events:
         mutation = str(event.get("mutation_type") or "")
         details = dict(event.get("details") or {})
         ticker = str(details.get("ticker") or "").strip().upper()
         if not ticker:
+            continue
+        revision = int(event.get("revision") or 0)
+        if mutation == "adopt_manual_position":
+            active_source[ticker] = "manual_adopted"
+            continue
+        if mutation == "remove_manual_position":
+            active_source.pop(ticker, None)
             continue
         if mutation in {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment"}:
             qty = int(details.get("qty") or details.get("fill_qty") or 0)
@@ -196,6 +218,9 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
             fee_milli = details.get("buy_fee_milli")
             if fee_milli is None and gross_milli is not None and net_milli > 0:
                 fee_milli = net_milli - int(gross_milli)
+            manual = mutation == "manual_buy_fill"
+            source = "手動成交" if manual else "策略成交"
+            active_source[ticker] = "manual_adopted" if manual else "strategy_fill"
             buys.append({
                 "ticker": ticker,
                 "trade_date": details.get("trade_date"),
@@ -204,10 +229,13 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
                 "gross_amount": None if gross_milli is None else milli_to_money(int(gross_milli)),
                 "buy_fee": None if fee_milli is None else milli_to_money(int(fee_milli)),
                 "holding_cost": None if net_milli <= 0 else milli_to_money(net_milli),
-                "source": "策略成交" if mutation.startswith("confirm_strategy") else "手動成交",
-                "revision": int(event.get("revision") or 0),
+                "source": source,
+                "revision": revision,
+                "editable": bool(manual),
+                "is_latest_ticker_trade": revision == latest_trade_revision_by_ticker.get(ticker),
             })
-        elif mutation == "confirm_sell_fill":
+            continue
+        if mutation == "confirm_sell_fill":
             qty = int(details.get("qty") or 0)
             price_milli = details.get("exec_price_milli")
             gross_milli = details.get("gross_sell_milli")
@@ -215,6 +243,12 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
                 gross_milli = int(price_milli) * qty
             cost_milli = int(details.get("allocated_cost_milli") or 0)
             pnl_milli = int(details.get("realized_pnl_milli") or 0)
+            source_before = str(details.get("position_source") or active_source.get(ticker) or "")
+            strategy_managed = bool(details.get("strategy_managed")) or source_before == "strategy_fill"
+            manual_sell = (
+                str(details.get("event") or "") == "MANUAL_ACCOUNT_SELL"
+                or (source_before == "manual_adopted" and not strategy_managed)
+            )
             sells.append({
                 "ticker": ticker,
                 "trade_date": details.get("trade_date"),
@@ -229,8 +263,14 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
                 "pnl": milli_to_money(pnl_milli),
                 "return_pct": _safe_pct(pnl_milli, cost_milli),
                 "remaining_qty": int(details.get("remaining_qty") or 0),
-                "revision": int(event.get("revision") or 0),
+                "revision": revision,
+                "source": "手動成交" if manual_sell else "策略成交",
+                "editable": bool(manual_sell),
+                "is_latest_ticker_trade": revision == latest_trade_revision_by_ticker.get(ticker),
             })
+            if int(details.get("remaining_qty") or 0) <= 0:
+                active_source.pop(ticker, None)
+
     buys.sort(key=lambda row: (str(row.get("trade_date") or ""), int(row.get("revision") or 0)), reverse=True)
     sells.sort(key=lambda row: (str(row.get("trade_date") or ""), int(row.get("revision") or 0)), reverse=True)
     return buys, sells

@@ -2690,7 +2690,7 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     check("portfolio_kline_labels_use_stock_trade_sequence_not_total_count", True, "next_trade_sequence += 1" in portfolio_inspector_source and 'enriched["trade_sequence"] = int(trade_sequence)' in portfolio_inspector_source and 'enriched["trade_count"]' not in portfolio_inspector_source and "交易次數: 第 {int(trade_sequence)} 次" in charting_source)
     check("portfolio_single_ticker_summary_is_compact", True, "總損益: {total_pnl:+,.0f} ({invested_return_text})" in portfolio_inspector_source and "投報度: {invested_return_text}" not in portfolio_inspector_source and "交易次數: {exit_count} (正常: {normal_trade_count} | 延續: {extended_trade_count} | 重進: {reentry_trade_count})" in portfolio_inspector_source and "錯失買進: {missed_buy_count} | 錯失賣出: {missed_sell_count}" in portfolio_inspector_source and "勝率: {win_rate_text}" in portfolio_inspector_source and "累計預留" not in portfolio_inspector_source and "累計實支" not in portfolio_inspector_source and "買進成交" not in portfolio_inspector_source)
     check("single_stock_workbench_has_fixed_risk_ui_like_portfolio", True, "FIXED_RISK_LABELS" in inspector_source and "self._fixed_risk_display_var" in inspector_source and "params.fixed_risk = float(fixed_risk)" in inspector_source and 'parse_float_strict(raw_value, "固定風險比例"' in inspector_source)
-    check("single_stock_pending_analysis_request_keeps_fixed_risk", True, "self._analysis_pending_request = (ticker, params_path, fixed_risk)" in inspector_source and "def _consume_pending_analysis_request(self, completed_ticker, completed_params_path, completed_fixed_risk):" in inspector_source and "float(pending_fixed_risk) == float(completed_fixed_risk)" in inspector_source)
+    check("single_stock_pending_analysis_request_keeps_fixed_risk", True, "self._analysis_pending_request = (ticker, params_path, fixed_risk, runtime_domain, candidate_row)" in inspector_source and "def _consume_pending_analysis_request(self, completed_ticker, completed_params_path, completed_fixed_risk, completed_domain):" in inspector_source and "self._same_optional_risk(pending_fixed_risk, completed_fixed_risk)" in inspector_source)
 
     params = make_synthetic_validation_params(base_params)
     forced_close_date = pd.Timestamp("2024-01-03")
@@ -3051,7 +3051,7 @@ def validate_gui_workbench_contract_case(base_params):
     panel_specs = workbench_spec.get("panels", [])
     panel_ids = [panel.get("panel_id") for panel in panel_specs]
     check("gui_workbench_panel_ids",
-        ["single_stock_backtest_inspector", "portfolio_backtest_inspector", "trading_account", "market_data_ops"],
+        ["single_stock_backtest_inspector", "portfolio_backtest_inspector", "trading_account", "accounting_center", "market_data_ops"],
         panel_ids,
     )
     if panel_specs:
@@ -3072,12 +3072,18 @@ def validate_gui_workbench_contract_case(base_params):
 
     if len(panel_specs) > 2:
         trading_panel_spec = panel_specs[2]
-        check("gui_workbench_trading_panel_tab_label", "實際交易", trading_panel_spec.get("tab_label"))
+        check("gui_workbench_trading_panel_tab_label", "交易中心", trading_panel_spec.get("tab_label"))
         check("gui_workbench_trading_panel_backend", "services.trading.account_state.get_trading_account_read_model", trading_panel_spec.get("backend_runner"))
         check("gui_workbench_trading_panel_has_no_artifact_outputs", [], trading_panel_spec.get("artifact_keys"))
 
     if len(panel_specs) > 3:
-        data_ops_panel_spec = panel_specs[3]
+        accounting_panel_spec = panel_specs[3]
+        check("gui_workbench_accounting_tab_label", "帳務中心", accounting_panel_spec.get("tab_label"))
+        check("gui_workbench_accounting_backend", "services.trading.account_dashboard.build_trading_account_dashboard_read_model", accounting_panel_spec.get("backend_runner"))
+        check("gui_workbench_accounting_has_no_artifact_outputs", [], accounting_panel_spec.get("artifact_keys"))
+
+    if len(panel_specs) > 4:
+        data_ops_panel_spec = panel_specs[4]
         check("gui_workbench_data_ops_tab_label", "資料中心", data_ops_panel_spec.get("tab_label"))
         check("gui_workbench_data_ops_backend", "services.trading.market_data_ops.build_market_data_ops_read_model", data_ops_panel_spec.get("backend_runner"))
         check("gui_workbench_data_ops_has_no_artifact_outputs", [], data_ops_panel_spec.get("artifact_keys"))

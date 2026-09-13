@@ -81,10 +81,10 @@ from services.trading.account_state import (
     load_trading_account_state,
     remove_existing_trading_position,
     record_manual_trading_buy,
-    record_manual_trading_sell,
     resolve_trading_account_state_path,
     set_trading_cash_balance,
 )
+from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.workbench import (
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
@@ -831,16 +831,12 @@ class TradingAccountPanel(ttk.Frame):
         self._cost_var = tk.StringVar()
         self._entry_date_var = tk.StringVar()
         self._note_var = tk.StringVar()
-        entries = (
-            (self._ticker_var, 12),
-            (self._qty_var, 12),
-            (self._cost_var, 18),
-            (self._entry_date_var, 18),
-            (self._note_var, 36),
-        )
-        for col, (variable, width) in enumerate(entries):
-            ttk.Entry(form, textvariable=variable, width=width, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0), pady=(4, 0))
-            form.columnconfigure(col, weight=1 if col == 4 else 0)
+        ttk.Entry(form, textvariable=self._ticker_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        ttk.Entry(form, textvariable=self._qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Entry(form, textvariable=self._cost_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        DatePickerField(form, textvariable=self._entry_date_var, width=14).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Entry(form, textvariable=self._note_var, width=36, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
+        form.columnconfigure(4, weight=1)
 
         button_row = ttk.Frame(form, style=WORKBENCH_FRAME_STYLE)
         button_row.grid(row=2, column=0, columnspan=5, sticky="w", pady=(10, 0))
@@ -875,10 +871,7 @@ class TradingAccountPanel(ttk.Frame):
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center")
-        scroll = ttk.Scrollbar(table_box, orient="vertical", command=self._tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        self._tree.configure(yscrollcommand=scroll.set)
         self._tree.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=0, column=1, sticky="ns")
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
         self._tree.bind("<Double-1>", self._open_selected_position_in_inspector, add="+")
         holding_actions = ttk.Frame(table_box, style=WORKBENCH_FRAME_STYLE)
@@ -900,35 +893,30 @@ class TradingAccountPanel(ttk.Frame):
         for key in candidate_columns:
             self._candidate_tree.heading(key, text=candidate_headings[key])
             self._candidate_tree.column(key, width=candidate_widths[key], anchor="w" if key == "detail" else "center")
-        candidate_y = ttk.Scrollbar(candidate_box, orient="vertical", command=self._candidate_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        candidate_x = ttk.Scrollbar(candidate_box, orient="horizontal", command=self._candidate_tree.xview, style=WORKBENCH_HSCROLL_STYLE)
-        self._candidate_tree.configure(yscrollcommand=candidate_y.set, xscrollcommand=candidate_x.set)
         self._candidate_tree.grid(row=0, column=0, sticky="nsew")
-        candidate_y.grid(row=0, column=1, sticky="ns")
-        candidate_x.grid(row=1, column=0, sticky="ew")
         self._candidate_tree.bind("<Double-1>", self._open_selected_candidate_in_inspector, add="+")
         candidate_actions = ttk.Frame(candidate_box, style=WORKBENCH_FRAME_STYLE)
         candidate_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Label(candidate_actions, text="雙擊股票可直接切到單股回測檢視；下單由你在券商端自行完成。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
         ttk.Button(candidate_actions, text="檢視選取股票", command=self._open_selected_candidate_in_inspector, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
 
-        trade_box = ttk.LabelFrame(content, text="成交登錄｜只輸入券商實際成交資料", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        trade_box = ttk.LabelFrame(content, text="買入成交登錄｜只輸入券商實際成交資料", padding=10, style=WORKBENCH_LABELLF_STYLE)
         trade_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
-        trade_labels = ("股票", "數量", "成交價", "成交日 YYYY-MM-DD")
+        trade_labels = ("股票", "數量", "成交價", "成交日")
         self._trade_ticker_var = tk.StringVar()
         self._trade_qty_var = tk.StringVar()
         self._trade_price_var = tk.StringVar()
         self._trade_date_var = tk.StringVar()
-        trade_vars = (self._trade_ticker_var, self._trade_qty_var, self._trade_price_var, self._trade_date_var)
-        trade_widths = (12, 12, 14, 18)
-        for col, (label, variable, width) in enumerate(zip(trade_labels, trade_vars, trade_widths)):
+        for col, label in enumerate(trade_labels):
             ttk.Label(trade_box, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
-            ttk.Entry(trade_box, textvariable=variable, width=width, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0), pady=(4, 0))
+        ttk.Entry(trade_box, textvariable=self._trade_ticker_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        ttk.Entry(trade_box, textvariable=self._trade_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Entry(trade_box, textvariable=self._trade_price_var, width=14, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        DatePickerField(trade_box, textvariable=self._trade_date_var, width=12).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
         trade_buttons = ttk.Frame(trade_box, style=WORKBENCH_FRAME_STYLE)
         trade_buttons.grid(row=1, column=4, sticky="w", padx=(12, 0), pady=(4, 0))
         ttk.Button(trade_buttons, text="登錄買入成交", command=lambda: self._record_simple_trade("BUY"), style=WORKBENCH_BUTTON_STYLE).pack(side="left")
-        ttk.Button(trade_buttons, text="登錄賣出成交", command=lambda: self._record_simple_trade("SELL"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
-        self._trade_note_var = tk.StringVar(value="價金、未折扣 0.001425 手續費、交易稅、持有成本與損益由系統自動計算。")
+        self._trade_note_var = tk.StringVar(value="交易中心只登錄買入；賣出請到帳務中心點選庫存後操作。價金、未折扣 0.001425 手續費與持有成本由系統自動計算。")
         ttk.Label(trade_box, textvariable=self._trade_note_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).grid(row=2, column=0, columnspan=5, sticky="w", pady=(6, 0))
 
         performance_box = ttk.LabelFrame(content, text="帳戶績效統計", padding=8, style=WORKBENCH_LABELLF_STYLE)
@@ -936,6 +924,9 @@ class TradingAccountPanel(ttk.Frame):
         performance_box.columnconfigure(0, weight=1)
         perf_columns = ("scope", "count", "cost", "pnl", "return", "profitable", "rate")
         self._performance_tree = ttk.Treeview(performance_box, columns=perf_columns, show="headings", style=WORKBENCH_TREE_STYLE, height=3)
+        self._performance_tree.tag_configure("gain", foreground=WORKBENCH_ERROR)
+        self._performance_tree.tag_configure("loss", foreground=WORKBENCH_SUCCESS)
+        self._performance_tree.tag_configure("flat", foreground=WORKBENCH_TEXT)
         perf_headings = {"scope": "範圍", "count": "持股/交易數", "cost": "成本基礎", "pnl": "PnL", "return": "報酬率", "profitable": "獲利數", "rate": "獲利率/勝率"}
         perf_widths = {"scope": 120, "count": 100, "cost": 130, "pnl": 120, "return": 95, "profitable": 90, "rate": 110}
         for key in perf_columns:
@@ -980,12 +971,7 @@ class TradingAccountPanel(ttk.Frame):
         for key in proposed_columns:
             self._proposed_tree.heading(key, text=proposed_headings[key])
             self._proposed_tree.column(key, width=proposed_widths[key], anchor="center")
-        proposed_y = ttk.Scrollbar(proposed_box, orient="vertical", command=self._proposed_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        proposed_x = ttk.Scrollbar(proposed_box, orient="horizontal", command=self._proposed_tree.xview, style=WORKBENCH_HSCROLL_STYLE)
-        self._proposed_tree.configure(yscrollcommand=proposed_y.set, xscrollcommand=proposed_x.set)
         self._proposed_tree.grid(row=1, column=0, sticky="nsew")
-        proposed_y.grid(row=1, column=1, sticky="ns")
-        proposed_x.grid(row=2, column=0, sticky="ew")
 
         submit_row = ttk.Frame(proposed_box, style=WORKBENCH_FRAME_STYLE)
         submit_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
@@ -1027,12 +1013,7 @@ class TradingAccountPanel(ttk.Frame):
         for key in order_columns:
             self._order_tree.heading(key, text=order_headings[key])
             self._order_tree.column(key, width=order_widths[key], anchor="center")
-        order_y = ttk.Scrollbar(pending_box, orient="vertical", command=self._order_tree.yview, style=WORKBENCH_VSCROLL_STYLE)
-        order_x = ttk.Scrollbar(pending_box, orient="horizontal", command=self._order_tree.xview, style=WORKBENCH_HSCROLL_STYLE)
-        self._order_tree.configure(yscrollcommand=order_y.set, xscrollcommand=order_x.set)
         self._order_tree.grid(row=1, column=0, sticky="nsew")
-        order_y.grid(row=1, column=1, sticky="ns")
-        order_x.grid(row=2, column=0, sticky="ew")
         fill_row = ttk.Frame(pending_box, style=WORKBENCH_FRAME_STYLE)
         fill_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Label(fill_row, text="本次成交股數", style=WORKBENCH_LABEL_STYLE).pack(side="left")
@@ -1041,9 +1022,9 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Label(fill_row, text="本次成交價", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._fill_price_var = tk.StringVar()
         ttk.Entry(fill_row, textvariable=self._fill_price_var, width=12, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
-        ttk.Label(fill_row, text="成交日 YYYY-MM-DD", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        ttk.Label(fill_row, text="成交日", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._fill_date_var = tk.StringVar()
-        ttk.Entry(fill_row, textvariable=self._fill_date_var, width=14, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
+        DatePickerField(fill_row, textvariable=self._fill_date_var, width=12).pack(side="left", padx=(6, 10))
         self._confirm_fill_button = ttk.Button(
             fill_row,
             text="確認選取成交",
@@ -1096,12 +1077,7 @@ class TradingAccountPanel(ttk.Frame):
         for key in protection_columns:
             self._protection_tree.heading(key, text=protection_headings[key])
             self._protection_tree.column(key, width=protection_widths[key], anchor="center")
-        protection_y = ttk.Scrollbar(
-            protection_box, orient="vertical", command=self._protection_tree.yview, style=WORKBENCH_VSCROLL_STYLE
-        )
-        self._protection_tree.configure(yscrollcommand=protection_y.set)
         self._protection_tree.grid(row=1, column=0, sticky="nsew")
-        protection_y.grid(row=1, column=1, sticky="ns")
         protection_buttons = ttk.Frame(protection_box, style=WORKBENCH_FRAME_STYLE)
         protection_buttons.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Button(
@@ -1164,8 +1140,7 @@ class TradingAccountPanel(ttk.Frame):
         widths={"ticker":90,"signal":100,"qty":100,"entry_date":100,"type":90,"carried":110}
         for key in columns:
             self._indicator_tree.heading(key,text=headings[key]); self._indicator_tree.column(key,width=widths[key],anchor="center")
-        iy=ttk.Scrollbar(indicator_box,orient="vertical",command=self._indicator_tree.yview,style=WORKBENCH_VSCROLL_STYLE)
-        self._indicator_tree.configure(yscrollcommand=iy.set); self._indicator_tree.grid(row=1,column=0,sticky="nsew"); iy.grid(row=1,column=1,sticky="ns")
+        self._indicator_tree.grid(row=1,column=0,sticky="nsew")
         buttons=ttk.Frame(indicator_box,style=WORKBENCH_FRAME_STYLE); buttons.grid(row=2,column=0,columnspan=2,sticky="w",pady=(8,0))
         ttk.Button(buttons,text="建立／刷新 Indicator SELL 計畫",command=self._rebuild_indicator_exit_plan,style=WORKBENCH_BUTTON_STYLE).pack(side="left")
         ttk.Button(buttons,text="刷新 Indicator SELL 狀態",command=lambda: self._request_state_refresh("Indicator SELL 狀態刷新"),style=WORKBENCH_BUTTON_STYLE).pack(side="left",padx=(8,0))
@@ -1229,10 +1204,20 @@ class TradingAccountPanel(ttk.Frame):
             except tk.TclError as exc:
                 _warn_gui_fallback("Trading page mousewheel bind", exc)
 
+    @staticmethod
+    def _fit_tree_rows(tree, count):
+        count = int(count or 0)
+        if count <= 0:
+            tree.grid_remove()
+            return
+        tree.grid()
+        tree.configure(height=count)
+
     def _reload_protection_rows(self, rows):
         for item in self._protection_tree.get_children():
             self._protection_tree.delete(item)
         self._protection_rows = [dict(row) for row in list(rows or [])]
+        self._fit_tree_rows(self._protection_tree, len(self._protection_rows))
         for row in self._protection_rows:
             self._protection_tree.insert(
                 "",
@@ -1391,6 +1376,7 @@ class TradingAccountPanel(ttk.Frame):
         for item in self._indicator_tree.get_children():
             self._indicator_tree.delete(item)
         self._indicator_rows=[dict(row) for row in list(rows or [])]
+        self._fit_tree_rows(self._indicator_tree, len(self._indicator_rows))
         for row in self._indicator_rows:
             signal_key=str(row.get("signal_key") or "")
             iid=signal_key or f"{row.get('ticker')}:{row.get('signal_information_date')}"
@@ -1864,6 +1850,7 @@ class TradingAccountPanel(ttk.Frame):
         for item in self._candidate_tree.get_children():
             self._candidate_tree.delete(item)
         self._candidate_rows = [dict(row) for row in list(rows or [])]
+        self._fit_tree_rows(self._candidate_tree, len(self._candidate_rows))
         kind_labels = {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)", "reentry": "再進場"}
         selected_iid = None
         for idx, row in enumerate(self._candidate_rows, 1):
@@ -1929,6 +1916,7 @@ class TradingAccountPanel(ttk.Frame):
         for item in self._proposed_tree.get_children():
             self._proposed_tree.delete(item)
         self._proposed_order_rows = [dict(row) for row in list(rows or [])]
+        self._fit_tree_rows(self._proposed_tree, len(self._proposed_order_rows))
         for row in self._proposed_order_rows:
             iid = f"{int(row.get('rank') or 0)}:{str(row.get('ticker') or '')}"
             self._proposed_tree.insert(
@@ -2009,6 +1997,7 @@ class TradingAccountPanel(ttk.Frame):
                     row.get("cancelled_at") or "-",
                 ),
             )
+        self._fit_tree_rows(self._order_tree, len(self._order_rows))
         active = int(snapshot.get("active_order_count") or 0)
         revision = snapshot.get("revision")
         self._order_status_var.set(
@@ -2331,12 +2320,16 @@ class TradingAccountPanel(ttk.Frame):
         for item in self._performance_tree.get_children():
             self._performance_tree.delete(item)
         self._performance_rows = [dict(row) for row in list(rows or [])]
+        self._fit_tree_rows(self._performance_tree, len(self._performance_rows))
         for row in self._performance_rows:
             return_pct = row.get("return_pct")
             profitable_rate = row.get("profitable_rate_pct")
+            pnl = row.get("pnl")
+            tag = "gain" if pnl is not None and float(pnl) > 0 else "loss" if pnl is not None and float(pnl) < 0 else "flat"
             self._performance_tree.insert(
                 "",
                 "end",
+                tags=(tag,),
                 values=(
                     row.get("scope") or "-",
                     f"{int(row.get('position_or_trade_count') or 0):,}",
@@ -2410,6 +2403,7 @@ class TradingAccountPanel(ttk.Frame):
                     management_labels.get(str(row.get("management_status")), str(row.get("management_status") or "-")),
                 ),
             )
+        self._fit_tree_rows(self._tree, len(self._position_rows))
         if selected and selected in self._position_rows:
             self._tree.selection_set(selected)
             self._tree.focus(selected)
@@ -2513,7 +2507,10 @@ class TradingAccountPanel(ttk.Frame):
             messagebox.showerror("成交登錄", str(exc), parent=self)
             return
         side = str(side).upper()
-        action_text = "買入" if side == "BUY" else "賣出"
+        if side != "BUY":
+            messagebox.showerror("成交登錄", "賣出成交請到帳務中心點選庫存後操作。", parent=self)
+            return
+        action_text = "買入"
         matching_orders = self._matching_active_orders(ticker, side)
         if len(matching_orders) > 1:
             order_labels = "、".join(str(row.get("broker_order_id") or order_id) for order_id, row in matching_orders)
@@ -2544,25 +2541,14 @@ class TradingAccountPanel(ttk.Frame):
             return
 
         if matched_order is None:
-            if side == "BUY":
-                worker = lambda: record_manual_trading_buy(
-                    WORKBENCH_PROJECT_ROOT, ticker=ticker, qty=qty, price=price,
-                    trade_date=trade_date, expected_revision=expected_revision,
-                )
-            else:
-                worker = lambda: record_manual_trading_sell(
-                    WORKBENCH_PROJECT_ROOT, ticker=ticker, qty=qty, price=price,
-                    trade_date=trade_date, expected_revision=expected_revision,
-                )
+            worker = lambda: record_manual_trading_buy(
+                WORKBENCH_PROJECT_ROOT, ticker=ticker, qty=qty, price=price,
+                trade_date=trade_date, expected_revision=expected_revision,
+            )
             success_suffix = "已直接寫入帳戶 SSOT"
         else:
             expected_order_revision = int(self._current_order_revision())
-            if side == "BUY":
-                fill_fn = confirm_trading_buy_order_fill
-            elif str(matched_order.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
-                fill_fn = confirm_trading_indicator_sell_order_fill
-            else:
-                fill_fn = confirm_trading_protection_sell_order_fill
+            fill_fn = confirm_trading_buy_order_fill
 
             def worker():
                 result = fill_fn(

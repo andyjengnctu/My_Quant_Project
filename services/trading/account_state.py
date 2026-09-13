@@ -30,6 +30,7 @@ from core.trading_account_state import (
     correct_manual_trading_position,
     remove_manual_trading_position,
     set_trading_account_cash,
+    void_manual_trading_transaction,
     validate_trading_account_state,
 )
 
@@ -129,6 +130,7 @@ def _mutate_account(
     expected_revision: int,
     mutator: Callable[[dict[str, Any], str, str], dict[str, Any]],
     allow_active_protection_orders: bool = False,
+    expected_revision_increment: int = 1,
 ) -> dict[str, Any]:
     order_guard_sha = _read_order_guard_sha(
         project_root, allow_active_protection_orders=allow_active_protection_orders
@@ -143,8 +145,11 @@ def _mutate_account(
 
     updated = mutator(state, _timestamp(), _mutation_id())
     validate_trading_account_state(updated)
-    if int(updated["revision"]) != current_revision + 1:
-        raise RuntimeError("Trading account mutation 必須恰好增加一個 revision")
+    increment = int(expected_revision_increment)
+    if increment <= 0:
+        raise ValueError("expected_revision_increment 必須 > 0")
+    if int(updated["revision"]) != current_revision + increment:
+        raise RuntimeError(f"Trading account mutation 必須恰好增加 {increment} 個 revision")
 
     latest_raw = path.read_bytes()
     latest_sha = hashlib.sha256(latest_raw).hexdigest()
@@ -295,6 +300,93 @@ def record_manual_trading_sell(
     )
 
 
+
+
+def delete_manual_trading_transaction(
+    project_root,
+    *,
+    transaction_revision: int,
+    expected_revision: int,
+    note: str | None = None,
+):
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        mutator=lambda state, timestamp, mutation_id: void_manual_trading_transaction(
+            state,
+            target_revision=transaction_revision,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+            note=note or "Workbench accounting center delete transaction",
+        ),
+    )
+
+
+def correct_manual_trading_transaction(
+    project_root,
+    *,
+    transaction_revision: int,
+    qty: int,
+    price,
+    trade_date,
+    expected_revision: int,
+):
+    params = build_standalone_trading_accounting_params()
+
+    def mutate(state, timestamp, mutation_id):
+        target = None
+        for event in state.get("events", []):
+            if int(event.get("revision") or -1) == int(transaction_revision):
+                target = event
+                break
+        if target is None:
+            raise ValueError(f"找不到交易明細 revision={transaction_revision}")
+        mutation_type = str(target.get("mutation_type") or "")
+        details = dict(target.get("details") or {})
+        ticker = str(details.get("ticker") or "").strip().upper()
+        if not ticker:
+            raise ValueError("交易明細缺少股票代號")
+
+        reverted = void_manual_trading_transaction(
+            state,
+            target_revision=transaction_revision,
+            timestamp=timestamp,
+            mutation_id=f"{mutation_id}:void",
+            note="Workbench accounting center edit transaction",
+        )
+        if mutation_type == "manual_buy_fill":
+            return apply_manual_trading_buy_fill(
+                reverted,
+                ticker=ticker,
+                qty=qty,
+                buy_price=price,
+                params=params,
+                timestamp=timestamp,
+                mutation_id=f"{mutation_id}:replace",
+                trade_date=trade_date,
+            )
+        if mutation_type == "confirm_sell_fill":
+            return apply_confirmed_sell_fill(
+                reverted,
+                ticker=ticker,
+                qty=qty,
+                exec_price=price,
+                params=params,
+                timestamp=timestamp,
+                mutation_id=f"{mutation_id}:replace",
+                trade_date=trade_date,
+                event="MANUAL_ACCOUNT_SELL",
+            )
+        raise ValueError("只有手動帳務買入/賣出明細可修改")
+
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        expected_revision_increment=2,
+        mutator=mutate,
+    )
+
+
 def rollforward_trading_strategy_management(
     project_root,
     *,
@@ -328,6 +420,8 @@ __all__ = [
     "remove_existing_trading_position",
     "record_manual_trading_buy",
     "record_manual_trading_sell",
+    "delete_manual_trading_transaction",
+    "correct_manual_trading_transaction",
     "rollforward_trading_strategy_management",
     "get_trading_account_read_model",
 ]

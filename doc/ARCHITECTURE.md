@@ -304,7 +304,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `trade_analysis`：單股分析、圖表與交易明細輸出。
 - `validate`：formal contract、schema、synthetic 與 real-case 驗證。
 - `local_regression`：reduced formal orchestrator 與 bundle 產出。
-- `workbench_ui`：GUI 主視窗、單股／投組回測檢視、交易中心與帳務中心。單股頁上方控制列提供股票代號、常用股票、候選股、持有股與歷史績效股操作，K 線圖主檢視下交易明細、Console 與 Trading Scanner Pool 以獨立分頁承接；交易中心只負責 Trading active strategy／param selector、data/params freshness、Scanner候選、每日 workflow 與使用者確認的實際成交登錄，複雜 broker order／Stop／TP／Indicator SELL reconciliation 收在進階區；帳務中心只讀 canonical account state 與 account-dashboard read model，管理現金、庫存、逐筆買賣／沖抵明細與持有／已賣出／合併績效。`state/trading/account.json` 是唯一 mutable account truth，實際帳戶成交費率由 `services/trading/accounting_policy.py` 對帳務層覆寫為未折扣 broker fee，不改 Research／回測 execution semantics。
+- `workbench_ui`：GUI 主視窗、單股／投組回測檢視、交易中心與帳務中心。單股頁上方控制列提供股票代號、常用股票、候選股、持有股與歷史績效股操作，K 線圖主檢視下交易明細與 Console 以獨立分頁承接，Trading Scanner Pool 另以獨立分頁承接；交易中心只負責 Trading active strategy／param selector、data/params freshness、Scanner候選、每日 workflow 與使用者確認的實際**買入**成交登錄，複雜 broker order／Stop／TP／Indicator SELL reconciliation 收在進階區；帳務中心消費 canonical account state 與 account-dashboard read model，管理現金、庫存、逐筆買賣／沖抵明細與持有／已賣出／合併績效，並由使用者先選取庫存後登錄實際賣出。帳務更正採 hash-chain event 上追加 void/correction，不覆寫歷史 event；只允許從同 ticker 最新有效 manual trade 往回修正，strategy order/fill lineage 維持交易流程 owner。Workbench 日期輸入共用 dependency-free calendar picker；表格以資料列數自適應高度，表內不建立垂直捲動區，外層頁面承擔整頁捲動。`state/trading/account.json` 是唯一 mutable account truth，實際帳戶成交費率由 `services/trading/accounting_policy.py` 對帳務層覆寫為未折扣 broker fee，不改 Research／回測 execution semantics。
 
 ## 依賴方向
 
