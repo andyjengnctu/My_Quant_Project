@@ -358,15 +358,18 @@ class AccountingCenterPanel(ttk.Frame):
         self._bind_page_mousewheel(self)
 
     def _on_mousewheel(self, event):
-        delta = int(getattr(event, "delta", 0) or 0)
-        number = int(getattr(event, "num", 0) or 0)
+        # Tk reports ``event.num`` as the literal string "??" for native
+        # <MouseWheel> events on some Windows/Tk builds.  Do not coerce it
+        # to int; Button-4/5 remain numeric while MouseWheel uses delta.
+        number = getattr(event, "num", None)
         if number == 4:
-            units = -3
+            units = -1
         elif number == 5:
-            units = 3
-        elif delta:
-            units = -max(1, abs(delta) // 120) if delta > 0 else max(1, abs(delta) // 120)
+            units = 1
         else:
+            delta = getattr(event, "delta", 0)
+            units = -1 * int(delta / 120) if isinstance(delta, (int, float)) and delta else 0
+        if not units:
             return None
         self._canvas.yview_scroll(units, "units")
         return "break"

@@ -2909,6 +2909,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_account_dashboard_merges_revision_market_date_and_refresh", True, "帳務中心｜帳戶儀表板" in accounting_source and "self._market_date_var" in accounting_source and "WORKBENCH_INFO if key in {\"cash\", \"equity\"}" in accounting_source)
     check("workbench_performance_is_fixed_three_row_unsortable_schema", True, all(text in accounting_source for text in ("股票檔數", 'TableColumn("value", "價值"', 'TableColumn("cost", "成本"', 'TableColumn("pnl", "損益"', "sortable=False")))
     check("workbench_page_mousewheel_binds_static_dynamic_and_full_accounting_panel", True, "def _bind_page_mousewheel" in accounting_source and "self._bind_page_mousewheel(self)" in accounting_source and "on_mousewheel=self._on_mousewheel" in accounting_source and "self._bind_mousewheel(cell)" in paged_source and "self._bind_pointer_callbacks(cell)" in paged_source)
+    from services.workbench_ui.accounting_center_panel import AccountingCenterPanel
+    accounting_scroll_calls = []
+    accounting_scroll_panel = SimpleNamespace(_canvas=SimpleNamespace(yview_scroll=lambda units, mode: accounting_scroll_calls.append((units, mode))))
+    accounting_scroll_result = AccountingCenterPanel._on_mousewheel(
+        accounting_scroll_panel,
+        SimpleNamespace(num="??", delta=-120),
+    )
+    check("workbench_accounting_mousewheel_accepts_native_windows_placeholder_num", [(1, "units")], accounting_scroll_calls)
+    check("workbench_accounting_mousewheel_consumes_handled_event", "break", accounting_scroll_result)
     check("workbench_account_mutations_resolve_latest_revision_inside_lock", True, "expected_account_revision=None" in panel_source and "expected_revision=None" in accounting_source)
     check("workbench_centers_use_fixed_contextual_footer_status_bars", True, "self._footer_bar.grid(row=1" in accounting_source and "操作提示｜" in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source and "self._footer_bar.grid(row=1" in panel_source and "操作提示｜" in panel_source)
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
