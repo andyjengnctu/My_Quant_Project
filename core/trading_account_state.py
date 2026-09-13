@@ -1910,20 +1910,10 @@ def void_manual_trading_transaction(
     ticker = _normalize_ticker(details.get("ticker"))
     projection = _project_trading_account_economics(
         state, accounting_params=params, extra_void_revisions={int(target_revision)},
-        allow_historical_reconciliation=True,
+        allow_historical_reconciliation=False,
     )
     updated = deepcopy(state)
-    # Persist every inferred external/opening inventory dependency as an explicit
-    # audit event.  This replaces the old silent SELL-based inventory guess.
-    reconciliations = list(projection.get("historical_reconciliations") or [])
-    for index, reconciliation in enumerate(reconciliations, start=1):
-        updated = _append_mutation(
-            updated,
-            mutation_id=f"{mutation_id}:inventory:{index}",
-            mutation_type=ACCOUNT_MUTATION_HISTORICAL_INVENTORY,
-            timestamp=timestamp,
-            details=deepcopy(reconciliation),
-        )
+    reconciliations: list[dict[str, Any]] = []
     updated["cash_milli"] = projection["cash_milli"]
     updated["positions"] = projection["positions"]
     side = "SELL" if mutation == TRADE_MUTATION_SELL else "BUY"
@@ -2016,7 +2006,7 @@ def replace_trading_transaction(
         accounting_params=params,
         extra_void_revisions={int(target_revision)},
         synthetic_trade_events=[synthetic],
-        allow_historical_reconciliation=True,
+        allow_historical_reconciliation=False,
     )
     # Pick the synthetic projected row to persist recalculated cost/PnL metadata.
     projected_details = None
@@ -2029,15 +2019,7 @@ def replace_trading_transaction(
         projected_details = details
 
     updated = deepcopy(state)
-    reconciliations = list(projection.get("historical_reconciliations") or [])
-    for index, reconciliation in enumerate(reconciliations, start=1):
-        updated = _append_mutation(
-            updated,
-            mutation_id=f"{mutation_id}:inventory:{index}",
-            mutation_type=ACCOUNT_MUTATION_HISTORICAL_INVENTORY,
-            timestamp=timestamp,
-            details=deepcopy(reconciliation),
-        )
+    reconciliations: list[dict[str, Any]] = []
     updated["cash_milli"] = projection["cash_milli"]
     updated["positions"] = projection["positions"]
     updated = _append_mutation(

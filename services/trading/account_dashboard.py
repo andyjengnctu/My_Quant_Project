@@ -328,7 +328,9 @@ def _closed_trade_metrics(rows: list[dict[str, Any]]) -> dict[str, float | None]
     win_rate = len(wins) / len(rows) * 100.0
     avg_win_amount = sum(float(row.get("pnl") or 0) for row in wins) / len(wins) if wins else 0.0
     avg_loss_amount = abs(sum(float(row.get("pnl") or 0) for row in losses) / len(losses)) if losses else 0.0
-    payoff = (avg_win_amount / avg_loss_amount) if avg_loss_amount > 0 else (99.9 if avg_win_amount > 0 else 0.0)
+    # Risk/reward is undefined unless both winning and losing closed trades exist.
+    # Do not expose a 99.9 sentinel as if it were a real metric.
+    payoff = (avg_win_amount / avg_loss_amount) if wins and losses and avg_loss_amount > 0 else None
 
     r_rows = [row for row in rows if row.get("r_mult") is not None]
     expected_value_r = None
@@ -336,10 +338,12 @@ def _closed_trade_metrics(rows: list[dict[str, Any]]) -> dict[str, float | None]
         if get_ev_calc_method() == "B":
             win_r = [float(row["r_mult"]) for row in r_rows if float(row["r_mult"]) > 0]
             loss_r = [float(row["r_mult"]) for row in r_rows if float(row["r_mult"]) <= 0]
-            avg_win_r = sum(win_r) / len(win_r) if win_r else 0.0
-            avg_loss_r = abs(sum(loss_r) / len(loss_r)) if loss_r else 0.0
-            payoff_for_ev = min(10.0, avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
-            expected_value_r = (win_rate / 100.0 * payoff_for_ev) - (1.0 - win_rate / 100.0)
+            if win_r and loss_r:
+                avg_win_r = sum(win_r) / len(win_r)
+                avg_loss_r = abs(sum(loss_r) / len(loss_r))
+                if avg_loss_r > 0:
+                    payoff_for_ev = min(10.0, avg_win_r / avg_loss_r)
+                    expected_value_r = (win_rate / 100.0 * payoff_for_ev) - (1.0 - win_rate / 100.0)
         else:
             expected_value_r = sum(float(row["r_mult"]) for row in r_rows) / len(r_rows)
     return {"win_rate_pct": win_rate, "expected_value_r": expected_value_r, "risk_reward_ratio": payoff}
