@@ -53,6 +53,8 @@ class PagedTable(ttk.Frame):
         on_open_stock: Callable[[str], None] | None = None,
         sortable: bool = True,
         on_mousewheel: Callable[[Any], Any] | None = None,
+        on_pointer_enter: Callable[[Any], Any] | None = None,
+        on_pointer_leave: Callable[[Any], Any] | None = None,
     ):
         super().__init__(master, style=WORKBENCH_FRAME_STYLE)
         self.columns = tuple(columns)
@@ -68,6 +70,8 @@ class PagedTable(ttk.Frame):
         self.on_open_stock = on_open_stock
         self.sortable = bool(sortable)
         self.on_mousewheel = on_mousewheel
+        self.on_pointer_enter = on_pointer_enter
+        self.on_pointer_leave = on_pointer_leave
         self._rows: list[dict[str, Any]] = []
         self._selected_id: str | None = None
         self._page = 0
@@ -87,6 +91,7 @@ class PagedTable(ttk.Frame):
         self._next.pack(side="left")
         for widget in (self, self._grid, self._empty, self._pager, self._prev, self._page_label, self._next):
             self._bind_mousewheel(widget)
+            self._bind_pointer_callbacks(widget)
         self._render()
 
     def _bind_mousewheel(self, widget) -> None:
@@ -95,6 +100,12 @@ class PagedTable(ttk.Frame):
         widget.bind("<MouseWheel>", self.on_mousewheel, add="+")
         widget.bind("<Button-4>", self.on_mousewheel, add="+")
         widget.bind("<Button-5>", self.on_mousewheel, add="+")
+
+    def _bind_pointer_callbacks(self, widget) -> None:
+        if callable(self.on_pointer_enter):
+            widget.bind("<Enter>", self.on_pointer_enter, add="+")
+        if callable(self.on_pointer_leave):
+            widget.bind("<Leave>", self.on_pointer_leave, add="+")
 
     def set_rows(self, rows: Iterable[dict[str, Any]], *, preserve_selection: bool = True) -> None:
         normalized: list[dict[str, Any]] = []
@@ -261,6 +272,7 @@ class PagedTable(ttk.Frame):
             )
             label.grid(row=0, column=col_idx, sticky="nsew")
             self._bind_mousewheel(label)
+            self._bind_pointer_callbacks(label)
             if command is not None:
                 label.bind("<Button-1>", command)
 
@@ -296,6 +308,7 @@ class PagedTable(ttk.Frame):
                 )
                 cell.grid(row=row_idx, column=col_idx, sticky="nsew")
                 self._bind_mousewheel(cell)
+                self._bind_pointer_callbacks(cell)
                 if key == "__open__":
                     cell.bind("<Button-1>", lambda _event, ticker=row.get(self.stock_key): self._open_stock(ticker))
                 else:

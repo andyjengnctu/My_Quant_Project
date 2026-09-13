@@ -126,6 +126,9 @@ PROPOSED_ORDER_HINT = "建議掛單的 Target / 完成線是盤前策略參考�
 PROTECTION_HINT = "只由 confirmed strategy fill 的 canonical position state＋ORDERED 時 frozen params 機械派生；不讀成交後行情、不代表券商已掛出 Stop/TP。"
 OCO_HINT = "系統不預設券商支援 OCO；只有你明確輸入實際券商 OCO/互斥群組 ID 時才允許 Stop full + TP 同時超額共享同一持股。尚未送券商的 logical plan 仍不是 broker truth。"
 INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。"
+POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；Stop / Target / Trailing / SELL 訊號是持股決策資訊。"
+SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；下單由你在券商端自行完成。"
+BUY_ENTRY_HINT = "交易中心只登錄實際買入；賣出到帳務中心登錄。價金、手續費與持有成本由系統自動計算。"
 
 _STATUS_TOKEN_TONES = {
     "READY": "success",
@@ -654,6 +657,7 @@ class TradingAccountPanel(ttk.Frame):
         # existing tables and semantics, but put the whole page in one vertical canvas.
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=0)
         self._page_canvas = tk.Canvas(self, background=WORKBENCH_BG, highlightthickness=0, borderwidth=0)
         self._page_scrollbar = ttk.Scrollbar(
             self, orient="vertical", command=self._page_canvas.yview, style=WORKBENCH_VSCROLL_STYLE
@@ -844,23 +848,21 @@ class TradingAccountPanel(ttk.Frame):
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("ticker", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal", "action")
+        columns = ("open", "ticker", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal", "action")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
-            "ticker": "股票", "qty": "股數", "avg_cost": "均價", "current": "市價",
+            "open": "↗", "ticker": "股票", "qty": "股數", "avg_cost": "均價", "current": "市價",
             "stop": "目前Stop", "target": "Target", "trailing": "Trailing",
             "sell_signal": "SELL訊號", "action": "建議動作",
         }
-        widths = {"ticker": 80, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125, "action": 220}
+        widths = {"open": 36, "ticker": 80, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125, "action": 220}
         for key in columns:
             self._tree.heading(key, text=headings[key])
-            self._tree.column(key, width=widths[key], anchor="center")
+            self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
         self._tree.grid(row=0, column=0, sticky="nsew")
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
+        self._tree.bind("<Button-1>", self._on_position_tree_click, add="+")
         self._tree.bind("<Double-1>", self._open_selected_position_in_inspector, add="+")
-        holding_actions = ttk.Frame(table_box, style=WORKBENCH_FRAME_STYLE)
-        holding_actions.grid(row=1, column=0, sticky="e", pady=(6, 0))
-        ttk.Button(holding_actions, text="在單股回測檢視", command=self._open_selected_position_in_inspector, style=WORKBENCH_BUTTON_STYLE).pack(side="left")
 
         candidate_box = ttk.LabelFrame(content, text="今日 Scanner Pool｜依策略順序（今日 Scanner 候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
         candidate_box.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
@@ -888,13 +890,10 @@ class TradingAccountPanel(ttk.Frame):
             on_select=self._on_candidate_selected,
             on_open_stock=self._open_ticker_in_inspector,
             on_mousewheel=self._on_page_mousewheel,
+            on_pointer_enter=lambda _event: self._show_footer_hint(SCANNER_HINT),
+            on_pointer_leave=lambda _event: self._schedule_footer_hint_clear(),
         )
         self._candidate_tree.grid(row=0, column=0, sticky="ew")
-        candidate_actions = ttk.Frame(candidate_box, style=WORKBENCH_FRAME_STYLE)
-        candidate_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Label(candidate_actions, text="雙擊股票可直接切到單股回測檢視；下單由你在券商端自行完成。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
-        ttk.Button(candidate_actions, text="檢視選取股票", command=self._open_selected_candidate_in_inspector, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
-
         trade_box = ttk.LabelFrame(content, text="買入成交登錄｜只輸入券商實際成交資料", padding=10, style=WORKBENCH_LABELLF_STYLE)
         trade_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         trade_labels = ("股票", "數量", "成交價", "成交日")
@@ -911,9 +910,6 @@ class TradingAccountPanel(ttk.Frame):
         trade_buttons = ttk.Frame(trade_box, style=WORKBENCH_FRAME_STYLE)
         trade_buttons.grid(row=1, column=4, sticky="w", padx=(12, 0), pady=(4, 0))
         ttk.Button(trade_buttons, text="登錄買入成交", command=lambda: self._record_simple_trade("BUY"), style=WORKBENCH_BUTTON_STYLE).pack(side="left")
-        self._trade_note_var = tk.StringVar(value="交易中心只登錄買入；賣出請到帳務中心點選庫存後操作。價金、未折扣 0.001425 手續費與持有成本由系統自動計算。")
-        ttk.Label(trade_box, textvariable=self._trade_note_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).grid(row=2, column=0, columnspan=5, sticky="w", pady=(6, 0))
-
         performance_box = ttk.LabelFrame(content, text="帳戶績效統計", padding=8, style=WORKBENCH_LABELLF_STYLE)
         performance_box.grid(row=8, column=0, sticky="nsew", pady=(0, 8))
         performance_box.columnconfigure(0, weight=1)
@@ -1145,18 +1141,19 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Entry(buttons,textvariable=self._indicator_broker_id_var,width=16,style=WORKBENCH_ENTRY_STYLE).pack(side="left",padx=(6,8))
         ttk.Button(buttons,text="確認選取 MARKET SELL 已送單",command=self._confirm_indicator_exit_submitted,style=WORKBENCH_BUTTON_STYLE).pack(side="left")
 
-        hint_box = ttk.LabelFrame(content, text="操作提示", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
-        hint_box.grid(row=10, column=0, sticky="ew")
-        self._footer_hint_label = _TradingStatusLine(hint_box, textvariable=self._footer_hint_var, default_tone="muted", max_lines=3)
-        self._footer_hint_label.pack(fill="x")
+        # Fixed bottom status line: contextual help never scrolls away or consumes page space.
+        self._footer_bar = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
+        self._footer_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Separator(self._footer_bar, orient="horizontal").pack(fill="x", pady=(0, 3))
+        footer_line = ttk.Frame(self._footer_bar, style=WORKBENCH_FRAME_STYLE)
+        footer_line.pack(fill="x")
+        ttk.Label(footer_line, text="操作提示｜", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
+        self._footer_hint_label = ttk.Label(footer_line, textvariable=self._footer_hint_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED)
+        self._footer_hint_label.pack(side="left", fill="x", expand=True)
         self._bind_footer_hint(workflow_box, WORKFLOW_HINT)
-        self._bind_footer_hint(cash_box, CASH_HINT)
-        self._bind_footer_hint(form, MANUAL_POSITION_HINT)
-        self._bind_footer_hint(proposed_box, PROPOSED_ORDER_HINT)
-        self._bind_footer_hint(pending_box, FILL_HINT)
-        self._bind_footer_hint(protection_buttons, PROTECTION_HINT)
-        self._bind_footer_hint(protection_oco, OCO_HINT)
-        self._bind_footer_hint(indicator_box, INDICATOR_HINT)
+        self._bind_footer_hint(table_box, POSITION_DECISION_HINT)
+        self._bind_footer_hint(candidate_box, SCANNER_HINT)
+        self._bind_footer_hint(trade_box, BUY_ENTRY_HINT)
         self._bind_page_mousewheel(content)
 
     def _sync_page_scrollregion(self, _event=None) -> None:
@@ -2364,7 +2361,7 @@ class TradingAccountPanel(ttk.Frame):
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
-                    ticker, f"{int(row.get('qty') or 0):,}",
+                    "▣", ticker, f"{int(row.get('qty') or 0):,}",
                     format_trading_money(row.get("average_cost")),
                     format_trading_money(row.get("current_price")),
                     format_trading_money(row.get("effective_stop")),
@@ -2379,6 +2376,16 @@ class TradingAccountPanel(ttk.Frame):
             self._tree.focus(selected)
         else:
             self._set_position_action_state(None)
+
+    def _on_position_tree_click(self, event):
+        region = self._tree.identify_region(event.x, event.y)
+        if region != "cell" or self._tree.identify_column(event.x) != "#1":
+            return None
+        item_id = str(self._tree.identify_row(event.y) or "")
+        if not item_id:
+            return "break"
+        self._open_ticker_in_inspector(item_id)
+        return "break"
 
     def _selected_ticker(self):
         selected = self._tree.selection()

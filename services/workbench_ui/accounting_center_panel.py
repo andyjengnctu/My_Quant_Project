@@ -118,16 +118,22 @@ class AccountingCenterPanel(ttk.Frame):
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=0)
         self._canvas = tk.Canvas(self, background=WORKBENCH_BG, highlightthickness=0, borderwidth=0)
-        page_scroll = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview, style=WORKBENCH_VSCROLL_STYLE)
-        self._canvas.configure(yscrollcommand=page_scroll.set, yscrollincrement=36)
+        self._page_scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview, style=WORKBENCH_VSCROLL_STYLE)
+        self._canvas.configure(yscrollcommand=self._page_scrollbar.set, yscrollincrement=36)
         self._canvas.grid(row=0, column=0, sticky="nsew")
-        page_scroll.grid(row=0, column=1, sticky="ns")
+        self._page_scrollbar.grid(row=0, column=1, sticky="ns")
         content = ttk.Frame(self._canvas, style=WORKBENCH_FRAME_STYLE)
         self._window = self._canvas.create_window((0, 0), window=content, anchor="nw")
         content.columnconfigure(0, weight=1)
         content.bind("<Configure>", lambda _e: self._canvas.configure(scrollregion=self._canvas.bbox("all")), add="+")
         self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfigure(self._window, width=max(1, int(e.width))), add="+")
+
+        inventory_hint = "左側 ▣ 可開啟單股回測檢視；庫存修正只做券商庫存對帳。"
+        buy_hint = "左側 ▣ 可開啟單股回測檢視；買入明細可修改或刪除；原 event 保留，帳務由有效歷史重新計算。"
+        sell_hint = "左側 ▣ 可開啟單股回測檢視；賣出明細可修改或刪除；沖抵成本、損益與現金會依有效歷史重算。"
+        offset_hint = "沖抵明細跟隨上方選取的賣出紀錄。"
 
         dashboard = ttk.LabelFrame(content, text="帳務中心｜帳戶儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
         dashboard.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -186,6 +192,8 @@ class AccountingCenterPanel(ttk.Frame):
             on_select=self._on_inventory_selected,
             on_open_stock=self._open_stock,
             on_mousewheel=self._on_mousewheel,
+            on_pointer_enter=lambda _event: self._show_footer_hint(inventory_hint),
+            on_pointer_leave=lambda _event: self._schedule_footer_hint_clear(),
         )
         self._inventory.grid(row=0, column=0, sticky="ew")
 
@@ -236,6 +244,8 @@ class AccountingCenterPanel(ttk.Frame):
             on_select=self._on_buy_selected,
             on_open_stock=self._open_stock,
             on_mousewheel=self._on_mousewheel,
+            on_pointer_enter=lambda _event: self._show_footer_hint(buy_hint),
+            on_pointer_leave=lambda _event: self._schedule_footer_hint_clear(),
         )
         self._buys.grid(row=0, column=0, sticky="ew")
         buy_actions = ttk.Frame(buy_box, style=WORKBENCH_FRAME_STYLE)
@@ -269,6 +279,8 @@ class AccountingCenterPanel(ttk.Frame):
             on_select=self._on_sell_selected,
             on_open_stock=self._open_stock,
             on_mousewheel=self._on_mousewheel,
+            on_pointer_enter=lambda _event: self._show_footer_hint(sell_hint),
+            on_pointer_leave=lambda _event: self._schedule_footer_hint_clear(),
         )
         self._sells.grid(row=0, column=0, sticky="ew")
         sell_actions = ttk.Frame(sell_box, style=WORKBENCH_FRAME_STYLE)
@@ -297,6 +309,8 @@ class AccountingCenterPanel(ttk.Frame):
             empty_text="選取賣出紀錄後顯示沖抵明細",
             on_open_stock=self._open_stock,
             on_mousewheel=self._on_mousewheel,
+            on_pointer_enter=lambda _event: self._show_footer_hint(offset_hint),
+            on_pointer_leave=lambda _event: self._schedule_footer_hint_clear(),
         )
         self._offset.grid(row=0, column=0, sticky="ew")
 
@@ -325,15 +339,23 @@ class AccountingCenterPanel(ttk.Frame):
         )
         self._perf.grid(row=0, column=0, sticky="ew")
 
-        hint_box = ttk.LabelFrame(content, text="操作提示", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
-        hint_box.grid(row=7, column=0, sticky="ew")
-        ttk.Label(hint_box, textvariable=self._footer_hint_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(fill="x")
-        self._bind_footer_hint(cash_box, "現金欄只用於券商現金對帳；買賣成交會自動更新現金，不需手動調整。")
-        self._bind_footer_hint(inv_actions, "庫存修正是券商庫存對帳，不會偽造成一筆買賣成交。")
+        # Fixed bottom status line: hints never consume scrollable page space.
+        self._footer_bar = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
+        self._footer_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Separator(self._footer_bar, orient="horizontal").pack(fill="x", pady=(0, 3))
+        footer_line = ttk.Frame(self._footer_bar, style=WORKBENCH_FRAME_STYLE)
+        footer_line.pack(fill="x")
+        ttk.Label(footer_line, text="操作提示｜", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
+        ttk.Label(footer_line, textvariable=self._footer_hint_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left", fill="x", expand=True)
+        self._bind_footer_hint(cash_box, "現金欄只用於券商現金對帳；買賣成交會自動更新現金。")
+        self._bind_footer_hint(inventory, inventory_hint)
         self._bind_footer_hint(sell_entry, "先在券商完成賣出，再登錄實際股數、成交價與成交日。")
-        self._bind_footer_hint(buy_actions, "買入明細可修改或刪除；原 event 保留，帳務由有效歷史重新計算。")
-        self._bind_footer_hint(sell_actions, "賣出明細可修改或刪除；沖抵成本、損益與現金會依有效歷史重算。")
-        self._bind_page_mousewheel(content)
+        self._bind_footer_hint(buy_box, buy_hint)
+        self._bind_footer_hint(sell_box, sell_hint)
+        self._bind_footer_hint(offset_box, offset_hint)
+        # Bind the whole panel, canvas, fixed footer and all existing descendants.
+        # PagedTable separately binds cells created later during refresh.
+        self._bind_page_mousewheel(self)
 
     def _on_mousewheel(self, event):
         delta = int(getattr(event, "delta", 0) or 0)
