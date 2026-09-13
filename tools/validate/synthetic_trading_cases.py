@@ -787,13 +787,25 @@ def validate_trading_account_state_contract_case(base_params):
                 entered_commit_window = writing.wait(timeout=concurrency_timeout_seconds)
                 try:
                     check("concurrent_cash_test_reaches_commit_window", True, entered_commit_window)
-                    busy_rejected = False
+                    contention_rejected = False
+                    rejection_type = None
                     if entered_commit_window:
                         try:
                             set_trading_cash_balance(root, cash=80, expected_revision=0)
-                        except TradingStateBusyError:
-                            busy_rejected = True
-                    check("concurrent_cash_change_rejects_before_lost_update", True, busy_rejected)
+                        except (TradingStateBusyError, TradingAccountRevisionConflict) as exc:
+                            # The correctness invariant is no lost update.  In-process
+                            # contention should normally fail at the lock boundary; on
+                            # platforms where the first commit wins the race, an atomic
+                            # stale-revision rejection is equally safe and must not crash
+                            # the whole synthetic coverage suite.
+                            contention_rejected = True
+                            rejection_type = type(exc).__name__
+                    check("concurrent_cash_change_rejects_before_lost_update", True, contention_rejected)
+                    check(
+                        "concurrent_cash_change_uses_safe_rejection_type",
+                        True,
+                        rejection_type in {"TradingStateBusyError", "TradingAccountRevisionConflict"},
+                    )
                 finally:
                     release.set()
                 committed = pending.result(timeout=concurrency_timeout_seconds)

@@ -58,7 +58,10 @@ def serialized_trading_state_mutation(function):
     @wraps(function)
     def wrapped(project_root, *args, **kwargs):
         path = resolve_trading_state_mutation_lock_path(project_root).resolve()
-        path_key = str(path)
+        # Windows paths are case-insensitive and may be surfaced with different
+        # casing/aliases across threads.  Normalize the in-process lock identity
+        # independently from the filesystem path used by SQLite.
+        path_key = os.path.normcase(os.path.realpath(os.fspath(path)))
         key = (os.getpid(), path_key)
         owned = getattr(_OWNED_LOCKS, "paths", None)
         if owned is None:
