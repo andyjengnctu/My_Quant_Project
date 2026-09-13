@@ -1059,7 +1059,17 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "今日 Scanner Pool" in panel_source and "advanced_notebook.grid(" not in panel_source)
     check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數", "策略 / Params")))
     check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=1", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
-    check("workbench_reuse_mode_shows_original_param_training_date", True, "沿用既有 Params｜訓練至" in panel_source)
+    # AI: This contract is about preserving and rendering the original parameter
+    # training date in reuse mode, not about freezing one historical UI phrase.
+    # The runtime checks above already prove reuse keeps the original training date;
+    # here we only verify that the Workbench overview consumes that canonical field.
+    check(
+        "workbench_reuse_mode_shows_original_param_training_date",
+        True,
+        'param_training_date = snapshot.get("param_training_data_date")' in panel_source
+        and 'f"訓練至 {param_training_date} | DL {dl_state}"' in panel_source
+        and 'self._set_overview_card("strategy_params", strategy_id, param_detail' in panel_source,
+    )
     check("workbench_page_does_not_render_artifact_paths", False, any(token in panel_source for token in ("_path_var", "snapshot.get('text_path')", "snapshot.get('json_path')", "scanner_output_dir")))
     audit_body = panel_source.split("def _run_operational_audit", 1)[1].split("def _refresh_all_trading_state", 1)[0]
     check("workbench_operational_audit_dialog_does_not_render_report_path", False, "markdown_path" in audit_body or "report_path" in audit_body)
