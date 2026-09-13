@@ -1494,21 +1494,30 @@ def validate_trading_pending_order_state_contract_case(base_params):
         check("same_proposal_cannot_be_marked_ordered_twice", True, duplicate_rejected)
         check("duplicate_rejection_does_not_advance_order_revision", ordered["revision"], load_trading_order_state(root)["revision"])
 
-        try:
-            set_trading_cash_balance(root, cash=700_000, expected_revision=account_revision)
-        except RuntimeError as exc:
-            account_locked = "ORDERED pending orders" in str(exc)
-        else:
-            account_locked = False
-        check("active_order_blocks_account_reconciliation", True, account_locked)
+        # Primary Trading is not a broker OMS.  A legacy/compatibility ORDERED
+        # record is evidence only: it must not freeze cash reconciliation or a
+        # fresh allocation.  Actual account BUY/SELL fills, not hidden order
+        # lifecycle state, own the session lock.
+        reconciled_while_active = set_trading_cash_balance(
+            root, cash=700_000, expected_revision=account_revision
+        )
+        check(
+            "legacy_active_order_does_not_block_account_reconciliation",
+            account_revision + 1,
+            reconciled_while_active["revision"],
+        )
+        check(
+            "legacy_active_order_reconciliation_updates_cash",
+            money_to_milli(700_000),
+            reconciled_while_active["cash_milli"],
+        )
 
-        try:
-            build_trading_proposed_order_plan(project_root=root)
-        except RuntimeError:
-            replanning_blocked = True
-        else:
-            replanning_blocked = False
-        check("active_order_blocks_new_premarket_allocation", True, replanning_blocked)
+        replanned_while_active = build_trading_proposed_order_plan(project_root=root)
+        check(
+            "legacy_active_order_does_not_block_fresh_allocation",
+            reconciled_while_active["revision"],
+            replanned_while_active["account_revision"],
+        )
 
         order_id = ordered_record["order_id"]
         try:
@@ -1529,18 +1538,27 @@ def validate_trading_pending_order_state_contract_case(base_params):
         check("cancel_transition_advances_one_revision", ordered["revision"] + 1, cancelled["revision"])
         check("cancelled_order_status", "CANCELLED", cancelled_record["status"])
         check("cancelled_order_has_timestamp", True, bool(cancelled_record["cancelled_at"]))
-        check("cancellation_does_not_mutate_account", [account_revision, account_cash_milli], [load_trading_account_state(root)["revision"], load_trading_account_state(root)["cash_milli"]])
+        check(
+            "cancellation_does_not_mutate_account",
+            [reconciled_while_active["revision"], reconciled_while_active["cash_milli"]],
+            [load_trading_account_state(root)["revision"], load_trading_account_state(root)["cash_milli"]],
+        )
 
-        try:
-            build_trading_proposed_order_plan(project_root=root)
-        except RuntimeError:
-            same_day_reallocation_blocked = True
-        else:
-            same_day_reallocation_blocked = False
-        check("cancelled_order_still_locks_same_information_date_allocation", True, same_day_reallocation_blocked)
+        replanned_after_cancel = build_trading_proposed_order_plan(project_root=root)
+        check(
+            "legacy_cancelled_order_does_not_create_same_day_allocation_lock",
+            reconciled_while_active["revision"],
+            replanned_after_cancel["account_revision"],
+        )
 
-        reconciled = set_trading_cash_balance(root, cash=700_000, expected_revision=account_revision)
-        check("account_mutation_is_reenabled_after_all_orders_cancelled", account_revision + 1, reconciled["revision"])
+        reconciled_after_cancel = set_trading_cash_balance(
+            root, cash=650_000, expected_revision=reconciled_while_active["revision"]
+        )
+        check(
+            "account_mutation_remains_available_after_legacy_order_cancel",
+            reconciled_while_active["revision"] + 1,
+            reconciled_after_cancel["revision"],
+        )
 
         try:
             confirm_trading_order_cancellation(root, order_id=order_id, expected_revision=cancelled["revision"])
@@ -1787,7 +1805,11 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_requires_explicit_broker_fill_confirmation", True, 'text="確認選取成交"' in panel_source and "confirm_trading_buy_order_fill" in panel_source and "confirm_trading_protection_sell_order_fill" in panel_source)
-    check("workbench_fill_inputs_are_actual_qty_price_and_date", True, all(token in panel_source for token in ("本次成交股數", "本次成交價", "成交日 YYYY-MM-DD")))
+    check(
+        "workbench_fill_inputs_are_actual_qty_price_and_date",
+        True,
+        all(token in panel_source for token in ("本次成交股數", "本次成交價", 'text="成交日"', "DatePickerField(")),
+    )
     check("workbench_does_not_auto_infer_fill_from_market_bar", False, "t_low" in panel_source or "t_high" in panel_source or "execute_pre_market_entry_plan" in panel_source)
 
     summary["checks"] = len(results)
