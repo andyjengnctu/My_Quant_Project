@@ -199,6 +199,17 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
                 )
             except (OSError, ValueError, RuntimeError) as exc:
                 param_binding_error = f"{type(exc).__name__}: {exc}"
+    current_execution_pool_stats = dict(
+        (market_state or {}).get("current_execution_pool_stats") or {}
+    )
+    current_execution_pool_ticker_count = (
+        None
+        if market_state is None
+        else int(
+            market_state.get("current_execution_pool_ticker_count")
+            or len(market_state.get("current_execution_pool_tickers") or [])
+        )
+    )
     data_readiness = build_trading_data_readiness_for_consumer_evidence(
         root,
         strategy_id=profile.strategy_id,
@@ -253,6 +264,8 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             None if market_state is None else str(market_state.get("source_view_fingerprint") or "") or None
         ),
         "market_data_source": (None if market_state is None else market_state.get("source")),
+        "current_execution_pool_ticker_count": current_execution_pool_ticker_count,
+        "current_execution_pool_stats": current_execution_pool_stats,
         "market_data_v2_archive_status": v2_archive.get("status"),
         "market_data_v2_archive_provider_ready": bool(v2_archive.get("provider_ready")),
         "market_data_v2_archive_latest_date": v2_archive.get("latest_sync_target_date"),

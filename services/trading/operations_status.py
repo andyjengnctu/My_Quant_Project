@@ -106,6 +106,7 @@ def _empty_candidate() -> dict[str, Any]:
         "valid": False,
         "fresh": False,
         "candidate_count": 0,
+        "scanned_ticker_count": 0,
         "information_date": None,
         "error": None,
         "path": None,
@@ -355,6 +356,26 @@ def derive_trading_operations_status(
 
     market_data_ready = bool(workflow.get("market_data_ready", bool(workflow.get("latest_data_date"))))
     trading_data_ready = bool(workflow.get("trading_data_ready", market_data_ready))
+    execution_pool_stats = dict(workflow.get("current_execution_pool_stats") or {})
+    listed_ticker_count = execution_pool_stats.get("listed_count")
+    if listed_ticker_count is not None:
+        listed_ticker_count = int(listed_ticker_count)
+    quick_filter_qualified_count = execution_pool_stats.get("qualified_count")
+    if quick_filter_qualified_count is None:
+        quick_filter_qualified_count = workflow.get("current_execution_pool_ticker_count")
+    if quick_filter_qualified_count is not None:
+        quick_filter_qualified_count = int(quick_filter_qualified_count)
+    candidate_snapshot_available = bool(candidate.get("exists")) and bool(candidate.get("valid"))
+    scanner_scanned_ticker_count = (
+        int(candidate.get("scanned_ticker_count") or 0)
+        if candidate_snapshot_available
+        else None
+    )
+    scanner_remaining_ticker_count = (
+        int(candidate.get("candidate_count") or 0)
+        if candidate_snapshot_available
+        else None
+    )
     trading_data_blockers = [str(item) for item in list(workflow.get("trading_data_blockers") or []) if str(item)]
 
     allocation_blockers: list[str] = []
@@ -590,6 +611,11 @@ def derive_trading_operations_status(
         "market_data_v2_archive_status": workflow.get("market_data_v2_archive_status"),
         "market_data_v2_archive_latest_date": workflow.get("market_data_v2_archive_latest_date"),
         "market_data_v2_archive_error": workflow.get("market_data_v2_archive_error"),
+        "listed_ticker_count": listed_ticker_count,
+        "quick_filter_qualified_count": quick_filter_qualified_count,
+        "scanner_scanned_ticker_count": scanner_scanned_ticker_count,
+        "scanner_remaining_ticker_count": scanner_remaining_ticker_count,
+        "scanner_information_date": candidate.get("information_date"),
         "strategy_id": workflow.get("strategy_id"),
         "param_selector": workflow.get("param_selector"),
         "param_training_data_date": workflow.get("param_latest_data_date"),
@@ -598,6 +624,8 @@ def derive_trading_operations_status(
         "params_ready_for_scan": bool(workflow.get("params_ready_for_scan")),
         "params_reusable": bool(workflow.get("params_reusable")),
         "param_usage_mode": workflow.get("param_usage_mode"),
+        "param_error": workflow.get("param_error"),
+        "param_binding_error": workflow.get("param_binding_error"),
         "account_initialized": bool(account.get("initialized")),
         "account_revision": account.get("revision"),
         "cash": account.get("cash"),

@@ -445,8 +445,7 @@ class TradingAccountPanel(ttk.Frame):
 
     def _set_initial_loading_state(self):
         self._operations_next_var.set("LOADING | Trading 狀態載入中…")
-        self._operations_detail_var.set("頁面已可操作捲動；canonical Trading state 正在背景讀取。")
-        self._workflow_status_var.set("Trading 狀態載入中…")
+        self._operations_detail_var.set("canonical Trading state 正在背景讀取。")
         self._set_workflow_buttons_state("disabled")
         for button_name in ("_initialize_button", "_set_cash_button", "_add_button", "_correct_button", "_remove_button", "_confirm_ordered_button"):
             button = getattr(self, button_name, None)
@@ -508,8 +507,6 @@ class TradingAccountPanel(ttk.Frame):
             return
         self._initial_state_thread = None
         self._apply_state_bundle(bundle)
-        if self._workflow_status_var.get() == "Trading 狀態載入中…":
-            self._workflow_status_var.set("Trading 狀態載入完成。")
 
     def _iter_action_buttons(self):
         stack = [self]
@@ -677,17 +674,21 @@ class TradingAccountPanel(ttk.Frame):
         operations_box = ttk.LabelFrame(content, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
         operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         operations_box.columnconfigure(0, weight=1)
-        self._overview_vars = {key: tk.StringVar(value="-") for key in ("data", "strategy", "params", "account", "pipeline")}
+        self._overview_vars = {
+            key: tk.StringVar(value="-")
+            for key in ("sync", "total", "quick", "scanned", "remaining", "strategy_params")
+        }
         self._overview_detail_vars = {key: tk.StringVar(value="-") for key in self._overview_vars}
         self._overview_primary_labels: dict[str, tk.Label] = {}
         overview_grid = ttk.Frame(operations_box, style=WORKBENCH_FRAME_STYLE)
         overview_grid.grid(row=0, column=0, sticky="ew")
         for col, (title, key) in enumerate((
-            ("Trading Data", "data"),
-            ("策略", "strategy"),
-            ("Params", "params"),
-            ("帳戶", "account"),
-            ("Scanner", "pipeline"),
+            ("同步狀態", "sync"),
+            ("總股數", "total"),
+            ("符合快篩數", "quick"),
+            ("Scanner 掃出的檔數", "scanned"),
+            ("剩餘檔數", "remaining"),
+            ("策略 / Params", "strategy_params"),
         )):
             box = ttk.LabelFrame(overview_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
             box.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
@@ -712,13 +713,10 @@ class TradingAccountPanel(ttk.Frame):
 
         self._operations_next_var = tk.StringVar(value="下一步：-")
         self._operations_detail_var = tk.StringVar(value="")
-        self._live_audit_var = tk.StringVar(value="實盤就緒：尚未執行實盤就緒檢查")
-        self._operations_next_label = _TradingStatusLine(operations_box, textvariable=self._operations_next_var, max_lines=2)
-        self._operations_detail_label = _TradingStatusLine(operations_box, textvariable=self._operations_detail_var, default_tone="muted", max_lines=3)
-        self._live_audit_label = _TradingStatusLine(operations_box, textvariable=self._live_audit_var, default_tone="muted", max_lines=2)
+        self._operations_next_label = _TradingStatusLine(operations_box, textvariable=self._operations_next_var, max_lines=1)
+        self._operations_detail_label = _TradingStatusLine(operations_box, textvariable=self._operations_detail_var, default_tone="muted", max_lines=1)
         self._operations_next_label.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self._operations_detail_label.grid(row=2, column=0, sticky="ew", pady=(2, 0))
-        self._live_audit_label.grid(row=3, column=0, sticky="ew", pady=(2, 0))
 
         # Trading Center still consumes the account dashboard read model for current
         # position valuation, but its duplicate account-summary cards belong only to
@@ -747,9 +745,7 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._param_mode_combo.pack(side="left", padx=(8, 0))
         self._param_mode_combo.bind("<<ComboboxSelected>>", self._on_param_mode_selected)
-        self._param_mode_detail_var = tk.StringVar(value="-")
-        self._param_mode_detail_label = _TradingStatusLine(param_mode_row, textvariable=self._param_mode_detail_var, default_tone="muted", max_lines=1)
-        self._param_mode_detail_label.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        # Params status/lineage is rendered once in Trading 操作總覽.
 
         workflow_buttons = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
         workflow_buttons.grid(row=1, column=0, sticky="w", pady=(8, 0))
@@ -769,9 +765,7 @@ class TradingAccountPanel(ttk.Frame):
             button.pack(side="left", padx=(0 if not self._workflow_buttons else 8, 0))
             self._workflow_buttons.append(button)
             self._workflow_action_buttons[action] = button
-        self._workflow_status_var = tk.StringVar(value="")
-        self._workflow_status_label = _TradingStatusLine(workflow_box, textvariable=self._workflow_status_var, default_tone="muted", max_lines=2)
-        self._workflow_status_label.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        # Daily workflow dynamic status is centralized in Trading 操作總覽.
 
         header = ttk.LabelFrame(content, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
         header.grid(row=4, column=0, sticky="ew", pady=(0, 8))
@@ -1433,7 +1427,12 @@ class TradingAccountPanel(ttk.Frame):
         except (OSError, TypeError, ValueError, RuntimeError) as exc:
             self._operations_snapshot = {}
             for key in self._overview_vars:
-                self._set_overview_card(key, "BLOCKED" if key == "data" else "-", "狀態讀取失敗" if key == "data" else "", tone="error" if key == "data" else "muted")
+                self._set_overview_card(
+                    key,
+                    "BLOCKED" if key == "sync" else "-",
+                    "狀態讀取失敗" if key == "sync" else "",
+                    tone="error" if key == "sync" else "muted",
+                )
             self._operations_next_var.set("下一步：先修正 Trading 整體狀態讀取錯誤")
             self._operations_detail_var.set(f"FAIL：{exc}")
             self._set_workflow_buttons_state("disabled")
@@ -1441,55 +1440,67 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_snapshot = snapshot
 
         overall = str(snapshot.get("overall_status") or "-")
-        overall_tone = "success" if overall in {"READY", "IDLE"} else ("error" if overall in {"BLOCKED", "LIVE_BLOCKED"} else "warning")
-        latest_data_date = snapshot.get("latest_data_date") or "尚無資料"
+        latest_data_date = snapshot.get("latest_data_date") or "-"
         data_ready = bool(snapshot.get("trading_data_ready"))
         v2_status = str(snapshot.get("market_data_v2_archive_status") or "NOT_BOOTSTRAPPED")
+        sync_tone = "success" if data_ready and v2_status == "SYNCED" else ("error" if overall in {"BLOCKED", "LIVE_BLOCKED"} else "warning")
         self._set_overview_card(
-            "data",
-            latest_data_date,
-            f"Data {'READY' if data_ready else 'NOT READY'} | V2 {v2_status}",
-            tone="success" if data_ready else "warning",
+            "sync",
+            v2_status,
+            f"資料日 {latest_data_date} | Trading Data {'READY' if data_ready else 'NOT READY'}",
+            tone=sync_tone,
+        )
+
+        def count_text(value: object) -> str:
+            return "-" if value is None else f"{int(value):,} 檔"
+
+        listed_count = snapshot.get("listed_ticker_count")
+        quick_count = snapshot.get("quick_filter_qualified_count")
+        scanned_count = snapshot.get("scanner_scanned_ticker_count")
+        remaining_count = snapshot.get("scanner_remaining_ticker_count")
+        scanner_fresh = bool(snapshot.get("candidate_snapshot_fresh"))
+        scanner_date = snapshot.get("scanner_information_date") or "-"
+        self._set_overview_card(
+            "total",
+            count_text(listed_count),
+            "當日市場 universe",
+            tone="success" if listed_count is not None else "muted",
+        )
+        self._set_overview_card(
+            "quick",
+            count_text(quick_count),
+            "快篩後可進 Scanner",
+            tone="success" if quick_count is not None else "muted",
+        )
+        scanner_tone = "success" if scanner_fresh else ("warning" if scanned_count is not None else "muted")
+        scanner_status = "FRESH" if scanner_fresh else ("STALE" if scanned_count is not None else "尚未掃描")
+        self._set_overview_card(
+            "scanned",
+            count_text(scanned_count),
+            f"{scanner_status} | {scanner_date}",
+            tone=scanner_tone,
+        )
+        self._set_overview_card(
+            "remaining",
+            count_text(remaining_count),
+            "Scanner 最終候選",
+            tone=scanner_tone,
         )
 
         strategy_id = snapshot.get("strategy_id") or "-"
         policy = get_trading_policy_snapshot()
         dl_state = "OFF" if not policy.get("dl_filter_enabled") and not policy.get("dl_ranking_enabled") else "ON"
-        self._set_overview_card("strategy", strategy_id, f"DL {dl_state}", tone="info")
-
         param_training_date = snapshot.get("param_training_data_date") or "尚無 Params"
         usage_mode = {
             TRADING_PARAM_USAGE_REUSE_EXISTING: "沿用既有",
             TRADING_PARAM_USAGE_TRAINED_CURRENT: "重新訓練",
         }.get(snapshot.get("param_usage_mode"), "未綁定")
-        param_member_count = int(snapshot.get("param_member_count") or 0)
-        param_min_agree = int(snapshot.get("param_min_agree") or 0)
-        agreement_text = (
-            f"members {param_member_count} | agree {param_min_agree}"
-            if param_member_count > 1
-            else f"member {param_member_count}"
+        param_detail = (
+            f"{snapshot.get('param_selector') or '-'} | {usage_mode} | "
+            f"訓練至 {param_training_date} | DL {dl_state}"
         )
-        param_detail = f"{snapshot.get('param_selector') or '-'} | {usage_mode} | {agreement_text}"
         param_tone = "success" if snapshot.get("params_ready_for_scan") else ("info" if snapshot.get("params_reusable") else "warning")
-        self._set_overview_card("params", param_training_date, param_detail, tone=param_tone)
-
-        if snapshot.get("account_initialized"):
-            cash_text = format_trading_money(snapshot.get("cash"))
-            account_detail = (
-                f"rev {snapshot.get('account_revision') if snapshot.get('account_revision') is not None else '-'} | "
-                f"持股 策略/手動 {int(snapshot.get('strategy_position_count') or 0)}/{int(snapshot.get('manual_position_count') or 0)}"
-            )
-            self._set_overview_card("account", cash_text, account_detail, tone="success")
-        else:
-            self._set_overview_card("account", "未初始化", "請先建立 Trading account", tone="warning")
-
-        scanner_fresh = bool(snapshot.get("candidate_snapshot_fresh"))
-        self._set_overview_card(
-            "pipeline",
-            f"{int(snapshot.get('candidate_count') or 0)} 檔",
-            f"Scanner {'FRESH' if scanner_fresh else 'STALE'}",
-            tone="success" if scanner_fresh else "warning",
-        )
+        self._set_overview_card("strategy_params", strategy_id, param_detail, tone=param_tone)
 
         if not data_ready:
             next_text = "1 更新 Trading 資料"
@@ -1502,6 +1513,15 @@ class TradingAccountPanel(ttk.Frame):
         display_status = "READY" if data_ready and bool(snapshot.get("params_ready_for_scan")) and scanner_fresh else "WAIT"
         self._operations_next_var.set(f"{display_status} | 下一步：{next_text}")
         details = []
+        param_error = snapshot.get("param_error")
+        param_binding_error = snapshot.get("param_binding_error")
+        if param_error:
+            details.append(f"Params：{param_error}")
+        elif param_binding_error and not snapshot.get("params_ready_for_scan"):
+            details.append("Params 尚未綁定目前 Trading Data")
+        trading_blockers = [str(item) for item in list(snapshot.get("trading_data_blockers") or []) if str(item)]
+        if trading_blockers:
+            details.append("Data：" + "；".join(trading_blockers[:2]))
         rollforward_due = list(snapshot.get("rollforward_due_tickers") or [])
         if rollforward_due:
             details.append("待持股日終推進: " + ",".join(rollforward_due))
@@ -1514,15 +1534,15 @@ class TradingAccountPanel(ttk.Frame):
             warnings = list((audit or {}).get("warnings") or [])
             if blockers:
                 summary = "；".join(blockers[:2])
-                self._live_audit_var.set(f"實盤就緒：{audit.get('status')}｜{summary}")
+                self._operations_detail_var.set(f"實盤就緒：{audit.get('status')}｜{summary}")
                 messagebox.showwarning("Trading 尚不可實盤", summary, parent=self)
             else:
                 suffix = f"｜警告 {len(warnings)} 項" if warnings else ""
-                self._live_audit_var.set(f"實盤就緒：{audit.get('status')}{suffix}")
+                self._operations_detail_var.set(f"實盤就緒：{audit.get('status')}{suffix}")
                 messagebox.showinfo("Trading 實盤就緒檢查", f"{audit.get('status')}{suffix}", parent=self)
 
         def on_error(exc):
-            self._live_audit_var.set(f"實盤就緒：LIVE_BLOCKED｜Audit 失敗：{exc}")
+            self._operations_detail_var.set(f"實盤就緒：LIVE_BLOCKED｜Audit 失敗：{exc}")
             messagebox.showerror("Trading 實盤就緒檢查失敗", str(exc), parent=self)
 
         self._submit_trading_command(
@@ -1598,23 +1618,8 @@ class TradingAccountPanel(ttk.Frame):
             except tk.TclError as exc:
                 _warn_gui_fallback("Trading footer hint bind", exc)
 
-    def _update_param_mode_detail(self) -> None:
-        snapshot = dict(self._latest_workflow_snapshot or {})
-        mode = self._selected_param_mode()
-        training_date = snapshot.get("param_latest_data_date")
-        if mode == TRADING_PARAM_MODE_REUSE:
-            if training_date and bool(snapshot.get("params_reusable")):
-                self._param_mode_detail_var.set(f"沿用既有 Params｜訓練至 {training_date}")
-            elif training_date:
-                self._param_mode_detail_var.set(f"既有 Params 訓練至 {training_date}｜目前不可沿用")
-            else:
-                self._param_mode_detail_var.set("目前沒有可沿用的 Params")
-        else:
-            self._param_mode_detail_var.set("重新訓練 Params｜完成後綁定目前 Trading Data")
-
     def _on_param_mode_selected(self, _event=None) -> None:
         self._param_mode_user_selected = True
-        self._update_param_mode_detail()
 
     def _selected_param_mode(self) -> str:
         label = str(self._param_mode_var.get() or "").strip()
@@ -1634,7 +1639,7 @@ class TradingAccountPanel(ttk.Frame):
             )
         except (OSError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([])
-            self._workflow_status_var.set(f"Scanner snapshot 讀取失敗：{exc}")
+            self._operations_detail_var.set(f"Scanner snapshot 讀取失敗：{exc}")
             return
         if not bool(snapshot.get("fresh")):
             self._reload_candidate_rows([])
@@ -1645,7 +1650,7 @@ class TradingAccountPanel(ttk.Frame):
             )
         except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([])
-            self._workflow_status_var.set(f"Scanner snapshot 讀取失敗：{exc}")
+            self._operations_detail_var.set(f"Scanner snapshot 讀取失敗：{exc}")
             return
         self._reload_candidate_rows(payload.get("candidate_rows") or [])
 
@@ -1696,20 +1701,12 @@ class TradingAccountPanel(ttk.Frame):
             )
         except (OSError, ValueError, RuntimeError) as exc:
             self._latest_workflow_snapshot = {}
-            self._param_mode_detail_var.set("Params 狀態讀取失敗")
-            self._workflow_status_var.set(f"FAIL：Workflow 狀態讀取失敗：{exc}")
+            self._operations_detail_var.set(f"FAIL：Workflow 狀態讀取失敗：{exc}")
             return
         self._latest_workflow_snapshot = dict(snapshot)
         reusable = bool(snapshot.get("params_reusable"))
         if not self._param_mode_user_selected:
             self._param_mode_var.set(PARAM_MODE_REUSE_LABEL if reusable else PARAM_MODE_TRAIN_LABEL)
-        self._update_param_mode_detail()
-        param_error = snapshot.get("param_error")
-        binding_error = snapshot.get("param_binding_error")
-        if param_error:
-            self._workflow_status_var.set(f"Params 狀態：{param_error}")
-        elif binding_error and self._selected_param_mode() == TRADING_PARAM_MODE_REUSE:
-            self._workflow_status_var.set("既有 Params 尚未綁定目前 Trading Data；按 2 套用 Params 即可沿用。")
         self.refresh_operations_status()
 
     def _start_workflow_action(self, action: str):
@@ -1726,13 +1723,13 @@ class TradingAccountPanel(ttk.Frame):
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
             return
-        self._workflow_status_var.set(f"執行中：{labels[action]}")
+        self._operations_detail_var.set(f"執行中：{labels[action]}")
 
         def on_success(result):
             self._finish_workflow_success(action, result)
 
         def on_error(exc):
-            self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
+            self._operations_detail_var.set(f"FAIL：{type(exc).__name__}: {exc}")
             messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
 
         self._submit_trading_command(
@@ -2152,7 +2149,7 @@ class TradingAccountPanel(ttk.Frame):
         scan_result = dict(result.get("scanner") or {}) if action == "all" else (dict(result) if action == "scanner" else {})
         if action == "data":
             v2 = dict(result.get("market_data_v2_archive") or {})
-            self._workflow_status_var.set(
+            self._operations_detail_var.set(
                 f"資料更新完成：market {result.get('market_date') or '-'} | "
                 f"新進場池 {result.get('current_execution_pool_ticker_count', 0)} 檔 | "
                 f"訓練池 {result.get('training_ticker_count', 0)} 檔 | "
@@ -2160,22 +2157,22 @@ class TradingAccountPanel(ttk.Frame):
                 f"data/usage requests {v2.get('data_requests', 0)}/{v2.get('usage_requests', 0)}"
             )
         elif action == "rollforward":
-            self._workflow_status_var.set(
+            self._operations_detail_var.set(
                 f"持股日終推進完成：持股 {result.get('processed_position_count', 0)} 檔 | completed bars {result.get('processed_bar_count', 0)} | account rev {result.get('account_revision', '-')}"
             )
         elif action == "params":
             usage_mode = str(result.get("param_usage_mode") or "-")
             usage_label = "沿用既有" if usage_mode == TRADING_PARAM_USAGE_REUSE_EXISTING else "重新訓練"
-            self._workflow_status_var.set(
+            self._operations_detail_var.set(
                 f"Params 套用完成（{usage_label}）：訓練資料至 {result.get('param_training_data_date') or '-'} | "
                 f"Trading data {result.get('latest_data_date') or '-'}"
             )
         elif action == "orders":
-            self._workflow_status_var.set(
+            self._operations_detail_var.set(
                 f"建議掛單完成：{len(result.get('orders') or [])} 筆 | 預留 {format_trading_money(result.get('reserved_total'))} | account rev {result.get('account_revision')}"
             )
         else:
-            self._workflow_status_var.set(
+            self._operations_detail_var.set(
                 f"每日 Scanner 完成：候選 {len(scan_result.get('candidate_rows') or [])} 檔 | data {scan_result.get('latest_data_date') or '-'}"
             )
 

@@ -940,6 +940,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("workflow_snapshot_single_member_min_agree_is_one", 1, snapshot.get("param_min_agree"))
         check("workflow_snapshot_ready_when_data_and_params_match", True, snapshot.get("params_ready_for_scan"))
         check("workflow_snapshot_requires_canonical_v2_consumer_state", True, snapshot.get("market_data_ready"))
+        check("workflow_snapshot_exposes_total_market_count_for_overview", 1, (snapshot.get("current_execution_pool_stats") or {}).get("listed_count"))
+        check("workflow_snapshot_exposes_quick_filter_count_for_overview", 1, snapshot.get("current_execution_pool_ticker_count"))
         check("workflow_snapshot_exposes_market_data_source_view_identity", 64, len(str(snapshot.get("market_data_source_view_fingerprint") or "")))
         check("workflow_scanner_output_is_trading_scoped", "outputs/trading/scanner", snapshot.get("scanner_output_dir"))
 
@@ -1050,7 +1052,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "今日 Scanner Pool" in panel_source and "advanced_notebook.grid(" not in panel_source)
-    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and "Trading Data" in panel_source and "Scanner" in panel_source)
+    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 掃出的檔數", "剩餘檔數", "策略 / Params")))
     check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=1", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
     check("workbench_reuse_mode_shows_original_param_training_date", True, "沿用既有 Params｜訓練至" in panel_source)
     check("workbench_page_does_not_render_artifact_paths", False, any(token in panel_source for token in ("_path_var", "snapshot.get('text_path')", "snapshot.get('json_path')", "scanner_output_dir")))
@@ -2634,10 +2636,12 @@ def validate_trading_operations_status_contract_case(base_params):
         "latest_data_date": "2026-09-04",
         "params_ready_for_scan": True,
         "param_selector": "base_finalist_best",
+        "current_execution_pool_ticker_count": 120,
+        "current_execution_pool_stats": {"listed_count": 300, "qualified_count": 120},
     }
     account = {"initialized": True, "revision": 7, "cash": 500_000.0, "positions": []}
     orders = {"revision": 4, "orders": []}
-    candidate = {"exists": True, "valid": True, "fresh": True, "candidate_count": 3, "information_date": "2026-09-04"}
+    candidate = {"exists": True, "valid": True, "fresh": True, "candidate_count": 3, "scanned_ticker_count": 120, "information_date": "2026-09-04"}
     proposed = {"exists": False, "valid": False, "fresh": False, "order_count": 0}
     protection = {"exists": False, "fresh": False, "positions": []}
     indicator_clear = {"exists": True, "fresh": True, "exit_count": 0, "exits": [], "active_indicator_exit_order_count": 0, "active_indicator_exit_tickers": []}
@@ -2656,6 +2660,12 @@ def validate_trading_operations_status_contract_case(base_params):
         }
         inputs.update(overrides)
         return derive_trading_operations_status(**inputs)
+
+    overview_counts = derive()
+    check("operations_status_exposes_total_market_count", 300, overview_counts["listed_ticker_count"])
+    check("operations_status_exposes_quick_filter_count", 120, overview_counts["quick_filter_qualified_count"])
+    check("operations_status_exposes_scanner_scanned_count", 120, overview_counts["scanner_scanned_ticker_count"])
+    check("operations_status_exposes_scanner_remaining_count", 3, overview_counts["scanner_remaining_ticker_count"])
 
     recovery = derive(fill_transaction_pending=True)
     check("pending_fill_transaction_is_top_priority_blocker", NEXT_RECOVER_FILL, recovery["next_action_code"])
@@ -2961,7 +2971,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_account_mutations_resolve_latest_revision_inside_lock", True, "expected_account_revision=None" in panel_source and "expected_revision=None" in accounting_source)
     check("workbench_centers_use_fixed_contextual_footer_status_bars", True, "self._footer_bar.grid(row=1" in accounting_source and "操作提示｜" in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source and "self._footer_bar.grid(row=1" in panel_source and "操作提示｜" in panel_source)
     check("workbench_primary_ui_has_single_fixed_bottom_right_refresh_per_center", True, panel_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in panel_source and 'text="全狀態刷新", command=self._refresh_all_trading_state' in panel_source and 'pack(side="right"' in panel_source and accounting_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新", command=self.refresh' in accounting_source)
-    check("workbench_dynamic_status_is_mounted_in_corresponding_operation_boxes_not_footer", True, '_operations_next_label.grid(' in panel_source and '_operations_detail_label.grid(' in panel_source and '_workflow_status_label.grid(' in panel_source and '_show_footer_hint(self._workflow_status_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
+    overview_schema = panel_source.split('operations_box = ttk.LabelFrame(content, text="Trading 操作總覽"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
+    workflow_schema = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
+    check("workbench_overview_removes_account_card_and_consolidates_strategy_params", True, '帳戶"' not in overview_schema and '策略 / Params' in overview_schema and 'member' not in overview_schema.lower() and 'agree' not in overview_schema.lower())
+    check("workbench_overview_exposes_requested_funnel_cards", True, all(label in overview_schema for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 掃出的檔數", "剩餘檔數")))
+    check("workbench_overview_limits_dynamic_status_to_two_single_line_rows", True, '_operations_next_label.grid(' in overview_schema and '_operations_detail_label.grid(' in overview_schema and overview_schema.count('max_lines=1') >= 2 and '_live_audit_label' not in overview_schema)
+    check("workbench_daily_workflow_does_not_repeat_status_rows", True, '_workflow_status_label' not in workflow_schema and '_param_mode_detail_label' not in workflow_schema)
+    check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_detail_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
     scanner_schema = panel_source.split('candidate_box = ttk.LabelFrame(content, text="今日 Scanner Pool"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="買入成交登錄"', 1)[0]
     check("workbench_scanner_pool_uses_take_profit_reference_qty_cost_without_summary", True, 'TableColumn("target_price", "停利線"' in scanner_schema and 'TableColumn("proj_qty", "參考股數"' in scanner_schema and 'TableColumn("proj_cost", "參考投入"' in scanner_schema and 'Scanner 摘要' not in scanner_schema and scanner_schema.index('"停利線"') < scanner_schema.index('"參考股數"') < scanner_schema.index('"參考投入"'))
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
@@ -2989,7 +3005,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     # AI: Completion callbacks now only render command results; canonical state refresh is
     # applied once by the shared background command executor.
     messages = []
-    panel = SimpleNamespace(_workflow_status_var=SimpleNamespace(set=messages.append))
+    panel = SimpleNamespace(_operations_detail_var=SimpleNamespace(set=messages.append))
     TradingAccountPanel._finish_workflow_success(panel, "data", {
         "market_date": "2026-09-09", "current_execution_pool_ticker_count": 17,
         "training_ticker_count": 23,
