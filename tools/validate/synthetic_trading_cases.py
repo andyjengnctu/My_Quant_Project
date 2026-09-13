@@ -2945,7 +2945,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     from core.portfolio_ensemble import build_ensemble_candidate_display_metrics
     ensemble_metrics = build_ensemble_candidate_display_metrics(total_member_count=8)
-    check("scanner_pool_ensemble_dynamic_metric_labels", ["共識", "中位超限幅"], [row.get("label") for row in ensemble_metrics])
+    check("scanner_pool_ensemble_dynamic_metric_labels", ["共識"], [row.get("label") for row in ensemble_metrics])
     check("scanner_pool_consensus_uses_total_member_denominator", 8, ensemble_metrics[0].get("denominator"))
     check("scanner_pool_single_member_has_no_ensemble_dynamic_columns", [], build_ensemble_candidate_display_metrics(total_member_count=1))
 
@@ -3007,6 +3007,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_tables_share_sort_toggle_page_and_stock_open_contract", True, all(text in paged_source for text in ("page_size", "上一頁", "下一頁", "_header_click", "_row_click", "_open_stock")) and "ttk.Scrollbar" not in paged_source)
     check("workbench_paged_table_supports_runtime_dynamic_columns", True, "def set_columns(" in paged_source)
     check("workbench_scanner_dynamic_columns_are_descriptor_driven_not_selector_named", True, "candidate_display_metrics" in panel_source and "_candidate_metric_formatter" in panel_source and "if selector ==" not in panel_source)
+    scanner_columns_block = panel_source.split("def _candidate_static_columns_after_dynamic", 1)[1].split("@staticmethod", 1)[0]
+    check("workbench_scanner_pool_shows_market_price_before_buy_limit", True, 'TableColumn("market_price", "市價"' in scanner_columns_block and scanner_columns_block.index('TableColumn("market_price", "市價"') < scanner_columns_block.index('TableColumn("limit_price", "買入限價"'))
+    check("workbench_scanner_pool_market_price_uses_candidate_prev_close", True, '"market_price": row.get("prev_close")' in panel_source)
+    check("workbench_scanner_pool_hides_median_sort_evidence_column", False, any(row.get("key") == "ensemble_median_sort_value" for row in ensemble_metrics))
     check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'self._page_scrollbar = ttk.Scrollbar' in accounting_source)
     check("workbench_trading_scanner_pages_at_twelve_without_inner_scrollbar", True, "page_size=12" in panel_source and panel_source.count("ttk.Scrollbar(") == 1 and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
     check("workbench_buy_success_navigates_to_refreshed_accounting_center", True, '_open_accounting_center' in panel_source and 'callback(refresh=True)' in panel_source and "已切換至帳務中心並重新整理" in panel_source)

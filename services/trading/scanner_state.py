@@ -26,7 +26,7 @@ from services.trading.strategy_param_state import (
 )
 
 
-TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 7
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 8
 
 
 def partition_trading_candidate_rows_for_information_date(

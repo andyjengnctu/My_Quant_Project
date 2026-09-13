@@ -8,8 +8,6 @@ from core.buy_sort import (
     build_breakout_quality_ranking_prefixes,
     calc_buy_limit_overage_pct_from_row,
     calc_entry_type_priority_from_row,
-    get_buy_sort_metric_format_kind,
-    get_buy_sort_metric_label,
     resolve_breakout_quality_ranking_policy,
 )
 from core.capital_policy import resolve_portfolio_sizing_equity
@@ -324,12 +322,13 @@ def sort_aggregated_ensemble_candidate_rows(rows):
 
 
 def build_ensemble_candidate_display_metrics(*, total_member_count):
-    """Describe ensemble-specific candidate evidence for generic UI consumers.
+    """Describe selector-specific ensemble evidence for generic UI consumers.
 
-    The descriptor is capability-driven rather than selector-name-driven.  A
+    The descriptor is capability-driven rather than selector-name-driven. A
     single-member parameter source has no ensemble evidence columns; a
-    multi-member source exposes the actual agreement strength and the median
-    canonical buy-sort metric that participates in aggregate ordering.
+    multi-member source exposes agreement strength. Canonical median sort
+    evidence remains in candidate data for ordering/audit, but is intentionally
+    not part of the Scanner Pool display contract.
     """
     member_count = int(total_member_count or 0)
     if member_count <= 1:
@@ -343,14 +342,6 @@ def build_ensemble_candidate_display_metrics(*, total_member_count):
             "value_field": "ensemble_vote_count",
             "format_kind": "fraction",
             "denominator": member_count,
-        },
-        {
-            "key": "ensemble_median_sort_value",
-            "label": f"中位{get_buy_sort_metric_label()}",
-            "width": 9,
-            "sort_kind": "numeric",
-            "value_field": "ensemble_median_sort_value",
-            "format_kind": get_buy_sort_metric_format_kind(),
         },
     ]
 

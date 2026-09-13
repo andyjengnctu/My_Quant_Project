@@ -1794,6 +1794,7 @@ class TradingAccountPanel(ttk.Frame):
 
     def _candidate_static_columns_after_dynamic(self):
         return (
+            TableColumn("market_price", "市價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
             TableColumn("limit_price", "買入限價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
             TableColumn("stop_price", "初始Stop", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
             TableColumn("target_price", "停利線", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
@@ -1865,6 +1866,7 @@ class TradingAccountPanel(ttk.Frame):
                 "rank": idx,
                 "ticker": ticker,
                 "kind_label": kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
+                "market_price": row.get("prev_close"),
                 "limit_price": row.get("limit_price") if row.get("limit_price") is not None else seed.get("limit_price"),
                 "stop_price": seed.get("init_sl"),
                 "target_price": seed.get("target_price"),
