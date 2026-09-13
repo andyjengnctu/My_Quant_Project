@@ -23,6 +23,8 @@ from core.trading_account_state import (
     TRADING_ACCOUNT_STATE_FILENAME,
     adopt_manual_trading_position,
     apply_trading_strategy_management_rollforward,
+    apply_manual_trading_buy_fill,
+    apply_confirmed_sell_fill,
     build_empty_trading_account_state,
     build_trading_account_read_model,
     correct_manual_trading_position,
@@ -30,6 +32,8 @@ from core.trading_account_state import (
     set_trading_account_cash,
     validate_trading_account_state,
 )
+
+from services.trading.accounting_policy import build_standalone_trading_accounting_params
 
 ACCOUNT_STATE_FILENAME = TRADING_ACCOUNT_STATE_FILENAME
 
@@ -238,6 +242,59 @@ def remove_existing_trading_position(
 
 
 
+def record_manual_trading_buy(
+    project_root,
+    *,
+    ticker,
+    qty: int,
+    price,
+    trade_date,
+    expected_revision: int,
+):
+    params = build_standalone_trading_accounting_params()
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        mutator=lambda state, timestamp, mutation_id: apply_manual_trading_buy_fill(
+            state,
+            ticker=ticker,
+            qty=qty,
+            buy_price=price,
+            params=params,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+            trade_date=trade_date,
+        ),
+    )
+
+
+def record_manual_trading_sell(
+    project_root,
+    *,
+    ticker,
+    qty: int,
+    price,
+    trade_date,
+    expected_revision: int,
+):
+    params = build_standalone_trading_accounting_params()
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        mutator=lambda state, timestamp, mutation_id: apply_confirmed_sell_fill(
+            state,
+            ticker=ticker,
+            qty=qty,
+            exec_price=price,
+            params=params,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+            trade_date=trade_date,
+            event="MANUAL_ACCOUNT_SELL",
+        ),
+    )
+
+
 def rollforward_trading_strategy_management(
     project_root,
     *,
@@ -269,6 +326,8 @@ __all__ = [
     "adopt_existing_trading_position",
     "correct_existing_trading_position",
     "remove_existing_trading_position",
+    "record_manual_trading_buy",
+    "record_manual_trading_sell",
     "rollforward_trading_strategy_management",
     "get_trading_account_read_model",
 ]

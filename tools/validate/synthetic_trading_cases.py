@@ -26,11 +26,14 @@ from core.trading_state_paths import (
     resolve_trading_fill_transaction_path as resolve_core_trading_fill_transaction_path,
     resolve_trading_order_state_path as resolve_core_trading_order_state_path,
 )
+from services.trading.accounting_policy import overlay_trading_accounting_params
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
     correct_existing_trading_position,
     remove_existing_trading_position,
+    record_manual_trading_buy,
+    record_manual_trading_sell,
     get_trading_account_read_model,
     initialize_trading_account_state,
     load_trading_account_state,
@@ -552,6 +555,67 @@ def validate_trading_account_state_contract_case(base_params):
         check("read_model_position_count_matches_open_positions", len(state["positions"]), read_model["position_count"])
         check("persisted_state_is_single_account_file", True, state_path.is_file())
         check("separate_positions_truth_file_is_not_created", False, (state_path.parent / "positions.json").exists())
+
+    # AI: User-facing broker ledger uses actual 0.001425 (no strategy discount).
+    with tempfile.TemporaryDirectory() as temp_dir:
+        from services.trading.accounting_policy import build_standalone_trading_accounting_params
+        from services.trading.account_dashboard import build_trading_account_dashboard_read_model
+
+        root = Path(temp_dir)
+        state = initialize_trading_account_state(root, cash=1_000_000)
+        account_params = build_standalone_trading_accounting_params()
+        expected_buy = build_buy_ledger_from_price(100, 1000, account_params)
+        state = record_manual_trading_buy(
+            root, ticker="2330", qty=1000, price=100, trade_date="2026-09-01", expected_revision=state["revision"]
+        )
+        broker = state["positions"]["2330"]["broker"]
+        check("manual_trade_buy_uses_un-discounted_broker_fee", money_to_milli(142.5), expected_buy["buy_fee_milli"])
+        check("manual_trade_buy_deducts_holding_cost_from_cash", money_to_milli(1_000_000) - expected_buy["net_buy_total_milli"], state["cash_milli"])
+        check("manual_trade_buy_tracks_gross_consideration", expected_buy["gross_buy_milli"], broker["remaining_gross_buy_milli"])
+        check("manual_trade_buy_tracks_fee_separately", expected_buy["buy_fee_milli"], broker["remaining_buy_fee_milli"])
+
+        state = record_manual_trading_buy(
+            root, ticker="2330", qty=500, price=110, trade_date="2026-09-02", expected_revision=state["revision"]
+        )
+        try:
+            record_manual_trading_sell(
+                root, ticker="2330", qty=100, price=120, trade_date="2026-09-02", expected_revision=state["revision"]
+            )
+        except ValueError:
+            same_day_manual_rejected = True
+        else:
+            same_day_manual_rejected = False
+        check("manual_trade_same_day_buy_sell_is_rejected", True, same_day_manual_rejected)
+
+        expected_sell = build_sell_ledger_from_price(120, 500, account_params, ticker="2330", trade_date="2026-09-03")
+        state = record_manual_trading_sell(
+            root, ticker="2330", qty=500, price=120, trade_date="2026-09-03", expected_revision=state["revision"]
+        )
+        sell_details = state["events"][-1]["details"]
+        check("manual_trade_sell_records_gross_consideration", expected_sell["gross_sell_milli"], sell_details["gross_sell_milli"])
+        check("manual_trade_sell_records_fee", expected_sell["sell_fee_milli"], sell_details["sell_fee_milli"])
+        check("manual_trade_sell_records_tax", expected_sell["tax_milli"], sell_details["tax_milli"])
+        check("manual_trade_sell_pnl_formula", int(sell_details["gross_sell_milli"]) - int(sell_details["sell_fee_milli"]) - int(sell_details["tax_milli"]) - int(sell_details["allocated_cost_milli"]), int(sell_details["realized_pnl_milli"]))
+        try:
+            record_manual_trading_buy(
+                root, ticker="2330", qty=100, price=119, trade_date="2026-09-03", expected_revision=state["revision"]
+            )
+        except ValueError:
+            same_day_rebuy_rejected = True
+        else:
+            same_day_rebuy_rejected = False
+        check("manual_trade_same_day_sell_then_buy_is_rejected", True, same_day_rebuy_rejected)
+
+        account_model = get_trading_account_read_model(root)
+        holding = account_model["positions"][0]
+        check("broker_inventory_average_price_excludes_buy_fee", True, abs(float(holding["average_cost"]) - 103.3333333333) < 1e-6)
+        check("broker_inventory_holding_cost_includes_buy_fee", holding["remaining_cost_basis"], holding["holding_cost"])
+        dashboard = build_trading_account_dashboard_read_model(root)
+        check("account_dashboard_exposes_two_buy_detail_rows", 2, len(dashboard["buy_details"]))
+        check("account_dashboard_exposes_sell_detail_row", 1, len(dashboard["sell_details"]))
+        check("account_dashboard_sell_detail_exposes_offset_cost", True, dashboard["sell_details"][0]["offset_holding_cost"] > 0)
+        check("account_dashboard_sell_detail_exposes_offset_gross", True, dashboard["sell_details"][0]["offset_gross_amount"] > 0)
+        check("account_dashboard_sell_detail_exposes_offset_buy_fee", True, dashboard["sell_details"][0]["offset_buy_fee"] > 0)
 
     # AI: Pause a real commit after its revision checks; another caller must
     # not accept the same revision and overwrite that pending commit.
@@ -1400,7 +1464,8 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
         order_qty = int(ordered_record["qty"])
         first_qty = max(1, order_qty // 2)
         initial_cash = int(account["cash_milli"])
-        first_ledger = build_buy_ledger_from_price(199.0, first_qty, base_params)
+        account_params = overlay_trading_accounting_params(base_params)
+        first_ledger = build_buy_ledger_from_price(199.0, first_qty, account_params)
         tx_path = resolve_trading_fill_transaction_path(root)
         from core.file_integrity import atomic_write_json as real_atomic_write_json
         write_counter = {"count": 0}
@@ -1479,7 +1544,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
         check("partial_fills_for_one_order_cannot_cross_trade_dates", True, cross_day_partial_rejected)
 
         remaining = int(partial_record["remaining_qty"])
-        second_ledger = build_buy_ledger_from_price(198.0, remaining, base_params)
+        second_ledger = build_buy_ledger_from_price(198.0, remaining, account_params)
         final = confirm_trading_buy_order_fill(
             root,
             order_id=order_id,
@@ -1941,7 +2006,8 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
         )
         first_record = first["orders"]["orders"][tp["order_id"]]
         peer = first["orders"]["orders"][stop["order_id"]]
-        expected_first_ledger = build_sell_ledger_from_price(111.0, first_qty, base_params, ticker="2454", security_profile={}, trade_date="2026-09-05")
+        account_params = overlay_trading_accounting_params(base_params)
+        expected_first_ledger = build_sell_ledger_from_price(111.0, first_qty, account_params, ticker="2454", security_profile={}, trade_date="2026-09-05")
         check("partial_tp_fill_sets_partial", "PARTIAL", first_record["status"])
         check("partial_tp_fill_reduces_remaining_qty", int(tp["qty"]) - first_qty, first_record["remaining_qty"])
         check("partial_tp_fill_reduces_real_held_qty", qty - first_qty, first["account"]["positions"]["2454"]["broker"]["qty"])
@@ -2502,10 +2568,14 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     panel_specs = {row["panel_id"]: row for row in workbench_spec.get("panels", [])}
     check("actual_trading_panel_is_registered", True, "trading_account" in panel_specs)
     trading_panel = panel_specs.get("trading_account", {})
+    accounting_panel = panel_specs.get("accounting_center", {})
+    check("accounting_center_panel_is_registered", True, "accounting_center" in panel_specs)
+    check("accounting_center_panel_label", "帳務中心", accounting_panel.get("tab_label"))
+    check("accounting_center_uses_dedicated_factory", "services.workbench_ui.accounting_center_panel:AccountingCenterPanel", next((row.get("panel_factory_path") for row in PANEL_SPECS if row.get("panel_id") == "accounting_center"), None))
     run_bound_checks(
         check,
         (
-            ('actual_trading_panel_label', '實際交易', trading_panel.get('tab_label'),),
+            ('trading_center_panel_label', '交易中心', trading_panel.get('tab_label'),),
             ('actual_trading_panel_uses_account_state_backend', 'services.trading.account_state.get_trading_account_read_model', trading_panel.get('backend_runner'),),
             ('actual_trading_panel_uses_dedicated_factory', 'services.workbench_ui.trading_account_panel:TradingAccountPanel', next((row.get('panel_factory_path') for row in PANEL_SPECS if row.get('panel_id') == 'trading_account'), None),),
             ('money_parser_accepts_grouping_and_decimal', '1234567.89', str(parse_trading_money_text('1,234,567.89', 'cash')),),
@@ -2572,7 +2642,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_background_worker_never_calls_tk_after", True, "self.after(0, self._finish_initial_state_load" not in panel_source and "def _drain_initial_state_results" in panel_source)
     check("workbench_trading_constructor_defers_state_reads_until_after_paint", True, "self.after(80, self._start_initial_state_load)" in panel_source and "self.refresh_account()\n        self.refresh_candidate_snapshot_rows()" not in panel_source.split("def __init__", 1)[1].split("def _set_initial_loading_state", 1)[0])
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
-    check("workbench_trading_main_view_exposes_dashboard_pool_and_performance", True, all(text in panel_source for text in ("帳戶儀表板", "今日 Scanner Pool", "帳戶績效統計", "在單股回測檢視")))
+    check("workbench_trading_center_exposes_scanner_and_simple_trade_entry", True, all(text in panel_source for text in ("今日 Scanner Pool", "成交登錄｜只輸入券商實際成交資料", "登錄買入成交", "登錄賣出成交", "在單股回測檢視")))
+    check("workbench_trading_center_keeps_risk_dashboard_but_demotes_account_maintenance", True, "for accounting_section in (header, cash_box, form, table_box, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box.grid(row=1' in panel_source)
+    accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
+    check("workbench_accounting_center_exposes_broker_inventory_trade_details_and_performance", True, all(text in accounting_source for text in ("庫存股", "買入明細", "賣出明細｜含沖抵持有成本", "沖抵明細｜選取上方賣出紀錄", "績效統計", "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
+    check("workbench_simple_trade_auto_reconciles_unique_active_order", True, all(text in panel_source for text in ("_matching_active_orders", "已找到對應 active 券商單", "order/account reconciliation")))
     check("workbench_trading_advanced_execution_controls_are_demoted", True, all(text in panel_source for text in ("進階｜掛單/成交", "進階｜Stop / TP", "進階｜Indicator SELL")))
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))

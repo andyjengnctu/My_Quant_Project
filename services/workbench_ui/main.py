@@ -8,7 +8,7 @@ if PROJECT_ROOT not in sys.path:
 from core.runtime_utils import parse_no_arg_cli
 
 
-HELP_DESCRIPTION = "啟動股票工具工作台；整合單股回測、投組回測、實際交易與 Market Data 資料中心。"
+HELP_DESCRIPTION = "啟動股票工具工作台；整合單股回測、投組回測、交易中心、帳務中心與 Market Data 資料中心。"
 
 
 def main(argv=None):

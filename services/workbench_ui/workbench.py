@@ -108,7 +108,7 @@ PANEL_SPECS = (
     },
     {
         "panel_id": "trading_account",
-        "tab_label": "實際交易",
+        "tab_label": "交易中心",
         "backend_runner": "services.trading.account_state.get_trading_account_read_model",
         "artifact_keys": (),
         "inline_chart_backend": "",
@@ -118,6 +118,19 @@ PANEL_SPECS = (
         "jump_to_latest_enabled": False,
         "jump_to_trade_enabled": False,
         "panel_factory_path": "services.workbench_ui.trading_account_panel:TradingAccountPanel",
+    },
+    {
+        "panel_id": "accounting_center",
+        "tab_label": "帳務中心",
+        "backend_runner": "services.trading.account_dashboard.build_trading_account_dashboard_read_model",
+        "artifact_keys": (),
+        "inline_chart_backend": "",
+        "default_show_volume": False,
+        "scanner_dropdown_enabled": False,
+        "console_tab_enabled": False,
+        "jump_to_latest_enabled": False,
+        "jump_to_trade_enabled": False,
+        "panel_factory_path": "services.workbench_ui.accounting_center_panel:AccountingCenterPanel",
     },
     {
         "panel_id": "market_data_ops",

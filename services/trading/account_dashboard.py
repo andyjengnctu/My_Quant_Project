@@ -21,6 +21,10 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_
 from core.runtime_utils import get_taipei_now
 from core.trading_policy import resolve_trading_selected_strategy_param_path
 from services.trading.account_state import load_trading_account_state, resolve_trading_account_state_path
+from services.trading.accounting_policy import (
+    build_standalone_trading_accounting_params,
+    overlay_trading_accounting_params,
+)
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
@@ -107,6 +111,20 @@ def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
             active[ticker]["cost_basis_milli"] = int(broker.get("initial_cost_basis_milli") or 0)
         elif mutation == "remove_manual_position":
             active.pop(ticker, None)
+        elif mutation == "manual_buy_fill":
+            if ticker not in active:
+                active[ticker] = {
+                    "ticker": ticker,
+                    "source": "manual_adopted",
+                    "entry_date": details.get("trade_date"),
+                    "cost_basis_milli": 0,
+                    "realized_pnl_milli": 0,
+                    "net_sell_total_milli": 0,
+                    "sell_count": 0,
+                }
+            active[ticker]["cost_basis_milli"] += int(details.get("net_buy_total_milli") or 0)
+            if active[ticker].get("entry_date") is None:
+                active[ticker]["entry_date"] = details.get("trade_date")
         elif mutation == "confirm_strategy_buy_fill":
             active[ticker] = {
                 "ticker": ticker,
@@ -157,6 +175,67 @@ def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
     return closed
 
 
+def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    buys: list[dict[str, Any]] = []
+    sells: list[dict[str, Any]] = []
+    for event in list(state.get("events") or []):
+        mutation = str(event.get("mutation_type") or "")
+        details = dict(event.get("details") or {})
+        ticker = str(details.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        if mutation in {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment"}:
+            qty = int(details.get("qty") or details.get("fill_qty") or 0)
+            price_milli = details.get("entry_fill_price_milli")
+            if price_milli is None:
+                price_milli = details.get("fill_price_milli")
+            gross_milli = details.get("gross_buy_milli")
+            if gross_milli is None and price_milli is not None and qty > 0:
+                gross_milli = int(price_milli) * qty
+            net_milli = int(details.get("net_buy_total_milli") or 0)
+            fee_milli = details.get("buy_fee_milli")
+            if fee_milli is None and gross_milli is not None and net_milli > 0:
+                fee_milli = net_milli - int(gross_milli)
+            buys.append({
+                "ticker": ticker,
+                "trade_date": details.get("trade_date"),
+                "price": None if price_milli is None else milli_to_money(int(price_milli)),
+                "qty": qty,
+                "gross_amount": None if gross_milli is None else milli_to_money(int(gross_milli)),
+                "buy_fee": None if fee_milli is None else milli_to_money(int(fee_milli)),
+                "holding_cost": None if net_milli <= 0 else milli_to_money(net_milli),
+                "source": "策略成交" if mutation.startswith("confirm_strategy") else "手動成交",
+                "revision": int(event.get("revision") or 0),
+            })
+        elif mutation == "confirm_sell_fill":
+            qty = int(details.get("qty") or 0)
+            price_milli = details.get("exec_price_milli")
+            gross_milli = details.get("gross_sell_milli")
+            if gross_milli is None and price_milli is not None and qty > 0:
+                gross_milli = int(price_milli) * qty
+            cost_milli = int(details.get("allocated_cost_milli") or 0)
+            pnl_milli = int(details.get("realized_pnl_milli") or 0)
+            sells.append({
+                "ticker": ticker,
+                "trade_date": details.get("trade_date"),
+                "qty": qty,
+                "price": None if price_milli is None else milli_to_money(int(price_milli)),
+                "gross_amount": None if gross_milli is None else milli_to_money(int(gross_milli)),
+                "sell_fee": None if details.get("sell_fee_milli") is None else milli_to_money(int(details.get("sell_fee_milli") or 0)),
+                "tax": None if details.get("tax_milli") is None else milli_to_money(int(details.get("tax_milli") or 0)),
+                "offset_holding_cost": milli_to_money(cost_milli),
+                "offset_gross_amount": None if details.get("allocated_gross_buy_milli") is None else milli_to_money(int(details.get("allocated_gross_buy_milli") or 0)),
+                "offset_buy_fee": None if details.get("allocated_buy_fee_milli") is None else milli_to_money(int(details.get("allocated_buy_fee_milli") or 0)),
+                "pnl": milli_to_money(pnl_milli),
+                "return_pct": _safe_pct(pnl_milli, cost_milli),
+                "remaining_qty": int(details.get("remaining_qty") or 0),
+                "revision": int(event.get("revision") or 0),
+            })
+    buys.sort(key=lambda row: (str(row.get("trade_date") or ""), int(row.get("revision") or 0)), reverse=True)
+    sells.sort(key=lambda row: (str(row.get("trade_date") or ""), int(row.get("revision") or 0)), reverse=True)
+    return buys, sells
+
+
 def _performance_row(label: str, rows: list[dict[str, Any]], *, closed_only: bool) -> dict[str, Any]:
     cost = sum(float(row.get("cost_basis") or 0) for row in rows)
     pnl = sum(float(row.get("pnl") or 0) for row in rows)
@@ -188,6 +267,8 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
             "source_account_revision": None,
             "market_date": None,
             "positions": [],
+            "buy_details": [],
+            "sell_details": [],
             "closed_trades": [],
             "performance": [],
             "summary": {
@@ -221,6 +302,11 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
     params, params_path, params_error = _load_primary_params(root)
     if params_error:
         warnings.append(params_error)
+    accounting_params = (
+        overlay_trading_accounting_params(params)
+        if params is not None
+        else build_standalone_trading_accounting_params()
+    )
 
     enriched_positions: list[dict[str, Any]] = []
     holdings_market_value = 0.0
@@ -257,16 +343,16 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         net_liquidation = None
         unrealized = None
         risk_to_stop = None
-        if params is not None and current_price is not None and qty > 0 and market_date:
+        if current_price is not None and qty > 0 and market_date:
             try:
-                current_ledger = build_sell_ledger_from_price(current_price, qty, params, ticker=ticker, trade_date=market_date)
+                current_ledger = build_sell_ledger_from_price(current_price, qty, accounting_params, ticker=ticker, trade_date=market_date)
                 current_net_milli = int(current_ledger["net_sell_total_milli"])
                 net_liquidation = milli_to_money(current_net_milli)
                 holdings_net_liquidation += net_liquidation
                 unrealized = milli_to_money(current_net_milli - remaining_cost_milli)
                 open_unrealized_pnl += unrealized
                 if effective_stop is not None:
-                    stop_ledger = build_sell_ledger_from_price(effective_stop, qty, params, ticker=ticker, trade_date=market_date)
+                    stop_ledger = build_sell_ledger_from_price(effective_stop, qty, accounting_params, ticker=ticker, trade_date=market_date)
                     risk_to_stop = milli_to_money(max(current_net_milli - int(stop_ledger["net_sell_total_milli"]), 0))
                     managed_open_risk += risk_to_stop
                 elif str(management.get("status") or "") == "active":
@@ -286,6 +372,8 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
             net_liquidation_complete = False
 
         initial_cost_milli = int(broker.get("initial_cost_basis_milli") or remaining_cost_milli)
+        remaining_gross_milli = broker.get("remaining_gross_buy_milli")
+        average_price_basis_milli = remaining_cost_milli if remaining_gross_milli is None else int(remaining_gross_milli)
         total_pnl = None if unrealized is None else milli_to_money(realized_milli) + unrealized
         enriched_positions.append(
             {
@@ -293,7 +381,8 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
                 "source": record.get("source"),
                 "qty": qty,
                 "entry_date": broker.get("entry_date"),
-                "average_cost": None if qty <= 0 else milli_to_money(remaining_cost_milli) / qty,
+                "average_cost": None if qty <= 0 else milli_to_money(average_price_basis_milli) / qty,
+                "holding_cost": milli_to_money(remaining_cost_milli),
                 "remaining_cost_basis": milli_to_money(remaining_cost_milli),
                 "initial_cost_basis": milli_to_money(initial_cost_milli),
                 "realized_pnl": milli_to_money(realized_milli),
@@ -301,6 +390,7 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
                 "market_value": market_value,
                 "net_liquidation_value": net_liquidation,
                 "unrealized_pnl": unrealized,
+                "holding_return_pct": None if unrealized is None else _safe_pct(unrealized, milli_to_money(remaining_cost_milli)),
                 "total_pnl": total_pnl,
                 "return_pct": None if total_pnl is None else _safe_pct(total_pnl, milli_to_money(initial_cost_milli)),
                 "management_status": management.get("status"),
@@ -320,19 +410,20 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         fixed_risk = float(params.fixed_risk)
         single_position_risk_budget = milli_to_money(calc_risk_budget_milli(equity, fixed_risk))
 
+    buy_details, sell_details = _build_transaction_details(state)
     closed_trades = _build_closed_round_trips(state)
     open_perf_rows = [
         {
             "ticker": row["ticker"],
-            "cost_basis": row["initial_cost_basis"],
-            "pnl": row["total_pnl"],
+            "cost_basis": row["holding_cost"],
+            "pnl": row["unrealized_pnl"],
         }
         for row in enriched_positions
-        if row.get("total_pnl") is not None
+        if row.get("unrealized_pnl") is not None
     ]
     sold_perf_rows = [
-        {"ticker": row["ticker"], "cost_basis": row["cost_basis"], "pnl": row["pnl"]}
-        for row in closed_trades
+        {"ticker": row["ticker"], "cost_basis": row["offset_holding_cost"], "pnl": row["pnl"]}
+        for row in sell_details
     ]
     performance = [
         _performance_row("持有中", open_perf_rows, closed_only=False),
@@ -351,6 +442,8 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         "market_date": market_date,
         "fixed_risk": fixed_risk,
         "positions": enriched_positions,
+        "buy_details": buy_details,
+        "sell_details": sell_details,
         "closed_trades": closed_trades,
         "performance": performance,
         "summary": {
@@ -387,6 +480,8 @@ def publish_trading_account_dashboard_snapshot(project_root, snapshot: dict[str,
             "source_account_revision": payload.get("source_account_revision"),
             "market_date": payload.get("market_date"),
             "performance": list(payload.get("performance") or []),
+            "buy_details": list(payload.get("buy_details") or []),
+            "sell_details": list(payload.get("sell_details") or []),
             "closed_trades": list(payload.get("closed_trades") or []),
         },
     )

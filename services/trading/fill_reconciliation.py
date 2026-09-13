@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.accounting_policy import overlay_trading_accounting_params
 from core.exact_accounting import milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping
 from core.runtime_utils import get_taipei_now
@@ -185,7 +186,7 @@ def confirm_trading_buy_order_fill(
     frozen_params = record.get("frozen_params")
     if not isinstance(frozen_params, dict):
         raise RuntimeError("Trading ORDERED 缺少 frozen_params；禁止用目前新 params 回填舊掛單")
-    params = build_params_from_mapping(frozen_params)
+    params = overlay_trading_accounting_params(build_params_from_mapping(frozen_params))
     normalized_fill_price = _normalize_external_fill_price(fill_price)
 
     ticker = str(record["ticker"])
@@ -355,7 +356,7 @@ def _confirm_trading_sell_order_fill(
     frozen_params = None if not isinstance(entry_order, dict) else entry_order.get("frozen_params")
     if not isinstance(frozen_params, dict):
         raise RuntimeError("Trading SELL 來源 entry order 缺少 frozen_params")
-    params = build_params_from_mapping(frozen_params)
+    params = overlay_trading_accounting_params(build_params_from_mapping(frozen_params))
     normalized_fill_price = _normalize_external_fill_price(fill_price)
     fill_qty_int = int(fill_qty)
     tp_half_complete = False

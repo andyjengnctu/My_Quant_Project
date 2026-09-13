@@ -104,7 +104,7 @@ project/
 │  ├─ portfolio_sim/                  # portfolio CLI/report/runtime service owner
 │  ├─ downloader/                     # 正式資料下載 owner；main只負責composition/render/dispatch；menu_contract持有輕量選單契約，另含Preflight、Bootstrap、ledger、quota executor與Parquet storage
 │  ├─ scanner/                        # 正式掃描 runtime service owner
-│  ├─ workbench_ui/                   # GUI application service/UI owner；含回測檢視、實際交易帳戶與資料中心頁
+│  ├─ workbench_ui/                   # GUI application service/UI owner；含回測檢視、交易中心、帳務中心與資料中心頁
 │  ├─ trade_analysis/                 # 單股 trade-analysis backend/service owner
 │  ├─ research/                       # Research application boundaries／artifact orchestration／Strategy Compare orchestration
 │  ├─ trading/                        # Trading orchestration；market_data_update canonical update、data_readiness dependency gate、market_data_dataset_state state owner、strategy-param/account/order/fill/protection/daily workflow
@@ -304,7 +304,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `trade_analysis`：單股分析、圖表與交易明細輸出。
 - `validate`：formal contract、schema、synthetic 與 real-case 驗證。
 - `local_regression`：reduced formal orchestrator 與 bundle 產出。
-- `workbench_ui`：GUI 主視窗、單股／投組回測檢視與實際交易頁面。單股頁上方控制列提供股票代號、常用股票、候選股與歷史績效股操作，K 線圖主檢視下交易明細與 Console 以獨立分頁承接；實際交易頁顯示 Trading active strategy／param selector、data/params freshness、Scanner候選、account revision、現金與持股 broker truth，並透過 Trading domain services 執行每日workflow與持久化 account mutation。
+- `workbench_ui`：GUI 主視窗、單股／投組回測檢視、交易中心與帳務中心。單股頁上方控制列提供股票代號、常用股票、候選股、持有股與歷史績效股操作，K 線圖主檢視下交易明細、Console 與 Trading Scanner Pool 以獨立分頁承接；交易中心只負責 Trading active strategy／param selector、data/params freshness、Scanner候選、每日 workflow 與使用者確認的實際成交登錄，複雜 broker order／Stop／TP／Indicator SELL reconciliation 收在進階區；帳務中心只讀 canonical account state 與 account-dashboard read model，管理現金、庫存、逐筆買賣／沖抵明細與持有／已賣出／合併績效。`state/trading/account.json` 是唯一 mutable account truth，實際帳戶成交費率由 `services/trading/accounting_policy.py` 對帳務層覆寫為未折扣 broker fee，不改 Research／回測 execution semantics。
 
 ## 依賴方向
 

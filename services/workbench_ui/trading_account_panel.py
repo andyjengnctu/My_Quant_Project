@@ -80,6 +80,8 @@ from services.trading.account_state import (
     initialize_trading_account_state,
     load_trading_account_state,
     remove_existing_trading_position,
+    record_manual_trading_buy,
+    record_manual_trading_sell,
     resolve_trading_account_state_path,
     set_trading_cash_balance,
 )
@@ -910,6 +912,25 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Label(candidate_actions, text="雙擊股票可直接切到單股回測檢視；下單由你在券商端自行完成。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
         ttk.Button(candidate_actions, text="檢視選取股票", command=self._open_selected_candidate_in_inspector, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
 
+        trade_box = ttk.LabelFrame(content, text="成交登錄｜只輸入券商實際成交資料", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        trade_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        trade_labels = ("股票", "數量", "成交價", "成交日 YYYY-MM-DD")
+        self._trade_ticker_var = tk.StringVar()
+        self._trade_qty_var = tk.StringVar()
+        self._trade_price_var = tk.StringVar()
+        self._trade_date_var = tk.StringVar()
+        trade_vars = (self._trade_ticker_var, self._trade_qty_var, self._trade_price_var, self._trade_date_var)
+        trade_widths = (12, 12, 14, 18)
+        for col, (label, variable, width) in enumerate(zip(trade_labels, trade_vars, trade_widths)):
+            ttk.Label(trade_box, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
+            ttk.Entry(trade_box, textvariable=variable, width=width, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0), pady=(4, 0))
+        trade_buttons = ttk.Frame(trade_box, style=WORKBENCH_FRAME_STYLE)
+        trade_buttons.grid(row=1, column=4, sticky="w", padx=(12, 0), pady=(4, 0))
+        ttk.Button(trade_buttons, text="登錄買入成交", command=lambda: self._record_simple_trade("BUY"), style=WORKBENCH_BUTTON_STYLE).pack(side="left")
+        ttk.Button(trade_buttons, text="登錄賣出成交", command=lambda: self._record_simple_trade("SELL"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
+        self._trade_note_var = tk.StringVar(value="價金、未折扣 0.001425 手續費、交易稅、持有成本與損益由系統自動計算。")
+        ttk.Label(trade_box, textvariable=self._trade_note_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).grid(row=2, column=0, columnspan=5, sticky="w", pady=(6, 0))
+
         performance_box = ttk.LabelFrame(content, text="帳戶績效統計", padding=8, style=WORKBENCH_LABELLF_STYLE)
         performance_box.grid(row=8, column=0, sticky="nsew", pady=(0, 8))
         performance_box.columnconfigure(0, weight=1)
@@ -923,6 +944,13 @@ class TradingAccountPanel(ttk.Frame):
         self._performance_tree.grid(row=0, column=0, sticky="ew")
         self._performance_note_var = tk.StringVar(value="已賣出＝account event 中已完整平倉交易；持有中以最新 Trading 市價估值。")
         ttk.Label(performance_box, textvariable=self._performance_note_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).grid(row=1, column=0, sticky="w", pady=(5, 0))
+
+        # AI: Trading Center owns selection and execution.  Account maintenance,
+        # inventory detail, transaction history and performance live in the separate
+        # top-level Accounting Center.  Keep these widgets instantiated for backward-
+        # compatible refresh methods but remove them from the Trading Center layout.
+        for accounting_section in (header, cash_box, form, table_box, performance_box):
+            accounting_section.grid_remove()
 
         advanced_notebook = ttk.Notebook(content, style="Workbench.TNotebook")
         advanced_notebook.grid(row=9, column=0, sticky="nsew", pady=(0, 8))
@@ -2450,6 +2478,143 @@ class TradingAccountPanel(ttk.Frame):
                 note="Workbench cash reconciliation",
             ),
             success_message="現金餘額已更新。",
+        )
+
+    def _simple_trade_values(self):
+        ticker = self._trade_ticker_var.get().strip().upper()
+        if not ticker:
+            selected = self._candidate_tree.selection() if hasattr(self, "_candidate_tree") else ()
+            ticker = str(selected[0]).strip().upper() if selected else ""
+        if not ticker:
+            raise ValueError("股票代號必填")
+        qty = parse_trading_qty_text(self._trade_qty_var.get(), "成交股數")
+        price = parse_trading_money_text(self._trade_price_var.get(), "成交價", allow_zero=False)
+        trade_date = self._trade_date_var.get().strip()
+        if not trade_date:
+            raise ValueError("成交日必填")
+        return ticker, qty, price, trade_date
+
+    def _matching_active_orders(self, ticker: str, side: str):
+        ticker = str(ticker).strip().upper()
+        side = str(side).strip().upper()
+        return [
+            (order_id, dict(row))
+            for order_id, row in self._order_rows.items()
+            if str(row.get("ticker") or "").strip().upper() == ticker
+            and str(row.get("side") or "").strip().upper() == side
+            and str(row.get("status") or "") in TRADING_ACTIVE_ORDER_STATUSES
+        ]
+
+    def _record_simple_trade(self, side: str):
+        try:
+            ticker, qty, price, trade_date = self._simple_trade_values()
+            expected_revision = int(self._current_revision())
+        except (ValueError, RuntimeError) as exc:
+            messagebox.showerror("成交登錄", str(exc), parent=self)
+            return
+        side = str(side).upper()
+        action_text = "買入" if side == "BUY" else "賣出"
+        matching_orders = self._matching_active_orders(ticker, side)
+        if len(matching_orders) > 1:
+            order_labels = "、".join(str(row.get("broker_order_id") or order_id) for order_id, row in matching_orders)
+            messagebox.showerror(
+                "成交登錄",
+                f"{ticker} 目前有多筆 active {side} 券商單（{order_labels}），只靠股票/股數/成交價/日期無法判定是哪一筆。\n\n請到下方進階掛單區選取實際成交的券商單後確認。",
+                parent=self,
+            )
+            return
+
+        matched_order_id = None
+        matched_order = None
+        if matching_orders:
+            matched_order_id, matched_order = matching_orders[0]
+            remaining = int(matched_order.get("remaining_qty") or 0)
+            if qty > remaining:
+                messagebox.showerror("成交登錄", f"本次成交股數不可超過該券商單未成交股數 {remaining:,}", parent=self)
+                return
+
+        route_note = ""
+        if matched_order is not None:
+            route_note = f"\n\n已找到對應 active 券商單：{matched_order.get('broker_order_id') or matched_order_id}，會自動做 order/account reconciliation。"
+        if not messagebox.askyesno(
+            f"確認{action_text}成交",
+            f"{ticker}｜{qty:,} 股 @ {price}｜{trade_date}\n\n其餘價金、費用、稅、成本與損益由帳務 SSOT 自動計算。{route_note}",
+            parent=self,
+        ):
+            return
+
+        if matched_order is None:
+            if side == "BUY":
+                worker = lambda: record_manual_trading_buy(
+                    WORKBENCH_PROJECT_ROOT, ticker=ticker, qty=qty, price=price,
+                    trade_date=trade_date, expected_revision=expected_revision,
+                )
+            else:
+                worker = lambda: record_manual_trading_sell(
+                    WORKBENCH_PROJECT_ROOT, ticker=ticker, qty=qty, price=price,
+                    trade_date=trade_date, expected_revision=expected_revision,
+                )
+            success_suffix = "已直接寫入帳戶 SSOT"
+        else:
+            expected_order_revision = int(self._current_order_revision())
+            if side == "BUY":
+                fill_fn = confirm_trading_buy_order_fill
+            elif str(matched_order.get("purpose") or "") == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
+                fill_fn = confirm_trading_indicator_sell_order_fill
+            else:
+                fill_fn = confirm_trading_protection_sell_order_fill
+
+            def worker():
+                result = fill_fn(
+                    WORKBENCH_PROJECT_ROOT,
+                    order_id=matched_order_id,
+                    fill_qty=qty,
+                    fill_price=price,
+                    trade_date=trade_date,
+                    expected_order_revision=expected_order_revision,
+                    expected_account_revision=expected_revision,
+                )
+                protection_error = None
+                indicator_error = None
+                try:
+                    build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
+                except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+                    protection_error = str(exc)
+                try:
+                    build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
+                except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+                    indicator_error = str(exc)
+                return {
+                    "fill_result": result,
+                    "protection_error": protection_error,
+                    "indicator_error": indicator_error,
+                }
+
+            success_suffix = f"已與券商單 {matched_order.get('broker_order_id') or matched_order_id} 完成 order/account reconciliation"
+
+        def on_success(result):
+            self._trade_ticker_var.set("")
+            self._trade_qty_var.set("")
+            self._trade_price_var.set("")
+            self._trade_date_var.set("")
+            extra = ""
+            if matched_order is not None:
+                payload = dict(result or {})
+                if payload.get("protection_error"):
+                    extra += f"\n保護單計畫刷新失敗：{payload['protection_error']}"
+                if payload.get("indicator_error"):
+                    extra += f"\nIndicator 計畫刷新失敗：{payload['indicator_error']}"
+            messagebox.showinfo(
+                "成交登錄",
+                f"{ticker} {action_text}成交{success_suffix}；帳務中心可查看逐筆明細。{extra}",
+                parent=self,
+            )
+
+        self._submit_trading_command(
+            f"{ticker} {action_text}成交登錄",
+            worker,
+            on_success=on_success,
+            error_title="成交登錄失敗",
         )
 
     def _position_form_values(self):
