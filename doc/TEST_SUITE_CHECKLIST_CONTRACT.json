@@ -3887,8 +3887,8 @@
       "priority": "P1",
       "category": "GUI / Workbench Trading account",
       "item": "Workbench 交易中心 / 帳務中心分層並共用 Trading account-state SSOT",
-      "gap": "Workbench必須將選股/策略交易主流程放在「交易中心」，帳戶資金、庫存股、買入明細、賣出/沖抵明細與績效放在獨立「帳務中心」，並只透過services/trading account services操作state/trading/account.json。交易中心主流程只登錄BUY成交；SELL必須在帳務中心先點選庫存再登錄，若有active broker SELL order則由account trade-entry service做order/account reconciliation。日期輸入支援日曆；績效/損益採台股漲紅跌綠平白；表格依實際列數動態高度且不放內層vertical scrollbar。manual broker truth庫存可在既有限制下修正/刪除，手動買賣明細則以append-only void/correction修正；UI不得直接讀寫JSON或改寫策略lineage，stale revision必須fail-fast。",
-      "entry": "`services/workbench_ui/workbench.py`, `services/workbench_ui/trading_account_panel.py`, `services/workbench_ui/accounting_center_panel.py`, `services/workbench_ui/date_picker.py`, `services/trading/account_trade_entry.py`, `services/trading/account_state.py`, `core/trading_account_state.py`, `tools/validate/synthetic_trading_cases.py`",
+      "gap": "Workbench必須將Scanner/策略決策/BUY成交主流程放在「交易中心」，帳戶資金、庫存股、買入明細、賣出/沖抵明細與績效放在獨立「帳務中心」，並只透過services/trading account services操作state/trading/account.json。Workbench不是券商OMS：primary UI不得要求或管理broker order lifecycle、券商委託號、Stop/TP或Indicator SELL掛單；Stop/Target/SELL signal只作決策資訊。交易中心只登錄BUY；買入成功後切換並刷新帳務中心。SELL必須在帳務中心先點選庫存，再直接依實際股數/成交價/成交日更新account truth，不依賴broker-order mapping。日期欄本身可開日曆；股票表格共用首次點欄位升冪/再次降冪、同列再點取消、最多12列分頁與左側單股檢視入口，無表內vertical scrollbar。只有損益/報酬率等directional performance數字使用台股漲紅跌綠平白。庫存與買賣明細不分manual/strategy皆可修正/刪除；庫存採broker-truth reconciliation，成交採append-only void/correction，若同ticker已有後續有效成交則由最新一筆往回修正以維持成本分攤；UI不得直接讀寫JSON，stale revision必須fail-fast。",
+      "entry": "`services/workbench_ui/workbench.py`, `services/workbench_ui/trading_account_panel.py`, `services/workbench_ui/accounting_center_panel.py`, `services/workbench_ui/date_picker.py`, `services/workbench_ui/paged_table.py`, `services/trading/account_trade_entry.py`, `services/trading/account_state.py`, `core/trading_account_state.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 350
     },
@@ -3962,10 +3962,10 @@
       "id": "B369",
       "section": "B2",
       "priority": "P1",
-      "category": "GUI / Workbench Trading protection SELL fills",
-      "item": "Explicit protection SELL fills reconcile broker order state and account exact accounting without market inference",
-      "gap": "Protection SELL實際成交只能由使用者輸入券商真正的成交股數、成交價與成交日觸發，不得由market high/low、trigger touch或shadow fill自動推定。Workbench主流程中的SELL入口必須位於帳務中心並先選取庫存；若該ticker有active protection/indicator SELL order，必須明確對應唯一order或由使用者選擇後，才可經fill reconciliation更新order/account。只有ORDERED/PARTIAL protection SELL可成交，每次fill qty必須大於0且不超過remaining qty；TP LIMIT實際成交價不得低於原limit，STOP_MARKET允許gap成交。每次SELL fill必須重用來源entry order frozen params與canonical exact sell accounting／position sell seam，同步更新cash、cost basis、realized PnL與strategy position；TP只有canonical TP target真正完成時才可把sold_half標記完成。Protection partial fills可跨交易日；未全數成交維持PARTIAL，全數成交轉FILLED。若該腿屬使用者先前明確確認的broker-native OCO，任何fill只代表該腿的broker fill truth；系統不得自行推論peer已被券商取消或縮量。同OCO group仍active的peer必須回報為待broker reconciliation，只有使用者依實際券商狀態明確確認取消後才可轉CANCELLED。account.json與orders.json仍必須透過state/trading/fill_transaction.json可恢復transaction原子收斂；Workbench只做explicit actual-fill／cancel input與service委派，不得自行重算帳務或推定券商狀態。",
-      "entry": "`core/trading_order_state.py`, `core/trading_account_state.py`, `core/trading_fill_transaction.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_planning.py`, `services/trading/account_trade_entry.py`, `services/workbench_ui/accounting_center_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "category": "Trading protection SELL fill backend compatibility",
+      "item": "Legacy explicit protection SELL reconciliation remains canonical backend compatibility, not Workbench OMS",
+      "gap": "Protection SELL backend reconciliation仍只能由explicit actual fill輸入觸發，不得由market high/low、trigger touch或shadow fill自動推定。只有ORDERED/PARTIAL protection SELL可走legacy broker-order reconciliation；fill qty必須大於0且不超過remaining qty，TP LIMIT實際成交價不得低於原limit，STOP_MARKET允許gap成交。每次legacy SELL fill重用來源entry order frozen params與canonical exact sell accounting／position sell seam，同步更新cash、cost basis、realized PnL與strategy position；TP只有canonical TP target真正完成時才可標記sold_half。Broker-native OCO fill不得自行推論peer已取消或縮量，peer cancellation仍須explicit reconciliation。此broker-order/fill transaction能力保留作既有state/compatibility與可恢復性，但簡化後Workbench primary UI不暴露broker OMS、不要求帳務中心SELL對應order；帳務中心direct SELL只依實際券商成交更新account truth。",
+      "entry": "`core/trading_order_state.py`, `core/trading_account_state.py`, `core/trading_fill_transaction.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_planning.py`, `services/trading/account_trade_entry.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 357
     },
@@ -7878,14 +7878,14 @@
     {
       "id": "T481",
       "b_id": "B361",
-      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、gitignore isolation、manual adoption/correction/remove、append-only manual trade void/correction、cash reconciliation、strategy confirmed buy/sell exact accounting、same-day/over-sell/stale-revision guard、broker/strategy parity與event hash-chain tamper detection。",
+      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、gitignore isolation、manual adoption與source-agnostic inventory correction/remove、append-only manual/strategy trade void/correction、cash reconciliation、strategy confirmed buy/sell exact accounting、same-day/over-sell/stale-revision guard、broker/strategy parity、current-inventory lifecycle mapping與event hash-chain tamper detection。",
       "initial_status": "NEW",
       "order": 471
     },
     {
       "id": "T482",
       "b_id": "B362",
-      "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋交易中心/帳務中心panel registry、BUY-only交易中心與inventory-selected SELL帳務中心、account backend/factory、日曆輸入、動態表格、損益顏色、交易/庫存修正刪除、project-relative state path與config-driven Trading policy。",
+      "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋交易中心/帳務中心panel registry、BUY-only交易中心與inventory-selected direct SELL帳務中心、no-broker-OMS primary UI、買入後自動切帳務中心、日期欄日曆、12列分頁/排序/取消選取/單股入口、directional績效cell顏色、manual/strategy交易與庫存修正刪除、project-relative state path與config-driven Trading policy。",
       "initial_status": "NEW",
       "order": 472
     },
@@ -7934,7 +7934,7 @@
     {
       "id": "T489",
       "b_id": "B369",
-      "description": "`validate_trading_protection_sell_fill_reconciliation_contract_case` 覆蓋帳務中心inventory-selected explicit SELL actual-fill、active SELL order routing、PARTIAL→FILLED、跨日partial、TP limit/Stop gap語意、canonical exact-accounting、TP sold_half完成時點、broker-native OCO fill不推論peer cancellation、peer待explicit broker reconciliation、明確取消為獨立order mutation與no-market-inference。",
+      "description": "`validate_trading_protection_sell_fill_reconciliation_contract_case` 覆蓋legacy backend explicit protection SELL actual-fill、PARTIAL→FILLED、跨日partial、TP limit/Stop gap語意、canonical exact-accounting、TP sold_half完成時點、broker-native OCO fill不推論peer cancellation、peer待explicit broker reconciliation、明確取消為獨立order mutation與no-market-inference；不要求Workbench primary UI暴露broker OMS。",
       "initial_status": "NEW",
       "order": 479
     },

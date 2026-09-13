@@ -26,10 +26,15 @@ class DatePickerField(ttk.Frame):
         self.variable = textvariable
         self.entry = ttk.Entry(self, textvariable=self.variable, width=width, style=WORKBENCH_ENTRY_STYLE)
         self.entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(self, text="日曆", command=self._open_calendar, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(5, 0))
+        # The date field itself is the picker trigger; keep the textvariable editable
+        # so YYYY-MM-DD may still be pasted/typed when that is faster.
+        self.entry.bind("<Button-1>", self._on_entry_click, add="+")
         self._popup = None
         self._calendar_year = None
         self._calendar_month = None
+
+    def _on_entry_click(self, _event=None):
+        self.after_idle(self._open_calendar)
 
     def _initial_date(self) -> date:
         raw = self.variable.get().strip()

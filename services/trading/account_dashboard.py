@@ -193,6 +193,11 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
             )
 
     active_source: dict[str, str] = {}
+    # Track the BUY events that still belong to the currently open lifecycle for
+    # each ticker.  A completed sell closes that lifecycle; a later re-entry starts
+    # a new one.  This lets Accounting Center show only the buys corresponding to
+    # the selected current inventory instead of mixing in older closed cycles.
+    active_buy_revisions: dict[str, set[int]] = {}
     for event in events:
         mutation = str(event.get("mutation_type") or "")
         details = dict(event.get("details") or {})
@@ -221,6 +226,7 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
             manual = mutation == "manual_buy_fill"
             source = "手動成交" if manual else "策略成交"
             active_source[ticker] = "manual_adopted" if manual else "strategy_fill"
+            active_buy_revisions.setdefault(ticker, set()).add(revision)
             buys.append({
                 "ticker": ticker,
                 "trade_date": details.get("trade_date"),
@@ -231,7 +237,7 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
                 "holding_cost": None if net_milli <= 0 else milli_to_money(net_milli),
                 "source": source,
                 "revision": revision,
-                "editable": bool(manual),
+                "editable": True,
                 "is_latest_ticker_trade": revision == latest_trade_revision_by_ticker.get(ticker),
             })
             continue
@@ -265,11 +271,16 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
                 "remaining_qty": int(details.get("remaining_qty") or 0),
                 "revision": revision,
                 "source": "手動成交" if manual_sell else "策略成交",
-                "editable": bool(manual_sell),
+                "editable": True,
                 "is_latest_ticker_trade": revision == latest_trade_revision_by_ticker.get(ticker),
             })
             if int(details.get("remaining_qty") or 0) <= 0:
                 active_source.pop(ticker, None)
+                active_buy_revisions.pop(ticker, None)
+
+    for row in buys:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        row["open_position_related"] = int(row.get("revision") or 0) in active_buy_revisions.get(ticker, set())
 
     buys.sort(key=lambda row: (str(row.get("trade_date") or ""), int(row.get("revision") or 0)), reverse=True)
     sells.sort(key=lambda row: (str(row.get("trade_date") or ""), int(row.get("revision") or 0)), reverse=True)

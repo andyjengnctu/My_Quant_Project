@@ -24,17 +24,21 @@ from core.trading_account_state import (
     adopt_manual_trading_position,
     apply_trading_strategy_management_rollforward,
     apply_manual_trading_buy_fill,
+    apply_confirmed_strategy_buy_fill,
     apply_confirmed_sell_fill,
+    apply_strategy_account_buy_correction_fill,
     build_empty_trading_account_state,
     build_trading_account_read_model,
     correct_manual_trading_position,
+    correct_trading_position_broker_truth,
     remove_manual_trading_position,
+    remove_trading_position_broker_truth,
     set_trading_account_cash,
     void_manual_trading_transaction,
     validate_trading_account_state,
 )
 
-from services.trading.accounting_policy import build_standalone_trading_accounting_params
+from services.trading.accounting_policy import build_standalone_trading_accounting_params, overlay_trading_accounting_params
 
 ACCOUNT_STATE_FILENAME = TRADING_ACCOUNT_STATE_FILENAME
 
@@ -131,9 +135,11 @@ def _mutate_account(
     mutator: Callable[[dict[str, Any], str, str], dict[str, Any]],
     allow_active_protection_orders: bool = False,
     expected_revision_increment: int = 1,
+    guard_orders: bool = True,
 ) -> dict[str, Any]:
-    order_guard_sha = _read_order_guard_sha(
-        project_root, allow_active_protection_orders=allow_active_protection_orders
+    order_guard_sha = (
+        _read_order_guard_sha(project_root, allow_active_protection_orders=allow_active_protection_orders)
+        if guard_orders else None
     )
     path = resolve_trading_account_state_path(project_root)
     state, source_sha = _read_state_with_sha(path)
@@ -155,7 +161,8 @@ def _mutate_account(
     latest_sha = hashlib.sha256(latest_raw).hexdigest()
     if latest_sha != source_sha:
         raise TradingAccountRevisionConflict("Trading account state 在寫入前已被其他流程修改")
-    _assert_order_guard_unchanged(project_root, order_guard_sha)
+    if guard_orders:
+        _assert_order_guard_unchanged(project_root, order_guard_sha)
     atomic_write_json(path, updated)
     return load_trading_account_state(project_root)
 
@@ -164,6 +171,7 @@ def set_trading_cash_balance(project_root, *, cash, expected_revision: int, note
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
+        guard_orders=False,
         mutator=lambda state, timestamp, mutation_id: set_trading_account_cash(
             state,
             cash=cash,
@@ -187,6 +195,7 @@ def adopt_existing_trading_position(
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
+        guard_orders=False,
         mutator=lambda state, timestamp, mutation_id: adopt_manual_trading_position(
             state,
             ticker=ticker,
@@ -213,7 +222,8 @@ def correct_existing_trading_position(
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
-        mutator=lambda state, timestamp, mutation_id: correct_manual_trading_position(
+        guard_orders=False,
+        mutator=lambda state, timestamp, mutation_id: correct_trading_position_broker_truth(
             state,
             ticker=ticker,
             qty=qty,
@@ -236,7 +246,8 @@ def remove_existing_trading_position(
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
-        mutator=lambda state, timestamp, mutation_id: remove_manual_trading_position(
+        guard_orders=False,
+        mutator=lambda state, timestamp, mutation_id: remove_trading_position_broker_truth(
             state,
             ticker=ticker,
             timestamp=timestamp,
@@ -260,6 +271,7 @@ def record_manual_trading_buy(
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
+        guard_orders=False,
         mutator=lambda state, timestamp, mutation_id: apply_manual_trading_buy_fill(
             state,
             ticker=ticker,
@@ -286,6 +298,7 @@ def record_manual_trading_sell(
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
+        guard_orders=False,
         mutator=lambda state, timestamp, mutation_id: apply_confirmed_sell_fill(
             state,
             ticker=ticker,
@@ -302,7 +315,46 @@ def record_manual_trading_sell(
 
 
 
-def delete_manual_trading_transaction(
+def record_strategy_trading_buy(
+    project_root,
+    *,
+    ticker,
+    qty: int,
+    price,
+    trade_date,
+    expected_revision: int,
+    params,
+    execution_plan_seed: dict[str, Any] | None = None,
+):
+    seed = dict(execution_plan_seed or {})
+    accounting_params = overlay_trading_accounting_params(params)
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        guard_orders=False,
+        mutator=lambda state, timestamp, mutation_id: apply_confirmed_strategy_buy_fill(
+            state,
+            ticker=ticker,
+            qty=qty,
+            buy_price=price,
+            params=accounting_params,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+            trade_date=trade_date,
+            init_sl=seed.get("init_sl"),
+            init_trail=seed.get("init_trail"),
+            target_price=seed.get("target_price"),
+            limit_price=seed.get("limit_price"),
+            entry_atr=seed.get("entry_atr"),
+            security_profile=seed.get("security_profile"),
+            entry_type=str(seed.get("entry_type") or "normal"),
+            entry_order_id=None,
+        ),
+    )
+
+
+
+def delete_trading_transaction(
     project_root,
     *,
     transaction_revision: int,
@@ -312,6 +364,7 @@ def delete_manual_trading_transaction(
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
+        guard_orders=False,
         mutator=lambda state, timestamp, mutation_id: void_manual_trading_transaction(
             state,
             target_revision=transaction_revision,
@@ -322,7 +375,7 @@ def delete_manual_trading_transaction(
     )
 
 
-def correct_manual_trading_transaction(
+def correct_trading_transaction(
     project_root,
     *,
     transaction_revision: int,
@@ -346,6 +399,11 @@ def correct_manual_trading_transaction(
         ticker = str(details.get("ticker") or "").strip().upper()
         if not ticker:
             raise ValueError("交易明細缺少股票代號")
+        strategy_template = None
+        if mutation_type in {"confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment"}:
+            current = state.get("positions", {}).get(ticker)
+            if current is not None:
+                strategy_template = dict(current)
 
         reverted = void_manual_trading_transaction(
             state,
@@ -365,6 +423,21 @@ def correct_manual_trading_transaction(
                 mutation_id=f"{mutation_id}:replace",
                 trade_date=trade_date,
             )
+        if mutation_type in {"confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment"}:
+            if strategy_template is None:
+                raise ValueError("策略買入修正缺少目前 strategy position；請先由最新交易往回修正")
+            return apply_strategy_account_buy_correction_fill(
+                reverted,
+                ticker=ticker,
+                qty=qty,
+                buy_price=price,
+                params=params,
+                timestamp=timestamp,
+                mutation_id=f"{mutation_id}:replace",
+                trade_date=trade_date,
+                position_template=strategy_template,
+                increment=mutation_type == "confirm_strategy_buy_fill_increment",
+            )
         if mutation_type == "confirm_sell_fill":
             return apply_confirmed_sell_fill(
                 reverted,
@@ -375,16 +448,27 @@ def correct_manual_trading_transaction(
                 timestamp=timestamp,
                 mutation_id=f"{mutation_id}:replace",
                 trade_date=trade_date,
-                event="MANUAL_ACCOUNT_SELL",
+                event="ACCOUNT_CORRECTED_SELL",
             )
-        raise ValueError("只有手動帳務買入/賣出明細可修改")
+        raise ValueError("這筆明細不是可修改的買賣成交")
 
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
         expected_revision_increment=2,
+        guard_orders=False,
         mutator=mutate,
     )
+
+
+def delete_manual_trading_transaction(*args, **kwargs):
+    """Backward-compatible alias; strategy and manual trades are both supported."""
+    return delete_trading_transaction(*args, **kwargs)
+
+
+def correct_manual_trading_transaction(*args, **kwargs):
+    """Backward-compatible alias; strategy and manual trades are both supported."""
+    return correct_trading_transaction(*args, **kwargs)
 
 
 def rollforward_trading_strategy_management(
@@ -396,7 +480,7 @@ def rollforward_trading_strategy_management(
     return _mutate_account(
         project_root,
         expected_revision=expected_revision,
-        allow_active_protection_orders=True,
+        guard_orders=False,
         mutator=lambda state, timestamp, mutation_id: apply_trading_strategy_management_rollforward(
             state,
             updates=updates,
@@ -419,7 +503,10 @@ __all__ = [
     "correct_existing_trading_position",
     "remove_existing_trading_position",
     "record_manual_trading_buy",
+    "record_strategy_trading_buy",
     "record_manual_trading_sell",
+    "delete_trading_transaction",
+    "correct_trading_transaction",
     "delete_manual_trading_transaction",
     "correct_manual_trading_transaction",
     "rollforward_trading_strategy_management",

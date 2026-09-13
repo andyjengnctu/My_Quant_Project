@@ -519,21 +519,19 @@ def validate_trading_account_state_contract_case(base_params):
         check("manual_position_sell_uses_canonical_net_proceeds", cash_before_manual_sell + manual_sell["net_sell_total_milli"], state["cash_milli"])
         check("manual_position_partial_cost_basis_is_allocated_canonically", manual_before["remaining_cost_basis_milli"] - manual_allocated, manual_after["remaining_cost_basis_milli"])
         check("manual_position_remains_unmanaged_after_broker_sell", "unmanaged", state["positions"]["2330"]["strategy_management"]["status"])
-        try:
-            correct_existing_trading_position(
-                root,
-                ticker="2330",
-                qty=800,
-                cost_basis_total=400_000,
-                entry_date="2026-08-02",
-                expected_revision=state["revision"],
-            )
-        except ValueError:
-            sold_manual_correction_rejected = True
-        else:
-            sold_manual_correction_rejected = False
-        check("manual_position_with_sell_history_cannot_be_corrected", True, sold_manual_correction_rejected)
-        check("sold_manual_correction_reject_keeps_revision", state["revision"], load_trading_account_state(root)["revision"])
+        revision_before_inventory_correction = int(state["revision"])
+        realized_before_inventory_correction = int(state["positions"]["2330"]["broker"].get("realized_pnl_milli") or 0)
+        state = correct_existing_trading_position(
+            root,
+            ticker="2330",
+            qty=800,
+            cost_basis_total=400_000,
+            entry_date="2026-08-02",
+            expected_revision=state["revision"],
+        )
+        check("manual_position_with_sell_history_can_reconcile_current_inventory", 800, state["positions"]["2330"]["broker"]["qty"])
+        check("inventory_reconciliation_advances_one_revision", revision_before_inventory_correction + 1, state["revision"])
+        check("inventory_reconciliation_preserves_realized_pnl_history", realized_before_inventory_correction, int(state["positions"]["2330"]["broker"].get("realized_pnl_milli") or 0))
 
         validate_trading_account_state(state)
         expected_revisions = list(range(state["revision"] + 1))
@@ -824,8 +822,8 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
-    check("workbench_keeps_scanner_candidates_separate_from_proposed_orders", True, "今日 Scanner 候選" in panel_source and "建議掛單（尚未送單／尚未成交）" in panel_source)
-    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and "Trading Data" in panel_source and "Pipeline" in panel_source)
+    check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "今日 Scanner Pool" in panel_source and "advanced_notebook.grid(" not in panel_source)
+    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and "Trading Data" in panel_source and "Scanner" in panel_source)
     check("workbench_fixed_notes_move_to_bottom_hover_slot", True, "_footer_hint_var" in panel_source and "_bind_footer_hint(workflow_box, WORKFLOW_HINT)" in panel_source)
     check("workbench_reuse_mode_shows_original_param_training_date", True, "沿用既有 Params｜訓練至" in panel_source)
     check("workbench_page_does_not_render_artifact_paths", False, any(token in panel_source for token in ("_path_var", "snapshot.get('text_path')", "snapshot.get('json_path')", "scanner_output_dir")))
@@ -2646,14 +2644,19 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in panel_source.split('trade_box = ttk.LabelFrame(content, text="買入成交登錄', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0])
     check("workbench_trading_center_keeps_risk_dashboard_but_demotes_account_maintenance", True, "for accounting_section in (header, cash_box, form, table_box, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box.grid(row=1' in panel_source)
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
-    check("workbench_accounting_center_exposes_broker_inventory_trade_details_and_performance", True, all(text in accounting_source for text in ("庫存股｜點選後可賣出、修改或刪除", "買入明細", "賣出明細｜含沖抵持有成本", "沖抵明細｜選取上方賣出紀錄", "績效統計｜漲紅、跌綠、平白", "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
-    check("workbench_accounting_center_owns_inventory_sell_entry", True, all(text in accounting_source for text in ("選取庫存後登錄賣出成交", "record_trading_account_inventory_sell", "對應券商 SELL 單")))
-    check("workbench_accounting_center_supports_inventory_and_transaction_edit_delete", True, all(text in accounting_source for text in ("修改庫存", "刪除庫存", "修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_manual_trading_transaction", "delete_manual_trading_transaction")))
-    check("workbench_date_inputs_use_calendar_picker", True, "DatePickerField" in panel_source and "DatePickerField" in accounting_source)
-    check("workbench_accounting_tables_fit_row_count_without_inner_scrollbars", True, "def _fit_table" in accounting_source and "Scrollbar(buy_box" not in accounting_source and "Scrollbar(sell_box" not in accounting_source)
-    check("workbench_trading_tables_fit_row_count_without_inner_scrollbars", True, "def _fit_tree_rows" in panel_source and panel_source.count("ttk.Scrollbar(") == 1 and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
-    check("workbench_simple_trade_auto_reconciles_unique_active_order", True, all(text in panel_source for text in ("_matching_active_orders", "已找到對應 active 券商單", "order/account reconciliation")))
-    check("workbench_trading_advanced_execution_controls_are_demoted", True, all(text in panel_source for text in ("進階｜掛單/成交", "進階｜Stop / TP", "進階｜Indicator SELL")))
+    check("workbench_accounting_center_exposes_inventory_trade_details_and_performance", True, all(text in accounting_source for text in ("庫存股｜點一下選取，再點同一列取消選取", "買入明細｜未選庫存時顯示全部；選取庫存後只顯示目前庫存對應買入", "賣出明細｜含沖抵持有成本", "沖抵明細｜選取上方賣出紀錄", "績效統計", "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
+    check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ("選取庫存後登錄賣出成交", "record_trading_account_inventory_sell", "系統不管理券商掛單")) and "對應券商 SELL 單" not in accounting_source)
+    check("workbench_accounting_center_supports_manual_and_strategy_edit_delete", True, all(text in accounting_source for text in ("修改庫存", "刪除庫存", "修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_transaction", "delete_trading_transaction", "手動與策略成交都可修正")))
+    date_picker_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "date_picker.py").read_text(encoding="utf-8")
+    check("workbench_date_inputs_open_calendar_from_date_field", True, "DatePickerField" in panel_source and "DatePickerField" in accounting_source and 'self.entry.bind("<Button-1>", self._on_entry_click' in date_picker_source and 'text="日曆"' not in date_picker_source)
+    paged_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "paged_table.py").read_text(encoding="utf-8")
+    check("workbench_tables_share_sort_toggle_page_and_stock_open_contract", True, all(text in paged_source for text in ("page_size", "上一頁", "下一頁", "_header_click", "_row_click", "_open_stock")) and "ttk.Scrollbar" not in paged_source)
+    check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'page_scroll = ttk.Scrollbar' in accounting_source)
+    check("workbench_trading_scanner_pages_at_twelve_without_inner_scrollbar", True, "page_size=12" in panel_source and panel_source.count("ttk.Scrollbar(") == 1 and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
+    check("workbench_buy_success_navigates_to_refreshed_accounting_center", True, '_open_accounting_center' in panel_source and 'callback(refresh=True)' in panel_source and "已切換至帳務中心並重新整理" in panel_source)
+    check("workbench_primary_ui_does_not_mount_broker_oms_notebook", False, "advanced_notebook.grid(" in panel_source or "advanced_notebook.pack(" in panel_source)
+    check("workbench_performance_colour_is_cell_scoped", True, "performance=True" in accounting_source and "column.performance" in paged_source and 'tag_configure("gain"' not in accounting_source)
+    check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
     check("workbench_single_stock_exposes_trading_holdings_and_scanner_pool", True, all(text in inspector_source for text in ("持有股", "Scanner Pool", "get_trading_account_read_model")))

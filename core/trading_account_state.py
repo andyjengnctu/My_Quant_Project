@@ -470,6 +470,273 @@ def remove_manual_trading_position(
     )
 
 
+
+def correct_trading_position_broker_truth(
+    state: dict[str, Any],
+    *,
+    ticker: object,
+    qty: int,
+    cost_basis_total: object,
+    timestamp: str,
+    mutation_id: str,
+    entry_date: object | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Reconcile current broker inventory without fabricating a buy/sell trade.
+
+    This operation is deliberately source-agnostic: both manually adopted and
+    strategy-managed positions may be corrected because the broker inventory is
+    the account truth.  Strategy stop/target state is preserved while quantity
+    and accounting fields are synchronized to the corrected broker truth.
+    """
+    validate_trading_account_state(state)
+    ticker_key = _normalize_ticker(ticker)
+    if ticker_key not in state["positions"]:
+        raise ValueError(f"Trading 沒有 open position: {ticker_key}")
+    new_qty = int(qty)
+    if new_qty <= 0:
+        raise ValueError("position qty 必須 > 0")
+    new_cost = int(money_to_milli(cost_basis_total))
+    if new_cost <= 0:
+        raise ValueError("position cost_basis_total 必須 > 0")
+    corrected_entry_date = _normalize_iso_date(entry_date, field_name="entry_date")
+
+    updated = deepcopy(state)
+    record = updated["positions"][ticker_key]
+    previous = deepcopy(record)
+    broker = record["broker"]
+    old_qty = max(1, int(broker.get("qty") or 1))
+    old_cost = max(1, int(broker.get("remaining_cost_basis_milli") or 1))
+
+    if all(key in broker for key in (
+        "initial_gross_buy_milli", "remaining_gross_buy_milli",
+        "initial_buy_fee_milli", "remaining_buy_fee_milli",
+    )):
+        old_gross = int(broker.get("remaining_gross_buy_milli") or 0)
+        ratio = old_gross / old_cost if old_cost > 0 else 1.0
+        new_gross = max(0, min(new_cost, int(round(new_cost * ratio))))
+        new_fee = new_cost - new_gross
+        broker["initial_gross_buy_milli"] = new_gross
+        broker["remaining_gross_buy_milli"] = new_gross
+        broker["initial_buy_fee_milli"] = new_fee
+        broker["remaining_buy_fee_milli"] = new_fee
+    realized_pnl_milli = int(broker.get("realized_pnl_milli") or 0)
+    broker["qty"] = new_qty
+    broker["initial_qty"] = new_qty
+    broker["initial_cost_basis_milli"] = new_cost
+    broker["remaining_cost_basis_milli"] = new_cost
+    # Current-inventory reconciliation must not erase PnL already realized by
+    # historical sells.  Those fills remain immutable audit evidence.
+    broker["realized_pnl_milli"] = realized_pnl_milli
+    if corrected_entry_date is not None:
+        broker["entry_date"] = corrected_entry_date
+
+    management = record.get("strategy_management") or {}
+    position_state = management.get("position_state")
+    if record.get("source") == POSITION_SOURCE_STRATEGY_FILL and isinstance(position_state, dict):
+        position_state = deepcopy(position_state)
+        gross = int(broker.get("remaining_gross_buy_milli", new_cost) or new_cost)
+        fee = int(broker.get("remaining_buy_fee_milli", new_cost - gross) or 0)
+        avg_price_milli = max(1, (gross + new_qty // 2) // new_qty)
+        old_initial_qty = max(1, int(position_state.get("initial_qty") or old_qty))
+        old_risk = int(position_state.get("initial_risk_total_milli") or 0)
+        position_state["qty"] = new_qty
+        position_state["initial_qty"] = new_qty
+        position_state["gross_buy_milli"] = gross
+        position_state["buy_fee_milli"] = fee
+        position_state["net_buy_total_milli"] = new_cost
+        position_state["remaining_cost_basis_milli"] = new_cost
+        position_state["entry_fill_price_milli"] = avg_price_milli
+        position_state["entry_fill_price"] = milli_to_price(avg_price_milli)
+        position_state["pure_buy_price_milli"] = avg_price_milli
+        position_state["pure_buy_price"] = milli_to_price(avg_price_milli)
+        position_state["initial_risk_total_milli"] = int(round(old_risk * new_qty / old_initial_qty)) if old_risk else 0
+        if corrected_entry_date is not None:
+            position_state["entry_trade_date"] = corrected_entry_date
+            management["management_start_date"] = corrected_entry_date
+        management["position_state"] = _json_safe(sync_position_display_fields(position_state))
+        record["strategy_management"] = management
+
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="correct_position_broker_truth",
+        timestamp=timestamp,
+        details={
+            "ticker": ticker_key,
+            "source": record.get("source"),
+            "previous_position": previous,
+            "position": deepcopy(record),
+            "note": None if note is None else str(note),
+            "cash_changed": False,
+        },
+    )
+
+
+def remove_trading_position_broker_truth(
+    state: dict[str, Any],
+    *,
+    ticker: object,
+    timestamp: str,
+    mutation_id: str,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Remove a current broker inventory row without pretending a SELL occurred."""
+    validate_trading_account_state(state)
+    ticker_key = _normalize_ticker(ticker)
+    if ticker_key not in state["positions"]:
+        raise ValueError(f"Trading 沒有 open position: {ticker_key}")
+    updated = deepcopy(state)
+    removed = deepcopy(updated["positions"].pop(ticker_key))
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type="remove_position_broker_truth",
+        timestamp=timestamp,
+        details={
+            "ticker": ticker_key,
+            "source": removed.get("source"),
+            "removed_position": removed,
+            "note": None if note is None else str(note),
+            "cash_changed": False,
+        },
+    )
+
+
+def apply_strategy_account_buy_correction_fill(
+    state: dict[str, Any],
+    *,
+    ticker: object,
+    qty: int,
+    buy_price: object,
+    params,
+    timestamp: str,
+    mutation_id: str,
+    trade_date: object,
+    position_template: dict[str, Any],
+    increment: bool = False,
+) -> dict[str, Any]:
+    """Record a corrected strategy BUY while preserving strategy decision state.
+
+    Accounting values are rebuilt from the actual broker fill.  Stop/target and
+    roll-forward state come from the pre-correction strategy template, because an
+    accounting correction must not silently re-run strategy decisions.
+    """
+    validate_trading_account_state(state)
+    ticker_key = _normalize_ticker(ticker)
+    trade_date_text = _normalize_iso_date(trade_date, field_name="trade_date")
+    if trade_date_text is None:
+        raise ValueError("trade_date 必填")
+    if _has_sell_fill_on_date(state, ticker_key, trade_date_text):
+        raise ValueError(f"{ticker_key} 同一交易日已有賣出成交；Trading 禁止同日買賣")
+    add_qty = int(qty)
+    if add_qty <= 0:
+        raise ValueError("buy qty 必須 > 0")
+    cash_milli = state.get("cash_milli")
+    if cash_milli is None:
+        raise ValueError("Trading cash 尚未設定，不能修正買入成交")
+    ledger = build_buy_ledger_from_price(buy_price, add_qty, params)
+    add_cost = int(ledger["net_buy_total_milli"])
+    if add_cost > int(cash_milli):
+        raise ValueError("Trading cash 不足，不能套用修正後買入成交")
+
+    updated = deepcopy(state)
+    existing = updated["positions"].get(ticker_key)
+    if increment:
+        if existing is None or existing.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+            raise ValueError(f"{ticker_key} 缺少可承接策略加碼修正的 position")
+        record = existing
+    else:
+        if existing is not None:
+            raise ValueError(f"{ticker_key} 已有 open position，不能重建策略買入")
+        record = deepcopy(position_template)
+        if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+            raise ValueError("策略買入修正缺少 strategy_fill template")
+        updated["positions"][ticker_key] = record
+
+    broker = record["broker"]
+    management = record.get("strategy_management") or {}
+    position_state = deepcopy(management.get("position_state") or {})
+    if not position_state:
+        raise ValueError("策略買入修正缺少 position_state")
+
+    if increment:
+        old_qty = int(broker.get("qty") or 0)
+        old_gross = int(broker.get("remaining_gross_buy_milli") or position_state.get("gross_buy_milli") or 0)
+        old_fee = int(broker.get("remaining_buy_fee_milli") or position_state.get("buy_fee_milli") or 0)
+        old_cost = int(broker.get("remaining_cost_basis_milli") or position_state.get("remaining_cost_basis_milli") or 0)
+        total_qty = old_qty + add_qty
+        total_gross = old_gross + int(ledger["gross_buy_milli"])
+        total_fee = old_fee + int(ledger["buy_fee_milli"])
+        total_cost = old_cost + add_cost
+        broker["qty"] = total_qty
+        broker["initial_qty"] = int(broker.get("initial_qty") or old_qty) + add_qty
+        broker["initial_cost_basis_milli"] = int(broker.get("initial_cost_basis_milli") or old_cost) + add_cost
+        broker["remaining_cost_basis_milli"] = total_cost
+        broker["initial_gross_buy_milli"] = int(broker.get("initial_gross_buy_milli") or old_gross) + int(ledger["gross_buy_milli"])
+        broker["remaining_gross_buy_milli"] = total_gross
+        broker["initial_buy_fee_milli"] = int(broker.get("initial_buy_fee_milli") or old_fee) + int(ledger["buy_fee_milli"])
+        broker["remaining_buy_fee_milli"] = total_fee
+    else:
+        total_qty = add_qty
+        total_gross = int(ledger["gross_buy_milli"])
+        total_fee = int(ledger["buy_fee_milli"])
+        total_cost = add_cost
+        broker["qty"] = total_qty
+        broker["initial_qty"] = total_qty
+        broker["initial_cost_basis_milli"] = total_cost
+        broker["remaining_cost_basis_milli"] = total_cost
+        broker["initial_gross_buy_milli"] = total_gross
+        broker["remaining_gross_buy_milli"] = total_gross
+        broker["initial_buy_fee_milli"] = total_fee
+        broker["remaining_buy_fee_milli"] = total_fee
+        broker["realized_pnl_milli"] = 0
+        broker["entry_date"] = trade_date_text
+
+    avg_price_milli = max(1, (total_gross + total_qty // 2) // total_qty)
+    old_initial_qty = max(1, int(position_state.get("initial_qty") or total_qty))
+    old_risk = int(position_state.get("initial_risk_total_milli") or 0)
+    position_state["qty"] = total_qty
+    position_state["initial_qty"] = total_qty
+    position_state["gross_buy_milli"] = total_gross
+    position_state["buy_fee_milli"] = total_fee
+    position_state["net_buy_total_milli"] = total_cost
+    position_state["remaining_cost_basis_milli"] = total_cost
+    position_state["entry_fill_price_milli"] = avg_price_milli
+    position_state["entry_fill_price"] = milli_to_price(avg_price_milli)
+    position_state["pure_buy_price_milli"] = avg_price_milli
+    position_state["pure_buy_price"] = milli_to_price(avg_price_milli)
+    position_state["initial_risk_total_milli"] = int(round(old_risk * total_qty / old_initial_qty)) if old_risk else 0
+    if not increment:
+        position_state["entry_trade_date"] = trade_date_text
+        management["management_start_date"] = trade_date_text
+    management["position_state"] = _json_safe(sync_position_display_fields(position_state))
+    record["strategy_management"] = management
+    updated["cash_milli"] = int(cash_milli) - add_cost
+
+    mutation_type = TRADE_MUTATION_STRATEGY_BUY_INCREMENT if increment else TRADE_MUTATION_STRATEGY_BUY
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type=mutation_type,
+        timestamp=timestamp,
+        details={
+            "ticker": ticker_key,
+            "qty": add_qty if not increment else None,
+            "fill_qty": add_qty if increment else None,
+            "trade_date": trade_date_text,
+            "entry_fill_price_milli": None if increment else avg_price_milli,
+            "fill_price_milli": int(ledger["fill_price_milli"]),
+            "gross_buy_milli": int(ledger["gross_buy_milli"]) if increment else total_gross,
+            "buy_fee_milli": int(ledger["buy_fee_milli"]) if increment else total_fee,
+            "net_buy_total_milli": add_cost if increment else total_cost,
+            "cumulative_qty": total_qty if increment else None,
+            "cumulative_cost_basis_milli": total_cost if increment else None,
+            "cash_milli_after": int(updated["cash_milli"]),
+            "account_origin": "ACCOUNT_CORRECTION",
+        },
+    )
+
 def apply_manual_trading_buy_fill(
     state: dict[str, Any],
     *,
@@ -1056,7 +1323,7 @@ def void_manual_trading_transaction(
     mutation_id: str,
     note: str | None = None,
 ) -> dict[str, Any]:
-    """Void the latest effective manual trade for one ticker and reverse its accounting.
+    """Void the latest effective trade for one ticker and reverse its accounting.
 
     Historical trade events remain hash-chained evidence.  Only a later void event
     changes the effective transaction projection.  To avoid silently re-writing
@@ -1075,21 +1342,65 @@ def void_manual_trading_transaction(
         )
 
     manual_buy = mutation == TRADE_MUTATION_BUY
-    inferred_source = _effective_position_source_before_revision(state, ticker, int(target_revision))
-    source_before = str(details.get("position_source") or inferred_source or "")
-    manual_sell = mutation == TRADE_MUTATION_SELL and (
-        str(details.get("event") or "") == "MANUAL_ACCOUNT_SELL"
-        or (source_before == POSITION_SOURCE_MANUAL_ADOPTED and not bool(details.get("strategy_managed")))
-    )
-    if not (manual_buy or manual_sell):
-        raise ValueError("只有手動帳務買賣明細可在帳務中心修改/刪除；策略 order/fill lineage 必須由交易流程維護")
+    strategy_buy = mutation in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}
+    sell_trade = mutation == TRADE_MUTATION_SELL
+    if not (manual_buy or strategy_buy or sell_trade):
+        raise ValueError("這筆事件不是可修改/刪除的買賣成交")
 
     cash_milli = state.get("cash_milli")
     if cash_milli is None:
         raise ValueError("Trading cash 尚未設定，不能修正交易明細")
     updated = deepcopy(state)
 
-    if manual_buy:
+    if strategy_buy:
+        net_buy_milli = int(details.get("net_buy_total_milli") or 0)
+        record = updated["positions"].get(ticker)
+        if mutation == TRADE_MUTATION_STRATEGY_BUY:
+            if record is not None and record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+                raise ValueError(f"{ticker} current position 已不是 strategy_fill，無法安全回復")
+            updated["positions"].pop(ticker, None)
+        else:
+            if record is None or record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+                raise ValueError(f"{ticker} 缺少可回復的 strategy_fill position")
+            broker = record["broker"]
+            management = record.get("strategy_management") or {}
+            position_state = deepcopy(management.get("position_state") or {})
+            fill_qty = int(details.get("fill_qty") or 0)
+            gross = int(details.get("gross_buy_milli") or 0)
+            fee = int(details.get("buy_fee_milli") or 0)
+            new_qty = int(broker.get("qty") or 0) - fill_qty
+            if new_qty <= 0:
+                raise ValueError("策略加碼回復後 qty 不合法")
+            broker["qty"] = new_qty
+            broker["initial_qty"] = int(broker.get("initial_qty") or 0) - fill_qty
+            broker["remaining_cost_basis_milli"] = int(broker.get("remaining_cost_basis_milli") or 0) - net_buy_milli
+            broker["initial_cost_basis_milli"] = int(broker.get("initial_cost_basis_milli") or 0) - net_buy_milli
+            broker["remaining_gross_buy_milli"] = int(broker.get("remaining_gross_buy_milli") or 0) - gross
+            broker["initial_gross_buy_milli"] = int(broker.get("initial_gross_buy_milli") or 0) - gross
+            broker["remaining_buy_fee_milli"] = int(broker.get("remaining_buy_fee_milli") or 0) - fee
+            broker["initial_buy_fee_milli"] = int(broker.get("initial_buy_fee_milli") or 0) - fee
+            total_gross = int(broker["remaining_gross_buy_milli"])
+            total_fee = int(broker["remaining_buy_fee_milli"])
+            total_cost = int(broker["remaining_cost_basis_milli"])
+            avg_price_milli = max(1, (total_gross + new_qty // 2) // new_qty)
+            old_qty = max(1, int(position_state.get("qty") or new_qty + fill_qty))
+            old_risk = int(position_state.get("initial_risk_total_milli") or 0)
+            position_state["qty"] = new_qty
+            position_state["initial_qty"] = new_qty
+            position_state["gross_buy_milli"] = total_gross
+            position_state["buy_fee_milli"] = total_fee
+            position_state["net_buy_total_milli"] = total_cost
+            position_state["remaining_cost_basis_milli"] = total_cost
+            position_state["entry_fill_price_milli"] = avg_price_milli
+            position_state["entry_fill_price"] = milli_to_price(avg_price_milli)
+            position_state["pure_buy_price_milli"] = avg_price_milli
+            position_state["pure_buy_price"] = milli_to_price(avg_price_milli)
+            position_state["initial_risk_total_milli"] = int(round(old_risk * new_qty / old_qty)) if old_risk else 0
+            management["position_state"] = _json_safe(sync_position_display_fields(position_state))
+            record["strategy_management"] = management
+        updated["cash_milli"] = int(cash_milli) + net_buy_milli
+        side = "BUY"
+    elif manual_buy:
         net_buy_milli = int(details.get("net_buy_total_milli") or 0)
         position_before = details.get("position_before")
         if position_before is not None:

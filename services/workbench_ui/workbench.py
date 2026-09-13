@@ -707,6 +707,7 @@ class StockToolsWorkbench:
         # Cross-panel navigation seam used by Trading tables without importing the
         # inspector implementation into the Trading panel.
         self.root._open_single_stock_inspector = self.open_single_stock_inspector
+        self.root._open_accounting_center = self.open_accounting_center
         self._build_ui()
         self.root.update_idletasks()
         self.root.deiconify()
@@ -852,6 +853,20 @@ class StockToolsWorkbench:
         self._panel_instances[panel_id] = panel
         if panel_id == "single_stock_backtest_inspector":
             self._consume_pending_single_stock_request()
+
+    def open_accounting_center(self, *, refresh=True):
+        panel_id = "accounting_center"
+        host = self._panel_hosts.get(panel_id)
+        if host is None:
+            return
+        self._notebook.select(host)
+        panel = self._panel_instances.get(panel_id)
+        if panel is not None:
+            refresher = getattr(panel, "refresh", None)
+            if refresh and callable(refresher):
+                refresher()
+        else:
+            self._request_panel_load(panel_id)
 
     def open_single_stock_inspector(self, ticker, *, runtime_domain="trading", auto_run=True):
         ticker_text = str(ticker or "").strip().upper()

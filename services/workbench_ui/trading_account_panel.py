@@ -85,6 +85,8 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 from services.workbench_ui.date_picker import DatePickerField
+from services.workbench_ui.paged_table import PagedTable, TableColumn
+from services.trading.account_trade_entry import record_trading_account_buy
 from services.workbench_ui.workbench import (
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
@@ -680,7 +682,7 @@ class TradingAccountPanel(ttk.Frame):
         operations_box = ttk.LabelFrame(content, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
         operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         operations_box.columnconfigure(0, weight=1)
-        self._overview_vars = {key: tk.StringVar(value="-") for key in ("data", "strategy", "params", "account", "pipeline", "orders")}
+        self._overview_vars = {key: tk.StringVar(value="-") for key in ("data", "strategy", "params", "account", "pipeline")}
         self._overview_detail_vars = {key: tk.StringVar(value="-") for key in self._overview_vars}
         self._overview_primary_labels: dict[str, tk.Label] = {}
         overview_grid = ttk.Frame(operations_box, style=WORKBENCH_FRAME_STYLE)
@@ -690,8 +692,7 @@ class TradingAccountPanel(ttk.Frame):
             ("策略", "strategy"),
             ("Params", "params"),
             ("帳戶", "account"),
-            ("Pipeline", "pipeline"),
-            ("掛單", "orders"),
+            ("Scanner", "pipeline"),
         )):
             box = ttk.LabelFrame(overview_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
             box.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
@@ -722,11 +723,10 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_detail_label = _TradingStatusLine(operations_box, textvariable=self._operations_detail_var, default_tone="muted", max_lines=3)
         self._operations_detail_label.grid(row=2, column=0, sticky="ew", pady=(2, 0))
         self._live_audit_label = _TradingStatusLine(operations_box, textvariable=self._live_audit_var, default_tone="muted", max_lines=2)
-        self._live_audit_label.grid(row=3, column=0, sticky="ew", pady=(2, 0))
+        # OMS/pre-live broker-order audit is no longer part of the simplified daily UI.
         operations_buttons = ttk.Frame(operations_box, style=WORKBENCH_FRAME_STYLE)
         operations_buttons.grid(row=4, column=0, pady=(6, 0), sticky="e")
         ttk.Button(operations_buttons, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left")
-        ttk.Button(operations_buttons, text="實盤就緒檢查", command=self._run_operational_audit, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
         dashboard_box = ttk.LabelFrame(content, text="帳戶儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
         dashboard_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -736,6 +736,7 @@ class TradingAccountPanel(ttk.Frame):
         }
         dashboard_grid = ttk.Frame(dashboard_box, style=WORKBENCH_FRAME_STYLE)
         dashboard_grid.pack(fill="x")
+        self._dashboard_metric_labels = {}
         for col, (title, key) in enumerate((
             ("現金", "cash"),
             ("持股市值", "market_value"),
@@ -746,13 +747,15 @@ class TradingAccountPanel(ttk.Frame):
         )):
             card = ttk.LabelFrame(dashboard_grid, text=title, padding=(8, 5), style=WORKBENCH_LABELLF_STYLE)
             card.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
-            ttk.Label(
+            metric_label = ttk.Label(
                 card,
                 textvariable=self._dashboard_metric_vars[key],
                 style=WORKBENCH_LABEL_STYLE,
                 foreground=WORKBENCH_TEXT,
                 justify="center",
-            ).pack(fill="x")
+            )
+            metric_label.pack(fill="x")
+            self._dashboard_metric_labels[key] = metric_label
             dashboard_grid.columnconfigure(col, weight=1)
         self._dashboard_detail_var = tk.StringVar(value="account/ 衍生快照尚未載入")
         _TradingStatusLine(
@@ -882,19 +885,29 @@ class TradingAccountPanel(ttk.Frame):
         candidate_box.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
         candidate_box.rowconfigure(0, weight=1)
         candidate_box.columnconfigure(0, weight=1)
-        candidate_columns = ("rank", "ticker", "kind", "limit", "stop", "target", "ev", "win_rate", "trades", "growth", "proj_cost", "detail")
-        self._candidate_tree = ttk.Treeview(candidate_box, columns=candidate_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=10)
-        candidate_headings = {
-            "rank": "順位", "ticker": "股票", "kind": "類型", "limit": "買入限價", "stop": "初始Stop",
-            "target": "Target/完成線", "ev": "EV", "win_rate": "歷史勝率", "trades": "交易次數",
-            "growth": "資產成長", "proj_cost": "參考投入", "detail": "Scanner 摘要"
-        }
-        candidate_widths = {"rank": 55, "ticker": 75, "kind": 100, "limit": 90, "stop": 90, "target": 105, "ev": 75, "win_rate": 90, "trades": 80, "growth": 90, "proj_cost": 105, "detail": 520}
-        for key in candidate_columns:
-            self._candidate_tree.heading(key, text=candidate_headings[key])
-            self._candidate_tree.column(key, width=candidate_widths[key], anchor="w" if key == "detail" else "center")
-        self._candidate_tree.grid(row=0, column=0, sticky="nsew")
-        self._candidate_tree.bind("<Double-1>", self._open_selected_candidate_in_inspector, add="+")
+        self._candidate_tree = PagedTable(
+            candidate_box,
+            columns=(
+                TableColumn("rank", "順位", 5, sort_kind="numeric"),
+                TableColumn("ticker", "股票", 7),
+                TableColumn("kind_label", "類型", 10),
+                TableColumn("limit_price", "買入限價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+                TableColumn("stop_price", "初始Stop", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+                TableColumn("target_price", "Target/完成線", 11, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+                TableColumn("ev_value", "EV", 7, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=3)),
+                TableColumn("win_rate", "歷史勝率", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
+                TableColumn("trade_count", "交易次數", 8, sort_kind="numeric", formatter=lambda v, _r: f"{int(v or 0):,}"),
+                TableColumn("asset_growth", "資產成長", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
+                TableColumn("proj_cost", "參考投入", 10, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=0)),
+                TableColumn("detail", "Scanner 摘要", 30, anchor="w"),
+            ),
+            page_size=12,
+            default_sort_key="rank",
+            empty_text="目前沒有 Scanner 候選",
+            on_select=self._on_candidate_selected,
+            on_open_stock=self._open_ticker_in_inspector,
+        )
+        self._candidate_tree.grid(row=0, column=0, sticky="ew")
         candidate_actions = ttk.Frame(candidate_box, style=WORKBENCH_FRAME_STYLE)
         candidate_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Label(candidate_actions, text="雙擊股票可直接切到單股回測檢視；下單由你在券商端自行完成。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
@@ -944,7 +957,8 @@ class TradingAccountPanel(ttk.Frame):
             accounting_section.grid_remove()
 
         advanced_notebook = ttk.Notebook(content, style="Workbench.TNotebook")
-        advanced_notebook.grid(row=9, column=0, sticky="nsew", pady=(0, 8))
+        # Legacy broker-OMS widgets remain instantiated for backward-compatible state readers,
+        # but are intentionally not mounted in Trading Center.  User executes at the broker.
         advanced_orders_tab = ttk.Frame(advanced_notebook, padding=6, style=WORKBENCH_FRAME_STYLE)
         advanced_protection_tab = ttk.Frame(advanced_notebook, padding=6, style=WORKBENCH_FRAME_STYLE)
         advanced_indicator_tab = ttk.Frame(advanced_notebook, padding=6, style=WORKBENCH_FRAME_STYLE)
@@ -1519,46 +1533,29 @@ class TradingAccountPanel(ttk.Frame):
             self._set_overview_card("account", "未初始化", "請先建立 Trading account", tone="warning")
 
         scanner_fresh = bool(snapshot.get("candidate_snapshot_fresh"))
-        proposed_fresh = bool(snapshot.get("proposed_orders_fresh"))
         self._set_overview_card(
             "pipeline",
-            f"{int(snapshot.get('candidate_count') or 0)} / {int(snapshot.get('proposed_order_count') or 0)}",
-            f"Scanner {'FRESH' if scanner_fresh else 'STALE'} / Proposed {'FRESH' if proposed_fresh else 'STALE'}",
-            tone="success" if scanner_fresh and proposed_fresh else "warning",
+            f"{int(snapshot.get('candidate_count') or 0)} 檔",
+            f"Scanner {'FRESH' if scanner_fresh else 'STALE'}",
+            tone="success" if scanner_fresh else "warning",
         )
 
-        entry_count = int(snapshot.get("active_entry_order_count") or 0)
-        protection_count = int(snapshot.get("active_protection_order_count") or 0)
-        indicator_count = int(snapshot.get("active_indicator_exit_order_count") or 0)
-        self._set_overview_card(
-            "orders",
-            f"{entry_count} / {protection_count} / {indicator_count}",
-            "BUY / Protection / Indicator",
-            tone="warning" if any((entry_count, protection_count, indicator_count)) else "success",
-        )
-
-        self._operations_next_var.set(
-            f"{overall} | 下一步：{snapshot.get('next_action_label') or '-'} | {snapshot.get('next_action_detail') or '-'}"
-        )
+        if not data_ready:
+            next_text = "1 更新 Trading 資料"
+        elif not snapshot.get("params_ready_for_scan"):
+            next_text = "2 套用 Params"
+        elif not scanner_fresh:
+            next_text = "3 Scanner 候選"
+        else:
+            next_text = "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"
+        display_status = "READY" if data_ready and bool(snapshot.get("params_ready_for_scan")) and scanner_fresh else "WAIT"
+        self._operations_next_var.set(f"{display_status} | 下一步：{next_text}")
         details = []
         rollforward_due = list(snapshot.get("rollforward_due_tickers") or [])
         if rollforward_due:
             details.append("待持股日終推進: " + ",".join(rollforward_due))
-        stale_protection = list(snapshot.get("stale_active_protection_tickers") or [])
-        if stale_protection:
-            details.append("保護單待取消/重送: " + ",".join(stale_protection))
-        forced_stop = list(snapshot.get("forced_stop_exit_tickers") or [])
-        if forced_stop:
-            details.append("STOP已觸發/剩餘須退出: " + ",".join(forced_stop))
-        missing_stop = list(snapshot.get("missing_stop_tickers") or [])
-        if missing_stop:
-            details.append("缺 active Stop: " + ",".join(missing_stop))
-        blockers = list(snapshot.get("blockers") or [])
-        warnings = list(snapshot.get("warnings") or [])
-        if blockers:
-            details.append("BLOCK: " + "；".join(blockers))
-        elif warnings:
-            details.append("注意: " + "；".join(warnings[:3]))
+        if scanner_fresh:
+            details.append("Stop / Target / SELL 訊號只作決策資訊；券商掛單由使用者自行管理")
         self._operations_detail_var.set(" | ".join(details))
         self._apply_workflow_action_availability()
 
@@ -1588,10 +1585,12 @@ class TradingAccountPanel(ttk.Frame):
         )
 
     def _refresh_all_trading_state(self):
+        # Refresh decision/accounting read models only; broker OMS recovery is no
+        # longer part of the user-facing Trading Center workflow.
         self._submit_trading_command(
             "全狀態刷新",
-            lambda: recover_trading_fill_transaction(WORKBENCH_PROJECT_ROOT),
-            error_title="Trading fill recovery 失敗",
+            lambda: {"status": "REFRESH"},
+            error_title="Trading 狀態刷新失敗",
             refresh_state=True,
         )
 
@@ -1599,12 +1598,10 @@ class TradingAccountPanel(ttk.Frame):
         if self._command_thread is not None and self._command_thread.is_alive():
             self._set_workflow_buttons_state("disabled")
             return
-        availability = dict(self._operations_snapshot.get("workflow_action_availability") or {})
-        for action, button in self._workflow_action_buttons.items():
-            button.configure(state="normal" if bool(availability.get(action)) else "disabled")
-        self._confirm_ordered_button.configure(
-            state="normal" if bool(self._operations_snapshot.get("entry_submission_allowed")) else "disabled"
-        )
+        for _action, button in self._workflow_action_buttons.items():
+            button.configure(state="normal")
+        # Legacy broker-order controls are hidden from the simplified UI.
+        self._confirm_ordered_button.configure(state="disabled")
 
     @staticmethod
     def _set_wraplength(labels, width: int) -> None:
@@ -1780,14 +1777,6 @@ class TradingAccountPanel(ttk.Frame):
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
             return
-        availability = dict(self._operations_snapshot.get("workflow_action_availability") or {})
-        if availability and not bool(availability.get(action)):
-            messagebox.showerror(
-                "Trading workflow 尚不可執行",
-                f"{labels[action]} 目前被狀態契約阻擋。\n\n下一步：{self._operations_snapshot.get('next_action_label') or '-'}\n{self._operations_snapshot.get('next_action_detail') or ''}",
-                parent=self,
-            )
-            return
         self._workflow_status_var.set(f"執行中：{labels[action]}")
 
         def on_success(result):
@@ -1846,51 +1835,45 @@ class TradingAccountPanel(ttk.Frame):
             return str(value)
 
     def _reload_candidate_rows(self, rows):
-        selected = self._selected_candidate_ticker()
-        for item in self._candidate_tree.get_children():
-            self._candidate_tree.delete(item)
         self._candidate_rows = [dict(row) for row in list(rows or [])]
-        self._fit_tree_rows(self._candidate_tree, len(self._candidate_rows))
+        self._candidate_by_ticker = {
+            str(row.get("ticker") or "").strip().upper(): row
+            for row in self._candidate_rows
+            if str(row.get("ticker") or "").strip()
+        }
         kind_labels = {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)", "reentry": "再進場"}
-        selected_iid = None
+        display_rows = []
         for idx, row in enumerate(self._candidate_rows, 1):
             seed = dict(row.get("execution_plan_seed") or {})
-            ticker = str(row.get("ticker") or "-")
-            limit_price = row.get("limit_price") if row.get("limit_price") is not None else seed.get("limit_price")
-            stop_price = seed.get("init_sl")
-            target_price = seed.get("target_price")
-            iid = f"candidate:{idx}"
-            self._candidate_tree.insert(
-                "",
-                "end",
-                iid=iid,
-                values=(
-                    idx,
-                    ticker,
-                    kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
-                    self._format_candidate_number(limit_price, digits=2),
-                    self._format_candidate_number(stop_price, digits=2),
-                    self._format_candidate_number(target_price, digits=2),
-                    self._format_candidate_number(row.get("expected_value", row.get("ev")), digits=3),
-                    self._format_candidate_number(row.get("win_rate"), digits=1) + "%" if row.get("win_rate") is not None else "-",
-                    f"{int(row.get('trade_count') or 0):,}",
-                    self._format_candidate_number(row.get("asset_growth"), digits=1) + "%" if row.get("asset_growth") is not None else "-",
-                    self._format_candidate_number(row.get("proj_cost"), digits=0),
-                    row.get("text") or "",
-                ),
-            )
-            if selected and ticker == selected:
-                selected_iid = iid
-        if selected_iid is not None:
-            self._candidate_tree.selection_set(selected_iid)
-            self._candidate_tree.focus(selected_iid)
+            ticker = str(row.get("ticker") or "-").strip().upper()
+            display_rows.append({
+                "_table_id": f"candidate:{ticker}",
+                "rank": idx,
+                "ticker": ticker,
+                "kind_label": kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
+                "limit_price": row.get("limit_price") if row.get("limit_price") is not None else seed.get("limit_price"),
+                "stop_price": seed.get("init_sl"),
+                "target_price": seed.get("target_price"),
+                "ev_value": row.get("expected_value", row.get("ev")),
+                "win_rate": row.get("win_rate"),
+                "trade_count": row.get("trade_count"),
+                "asset_growth": row.get("asset_growth"),
+                "proj_cost": row.get("proj_cost"),
+                "detail": row.get("text") or "",
+            })
+        self._candidate_tree.set_rows(display_rows, preserve_selection=True)
 
     def _selected_candidate_ticker(self):
-        selected = self._candidate_tree.selection()
-        if not selected:
-            return None
-        values = self._candidate_tree.item(selected[0], "values")
-        return str(values[1]).strip() if len(values) > 1 else None
+        row = self._candidate_tree.selected_row()
+        return str(row.get("ticker") or "").strip().upper() if row else None
+
+    def _selected_candidate_row(self):
+        ticker = self._selected_candidate_ticker()
+        return dict(getattr(self, "_candidate_by_ticker", {}).get(ticker) or {}) if ticker else None
+
+    def _on_candidate_selected(self, row):
+        ticker = str((row or {}).get("ticker") or "").strip().upper()
+        self._trade_ticker_var.set(ticker)
 
     def _open_ticker_in_inspector(self, ticker):
         ticker = str(ticker or "").strip().upper()
@@ -2302,6 +2285,12 @@ class TradingAccountPanel(ttk.Frame):
         self._dashboard_metric_vars["equity"].set(money_text(summary.get("equity")))
         unrealized = summary.get("unrealized_pnl")
         self._dashboard_metric_vars["unrealized"].set(money_text(unrealized))
+        if hasattr(self, "_dashboard_metric_labels"):
+            self._dashboard_metric_labels["unrealized"].configure(
+                foreground=WORKBENCH_ERROR if unrealized is not None and float(unrealized) > 0
+                else WORKBENCH_SUCCESS if unrealized is not None and float(unrealized) < 0
+                else WORKBENCH_TEXT
+            )
         self._dashboard_metric_vars["risk_budget"].set(money_text(summary.get("single_position_risk_budget")))
         self._dashboard_metric_vars["managed_risk"].set(money_text(summary.get("managed_open_risk")))
         warnings = list(self._account_dashboard_snapshot.get("warnings") or [])
@@ -2477,8 +2466,7 @@ class TradingAccountPanel(ttk.Frame):
     def _simple_trade_values(self):
         ticker = self._trade_ticker_var.get().strip().upper()
         if not ticker:
-            selected = self._candidate_tree.selection() if hasattr(self, "_candidate_tree") else ()
-            ticker = str(selected[0]).strip().upper() if selected else ""
+            ticker = self._selected_candidate_ticker() or ""
         if not ticker:
             raise ValueError("股票代號必填")
         qty = parse_trading_qty_text(self._trade_qty_var.get(), "成交股數")
@@ -2488,17 +2476,6 @@ class TradingAccountPanel(ttk.Frame):
             raise ValueError("成交日必填")
         return ticker, qty, price, trade_date
 
-    def _matching_active_orders(self, ticker: str, side: str):
-        ticker = str(ticker).strip().upper()
-        side = str(side).strip().upper()
-        return [
-            (order_id, dict(row))
-            for order_id, row in self._order_rows.items()
-            if str(row.get("ticker") or "").strip().upper() == ticker
-            and str(row.get("side") or "").strip().upper() == side
-            and str(row.get("status") or "") in TRADING_ACTIVE_ORDER_STATUSES
-        ]
-
     def _record_simple_trade(self, side: str):
         try:
             ticker, qty, price, trade_date = self._simple_trade_values()
@@ -2506,98 +2483,47 @@ class TradingAccountPanel(ttk.Frame):
         except (ValueError, RuntimeError) as exc:
             messagebox.showerror("成交登錄", str(exc), parent=self)
             return
-        side = str(side).upper()
-        if side != "BUY":
+        if str(side).upper() != "BUY":
             messagebox.showerror("成交登錄", "賣出成交請到帳務中心點選庫存後操作。", parent=self)
             return
-        action_text = "買入"
-        matching_orders = self._matching_active_orders(ticker, side)
-        if len(matching_orders) > 1:
-            order_labels = "、".join(str(row.get("broker_order_id") or order_id) for order_id, row in matching_orders)
-            messagebox.showerror(
-                "成交登錄",
-                f"{ticker} 目前有多筆 active {side} 券商單（{order_labels}），只靠股票/股數/成交價/日期無法判定是哪一筆。\n\n請到下方進階掛單區選取實際成交的券商單後確認。",
-                parent=self,
-            )
-            return
 
-        matched_order_id = None
-        matched_order = None
-        if matching_orders:
-            matched_order_id, matched_order = matching_orders[0]
-            remaining = int(matched_order.get("remaining_qty") or 0)
-            if qty > remaining:
-                messagebox.showerror("成交登錄", f"本次成交股數不可超過該券商單未成交股數 {remaining:,}", parent=self)
-                return
-
-        route_note = ""
-        if matched_order is not None:
-            route_note = f"\n\n已找到對應 active 券商單：{matched_order.get('broker_order_id') or matched_order_id}，會自動做 order/account reconciliation。"
+        candidate = self._selected_candidate_row()
+        if candidate and str(candidate.get("ticker") or "").strip().upper() != ticker:
+            candidate = None
+        source_text = "Scanner 策略買入" if candidate else "自行買入"
         if not messagebox.askyesno(
-            f"確認{action_text}成交",
-            f"{ticker}｜{qty:,} 股 @ {price}｜{trade_date}\n\n其餘價金、費用、稅、成本與損益由帳務 SSOT 自動計算。{route_note}",
+            "確認買入成交",
+            f"{ticker}｜{qty:,} 股 @ {price}｜{trade_date}\n\n來源：{source_text}\n價金、買入手續費與持有成本由帳務 SSOT 自動計算。",
             parent=self,
         ):
             return
 
-        if matched_order is None:
-            worker = lambda: record_manual_trading_buy(
-                WORKBENCH_PROJECT_ROOT, ticker=ticker, qty=qty, price=price,
-                trade_date=trade_date, expected_revision=expected_revision,
-            )
-            success_suffix = "已直接寫入帳戶 SSOT"
-        else:
-            expected_order_revision = int(self._current_order_revision())
-            fill_fn = confirm_trading_buy_order_fill
+        worker = lambda: record_trading_account_buy(
+            WORKBENCH_PROJECT_ROOT,
+            ticker=ticker,
+            qty=qty,
+            price=price,
+            trade_date=trade_date,
+            expected_account_revision=expected_revision,
+            candidate=candidate,
+        )
 
-            def worker():
-                result = fill_fn(
-                    WORKBENCH_PROJECT_ROOT,
-                    order_id=matched_order_id,
-                    fill_qty=qty,
-                    fill_price=price,
-                    trade_date=trade_date,
-                    expected_order_revision=expected_order_revision,
-                    expected_account_revision=expected_revision,
-                )
-                protection_error = None
-                indicator_error = None
-                try:
-                    build_trading_protection_plan(WORKBENCH_PROJECT_ROOT)
-                except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
-                    protection_error = str(exc)
-                try:
-                    build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
-                except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
-                    indicator_error = str(exc)
-                return {
-                    "fill_result": result,
-                    "protection_error": protection_error,
-                    "indicator_error": indicator_error,
-                }
-
-            success_suffix = f"已與券商單 {matched_order.get('broker_order_id') or matched_order_id} 完成 order/account reconciliation"
-
-        def on_success(result):
+        def on_success(_result):
             self._trade_ticker_var.set("")
             self._trade_qty_var.set("")
             self._trade_price_var.set("")
             self._trade_date_var.set("")
-            extra = ""
-            if matched_order is not None:
-                payload = dict(result or {})
-                if payload.get("protection_error"):
-                    extra += f"\n保護單計畫刷新失敗：{payload['protection_error']}"
-                if payload.get("indicator_error"):
-                    extra += f"\nIndicator 計畫刷新失敗：{payload['indicator_error']}"
+            callback = getattr(self.winfo_toplevel(), "_open_accounting_center", None)
+            if callable(callback):
+                callback(refresh=True)
             messagebox.showinfo(
                 "成交登錄",
-                f"{ticker} {action_text}成交{success_suffix}；帳務中心可查看逐筆明細。{extra}",
-                parent=self,
+                f"{ticker} 買入成交已寫入帳戶 SSOT；已切換至帳務中心並重新整理。",
+                parent=self.winfo_toplevel(),
             )
 
         self._submit_trading_command(
-            f"{ticker} {action_text}成交登錄",
+            f"{ticker} 買入成交登錄",
             worker,
             on_success=on_success,
             error_title="成交登錄失敗",
