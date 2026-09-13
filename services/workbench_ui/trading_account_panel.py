@@ -68,6 +68,10 @@ from services.trading.order_state import (
     confirm_trading_order_cancellation,
     get_trading_order_read_model,
 )
+from services.trading.account_dashboard import (
+    build_trading_account_dashboard_read_model,
+    publish_trading_account_dashboard_snapshot,
+)
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
@@ -356,6 +360,13 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
     bundle: dict[str, object] = {}
     bundle["account"] = _capture_initial_panel_value(lambda: build_trading_account_panel_snapshot(root))
 
+    def _load_dashboard():
+        snapshot = build_trading_account_dashboard_read_model(root)
+        publish_trading_account_dashboard_snapshot(root, snapshot)
+        return snapshot
+
+    bundle["dashboard"] = _capture_initial_panel_value(_load_dashboard)
+
     candidate = _capture_initial_panel_value(lambda: get_trading_candidate_snapshot_read_model(root))
     bundle["candidate_read"] = candidate
     if candidate[0] and bool(candidate[1].get("fresh")):
@@ -396,6 +407,8 @@ class TradingAccountPanel(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=10, style=WORKBENCH_FRAME_STYLE)
         self._snapshot: dict[str, object] = {}
+        self._account_dashboard_snapshot: dict[str, object] = {}
+        self._performance_rows: list[dict[str, object]] = []
         self._position_rows: dict[str, dict[str, object]] = {}
         self._candidate_rows: list[dict[str, object]] = []
         self._proposed_order_rows: list[dict[str, object]] = []
@@ -480,6 +493,7 @@ class TradingAccountPanel(ttk.Frame):
         self._suspend_operations_refresh = True
         try:
             self.refresh_account()
+            self.refresh_account_dashboard()
             self.refresh_candidate_snapshot_rows()
             self.refresh_proposed_order_plan()
             self.refresh_order_state()
@@ -712,8 +726,42 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(operations_buttons, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).pack(side="left")
         ttk.Button(operations_buttons, text="實盤就緒檢查", command=self._run_operational_audit, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
+        dashboard_box = ttk.LabelFrame(content, text="帳戶儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        dashboard_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self._dashboard_metric_vars = {
+            key: tk.StringVar(value="-")
+            for key in ("cash", "market_value", "equity", "unrealized", "risk_budget", "managed_risk")
+        }
+        dashboard_grid = ttk.Frame(dashboard_box, style=WORKBENCH_FRAME_STYLE)
+        dashboard_grid.pack(fill="x")
+        for col, (title, key) in enumerate((
+            ("現金", "cash"),
+            ("持股市值", "market_value"),
+            ("帳戶淨值", "equity"),
+            ("未實現PnL", "unrealized"),
+            ("單筆風險預算", "risk_budget"),
+            ("持倉Stop風險", "managed_risk"),
+        )):
+            card = ttk.LabelFrame(dashboard_grid, text=title, padding=(8, 5), style=WORKBENCH_LABELLF_STYLE)
+            card.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
+            ttk.Label(
+                card,
+                textvariable=self._dashboard_metric_vars[key],
+                style=WORKBENCH_LABEL_STYLE,
+                foreground=WORKBENCH_TEXT,
+                justify="center",
+            ).pack(fill="x")
+            dashboard_grid.columnconfigure(col, weight=1)
+        self._dashboard_detail_var = tk.StringVar(value="account/ 衍生快照尚未載入")
+        _TradingStatusLine(
+            dashboard_box,
+            textvariable=self._dashboard_detail_var,
+            default_tone="muted",
+            max_lines=2,
+        ).pack(fill="x", pady=(6, 0))
+
         workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        workflow_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        workflow_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         workflow_box.columnconfigure(0, weight=1)
         param_mode_row = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
         param_mode_row.grid(row=0, column=0, sticky="ew")
@@ -740,7 +788,6 @@ class TradingAccountPanel(ttk.Frame):
             ("持股日終推進", "rollforward"),
             ("2 套用 Params", "params"),
             ("3 Scanner 候選", "scanner"),
-            ("4 建議掛單", "orders"),
             ("每日流程 1→2→3", "all"),
         ):
             button = ttk.Button(
@@ -758,11 +805,11 @@ class TradingAccountPanel(ttk.Frame):
         self._workflow_status_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
         header = ttk.LabelFrame(content, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        header.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        header.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         ttk.Button(header, text="重新整理帳戶", command=lambda: self._request_state_refresh("帳戶狀態刷新"), style=WORKBENCH_BUTTON_STYLE).pack(side="right")
 
         cash_box = ttk.LabelFrame(content, text="現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        cash_box.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        cash_box.grid(row=5, column=0, sticky="ew", pady=(0, 8))
         ttk.Label(cash_box, text="帳戶現金", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
         self._cash_var = tk.StringVar()
         self._cash_entry = ttk.Entry(cash_box, textvariable=self._cash_var, width=22, style=WORKBENCH_ENTRY_STYLE)
@@ -773,7 +820,7 @@ class TradingAccountPanel(ttk.Frame):
         self._set_cash_button.grid(row=0, column=3)
 
         form = ttk.LabelFrame(content, text="既有持股（manual adopted broker truth）", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        form.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        form.grid(row=6, column=0, sticky="ew", pady=(0, 8))
         labels = ("股票代號", "股數", "剩餘成本總額", "買入日 YYYY-MM-DD", "備註")
         for col, label in enumerate(labels):
             ttk.Label(form, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
@@ -804,22 +851,25 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(button_row, text="清除輸入", command=self._clear_position_form, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
         table_box = ttk.LabelFrame(content, text="目前持股", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
+        table_box.grid(row=7, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("ticker", "source", "qty", "avg_cost", "remaining_cost", "realized_pnl", "entry_date", "management")
-        self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
+        columns = ("ticker", "source", "qty", "avg_cost", "current", "market_value", "pnl", "return_pct", "stop", "risk", "management")
+        self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
             "ticker": "股票",
             "source": "來源",
             "qty": "股數",
             "avg_cost": "平均成本",
-            "remaining_cost": "剩餘成本",
-            "realized_pnl": "已實現PnL",
-            "entry_date": "買入日",
+            "current": "最新價",
+            "market_value": "持股市值",
+            "pnl": "總PnL",
+            "return_pct": "報酬率",
+            "stop": "目前Stop",
+            "risk": "Stop風險",
             "management": "策略管理",
         }
-        widths = {"ticker": 90, "source": 120, "qty": 90, "avg_cost": 110, "remaining_cost": 130, "realized_pnl": 120, "entry_date": 120, "management": 100}
+        widths = {"ticker": 80, "source": 105, "qty": 80, "avg_cost": 100, "current": 90, "market_value": 115, "pnl": 110, "return_pct": 90, "stop": 95, "risk": 105, "management": 95}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center")
@@ -828,15 +878,23 @@ class TradingAccountPanel(ttk.Frame):
         self._tree.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
+        self._tree.bind("<Double-1>", self._open_selected_position_in_inspector, add="+")
+        holding_actions = ttk.Frame(table_box, style=WORKBENCH_FRAME_STYLE)
+        holding_actions.grid(row=1, column=0, columnspan=2, sticky="e", pady=(6, 0))
+        ttk.Button(holding_actions, text="在單股回測檢視", command=self._open_selected_position_in_inspector, style=WORKBENCH_BUTTON_STYLE).pack(side="left")
 
-        candidate_box = ttk.LabelFrame(content, text="今日 Scanner 候選（原始策略候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        candidate_box.grid(row=6, column=0, sticky="nsew")
+        candidate_box = ttk.LabelFrame(content, text="今日 Scanner Pool｜依策略順序（今日 Scanner 候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        candidate_box.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
         candidate_box.rowconfigure(0, weight=1)
         candidate_box.columnconfigure(0, weight=1)
-        candidate_columns = ("rank", "ticker", "kind", "sort", "ev", "proj_cost", "detail")
-        self._candidate_tree = ttk.Treeview(candidate_box, columns=candidate_columns, show="headings", style=WORKBENCH_TREE_STYLE)
-        candidate_headings = {"rank": "排名", "ticker": "股票", "kind": "類型", "sort": "排序值", "ev": "EV", "proj_cost": "參考投入", "detail": "Scanner 摘要"}
-        candidate_widths = {"rank": 60, "ticker": 80, "kind": 110, "sort": 100, "ev": 90, "proj_cost": 110, "detail": 700}
+        candidate_columns = ("rank", "ticker", "kind", "limit", "stop", "target", "ev", "win_rate", "trades", "growth", "proj_cost", "detail")
+        self._candidate_tree = ttk.Treeview(candidate_box, columns=candidate_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=10)
+        candidate_headings = {
+            "rank": "順位", "ticker": "股票", "kind": "類型", "limit": "買入限價", "stop": "初始Stop",
+            "target": "Target/完成線", "ev": "EV", "win_rate": "歷史勝率", "trades": "交易次數",
+            "growth": "資產成長", "proj_cost": "參考投入", "detail": "Scanner 摘要"
+        }
+        candidate_widths = {"rank": 55, "ticker": 75, "kind": 100, "limit": 90, "stop": 90, "target": 105, "ev": 75, "win_rate": 90, "trades": 80, "growth": 90, "proj_cost": 105, "detail": 520}
         for key in candidate_columns:
             self._candidate_tree.heading(key, text=candidate_headings[key])
             self._candidate_tree.column(key, width=candidate_widths[key], anchor="w" if key == "detail" else "center")
@@ -846,9 +904,39 @@ class TradingAccountPanel(ttk.Frame):
         self._candidate_tree.grid(row=0, column=0, sticky="nsew")
         candidate_y.grid(row=0, column=1, sticky="ns")
         candidate_x.grid(row=1, column=0, sticky="ew")
+        self._candidate_tree.bind("<Double-1>", self._open_selected_candidate_in_inspector, add="+")
+        candidate_actions = ttk.Frame(candidate_box, style=WORKBENCH_FRAME_STYLE)
+        candidate_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(candidate_actions, text="雙擊股票可直接切到單股回測檢視；下單由你在券商端自行完成。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
+        ttk.Button(candidate_actions, text="檢視選取股票", command=self._open_selected_candidate_in_inspector, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
 
-        proposed_box = ttk.LabelFrame(content, text="建議掛單（尚未送單／尚未成交）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        proposed_box.grid(row=7, column=0, sticky="nsew", pady=(8, 0))
+        performance_box = ttk.LabelFrame(content, text="帳戶績效統計", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        performance_box.grid(row=8, column=0, sticky="nsew", pady=(0, 8))
+        performance_box.columnconfigure(0, weight=1)
+        perf_columns = ("scope", "count", "cost", "pnl", "return", "profitable", "rate")
+        self._performance_tree = ttk.Treeview(performance_box, columns=perf_columns, show="headings", style=WORKBENCH_TREE_STYLE, height=3)
+        perf_headings = {"scope": "範圍", "count": "持股/交易數", "cost": "成本基礎", "pnl": "PnL", "return": "報酬率", "profitable": "獲利數", "rate": "獲利率/勝率"}
+        perf_widths = {"scope": 120, "count": 100, "cost": 130, "pnl": 120, "return": 95, "profitable": 90, "rate": 110}
+        for key in perf_columns:
+            self._performance_tree.heading(key, text=perf_headings[key])
+            self._performance_tree.column(key, width=perf_widths[key], anchor="center")
+        self._performance_tree.grid(row=0, column=0, sticky="ew")
+        self._performance_note_var = tk.StringVar(value="已賣出＝account event 中已完整平倉交易；持有中以最新 Trading 市價估值。")
+        ttk.Label(performance_box, textvariable=self._performance_note_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).grid(row=1, column=0, sticky="w", pady=(5, 0))
+
+        advanced_notebook = ttk.Notebook(content, style="Workbench.TNotebook")
+        advanced_notebook.grid(row=9, column=0, sticky="nsew", pady=(0, 8))
+        advanced_orders_tab = ttk.Frame(advanced_notebook, padding=6, style=WORKBENCH_FRAME_STYLE)
+        advanced_protection_tab = ttk.Frame(advanced_notebook, padding=6, style=WORKBENCH_FRAME_STYLE)
+        advanced_indicator_tab = ttk.Frame(advanced_notebook, padding=6, style=WORKBENCH_FRAME_STYLE)
+        for tab in (advanced_orders_tab, advanced_protection_tab, advanced_indicator_tab):
+            tab.columnconfigure(0, weight=1)
+        advanced_notebook.add(advanced_orders_tab, text="進階｜掛單/成交")
+        advanced_notebook.add(advanced_protection_tab, text="進階｜Stop / TP")
+        advanced_notebook.add(advanced_indicator_tab, text="進階｜Indicator SELL")
+
+        proposed_box = ttk.LabelFrame(advanced_orders_tab, text="建議掛單（尚未送單／尚未成交）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        proposed_box.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
         proposed_box.rowconfigure(1, weight=1)
         proposed_box.columnconfigure(0, weight=1)
         self._proposed_status_var = tk.StringVar(value="尚未產生建議掛單。")
@@ -873,6 +961,7 @@ class TradingAccountPanel(ttk.Frame):
 
         submit_row = ttk.Frame(proposed_box, style=WORKBENCH_FRAME_STYLE)
         submit_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Button(submit_row, text="4 建議掛單", command=lambda: self._start_workflow_action("orders"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(0, 12))
         ttk.Label(submit_row, text="券商委託號（可留空）", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._broker_order_id_var = tk.StringVar()
         ttk.Entry(submit_row, textvariable=self._broker_order_id_var, width=18, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
@@ -887,8 +976,8 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._confirm_ordered_button.pack(side="right")
 
-        pending_box = ttk.LabelFrame(content, text="券商掛單狀態（ORDERED / PARTIAL / FILLED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        pending_box.grid(row=8, column=0, sticky="nsew", pady=(8, 0))
+        pending_box = ttk.LabelFrame(advanced_orders_tab, text="券商掛單狀態（ORDERED / PARTIAL / FILLED / CANCELLED）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        pending_box.grid(row=1, column=0, sticky="nsew")
         pending_box.rowconfigure(1, weight=1)
         pending_box.columnconfigure(0, weight=1)
         self._order_status_var = tk.StringVar(value="尚無實際送單紀錄。")
@@ -946,8 +1035,8 @@ class TradingAccountPanel(ttk.Frame):
         self._cancel_order_button.pack(side="left")
         ttk.Button(pending_buttons, text="刷新掛單狀態", command=lambda: self._request_state_refresh("券商掛單狀態刷新"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
-        protection_box = ttk.LabelFrame(content, text="成交後 Stop / TP 保護單計畫（logical plan；送單狀態見券商掛單表）", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        protection_box.grid(row=9, column=0, sticky="nsew", pady=(8, 0))
+        protection_box = ttk.LabelFrame(advanced_protection_tab, text="成交後 Stop / TP 保護單計畫（logical plan；送單狀態見券商掛單表）", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        protection_box.grid(row=0, column=0, sticky="nsew")
         protection_box.rowconfigure(1, weight=1)
         protection_box.columnconfigure(0, weight=1)
         self._protection_status_var = tk.StringVar(value="尚未建立成交後保護單計畫。")
@@ -1034,8 +1123,8 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._confirm_oco_submitted_button.pack(side="left")
 
-        indicator_box = ttk.LabelFrame(content, text="Indicator SELL 計畫", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        indicator_box.grid(row=10, column=0, sticky="nsew", pady=(8, 0))
+        indicator_box = ttk.LabelFrame(advanced_indicator_tab, text="Indicator SELL 計畫", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        indicator_box.grid(row=0, column=0, sticky="nsew")
         indicator_box.rowconfigure(1, weight=1)
         indicator_box.columnconfigure(0, weight=1)
         self._indicator_status_var = tk.StringVar(value="尚未建立 Indicator SELL 計畫。")
@@ -1058,7 +1147,7 @@ class TradingAccountPanel(ttk.Frame):
         ttk.Button(buttons,text="確認選取 MARKET SELL 已送單",command=self._confirm_indicator_exit_submitted,style=WORKBENCH_BUTTON_STYLE).pack(side="left")
 
         hint_box = ttk.LabelFrame(content, text="操作提示", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
-        hint_box.grid(row=11, column=0, sticky="ew", pady=(8, 0))
+        hint_box.grid(row=10, column=0, sticky="ew")
         self._footer_hint_label = _TradingStatusLine(hint_box, textvariable=self._footer_hint_var, default_tone="muted", max_lines=3)
         self._footer_hint_label.pack(fill="x")
         self._bind_footer_hint(workflow_box, WORKFLOW_HINT)
@@ -1743,24 +1832,70 @@ class TradingAccountPanel(ttk.Frame):
             return str(value)
 
     def _reload_candidate_rows(self, rows):
+        selected = self._selected_candidate_ticker()
         for item in self._candidate_tree.get_children():
             self._candidate_tree.delete(item)
         self._candidate_rows = [dict(row) for row in list(rows or [])]
         kind_labels = {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)", "reentry": "再進場"}
+        selected_iid = None
         for idx, row in enumerate(self._candidate_rows, 1):
+            seed = dict(row.get("execution_plan_seed") or {})
+            ticker = str(row.get("ticker") or "-")
+            limit_price = row.get("limit_price") if row.get("limit_price") is not None else seed.get("limit_price")
+            stop_price = seed.get("init_sl")
+            target_price = seed.get("target_price")
+            iid = f"candidate:{idx}"
             self._candidate_tree.insert(
                 "",
                 "end",
+                iid=iid,
                 values=(
                     idx,
-                    row.get("ticker") or "-",
+                    ticker,
                     kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
-                    self._format_candidate_number(row.get("sort_value"), digits=4),
+                    self._format_candidate_number(limit_price, digits=2),
+                    self._format_candidate_number(stop_price, digits=2),
+                    self._format_candidate_number(target_price, digits=2),
                     self._format_candidate_number(row.get("expected_value", row.get("ev")), digits=3),
+                    self._format_candidate_number(row.get("win_rate"), digits=1) + "%" if row.get("win_rate") is not None else "-",
+                    f"{int(row.get('trade_count') or 0):,}",
+                    self._format_candidate_number(row.get("asset_growth"), digits=1) + "%" if row.get("asset_growth") is not None else "-",
                     self._format_candidate_number(row.get("proj_cost"), digits=0),
                     row.get("text") or "",
                 ),
             )
+            if selected and ticker == selected:
+                selected_iid = iid
+        if selected_iid is not None:
+            self._candidate_tree.selection_set(selected_iid)
+            self._candidate_tree.focus(selected_iid)
+
+    def _selected_candidate_ticker(self):
+        selected = self._candidate_tree.selection()
+        if not selected:
+            return None
+        values = self._candidate_tree.item(selected[0], "values")
+        return str(values[1]).strip() if len(values) > 1 else None
+
+    def _open_ticker_in_inspector(self, ticker):
+        ticker = str(ticker or "").strip().upper()
+        if not ticker:
+            return
+        callback = getattr(self.winfo_toplevel(), "_open_single_stock_inspector", None)
+        if not callable(callback):
+            messagebox.showerror("單股回測檢視", "Workbench 尚未提供單股回測導覽。", parent=self)
+            return
+        callback(ticker, runtime_domain="trading", auto_run=True)
+
+    def _open_selected_candidate_in_inspector(self, _event=None):
+        ticker = self._selected_candidate_ticker()
+        if ticker:
+            self._open_ticker_in_inspector(ticker)
+
+    def _open_selected_position_in_inspector(self, _event=None):
+        ticker = self._selected_ticker()
+        if ticker:
+            self._open_ticker_in_inspector(ticker)
 
     def _reload_proposed_order_rows(self, rows):
         for item in self._proposed_tree.get_children():
@@ -2126,6 +2261,65 @@ class TradingAccountPanel(ttk.Frame):
             refresh_state=True,
         )
 
+    def refresh_account_dashboard(self):
+        try:
+            snapshot = _load_panel_value(
+                self, "dashboard", lambda: build_trading_account_dashboard_read_model(WORKBENCH_PROJECT_ROOT)
+            )
+        except (FileNotFoundError, ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
+            self._account_dashboard_snapshot = {}
+            for variable in self._dashboard_metric_vars.values():
+                variable.set("-")
+            self._dashboard_detail_var.set(f"帳戶儀表板讀取失敗：{type(exc).__name__}: {exc}")
+            self._reload_performance_rows([])
+            self._reload_positions()
+            return
+        self._account_dashboard_snapshot = dict(snapshot or {})
+        summary = dict(self._account_dashboard_snapshot.get("summary") or {})
+
+        def money_text(value):
+            return "-" if value is None else f"{float(value):,.0f}"
+
+        self._dashboard_metric_vars["cash"].set(money_text(summary.get("cash")))
+        self._dashboard_metric_vars["market_value"].set(money_text(summary.get("holdings_market_value")))
+        self._dashboard_metric_vars["equity"].set(money_text(summary.get("equity")))
+        unrealized = summary.get("unrealized_pnl")
+        self._dashboard_metric_vars["unrealized"].set(money_text(unrealized))
+        self._dashboard_metric_vars["risk_budget"].set(money_text(summary.get("single_position_risk_budget")))
+        self._dashboard_metric_vars["managed_risk"].set(money_text(summary.get("managed_open_risk")))
+        warnings = list(self._account_dashboard_snapshot.get("warnings") or [])
+        revision = self._account_dashboard_snapshot.get("source_account_revision")
+        market_date = self._account_dashboard_snapshot.get("market_date") or "-"
+        self._dashboard_detail_var.set(
+            f"Trading 市價日 {market_date} | account revision {revision if revision is not None else '-'} | "
+            f"持股 {int(summary.get('position_count') or 0)} | 已平倉 {int(summary.get('closed_trade_count') or 0)} | "
+            f"唯讀衍生資料 outputs/trading/account/"
+            + (f" | 注意 {len(warnings)} 項" if warnings else "")
+        )
+        self._reload_performance_rows(self._account_dashboard_snapshot.get("performance") or [])
+        self._reload_positions()
+
+    def _reload_performance_rows(self, rows):
+        for item in self._performance_tree.get_children():
+            self._performance_tree.delete(item)
+        self._performance_rows = [dict(row) for row in list(rows or [])]
+        for row in self._performance_rows:
+            return_pct = row.get("return_pct")
+            profitable_rate = row.get("profitable_rate_pct")
+            self._performance_tree.insert(
+                "",
+                "end",
+                values=(
+                    row.get("scope") or "-",
+                    f"{int(row.get('position_or_trade_count') or 0):,}",
+                    self._format_candidate_number(row.get("cost_basis"), digits=0),
+                    self._format_candidate_number(row.get("pnl"), digits=0),
+                    "-" if return_pct is None else f"{float(return_pct):.2f}%",
+                    f"{int(row.get('profitable_count') or 0):,}",
+                    "-" if profitable_rate is None else f"{float(profitable_rate):.1f}%",
+                ),
+            )
+
     def refresh_account(self):
         try:
             snapshot = _load_panel_value(
@@ -2150,15 +2344,26 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_operations_status()
 
     def _reload_positions(self):
+        if not hasattr(self, "_tree"):
+            return
         selected = self._selected_ticker()
         for item in self._tree.get_children():
             self._tree.delete(item)
         self._position_rows = {}
         source_labels = {"manual_adopted": "手動既有", "strategy_fill": "策略成交"}
         management_labels = {"unmanaged": "未接管", "active": "策略管理"}
-        for row in list(self._snapshot.get("positions") or []):
-            ticker = str(row.get("ticker") or "")
-            self._position_rows[ticker] = dict(row)
+        dashboard_positions = {
+            str(row.get("ticker") or ""): dict(row)
+            for row in list(self._account_dashboard_snapshot.get("positions") or [])
+        }
+        for base_row in list(self._snapshot.get("positions") or []):
+            ticker = str(base_row.get("ticker") or "")
+            row = dict(base_row)
+            row.update(dashboard_positions.get(ticker, {}))
+            # Editing eligibility belongs to the canonical account read model.
+            row["has_sell_history"] = bool(base_row.get("has_sell_history"))
+            self._position_rows[ticker] = row
+            return_pct = row.get("return_pct")
             self._tree.insert(
                 "",
                 "end",
@@ -2168,9 +2373,12 @@ class TradingAccountPanel(ttk.Frame):
                     source_labels.get(str(row.get("source")), str(row.get("source") or "-")),
                     f"{int(row.get('qty') or 0):,}",
                     format_trading_money(row.get("average_cost")),
-                    format_trading_money(row.get("remaining_cost_basis")),
-                    format_trading_money(row.get("realized_pnl")),
-                    row.get("entry_date") or "-",
+                    format_trading_money(row.get("current_price")),
+                    format_trading_money(row.get("market_value")),
+                    format_trading_money(row.get("total_pnl")),
+                    "-" if return_pct is None else f"{float(return_pct):.2f}%",
+                    format_trading_money(row.get("effective_stop")),
+                    format_trading_money(row.get("risk_to_stop")),
                     management_labels.get(str(row.get("management_status")), str(row.get("management_status") or "-")),
                 ),
             )

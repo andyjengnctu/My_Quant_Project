@@ -28,6 +28,9 @@ from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_
 from core.output_paths import ensure_output_dir
 from core.console_report import project_relative_display_path
 from core.runtime_utils import parse_float_strict
+from core.data_utils import get_required_min_rows
+from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
+from core.trading_policy import resolve_trading_selected_strategy_param_path
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method, sort_candidate_rows
 from core.scanner_display import build_scanner_sort_probe_text
 from services.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
@@ -42,8 +45,26 @@ from services.trade_analysis.charting import (
     scroll_chart_to_adjacent_trade,
     scroll_chart_to_latest,
 )
-from services.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
+from services.trade_analysis.trade_log import (
+    build_trade_analysis_view_params,
+    load_params,
+    resolve_trade_analysis_data_dir,
+    run_ticker_analysis,
+    run_trade_analysis,
+)
 from services.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
+from services.trading.daily_workflow import run_trading_candidate_scan
+from services.trading.scanner_state import load_trading_candidate_snapshot
+from services.trading.account_state import get_trading_account_read_model
+from services.trading.market_data_consumer import (
+    load_trading_v2_consumer_state,
+    load_trading_v2_sanitized_ohlcv_frame,
+)
+from services.trading.market_data_v2_view import TradingMarketDataV2View
+from services.trading.strategy_param_runtime import (
+    load_trading_strategy_param_runtime,
+    resolve_trading_candidate_frozen_params,
+)
 from services.workbench_ui.workbench import (
     WorkbenchConsoleWriter,
     WorkbenchInspectorSharedMixin,
@@ -449,6 +470,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._reduced_stock_map = {}
         self._reduced_stock_company_name_map = {}
         self._show_volume_var = tk.BooleanVar(value=False)
+        self._runtime_domain_var = tk.StringVar(value="Research")
+        self._holdings_display_var = tk.StringVar()
+        self._holdings_map = {}
+        self._scanner_info_var = tk.StringVar(value="Scanner：尚未載入")
+        self._trading_candidate_rows_by_ticker: dict[str, dict] = {}
         self._candidate_display_var = tk.StringVar()
         self._candidate_map = {}
         self._history_display_var = tk.StringVar()
@@ -517,13 +543,15 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._reduced_stock_combo.grid(row=0, column=3, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
 
-        ttk.Button(controls_bar, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), pady=uniform_pady, sticky="w")
+        self._candidate_scan_button = ttk.Button(controls_bar, text="計算候選股", command=self._run_scanner, style="Workbench.TButton")
+        self._candidate_scan_button.grid(row=0, column=4, padx=(0, 8), pady=uniform_pady, sticky="w")
         self._candidate_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
         self._autosize_combobox(self._candidate_combo, values=[], current_text=self._candidate_display_var.get(), rule_key="candidate")
         self._candidate_combo.grid(row=0, column=5, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
-        ttk.Button(controls_bar, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), pady=uniform_pady, sticky="w")
+        self._history_scan_button = ttk.Button(controls_bar, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton")
+        self._history_scan_button.grid(row=0, column=6, padx=(0, 8), pady=uniform_pady, sticky="w")
         self._history_combo = ttk.Combobox(controls_bar, state="readonly", width=30, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
         self._autosize_combobox(self._history_combo, values=[], current_text=self._history_display_var.get(), rule_key="history")
         self._history_combo.grid(row=0, column=7, padx=(0, 14), pady=uniform_pady, sticky="w")
@@ -565,6 +593,35 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             command=self._rerender_current_chart,
             style="Workbench.TCheckbutton",
         ).grid(row=0, column=13, padx=(0, 0), pady=uniform_pady, sticky="w")
+
+        ttk.Label(controls_bar, text="檢視模式", style="Workbench.TLabel").grid(row=1, column=0, padx=(0, 6), pady=uniform_pady, sticky="w")
+        self._runtime_domain_combo = ttk.Combobox(
+            controls_bar,
+            state="readonly",
+            width=12,
+            textvariable=self._runtime_domain_var,
+            style="Workbench.TCombobox",
+            values=("Research", "Trading"),
+        )
+        self._runtime_domain_combo.grid(row=1, column=1, padx=(0, 10), pady=uniform_pady, sticky="w")
+        self._runtime_domain_combo.bind("<<ComboboxSelected>>", self._on_runtime_domain_selected)
+        ttk.Label(controls_bar, text="持有股", style="Workbench.TLabel").grid(row=1, column=2, padx=(0, 6), pady=uniform_pady, sticky="w")
+        self._holdings_combo = ttk.Combobox(
+            controls_bar,
+            state="readonly",
+            width=22,
+            textvariable=self._holdings_display_var,
+            style="Workbench.TCombobox",
+            values=(),
+            postcommand=self._refresh_holdings_options,
+        )
+        self._holdings_combo.grid(row=1, column=3, columnspan=2, padx=(0, 12), pady=uniform_pady, sticky="w")
+        self._holdings_combo.bind("<<ComboboxSelected>>", self._on_holding_selected)
+        ttk.Label(
+            controls_bar,
+            textvariable=self._scanner_info_var,
+            style="Workbench.TLabel",
+        ).grid(row=1, column=5, columnspan=9, padx=(0, 0), pady=uniform_pady, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -671,12 +728,33 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         console_scroll.grid(row=0, column=1, sticky="ns")
         self._console_text.configure(yscrollcommand=console_scroll.set)
 
+        scanner_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
+        scanner_tab.rowconfigure(0, weight=1)
+        scanner_tab.columnconfigure(0, weight=1)
+        notebook.add(scanner_tab, text="Scanner Pool")
+        scanner_columns = ("rank", "ticker", "kind", "limit", "stop", "target", "ev", "win", "trades", "growth", "cost")
+        self._scanner_pool_tree = ttk.Treeview(scanner_tab, columns=scanner_columns, show="headings", style="Workbench.Treeview", selectmode="browse")
+        scanner_headings = {"rank":"順位","ticker":"股票","kind":"類型","limit":"買入限價","stop":"初始Stop","target":"Target/完成線","ev":"EV","win":"歷史勝率","trades":"交易次數","growth":"資產成長","cost":"參考投入"}
+        scanner_widths = {"rank":55,"ticker":80,"kind":100,"limit":95,"stop":95,"target":110,"ev":80,"win":90,"trades":85,"growth":90,"cost":110}
+        for key in scanner_columns:
+            self._scanner_pool_tree.heading(key, text=scanner_headings[key])
+            self._scanner_pool_tree.column(key, width=scanner_widths[key], anchor="center")
+        self._scanner_pool_tree.grid(row=0, column=0, sticky="nsew")
+        scanner_y = ttk.Scrollbar(scanner_tab, orient="vertical", command=self._scanner_pool_tree.yview, style="Workbench.Vertical.TScrollbar")
+        scanner_x = ttk.Scrollbar(scanner_tab, orient="horizontal", command=self._scanner_pool_tree.xview, style="Workbench.Horizontal.TScrollbar")
+        self._scanner_pool_tree.configure(yscrollcommand=scanner_y.set, xscrollcommand=scanner_x.set)
+        scanner_y.grid(row=0, column=1, sticky="ns")
+        scanner_x.grid(row=1, column=0, sticky="ew")
+        self._scanner_pool_tree.bind("<Double-1>", self._on_scanner_pool_selected, add="+")
+
         footer = ttk.Frame(self, style="Workbench.TFrame")
         footer.pack(fill="x", pady=(2, 0))
         ttk.Label(footer, textvariable=self._status_var, style="Workbench.TLabel").pack(anchor="w")
 
         self._notebook.select(chart_tab)
+        self._apply_runtime_domain_controls()
         self.after_idle(self._refresh_reduced_stock_company_names_if_needed)
+        self.after_idle(self._refresh_holdings_options)
 
 
 
@@ -862,6 +940,141 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
     def _get_selected_param_source_label(self):
         return self._param_source_display_var.get().strip() or DEFAULT_PARAM_SOURCE_LABEL
 
+    def _runtime_domain_key(self):
+        return "trading" if self._runtime_domain_var.get().strip().lower() == "trading" else "research"
+
+    def _apply_runtime_domain_controls(self):
+        trading = self._runtime_domain_key() == "trading"
+        self._param_source_combo.configure(state="disabled" if trading else "readonly")
+        self._risk_combo.configure(state="disabled" if trading else "readonly")
+        if trading:
+            self._custom_fixed_risk_entry.state(["disabled"])
+            self._history_scan_button.configure(state="disabled")
+            self._scanner_info_var.set("Scanner：Trading 模式與實際交易頁共用 canonical pool / Params / V2 市場資料")
+        else:
+            self._history_scan_button.configure(state="normal")
+            self._on_fixed_risk_selected()
+            self._scanner_info_var.set("Scanner：Research 模式")
+
+    def _on_runtime_domain_selected(self, _event=None):
+        self._apply_runtime_domain_controls()
+        self._refresh_holdings_options()
+        if self._runtime_domain_key() == "trading":
+            self._load_current_trading_candidate_pool()
+        ticker = self._ticker_var.get().strip()
+        if ticker:
+            self.after_idle(self._run_analysis)
+
+    def _refresh_holdings_options(self):
+        self._holdings_map = {}
+        try:
+            read_model = get_trading_account_read_model(WORKBENCH_PROJECT_ROOT)
+        except (FileNotFoundError, ValueError, RuntimeError, OSError):
+            read_model = {"positions": []}
+        labels = []
+        for row in list(read_model.get("positions") or []):
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            label = f"{ticker} | {int(row.get('qty') or 0):,}股 | {row.get('source') or '-'}"
+            labels.append(label)
+            self._holdings_map[label] = ticker
+        self._holdings_combo.configure(values=labels)
+        current = self._holdings_display_var.get().strip()
+        if current not in self._holdings_map:
+            self._holdings_display_var.set("")
+
+    def _on_holding_selected(self, _event=None):
+        ticker = self._holdings_map.get(self._holdings_display_var.get().strip())
+        if ticker:
+            self._runtime_domain_var.set("Trading")
+            self._apply_runtime_domain_controls()
+            self._ticker_var.set(ticker)
+            self.after_idle(self._run_analysis)
+
+    def _load_current_trading_candidate_pool(self):
+        try:
+            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=True)
+        except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+            self._trading_candidate_rows_by_ticker = {}
+            self._apply_scanner_pool_rows([])
+            self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
+            return
+        rows = list(payload.get("candidate_rows") or [])
+        self._apply_trading_candidate_rows(rows, latest_data_date=payload.get("latest_data_date"))
+
+    def _apply_trading_candidate_rows(self, rows, *, latest_data_date=None):
+        self._trading_candidate_rows_by_ticker = {
+            str(row.get("ticker") or "").strip().upper(): dict(row) for row in list(rows or [])
+            if str(row.get("ticker") or "").strip()
+        }
+        display_values = [self._format_scan_dropdown_label(item) for item in list(rows or [])]
+        self._apply_scan_dropdown(
+            combo=self._candidate_combo,
+            value_var=self._candidate_display_var,
+            mapping=self._candidate_map,
+            display_values=display_values,
+            rule_key="candidate",
+        )
+        self._apply_scanner_pool_rows(rows)
+        self._scanner_info_var.set(
+            f"Scanner：Trading {latest_data_date or '-'} | pool {len(display_values)} 檔 | 與實際交易頁一致"
+        )
+
+    def _apply_scanner_pool_rows(self, rows):
+        if not hasattr(self, "_scanner_pool_tree"):
+            return
+        self._scanner_pool_tree.delete(*self._scanner_pool_tree.get_children())
+        kind_labels = {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)", "reentry": "再進場"}
+        for idx, row in enumerate(list(rows or []), 1):
+            seed = dict(row.get("execution_plan_seed") or {})
+            ticker = str(row.get("ticker") or "-")
+            def fmt(value, digits=2):
+                if value is None:
+                    return "-"
+                try:
+                    return f"{float(value):,.{digits}f}"
+                except (TypeError, ValueError):
+                    return str(value)
+            self._scanner_pool_tree.insert(
+                "", "end", iid=f"scanner:{idx}",
+                values=(
+                    idx, ticker, kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
+                    fmt(row.get("limit_price") if row.get("limit_price") is not None else seed.get("limit_price")),
+                    fmt(seed.get("init_sl")), fmt(seed.get("target_price")), fmt(row.get("expected_value", row.get("ev")), 3),
+                    "-" if row.get("win_rate") is None else f"{float(row.get('win_rate')):.1f}%",
+                    f"{int(row.get('trade_count') or 0):,}",
+                    "-" if row.get("asset_growth") is None else f"{float(row.get('asset_growth')):.1f}%",
+                    fmt(row.get("proj_cost"), 0),
+                ),
+            )
+
+    def _on_scanner_pool_selected(self, _event=None):
+        selected = self._scanner_pool_tree.selection()
+        if not selected:
+            return
+        values = self._scanner_pool_tree.item(selected[0], "values")
+        if len(values) < 2:
+            return
+        ticker = str(values[1]).strip().upper()
+        if ticker:
+            if self._runtime_domain_key() != "trading":
+                self._runtime_domain_var.set("Trading")
+                self._apply_runtime_domain_controls()
+            self._ticker_var.set(ticker)
+            self.after_idle(self._run_analysis)
+
+    def open_ticker(self, ticker, *, runtime_domain="trading", auto_run=True):
+        domain = "Trading" if str(runtime_domain or "").strip().lower() == "trading" else "Research"
+        self._runtime_domain_var.set(domain)
+        self._apply_runtime_domain_controls()
+        self._ticker_var.set(str(ticker or "").strip().upper())
+        if domain == "Trading":
+            self._refresh_holdings_options()
+            self._load_current_trading_candidate_pool()
+        if auto_run and self._ticker_var.get().strip():
+            self.after_idle(self._run_analysis)
+
     def _on_reduced_stock_selected(self, _event=None):
         selected = self._reduced_stock_display_var.get().strip()
         ticker = self._reduced_stock_map.get(selected)
@@ -874,6 +1087,16 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         ticker = self._candidate_map.get(selected)
         if ticker:
             self._ticker_var.set(ticker)
+            if self._runtime_domain_key() == "trading":
+                row = dict(self._trading_candidate_rows_by_ticker.get(str(ticker).upper()) or {})
+                seed = dict(row.get("execution_plan_seed") or {})
+                if row:
+                    self._scanner_info_var.set(
+                        "Scanner："
+                        f"{ticker} {row.get('kind') or '-'} | 限價 {row.get('limit_price') or seed.get('limit_price') or '-'} "
+                        f"| Stop {seed.get('init_sl') or '-'} | Target {seed.get('target_price') or '-'} "
+                        f"| EV {row.get('expected_value', row.get('ev')) if row.get('expected_value', row.get('ev')) is not None else '-'}"
+                    )
             self.after_idle(self._run_analysis)
 
     def _on_history_selected(self, _event=None):
@@ -1014,19 +1237,24 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         value_var.set("")
         self._autosize_combobox(combo, values=[], current_text="", rule_key=rule_key)
 
-    def _run_scanner_worker(self, mode, params_path, fixed_risk, request_token):
+    def _run_scanner_worker(self, mode, params_path, fixed_risk, request_token, runtime_domain):
         try:
-            data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
-            params = self._load_params_with_fixed_risk(params_path, fixed_risk)
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
-                if mode == "candidate":
-                    scan_result = run_daily_scanner(data_dir, params)
+                if runtime_domain == "trading":
+                    if mode != "candidate":
+                        raise RuntimeError("Trading 模式不提供 Research 歷史績效池；請切回 Research。")
+                    scan_result = run_trading_candidate_scan(project_root=WORKBENCH_PROJECT_ROOT)
                 else:
-                    scan_result = run_history_qualified_scanner(data_dir, params)
+                    data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
+                    params = self._load_params_with_fixed_risk(params_path, fixed_risk)
+                    if mode == "candidate":
+                        scan_result = run_daily_scanner(data_dir, params)
+                    else:
+                        scan_result = run_history_qualified_scanner(data_dir, params)
         except Exception as exc:
             self.after(0, self._finish_scanner_error, mode, request_token, exc)
             return
-        self.after(0, self._finish_scanner_success, mode, request_token, scan_result)
+        self.after(0, self._finish_scanner_success, mode, request_token, scan_result, runtime_domain)
 
     def _start_scanner(self, mode):
         if self._scanner_thread is not None and self._scanner_thread.is_alive():
@@ -1034,17 +1262,26 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._status_var.set(status_text)
             self._append_console_text(f"[scanner] {status_text}\n")
             return
+        runtime_domain = self._runtime_domain_key()
+        if runtime_domain == "trading" and mode != "candidate":
+            messagebox.showerror("股票工具工作台", "Trading 模式的候選池只使用實際交易 Scanner；歷史績效股請切回 Research。")
+            return
         self._scanner_active_token += 1
         request_token = self._scanner_active_token
-        params_path = self._get_selected_params_path()
-        try:
-            fixed_risk = self._resolve_fixed_risk()
-        except ValueError as exc:
-            messagebox.showerror("股票工具工作台", str(exc))
-            return
+        if runtime_domain == "trading":
+            params_path = resolve_trading_selected_strategy_param_path(WORKBENCH_PROJECT_ROOT)
+            fixed_risk = None
+            param_source = "Trading canonical Params"
+        else:
+            params_path = self._get_selected_params_path()
+            try:
+                fixed_risk = self._resolve_fixed_risk()
+            except ValueError as exc:
+                messagebox.showerror("股票工具工作台", str(exc))
+                return
+            param_source = self._get_selected_param_source_label()
         self._prepare_console_for_new_task()
         self._notebook.select(2)
-        param_source = self._get_selected_param_source_label()
         status_text = (
             f"執行中：掃描候選股 ({param_source})"
             if mode == "candidate"
@@ -1054,28 +1291,36 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._append_console_text(f"[scanner] {status_text}\n")
         scanner_thread = threading.Thread(
             target=self._run_scanner_worker,
-            args=(mode, params_path, fixed_risk, request_token),
+            args=(mode, params_path, fixed_risk, request_token, runtime_domain),
             name=f"workbench-scanner-{mode}",
             daemon=True,
         )
         self._scanner_thread = scanner_thread
         scanner_thread.start()
 
-    def _finish_scanner_success(self, mode, request_token, scan_result):
+    def _finish_scanner_success(self, mode, request_token, scan_result, runtime_domain="research"):
         if request_token != self._scanner_active_token:
             return
         self._scanner_thread = None
         if mode == "candidate":
             candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
-            sort_candidate_rows(candidate_rows, get_buy_sort_method())
-            display_values = [self._format_scan_dropdown_label(item) for item in candidate_rows]
-            self._apply_scan_dropdown(
-                combo=self._candidate_combo,
-                value_var=self._candidate_display_var,
-                mapping=self._candidate_map,
-                display_values=display_values,
-                rule_key="candidate",
-            )
+            if runtime_domain == "trading":
+                self._apply_trading_candidate_rows(
+                    candidate_rows, latest_data_date=(scan_result or {}).get("latest_data_date")
+                )
+                display_values = list(self._candidate_combo.cget("values") or ())
+                self._notebook.select(3)
+            else:
+                sort_candidate_rows(candidate_rows, get_buy_sort_method())
+                display_values = [self._format_scan_dropdown_label(item) for item in candidate_rows]
+                self._apply_scan_dropdown(
+                    combo=self._candidate_combo,
+                    value_var=self._candidate_display_var,
+                    mapping=self._candidate_map,
+                    display_values=display_values,
+                    rule_key="candidate",
+                )
+                self._apply_scanner_pool_rows(candidate_rows)
             self._status_var.set(f"掃描完成：候選股 {len(display_values)} 檔")
             return
 
@@ -1104,96 +1349,177 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
     def _run_history_scanner(self):
         self._start_scanner("history")
 
-    def _run_analysis_worker(self, ticker, params_path, fixed_risk, request_token):
+    def _run_analysis_worker(self, ticker, params_path, fixed_risk, request_token, runtime_domain, candidate_row):
         try:
-            result = run_ticker_analysis(
-                ticker,
-                dataset_profile_key=DEFAULT_DATASET_PROFILE,
-                params=self._load_params_with_fixed_risk(params_path, fixed_risk),
-                export_excel=True,
-                export_chart=False,
-                return_chart_payload=True,
-                verbose=False,
-            )
+            if runtime_domain == "trading":
+                consumer_state = load_trading_v2_consumer_state(
+                    WORKBENCH_PROJECT_ROOT, required=True, verify_current_view=True
+                )
+                market_date = str(consumer_state.get("market_date") or "")
+                if not market_date:
+                    raise RuntimeError("Trading V2 consumer state 缺少 market_date")
+                if candidate_row:
+                    params, _member = resolve_trading_candidate_frozen_params(candidate_row)
+                    params_source = "scanner_frozen_candidate"
+                else:
+                    runtime = load_trading_strategy_param_runtime(params_path)
+                    params = runtime["primary_params"]
+                    params_source = "trading_primary_params"
+                view = TradingMarketDataV2View.open(WORKBENCH_PROJECT_ROOT)
+                clean_df = load_trading_v2_sanitized_ohlcv_frame(
+                    view,
+                    ticker=ticker,
+                    through_date=market_date,
+                    min_rows=get_required_min_rows(params),
+                )
+                analysis_params = build_trade_analysis_view_params(params)
+                output_dir = resolve_runtime_output_dir(
+                    WORKBENCH_PROJECT_ROOT, domain=RUNTIME_DOMAIN_TRADING, category=WORKBENCH_OUTPUT_CATEGORY
+                )
+                os.makedirs(output_dir, exist_ok=True)
+                analysis_result = run_trade_analysis(
+                    clean_df,
+                    ticker,
+                    analysis_params,
+                    export_excel=False,
+                    export_chart=False,
+                    return_chart_payload=True,
+                    verbose=False,
+                    output_dir=output_dir,
+                )
+                result = {
+                    "ticker": ticker,
+                    "params": analysis_params,
+                    "clean_df": clean_df,
+                    "source": "TRADING_V2",
+                    "dataset_profile_key": "trading",
+                    "dataset_label": f"Trading V2 through {market_date}",
+                    "trading_market_date": market_date,
+                    "trading_params_source": params_source,
+                    **analysis_result,
+                }
+            else:
+                result = run_ticker_analysis(
+                    ticker,
+                    dataset_profile_key=DEFAULT_DATASET_PROFILE,
+                    params=self._load_params_with_fixed_risk(params_path, fixed_risk),
+                    export_excel=True,
+                    export_chart=False,
+                    return_chart_payload=True,
+                    verbose=False,
+                )
         except Exception as exc:
-            self.after(0, self._finish_analysis_error, ticker, params_path, fixed_risk, request_token, exc)
+            self.after(
+                0, self._finish_analysis_error, ticker, params_path, fixed_risk,
+                request_token, runtime_domain, exc
+            )
             return
-        self.after(0, self._finish_analysis_success, ticker, params_path, fixed_risk, request_token, result)
+        self.after(
+            0, self._finish_analysis_success, ticker, params_path, fixed_risk,
+            request_token, runtime_domain, result
+        )
 
-    def _start_analysis(self, ticker, *, params_path=None, fixed_risk=None):
-        ticker = str(ticker or "").strip()
+    def _start_analysis(self, ticker, *, params_path=None, fixed_risk=None, runtime_domain=None, candidate_row=None):
+        ticker = str(ticker or "").strip().upper()
         if not ticker:
             return
-        resolved_params_path = str(params_path or self._get_selected_params_path())
-        try:
-            resolved_fixed_risk = self._resolve_fixed_risk() if fixed_risk is None else float(fixed_risk)
-        except ValueError as exc:
-            messagebox.showerror("股票工具工作台", str(exc))
-            return
+        resolved_domain = str(runtime_domain or self._runtime_domain_key()).strip().lower()
+        if resolved_domain == "trading":
+            resolved_params_path = str(params_path or resolve_trading_selected_strategy_param_path(WORKBENCH_PROJECT_ROOT))
+            resolved_fixed_risk = None
+            status_context = "Trading V2 / canonical Params"
+        else:
+            resolved_params_path = str(params_path or self._get_selected_params_path())
+            try:
+                resolved_fixed_risk = self._resolve_fixed_risk() if fixed_risk is None else float(fixed_risk)
+            except ValueError as exc:
+                messagebox.showerror("股票工具工作台", str(exc))
+                return
+            status_context = f"{get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} / 固定風險 {resolved_fixed_risk:.4f}"
         self._analysis_active_token += 1
         request_token = self._analysis_active_token
-        self._status_var.set(f"執行中：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} / 固定風險 {resolved_fixed_risk:.4f}")
+        self._status_var.set(f"執行中：{ticker} / {status_context}")
         analysis_thread = threading.Thread(
             target=self._run_analysis_worker,
-            args=(ticker, resolved_params_path, resolved_fixed_risk, request_token),
+            args=(ticker, resolved_params_path, resolved_fixed_risk, request_token, resolved_domain, dict(candidate_row or {})),
             name=f"workbench-analysis-{ticker}",
             daemon=True,
         )
         self._analysis_thread = analysis_thread
         analysis_thread.start()
 
-    def _consume_pending_analysis_request(self, completed_ticker, completed_params_path, completed_fixed_risk):
+    @staticmethod
+    def _same_optional_risk(left, right):
+        if left is None or right is None:
+            return left is None and right is None
+        return float(left) == float(right)
+
+    def _consume_pending_analysis_request(self, completed_ticker, completed_params_path, completed_fixed_risk, completed_domain):
         pending_request = self._analysis_pending_request
         self._analysis_pending_request = None
         if not pending_request:
             return
-        pending_ticker, pending_params_path, pending_fixed_risk = pending_request
+        pending_ticker, pending_params_path, pending_fixed_risk, pending_domain, pending_candidate = pending_request
         if (
             str(pending_ticker or "").strip() == str(completed_ticker or "").strip()
             and str(pending_params_path or "").strip() == str(completed_params_path or "").strip()
-            and float(pending_fixed_risk) == float(completed_fixed_risk)
+            and self._same_optional_risk(pending_fixed_risk, completed_fixed_risk)
+            and str(pending_domain) == str(completed_domain)
         ):
             return
-        self.after_idle(lambda ticker=pending_ticker, path=pending_params_path, risk=pending_fixed_risk: self._start_analysis(ticker, params_path=path, fixed_risk=risk))
+        self.after_idle(
+            lambda ticker=pending_ticker, path=pending_params_path, risk=pending_fixed_risk, domain=pending_domain, candidate=pending_candidate:
+            self._start_analysis(ticker, params_path=path, fixed_risk=risk, runtime_domain=domain, candidate_row=candidate)
+        )
 
-    def _finish_analysis_success(self, ticker, params_path, fixed_risk, request_token, result):
+    def _finish_analysis_success(self, ticker, params_path, fixed_risk, request_token, runtime_domain, result):
         if request_token != self._analysis_active_token:
             return
         self._analysis_thread = None
         self._result = result
         render_error_text = self._render_result(result)
         if not render_error_text:
-            self._status_var.set(f"完成：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
-        self._consume_pending_analysis_request(ticker, params_path, fixed_risk)
+            context = "Trading" if runtime_domain == "trading" else get_dataset_profile_label(DEFAULT_DATASET_PROFILE)
+            self._status_var.set(f"完成：{ticker} / {context}")
+        self._consume_pending_analysis_request(ticker, params_path, fixed_risk, runtime_domain)
 
-    def _finish_analysis_error(self, ticker, params_path, fixed_risk, request_token, exc):
+    def _finish_analysis_error(self, ticker, params_path, fixed_risk, request_token, runtime_domain, exc):
         if request_token != self._analysis_active_token:
             return
         self._analysis_thread = None
         self._report_runtime_exception("run_analysis", exc, status_prefix="執行失敗")
-        self._consume_pending_analysis_request(ticker, params_path, fixed_risk)
+        self._consume_pending_analysis_request(ticker, params_path, fixed_risk, runtime_domain)
 
     def _run_analysis(self):
-        ticker = self._ticker_var.get().strip()
+        ticker = self._ticker_var.get().strip().upper()
         if not ticker:
             messagebox.showerror("股票工具工作台", "請先輸入股票代號。")
             return
 
-        params_path = self._get_selected_params_path()
-        try:
-            fixed_risk = self._resolve_fixed_risk()
-        except ValueError as exc:
-            messagebox.showerror("股票工具工作台", str(exc))
-            return
+        runtime_domain = self._runtime_domain_key()
+        if runtime_domain == "trading":
+            params_path = resolve_trading_selected_strategy_param_path(WORKBENCH_PROJECT_ROOT)
+            fixed_risk = None
+            candidate_row = dict(self._trading_candidate_rows_by_ticker.get(ticker) or {})
+        else:
+            params_path = self._get_selected_params_path()
+            try:
+                fixed_risk = self._resolve_fixed_risk()
+            except ValueError as exc:
+                messagebox.showerror("股票工具工作台", str(exc))
+                return
+            candidate_row = {}
         if self._analysis_thread is not None and self._analysis_thread.is_alive():
-            self._analysis_pending_request = (ticker, params_path, fixed_risk)
-            self._status_var.set(
-                f"查股進行中，已排入最新請求：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}"
-            )
+            self._analysis_pending_request = (ticker, params_path, fixed_risk, runtime_domain, candidate_row)
+            context = "Trading" if runtime_domain == "trading" else get_dataset_profile_label(DEFAULT_DATASET_PROFILE)
+            self._status_var.set(f"查股進行中，已排入最新請求：{ticker} / {context}")
             return
 
         self._analysis_pending_request = None
-        self._start_analysis(ticker, params_path=params_path, fixed_risk=fixed_risk)
+        self._start_analysis(
+            ticker, params_path=params_path, fixed_risk=fixed_risk,
+            runtime_domain=runtime_domain, candidate_row=candidate_row
+        )
 
     def _render_result(self, result):
         trade_logs_df = result.get("trade_logs_df")

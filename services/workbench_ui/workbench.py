@@ -690,6 +690,10 @@ class StockToolsWorkbench:
         self._panel_loading: set[str] = set()
         self._panel_load_results: queue.Queue = queue.Queue()
         self._panel_poll_after_id = None
+        self._pending_single_stock_request: dict[str, object] | None = None
+        # Cross-panel navigation seam used by Trading tables without importing the
+        # inspector implementation into the Trading panel.
+        self.root._open_single_stock_inspector = self.open_single_stock_inspector
         self._build_ui()
         self.root.update_idletasks()
         self.root.deiconify()
@@ -833,6 +837,42 @@ class StockToolsWorkbench:
             status.destroy()
             self._panel_status_labels.pop(panel_id, None)
         self._panel_instances[panel_id] = panel
+        if panel_id == "single_stock_backtest_inspector":
+            self._consume_pending_single_stock_request()
+
+    def open_single_stock_inspector(self, ticker, *, runtime_domain="trading", auto_run=True):
+        ticker_text = str(ticker or "").strip().upper()
+        if not ticker_text:
+            return
+        panel_id = "single_stock_backtest_inspector"
+        self._pending_single_stock_request = {
+            "ticker": ticker_text,
+            "runtime_domain": str(runtime_domain or "trading"),
+            "auto_run": bool(auto_run),
+        }
+        host = self._panel_hosts.get(panel_id)
+        if host is None:
+            return
+        self._notebook.select(host)
+        if panel_id in self._panel_instances:
+            self._consume_pending_single_stock_request()
+        else:
+            self._request_panel_load(panel_id)
+
+    def _consume_pending_single_stock_request(self):
+        request = self._pending_single_stock_request
+        panel = self._panel_instances.get("single_stock_backtest_inspector")
+        if not request or panel is None:
+            return
+        opener = getattr(panel, "open_ticker", None)
+        if not callable(opener):
+            return
+        self._pending_single_stock_request = None
+        opener(
+            request["ticker"],
+            runtime_domain=request["runtime_domain"],
+            auto_run=bool(request["auto_run"]),
+        )
 
     def run(self):
         self.root.mainloop()
