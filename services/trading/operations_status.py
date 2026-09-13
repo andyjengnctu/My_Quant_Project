@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
+
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
 from core.trading_order_state import (
@@ -106,6 +108,7 @@ def _empty_candidate() -> dict[str, Any]:
         "valid": False,
         "fresh": False,
         "candidate_count": 0,
+        "candidate_tickers": [],
         "scanned_ticker_count": 0,
         "information_date": None,
         "error": None,
@@ -366,16 +369,31 @@ def derive_trading_operations_status(
     if quick_filter_qualified_count is not None:
         quick_filter_qualified_count = int(quick_filter_qualified_count)
     candidate_snapshot_available = bool(candidate.get("exists")) and bool(candidate.get("valid"))
-    scanner_scanned_ticker_count = (
-        int(candidate.get("scanned_ticker_count") or 0)
-        if candidate_snapshot_available
-        else None
-    )
-    scanner_remaining_ticker_count = (
+    scanner_candidate_ticker_count = (
         int(candidate.get("candidate_count") or 0)
         if candidate_snapshot_available
         else None
     )
+    open_position_tickers = {
+        str(row.get("ticker") or "").strip().upper()
+        for row in positions
+        if int(row.get("qty") or 0) > 0 and str(row.get("ticker") or "").strip()
+    }
+    candidate_tickers = {
+        str(ticker or "").strip().upper()
+        for ticker in list(candidate.get("candidate_tickers") or [])
+        if str(ticker or "").strip()
+    }
+    unheld_candidate_tickers = candidate_tickers - open_position_tickers
+    portfolio_free_slot_count = max(0, int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - len(open_position_tickers))
+    scanner_buyable_ticker_count = None
+    if (
+        candidate_snapshot_available
+        and bool(candidate.get("fresh"))
+        and bool(account.get("initialized"))
+        and account.get("cash") is not None
+    ):
+        scanner_buyable_ticker_count = min(len(unheld_candidate_tickers), portfolio_free_slot_count)
     trading_data_blockers = [str(item) for item in list(workflow.get("trading_data_blockers") or []) if str(item)]
 
     allocation_blockers: list[str] = []
@@ -613,8 +631,11 @@ def derive_trading_operations_status(
         "market_data_v2_archive_error": workflow.get("market_data_v2_archive_error"),
         "listed_ticker_count": listed_ticker_count,
         "quick_filter_qualified_count": quick_filter_qualified_count,
-        "scanner_scanned_ticker_count": scanner_scanned_ticker_count,
-        "scanner_remaining_ticker_count": scanner_remaining_ticker_count,
+        "scanner_candidate_ticker_count": scanner_candidate_ticker_count,
+        "scanner_buyable_ticker_count": scanner_buyable_ticker_count,
+        "scanner_unheld_candidate_ticker_count": (len(unheld_candidate_tickers) if candidate_snapshot_available else None),
+        "portfolio_free_slot_count": (portfolio_free_slot_count if bool(account.get("initialized")) else None),
+        "portfolio_max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
         "scanner_information_date": candidate.get("information_date"),
         "strategy_id": workflow.get("strategy_id"),
         "param_selector": workflow.get("param_selector"),

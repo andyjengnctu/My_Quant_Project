@@ -1052,7 +1052,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "今日 Scanner Pool" in panel_source and "advanced_notebook.grid(" not in panel_source)
-    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 掃出的檔數", "剩餘檔數", "策略 / Params")))
+    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數", "策略 / Params")))
     check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=1", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
     check("workbench_reuse_mode_shows_original_param_training_date", True, "沿用既有 Params｜訓練至" in panel_source)
     check("workbench_page_does_not_render_artifact_paths", False, any(token in panel_source for token in ("_path_var", "snapshot.get('text_path')", "snapshot.get('json_path')", "scanner_output_dir")))
@@ -2641,7 +2641,11 @@ def validate_trading_operations_status_contract_case(base_params):
     }
     account = {"initialized": True, "revision": 7, "cash": 500_000.0, "positions": []}
     orders = {"revision": 4, "orders": []}
-    candidate = {"exists": True, "valid": True, "fresh": True, "candidate_count": 3, "scanned_ticker_count": 120, "information_date": "2026-09-04"}
+    candidate = {
+        "exists": True, "valid": True, "fresh": True, "candidate_count": 3,
+        "candidate_tickers": ["1101", "2317", "2330"],
+        "scanned_ticker_count": 120, "information_date": "2026-09-04",
+    }
     proposed = {"exists": False, "valid": False, "fresh": False, "order_count": 0}
     protection = {"exists": False, "fresh": False, "positions": []}
     indicator_clear = {"exists": True, "fresh": True, "exit_count": 0, "exits": [], "active_indicator_exit_order_count": 0, "active_indicator_exit_tickers": []}
@@ -2664,8 +2668,28 @@ def validate_trading_operations_status_contract_case(base_params):
     overview_counts = derive()
     check("operations_status_exposes_total_market_count", 300, overview_counts["listed_ticker_count"])
     check("operations_status_exposes_quick_filter_count", 120, overview_counts["quick_filter_qualified_count"])
-    check("operations_status_exposes_scanner_scanned_count", 120, overview_counts["scanner_scanned_ticker_count"])
-    check("operations_status_exposes_scanner_remaining_count", 3, overview_counts["scanner_remaining_ticker_count"])
+    check("operations_status_exposes_scanner_candidate_count", 3, overview_counts["scanner_candidate_ticker_count"])
+    check("operations_status_exposes_scanner_buyable_count", 3, overview_counts["scanner_buyable_ticker_count"])
+    check("operations_status_exposes_portfolio_free_slots", 10, overview_counts["portfolio_free_slot_count"])
+    held_candidate_account = {
+        "initialized": True, "revision": 8, "cash": 400_000.0,
+        "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "entry_order_id": "ENTRY-2317", "management_status": "active"}],
+    }
+    held_candidate_counts = derive(account=held_candidate_account)
+    check("operations_status_buyable_excludes_held_candidate", 2, held_candidate_counts["scanner_unheld_candidate_ticker_count"])
+    check("operations_status_buyable_uses_unheld_candidates", 2, held_candidate_counts["scanner_buyable_ticker_count"])
+    near_full_account = {
+        "initialized": True, "revision": 9, "cash": 400_000.0,
+        "positions": [
+            {"ticker": f"9{i:03d}", "source": "manual_adopted", "qty": 100}
+            for i in range(9)
+        ],
+    }
+    near_full_counts = derive(account=near_full_account)
+    check("operations_status_buyable_respects_max_position_free_slots", 1, near_full_counts["portfolio_free_slot_count"])
+    check("operations_status_buyable_is_bounded_by_free_slots", 1, near_full_counts["scanner_buyable_ticker_count"])
+    stale_candidate_counts = derive(candidate={**deepcopy(candidate), "fresh": False})
+    check("operations_status_buyable_requires_fresh_candidate_snapshot", None, stale_candidate_counts["scanner_buyable_ticker_count"])
 
     recovery = derive(fill_transaction_pending=True)
     check("pending_fill_transaction_is_top_priority_blocker", NEXT_RECOVER_FILL, recovery["next_action_code"])
@@ -2974,7 +2998,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     overview_schema = panel_source.split('operations_box = ttk.LabelFrame(content, text="Trading 操作總覽"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
     workflow_schema = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
     check("workbench_overview_removes_account_card_and_consolidates_strategy_params", True, '帳戶"' not in overview_schema and '策略 / Params' in overview_schema and 'member' not in overview_schema.lower() and 'agree' not in overview_schema.lower())
-    check("workbench_overview_exposes_requested_funnel_cards", True, all(label in overview_schema for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 掃出的檔數", "剩餘檔數")))
+    check("workbench_overview_exposes_requested_funnel_cards", True, all(label in overview_schema for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數")))
     check("workbench_overview_limits_dynamic_status_to_two_single_line_rows", True, '_operations_next_label.grid(' in overview_schema and '_operations_detail_label.grid(' in overview_schema and overview_schema.count('max_lines=1') >= 2 and '_live_audit_label' not in overview_schema)
     check("workbench_daily_workflow_does_not_repeat_status_rows", True, '_workflow_status_label' not in workflow_schema and '_param_mode_detail_label' not in workflow_schema)
     check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_detail_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)

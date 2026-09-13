@@ -408,6 +408,7 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
             "valid": False,
             "fresh": False,
             "candidate_count": 0,
+            "candidate_tickers": [],
             "information_date": None,
             "error": None,
             "path": project_relative_display_path(path, project_root=root),
@@ -420,6 +421,7 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
             "valid": False,
             "fresh": False,
             "candidate_count": 0,
+            "candidate_tickers": [],
             "information_date": None,
             "error": f"{type(exc).__name__}: {exc}",
             "path": project_relative_display_path(path, project_root=root),
@@ -429,11 +431,18 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
         load_trading_candidate_snapshot(root, require_current=True)
     except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
         freshness_error = f"{type(exc).__name__}: {exc}"
+    candidate_rows = [dict(row) for row in list(payload.get("candidate_rows") or [])]
+    candidate_tickers = sorted({
+        str(row.get("ticker") or "").strip().upper()
+        for row in candidate_rows
+        if str(row.get("ticker") or "").strip()
+    })
     return {
         "exists": True,
         "valid": True,
         "fresh": freshness_error is None,
-        "candidate_count": len(payload.get("candidate_rows") or []),
+        "candidate_count": len(candidate_rows),
+        "candidate_tickers": candidate_tickers,
         "scanned_tickers": list(payload.get("scanned_tickers") or []),
         "scanned_ticker_count": len(payload.get("scanned_tickers") or []),
         "stale_candidate_rows_skipped": list(payload.get("stale_candidate_rows_skipped") or []),

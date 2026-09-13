@@ -676,7 +676,7 @@ class TradingAccountPanel(ttk.Frame):
         operations_box.columnconfigure(0, weight=1)
         self._overview_vars = {
             key: tk.StringVar(value="-")
-            for key in ("sync", "total", "quick", "scanned", "remaining", "strategy_params")
+            for key in ("sync", "total", "quick", "candidates", "buyable", "strategy_params")
         }
         self._overview_detail_vars = {key: tk.StringVar(value="-") for key in self._overview_vars}
         self._overview_primary_labels: dict[str, tk.Label] = {}
@@ -686,8 +686,8 @@ class TradingAccountPanel(ttk.Frame):
             ("同步狀態", "sync"),
             ("總股數", "total"),
             ("符合快篩數", "quick"),
-            ("Scanner 掃出的檔數", "scanned"),
-            ("剩餘檔數", "remaining"),
+            ("Scanner 候選數", "candidates"),
+            ("剩餘可買數", "buyable"),
             ("策略 / Params", "strategy_params"),
         )):
             box = ttk.LabelFrame(overview_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
@@ -1456,8 +1456,8 @@ class TradingAccountPanel(ttk.Frame):
 
         listed_count = snapshot.get("listed_ticker_count")
         quick_count = snapshot.get("quick_filter_qualified_count")
-        scanned_count = snapshot.get("scanner_scanned_ticker_count")
-        remaining_count = snapshot.get("scanner_remaining_ticker_count")
+        candidate_count = snapshot.get("scanner_candidate_ticker_count")
+        buyable_count = snapshot.get("scanner_buyable_ticker_count")
         scanner_fresh = bool(snapshot.get("candidate_snapshot_fresh"))
         scanner_date = snapshot.get("scanner_information_date") or "-"
         self._set_overview_card(
@@ -1472,19 +1472,27 @@ class TradingAccountPanel(ttk.Frame):
             "快篩後可進 Scanner",
             tone="success" if quick_count is not None else "muted",
         )
-        scanner_tone = "success" if scanner_fresh else ("warning" if scanned_count is not None else "muted")
-        scanner_status = "FRESH" if scanner_fresh else ("STALE" if scanned_count is not None else "尚未掃描")
+        scanner_tone = "success" if scanner_fresh else ("warning" if candidate_count is not None else "muted")
+        scanner_status = "FRESH" if scanner_fresh else ("STALE" if candidate_count is not None else "尚未掃描")
         self._set_overview_card(
-            "scanned",
-            count_text(scanned_count),
+            "candidates",
+            count_text(candidate_count),
             f"{scanner_status} | {scanner_date}",
             tone=scanner_tone,
         )
+        free_slots = snapshot.get("portfolio_free_slot_count")
+        max_positions = snapshot.get("portfolio_max_positions")
+        unheld_count = snapshot.get("scanner_unheld_candidate_ticker_count")
+        buyable_detail = (
+            f"未持有候選 {int(unheld_count):,} | 空位 {int(free_slots):,}/{int(max_positions):,}"
+            if buyable_count is not None and unheld_count is not None and free_slots is not None and max_positions is not None
+            else "需 fresh Scanner 與帳戶狀態"
+        )
         self._set_overview_card(
-            "remaining",
-            count_text(remaining_count),
-            "Scanner 最終候選",
-            tone=scanner_tone,
+            "buyable",
+            count_text(buyable_count),
+            buyable_detail,
+            tone="success" if buyable_count is not None else "muted",
         )
 
         strategy_id = snapshot.get("strategy_id") or "-"
