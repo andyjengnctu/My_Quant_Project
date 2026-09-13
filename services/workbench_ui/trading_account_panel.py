@@ -677,13 +677,11 @@ class TradingAccountPanel(ttk.Frame):
         operations_box = ttk.LabelFrame(content, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
         operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         operations_box.columnconfigure(0, weight=1)
-        operations_box.columnconfigure(1, weight=0)
         self._overview_vars = {key: tk.StringVar(value="-") for key in ("data", "strategy", "params", "account", "pipeline")}
         self._overview_detail_vars = {key: tk.StringVar(value="-") for key in self._overview_vars}
         self._overview_primary_labels: dict[str, tk.Label] = {}
         overview_grid = ttk.Frame(operations_box, style=WORKBENCH_FRAME_STYLE)
-        overview_grid.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        ttk.Button(operations_box, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).grid(row=0, column=1, sticky="ne")
+        overview_grid.grid(row=0, column=0, sticky="ew")
         for col, (title, key) in enumerate((
             ("Trading Data", "data"),
             ("策略", "strategy"),
@@ -718,43 +716,19 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_next_label = _TradingStatusLine(operations_box, textvariable=self._operations_next_var, max_lines=2)
         self._operations_detail_label = _TradingStatusLine(operations_box, textvariable=self._operations_detail_var, default_tone="muted", max_lines=3)
         self._live_audit_label = _TradingStatusLine(operations_box, textvariable=self._live_audit_var, default_tone="muted", max_lines=2)
-        # Fixed explanatory/status prose is intentionally not mounted; only dynamic
-        # user feedback is surfaced through the fixed footer.
+        self._operations_next_label.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        self._operations_detail_label.grid(row=2, column=0, sticky="ew", pady=(2, 0))
+        self._live_audit_label.grid(row=3, column=0, sticky="ew", pady=(2, 0))
 
-        dashboard_box = ttk.LabelFrame(content, text="帳戶儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        dashboard_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        # Trading Center still consumes the account dashboard read model for current
+        # position valuation, but its duplicate account-summary cards belong only to
+        # Accounting Center and are not mounted here.
         self._dashboard_metric_vars = {
             key: tk.StringVar(value="-")
             for key in ("cash", "market_value", "liquidation", "equity")
         }
-        dashboard_grid = ttk.Frame(dashboard_box, style=WORKBENCH_FRAME_STYLE)
-        dashboard_grid.pack(fill="x")
         self._dashboard_metric_labels = {}
-        for col, (title, key) in enumerate((
-            ("現金餘額", "cash"),
-            ("持股市值", "market_value"),
-            ("可清算淨值", "liquidation"),
-            ("帳戶淨值", "equity"),
-        )):
-            card = ttk.LabelFrame(dashboard_grid, text=title, padding=(8, 5), style=WORKBENCH_LABELLF_STYLE)
-            card.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
-            metric_label = ttk.Label(
-                card,
-                textvariable=self._dashboard_metric_vars[key],
-                style=WORKBENCH_LABEL_STYLE,
-                foreground=WORKBENCH_TEXT,
-                justify="center",
-            )
-            metric_label.pack(fill="x")
-            self._dashboard_metric_labels[key] = metric_label
-            dashboard_grid.columnconfigure(col, weight=1)
         self._dashboard_detail_var = tk.StringVar(value="account/ 衍生快照尚未載入")
-        self._dashboard_detail_label = _TradingStatusLine(
-            dashboard_box,
-            textvariable=self._dashboard_detail_var,
-            default_tone="muted",
-            max_lines=2,
-        )
 
         workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -797,6 +771,7 @@ class TradingAccountPanel(ttk.Frame):
             self._workflow_action_buttons[action] = button
         self._workflow_status_var = tk.StringVar(value="")
         self._workflow_status_label = _TradingStatusLine(workflow_box, textvariable=self._workflow_status_var, default_tone="muted", max_lines=2)
+        self._workflow_status_label.grid(row=2, column=0, sticky="ew", pady=(6, 0))
 
         header = ttk.LabelFrame(content, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
         header.grid(row=4, column=0, sticky="ew", pady=(0, 8))
@@ -872,13 +847,13 @@ class TradingAccountPanel(ttk.Frame):
                 TableColumn("kind_label", "類型", 10),
                 TableColumn("limit_price", "買入限價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
                 TableColumn("stop_price", "初始Stop", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
-                TableColumn("target_price", "Target/完成線", 11, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+                TableColumn("target_price", "停利線", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
+                TableColumn("proj_qty", "參考股數", 9, sort_kind="numeric", formatter=lambda v, _r: "-" if v is None else f"{int(v):,}"),
+                TableColumn("proj_cost", "參考投入", 10, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=0)),
                 TableColumn("ev_value", "EV", 7, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=3)),
                 TableColumn("win_rate", "歷史勝率", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
                 TableColumn("trade_count", "交易次數", 8, sort_kind="numeric", formatter=lambda v, _r: f"{int(v or 0):,}"),
                 TableColumn("asset_growth", "資產成長", 8, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=1) + "%" if v is not None else "-"),
-                TableColumn("proj_cost", "參考投入", 10, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=0)),
-                TableColumn("detail", "Scanner 摘要", 30, anchor="w"),
             ),
             page_size=12,
             default_sort_key="rank",
@@ -1144,6 +1119,7 @@ class TradingAccountPanel(ttk.Frame):
         footer_line = ttk.Frame(self._footer_bar, style=WORKBENCH_FRAME_STYLE)
         footer_line.pack(fill="x")
         ttk.Label(footer_line, text="操作提示｜", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
+        ttk.Button(footer_line, text="全狀態刷新", command=self._refresh_all_trading_state, style=WORKBENCH_BUTTON_STYLE).pack(side="right", padx=(8, 0))
         self._footer_hint_label = ttk.Label(footer_line, textvariable=self._footer_hint_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED)
         self._footer_hint_label.pack(side="left", fill="x", expand=True)
         self._bind_footer_hint(workflow_box, WORKFLOW_HINT)
@@ -1529,8 +1505,6 @@ class TradingAccountPanel(ttk.Frame):
         rollforward_due = list(snapshot.get("rollforward_due_tickers") or [])
         if rollforward_due:
             details.append("待持股日終推進: " + ",".join(rollforward_due))
-        if scanner_fresh:
-            details.append("Stop / Target / SELL 訊號只作決策資訊；券商掛單由使用者自行管理")
         self._operations_detail_var.set(" | ".join(details))
         self._apply_workflow_action_availability()
 
@@ -1753,16 +1727,12 @@ class TradingAccountPanel(ttk.Frame):
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
             return
         self._workflow_status_var.set(f"執行中：{labels[action]}")
-        if hasattr(self, "_show_footer_hint"):
-            self._show_footer_hint(self._workflow_status_var.get())
 
         def on_success(result):
             self._finish_workflow_success(action, result)
 
         def on_error(exc):
             self._workflow_status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
-            if hasattr(self, "_show_footer_hint"):
-                self._show_footer_hint(self._workflow_status_var.get())
             messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
 
         self._submit_trading_command(
@@ -1833,12 +1803,12 @@ class TradingAccountPanel(ttk.Frame):
                 "limit_price": row.get("limit_price") if row.get("limit_price") is not None else seed.get("limit_price"),
                 "stop_price": seed.get("init_sl"),
                 "target_price": seed.get("target_price"),
+                "proj_qty": row.get("proj_qty"),
+                "proj_cost": row.get("proj_cost"),
                 "ev_value": row.get("expected_value", row.get("ev")),
                 "win_rate": row.get("win_rate"),
                 "trade_count": row.get("trade_count"),
                 "asset_growth": row.get("asset_growth"),
-                "proj_cost": row.get("proj_cost"),
-                "detail": row.get("text") or "",
             })
         self._candidate_tree.set_rows(display_rows, preserve_selection=True)
 
@@ -2208,8 +2178,6 @@ class TradingAccountPanel(ttk.Frame):
             self._workflow_status_var.set(
                 f"每日 Scanner 完成：候選 {len(scan_result.get('candidate_rows') or [])} 檔 | data {scan_result.get('latest_data_date') or '-'}"
             )
-        if hasattr(self, "_show_footer_hint"):
-            self._show_footer_hint(self._workflow_status_var.get())
 
 
     def _current_revision(self) -> int:

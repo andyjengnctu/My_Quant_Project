@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from core.config import get_ev_calc_method
 from core.console_report import project_relative_display_path
 from core.exact_accounting import (
     build_sell_ledger_from_price,
@@ -31,7 +30,7 @@ from services.trading.market_data_consumer import load_trading_v2_consumer_state
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
 
-ACCOUNT_DASHBOARD_SCHEMA_VERSION = 1
+ACCOUNT_DASHBOARD_SCHEMA_VERSION = 2
 ACCOUNT_DASHBOARD_ROLE = "derived_read_only_trading_account_dashboard"
 ACCOUNT_DASHBOARD_FILENAME = "account_snapshot.json"
 ACCOUNT_PERFORMANCE_FILENAME = "performance_summary.json"
@@ -319,34 +318,56 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
     return buys, sells
 
 
-def _closed_trade_metrics(rows: list[dict[str, Any]]) -> dict[str, float | None]:
-    """Canonical closed-trade win rate / payoff / EV(R) semantics."""
-    if not rows:
-        return {"win_rate_pct": None, "expected_value_r": None, "risk_reward_ratio": None}
-    wins = [row for row in rows if float(row.get("pnl") or 0) > 0]
-    losses = [row for row in rows if float(row.get("pnl") or 0) <= 0]
-    win_rate = len(wins) / len(rows) * 100.0
-    avg_win_amount = sum(float(row.get("pnl") or 0) for row in wins) / len(wins) if wins else 0.0
-    avg_loss_amount = abs(sum(float(row.get("pnl") or 0) for row in losses) / len(losses)) if losses else 0.0
-    # Risk/reward is undefined unless both winning and losing closed trades exist.
-    # Do not expose a 99.9 sentinel as if it were a real metric.
-    payoff = (avg_win_amount / avg_loss_amount) if wins and losses and avg_loss_amount > 0 else None
+def _actual_outcome_metrics(rows: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Derive empirical Trading performance from actual net PnL only.
 
-    r_rows = [row for row in rows if row.get("r_mult") is not None]
+    ``1 R`` is the mean absolute loss among the observed losing samples in the
+    requested scope.  Therefore ``expected_value_r`` answers: average net PnL
+    per sample / one unit of actually observed loss.  This is intentionally
+    independent from Scanner/strategy initial-risk lineage.
+    """
+    if not rows:
+        return {
+            "win_rate_pct": None,
+            "expected_value_r": None,
+            "risk_reward_ratio": None,
+            "actual_risk_unit": None,
+        }
+
+    pnl_values: list[float] = []
+    for row in rows:
+        value = row.get("pnl")
+        if value is None:
+            return {
+                "win_rate_pct": None,
+                "expected_value_r": None,
+                "risk_reward_ratio": None,
+                "actual_risk_unit": None,
+            }
+        pnl_values.append(float(value))
+
+    wins = [value for value in pnl_values if value > 0]
+    losses = [value for value in pnl_values if value < 0]
+    win_rate = len(wins) / len(pnl_values) * 100.0
+    avg_win_amount = sum(wins) / len(wins) if wins else None
+    avg_loss_amount = abs(sum(losses) / len(losses)) if losses else None
+
+    payoff = None
+    if avg_win_amount is not None and avg_loss_amount is not None and avg_loss_amount > 0:
+        payoff = avg_win_amount / avg_loss_amount
+
+    # No observed loss means there is no empirical risk unit yet, so EV(R) is
+    # mathematically undefined even when every observed sample is profitable.
     expected_value_r = None
-    if len(r_rows) == len(rows) and r_rows:
-        if get_ev_calc_method() == "B":
-            win_r = [float(row["r_mult"]) for row in r_rows if float(row["r_mult"]) > 0]
-            loss_r = [float(row["r_mult"]) for row in r_rows if float(row["r_mult"]) <= 0]
-            if win_r and loss_r:
-                avg_win_r = sum(win_r) / len(win_r)
-                avg_loss_r = abs(sum(loss_r) / len(loss_r))
-                if avg_loss_r > 0:
-                    payoff_for_ev = min(10.0, avg_win_r / avg_loss_r)
-                    expected_value_r = (win_rate / 100.0 * payoff_for_ev) - (1.0 - win_rate / 100.0)
-        else:
-            expected_value_r = sum(float(row["r_mult"]) for row in r_rows) / len(r_rows)
-    return {"win_rate_pct": win_rate, "expected_value_r": expected_value_r, "risk_reward_ratio": payoff}
+    if avg_loss_amount is not None and avg_loss_amount > 0:
+        expected_value_r = (sum(pnl_values) / len(pnl_values)) / avg_loss_amount
+
+    return {
+        "win_rate_pct": win_rate,
+        "expected_value_r": expected_value_r,
+        "risk_reward_ratio": payoff,
+        "actual_risk_unit": avg_loss_amount,
+    }
 
 
 def _performance_summary_row(
@@ -356,10 +377,10 @@ def _performance_summary_row(
     value: float | None,
     pnl: float | None,
     stock_tickers: set[str],
-    closed_metric_rows: list[dict[str, Any]] | None = None,
+    metric_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     cost = sum(float(row.get("cost_basis") or 0) for row in rows)
-    metrics = _closed_trade_metrics(list(closed_metric_rows or []))
+    metrics = _actual_outcome_metrics(list(metric_rows or []))
     return {
         "scope": label,
         "stock_count": len(stock_tickers),
@@ -565,16 +586,16 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
     performance = [
         _performance_summary_row(
             "庫存股", open_perf_rows, value=open_value, pnl=open_pnl,
-            stock_tickers=open_tickers, closed_metric_rows=[],
+            stock_tickers=open_tickers, metric_rows=open_perf_rows,
         ),
         _performance_summary_row(
             "平倉股", closed_perf_rows, value=closed_value, pnl=closed_pnl,
-            stock_tickers=closed_tickers, closed_metric_rows=closed_perf_rows,
+            stock_tickers=closed_tickers, metric_rows=closed_perf_rows,
         ),
         _performance_summary_row(
             "加總", [*open_perf_rows, *closed_perf_rows],
             value=combined_value, pnl=combined_pnl, stock_tickers=open_tickers | closed_tickers,
-            closed_metric_rows=closed_perf_rows,
+            metric_rows=[*open_perf_rows, *closed_perf_rows],
         ),
     ]
 

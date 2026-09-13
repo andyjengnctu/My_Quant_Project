@@ -69,7 +69,7 @@ def _normalize_execution_plan_seed(candidate_plan, *, ticker, trade_date):
     return seed
 
 
-def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, prev_close=None, limit_price=None, execution_plan_seed=None, trade_date=None):
+def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, prev_close=None, limit_price=None, execution_plan_seed=None, trade_date=None, proj_qty=None):
     sort_value = _calc_sort_value(
         expected_value=expected_value,
         proj_cost=proj_cost,
@@ -90,6 +90,7 @@ def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_coun
         'kind': kind,
         'ticker': ticker,
         'proj_cost': proj_cost,
+        'proj_qty': proj_qty,
         'ev': expected_value,
         'expected_value': expected_value,
         'sort_value': sort_value,
@@ -158,6 +159,7 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
         trade_count=trade_count,
         asset_growth_pct=asset_growth_pct,
         proj_cost=proj_cost,
+        proj_qty=proj_qty,
         detail=' | '.join(barrier_parts),
         sanitize_issue=sanitize_issue,
         prev_close=prev_close,
@@ -265,6 +267,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             trade_count=trade_count,
             asset_growth_pct=asset_growth_pct,
             proj_cost=proj_cost,
+            proj_qty=proj_qty,
             detail=detail,
             sanitize_issue=sanitize_issue,
             prev_close=prev_close,

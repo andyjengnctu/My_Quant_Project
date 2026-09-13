@@ -140,7 +140,8 @@ class AccountingCenterPanel(ttk.Frame):
         dashboard.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         dashboard_header = ttk.Frame(dashboard, style=WORKBENCH_FRAME_STYLE)
         dashboard_header.pack(fill="x", pady=(0, 6))
-        ttk.Button(dashboard_header, text="全狀態刷新", command=self.refresh, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
+        self._refresh_status_var = tk.StringVar(value="")
+        ttk.Label(dashboard_header, textvariable=self._refresh_status_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left", fill="x", expand=True)
         self._status_var = tk.StringVar(value="-")
         self._market_date_var = tk.StringVar(value="-")
 
@@ -328,8 +329,8 @@ class AccountingCenterPanel(ttk.Frame):
                 TableColumn("pnl", "損益", 12, performance=True, formatter=lambda v, _r: _amount(v)),
                 TableColumn("return_pct", "報酬率", 10, performance=True, formatter=lambda v, _r: _pct(v)),
                 TableColumn("win_rate_pct", "勝率", 9, formatter=lambda v, _r: _pct(v)),
-                TableColumn("expected_value_r", "期望值(EV R)", 11, performance=True, formatter=lambda v, _r: "N/A" if v is None else f"{float(v):.2f} R"),
-                TableColumn("risk_reward_ratio", "風報比", 9, formatter=lambda v, _r: "N/A" if v is None else f"{float(v):.2f}"),
+                TableColumn("expected_value_r", "實績 EV(R)", 11, performance=True, formatter=lambda v, _r: "N/A" if v is None else f"{float(v):.2f} R"),
+                TableColumn("risk_reward_ratio", "實績賺賠比", 10, formatter=lambda v, _r: "N/A" if v is None else f"{float(v):.2f}"),
             ),
             page_size=12,
             stock_key=None,
@@ -347,6 +348,7 @@ class AccountingCenterPanel(ttk.Frame):
         footer_line = ttk.Frame(self._footer_bar, style=WORKBENCH_FRAME_STYLE)
         footer_line.pack(fill="x")
         ttk.Label(footer_line, text="操作提示｜", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left")
+        ttk.Button(footer_line, text="全狀態刷新", command=self.refresh, style=WORKBENCH_BUTTON_STYLE).pack(side="right", padx=(8, 0))
         ttk.Label(footer_line, textvariable=self._footer_hint_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="left", fill="x", expand=True)
         self._bind_footer_hint(cash_box, "現金欄只用於券商現金對帳；買賣成交會自動更新現金。")
         self._bind_footer_hint(inventory, inventory_hint)
@@ -430,8 +432,10 @@ class AccountingCenterPanel(ttk.Frame):
     def refresh(self):
         if self._refresh_thread is not None and self._refresh_thread.is_alive():
             self._refresh_pending = True
+            self._refresh_status_var.set("刷新排程中…")
             return
         self._refresh_pending = False
+        self._refresh_status_var.set("刷新中…")
         self._refresh_thread = threading.Thread(target=self._load_worker, daemon=True, name="workbench-accounting-center-refresh")
         self._refresh_thread.start()
         self.after(30, self._poll_refresh)
@@ -460,13 +464,14 @@ class AccountingCenterPanel(ttk.Frame):
             self._market_date_var.set("-")
             self._init_button.configure(state="normal")
             self._cash_button.configure(state="disabled")
-            self._show_footer_hint(f"帳務資料讀取失敗：{error}")
+            self._refresh_status_var.set(f"刷新失敗：{type(error).__name__}: {error}")
             if self._refresh_pending:
                 self.after_idle(self.refresh)
             return
         self._snapshot = dict(account or {})
         self._dashboard = dict(dashboard or {})
         self._render()
+        self._refresh_status_var.set("刷新完成")
         if self._refresh_pending:
             self.after_idle(self.refresh)
 
