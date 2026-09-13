@@ -374,6 +374,9 @@ def _build_ordered_protection_record(
         "qty": qty,
         "position_qty_at_submission": position_qty,
         "entry_order_id": str(position_plan.get("entry_order_id") or ""),
+        "legacy_entry_order_id": (
+            str(position_plan.get("legacy_entry_order_id") or "") or None
+        ),
         "entry_trade_date": str(position_plan.get("entry_trade_date") or ""),
         "order_type": order_type,
         "trigger_price_milli": trigger_milli,

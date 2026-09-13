@@ -14,7 +14,10 @@ from services.trading.account_state import (
     record_strategy_trading_buy,
 )
 from services.trading.order_state import get_trading_order_read_model
-from services.trading.strategy_param_runtime import resolve_trading_candidate_frozen_params
+from services.trading.strategy_param_runtime import (
+    build_trading_candidate_strategy_lineage,
+    resolve_trading_candidate_frozen_params,
+)
 
 
 def list_active_sell_orders_for_ticker(project_root, ticker: object) -> dict:
@@ -50,6 +53,7 @@ def record_trading_account_buy(
         if candidate_ticker != ticker_key:
             raise ValueError("選取的 Scanner candidate 與成交股票不一致")
         params, member = resolve_trading_candidate_frozen_params(candidate_row)
+        strategy_lineage = build_trading_candidate_strategy_lineage(candidate_row)
         # Strategy geometry is float-based while exact account ledgers accept
         # decimal-like inputs.  Normalize only at this strategy/account boundary
         # so UI Decimal input never leaks into stop/risk arithmetic.
@@ -63,6 +67,7 @@ def record_trading_account_buy(
             expected_revision=(None if expected_account_revision is None else int(expected_account_revision)),
             params=params,
             execution_plan_seed=dict(candidate_row.get("execution_plan_seed") or {}),
+            strategy_lineage=strategy_lineage,
         )
         return {
             "route": "scanner_strategy_buy",

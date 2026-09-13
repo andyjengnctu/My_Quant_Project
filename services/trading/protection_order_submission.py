@@ -65,8 +65,16 @@ def _load_position_truth(root: Path, position_plan: dict[str, Any]) -> tuple[dic
     qty = int(broker.get("qty") or 0)
     if qty <= 0 or qty != int(position_plan.get("position_qty") or 0):
         raise RuntimeError(f"Trading protection plan 持股 qty 已變更，請先重新建立 plan: {ticker}")
-    if str(broker.get("entry_order_id") or "") != str(position_plan.get("entry_order_id") or ""):
-        raise RuntimeError(f"Trading protection plan entry order binding 已變更: {ticker}")
+    legacy_entry_order_id = str(position_plan.get("legacy_entry_order_id") or "").strip()
+    if legacy_entry_order_id:
+        if str(broker.get("entry_order_id") or "") != legacy_entry_order_id:
+            raise RuntimeError(f"Trading protection plan legacy entry order binding 已變更: {ticker}")
+    else:
+        lineage = record.get("strategy_lineage") or {}
+        lineage_id = str(lineage.get("lineage_id") or "").strip() if isinstance(lineage, dict) else ""
+        expected_key = f"POSITION:{lineage_id}" if lineage_id else ""
+        if expected_key and str(position_plan.get("entry_order_id") or "") != expected_key:
+            raise RuntimeError(f"Trading protection plan position strategy lineage 已變更: {ticker}")
     return account, qty
 
 

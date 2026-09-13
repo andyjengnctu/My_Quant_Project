@@ -7,7 +7,7 @@ restart must never turn it back into a fresh trigger-waiting STOP order.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 from core.file_integrity import canonical_json_sha256
 from core.trading_identity import normalize_trading_ticker
@@ -25,6 +25,7 @@ def is_trading_stop_exit_triggered_from_order_rows(
     *,
     ticker: object,
     entry_order_id: object,
+    compatible_entry_order_ids: Iterable[object] | None = None,
 ) -> bool:
     """Return whether the current entry lineage has any confirmed original STOP fill.
 
@@ -37,10 +38,19 @@ def is_trading_stop_exit_triggered_from_order_rows(
     entry_id = str(entry_order_id or "").strip()
     if not entry_id:
         raise ValueError("Trading STOP progress 缺少 entry_order_id")
+    accepted_entry_ids = {entry_id}
+    accepted_entry_ids.update(
+        str(value or "").strip()
+        for value in (compatible_entry_order_ids or ())
+        if str(value or "").strip()
+    )
     return any(
         str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_STOP
         and normalize_trading_ticker(row.get("ticker")) == ticker_key
-        and str(row.get("entry_order_id") or "").strip() == entry_id
+        and (
+            str(row.get("entry_order_id") or "").strip() in accepted_entry_ids
+            or str(row.get("legacy_entry_order_id") or "").strip() in accepted_entry_ids
+        )
         and int(row.get("filled_qty") or 0) > 0
         for row in list(order_rows or [])
     )
@@ -50,6 +60,7 @@ def build_trading_stop_exit_progress(
     *,
     ticker: object,
     entry_order_id: object,
+    compatible_entry_order_ids: Iterable[object] | None = None,
 ) -> dict[str, Any]:
     """Return persistent STOP-trigger / forced-exit progress for one entry lineage."""
 
@@ -58,8 +69,14 @@ def build_trading_stop_exit_progress(
     entry_id = str(entry_order_id or "").strip()
     if not ticker_key or not entry_id:
         raise ValueError("Trading STOP progress 缺少 ticker/entry_order_id")
+    accepted_entry_ids = {entry_id}
+    accepted_entry_ids.update(
+        str(value or "").strip()
+        for value in (compatible_entry_order_ids or ())
+        if str(value or "").strip()
+    )
 
-    trigger_fills: list[tuple[str, str, str, str]] = []
+    trigger_fills: list[tuple[str, str, str, str, str]] = []
     total_confirmed_qty = 0
     forced_attempt_count = 0
     active_original: list[dict[str, Any]] = []
@@ -74,7 +91,9 @@ def build_trading_stop_exit_progress(
             continue
         if normalize_trading_ticker(raw.get("ticker")) != ticker_key:
             continue
-        if str(raw.get("entry_order_id") or "").strip() != entry_id:
+        row_entry_id = str(raw.get("entry_order_id") or "").strip()
+        row_legacy_entry_id = str(raw.get("legacy_entry_order_id") or "").strip()
+        if row_entry_id not in accepted_entry_ids and row_legacy_entry_id not in accepted_entry_ids:
             continue
         row = dict(raw)
         total_confirmed_qty += int(row.get("filled_qty") or 0)
@@ -93,6 +112,7 @@ def build_trading_stop_exit_progress(
                         str(row.get("order_id") or ""),
                         str(fill.get("fill_id") or ""),
                         str(fill.get("trade_date") or ""),
+                        row_entry_id,
                     )
                 )
 
@@ -117,11 +137,11 @@ def build_trading_stop_exit_progress(
         }
 
     trigger_fills.sort()
-    _confirmed_at, trigger_order_id, trigger_fill_id, trigger_trade_date = trigger_fills[0]
+    _confirmed_at, trigger_order_id, trigger_fill_id, trigger_trade_date, trigger_entry_id = trigger_fills[0]
     forced_exit_key = canonical_json_sha256(
         {
             "ticker": ticker_key,
-            "entry_order_id": entry_id,
+            "entry_order_id": trigger_entry_id,
             "trigger_order_id": trigger_order_id,
             "trigger_fill_id": trigger_fill_id,
             "trigger_trade_date": trigger_trade_date,

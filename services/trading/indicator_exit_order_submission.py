@@ -37,7 +37,14 @@ def _load_position_truth(root: Path, exit_plan: dict[str, Any]) -> tuple[dict[st
     broker=record.get("broker") or {}; management=record.get("strategy_management") or {}; position=management.get("position_state") or {}
     broker_qty=int(broker.get("qty") or 0); strategy_qty=int(position.get("qty") or 0)
     if broker_qty<=0 or broker_qty!=strategy_qty or broker_qty!=int(exit_plan.get("qty") or 0): raise RuntimeError("Indicator SELL plan qty 已與目前持股不一致")
-    if str(broker.get("entry_order_id") or "")!=str(exit_plan.get("entry_order_id") or ""): raise RuntimeError("Indicator SELL entry_order_id binding 已改變")
+    broker_entry_id = str(broker.get("entry_order_id") or "").strip()
+    canonical_lineage_key = str(exit_plan.get("entry_order_id") or "").strip()
+    legacy_entry_order_id = str(exit_plan.get("legacy_entry_order_id") or "").strip()
+    allowed_ids = {canonical_lineage_key}
+    if legacy_entry_order_id:
+        allowed_ids.add(legacy_entry_order_id)
+    if broker_entry_id and broker_entry_id not in allowed_ids:
+        raise RuntimeError("Indicator SELL strategy lineage binding 已改變")
     return account, broker_qty
 
 
@@ -54,8 +61,12 @@ def confirm_trading_indicator_exit_submission(project_root: str | Path, *, signa
     root=Path(project_root).resolve(); plan=load_current_trading_indicator_exit_plan(root); exit_plan=_find_exit_plan(plan,signal_key); _account,qty=_load_position_truth(root,exit_plan); ticker=_normalize_ticker(exit_plan["ticker"])
     guard=_build_source_guard(root)
     def mutator(state: dict[str, Any], timestamp: str, mutation_id: str) -> dict[str, Any]:
+        legacy_entry_order_id = str(exit_plan.get("legacy_entry_order_id") or "").strip()
         stop_progress = build_trading_stop_exit_progress(
-            state, ticker=ticker, entry_order_id=str(exit_plan.get("entry_order_id") or "")
+            state,
+            ticker=ticker,
+            entry_order_id=str(exit_plan.get("entry_order_id") or ""),
+            compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
         )
         if bool(stop_progress.get("triggered")):
             raise RuntimeError("Trading STOP 已觸發；剩餘持股必須沿 STOP forced-exit obligation 完成退出，不得改送 Indicator SELL")

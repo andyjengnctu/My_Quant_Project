@@ -3876,8 +3876,8 @@
       "priority": "P1",
       "category": "Runtime domain / Trading account state",
       "item": "Trading account/positions single-state SSOT and confirmed-fill accounting",
-      "gap": "Trading實際帳戶必須以state/trading/account.json作唯一current truth，同一atomic snapshot保存exact-milli cash、open positions與revisioned hash-chain events；不得另建positions.json第二份可變真理。manual adopted既有持股只登記broker qty/cost basis，不偽造歷史strategy state。manual/strategy買賣明細皆可修正/刪除；原event不可竄改，必須追加void/correction並由canonical replay重建現金、庫存、後續平均成本、沖抵成本與realized PnL。Replay必須以current actual-account policy重新投影legacy fee/tax；set_cash_balance按其original cash delta重播而不是第二個opening anchor；若早期BUY被移除但後續SELL仍有效，優先重用immutable SELL position_before／allocated-cost evidence重建當時broker inventory，legacy缺snapshot時才允許average-cost compatibility reconstruction。正常新成交仍禁止同日買賣、超賣與實際可用現金不足。低階caller明確pin expected_revision時須fail-fast；Workbench user-intent mutation則在shared mutation lock內讀取latest revision。Trading data與operational state不得進Git/package ZIP。",
-      "entry": "`core/trading_account_state.py`, `core/exact_accounting.py`, `services/trading/accounting_policy.py`, `services/trading/account_state.py`, `services/trading/account_dashboard.py`, `core/position_step.py`, `.gitignore`, `tools/validate/synthetic_trading_cases.py`",
+      "gap": "Trading實際帳戶必須以state/trading/account.json作唯一current truth，同一atomic snapshot保存exact-milli cash、open positions與revisioned hash-chain events；不得另建positions.json第二份可變真理。manual adopted既有持股只登記broker qty/cost basis，不偽造歷史strategy state。manual/strategy買賣明細皆可修正/刪除；原event不可竄改，必須追加void/correction並由canonical replay重建現金、庫存、後續平均成本、沖抵成本與realized PnL。Replay必須以current actual-account policy重新投影legacy fee/tax；set_cash_balance按其original cash delta重播。若早期BUY被移除但後續SELL仍需外部/舊券商庫存，必須持久追加historical_inventory_reconciliation event，明確保存補足qty/cost evidence、effective-before revision與dependent SELL logical lineage；不得只在replay中隱性猜庫存，dependent SELL void後該reconciliation亦失效。strategy_fill position必須持久保存immutable strategy_lineage且replay不得遺失；舊entry_order_id只作compatibility metadata。正常新成交仍禁止同日買賣、超賣與實際可用現金不足。低階caller明確pin expected_revision時須fail-fast；Workbench user-intent mutation則在shared mutation lock內讀取latest revision。Trading data與operational state不得進Git/package ZIP。",
+      "entry": "`core/trading_account_state.py`, `core/exact_accounting.py`, `services/trading/accounting_policy.py`, `services/trading/account_state.py`, `services/trading/account_dashboard.py`, `services/trading/strategy_param_runtime.py`, `core/position_step.py`, `.gitignore`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 349
     },
@@ -3887,7 +3887,7 @@
       "priority": "P1",
       "category": "GUI / Workbench Trading account",
       "item": "Workbench 交易中心 / 帳務中心分層並共用 Trading account-state SSOT",
-      "gap": "Workbench必須將Scanner/策略決策/BUY成交主流程放在「交易中心」，帳戶資金、庫存股、買入明細、賣出/沖抵明細與績效放在獨立「帳務中心」，並只透過services/trading account services操作state/trading/account.json。Workbench不是券商OMS；交易中心只登錄BUY且成功後切換/刷新帳務中心，SELL在帳務中心選庫存後直接登錄實際成交。Workbench使用者操作不得帶畫面cached account revision作為必要寫入前提，service須在shared lock內解析latest truth；低階explicit revision contract仍保留。日期欄本身開日曆；股票表格支援升降冪、同列再點取消、最多12列分頁與左側單股入口，且dynamic cell/靜態controls的MouseWheel都路由outer page canvas，滑鼠不必停在scrollbar。績效表例外固定庫存股→平倉股→加總、不可排序，欄位只含股票檔數、價值、成本、損益、報酬率、勝率、期望值、風報比；closed row必須使用net sell proceeds與realized PnL。revision/市價日/重新整理與四項帳戶儀表合併於同一區，市價日、現金餘額、帳戶淨值使用info blue。操作說明集中於底部context hint，不常駐各區。只有directional performance數字使用台股漲紅跌綠平白。",
+      "gap": "Workbench必須將Scanner/策略決策/BUY成交主流程放在「交易中心」，帳戶資金、庫存股、買入明細、賣出/沖抵明細與績效放在獨立「帳務中心」，並只透過services/trading account services操作state/trading/account.json。Workbench不是券商OMS；交易中心只登錄BUY且成功後切換/刷新帳務中心，SELL在帳務中心選庫存後直接登錄實際成交。交易中心必須顯示持股決策表，對strategy持股直接呈現市價、目前Stop、Target、Trailing、SELL signal與建議動作；primary initial-load不得預載hidden proposed/order widgets。Workbench使用者操作不得帶畫面cached account revision作為必要寫入前提，service須在shared lock內解析latest truth；低階explicit revision contract仍保留。日期欄本身開日曆；股票表格支援升降冪、同列再點取消、最多12列分頁與左側單股入口，且dynamic cell/靜態controls的MouseWheel都路由outer page canvas。績效表固定庫存股→平倉股→加總、不可排序；欄位只含股票檔數、價值、成本、損益、報酬率、勝率、期望值(EV R)、風報比。缺市價open position仍保留檔數/成本但valuation為incomplete；未平倉row不得宣稱closed-trade勝率/EV/風報比；closed/composite trade metrics必須來自canonical closed lifecycle，broker-truth correction也必須反映於closed cost/PnL。revision/市價日/重新整理與四項帳戶儀表合併於同一區，市價日、現金餘額、帳戶淨值使用info blue。操作說明集中於底部context hint。只有directional performance數字使用台股漲紅跌綠平白。",
       "entry": "`services/workbench_ui/workbench.py`, `services/workbench_ui/trading_account_panel.py`, `services/workbench_ui/accounting_center_panel.py`, `services/workbench_ui/date_picker.py`, `services/workbench_ui/paged_table.py`, `services/trading/account_trade_entry.py`, `services/trading/account_state.py`, `services/trading/account_dashboard.py`, `core/trading_account_state.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 350
@@ -3941,9 +3941,9 @@
       "section": "B2",
       "priority": "P1",
       "category": "GUI / Workbench Trading protection orders",
-      "item": "Confirmed strategy fills mechanically derive Stop / TP protection plans without broker-side effects",
-      "gap": "Trading成交後保護單只能由已確認的strategy_fill canonical position state與來源entry order在ORDERED時凍結的strategy params機械派生；manual_adopted/unmanaged不得自動接管。Stop leg必須保護目前實際持股全量並沿用canonical stop-market gap semantics，TP leg股數必須重用canonical half-take-profit rule，price levels直接消費position state的effective stop與frozen target，同bar同時碰Stop/TP維持STOP_OVER_TP優先序。partial fill只保護已成交持股；後續partial/final fill或position/order source semantics改變時舊plan必須可判定STALE並重建。planner不得讀成交後market bar、不得接受discretionary input、不得修改account/order state或宣稱券商已收單；本輪只輸出outputs/trading/protection_orders/protection_plan.json/.txt並由Workbench顯示／在confirmed fill後機械刷新。",
-      "entry": "`services/trading/protection_planning.py`, `core/entry_plans.py`, `core/price_utils.py`, `services/trading/fill_reconciliation.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "item": "Confirmed strategy positions mechanically derive Stop / TP decision plans from immutable position lineage",
+      "gap": "Trading成交後Stop/TP decision plan只能由已確認strategy_fill canonical position state與position-level immutable strategy_lineage機械派生；Scanner BUY成交時必須凍結representative Params、params signature、member identity與execution-plan seed。Legacy持股才可回退讀取來源entry order frozen params，manual_adopted/unmanaged不得自動接管。Stop leg必須保護目前實際持股全量並沿用canonical stop-market gap semantics，TP leg股數必須重用canonical half-take-profit rule，price levels直接消費position state的effective stop與frozen target，同bar同時碰Stop/TP維持STOP_OVER_TP優先序。Direct position lineage即使沒有orders.json也必須能產生fresh decision plan；partial fill/position semantics改變時舊plan須STALE並重建。Planner不得讀成交後market bar、不得接受discretionary input、不得修改account/order state或宣稱券商已收單；broker-order lineage只屬compatibility backend。",
+      "entry": "`services/trading/strategy_param_runtime.py`, `services/trading/protection_planning.py`, `core/entry_plans.py`, `core/price_utils.py`, `services/trading/fill_reconciliation.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 355
     },
@@ -3951,10 +3951,10 @@
       "id": "B368",
       "section": "B2",
       "priority": "P1",
-      "category": "GUI / Workbench Trading protection broker orders",
-      "item": "Explicit protection SELL submission shares the canonical broker-order SSOT without overselling holdings",
-      "gap": "Trading Stop/TP protection plan仍只屬logical output；只有使用者明確確認券商已實際送出SELL時，才可寫入同一state/trading/orders.json，禁止另建sell_orders第二份truth。單腿Stop或TP送單必須綁定FRESH protection plan、當下strategy_fill實際持股、position-plan fingerprint與來源entry order；非OCO active protection SELL的有效委託曝險不得超過持股。Stop full + TP若合計會超過持股，只能在使用者明確輸入實際券商native OCO/互斥群組ID並確認後，以同一revision建立共享group的兩筆SELL ORDERED；系統不得自行假設OCO支援。Protection SELL不得由BUY fill reconciliation處理或從市場資料推定成交；後續實際SELL fill由獨立confirmed-fill contract治理。active ENTRY BUY與active protection SELL必須由canonical helper分層；長期protection SELL不得誤阻擋下一交易日新的盤前BUY allocation，但仍屬active broker order並保留account mutation guard。",
-      "entry": "`core/trading_order_state.py`, `services/trading/order_state.py`, `services/trading/protection_order_submission.py`, `services/trading/protection_planning.py`, `services/trading/order_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "category": "Trading protection broker-order compatibility",
+      "item": "Explicit protection SELL submission remains a compatibility backend bound to canonical position lineage",
+      "gap": "Primary Workbench不管理broker OMS；Stop/TP plan只提供decision information。Legacy/compatibility backend只有在使用者明確確認券商已實際送出SELL時才可寫同一state/trading/orders.json，禁止另建sell_orders第二份truth。Submission必須綁定FRESH protection plan、當下strategy_fill實際持股、position-plan fingerprint與canonical position strategy_lineage；有legacy entry_order_id時可另存compatibility lineage，但不得取代POSITION:<lineage_id>。非OCO active protection SELL有效委託曝險不得超過持股；Stop full + TP只有使用者明確輸入實際broker-native OCO/互斥群組ID後才可共享group。Protection SELL不得由BUY fill reconciliation或market high/low推定成交。長期legacy protection SELL可作broker evidence，但不得誤阻擋下一交易日primary Scanner/allocation。",
+      "entry": "`core/trading_order_state.py`, `services/trading/order_state.py`, `services/trading/strategy_param_runtime.py`, `services/trading/protection_order_submission.py`, `services/trading/protection_planning.py`, `services/trading/order_planning.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 356
     },
@@ -3974,9 +3974,9 @@
       "section": "B2",
       "priority": "P1",
       "category": "GUI / Workbench Trading operations readiness",
-      "item": "Trading Operations Status composes canonical read models into one next-action and workflow-availability contract",
-      "gap": "實際Trading主生命週期已分散於daily data/params、account、Scanner snapshot、proposed orders、broker BUY/SELL orders、fill transaction與protection plan等canonical owners；Workbench不得自行從多個區塊重猜現在可做什麼。必須由單一read-only operations-status service組合既有read models，派生overall status、下一個合法動作、workflow action availability、D4同資訊日allocation lock、active ENTRY BUY reconciliation、strategy_fill持股缺active Stop與component warnings/blockers。fill transaction recovery仍由既有fill-reconciliation owner明確執行，狀態查詢本身不得隱藏mutation。長期active protection SELL不得誤阻擋下一交易日的新盤前allocation；manual_adopted不得誤列為strategy Stop缺口。Scanner/proposed freshness必須由各自canonical loader驗證，Operations Status與Workbench不得建立第三套SHA/date/revision判斷。",
-      "entry": "`services/trading/operations_status.py`, `services/trading/daily_workflow.py`, `services/trading/order_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "item": "Trading Operations Status exposes one non-OMS primary next-action and workflow-availability contract",
+      "gap": "Primary Trading workflow只由canonical account/data readiness、actual account BUY/SELL trade-date session locks、strategy position roll-forward due、persistent strategy Indicator SELL obligation與Scanner/Params freshness決定；Workbench不得自行從hidden OMS state重猜是否可操作。Legacy active ENTRY BUY、orphan SELL、stale protection、已送Indicator/Protection broker orders只可作warning/compatibility evidence，不得阻擋primary Scanner或next-day allocation。D3/D4 session lock必須從account actual BUY/SELL fills解析，不能從orders.json推論。Strategy indicator obligation尚未處理時仍必須阻擋allocation並提示使用者自行在券商處理；position roll-forward due仍優先完成。fill transaction recovery仍由既有fill-reconciliation owner明確執行，read-only status不得隱藏mutation。Scanner/proposed freshness只由canonical loaders驗證；Operations Status與Workbench不得建立第三套SHA/date/revision判斷。",
+      "entry": "`services/trading/operations_status.py`, `services/trading/daily_workflow.py`, `services/trading/account_state.py`, `services/trading/order_planning.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 358
     },
@@ -3996,9 +3996,9 @@
       "section": "B2",
       "priority": "P1",
       "category": "Trading completed-bar position management",
-      "item": "Confirmed strategy positions roll forward from completed daily bars with frozen entry params before the next session",
-      "gap": "Trading既有strategy_fill持股必須在每日資料更新後、current Trading Params重訓與Scanner之前，以各自source entry order凍結的strategy params消費已完成日K，逐bar重用canonical trailing-stop update，推進highest-high/trailing/effective Stop並記錄last_rollforward_date。此流程不得讀current selected params取代frozen params、不得使用尚未完成的daily row、不得由OHLC推定任何券商SELL fill、不得改cash/qty/cost basis。active ENTRY BUY尚未reconcile時禁止account roll-forward；長期active protection SELL可存在，但若trailing更新使既有broker protection的position-plan fingerprint過期，只能標記stale並要求使用者依實際券商狀態取消／重送，禁止自行假設券商改單。Operations Status與Workbench必須把待roll-forward與stale protection納入next-action/allocation guard。完成本項後daily_position_rollforward capability可由LIVE blocker移除，但Full rule-based ind_sell_signal actual SELL lifecycle仍維持獨立required-live blocker。",
-      "entry": "`core/position_step.py`, `core/trading_account_state.py`, `core/trading_capabilities.py`, `services/trading/account_state.py`, `services/trading/position_rollforward.py`, `services/trading/daily_workflow.py`, `services/trading/protection_planning.py`, `services/trading/operations_status.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "item": "Confirmed strategy positions roll forward from completed daily bars with immutable position strategy lineage",
+      "gap": "Trading既有strategy_fill持股必須在每日資料更新後、current Trading Params重訓與Scanner之前，以position-level immutable strategy_lineage凍結的strategy params消費已完成日K，逐bar重用canonical trailing-stop update，推進highest-high/trailing/effective Stop並記錄last_rollforward_date。Legacy持股才可fallback來源entry order frozen params；direct position lineage不得要求orders.json存在。此流程不得讀current selected params取代frozen params、不得使用未完成daily row、不得由OHLC推定任何券商SELL fill、不得改cash/qty/cost basis。Legacy active ENTRY BUY或stale protection只能作compatibility warning，不能阻擋primary roll-forward；roll-forward若改變Stop/Target，只更新decision truth/plan，Workbench不自行假設券商改單。Operations Status與Workbench必須把待roll-forward列為primary next-action，daily workflow固定Data→rollforward→Indicator decision→Params→Scanner。",
+      "entry": "`core/position_step.py`, `core/trading_account_state.py`, `core/trading_capabilities.py`, `services/trading/strategy_param_runtime.py`, `services/trading/account_state.py`, `services/trading/position_rollforward.py`, `services/trading/daily_workflow.py`, `services/trading/protection_planning.py`, `services/trading/operations_status.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 360
     },
@@ -4007,9 +4007,9 @@
       "section": "B2",
       "priority": "P1",
       "category": "Trading rule-based indicator exit execution",
-      "item": "Completed-bar ind_sell_signal persists into explicit next-session broker MARKET SELL lifecycle",
-      "gap": "Full rule-based strategy_fill持股在完成daily position roll-forward後，必須以source entry order frozen params於completed bar判定ind_sell_signal；signal一旦成立即以immutable signal_key保存為完整持股MARKET SELL義務，後續completed bar即使signal轉false也不得洗掉，直到該broker-order lifecycle明確FILLED或持股關閉。Indicator plan不得宣稱已送券商或依OHLC推定成交；實際送單必須由使用者確認，且同ticker仍有active Stop/TP時必須先確認券商取消，避免SELL exposure超過持股。Indicator SELL only可在signal information date之後確認實際fill，partial/final fill必須沿用entry frozen params與canonical exact-accounting/position sell seam並記為IND_SELL；active order禁止同signal重複送單，取消剩餘量後才可用同signal建立下一attempt。Operations Status/Workbench必須優先處理persistent indicator obligation、submission/reconciliation與protection conflict；任何SELL fill發生於目前latest completed information date之後時，依D3/D4鎖住同一交易session新allocation，不得重用盤中釋放資金。daily workflow固定為Data→position roll-forward→Indicator plan→Params→Scanner。完成後indicator_sell_execution required-live capability可移除最後implementation blocker；pre-live audit仍須驗account/cash、roll-forward、fresh indicator plan與open-position SELL coverage，不能因implementation complete便把不安全runtime state誤報LIVE_READY。",
-      "entry": "`core/trading_order_state.py`, `core/trading_capabilities.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/protection_order_submission.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/trading/daily_workflow.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
+      "item": "Completed-bar ind_sell_signal becomes a persistent position-lineage SELL decision obligation",
+      "gap": "Full rule-based strategy_fill持股在completed daily position roll-forward後，必須以position-level immutable strategy_lineage frozen params判定ind_sell_signal；legacy持股才可fallback entry-order frozen params。Signal成立後以immutable signal_key保存完整持股SELL decision obligation，後續completed bar即使signal轉false也不得洗掉，直到使用者登錄實際SELL fill或持股關閉。Primary Workbench只顯示SELL signal與建議動作，由使用者自行至券商處理；legacy explicit broker submission/cancel/retry lifecycle僅保留compatibility backend，不得成為primary UI前置。Operations Status必須優先處理persistent strategy indicator obligation；D3/D4 lock以actual account SELL fill date判定，不得以active broker order代替。daily workflow固定Data→position roll-forward→Indicator decision→Params→Scanner；pre-live audit仍須驗account/cash、roll-forward、fresh indicator decision與open-position SELL coverage。",
+      "entry": "`core/trading_order_state.py`, `core/trading_capabilities.py`, `services/trading/strategy_param_runtime.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/trading/daily_workflow.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 361
     },
@@ -7878,14 +7878,14 @@
     {
       "id": "T481",
       "b_id": "B361",
-      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、manual adoption/source-agnostic inventory correction、actual-account fee/tax policy、historical trade void/correction replay、full-sell reopen、BUY刪除後後續SELL compatibility reconstruction、cash-reconciliation delta replay、latest-revision-inside-lock user intent、strategy exact accounting、same-day/over-sell explicit guards與event hash-chain tamper detection。",
+      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、manual adoption/source-agnostic inventory correction、actual-account fee/tax policy、historical trade void/correction replay、full-sell reopen、刪除舊BUY後顯式historical inventory reconciliation與dependent-SELL失效語意、cash-reconciliation delta replay、latest-revision-inside-lock user intent、position strategy_lineage persist/replay、closed canonical EV(R)/win-rate、missing-market open count/cost、broker-truth correction closed performance、same-day/over-sell guards與event hash-chain tamper detection。",
       "initial_status": "NEW",
       "order": 471
     },
     {
       "id": "T482",
       "b_id": "B362",
-      "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋交易中心/帳務中心panel registry、BUY-only交易中心與inventory-selected direct SELL、no-broker-OMS primary UI、買入後自動切帳務中心、latest revision inside lock、日期欄日曆、12列分頁/排序/取消選取/單股入口、全頁MouseWheel、固定三列不可排序績效schema、dashboard metadata整併/info-blue、context footer hints與manual/strategy交易/庫存修正刪除。",
+      "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋交易中心/帳務中心panel registry、BUY-only交易中心與inventory-selected direct SELL、no-broker-OMS primary UI、visible holdings decision table、primary initial bundle不預載hidden proposed/orders、買入後自動切帳務中心、latest revision inside lock、日期欄日曆、12列分頁/排序/取消選取/單股入口、全頁MouseWheel、固定三列不可排序canonical績效schema、dashboard metadata整併/info-blue、context footer hints與manual/strategy交易/庫存修正刪除。",
       "initial_status": "NEW",
       "order": 472
     },
@@ -7920,13 +7920,13 @@
     {
       "id": "T487",
       "b_id": "B367",
-      "description": "`validate_trading_protection_plan_contract_case` 覆蓋confirmed partial/final fill後的canonical Stop/TP levels、full-position Stop qty、half-take-profit qty、STOP_OVER_TP priority、manual-position exclusion、frozen-source freshness、no-market-data/no-discretionary/no-account-mutation/no-broker-submission與Workbench post-fill refresh controls。",
+      "description": "`validate_trading_protection_plan_contract_case` 覆蓋position strategy_lineage direct no-orders plan、legacy frozen-order fallback、confirmed partial/final fill後canonical Stop/TP levels、full-position Stop qty、half-take-profit qty、STOP_OVER_TP priority、manual-position exclusion、lineage freshness、no-market-data/no-discretionary/no-account-mutation/no-broker-submission。",
       "initial_status": "NEW",
       "order": 477
     },
     {
       "id": "T488",
-      "description": "`validate_trading_protection_order_submission_contract_case` 覆蓋explicit Stop/TP SELL submission、non-OCO持股上限、explicit broker-native OCO group、account no-mutation、BUY/SELL active-order分層、next-day allocation compatibility、no-BUY-fill/no-market-inference與Workbench確認控制。",
+      "description": "`validate_trading_protection_order_submission_contract_case` 覆蓋legacy explicit Stop/TP SELL submission compatibility、canonical POSITION lineage + optional legacy entry lineage、non-OCO持股上限、explicit broker-native OCO group、account no-mutation、next-day primary allocation不被long-lived legacy protection阻擋、no-BUY-fill/no-market-inference。",
       "b_id": "B368",
       "initial_status": "NEW",
       "order": 478
@@ -7941,7 +7941,7 @@
     {
       "id": "T490",
       "b_id": "B370",
-      "description": "`validate_trading_operations_status_contract_case` 覆蓋fill-recovery優先序、account/cash setup、active-Stop缺口、ENTRY BUY reconciliation、Data/Params/Scanner/Proposed階段、D4同日lock、long-lived protection SELL不阻擋隔日allocation、manual-adopted隔離、read-only ownership與Workbench總覽/按鈕控制。",
+      "description": "`validate_trading_operations_status_contract_case` 覆蓋non-OMS primary next-action、account/cash setup、actual account BUY/SELL trade-date session lock、position roll-forward與strategy indicator obligation、Data/Params/Scanner階段、legacy active ENTRY/orphan SELL/stale protection/legacy indicator-protection orders只警告不阻擋primary allocation、manual-adopted隔離、read-only ownership與Workbench總覽/按鈕控制。",
       "initial_status": "NEW",
       "order": 480
     },
@@ -7955,14 +7955,14 @@
     {
       "id": "T492",
       "b_id": "B372",
-      "description": "`validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、source entry frozen params、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、active protection共存與stale fingerprint、no-hidden-recovery/no-market-fill、Workbench explicit action，並鎖住daily Data→rollforward→Indicator plan→Params→Scanner順序及indicator execution capability完成後的相容性。",
+      "description": "`validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、position immutable strategy_lineage、legacy order fallback、direct lineage no-orders compatibility、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、legacy protection共存warning、no-hidden-recovery/no-market-fill，並鎖住daily Data→rollforward→Indicator decision→Params→Scanner順序。",
       "initial_status": "NEW",
       "order": 482
     },
     {
       "id": "T493",
       "b_id": "B373",
-      "description": "`validate_trading_indicator_sell_execution_contract_case` 覆蓋completed-bar full-position MARKET obligation、immutable signal identity、cancel/retry attempt、protection-first cancellation、explicit submission/no hidden fill、canonical IND_SELL event、Workbench explicit action與all-required-live capability completion；daily/operations/pre-live regressions同步覆蓋Data→rollforward→Indicator→Params→Scanner、D3/D4 SELL-cash session lock與runtime safety audit。",
+      "description": "`validate_trading_indicator_sell_execution_contract_case` 覆蓋position-lineage completed-bar full-position SELL obligation、immutable signal identity、primary manual-broker decision/no hidden fill、legacy cancel/retry submission compatibility、canonical IND_SELL actual account event、actual SELL-fill D3/D4 session lock與Data→rollforward→Indicator→Params→Scanner runtime safety。",
       "initial_status": "NEW",
       "order": 483
     },

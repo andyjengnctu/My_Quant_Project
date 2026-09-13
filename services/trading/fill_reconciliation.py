@@ -10,6 +10,7 @@ from uuid import uuid4
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from services.trading.state_lock import serialized_trading_state_mutation
 from services.trading.accounting_policy import overlay_trading_accounting_params
+from services.trading.strategy_param_runtime import build_trading_order_strategy_lineage, resolve_trading_position_strategy_binding
 from core.exact_accounting import milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping
 from core.runtime_utils import get_taipei_now
@@ -221,6 +222,7 @@ def confirm_trading_buy_order_fill(
             security_profile=record.get("security_profile"),
             entry_type=str(record.get("entry_type") or "normal"),
             entry_order_id=order_id_text,
+            strategy_lineage=build_trading_order_strategy_lineage(record),
         )
     else:
         account_target = apply_confirmed_strategy_buy_fill_increment(
@@ -344,19 +346,20 @@ def _confirm_trading_sell_order_fill(
     if not isinstance(position, dict) or str(position.get("source") or "") != "strategy_fill":
         raise RuntimeError(f"Trading SELL 找不到 strategy_fill position: {ticker}")
     entry_order_id = str(record.get("entry_order_id") or "")
-    if str((position.get("broker") or {}).get("entry_order_id") or "") != entry_order_id:
-        raise RuntimeError("Trading SELL entry-order lineage 與 account position 不一致")
+    binding = resolve_trading_position_strategy_binding(position, orders=orders)
+    allowed_lineage_keys = {str(binding.get("lineage_key") or "")}
+    legacy_entry_order_id = str(binding.get("entry_order_id") or "").strip()
+    if legacy_entry_order_id:
+        allowed_lineage_keys.add(legacy_entry_order_id)
+    if entry_order_id not in allowed_lineage_keys:
+        raise RuntimeError("Trading SELL strategy lineage 與 account position 不一致")
     sell_trade_date = require_trading_date_after(
         trade_date,
         after=(position.get("broker") or {}).get("entry_date"),
         field_name="SELL fill trade_date",
         after_field_name="entry_date",
     )
-    entry_order = (orders.get("orders") or {}).get(entry_order_id)
-    frozen_params = None if not isinstance(entry_order, dict) else entry_order.get("frozen_params")
-    if not isinstance(frozen_params, dict):
-        raise RuntimeError("Trading SELL 來源 entry order 缺少 frozen_params")
-    params = overlay_trading_accounting_params(build_params_from_mapping(frozen_params))
+    params = overlay_trading_accounting_params(build_params_from_mapping(binding["frozen_params"]))
     normalized_fill_price = _normalize_external_fill_price(fill_price)
     fill_qty_int = int(fill_qty)
     tp_half_complete = False
@@ -365,7 +368,8 @@ def _confirm_trading_sell_order_fill(
         tp_progress = build_trading_tp_half_progress(
             orders,
             ticker=ticker,
-            entry_order_id=entry_order_id,
+            entry_order_id=str(binding.get("lineage_key") or entry_order_id),
+            compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
             initial_qty=int(broker.get("initial_qty") or 0),
             tp_percent=params.tp_percent,
         )

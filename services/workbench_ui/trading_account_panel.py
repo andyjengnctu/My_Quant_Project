@@ -118,7 +118,7 @@ PARAM_MODE_BY_LABEL = {
     PARAM_MODE_TRAIN_LABEL: TRADING_PARAM_MODE_TRAIN,
 }
 
-WORKFLOW_HINT = "更新資料後，既有 strategy_fill 持股先用各 entry order frozen params 做日終推進；Params 可明確選擇沿用既有或重新訓練，Scanner 只接受已綁定目前 Trading data 的 Params。"
+WORKFLOW_HINT = "更新資料後，strategy_fill 持股用 position strategy_lineage 的 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。Stop/Target/SELL 為決策資訊，券商操作由使用者自行完成。"
 CASH_HINT = "初始化可留空；更新現金會留下 revision event，不直接改檔。"
 MANUAL_POSITION_HINT = "修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。"
 FILL_HINT = "成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。"
@@ -380,16 +380,9 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
     else:
         bundle["candidate_payload"] = (True, None)
 
-    proposed = _capture_initial_panel_value(lambda: get_trading_proposed_order_plan_read_model(root))
-    bundle["proposed_read"] = proposed
-    if proposed[0] and bool(proposed[1].get("exists")) and bool(proposed[1].get("valid")) and bool(proposed[1].get("fresh")):
-        bundle["proposed_payload"] = _capture_initial_panel_value(
-            lambda: load_current_trading_proposed_order_plan(root, require_current=False)
-        )
-    else:
-        bundle["proposed_payload"] = (True, None)
-
-    bundle["orders"] = _capture_initial_panel_value(lambda: get_trading_order_read_model(root))
+    # Primary Trading Center is decision/accounting oriented, not a broker OMS.
+    # Do not preload hidden proposed/order widgets.  Legacy compatibility readers
+    # remain available to explicit backend actions and Operations Status only.
     bundle["protection"] = _capture_initial_panel_value(lambda: get_trading_protection_plan_read_model(root))
     bundle["indicator"] = _capture_initial_panel_value(lambda: get_trading_indicator_exit_plan_read_model(root))
     bundle["workflow"] = _capture_initial_panel_value(lambda: build_trading_daily_workflow_snapshot(root))
@@ -499,8 +492,6 @@ class TradingAccountPanel(ttk.Frame):
             self.refresh_account()
             self.refresh_account_dashboard()
             self.refresh_candidate_snapshot_rows()
-            self.refresh_proposed_order_plan()
-            self.refresh_order_state()
             self.refresh_protection_plan()
             self.refresh_indicator_exit_plan()
             self.refresh_daily_workflow()
@@ -849,26 +840,18 @@ class TradingAccountPanel(ttk.Frame):
         self._remove_button.pack(side="left", padx=(8, 0))
         ttk.Button(button_row, text="清除輸入", command=self._clear_position_form, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
-        table_box = ttk.LabelFrame(content, text="目前持股", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        table_box.grid(row=7, column=0, sticky="nsew", pady=(0, 8))
+        table_box = ttk.LabelFrame(content, text="持股決策｜每日依 strategy lineage 更新 Stop / Target / SELL 訊號", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("ticker", "source", "qty", "avg_cost", "current", "market_value", "pnl", "return_pct", "stop", "risk", "management")
+        columns = ("ticker", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal", "action")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
-            "ticker": "股票",
-            "source": "來源",
-            "qty": "股數",
-            "avg_cost": "平均成本",
-            "current": "最新價",
-            "market_value": "持股市值",
-            "pnl": "總PnL",
-            "return_pct": "報酬率",
-            "stop": "目前Stop",
-            "risk": "Stop風險",
-            "management": "策略管理",
+            "ticker": "股票", "qty": "股數", "avg_cost": "均價", "current": "市價",
+            "stop": "目前Stop", "target": "Target", "trailing": "Trailing",
+            "sell_signal": "SELL訊號", "action": "建議動作",
         }
-        widths = {"ticker": 80, "source": 105, "qty": 80, "avg_cost": 100, "current": 90, "market_value": 115, "pnl": 110, "return_pct": 90, "stop": 95, "risk": 105, "management": 95}
+        widths = {"ticker": 80, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125, "action": 220}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center")
@@ -876,7 +859,7 @@ class TradingAccountPanel(ttk.Frame):
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
         self._tree.bind("<Double-1>", self._open_selected_position_in_inspector, add="+")
         holding_actions = ttk.Frame(table_box, style=WORKBENCH_FRAME_STYLE)
-        holding_actions.grid(row=1, column=0, columnspan=2, sticky="e", pady=(6, 0))
+        holding_actions.grid(row=1, column=0, sticky="e", pady=(6, 0))
         ttk.Button(holding_actions, text="在單股回測檢視", command=self._open_selected_position_in_inspector, style=WORKBENCH_BUTTON_STYLE).pack(side="left")
 
         candidate_box = ttk.LabelFrame(content, text="今日 Scanner Pool｜依策略順序（今日 Scanner 候選）", padding=8, style=WORKBENCH_LABELLF_STYLE)
@@ -952,7 +935,7 @@ class TradingAccountPanel(ttk.Frame):
         # inventory detail, transaction history and performance live in the separate
         # top-level Accounting Center.  Keep these widgets instantiated for backward-
         # compatible refresh methods but remove them from the Trading Center layout.
-        for accounting_section in (header, cash_box, form, table_box, performance_box):
+        for accounting_section in (header, cash_box, form, performance_box):
             accounting_section.grid_remove()
 
         advanced_notebook = ttk.Notebook(content, style="Workbench.TNotebook")
@@ -2363,23 +2346,31 @@ class TradingAccountPanel(ttk.Frame):
             # Editing eligibility belongs to the canonical account read model.
             row["has_sell_history"] = bool(base_row.get("has_sell_history"))
             self._position_rows[ticker] = row
-            return_pct = row.get("return_pct")
+            indicator_due = {str(item.get("ticker") or "") for item in list(self._indicator_snapshot.get("exits") or [])}
+            forced_stop = {
+                str(item.get("ticker") or "")
+                for item in list(self._protection_snapshot.get("positions") or [])
+                if bool(item.get("stop_forced_exit"))
+            }
+            if ticker in forced_stop:
+                sell_signal = "STOP EXIT"
+                action = "建議賣出｜依 Stop 規則自行至券商處理"
+            elif ticker in indicator_due:
+                sell_signal = "INDICATOR SELL"
+                action = "建議賣出｜自行至券商處理，成交後回帳務中心登錄"
+            else:
+                sell_signal = "-"
+                action = "持有｜依目前 Stop / Target / Trailing 管理" if str(row.get("source")) == "strategy_fill" else "手動持股｜無策略接管"
             self._tree.insert(
-                "",
-                "end",
-                iid=ticker,
+                "", "end", iid=ticker,
                 values=(
-                    ticker,
-                    source_labels.get(str(row.get("source")), str(row.get("source") or "-")),
-                    f"{int(row.get('qty') or 0):,}",
+                    ticker, f"{int(row.get('qty') or 0):,}",
                     format_trading_money(row.get("average_cost")),
                     format_trading_money(row.get("current_price")),
-                    format_trading_money(row.get("market_value")),
-                    format_trading_money(row.get("total_pnl")),
-                    "-" if return_pct is None else f"{float(return_pct):.2f}%",
                     format_trading_money(row.get("effective_stop")),
-                    format_trading_money(row.get("risk_to_stop")),
-                    management_labels.get(str(row.get("management_status")), str(row.get("management_status") or "-")),
+                    format_trading_money(row.get("target_price")),
+                    format_trading_money(row.get("trailing_stop")),
+                    sell_signal, action,
                 ),
             )
         self._fit_tree_rows(self._tree, len(self._position_rows))

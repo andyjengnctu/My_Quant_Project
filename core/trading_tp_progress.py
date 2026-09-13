@@ -7,7 +7,7 @@ strategy target from the already reduced remaining position.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 from core.price_utils import calc_half_take_profit_sell_qty
 from core.trading_identity import normalize_trading_ticker
@@ -24,6 +24,7 @@ def build_trading_tp_half_progress(
     entry_order_id: object,
     initial_qty: int,
     tp_percent: float,
+    compatible_entry_order_ids: Iterable[object] | None = None,
 ) -> dict[str, int]:
     """Return immutable target and cumulative confirmed TP fill progress."""
 
@@ -32,6 +33,12 @@ def build_trading_tp_half_progress(
     entry_id = str(entry_order_id or "").strip()
     if not ticker_key or not entry_id:
         raise ValueError("Trading TP progress 缺少 ticker/entry_order_id")
+    accepted_entry_ids = {entry_id}
+    accepted_entry_ids.update(
+        str(value or "").strip()
+        for value in (compatible_entry_order_ids or ())
+        if str(value or "").strip()
+    )
     initial_qty_int = int(initial_qty)
     if initial_qty_int <= 0:
         raise ValueError("Trading TP progress initial_qty 必須 > 0")
@@ -44,7 +51,9 @@ def build_trading_tp_half_progress(
             continue
         if normalize_trading_ticker(row.get("ticker")) != ticker_key:
             continue
-        if str(row.get("entry_order_id") or "").strip() != entry_id:
+        row_entry_id = str(row.get("entry_order_id") or "").strip()
+        row_legacy_entry_id = str(row.get("legacy_entry_order_id") or "").strip()
+        if row_entry_id not in accepted_entry_ids and row_legacy_entry_id not in accepted_entry_ids:
             continue
         attempt_count += 1
         confirmed_qty += int(row.get("filled_qty") or 0)

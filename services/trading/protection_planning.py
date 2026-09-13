@@ -38,6 +38,7 @@ from core.trading_order_state import (
     TRADING_PROTECTION_ORDER_TYPE_MARKET,
     TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET,
     active_trading_protection_orders,
+    build_empty_trading_order_state,
     validate_trading_order_state,
 )
 from core.trading_stop_exit_progress import build_trading_stop_exit_progress
@@ -46,6 +47,7 @@ from core.runtime_utils import get_taipei_now
 from services.trading.account_state import resolve_trading_account_state_path
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.order_state import resolve_trading_order_state_path
+from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
 
 PROTECTION_PLAN_SCHEMA_VERSION = 1
 PROTECTION_PLAN_STATUS = "PROPOSED_PROTECTION"
@@ -98,36 +100,36 @@ def _collect_strategy_sources(
         if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position_state, dict):
             raise RuntimeError(f"Trading strategy position 缺少 active canonical position state: {ticker}")
         broker = record.get("broker") or {}
-        order_id = str(broker.get("entry_order_id") or "").strip()
-        if not order_id:
-            raise RuntimeError(f"Trading strategy position 缺少 entry_order_id，無法取得 frozen params: {ticker}")
-        order = (orders.get("orders") or {}).get(order_id)
-        if not isinstance(order, dict):
-            raise RuntimeError(f"Trading strategy position 對應 entry order 不存在: {ticker} / {order_id}")
-        frozen_params = order.get("frozen_params")
-        if not isinstance(frozen_params, dict):
-            raise RuntimeError(f"Trading entry order 缺少 frozen_params，禁止用 current params 回填保護單: {ticker}")
-        expected_params_sha = str(order.get("frozen_params_sha256") or "")
-        if expected_params_sha != canonical_json_sha256(frozen_params):
-            raise RuntimeError(f"Trading entry order frozen_params hash 不一致: {ticker}")
-        filled_qty = int(order.get("filled_qty") or 0)
-        if filled_qty <= 0:
-            raise RuntimeError(f"Trading strategy position 對應 order 尚無 confirmed fill: {ticker}")
         broker_qty = int(broker.get("qty") or 0)
         position_qty = int(position_state.get("qty") or 0)
         if broker_qty <= 0 or position_qty != broker_qty:
             raise RuntimeError(f"Trading broker/strategy position qty 不一致: {ticker}")
-        if broker_qty > filled_qty:
-            raise RuntimeError(f"Trading position qty 不得大於 entry order confirmed filled qty: {ticker}")
 
-        strategy_positions.append(
-            {
-                "ticker": str(ticker),
-                "broker": deepcopy(broker),
-                "strategy_management": deepcopy(management),
-            }
-        )
-        source_orders[order_id] = deepcopy(order)
+        binding = resolve_trading_position_strategy_binding(record, orders=orders)
+        lineage_key = str(binding["lineage_key"])
+        legacy_order_id = str(binding.get("entry_order_id") or "")
+        legacy_order = dict((orders.get("orders") or {}).get(legacy_order_id) or {}) if legacy_order_id else {}
+        filled_qty = int(legacy_order.get("filled_qty") or broker.get("initial_qty") or broker_qty)
+        if broker_qty > filled_qty:
+            raise RuntimeError(f"Trading position qty 不得大於 confirmed/initial qty: {ticker}")
+        source_order = legacy_order or {
+            "status": "POSITION_LINEAGE",
+            "filled_qty": filled_qty,
+            "remaining_qty": 0,
+            "frozen_params": deepcopy(binding["frozen_params"]),
+            "frozen_params_sha256": str(binding["frozen_params_sha256"]),
+        }
+        source_order.setdefault("frozen_params", deepcopy(binding["frozen_params"]))
+        source_order.setdefault("frozen_params_sha256", str(binding["frozen_params_sha256"]))
+
+        strategy_positions.append({
+            "ticker": str(ticker),
+            "broker": deepcopy(broker),
+            "strategy_management": deepcopy(management),
+            "lineage_key": lineage_key,
+            "legacy_entry_order_id": legacy_order_id or None,
+        })
+        source_orders[lineage_key] = source_order
 
     return strategy_positions, source_orders, manual_skipped
 
@@ -151,7 +153,8 @@ def _build_position_plan(
     broker = source["broker"]
     management = source["strategy_management"]
     position = management["position_state"]
-    order_id = str(broker["entry_order_id"])
+    order_id = str(source["lineage_key"])
+    legacy_entry_order_id = str(source.get("legacy_entry_order_id") or "")
     order = source_orders[order_id]
     params = build_params_from_mapping(order["frozen_params"])
 
@@ -165,7 +168,12 @@ def _build_position_plan(
     sold_half = bool(position.get("sold_half", False))
     initial_qty = int(broker.get("initial_qty") or 0)
     tp_progress = build_trading_tp_half_progress(
-        orders, ticker=ticker, entry_order_id=order_id, initial_qty=initial_qty, tp_percent=params.tp_percent,
+        orders,
+        ticker=ticker,
+        entry_order_id=order_id,
+        compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
+        initial_qty=initial_qty,
+        tp_percent=params.tp_percent,
     )
     if int(tp_progress["overfill_qty"]) > 0:
         raise RuntimeError(
@@ -179,7 +187,12 @@ def _build_position_plan(
     if not sold_half and int(tp_progress["remaining_qty"]) == 0 and int(tp_progress["target_qty"]) > 0:
         raise RuntimeError(f"Trading {ticker} TP_HALF target 已由 confirmed fills 完成但 sold_half 尚未同步")
 
-    stop_progress = build_trading_stop_exit_progress(orders, ticker=ticker, entry_order_id=order_id)
+    stop_progress = build_trading_stop_exit_progress(
+        orders,
+        ticker=ticker,
+        entry_order_id=order_id,
+        compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
+    )
     stop_forced = bool(stop_progress["triggered"])
     tp_qty = 0 if stop_forced or sold_half else int(tp_progress["remaining_qty"])
     if tp_qty > qty:
@@ -238,6 +251,7 @@ def _build_position_plan(
         "ticker": ticker,
         "position_qty": qty,
         "entry_order_id": order_id,
+        "legacy_entry_order_id": legacy_entry_order_id or None,
         "entry_order_status": str(order.get("status") or ""),
         "entry_order_filled_qty": int(order.get("filled_qty") or 0),
         "entry_order_remaining_qty": int(order.get("remaining_qty") or 0),
@@ -412,11 +426,16 @@ def build_trading_protection_plan(project_root: str | Path) -> dict[str, Any]:
     order_path = resolve_trading_order_state_path(root)
     if not account_path.is_file():
         raise FileNotFoundError(f"Trading account state 尚未初始化: {account_path}")
-    if not order_path.is_file():
-        raise FileNotFoundError(f"Trading order state 尚未建立: {order_path}")
 
     account, account_file_sha = _read_state_with_file_sha(account_path, validate_trading_account_state)
-    orders, order_file_sha = _read_state_with_file_sha(order_path, validate_trading_order_state)
+    order_file_sha = None
+    if order_path.is_file():
+        orders, order_file_sha = _read_state_with_file_sha(order_path, validate_trading_order_state)
+    else:
+        orders = build_empty_trading_order_state(
+            timestamp=get_taipei_now().isoformat(timespec="seconds"),
+            mutation_id="position-lineage-read-only-order-state",
+        )
     strategy_positions, source_orders, manual_skipped = _collect_strategy_sources(account, orders)
     plan = _build_plan_payload(
         account=account,
@@ -429,8 +448,11 @@ def build_trading_protection_plan(project_root: str | Path) -> dict[str, Any]:
 
     if hashlib.sha256(account_path.read_bytes()).hexdigest() != account_file_sha:
         raise RuntimeError("Trading account 在保護單計畫建立期間已變更")
-    if hashlib.sha256(order_path.read_bytes()).hexdigest() != order_file_sha:
-        raise RuntimeError("Trading order state 在保護單計畫建立期間已變更")
+    if order_file_sha is not None:
+        if (not order_path.is_file()) or hashlib.sha256(order_path.read_bytes()).hexdigest() != order_file_sha:
+            raise RuntimeError("Trading order state 在保護單計畫建立期間已變更")
+    elif order_path.is_file():
+        raise RuntimeError("Trading order state 在保護單計畫建立期間由其他流程建立")
 
     json_path = resolve_trading_protection_plan_json_path(root)
     text_path = resolve_trading_protection_plan_text_path(root)
@@ -459,7 +481,11 @@ def _active_protection_matches_current_plan(order: dict[str, Any], position_plan
     status = str(order.get("status") or "")
     remaining = int(order.get("remaining_qty") or 0)
     position_qty = int(position_plan.get("position_qty") or 0)
-    if str(order.get("entry_order_id") or "") != str(position_plan.get("entry_order_id") or ""):
+    accepted_lineage_ids = {str(position_plan.get("entry_order_id") or "")}
+    legacy_entry_order_id = str(position_plan.get("legacy_entry_order_id") or "")
+    if legacy_entry_order_id:
+        accepted_lineage_ids.add(legacy_entry_order_id)
+    if str(order.get("entry_order_id") or "") not in accepted_lineage_ids:
         return False
     if bool(position_plan.get("stop_forced_exit")):
         if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
@@ -516,11 +542,17 @@ def get_trading_protection_plan_read_model(
     account_path = resolve_trading_account_state_path(root)
     order_path = resolve_trading_order_state_path(root)
     fresh = False
-    if account_path.is_file() and order_path.is_file():
+    if account_path.is_file():
         account = load_json_strict(account_path)
-        orders = load_json_strict(order_path)
         validate_trading_account_state(account)
-        validate_trading_order_state(orders)
+        if order_path.is_file():
+            orders = load_json_strict(order_path)
+            validate_trading_order_state(orders)
+        else:
+            orders = build_empty_trading_order_state(
+                timestamp=get_taipei_now().isoformat(timespec="seconds"),
+                mutation_id="position-lineage-read-only-order-state",
+            )
         strategy_positions, source_orders, _manual = _collect_strategy_sources(account, orders)
         strategy_sha, source_order_sha = _build_source_hashes(strategy_positions, source_orders)
         fresh = (

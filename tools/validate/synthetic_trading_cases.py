@@ -37,6 +37,7 @@ from services.trading.account_state import (
     remove_existing_trading_position,
     record_manual_trading_buy,
     record_manual_trading_sell,
+    record_strategy_trading_buy,
     get_trading_account_read_model,
     initialize_trading_account_state,
     load_trading_account_state,
@@ -650,6 +651,28 @@ def validate_trading_account_state_contract_case(base_params):
         )
         state2 = delete_trading_transaction(root2, transaction_revision=buy_revision2, expected_revision=None)
         check("historical_buy_delete_keeps_later_sell_replayable", False, "2820" in state2["positions"])
+        historical_reconciliations = [
+            event for event in state2.get("events", [])
+            if str(event.get("mutation_type") or "") == "historical_inventory_reconciliation"
+        ]
+        check("historical_buy_delete_persists_explicit_inventory_provenance", 1, len(historical_reconciliations))
+        check("historical_inventory_reconciliation_is_tied_to_sell_logical_revision", sell_revision, int((historical_reconciliations[0].get("details") or {}).get("required_sell_logical_revision") or -1))
+        state2 = delete_trading_transaction(root2, transaction_revision=sell_revision, expected_revision=None)
+        check("voiding_dependent_sell_deactivates_historical_inventory_reconciliation", False, "2820" in state2["positions"])
+
+        root_partial = Path(temp_dir) / "partial-history"
+        partial = initialize_trading_account_state(root_partial, cash=1_000_000)
+        partial = record_manual_trading_buy(root_partial, ticker="2330", qty=100, price=10, trade_date="2026-09-01", expected_revision=None)
+        partial = record_manual_trading_buy(root_partial, ticker="2330", qty=200, price=10, trade_date="2026-09-02", expected_revision=None)
+        deleted_buy_revision = int(partial["revision"])
+        partial = record_manual_trading_sell(root_partial, ticker="2330", qty=200, price=12, trade_date="2026-09-03", expected_revision=None)
+        partial = delete_trading_transaction(root_partial, transaction_revision=deleted_buy_revision, expected_revision=None)
+        partial_reconciliations = [
+            event for event in partial.get("events", [])
+            if str(event.get("mutation_type") or "") == "historical_inventory_reconciliation"
+        ]
+        check("partial_historical_buy_delete_keeps_remaining_recorded_inventory", 100, partial["positions"]["2330"]["broker"]["qty"])
+        check("partial_historical_buy_delete_records_missing_external_inventory_explicitly", 200, int((partial_reconciliations[-1].get("details") or {}).get("qty") or 0))
 
         root3 = Path(temp_dir) / "third"
         state3 = initialize_trading_account_state(root3, cash=1_000_000)
@@ -658,6 +681,82 @@ def validate_trading_account_state_contract_case(base_params):
             root3, ticker="2330", qty=10, price=100, trade_date="2026-09-03", expected_revision=None
         )
         check("latest_revision_inside_lock_allows_user_intent_buy", 2, state3["revision"])
+
+        # Scanner-origin BUY must persist immutable strategy params directly on the
+        # position so next-day management never depends on a broker ENTRY order.
+        from core.params_io import params_to_json_dict
+        from core.portfolio_param_runtime import build_portfolio_params_signature
+        from services.trading.strategy_param_runtime import (
+            build_trading_candidate_strategy_lineage,
+            resolve_trading_position_strategy_binding,
+        )
+        lineage_root = Path(temp_dir) / "strategy-lineage"
+        lineage_state = initialize_trading_account_state(lineage_root, cash=1_000_000)
+        params_payload = params_to_json_dict(base_params)
+        candidate = {
+            "ticker": "2317",
+            "ensemble_member_key": "1",
+            "params_signature": build_portfolio_params_signature(base_params),
+            "ensemble_member_params_by_key": {"1": params_payload},
+            "execution_plan_seed": {
+                "init_sl": 90, "init_trail": 92, "target_price": 120,
+                "limit_price": 100, "entry_atr": 5, "entry_type": "normal",
+            },
+        }
+        lineage = build_trading_candidate_strategy_lineage(candidate)
+        lineage_state = record_strategy_trading_buy(
+            lineage_root, ticker="2317", qty=100, price=100, trade_date="2026-09-04",
+            expected_revision=None, params=base_params,
+            execution_plan_seed=candidate["execution_plan_seed"], strategy_lineage=lineage,
+        )
+        lineage_record = lineage_state["positions"]["2317"]
+        check("scanner_strategy_buy_does_not_require_entry_broker_order", None, lineage_record["broker"].get("entry_order_id"))
+        check("scanner_strategy_buy_persists_position_strategy_lineage", lineage["lineage_id"], (lineage_record.get("strategy_lineage") or {}).get("lineage_id"))
+        binding = resolve_trading_position_strategy_binding(lineage_record, orders={"orders": {}})
+        check("position_strategy_lineage_resolves_without_orders_json", "position_strategy_lineage", binding["source"])
+        lineage_read = get_trading_account_read_model(lineage_root)
+        check("account_read_model_prefers_position_lineage_key", f"POSITION:{lineage['lineage_id']}", lineage_read["positions"][0]["strategy_lineage_key"])
+        rebuilt_lineage = rebuild_trading_account_economics(
+            lineage_state, accounting_params=build_standalone_trading_accounting_params()
+        )
+        check("account_replay_preserves_position_strategy_lineage", lineage["lineage_id"], (rebuilt_lineage["positions"]["2317"].get("strategy_lineage") or {}).get("lineage_id"))
+        lineage_state = record_manual_trading_sell(
+            lineage_root, ticker="2317", qty=100, price=120, trade_date="2026-09-05", expected_revision=None
+        )
+        from services.trading.account_dashboard import build_trading_account_dashboard_read_model
+        lineage_dashboard = build_trading_account_dashboard_read_model(lineage_root)
+        lineage_closed = lineage_dashboard["closed_trades"][0]
+        lineage_perf = lineage_dashboard["performance"][1]
+        check("performance_strategy_closed_ev_uses_canonical_r_unit", lineage_closed["r_mult"], lineage_perf["expected_value_r"])
+        check("performance_strategy_closed_win_rate_is_closed_trade_win_rate", 100.0, lineage_perf["win_rate_pct"])
+
+    # Account performance uses closed lifecycle economics and preserves open
+    # stock count/cost even when a current market price is temporarily missing.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        from services.trading.account_dashboard import build_trading_account_dashboard_read_model
+
+        root = Path(temp_dir)
+        perf_state = initialize_trading_account_state(root, cash=1_000_000)
+        perf_state = adopt_existing_trading_position(
+            root, ticker="2330", qty=100, cost_basis_total=10_000,
+            entry_date="2026-09-01", expected_revision=None,
+        )
+        perf_state = correct_existing_trading_position(
+            root, ticker="2330", qty=100, cost_basis_total=20_000,
+            entry_date="2026-09-01", expected_revision=None,
+        )
+        dashboard_open = build_trading_account_dashboard_read_model(root)
+        open_perf = dashboard_open["performance"][0]
+        check("performance_missing_market_price_keeps_open_stock_count", 1, open_perf["stock_count"])
+        check("performance_missing_market_price_keeps_open_cost", 20_000.0, open_perf["cost"])
+        check("performance_open_inventory_has_no_fake_trade_win_rate", None, open_perf["win_rate_pct"])
+        perf_state = record_manual_trading_sell(
+            root, ticker="2330", qty=100, price=300, trade_date="2026-09-02", expected_revision=None
+        )
+        dashboard_closed = build_trading_account_dashboard_read_model(root)
+        closed_perf = dashboard_closed["performance"][1]
+        check("performance_closed_cost_consumes_broker_truth_correction", 20_000.0, closed_perf["cost"])
+        check("performance_closed_row_uses_realized_pnl", dashboard_closed["closed_trades"][0]["pnl"], closed_perf["pnl"])
 
     # AI: Pause a real commit after its revision checks; another caller must
     # not accept the same revision and overwrite that pending commit.
@@ -1791,6 +1890,38 @@ def validate_trading_protection_plan_contract_case(base_params):
         check("source_change_produces_new_protection_fingerprint", True, rebuilt["plan_fingerprint"] != protection["plan_fingerprint"])
         check("rebuilt_plan_returns_to_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
 
+    # Primary non-OMS path: Scanner position lineage alone must be sufficient for
+    # Stop/TP decision planning; orders.json is optional compatibility state.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        from core.params_io import params_to_json_dict
+        from core.portfolio_param_runtime import build_portfolio_params_signature
+        from services.trading.strategy_param_runtime import build_trading_candidate_strategy_lineage
+
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        params_payload = params_to_json_dict(base_params)
+        candidate = {
+            "ticker": "2317", "ensemble_member_key": "1",
+            "params_signature": build_portfolio_params_signature(base_params),
+            "ensemble_member_params_by_key": {"1": params_payload},
+            "execution_plan_seed": {
+                "init_sl": 90, "init_trail": 92, "target_price": 120,
+                "limit_price": 100, "entry_atr": 5, "entry_type": "normal",
+            },
+        }
+        lineage = build_trading_candidate_strategy_lineage(candidate)
+        account = record_strategy_trading_buy(
+            root, ticker="2317", qty=100, price=100, trade_date="2026-09-04",
+            expected_revision=None, params=base_params,
+            execution_plan_seed=candidate["execution_plan_seed"], strategy_lineage=lineage,
+        )
+        check("direct_position_lineage_does_not_create_orders_state", False, resolve_trading_order_state_path(root).exists())
+        direct_plan = build_trading_protection_plan(root)
+        direct_row = direct_plan["positions"][0]
+        check("direct_position_lineage_builds_protection_without_entry_order", f"POSITION:{lineage['lineage_id']}", direct_row["entry_order_id"])
+        check("direct_position_lineage_has_no_legacy_entry_order_binding", None, direct_row.get("legacy_entry_order_id"))
+        check("direct_position_lineage_protection_plan_is_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
+
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     service_source = (project_root / "services" / "trading" / "protection_planning.py").read_text(encoding="utf-8")
     check("workbench_exposes_post_fill_protection_plan", True, "成交後 Stop / TP 保護單計畫" in panel_source and "build_trading_protection_plan(" in panel_source)
@@ -1927,7 +2058,7 @@ def validate_trading_protection_order_submission_contract_case(base_params):
         current_order_model = get_trading_order_read_model(root)
         current_protection_model = get_trading_protection_plan_read_model(root, recover_pending_fill=False)
         next_day_status = derive_trading_operations_status(
-            workflow={"latest_data_date": "2026-09-04", "params_ready_for_scan": True},
+            workflow={"latest_data_date": "2026-09-05", "params_ready_for_scan": True},
             account=current_account_model,
             orders=current_order_model,
             candidate={"exists": True, "valid": True, "fresh": True, "candidate_count": 0, "information_date": "2026-09-04"},
@@ -1941,7 +2072,7 @@ def validate_trading_protection_order_submission_contract_case(base_params):
         entry_only_rows = [row for row in current_order_model["orders"] if row.get("side") == "BUY"]
         same_day_status = derive_trading_operations_status(
             workflow={"latest_data_date": "2026-09-03", "params_ready_for_scan": True},
-            account={"initialized": True, "revision": 0, "cash": 1_000_000.0, "positions": []},
+            account={"initialized": True, "revision": 0, "cash": 1_000_000.0, "positions": [], "latest_buy_trade_date": "2026-09-03"},
             orders={"revision": current_order_model.get("revision"), "orders": entry_only_rows},
             candidate={"exists": True, "valid": True, "fresh": True, "candidate_count": 0, "information_date": "2026-09-03"},
             proposed={"exists": False, "valid": False, "fresh": False, "order_count": 0},
@@ -2452,12 +2583,12 @@ def validate_trading_operations_status_contract_case(base_params):
 
     missing_stop = derive(account=strategy_account)
     check("strategy_position_without_stop_is_reported", ["2317"], missing_stop["missing_stop_tickers"])
-    check("missing_stop_without_fresh_plan_requires_plan_refresh", NEXT_REFRESH_PROTECTION, missing_stop["next_action_code"])
+    check("legacy_missing_stop_does_not_override_primary_trading_next_action", NEXT_BUILD_PROPOSED, missing_stop["next_action_code"])
 
     fresh_protection = {"exists": True, "fresh": True, "positions": [{"ticker": "2317"}]}
     missing_stop_fresh_plan = derive(account=strategy_account, protection=fresh_protection)
-    check("fresh_plan_without_active_stop_requires_submission", NEXT_SUBMIT_PROTECTION_STOP, missing_stop_fresh_plan["next_action_code"])
-    check("missing_stop_blocks_step4_allocation", False, missing_stop_fresh_plan["workflow_action_availability"]["orders"])
+    check("legacy_fresh_protection_without_broker_stop_does_not_require_submission", NEXT_BUILD_PROPOSED, missing_stop_fresh_plan["next_action_code"])
+    check("legacy_missing_stop_does_not_block_account_aware_allocation", True, missing_stop_fresh_plan["workflow_action_availability"]["orders"])
 
     active_stop_orders = {
         "revision": 5,
@@ -2487,18 +2618,18 @@ def validate_trading_operations_status_contract_case(base_params):
         orders=active_stop_orders,
         protection={**fresh_protection, "stale_active_protection_order_ids": ["stop1"], "stale_active_protection_tickers": ["2317"]},
     )
-    check("stale_active_protection_requires_explicit_cancel_resubmit_sequence", NEXT_REPLACE_PROTECTION, stale_protection["next_action_code"])
-    check("stale_active_protection_blocks_new_allocation", False, stale_protection["workflow_action_availability"]["orders"])
+    check("stale_legacy_protection_does_not_override_primary_trading_next_action", NEXT_BUILD_PROPOSED, stale_protection["next_action_code"])
+    check("stale_legacy_protection_does_not_block_new_allocation", True, stale_protection["workflow_action_availability"]["orders"])
 
     indicator_due = {"exists": True, "fresh": True, "exit_count": 1, "exits": [{"ticker": "2317", "entry_order_id": "ENTRY-2317", "signal_key": "sig-1"}], "active_indicator_exit_order_count": 0, "active_indicator_exit_tickers": []}
     due_with_stop = derive(account=strategy_account, orders=active_stop_orders, protection=fresh_protection, indicator_exit=indicator_due)
-    check("indicator_due_with_active_protection_requires_cancel_first", NEXT_CANCEL_PROTECTION_FOR_INDICATOR, due_with_stop["next_action_code"])
+    check("indicator_due_is_strategy_decision_even_with_legacy_protection", NEXT_SUBMIT_INDICATOR_EXIT, due_with_stop["next_action_code"])
     due_without_stop = derive(account=strategy_account, protection=fresh_protection, indicator_exit=indicator_due)
     check("indicator_due_without_protection_requires_market_submission", NEXT_SUBMIT_INDICATOR_EXIT, due_without_stop["next_action_code"])
     check("indicator_due_blocks_step4_allocation", False, due_without_stop["workflow_action_availability"]["orders"])
     active_indicator_orders = {"revision": 6, "orders": [{"order_id":"ind1","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","entry_order_id":"ENTRY-2317","status":"ORDERED","information_date":"2026-09-04"}]}
     active_indicator = derive(account=strategy_account, orders=active_indicator_orders, protection=fresh_protection, indicator_exit=indicator_due)
-    check("active_indicator_order_requires_reconciliation", NEXT_RECONCILE_INDICATOR_EXIT, active_indicator["next_action_code"])
+    check("active_legacy_indicator_order_does_not_replace_strategy_sell_decision", NEXT_SUBMIT_INDICATOR_EXIT, active_indicator["next_action_code"])
 
     active_entry_orders = {
         "revision": 6,
@@ -2508,11 +2639,11 @@ def validate_trading_operations_status_contract_case(base_params):
         }],
     }
     active_entry = derive(orders=active_entry_orders)
-    check("active_entry_buy_requires_reconciliation", NEXT_RECONCILE_ENTRY, active_entry["next_action_code"])
-    check("active_entry_buy_disables_new_allocation", False, active_entry["workflow_action_availability"]["orders"])
+    check("active_legacy_entry_buy_does_not_override_primary_trading_next_action", NEXT_BUILD_PROPOSED, active_entry["next_action_code"])
+    check("active_legacy_entry_buy_does_not_block_new_allocation", True, active_entry["workflow_action_availability"]["orders"])
     active_entry_with_due = derive(orders=active_entry_orders, account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
-    check("active_entry_reconciliation_precedes_rollforward_that_cannot_mutate_while_entry_is_active", NEXT_RECONCILE_ENTRY, active_entry_with_due["next_action_code"])
-    check("active_entry_disables_rollforward_action", False, active_entry_with_due["workflow_action_availability"]["rollforward"])
+    check("position_rollforward_precedes_hidden_legacy_entry_reconciliation", NEXT_ROLLFORWARD_POSITIONS, active_entry_with_due["next_action_code"])
+    check("active_legacy_entry_does_not_disable_rollforward", True, active_entry_with_due["workflow_action_availability"]["rollforward"])
 
     stale_params = derive(workflow={"latest_data_date": "2026-09-04", "params_ready_for_scan": False})
     check("stale_params_require_update_params", NEXT_UPDATE_PARAMS, stale_params["next_action_code"])
@@ -2528,21 +2659,15 @@ def validate_trading_operations_status_contract_case(base_params):
     stale_candidate = derive(candidate={"exists": True, "valid": True, "fresh": False, "candidate_count": 3})
     check("stale_candidate_requires_scanner", NEXT_RUN_SCANNER, stale_candidate["next_action_code"])
 
-    same_day_history = {
-        "revision": 7,
-        "orders": [{
-            "order_id": "buydone", "ticker": "2330", "side": "BUY", "purpose": "ENTRY_BUY",
-            "status": "FILLED", "information_date": "2026-09-04",
-        }],
-    }
-    locked = derive(orders=same_day_history)
+    same_day_account = {**account, "latest_buy_trade_date": "2026-09-04"}
+    locked = derive(account=same_day_account)
     check("same_information_day_entry_history_locks_reallocation", NEXT_DAY_LOCKED, locked["next_action_code"])
     check("same_day_lock_has_explicit_status", OPERATIONS_STATUS_LOCKED_TODAY, locked["overall_status"])
     check("same_day_lock_disables_step4_only", False, locked["workflow_action_availability"]["orders"])
     check("same_day_lock_keeps_scanner_available", True, locked["workflow_action_availability"]["scanner"])
 
-    sell_fill_history = {"revision": 8, "orders": [{"order_id":"selldone","ticker":"2317","side":"SELL","purpose":"INDICATOR_EXIT","status":"FILLED","information_date":"2026-09-04","latest_fill_trade_date":"2026-09-05"}]}
-    sell_locked = derive(orders=sell_fill_history)
+    sell_fill_account = {**account, "latest_sell_trade_date": "2026-09-05"}
+    sell_locked = derive(account=sell_fill_account)
     check("sell_fill_after_latest_completed_date_locks_same_session_reallocation", NEXT_DAY_LOCKED, sell_locked["next_action_code"])
     check("sell_session_lock_disables_step4", False, sell_locked["workflow_action_availability"]["orders"])
     check("sell_session_lock_is_explicit", True, sell_locked["same_session_sell_locked"])
@@ -2559,8 +2684,8 @@ def validate_trading_operations_status_contract_case(base_params):
     }
     orphan_sell = derive(account=strategy_account, orders=orphan_sell_orders, protection=fresh_protection)
     check("old_lineage_active_sell_is_reported_as_orphan_not_current_indicator", 0, orphan_sell["active_indicator_exit_order_count"])
-    check("orphan_active_sell_blocks_step4_allocation", False, orphan_sell["workflow_action_availability"]["orders"])
-    check("orphan_active_sell_has_explicit_reconciliation_action", "RECONCILE_ORPHAN_SELL_ORDER", orphan_sell["next_action_code"])
+    check("orphan_legacy_sell_does_not_block_step4_allocation", True, orphan_sell["workflow_action_availability"]["orders"])
+    check("orphan_legacy_sell_does_not_override_primary_trading_next_action", NEXT_BUILD_PROPOSED, orphan_sell["next_action_code"])
 
     build_proposed = derive()
     check("fresh_candidate_without_fresh_proposal_requires_step4", NEXT_BUILD_PROPOSED, build_proposed["next_action_code"])
@@ -2666,7 +2791,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.workbench_ui.trading_account_panel import build_trading_account_panel_initial_bundle
     with tempfile.TemporaryDirectory() as temp_dir:
         initial_bundle = build_trading_account_panel_initial_bundle(Path(temp_dir))
-    expected_initial_keys = {"account", "dashboard", "candidate_read", "candidate_payload", "proposed_read", "proposed_payload", "orders", "protection", "indicator", "workflow", "operations"}
+    expected_initial_keys = {"account", "dashboard", "candidate_read", "candidate_payload", "protection", "indicator", "workflow", "operations"}
     check("workbench_trading_initial_bundle_has_all_canonical_read_models", expected_initial_keys, set(initial_bundle))
     check_true("workbench_trading_initial_bundle_reads_empty_state_without_exception", all(bool(value[0]) for value in initial_bundle.values()))
 
@@ -2693,7 +2818,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_center_exposes_scanner_and_buy_entry", True, all(text in panel_source for text in ("今日 Scanner Pool", "買入成交登錄｜只輸入券商實際成交資料", "登錄買入成交", "賣出請到帳務中心點選庫存後操作", "在單股回測檢視")))
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in panel_source.split('trade_box = ttk.LabelFrame(content, text="買入成交登錄', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0])
-    check("workbench_trading_center_keeps_risk_dashboard_but_demotes_account_maintenance", True, "for accounting_section in (header, cash_box, form, table_box, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box.grid(row=1' in panel_source)
+    check("workbench_trading_center_keeps_risk_dashboard_and_visible_position_decisions_while_demoting_account_maintenance", True, "持股決策｜每日依 strategy lineage 更新 Stop / Target / SELL 訊號" in panel_source and "for accounting_section in (header, cash_box, form, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box.grid(row=1' in panel_source)
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_inventory_trade_details_and_performance", True, all(text in accounting_source for text in ("庫存股｜點一下選取，再點同一列取消選取", "買入明細｜未選庫存時顯示全部；選取庫存後只顯示目前庫存對應買入", "賣出明細｜含沖抵持有成本", "沖抵明細｜選取上方賣出紀錄", "績效統計", "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
     check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ("選取庫存後登錄賣出成交", "record_trading_account_inventory_sell", "先在券商完成賣出")) and "對應券商 SELL 單" not in accounting_source)
@@ -3175,7 +3300,7 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
             )
 
         active_ops = operation_status(partial["orders"], protection_rm)
-        check("active_triggered_stop_requires_reconciliation_not_resubmission", NEXT_RECONCILE_STOP_REMAINDER, active_ops["next_action_code"])
+        check("active_triggered_stop_surfaces_manual_exit_action_without_oms_reconciliation_gate", NEXT_SUBMIT_STOP_REMAINDER, active_ops["next_action_code"])
 
         try:
             confirm_trading_protection_leg_submission(

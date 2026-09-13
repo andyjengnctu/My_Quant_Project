@@ -30,6 +30,7 @@ from core.trading_order_state import (
 from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.market_data_consumer import get_trading_v2_consumer_state_sha256
+from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
 from services.trading.position_market_context import (
     load_trading_position_market_frame,
     normalize_trading_date,
@@ -72,25 +73,21 @@ def _source_binding(*, ticker: str, record: dict[str, Any], orders: dict[str, An
     if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position, dict):
         raise RuntimeError(f"Trading strategy position 缺少 active canonical position state: {ticker}")
     broker = record.get("broker") or {}
-    entry_order_id = str(broker.get("entry_order_id") or "").strip()
-    order = (orders.get("orders") or {}).get(entry_order_id)
-    if not isinstance(order, dict) or not isinstance(order.get("frozen_params"), dict):
-        raise RuntimeError(f"Trading position 缺少來源 entry order frozen params: {ticker}")
-    params_sha = canonical_json_sha256(order["frozen_params"])
-    if params_sha != str(order.get("frozen_params_sha256") or ""):
-        raise RuntimeError(f"Trading entry order frozen_params hash 不一致: {ticker}")
+    binding = resolve_trading_position_strategy_binding(record, orders=orders)
     broker_qty = int(broker.get("qty") or 0)
     position_qty = int(position.get("qty") or 0)
     if broker_qty <= 0 or broker_qty != position_qty:
         raise RuntimeError(f"Trading broker/strategy position qty 不一致: {ticker}")
     return {
         "ticker": str(ticker),
-        "entry_order_id": entry_order_id,
+        "entry_order_id": str(binding["lineage_key"]),
+        "legacy_entry_order_id": binding.get("entry_order_id"),
         "entry_trade_date": normalize_trading_date(broker.get("entry_date")),
         "position_qty": position_qty,
         "position_state_sha256": canonical_json_sha256(position),
         "last_rollforward_date": normalize_trading_date(management.get("last_rollforward_date")),
-        "frozen_params_sha256": params_sha,
+        "frozen_params_sha256": str(binding["frozen_params_sha256"]),
+        "frozen_params": deepcopy(binding["frozen_params"]),
         "market_data_sha256": str(market_data_sha256),
     }
 
@@ -145,6 +142,7 @@ def _build_exit_row(*, binding: dict[str, Any], signal_information_date: str, ca
         "qty": int(binding["position_qty"]),
         "position_qty": int(binding["position_qty"]),
         "entry_order_id": binding["entry_order_id"],
+        "legacy_entry_order_id": binding.get("legacy_entry_order_id"),
         "entry_trade_date": binding["entry_trade_date"],
         "priority": 1,
         "position_state_sha256": binding["position_state_sha256"],
@@ -214,8 +212,12 @@ def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any
     exits=[]
     stop_forced_exit_skipped=[]
     for binding in bindings:
+        legacy_entry_order_id = str(binding.get("legacy_entry_order_id") or "")
         stop_progress = build_trading_stop_exit_progress(
-            orders, ticker=binding["ticker"], entry_order_id=binding["entry_order_id"]
+            orders,
+            ticker=binding["ticker"],
+            entry_order_id=str(binding.get("entry_order_id") or ""),
+            compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
         )
         if bool(stop_progress.get("triggered")):
             stop_forced_exit_skipped.append(binding["ticker"])
@@ -224,8 +226,7 @@ def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any
         if carried is not None:
             exits.append(_build_exit_row(binding=binding, signal_information_date=str(carried["signal_information_date"]), carried_forward=True, signal_origin_market_data_sha256=str(carried.get("signal_origin_market_data_sha256") or carried.get("market_data_sha256") or binding["market_data_sha256"])))
             continue
-        order=(orders.get("orders") or {})[binding["entry_order_id"]]
-        params=build_params_from_mapping(order["frozen_params"])
+        params=build_params_from_mapping(binding["frozen_params"])
         df=load_trading_position_market_frame(view=market_view, ticker=binding["ticker"], params=params, allowed_date=allowed_date)
         entry_date=binding["entry_trade_date"]
         eligible=df if entry_date is None else df.loc[df.index >= pd.Timestamp(entry_date)]

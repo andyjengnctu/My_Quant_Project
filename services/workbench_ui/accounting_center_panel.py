@@ -312,7 +312,7 @@ class AccountingCenterPanel(ttk.Frame):
                 TableColumn("pnl", "損益", 12, performance=True, formatter=lambda v, _r: _amount(v)),
                 TableColumn("return_pct", "報酬率", 10, performance=True, formatter=lambda v, _r: _pct(v)),
                 TableColumn("win_rate_pct", "勝率", 9, formatter=lambda v, _r: _pct(v)),
-                TableColumn("expectancy_pct", "期望值", 9, performance=True, formatter=lambda v, _r: _pct(v)),
+                TableColumn("expected_value_r", "期望值(EV R)", 11, performance=True, formatter=lambda v, _r: "-" if v is None else f"{float(v):.2f} R"),
                 TableColumn("risk_reward_ratio", "風報比", 9, formatter=lambda v, _r: "-" if v is None else f"{float(v):.2f}"),
             ),
             page_size=12,

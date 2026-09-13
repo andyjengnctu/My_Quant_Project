@@ -136,7 +136,7 @@ def _mutate_account(
     expected_revision: int | None,
     mutator: Callable[[dict[str, Any], str, str], dict[str, Any]],
     allow_active_protection_orders: bool = False,
-    expected_revision_increment: int = 1,
+    expected_revision_increment: int | None = 1,
     guard_orders: bool = True,
     accounting_params=None,
 ) -> dict[str, Any]:
@@ -156,11 +156,15 @@ def _mutate_account(
 
     updated = mutator(state, _timestamp(), _mutation_id())
     validate_trading_account_state(updated)
-    increment = int(expected_revision_increment)
-    if increment <= 0:
-        raise ValueError("expected_revision_increment 必須 > 0")
-    if int(updated["revision"]) != current_revision + increment:
-        raise RuntimeError(f"Trading account mutation 必須恰好增加 {increment} 個 revision")
+    if expected_revision_increment is None:
+        if int(updated["revision"]) <= current_revision:
+            raise RuntimeError("Trading account mutation 必須至少增加 1 個 revision")
+    else:
+        increment = int(expected_revision_increment)
+        if increment <= 0:
+            raise ValueError("expected_revision_increment 必須 > 0")
+        if int(updated["revision"]) != current_revision + increment:
+            raise RuntimeError(f"Trading account mutation 必須恰好增加 {increment} 個 revision")
 
     latest_raw = path.read_bytes()
     latest_sha = hashlib.sha256(latest_raw).hexdigest()
@@ -336,6 +340,7 @@ def record_strategy_trading_buy(
     expected_revision: int,
     params,
     execution_plan_seed: dict[str, Any] | None = None,
+    strategy_lineage: dict[str, Any] | None = None,
 ):
     seed = dict(execution_plan_seed or {})
     accounting_params = overlay_trading_accounting_params(params)
@@ -361,6 +366,7 @@ def record_strategy_trading_buy(
             security_profile=seed.get("security_profile"),
             entry_type=str(seed.get("entry_type") or "normal"),
             entry_order_id=None,
+            strategy_lineage=strategy_lineage,
         ),
     )
 
@@ -370,7 +376,7 @@ def delete_trading_transaction(
     project_root,
     *,
     transaction_revision: int,
-    expected_revision: int,
+    expected_revision: int | None,
     note: str | None = None,
 ):
     return _mutate_account(
@@ -378,6 +384,7 @@ def delete_trading_transaction(
         expected_revision=expected_revision,
         guard_orders=False,
         accounting_params=build_standalone_trading_accounting_params(),
+        expected_revision_increment=None,
         mutator=lambda state, timestamp, mutation_id: void_manual_trading_transaction(
             state,
             target_revision=transaction_revision,
@@ -396,7 +403,7 @@ def correct_trading_transaction(
     qty: int,
     price,
     trade_date,
-    expected_revision: int,
+    expected_revision: int | None,
 ):
     params = build_standalone_trading_accounting_params()
     return _mutate_account(
@@ -404,7 +411,7 @@ def correct_trading_transaction(
         expected_revision=expected_revision,
         guard_orders=False,
         accounting_params=build_standalone_trading_accounting_params(),
-        expected_revision_increment=2,
+        expected_revision_increment=None,
         mutator=lambda state, timestamp, mutation_id: replace_trading_transaction(
             state,
             target_revision=transaction_revision,

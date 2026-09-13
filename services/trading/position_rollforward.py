@@ -3,7 +3,8 @@
 This service advances only deterministic next-session management state from
 completed Trading OHLCV.  It never infers broker fills, executes Stop/TP, or
 uses current strategy params for an existing position; each holding is advanced
-with the frozen params captured on its source entry order.
+with immutable position-level strategy-lineage params, with source-entry order
+params retained only as legacy compatibility fallback.
 """
 from __future__ import annotations
 
@@ -35,6 +36,7 @@ from services.trading.position_market_context import (
     resolve_trading_strategy_position_sources,
 )
 from services.trading.protection_planning import build_trading_protection_plan
+from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
 
 TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
 
@@ -63,11 +65,15 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
         if management.get("status") != MANAGEMENT_STATUS_ACTIVE:
             raise RuntimeError(f"Trading strategy position management 非 active: {ticker}")
         broker = record.get("broker") or {}
-        entry_order_id = str(broker.get("entry_order_id") or "").strip()
-        order = (orders.get("orders") or {}).get(entry_order_id)
-        if not isinstance(order, dict) or not isinstance(order.get("frozen_params"), dict):
-            raise RuntimeError(f"Trading position 缺少來源 entry order frozen params: {ticker}")
-        stop_progress = build_trading_stop_exit_progress(orders, ticker=ticker, entry_order_id=entry_order_id)
+        binding = resolve_trading_position_strategy_binding(record, orders=orders)
+        lineage_key = str(binding.get("lineage_key") or "").strip()
+        legacy_entry_order_id = str(binding.get("entry_order_id") or "").strip()
+        stop_progress = build_trading_stop_exit_progress(
+            orders,
+            ticker=ticker,
+            entry_order_id=lineage_key,
+            compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
+        )
         if bool(stop_progress.get("triggered")):
             rows.append(
                 {
@@ -82,7 +88,7 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
             continue
         if market_view is None:
             raise RuntimeError("Trading V2 position market view 尚未就緒")
-        params = build_params_from_mapping(order["frozen_params"])
+        params = build_params_from_mapping(binding["frozen_params"])
         df = load_trading_position_market_frame(view=market_view, ticker=ticker, params=params, allowed_date=allowed_date)
         entry_date = normalize_trading_date(broker.get("entry_date"))
         last_rollforward = normalize_trading_date(management.get("last_rollforward_date"))
@@ -127,8 +133,8 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
             "processed_bar_count": 0,
             "positions": [],
         }
-    if active_trading_entry_orders(orders):
-        raise RuntimeError("Trading 尚有 active ENTRY BUY；完成成交／取消 reconciliation 前禁止日終持股推進")
+    # Broker OMS is compatibility-only.  Direct account positions must continue
+    # daily strategy rollforward even if a stale legacy ENTRY order remains.
 
     updates: dict[str, dict[str, Any]] = {}
     result_rows: list[dict[str, Any]] = []
@@ -143,16 +149,20 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
         if not isinstance(position, dict):
             raise RuntimeError(f"Trading strategy position state 缺失: {ticker}")
         broker = record.get("broker") or {}
-        entry_order_id = str(broker.get("entry_order_id") or "").strip()
-        order = (orders.get("orders") or {}).get(entry_order_id)
-        if not isinstance(order, dict) or not isinstance(order.get("frozen_params"), dict):
-            raise RuntimeError(f"Trading position 缺少來源 entry order frozen params: {ticker}")
-        stop_progress = build_trading_stop_exit_progress(orders, ticker=ticker, entry_order_id=entry_order_id)
+        binding = resolve_trading_position_strategy_binding(record, orders=orders)
+        lineage_key = str(binding.get("lineage_key") or "").strip()
+        legacy_entry_order_id = str(binding.get("entry_order_id") or "").strip()
+        stop_progress = build_trading_stop_exit_progress(
+            orders,
+            ticker=ticker,
+            entry_order_id=lineage_key,
+            compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
+        )
         if bool(stop_progress.get("triggered")):
             continue
         if market_view is None:
             raise RuntimeError("Trading V2 position market view 尚未就緒")
-        params = build_params_from_mapping(order["frozen_params"])
+        params = build_params_from_mapping(binding["frozen_params"])
         df = load_trading_position_market_frame(view=market_view, ticker=ticker, params=params, allowed_date=allowed_date)
         precomputed = generate_signals(df, params, ticker=ticker)
         atr_values, _buy_values, _sell_values, _limits = unpack_precomputed_signals(precomputed)

@@ -45,6 +45,7 @@ TRADE_MUTATION_STRATEGY_BUY = "confirm_strategy_buy_fill"
 TRADE_MUTATION_STRATEGY_BUY_INCREMENT = "confirm_strategy_buy_fill_increment"
 TRADE_MUTATION_SELL = "confirm_sell_fill"
 TRADE_MUTATION_VOID = "void_manual_trade"
+ACCOUNT_MUTATION_HISTORICAL_INVENTORY = "historical_inventory_reconciliation"
 TRADE_MUTATIONS = (
     TRADE_MUTATION_BUY,
     TRADE_MUTATION_STRATEGY_BUY,
@@ -127,7 +128,7 @@ def _strategy_template_by_ticker(state: dict[str, Any]) -> dict[str, dict[str, A
     for event in state.get("events", []):
         revision = int(event.get("revision") or 0)
         details = dict(event.get("details") or {})
-        for key in ("position_before", "position", "previous_position", "removed_position"):
+        for key in ("position_before", "position_after", "position", "previous_position", "removed_position"):
             candidate = details.get(key)
             if not isinstance(candidate, dict) or candidate.get("source") != POSITION_SOURCE_STRATEGY_FILL:
                 continue
@@ -173,7 +174,11 @@ def _record_from_replayed_broker(
     record = deepcopy(template)
     record["ticker"] = ticker
     record["source"] = POSITION_SOURCE_STRATEGY_FILL
-    record["broker"] = deepcopy(broker)
+    replay_broker = deepcopy(broker)
+    template_broker = dict(template.get("broker") or {})
+    if not replay_broker.get("entry_order_id") and template_broker.get("entry_order_id"):
+        replay_broker["entry_order_id"] = template_broker.get("entry_order_id")
+    record["broker"] = replay_broker
     management = deepcopy(record.get("strategy_management") or {})
     position_state = deepcopy(management.get("position_state") or {})
     if not position_state:
@@ -212,6 +217,7 @@ def _project_trading_account_economics(
     accounting_params=None,
     extra_void_revisions: set[int] | None = None,
     synthetic_trade_events: list[dict[str, Any]] | None = None,
+    allow_historical_reconciliation: bool = False,
 ) -> dict[str, Any]:
     """Replay effective account economics from immutable events.
 
@@ -224,7 +230,30 @@ def _project_trading_account_economics(
     voided = _voided_trade_revisions(state) | {int(v) for v in (extra_void_revisions or set())}
     strategy_templates = _strategy_template_by_ticker(state)
 
-    timeline: list[tuple[int, int, dict[str, Any]]] = []
+    # Historical inventory reconciliation is tied to an effective SELL at a
+    # logical revision.  If that SELL is later voided, its reconciliation must
+    # disappear from the economic replay as well instead of creating phantom
+    # inventory.  Replacement SELL events retain the same logical revision.
+    active_sell_logical_revisions: set[int] = set()
+    for existing_event in state.get("events", []):
+        existing_revision = int(existing_event.get("revision") or 0)
+        if existing_revision in voided:
+            continue
+        if str(existing_event.get("mutation_type") or "") != TRADE_MUTATION_SELL:
+            continue
+        existing_details = dict(existing_event.get("details") or {})
+        active_sell_logical_revisions.add(
+            int(existing_details.get("replacement_for_revision") or existing_revision)
+        )
+    for raw_synthetic in synthetic_trade_events or []:
+        if str(raw_synthetic.get("mutation_type") or "") != TRADE_MUTATION_SELL:
+            continue
+        synthetic_details = dict(raw_synthetic.get("details") or {})
+        active_sell_logical_revisions.add(
+            int(synthetic_details.get("replacement_for_revision") or raw_synthetic.get("logical_revision") or raw_synthetic.get("revision") or 0)
+        )
+
+    timeline: list[tuple[int, int, int, dict[str, Any]]] = []
     for event in state.get("events", []):
         mutation = str(event.get("mutation_type") or "")
         revision = int(event.get("revision") or 0)
@@ -233,20 +262,26 @@ def _project_trading_account_economics(
         if mutation in TRADE_MUTATIONS and revision in voided:
             continue
         details = dict(event.get("details") or {})
-        logical_revision = int(details.get("replacement_for_revision") or revision)
-        timeline.append((logical_revision, revision, event))
+        if mutation == ACCOUNT_MUTATION_HISTORICAL_INVENTORY:
+            logical_revision = int(details.get("effective_before_revision") or revision)
+            priority = -1
+        else:
+            logical_revision = int(details.get("replacement_for_revision") or revision)
+            priority = 0
+        timeline.append((logical_revision, priority, revision, event))
     for idx, raw in enumerate(synthetic_trade_events or []):
         event = deepcopy(raw)
         details = dict(event.get("details") or {})
         logical_revision = int(details.get("replacement_for_revision") or event.get("logical_revision") or 0)
-        timeline.append((logical_revision, 10**12 + idx, event))
-    timeline.sort(key=lambda item: (item[0], item[1]))
+        timeline.append((logical_revision, 0, 10**12 + idx, event))
+    timeline.sort(key=lambda item: (item[0], item[1], item[2]))
 
     cash_milli = None
     positions: dict[str, dict[str, Any]] = {}
     projected_trades: list[dict[str, Any]] = []
     buy_dates: dict[str, set[str]] = {}
     sell_dates: dict[str, set[str]] = {}
+    reconciliation_events: list[dict[str, Any]] = []
 
     def ensure_nonnegative_cash(context: str):
         # Historical account files may begin after the real broker cash history.
@@ -254,7 +289,7 @@ def _project_trading_account_economics(
         # otherwise valid correction.  Current/final cash is validated below.
         return None
 
-    for _logical, actual_revision, event in timeline:
+    for _logical, _priority, actual_revision, event in timeline:
         mutation = str(event.get("mutation_type") or "")
         details = deepcopy(event.get("details") or {})
         if mutation == "initialize":
@@ -278,6 +313,54 @@ def _project_trading_account_economics(
 
         ticker_raw = details.get("ticker")
         ticker = None if ticker_raw is None else _normalize_ticker(ticker_raw)
+        if mutation == ACCOUNT_MUTATION_HISTORICAL_INVENTORY and ticker:
+            required_sell_logical_revision = int(
+                details.get("required_sell_logical_revision")
+                or details.get("inferred_from_sell_revision")
+                or details.get("effective_before_revision")
+                or 0
+            )
+            if required_sell_logical_revision and required_sell_logical_revision not in active_sell_logical_revisions:
+                continue
+            add_qty = int(details.get("qty") or 0)
+            add_cost = int(details.get("cost_basis_milli") or 0)
+            if add_qty <= 0 or add_cost <= 0:
+                raise ValueError(f"{ticker} historical inventory reconciliation 不合法")
+            source = str(details.get("source") or POSITION_SOURCE_MANUAL_ADOPTED)
+            add_gross = details.get("gross_buy_milli")
+            add_fee = details.get("buy_fee_milli")
+            existing = positions.get(ticker)
+            if existing is None:
+                broker_seed = {
+                    "qty": add_qty, "initial_qty": add_qty,
+                    "initial_cost_basis_milli": add_cost, "remaining_cost_basis_milli": add_cost,
+                    "realized_pnl_milli": 0, "entry_date": details.get("entry_date"),
+                }
+                if add_gross is not None and add_fee is not None:
+                    broker_seed.update({
+                        "initial_gross_buy_milli": int(add_gross), "remaining_gross_buy_milli": int(add_gross),
+                        "initial_buy_fee_milli": int(add_fee), "remaining_buy_fee_milli": int(add_fee),
+                    })
+                positions[ticker] = _record_from_replayed_broker(
+                    ticker, source, broker_seed, strategy_templates=strategy_templates
+                )
+            else:
+                broker = existing["broker"]
+                broker["qty"] = int(broker.get("qty") or 0) + add_qty
+                broker["initial_qty"] = int(broker.get("initial_qty") or 0) + add_qty
+                broker["remaining_cost_basis_milli"] = int(broker.get("remaining_cost_basis_milli") or 0) + add_cost
+                broker["initial_cost_basis_milli"] = int(broker.get("initial_cost_basis_milli") or 0) + add_cost
+                if add_gross is not None and add_fee is not None and all(k in broker for k in (
+                    "initial_gross_buy_milli", "remaining_gross_buy_milli", "initial_buy_fee_milli", "remaining_buy_fee_milli"
+                )):
+                    broker["initial_gross_buy_milli"] += int(add_gross)
+                    broker["remaining_gross_buy_milli"] += int(add_gross)
+                    broker["initial_buy_fee_milli"] += int(add_fee)
+                    broker["remaining_buy_fee_milli"] += int(add_fee)
+                positions[ticker] = _record_from_replayed_broker(
+                    ticker, str(existing.get("source") or source), broker, strategy_templates=strategy_templates
+                )
+            continue
         if mutation == "adopt_manual_position" and ticker:
             qty = int(details.get("qty") or 0)
             cost = int(details.get("cost_basis_total_milli") or 0)
@@ -409,51 +492,78 @@ def _project_trading_account_economics(
         sell_dates.setdefault(ticker, set()).add(trade_date)
         existing = positions.get(ticker)
         qty = int(details.get("qty") or 0)
-        if existing is None:
+        held_qty = 0 if existing is None else int((existing.get("broker") or {}).get("qty") or 0)
+        if qty <= 0:
+            raise ValueError(f"{ticker} 修正後賣出股數不合法")
+        if held_qty < qty:
+            if not allow_historical_reconciliation:
+                raise ValueError(f"{ticker} 修正後賣出股數超過當時庫存：sell={qty}, held={held_qty}")
             position_before = details.get("position_before")
-            if isinstance(position_before, dict) and isinstance(position_before.get("broker"), dict):
-                existing = deepcopy(position_before)
-                positions[ticker] = existing
-            else:
-                # Legacy fallback: the SELL event itself carries the average-cost
-                # allocation.  Treat that as pre-existing broker inventory when an
-                # earlier BUY record was intentionally removed from the local ledger.
+            target_broker = dict(position_before.get("broker") or {}) if isinstance(position_before, dict) else {}
+            target_qty = int(target_broker.get("qty") or 0)
+            target_cost = int(target_broker.get("remaining_cost_basis_milli") or 0)
+            target_gross = target_broker.get("remaining_gross_buy_milli")
+            target_fee = target_broker.get("remaining_buy_fee_milli")
+            if target_qty < qty or target_cost <= 0:
                 remaining_qty_hint = max(0, int(details.get("remaining_qty") or 0))
-                pre_qty = max(qty, qty + remaining_qty_hint)
+                target_qty = max(qty, qty + remaining_qty_hint)
                 allocated_cost_hint = int(details.get("allocated_cost_milli") or 0)
-                if qty <= 0 or allocated_cost_hint <= 0:
+                if allocated_cost_hint <= 0:
                     raise ValueError(f"{ticker} 修正後賣出缺少可重建的庫存成本")
-                unit_cost = allocated_cost_hint / qty
-                pre_cost = int(round(unit_cost * pre_qty))
+                target_cost = int(round((allocated_cost_hint / qty) * target_qty))
                 allocated_gross_hint = details.get("allocated_gross_buy_milli")
-                allocated_fee_hint = details.get("allocated_buy_fee_milli")
                 if allocated_gross_hint is not None:
-                    unit_gross = int(allocated_gross_hint) / qty
-                    pre_gross = int(round(unit_gross * pre_qty))
-                    pre_fee = max(0, pre_cost - pre_gross)
-                else:
-                    pre_gross = None
-                    pre_fee = None
-                broker_seed = {
-                    "qty": pre_qty,
-                    "initial_qty": pre_qty,
-                    "initial_cost_basis_milli": pre_cost,
-                    "remaining_cost_basis_milli": pre_cost,
-                    "realized_pnl_milli": 0,
-                    "entry_date": None,
-                }
-                if pre_gross is not None:
-                    broker_seed.update({
-                        "initial_gross_buy_milli": pre_gross,
-                        "remaining_gross_buy_milli": pre_gross,
-                        "initial_buy_fee_milli": pre_fee,
-                        "remaining_buy_fee_milli": pre_fee,
-                    })
-                source_hint = str(details.get("position_source") or POSITION_SOURCE_MANUAL_ADOPTED)
+                    target_gross = int(round((int(allocated_gross_hint) / qty) * target_qty))
+                    target_fee = max(0, target_cost - int(target_gross))
+            current_cost = 0 if existing is None else int((existing.get("broker") or {}).get("remaining_cost_basis_milli") or 0)
+            current_gross = None if existing is None else (existing.get("broker") or {}).get("remaining_gross_buy_milli")
+            current_fee = None if existing is None else (existing.get("broker") or {}).get("remaining_buy_fee_milli")
+            add_qty = target_qty - held_qty
+            add_cost = max(1, target_cost - current_cost)
+            add_gross = None if target_gross is None else max(0, int(target_gross) - int(current_gross or 0))
+            add_fee = None if target_fee is None else max(0, int(target_fee) - int(current_fee or 0))
+            source_hint = str(
+                (position_before or {}).get("source") if isinstance(position_before, dict) else ""
+            ) or str(details.get("position_source") or POSITION_SOURCE_MANUAL_ADOPTED)
+            recon = {
+                "ticker": ticker, "qty": add_qty, "cost_basis_milli": add_cost,
+                "gross_buy_milli": add_gross, "buy_fee_milli": add_fee,
+                "entry_date": target_broker.get("entry_date"), "source": source_hint,
+                "effective_before_revision": economic_revision,
+                "inferred_from_sell_revision": economic_revision,
+                "required_sell_logical_revision": economic_revision,
+                "reason": "historical_trade_edit_requires_external_inventory_provenance",
+            }
+            reconciliation_events.append(recon)
+            broker_seed = {
+                "qty": add_qty, "initial_qty": add_qty,
+                "initial_cost_basis_milli": add_cost, "remaining_cost_basis_milli": add_cost,
+                "realized_pnl_milli": 0, "entry_date": recon.get("entry_date"),
+            }
+            if add_gross is not None and add_fee is not None:
+                broker_seed.update({
+                    "initial_gross_buy_milli": add_gross, "remaining_gross_buy_milli": add_gross,
+                    "initial_buy_fee_milli": add_fee, "remaining_buy_fee_milli": add_fee,
+                })
+            if existing is None:
                 existing = _record_from_replayed_broker(
                     ticker, source_hint, broker_seed, strategy_templates=strategy_templates
                 )
                 positions[ticker] = existing
+            else:
+                b = existing["broker"]
+                b["qty"] = int(b.get("qty") or 0) + add_qty
+                b["initial_qty"] = int(b.get("initial_qty") or 0) + add_qty
+                b["remaining_cost_basis_milli"] = int(b.get("remaining_cost_basis_milli") or 0) + add_cost
+                b["initial_cost_basis_milli"] = int(b.get("initial_cost_basis_milli") or 0) + add_cost
+                if add_gross is not None and add_fee is not None and all(k in b for k in (
+                    "initial_gross_buy_milli", "remaining_gross_buy_milli", "initial_buy_fee_milli", "remaining_buy_fee_milli"
+                )):
+                    b["initial_gross_buy_milli"] += add_gross; b["remaining_gross_buy_milli"] += add_gross
+                    b["initial_buy_fee_milli"] += add_fee; b["remaining_buy_fee_milli"] += add_fee
+                positions[ticker] = _record_from_replayed_broker(
+                    ticker, str(existing.get("source") or source_hint), b, strategy_templates=strategy_templates
+                )
         broker = existing["broker"]
         held_qty = int(broker.get("qty") or 0)
         if qty <= 0 or qty > held_qty:
@@ -534,6 +644,7 @@ def _project_trading_account_economics(
         "cash_milli": cash_milli,
         "positions": positions,
         "projected_trades": projected_trades,
+        "historical_reconciliations": reconciliation_events,
     }
 
 
@@ -1311,6 +1422,7 @@ def apply_confirmed_strategy_buy_fill(
     security_profile=None,
     entry_type: str = "normal",
     entry_order_id: str | None = None,
+    strategy_lineage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_trading_account_state(state)
     ticker_key = _normalize_ticker(ticker)
@@ -1349,9 +1461,19 @@ def apply_confirmed_strategy_buy_fill(
 
     updated = deepcopy(state)
     updated["cash_milli"] = int(cash_milli) - net_buy_total_milli
+    lineage_payload = None if strategy_lineage is None else deepcopy(strategy_lineage)
+    if lineage_payload is not None:
+        frozen_params = lineage_payload.get("frozen_params")
+        expected_sha = str(lineage_payload.get("frozen_params_sha256") or "")
+        if not isinstance(frozen_params, dict) or not expected_sha or canonical_json_sha256(frozen_params) != expected_sha:
+            raise ValueError("Trading strategy_lineage frozen_params/hash 不合法")
+        if not str(lineage_payload.get("lineage_id") or "").strip():
+            raise ValueError("Trading strategy_lineage 缺少 lineage_id")
+
     updated["positions"][ticker_key] = {
         "ticker": ticker_key,
         "source": POSITION_SOURCE_STRATEGY_FILL,
+        "strategy_lineage": lineage_payload,
         "broker": {
             "qty": int(position_state["qty"]),
             "initial_qty": int(position_state["initial_qty"]),
@@ -1386,6 +1508,8 @@ def apply_confirmed_strategy_buy_fill(
             "net_buy_total_milli": net_buy_total_milli,
             "cash_milli_after": int(updated["cash_milli"]),
             "entry_order_id": None if entry_order_id is None else str(entry_order_id),
+            "strategy_lineage": deepcopy(lineage_payload),
+            "position_after": deepcopy(updated["positions"][ticker_key]),
         },
     )
 
@@ -1785,9 +1909,21 @@ def void_manual_trading_transaction(
     details = dict(event.get("details") or {})
     ticker = _normalize_ticker(details.get("ticker"))
     projection = _project_trading_account_economics(
-        state, accounting_params=params, extra_void_revisions={int(target_revision)}
+        state, accounting_params=params, extra_void_revisions={int(target_revision)},
+        allow_historical_reconciliation=True,
     )
     updated = deepcopy(state)
+    # Persist every inferred external/opening inventory dependency as an explicit
+    # audit event.  This replaces the old silent SELL-based inventory guess.
+    reconciliations = list(projection.get("historical_reconciliations") or [])
+    for index, reconciliation in enumerate(reconciliations, start=1):
+        updated = _append_mutation(
+            updated,
+            mutation_id=f"{mutation_id}:inventory:{index}",
+            mutation_type=ACCOUNT_MUTATION_HISTORICAL_INVENTORY,
+            timestamp=timestamp,
+            details=deepcopy(reconciliation),
+        )
     updated["cash_milli"] = projection["cash_milli"]
     updated["positions"] = projection["positions"]
     side = "SELL" if mutation == TRADE_MUTATION_SELL else "BUY"
@@ -1804,6 +1940,7 @@ def void_manual_trading_transaction(
             "note": None if note is None else str(note),
             "cash_milli_after": None if updated.get("cash_milli") is None else int(updated["cash_milli"]),
             "projection_rebuilt": True,
+            "historical_inventory_reconciliation_count": len(reconciliations),
         },
     )
 
@@ -1879,6 +2016,7 @@ def replace_trading_transaction(
         accounting_params=params,
         extra_void_revisions={int(target_revision)},
         synthetic_trade_events=[synthetic],
+        allow_historical_reconciliation=True,
     )
     # Pick the synthetic projected row to persist recalculated cost/PnL metadata.
     projected_details = None
@@ -1891,6 +2029,15 @@ def replace_trading_transaction(
         projected_details = details
 
     updated = deepcopy(state)
+    reconciliations = list(projection.get("historical_reconciliations") or [])
+    for index, reconciliation in enumerate(reconciliations, start=1):
+        updated = _append_mutation(
+            updated,
+            mutation_id=f"{mutation_id}:inventory:{index}",
+            mutation_type=ACCOUNT_MUTATION_HISTORICAL_INVENTORY,
+            timestamp=timestamp,
+            details=deepcopy(reconciliation),
+        )
     updated["cash_milli"] = projection["cash_milli"]
     updated["positions"] = projection["positions"]
     updated = _append_mutation(
@@ -1906,6 +2053,7 @@ def replace_trading_transaction(
             "note": "Workbench accounting center edit transaction",
             "cash_milli_after": None if updated.get("cash_milli") is None else int(updated["cash_milli"]),
             "projection_rebuilt": True,
+            "historical_inventory_reconciliation_count": len(reconciliations),
         },
     )
     # The replacement is immutable audit evidence.  Economic projection was
@@ -1983,6 +2131,16 @@ def validate_trading_account_state(state: dict[str, Any]) -> None:
             if management.get("status") != MANAGEMENT_STATUS_UNMANAGED or management.get("position_state") is not None:
                 raise ValueError(f"manual adopted position 不得偽造 strategy state: {ticker}")
         if record.get("source") == POSITION_SOURCE_STRATEGY_FILL:
+            lineage = record.get("strategy_lineage")
+            if lineage is not None:
+                if not isinstance(lineage, dict):
+                    raise ValueError(f"Trading strategy_lineage 必須是 object: {ticker}")
+                frozen_params = lineage.get("frozen_params")
+                frozen_sha = str(lineage.get("frozen_params_sha256") or "")
+                if not isinstance(frozen_params, dict) or not frozen_sha or canonical_json_sha256(frozen_params) != frozen_sha:
+                    raise ValueError(f"Trading strategy_lineage frozen params/hash 不合法: {ticker}")
+                if not str(lineage.get("lineage_id") or "").strip():
+                    raise ValueError(f"Trading strategy_lineage 缺少 lineage_id: {ticker}")
             position_state = management.get("position_state")
             if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position_state, dict):
                 raise ValueError(f"strategy fill 必須持有 active strategy position: {ticker}")
@@ -2022,6 +2180,24 @@ def validate_trading_account_state(state: dict[str, Any]) -> None:
 
 def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
     validate_trading_account_state(state)
+    effective_trade_events = [
+        event for event in effective_trading_account_events(state)
+        if str(event.get("mutation_type") or "") in TRADE_MUTATIONS
+    ]
+    buy_trade_dates = sorted({
+        str((event.get("details") or {}).get("trade_date") or "")
+        for event in effective_trade_events
+        if str(event.get("mutation_type") or "") in {
+            TRADE_MUTATION_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT
+        }
+        and str((event.get("details") or {}).get("trade_date") or "")
+    })
+    sell_trade_dates = sorted({
+        str((event.get("details") or {}).get("trade_date") or "")
+        for event in effective_trade_events
+        if str(event.get("mutation_type") or "") == TRADE_MUTATION_SELL
+        and str((event.get("details") or {}).get("trade_date") or "")
+    })
     positions = []
     for ticker in sorted(state["positions"]):
         record = state["positions"][ticker]
@@ -2041,6 +2217,15 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "realized_pnl": milli_to_money(int(broker.get("realized_pnl_milli", 0) or 0)),
                 "entry_date": broker.get("entry_date"),
                 "entry_order_id": broker.get("entry_order_id"),
+                "strategy_lineage_id": (record.get("strategy_lineage") or {}).get("lineage_id"),
+                "strategy_lineage_key": (
+                    (
+                        "POSITION:" + str((record.get("strategy_lineage") or {}).get("lineage_id") or "")
+                        if str((record.get("strategy_lineage") or {}).get("lineage_id") or "") else None
+                    )
+                    or str(broker.get("entry_order_id") or "")
+                    or None
+                ),
                 "management_status": record["strategy_management"]["status"],
                 "last_rollforward_date": record["strategy_management"].get("last_rollforward_date"),
                 "effective_stop": (
@@ -2057,6 +2242,10 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
         "cash": None if state.get("cash_milli") is None else milli_to_money(int(state["cash_milli"])),
         "position_count": len(positions),
         "positions": positions,
+        "latest_buy_trade_date": buy_trade_dates[-1] if buy_trade_dates else None,
+        "latest_sell_trade_date": sell_trade_dates[-1] if sell_trade_dates else None,
+        "buy_trade_dates": buy_trade_dates,
+        "sell_trade_dates": sell_trade_dates,
         "updated_at": state.get("updated_at"),
     }
 

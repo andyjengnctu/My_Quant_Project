@@ -81,6 +81,8 @@ def _empty_account() -> dict[str, Any]:
         "cash": None,
         "position_count": 0,
         "positions": [],
+        "latest_buy_trade_date": None,
+        "latest_sell_trade_date": None,
         "updated_at": None,
     }
 
@@ -186,22 +188,21 @@ def _workflow_action_availability(
     account_ready = bool(account.get("initialized")) and account.get("cash") is not None
     return {
         "data": True,
-        "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0 and active_entry_count == 0 and forced_stop_exit_count == 0),
+        "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0),
         "params": bool(latest_data_date and trading_data_ready),
         "scanner": bool(trading_data_ready and workflow.get("params_ready_for_scan")),
+        # Primary Trading is not a broker OMS.  Legacy active/stale order state
+        # cannot block account-aware allocation; only actual fills/account state,
+        # strategy decisions and session locks may do so.
         "orders": bool(
             account_ready
             and candidate.get("fresh")
-            and active_entry_count == 0
-            and active_indicator_count == 0
             and indicator_due_count == 0
             and rollforward_due_count == 0
-            and stale_active_protection_count == 0
-            and forced_stop_exit_count == 0
             and not same_day_entry_locked
             and not same_session_sell_locked
         ),
-        "all": bool(active_entry_count == 0 and active_indicator_count == 0 and forced_stop_exit_count == 0),
+        "all": bool(account_ready and indicator_due_count == 0),
     }
 
 
@@ -225,6 +226,14 @@ def derive_trading_operations_status(
     indicator_exit = dict(indicator_exit or _empty_indicator_exit())
     positions = [dict(row) for row in list(account.get("positions") or [])]
     strategy_lineage_by_ticker = {
+        str(row.get("ticker") or ""): str(row.get("strategy_lineage_key") or row.get("entry_order_id") or "")
+        for row in positions
+        if str(row.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL
+        and int(row.get("qty") or 0) > 0
+        and str(row.get("ticker") or "")
+        and str(row.get("strategy_lineage_key") or row.get("entry_order_id") or "")
+    }
+    legacy_oms_lineage_by_ticker = {
         str(row.get("ticker") or ""): str(row.get("entry_order_id") or "")
         for row in positions
         if str(row.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL
@@ -233,6 +242,7 @@ def derive_trading_operations_status(
         and str(row.get("entry_order_id") or "")
     }
     strategy_tickers = sorted(strategy_lineage_by_ticker)
+    legacy_oms_tickers = sorted(legacy_oms_lineage_by_ticker)
     manual_tickers = sorted(
         str(row.get("ticker") or "")
         for row in positions
@@ -269,9 +279,15 @@ def derive_trading_operations_status(
 
     stop_triggered_by_ticker = {
         ticker: is_trading_stop_exit_triggered_from_order_rows(
-            order_rows, ticker=ticker, entry_order_id=entry_order_id
+            order_rows,
+            ticker=ticker,
+            entry_order_id=strategy_lineage_by_ticker[ticker],
+            compatible_entry_order_ids=(
+                [legacy_oms_lineage_by_ticker[ticker]]
+                if legacy_oms_lineage_by_ticker.get(ticker) else None
+            ),
         )
-        for ticker, entry_order_id in strategy_lineage_by_ticker.items()
+        for ticker in strategy_tickers
     }
     active_stop_tickers = sorted({
         str(row.get("ticker") or "")
@@ -287,16 +303,11 @@ def derive_trading_operations_status(
         for row in active_protection_rows
         if str(row.get("purpose") or "") == TRADING_ORDER_PURPOSE_PROTECTION_TP
     })
-    missing_stop_tickers = sorted(set(strategy_tickers) - set(active_stop_tickers))
+    missing_stop_tickers = sorted(set(legacy_oms_tickers) - set(active_stop_tickers))
 
     latest_data_date = str(workflow.get("latest_data_date") or "")
     same_day_entry_locked = bool(
-        latest_data_date
-        and any(
-            str(row.get("side") or "") == TRADING_ORDER_SIDE_BUY
-            and str(row.get("information_date") or "") == latest_data_date
-            for row in order_rows
-        )
+        latest_data_date and str(account.get("latest_buy_trade_date") or "") == latest_data_date
     )
     active_entry_count = len(active_entry_rows)
     active_protection_count = len(active_protection_rows)
@@ -327,31 +338,20 @@ def derive_trading_operations_status(
     orphan_active_sell_order_ids = sorted(str(row.get("order_id") or "") for row in orphan_active_sell_rows if str(row.get("order_id") or ""))
     orphan_active_sell_tickers = sorted({str(row.get("ticker") or "") for row in orphan_active_sell_rows if str(row.get("ticker") or "")})
     same_session_sell_locked = bool(
-        latest_data_date and any(
-            str(row.get("side") or "") == TRADING_ORDER_SIDE_SELL
-            and str(row.get("latest_fill_trade_date") or "") > latest_data_date
-            for row in order_rows
-        )
+        latest_data_date
+        and str(account.get("latest_sell_trade_date") or "")
+        and str(account.get("latest_sell_trade_date") or "") > latest_data_date
     )
     rollforward_due_tickers = sorted(str(x) for x in list(position_rollforward.get("due_tickers") or []))
     stale_active_protection_order_ids = [str(x) for x in list(protection.get("stale_active_protection_order_ids") or []) if str(x)]
     stale_active_protection_tickers = sorted(str(x) for x in list(protection.get("stale_active_protection_tickers") or []))
     missing_stop_tickers = sorted(set(missing_stop_tickers) - set(indicator_due_tickers) - set(active_indicator_tickers) - set(forced_stop_exit_tickers))
 
+    # Workbench is not the broker OMS.  Legacy broker-order inconsistencies stay
+    # visible as warnings but do not block Scanner/allocation for position-lineage
+    # managed accounts.  Strategy Stop/Target/SELL obligations are decision truth.
     sell_coverage_blockers: list[str] = []
-    if orphan_active_sell_order_ids:
-        sell_coverage_blockers.append("存在不屬於目前 strategy entry lineage 的 active SELL order")
-    if stale_active_protection_order_ids:
-        sell_coverage_blockers.append("active protection 與目前 position plan 不一致")
-    if missing_stop_tickers:
-        sell_coverage_blockers.append("strategy position 缺少 active Stop")
-    if indicator_protection_conflict_tickers:
-        sell_coverage_blockers.append("Indicator SELL 與 protection SELL 衝突")
-    if forced_stop_unsubmitted_tickers:
-        sell_coverage_blockers.append("STOP forced-exit 尚未有 active broker exit order")
-    if forced_stop_conflict_tickers:
-        sell_coverage_blockers.append("STOP forced-exit 與其他 SELL order 衝突")
-    open_position_sell_coverage_safe = not sell_coverage_blockers
+    open_position_sell_coverage_safe = True
 
     market_data_ready = bool(workflow.get("market_data_ready", bool(workflow.get("latest_data_date"))))
     trading_data_ready = bool(workflow.get("trading_data_ready", market_data_ready))
@@ -369,20 +369,8 @@ def derive_trading_operations_status(
             "Trading data readiness 尚未就緒"
             + (("：" + "；".join(trading_data_blockers)) if trading_data_blockers else "")
         )
-    if active_entry_count:
-        allocation_blockers.append("存在 active ENTRY BUY")
-    if orphan_active_sell_order_ids:
-        allocation_blockers.append("存在 orphan active SELL order")
-    if forced_stop_exit_tickers:
-        allocation_blockers.append("存在 STOP forced-exit obligation")
     if rollforward_due_tickers:
         allocation_blockers.append("strategy position 尚未完成日終推進")
-    if strategy_tickers and not indicator_plan_fresh:
-        allocation_blockers.append("Indicator SELL plan 尚未 fresh")
-    if active_indicator_count or indicator_due_tickers or indicator_protection_conflict_tickers:
-        allocation_blockers.append("Indicator SELL lifecycle 尚未完成")
-    if stale_active_protection_order_ids or missing_stop_tickers:
-        allocation_blockers.append("open position protection 尚未安全完成")
     if same_day_entry_locked or same_session_sell_locked:
         allocation_blockers.append("本交易 session allocation 已鎖定")
 
@@ -454,8 +442,12 @@ def derive_trading_operations_status(
         warnings.append("既有 Scanner snapshot 已 STALE")
     if strategy_tickers and protection.get("exists") and not protection_fresh:
         warnings.append("既有保護單計畫已 STALE")
+    if active_entry_count:
+        warnings.append(f"Legacy broker OMS 尚有 {active_entry_count} 筆 active ENTRY BUY（不阻擋 primary Trading；以實際 account fill 為準）")
+    if orphan_active_sell_order_ids:
+        warnings.append("Legacy broker OMS 有未對應目前 position lineage 的 active SELL（不阻擋決策流程）: " + ",".join(orphan_active_sell_tickers))
     if stale_active_protection_order_ids:
-        warnings.append("active broker protection 已與目前 position plan 不一致: " + ",".join(stale_active_protection_tickers))
+        warnings.append("Legacy broker protection 已與目前 position plan 不一致（不阻擋決策流程）: " + ",".join(stale_active_protection_tickers))
     if same_session_sell_locked:
         warnings.append("本交易 session 已確認 SELL fill；Trading completed data 尚未追上成交日，依 D3/D4 禁止重新 allocation")
     if forced_stop_exit_tickers:
@@ -490,94 +482,36 @@ def derive_trading_operations_status(
         next_code = NEXT_SET_CASH
         next_label = "設定 Trading 現金"
         next_detail = "Account 已建立但 cash 尚未設定，不能建立實際建議掛單。"
-    elif orphan_active_sell_order_ids:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_RECONCILE_ORPHAN_SELL
-        next_label = "確認舊 lineage SELL 成交或取消"
-        next_detail = "存在不屬於目前 strategy entry lineage 的 active SELL order；必須先依實際券商狀態 reconcile: " + ",".join(orphan_active_sell_order_ids)
-    elif forced_stop_conflict_tickers:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_CANCEL_SELL_FOR_STOP_REMAINDER
-        next_label = "先確認券商取消衝突 SELL"
-        next_detail = "STOP 已觸發，剩餘持股必須完成退出；先取消同 ticker TP/Indicator SELL: " + ",".join(forced_stop_conflict_tickers)
-    elif active_stop_exit_tickers:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_RECONCILE_STOP_REMAINDER
-        next_label = "確認已觸發 STOP 剩餘成交或取消"
-        next_detail = "STOP 已觸發且 broker exit order 仍 active；只做 fill/cancel reconciliation，不得重建等待觸價 Stop: " + ",".join(active_stop_exit_tickers)
-    elif forced_stop_unsubmitted_tickers and (not protection_fresh or not set(forced_stop_unsubmitted_tickers).issubset(set(protection_forced_tickers))):
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_REFRESH_STOP_REMAINDER
-        next_label = "刷新 STOP 剩餘強制退出計畫"
-        next_detail = "原 STOP 已有 confirmed fill 且剩餘 broker order 不再 active；建立 MARKET forced-exit plan: " + ",".join(forced_stop_unsubmitted_tickers)
-    elif forced_stop_unsubmitted_tickers:
+    elif forced_stop_exit_tickers:
         overall = OPERATIONS_STATUS_ACTION_REQUIRED
         next_code = NEXT_SUBMIT_STOP_REMAINDER
-        next_label = "確認 STOP 剩餘 MARKET SELL 已送券商"
-        next_detail = "Persistent STOP forced-exit obligation: " + ",".join(forced_stop_unsubmitted_tickers)
+        next_label = "依 Stop 退出訊號自行至券商處理"
+        next_detail = "STOP 已觸發且仍有剩餘持股：" + ",".join(forced_stop_exit_tickers) + "；Workbench 不管理券商掛單，成交後回帳務中心登錄。"
     elif "position_rollforward" in errors:
         overall = OPERATIONS_STATUS_BLOCKED
         next_code = NEXT_ROLLFORWARD_POSITIONS
         next_label = "修正持股日終推進狀態"
         next_detail = errors["position_rollforward"]
-    elif rollforward_due_tickers and active_entry_count:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_RECONCILE_ENTRY
-        next_label = "先確認 BUY 掛單成交或取消"
-        next_detail = f"目前有 {active_entry_count} 筆 active ENTRY BUY；完成 reconciliation 後才能安全推進既有持股。"
     elif rollforward_due_tickers:
         overall = OPERATIONS_STATUS_ACTION_REQUIRED
         next_code = NEXT_ROLLFORWARD_POSITIONS
         next_label = "持股日終推進"
-        next_detail = "用已完成日K與各 entry order frozen params 更新下一交易日 trailing stop: " + ",".join(rollforward_due_tickers)
+        next_detail = "用已完成日K與各持股 immutable strategy lineage frozen params 更新下一交易日 trailing stop: " + ",".join(rollforward_due_tickers)
     elif "indicator_exit" in errors:
         overall = OPERATIONS_STATUS_BLOCKED
         next_code = NEXT_REFRESH_INDICATOR_EXIT
         next_label = "修正／刷新 Indicator SELL 計畫"
         next_detail = errors["indicator_exit"]
-    elif active_indicator_count:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_RECONCILE_INDICATOR_EXIT
-        next_label = "確認 Indicator MARKET SELL 成交或取消"
-        next_detail = "目前有 active Indicator SELL: " + ",".join(active_indicator_tickers)
     elif strategy_tickers and not indicator_plan_fresh:
         overall = OPERATIONS_STATUS_ACTION_REQUIRED
         next_code = NEXT_REFRESH_INDICATOR_EXIT
         next_label = "建立／刷新 Indicator SELL 計畫"
         next_detail = "依最新 completed bar 與各持股 frozen params 判定 persistent indicator exit obligation。"
-    elif indicator_protection_conflict_tickers:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_CANCEL_PROTECTION_FOR_INDICATOR
-        next_label = "先確認券商取消 Stop/TP"
-        next_detail = "Indicator SELL 已成立，送 MARKET SELL 前先取消同 ticker protection: " + ",".join(indicator_protection_conflict_tickers)
     elif indicator_due_tickers:
         overall = OPERATIONS_STATUS_ACTION_REQUIRED
         next_code = NEXT_SUBMIT_INDICATOR_EXIT
-        next_label = "確認 Indicator MARKET SELL 已送券商"
-        next_detail = "Persistent Indicator SELL obligation: " + ",".join(indicator_due_tickers)
-    elif stale_active_protection_order_ids:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_REPLACE_PROTECTION
-        next_label = "取消／重送已過期保護單"
-        next_detail = "目前 active protection 與最新 position plan 不一致: " + ",".join(stale_active_protection_tickers)
-    elif missing_stop_tickers:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        if protection_fresh:
-            next_code = NEXT_SUBMIT_PROTECTION_STOP
-            next_label = "確認未保護持股的 Stop／OCO 已送券商"
-            next_detail = "缺少 active Stop: " + ",".join(missing_stop_tickers)
-            tp_only = sorted(set(missing_stop_tickers) & set(active_tp_tickers))
-            if tp_only:
-                next_detail += "；其中已有 active TP 但無 Stop: " + ",".join(tp_only) + "，須先依實際券商狀態取消／重建或使用已確認 native OCO。"
-        else:
-            next_code = NEXT_REFRESH_PROTECTION
-            next_label = "建立／刷新成交後保護單計畫"
-            next_detail = "目前 strategy position 尚缺 active Stop: " + ",".join(missing_stop_tickers)
-    elif active_entry_count:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_RECONCILE_ENTRY
-        next_label = "確認 BUY 掛單成交或取消"
-        next_detail = f"目前有 {active_entry_count} 筆 active ENTRY BUY；完成 reconciliation 前不得重新 allocation。"
+        next_label = "依 Indicator SELL 訊號自行至券商賣出"
+        next_detail = "策略 SELL decision：" + ",".join(indicator_due_tickers) + "；Workbench 不管理券商掛單，成交後回帳務中心登錄。"
     elif not workflow.get("latest_data_date") or not trading_data_ready:
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_DATA
@@ -627,8 +561,8 @@ def derive_trading_operations_status(
     elif strategy_tickers:
         overall = OPERATIONS_STATUS_IDLE
         next_code = NEXT_MONITOR
-        next_label = "維持既有持股／掛單 reconciliation"
-        next_detail = "目前沒有新的盤前動作；只處理實際券商成交／取消與機械保護單。"
+        next_label = "維持既有持股／每日決策監控"
+        next_detail = "目前沒有新的盤前動作；依持股決策表的 Stop / Target / SELL signal 自行處理券商交易。"
     else:
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_READY
