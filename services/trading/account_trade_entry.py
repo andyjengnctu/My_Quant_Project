@@ -40,7 +40,7 @@ def record_trading_account_buy(
     qty: int,
     price,
     trade_date,
-    expected_account_revision: int,
+    expected_account_revision: int | None = None,
     candidate: dict | None = None,
 ):
     ticker_key = str(ticker or "").strip().upper()
@@ -60,7 +60,7 @@ def record_trading_account_buy(
             qty=int(qty),
             price=strategy_price,
             trade_date=trade_date,
-            expected_revision=int(expected_account_revision),
+            expected_revision=(None if expected_account_revision is None else int(expected_account_revision)),
             params=params,
             execution_plan_seed=dict(candidate_row.get("execution_plan_seed") or {}),
         )
@@ -75,7 +75,7 @@ def record_trading_account_buy(
         qty=int(qty),
         price=price,
         trade_date=trade_date,
-        expected_revision=int(expected_account_revision),
+        expected_revision=(None if expected_account_revision is None else int(expected_account_revision)),
     )
     return {"route": "manual_account_buy", "account": account}
 
@@ -87,7 +87,7 @@ def record_trading_account_inventory_sell(
     qty: int,
     price,
     trade_date,
-    expected_account_revision: int,
+    expected_account_revision: int | None = None,
     selected_order_id: str | None = None,
 ):
     """Record actual broker SELL directly; broker-order lifecycle is not required."""
@@ -98,7 +98,7 @@ def record_trading_account_inventory_sell(
         qty=int(qty),
         price=price,
         trade_date=trade_date,
-        expected_revision=int(expected_account_revision),
+        expected_revision=(None if expected_account_revision is None else int(expected_account_revision)),
     )
     return {
         "route": "direct_account_sell",

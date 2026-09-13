@@ -904,6 +904,7 @@ class TradingAccountPanel(ttk.Frame):
             empty_text="目前沒有 Scanner 候選",
             on_select=self._on_candidate_selected,
             on_open_stock=self._open_ticker_in_inspector,
+            on_mousewheel=self._on_page_mousewheel,
         )
         self._candidate_tree.grid(row=0, column=0, sticky="ew")
         candidate_actions = ttk.Frame(candidate_box, style=WORKBENCH_FRAME_STYLE)
@@ -1197,6 +1198,8 @@ class TradingAccountPanel(ttk.Frame):
             delta = -1 * int(event.delta / 120) if event.delta else 0
         if delta:
             self._page_canvas.yview_scroll(delta, "units")
+            return "break"
+        return None
 
     def _bind_page_mousewheel(self, widget) -> None:
         targets = [widget]
@@ -1208,8 +1211,6 @@ class TradingAccountPanel(ttk.Frame):
                 for child in target.winfo_children():
                     if child not in targets:
                         targets.append(child)
-                if isinstance(target, (ttk.Treeview, ttk.Combobox)):
-                    continue
                 target.bind("<MouseWheel>", self._on_page_mousewheel, add="+")
                 target.bind("<Button-4>", self._on_page_mousewheel, add="+")
                 target.bind("<Button-5>", self._on_page_mousewheel, add="+")
@@ -2446,7 +2447,7 @@ class TradingAccountPanel(ttk.Frame):
             lambda: set_trading_cash_balance(
                 WORKBENCH_PROJECT_ROOT,
                 cash=cash,
-                expected_revision=expected_revision,
+                expected_revision=None,
                 note="Workbench cash reconciliation",
             ),
             success_message="現金餘額已更新。",
@@ -2468,7 +2469,6 @@ class TradingAccountPanel(ttk.Frame):
     def _record_simple_trade(self, side: str):
         try:
             ticker, qty, price, trade_date = self._simple_trade_values()
-            expected_revision = int(self._current_revision())
         except (ValueError, RuntimeError) as exc:
             messagebox.showerror("成交登錄", str(exc), parent=self)
             return
@@ -2493,7 +2493,7 @@ class TradingAccountPanel(ttk.Frame):
             qty=qty,
             price=price,
             trade_date=trade_date,
-            expected_account_revision=expected_revision,
+            expected_account_revision=None,
             candidate=candidate,
         )
 
@@ -2544,7 +2544,7 @@ class TradingAccountPanel(ttk.Frame):
             f"登記既有持股 {values['ticker']}",
             lambda: adopt_existing_trading_position(
                 WORKBENCH_PROJECT_ROOT,
-                expected_revision=expected_revision,
+                expected_revision=None,
                 **values,
             ),
             success_message="既有持股已登記；現金未變更。",
@@ -2568,7 +2568,7 @@ class TradingAccountPanel(ttk.Frame):
             f"修正既有持股 {selected}",
             lambda: correct_existing_trading_position(
                 WORKBENCH_PROJECT_ROOT,
-                expected_revision=expected_revision,
+                expected_revision=None,
                 **values,
             ),
             success_message="既有持股 broker truth 已修正；現金未變更。",
@@ -2597,7 +2597,7 @@ class TradingAccountPanel(ttk.Frame):
             lambda: remove_existing_trading_position(
                 WORKBENCH_PROJECT_ROOT,
                 ticker=selected,
-                expected_revision=expected_revision,
+                expected_revision=None,
                 note=note,
             ),
             success_message="既有持股已移除；現金未變更。",

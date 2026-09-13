@@ -21,7 +21,7 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_
 from core.runtime_utils import get_taipei_now
 from core.trading_policy import resolve_trading_selected_strategy_param_path
 from services.trading.account_state import load_trading_account_state, resolve_trading_account_state_path
-from core.trading_account_state import effective_trading_account_events, project_trading_account_transactions
+from core.trading_account_state import effective_trading_account_events, project_trading_account_transactions, rebuild_trading_account_economics
 from services.trading.accounting_policy import (
     build_standalone_trading_accounting_params,
     overlay_trading_accounting_params,
@@ -86,11 +86,11 @@ def _load_primary_params(project_root: Path):
     return runtime["primary_params"], project_relative_display_path(selected_path, project_root=project_root), None
 
 
-def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_closed_round_trips(state: dict[str, Any], *, accounting_params=None) -> list[dict[str, Any]]:
     """Reconstruct closed position lifecycles from effective, replayed economics."""
     active: dict[str, dict[str, Any]] = {}
     closed: list[dict[str, Any]] = []
-    projected_trades = project_trading_account_transactions(state)
+    projected_trades = project_trading_account_transactions(state, accounting_params=accounting_params)
     trade_revisions = {int(row.get("revision") or -1) for row in projected_trades}
     timeline = []
     for event in effective_trading_account_events(state):
@@ -191,10 +191,10 @@ def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
     return closed
 
 
-def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_transaction_details(state: dict[str, Any], *, accounting_params=None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     buys: list[dict[str, Any]] = []
     sells: list[dict[str, Any]] = []
-    events = project_trading_account_transactions(state)
+    events = project_trading_account_transactions(state, accounting_params=accounting_params)
     trade_mutations = {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment", "confirm_sell_fill"}
     latest_trade_revision_by_ticker: dict[str, int] = {}
     for event in events:
@@ -334,18 +334,19 @@ def _performance_summary_row(
     label: str,
     rows: list[dict[str, Any]],
     *,
-    market_value: float,
-    unrealized_pnl: float,
-    economic_pnl: float,
+    value: float,
+    pnl: float,
+    stock_tickers: set[str],
 ) -> dict[str, Any]:
-    holding_cost = sum(float(row.get("cost_basis") or 0) for row in rows)
+    cost = sum(float(row.get("cost_basis") or 0) for row in rows)
     rates = _performance_outcomes(rows)
     return {
         "scope": label,
-        "market_value": float(market_value),
-        "holding_cost": holding_cost,
-        "unrealized_pnl": float(unrealized_pnl),
-        "return_pct": None if holding_cost <= 0 else float(economic_pnl) / holding_cost * 100.0,
+        "stock_count": len(stock_tickers),
+        "value": float(value),
+        "cost": cost,
+        "pnl": float(pnl),
+        "return_pct": None if cost <= 0 else float(pnl) / cost * 100.0,
         **rates,
     }
 
@@ -391,12 +392,6 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         warnings.append(f"Trading V2 state: {type(exc).__name__}: {exc}")
     market_date = None if consumer_state is None else str(consumer_state.get("market_date") or "") or None
 
-    open_records = dict(state.get("positions") or {})
-    tickers = sorted(open_records)
-    prices, price_errors = _current_close_by_ticker(root, tickers, market_date)
-    for ticker, error in sorted(price_errors.items()):
-        warnings.append(f"{ticker} 市價: {error}")
-
     params, params_path, params_error = _load_primary_params(root)
     if params_error:
         warnings.append(params_error)
@@ -405,6 +400,15 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         if params is not None
         else build_standalone_trading_accounting_params()
     )
+    # Read views always consume current broker-accounting semantics, including
+    # migration of legacy fee/tax rounding, without rewriting immutable events.
+    state = rebuild_trading_account_economics(state, accounting_params=accounting_params)
+
+    open_records = dict(state.get("positions") or {})
+    tickers = sorted(open_records)
+    prices, price_errors = _current_close_by_ticker(root, tickers, market_date)
+    for ticker, error in sorted(price_errors.items()):
+        warnings.append(f"{ticker} 市價: {error}")
 
     enriched_positions: list[dict[str, Any]] = []
     holdings_market_value = 0.0
@@ -508,39 +512,31 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         fixed_risk = float(params.fixed_risk)
         single_position_risk_budget = milli_to_money(calc_risk_budget_milli(equity, fixed_risk))
 
-    buy_details, sell_details = _build_transaction_details(state)
-    closed_trades = _build_closed_round_trips(state)
+    buy_details, sell_details = _build_transaction_details(state, accounting_params=accounting_params)
+    closed_trades = _build_closed_round_trips(state, accounting_params=accounting_params)
     open_perf_rows = [
-        {
-            "ticker": row["ticker"],
-            "cost_basis": row["holding_cost"],
-            "pnl": row["unrealized_pnl"],
-        }
+        {"ticker": row["ticker"], "cost_basis": row["holding_cost"], "pnl": row["unrealized_pnl"]}
         for row in enriched_positions
         if row.get("unrealized_pnl") is not None
     ]
-    # One closed lifecycle = one outcome.  Partial sells are not counted as
-    # independent wins/losses because the user requested 平倉股 statistics.
     closed_perf_rows = [
         {"ticker": row["ticker"], "cost_basis": row["cost_basis"], "pnl": row["pnl"]}
         for row in closed_trades
         if float(row.get("cost_basis") or 0) > 0
     ]
-    open_market_value = sum(float(row.get("market_value") or 0) for row in enriched_positions)
-    open_unrealized = sum(float(row.get("pnl") or 0) for row in open_perf_rows)
-    closed_realized = sum(float(row.get("pnl") or 0) for row in closed_perf_rows)
+    open_value = sum(float(row.get("net_liquidation_value") or 0) for row in enriched_positions)
+    open_pnl = sum(float(row.get("pnl") or 0) for row in open_perf_rows)
+    closed_value = sum(float(row.get("net_sell_total") or 0) for row in closed_trades)
+    closed_pnl = sum(float(row.get("pnl") or 0) for row in closed_perf_rows)
+    open_tickers = {str(row.get("ticker") or "") for row in open_perf_rows if row.get("ticker")}
+    closed_tickers = {str(row.get("ticker") or "") for row in closed_perf_rows if row.get("ticker")}
     performance = [
+        _performance_summary_row("庫存股", open_perf_rows, value=open_value, pnl=open_pnl, stock_tickers=open_tickers),
+        _performance_summary_row("平倉股", closed_perf_rows, value=closed_value, pnl=closed_pnl, stock_tickers=closed_tickers),
         _performance_summary_row(
-            "庫存股", open_perf_rows, market_value=open_market_value,
-            unrealized_pnl=open_unrealized, economic_pnl=open_unrealized,
-        ),
-        _performance_summary_row(
-            "平倉股", closed_perf_rows, market_value=0.0,
-            unrealized_pnl=0.0, economic_pnl=closed_realized,
-        ),
-        _performance_summary_row(
-            "加總", [*open_perf_rows, *closed_perf_rows], market_value=open_market_value,
-            unrealized_pnl=open_unrealized, economic_pnl=open_unrealized + closed_realized,
+            "加總", [*open_perf_rows, *closed_perf_rows],
+            value=open_value + closed_value, pnl=open_pnl + closed_pnl,
+            stock_tickers=open_tickers | closed_tickers,
         ),
     ]
 

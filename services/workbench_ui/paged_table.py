@@ -51,6 +51,8 @@ class PagedTable(ttk.Frame):
         empty_text: str = "目前無資料",
         on_select: Callable[[dict[str, Any] | None], None] | None = None,
         on_open_stock: Callable[[str], None] | None = None,
+        sortable: bool = True,
+        on_mousewheel: Callable[[Any], Any] | None = None,
     ):
         super().__init__(master, style=WORKBENCH_FRAME_STYLE)
         self.columns = tuple(columns)
@@ -64,6 +66,8 @@ class PagedTable(ttk.Frame):
         self.empty_text = str(empty_text)
         self.on_select = on_select
         self.on_open_stock = on_open_stock
+        self.sortable = bool(sortable)
+        self.on_mousewheel = on_mousewheel
         self._rows: list[dict[str, Any]] = []
         self._selected_id: str | None = None
         self._page = 0
@@ -81,7 +85,16 @@ class PagedTable(ttk.Frame):
         self._prev.pack(side="left")
         self._page_label.pack(side="left", padx=10)
         self._next.pack(side="left")
+        for widget in (self, self._grid, self._empty, self._pager, self._prev, self._page_label, self._next):
+            self._bind_mousewheel(widget)
         self._render()
+
+    def _bind_mousewheel(self, widget) -> None:
+        if not callable(self.on_mousewheel):
+            return
+        widget.bind("<MouseWheel>", self.on_mousewheel, add="+")
+        widget.bind("<Button-4>", self.on_mousewheel, add="+")
+        widget.bind("<Button-5>", self.on_mousewheel, add="+")
 
     def set_rows(self, rows: Iterable[dict[str, Any]], *, preserve_selection: bool = True) -> None:
         normalized: list[dict[str, Any]] = []
@@ -164,6 +177,8 @@ class PagedTable(ttk.Frame):
         return WORKBENCH_TEXT
 
     def _header_click(self, key: str) -> None:
+        if not self.sortable:
+            return
         # First user click on any column is ascending; the next click on that same
         # column reverses it.  A default ascending sort (for example trade date)
         # does not consume that first-click contract.
@@ -225,12 +240,12 @@ class PagedTable(ttk.Frame):
                 command = None
             else:
                 arrow = ""
-                if self._sort_key == key:
+                if self.sortable and self._sort_key == key:
                     arrow = " ▼" if self._sort_desc else " ▲"
                 text = f"{column.label}{arrow}"
                 width = max(4, int(column.width))
-                cursor = "hand2"
-                command = lambda _event=None, sort_key=key: self._header_click(sort_key)
+                cursor = "hand2" if self.sortable else "arrow"
+                command = (lambda _event=None, sort_key=key: self._header_click(sort_key)) if self.sortable else None
             label = tk.Label(
                 self._grid,
                 text=text,
@@ -245,6 +260,7 @@ class PagedTable(ttk.Frame):
                 cursor=cursor,
             )
             label.grid(row=0, column=col_idx, sticky="nsew")
+            self._bind_mousewheel(label)
             if command is not None:
                 label.bind("<Button-1>", command)
 
@@ -279,6 +295,7 @@ class PagedTable(ttk.Frame):
                     cursor="hand2",
                 )
                 cell.grid(row=row_idx, column=col_idx, sticky="nsew")
+                self._bind_mousewheel(cell)
                 if key == "__open__":
                     cell.bind("<Button-1>", lambda _event, ticker=row.get(self.stock_key): self._open_stock(ticker))
                 else:

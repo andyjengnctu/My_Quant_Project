@@ -3876,8 +3876,8 @@
       "priority": "P1",
       "category": "Runtime domain / Trading account state",
       "item": "Trading account/positions single-state SSOT and confirmed-fill accounting",
-      "gap": "Trading實際帳戶必須以state/trading/account.json作唯一current truth，同一atomic snapshot保存exact-milli cash、open positions與revisioned hash-chain events；不得另建positions.json第二份可變真理。manual adopted既有持股只登記broker qty/cost basis，不改cash、不偽造歷史strategy state；尚未有confirmed sell history且尚未由策略接管的manual holding可用revisioned correction/remove修正broker truth，但不得改cash或偽造成交。手動帳務買賣若需更正/刪除，必須保留原event並追加void/correction event，manual/strategy成交皆可針對歷史有效交易修正/刪除；原event不可竄改，必須追加void/correction並重播有效帳務事件，後續成本分攤/PnL隨有效歷史重算，若修正後形成超賣、同日買賣或負現金則fail-fast。strategy fill必須重用canonical entry position與exact accounting，confirmed sell重用canonical sell/cost-basis/PnL semantics。stale revision、history tamper、同日買賣、超賣必須fail-fast；Trading data與operational state不得進Git/package ZIP。",
-      "entry": "`core/trading_account_state.py`, `services/trading/account_state.py`, `services/trading/account_dashboard.py`, `core/position_step.py`, `.gitignore`, `tools/validate/synthetic_trading_cases.py`",
+      "gap": "Trading實際帳戶必須以state/trading/account.json作唯一current truth，同一atomic snapshot保存exact-milli cash、open positions與revisioned hash-chain events；不得另建positions.json第二份可變真理。manual adopted既有持股只登記broker qty/cost basis，不偽造歷史strategy state。manual/strategy買賣明細皆可修正/刪除；原event不可竄改，必須追加void/correction並由canonical replay重建現金、庫存、後續平均成本、沖抵成本與realized PnL。Replay必須以current actual-account policy重新投影legacy fee/tax；set_cash_balance按其original cash delta重播而不是第二個opening anchor；若早期BUY被移除但後續SELL仍有效，優先重用immutable SELL position_before／allocated-cost evidence重建當時broker inventory，legacy缺snapshot時才允許average-cost compatibility reconstruction。正常新成交仍禁止同日買賣、超賣與實際可用現金不足。低階caller明確pin expected_revision時須fail-fast；Workbench user-intent mutation則在shared mutation lock內讀取latest revision。Trading data與operational state不得進Git/package ZIP。",
+      "entry": "`core/trading_account_state.py`, `core/exact_accounting.py`, `services/trading/accounting_policy.py`, `services/trading/account_state.py`, `services/trading/account_dashboard.py`, `core/position_step.py`, `.gitignore`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 349
     },
@@ -3887,8 +3887,8 @@
       "priority": "P1",
       "category": "GUI / Workbench Trading account",
       "item": "Workbench 交易中心 / 帳務中心分層並共用 Trading account-state SSOT",
-      "gap": "Workbench必須將Scanner/策略決策/BUY成交主流程放在「交易中心」，帳戶資金、庫存股、買入明細、賣出/沖抵明細與績效放在獨立「帳務中心」，並只透過services/trading account services操作state/trading/account.json。Workbench不是券商OMS：primary UI不得要求或管理broker order lifecycle、券商委託號、Stop/TP或Indicator SELL掛單；Stop/Target/SELL signal只作決策資訊。交易中心只登錄BUY；買入成功後切換並刷新帳務中心。SELL必須在帳務中心先點選庫存，再直接依實際股數/成交價/成交日更新account truth，不依賴broker-order mapping。日期欄本身可開日曆；股票表格共用首次點欄位升冪/再次降冪、同列再點取消、最多12列分頁與左側單股檢視入口，無表內vertical scrollbar。只有損益/報酬率等directional performance數字使用台股漲紅跌綠平白。庫存與買賣明細不分manual/strategy皆可修正/刪除；庫存採broker-truth reconciliation，成交採append-only void/correction，歷史成交修正/刪除後必須重播有效帳務事件並重算後續成本分攤；只有形成超賣、同日買賣或負現金等不合法歷史才fail-fast；UI不得直接讀寫JSON，stale revision必須fail-fast。",
-      "entry": "`services/workbench_ui/workbench.py`, `services/workbench_ui/trading_account_panel.py`, `services/workbench_ui/accounting_center_panel.py`, `services/workbench_ui/date_picker.py`, `services/workbench_ui/paged_table.py`, `services/trading/account_trade_entry.py`, `services/trading/account_state.py`, `core/trading_account_state.py`, `tools/validate/synthetic_trading_cases.py`",
+      "gap": "Workbench必須將Scanner/策略決策/BUY成交主流程放在「交易中心」，帳戶資金、庫存股、買入明細、賣出/沖抵明細與績效放在獨立「帳務中心」，並只透過services/trading account services操作state/trading/account.json。Workbench不是券商OMS；交易中心只登錄BUY且成功後切換/刷新帳務中心，SELL在帳務中心選庫存後直接登錄實際成交。Workbench使用者操作不得帶畫面cached account revision作為必要寫入前提，service須在shared lock內解析latest truth；低階explicit revision contract仍保留。日期欄本身開日曆；股票表格支援升降冪、同列再點取消、最多12列分頁與左側單股入口，且dynamic cell/靜態controls的MouseWheel都路由outer page canvas，滑鼠不必停在scrollbar。績效表例外固定庫存股→平倉股→加總、不可排序，欄位只含股票檔數、價值、成本、損益、報酬率、勝率、期望值、風報比；closed row必須使用net sell proceeds與realized PnL。revision/市價日/重新整理與四項帳戶儀表合併於同一區，市價日、現金餘額、帳戶淨值使用info blue。操作說明集中於底部context hint，不常駐各區。只有directional performance數字使用台股漲紅跌綠平白。",
+      "entry": "`services/workbench_ui/workbench.py`, `services/workbench_ui/trading_account_panel.py`, `services/workbench_ui/accounting_center_panel.py`, `services/workbench_ui/date_picker.py`, `services/workbench_ui/paged_table.py`, `services/trading/account_trade_entry.py`, `services/trading/account_state.py`, `services/trading/account_dashboard.py`, `core/trading_account_state.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 350
     },
@@ -7878,14 +7878,14 @@
     {
       "id": "T481",
       "b_id": "B361",
-      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、gitignore isolation、manual adoption與source-agnostic inventory correction/remove、append-only manual/strategy trade void/correction、cash reconciliation、strategy confirmed buy/sell exact accounting、same-day/over-sell/stale-revision guard、broker/strategy parity、current-inventory lifecycle mapping與event hash-chain tamper detection。",
+      "description": "`validate_trading_account_state_contract_case` 覆蓋single account file、manual adoption/source-agnostic inventory correction、actual-account fee/tax policy、historical trade void/correction replay、full-sell reopen、BUY刪除後後續SELL compatibility reconstruction、cash-reconciliation delta replay、latest-revision-inside-lock user intent、strategy exact accounting、same-day/over-sell explicit guards與event hash-chain tamper detection。",
       "initial_status": "NEW",
       "order": 471
     },
     {
       "id": "T482",
       "b_id": "B362",
-      "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋交易中心/帳務中心panel registry、BUY-only交易中心與inventory-selected direct SELL帳務中心、no-broker-OMS primary UI、買入後自動切帳務中心、日期欄日曆、12列分頁/排序/取消選取/單股入口、directional績效cell顏色、manual/strategy交易與庫存修正刪除、project-relative state path與config-driven Trading policy。",
+      "description": "`validate_trading_workbench_account_panel_contract_case` 覆蓋交易中心/帳務中心panel registry、BUY-only交易中心與inventory-selected direct SELL、no-broker-OMS primary UI、買入後自動切帳務中心、latest revision inside lock、日期欄日曆、12列分頁/排序/取消選取/單股入口、全頁MouseWheel、固定三列不可排序績效schema、dashboard metadata整併/info-blue、context footer hints與manual/strategy交易/庫存修正刪除。",
       "initial_status": "NEW",
       "order": 472
     },

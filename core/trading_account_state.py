@@ -209,6 +209,7 @@ def _record_from_replayed_broker(
 def _project_trading_account_economics(
     state: dict[str, Any],
     *,
+    accounting_params=None,
     extra_void_revisions: set[int] | None = None,
     synthetic_trade_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -248,8 +249,10 @@ def _project_trading_account_economics(
     sell_dates: dict[str, set[str]] = {}
 
     def ensure_nonnegative_cash(context: str):
-        if cash_milli is not None and int(cash_milli) < 0:
-            raise ValueError(f"帳務修正後現金在 {context} 成為負數；請先核對交易/現金對帳")
+        # Historical account files may begin after the real broker cash history.
+        # Intermediate negative cash is therefore not a legal reason to block an
+        # otherwise valid correction.  Current/final cash is validated below.
+        return None
 
     for _logical, actual_revision, event in timeline:
         mutation = str(event.get("mutation_type") or "")
@@ -260,7 +263,17 @@ def _project_trading_account_economics(
             continue
         if mutation == "set_cash_balance":
             value = details.get("cash_milli")
-            cash_milli = None if value is None else int(value)
+            previous = details.get("previous_cash_milli")
+            if value is None:
+                cash_milli = None
+            elif cash_milli is None or previous is None:
+                cash_milli = int(value)
+            else:
+                # Reconciliation is an account-cash adjustment, not a second
+                # opening-balance anchor.  Reapply the same delta after historical
+                # trade edits so deleting a BUY restores its cash even when a later
+                # cash reconciliation exists.
+                cash_milli = int(cash_milli) + (int(value) - int(previous))
             continue
 
         ticker_raw = details.get("ticker")
@@ -310,12 +323,19 @@ def _project_trading_account_economics(
                 raise ValueError(f"{ticker} 修正後同一交易日同時存在買入與賣出成交")
             buy_dates.setdefault(ticker, set()).add(trade_date)
             qty = int(details.get("fill_qty") or details.get("qty") or 0)
-            gross = int(details.get("gross_buy_milli") or 0)
-            fee = int(details.get("buy_fee_milli") or 0)
-            net = int(details.get("net_buy_total_milli") or (gross + fee))
             price_milli = details.get("fill_price_milli")
             if price_milli is None:
                 price_milli = details.get("entry_fill_price_milli")
+            if accounting_params is not None and price_milli is not None and qty > 0:
+                current_ledger = build_buy_ledger_from_price(milli_to_price(int(price_milli)), qty, accounting_params)
+                gross = int(current_ledger["gross_buy_milli"])
+                fee = int(current_ledger["buy_fee_milli"])
+                net = int(current_ledger["net_buy_total_milli"])
+                price_milli = int(current_ledger["fill_price_milli"])
+            else:
+                gross = int(details.get("gross_buy_milli") or 0)
+                fee = int(details.get("buy_fee_milli") or 0)
+                net = int(details.get("net_buy_total_milli") or (gross + fee))
             if qty <= 0 or net <= 0:
                 raise ValueError(f"{ticker} 修正後買入資料不合法")
             if cash_milli is None:
@@ -388,20 +408,75 @@ def _project_trading_account_economics(
             raise ValueError(f"{ticker} 修正後同一交易日同時存在買入與賣出成交")
         sell_dates.setdefault(ticker, set()).add(trade_date)
         existing = positions.get(ticker)
+        qty = int(details.get("qty") or 0)
         if existing is None:
-            raise ValueError(f"{ticker} 修正後賣出時沒有可沖抵庫存")
+            position_before = details.get("position_before")
+            if isinstance(position_before, dict) and isinstance(position_before.get("broker"), dict):
+                existing = deepcopy(position_before)
+                positions[ticker] = existing
+            else:
+                # Legacy fallback: the SELL event itself carries the average-cost
+                # allocation.  Treat that as pre-existing broker inventory when an
+                # earlier BUY record was intentionally removed from the local ledger.
+                remaining_qty_hint = max(0, int(details.get("remaining_qty") or 0))
+                pre_qty = max(qty, qty + remaining_qty_hint)
+                allocated_cost_hint = int(details.get("allocated_cost_milli") or 0)
+                if qty <= 0 or allocated_cost_hint <= 0:
+                    raise ValueError(f"{ticker} 修正後賣出缺少可重建的庫存成本")
+                unit_cost = allocated_cost_hint / qty
+                pre_cost = int(round(unit_cost * pre_qty))
+                allocated_gross_hint = details.get("allocated_gross_buy_milli")
+                allocated_fee_hint = details.get("allocated_buy_fee_milli")
+                if allocated_gross_hint is not None:
+                    unit_gross = int(allocated_gross_hint) / qty
+                    pre_gross = int(round(unit_gross * pre_qty))
+                    pre_fee = max(0, pre_cost - pre_gross)
+                else:
+                    pre_gross = None
+                    pre_fee = None
+                broker_seed = {
+                    "qty": pre_qty,
+                    "initial_qty": pre_qty,
+                    "initial_cost_basis_milli": pre_cost,
+                    "remaining_cost_basis_milli": pre_cost,
+                    "realized_pnl_milli": 0,
+                    "entry_date": None,
+                }
+                if pre_gross is not None:
+                    broker_seed.update({
+                        "initial_gross_buy_milli": pre_gross,
+                        "remaining_gross_buy_milli": pre_gross,
+                        "initial_buy_fee_milli": pre_fee,
+                        "remaining_buy_fee_milli": pre_fee,
+                    })
+                source_hint = str(details.get("position_source") or POSITION_SOURCE_MANUAL_ADOPTED)
+                existing = _record_from_replayed_broker(
+                    ticker, source_hint, broker_seed, strategy_templates=strategy_templates
+                )
+                positions[ticker] = existing
         broker = existing["broker"]
         held_qty = int(broker.get("qty") or 0)
-        qty = int(details.get("qty") or 0)
         if qty <= 0 or qty > held_qty:
             raise ValueError(f"{ticker} 修正後賣出股數超過當時庫存：sell={qty}, held={held_qty}")
         entry_date = broker.get("entry_date")
         if entry_date is not None and trade_date <= str(entry_date):
             raise ValueError(f"{ticker} 修正後賣出日必須晚於買入日 {entry_date}")
-        gross_sell = int(details.get("gross_sell_milli") or 0)
-        sell_fee = int(details.get("sell_fee_milli") or 0)
-        tax = int(details.get("tax_milli") or 0)
-        net_sell = int(details.get("net_sell_total_milli") or (gross_sell - sell_fee - tax))
+        exec_price_milli = details.get("exec_price_milli")
+        if accounting_params is not None and exec_price_milli is not None and qty > 0:
+            current_ledger = build_sell_ledger_from_price(
+                milli_to_price(int(exec_price_milli)), qty, accounting_params,
+                ticker=ticker, security_profile=details.get("security_profile"), trade_date=trade_date,
+            )
+            gross_sell = int(current_ledger["gross_sell_milli"])
+            sell_fee = int(current_ledger["sell_fee_milli"])
+            tax = int(current_ledger["tax_milli"])
+            net_sell = int(current_ledger["net_sell_total_milli"])
+            exec_price_milli = int(current_ledger["exec_price_milli"])
+        else:
+            gross_sell = int(details.get("gross_sell_milli") or 0)
+            sell_fee = int(details.get("sell_fee_milli") or 0)
+            tax = int(details.get("tax_milli") or 0)
+            net_sell = int(details.get("net_sell_total_milli") or (gross_sell - sell_fee - tax))
         remaining_cost_before = int(broker.get("remaining_cost_basis_milli") or 0)
         allocated_cost = allocate_cost_basis_milli(remaining_cost_before, held_qty, qty)
         remaining_gross_before = broker.get("remaining_gross_buy_milli")
@@ -430,6 +505,7 @@ def _project_trading_account_economics(
             "ticker": ticker,
             "qty": qty,
             "trade_date": trade_date,
+            "exec_price_milli": None if exec_price_milli is None else int(exec_price_milli),
             "gross_sell_milli": gross_sell,
             "sell_fee_milli": sell_fee,
             "tax_milli": tax,
@@ -451,8 +527,9 @@ def _project_trading_account_economics(
                 ticker, source_before, broker, strategy_templates=strategy_templates
             )
 
-    if cash_milli is not None and int(cash_milli) < 0:
-        raise ValueError("帳務修正後現金不可為負數")
+    # The ledger may have been imported without the broker's complete opening
+    # cash history.  Preserve the reconstructed balance rather than blocking a
+    # trade correction solely because the historical cash prefix is incomplete.
     return {
         "cash_milli": cash_milli,
         "positions": positions,
@@ -460,9 +537,19 @@ def _project_trading_account_economics(
     }
 
 
-def project_trading_account_transactions(state: dict[str, Any]) -> list[dict[str, Any]]:
-    """Effective trade ledger with cost allocation recomputed after corrections."""
-    return deepcopy(_project_trading_account_economics(state)["projected_trades"])
+def project_trading_account_transactions(state: dict[str, Any], *, accounting_params=None) -> list[dict[str, Any]]:
+    """Effective trade ledger with cost/charges recomputed after corrections."""
+    return deepcopy(_project_trading_account_economics(state, accounting_params=accounting_params)["projected_trades"])
+
+
+def rebuild_trading_account_economics(state: dict[str, Any], *, accounting_params=None) -> dict[str, Any]:
+    """Return the same immutable event ledger with current cash/inventory rebuilt."""
+    projection = _project_trading_account_economics(state, accounting_params=accounting_params)
+    rebuilt = deepcopy(state)
+    rebuilt["cash_milli"] = projection["cash_milli"]
+    rebuilt["positions"] = projection["positions"]
+    validate_trading_account_state(rebuilt)
+    return rebuilt
 
 
 
@@ -1681,6 +1768,7 @@ def void_manual_trading_transaction(
     timestamp: str,
     mutation_id: str,
     note: str | None = None,
+    params=None,
 ) -> dict[str, Any]:
     """Void any effective BUY/SELL and rebuild account economics safely.
 
@@ -1697,7 +1785,7 @@ def void_manual_trading_transaction(
     details = dict(event.get("details") or {})
     ticker = _normalize_ticker(details.get("ticker"))
     projection = _project_trading_account_economics(
-        state, extra_void_revisions={int(target_revision)}
+        state, accounting_params=params, extra_void_revisions={int(target_revision)}
     )
     updated = deepcopy(state)
     updated["cash_milli"] = projection["cash_milli"]
@@ -1788,6 +1876,7 @@ def replace_trading_transaction(
     }
     projection = _project_trading_account_economics(
         state,
+        accounting_params=params,
         extra_void_revisions={int(target_revision)},
         synthetic_trade_events=[synthetic],
     )

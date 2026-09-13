@@ -18,6 +18,7 @@ from core.exact_accounting import (
 from core.trading_account_state import (
     apply_confirmed_sell_fill,
     apply_confirmed_strategy_buy_fill,
+    rebuild_trading_account_economics,
     validate_trading_account_state,
 )
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
@@ -26,11 +27,13 @@ from core.trading_state_paths import (
     resolve_trading_fill_transaction_path as resolve_core_trading_fill_transaction_path,
     resolve_trading_order_state_path as resolve_core_trading_order_state_path,
 )
-from services.trading.accounting_policy import overlay_trading_accounting_params
+from services.trading.accounting_policy import build_standalone_trading_accounting_params, overlay_trading_accounting_params
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
     correct_existing_trading_position,
+    correct_trading_transaction,
+    delete_trading_transaction,
     remove_existing_trading_position,
     record_manual_trading_buy,
     record_manual_trading_sell,
@@ -520,7 +523,12 @@ def validate_trading_account_state_contract_case(base_params):
         check("manual_position_partial_cost_basis_is_allocated_canonically", manual_before["remaining_cost_basis_milli"] - manual_allocated, manual_after["remaining_cost_basis_milli"])
         check("manual_position_remains_unmanaged_after_broker_sell", "unmanaged", state["positions"]["2330"]["strategy_management"]["status"])
         revision_before_inventory_correction = int(state["revision"])
-        realized_before_inventory_correction = int(state["positions"]["2330"]["broker"].get("realized_pnl_milli") or 0)
+        canonical_before_inventory_correction = rebuild_trading_account_economics(
+            state, accounting_params=build_standalone_trading_accounting_params()
+        )
+        realized_before_inventory_correction = int(
+            canonical_before_inventory_correction["positions"]["2330"]["broker"].get("realized_pnl_milli") or 0
+        )
         state = correct_existing_trading_position(
             root,
             ticker="2330",
@@ -556,7 +564,6 @@ def validate_trading_account_state_contract_case(base_params):
 
     # AI: User-facing broker ledger uses actual 0.001425 (no strategy discount).
     with tempfile.TemporaryDirectory() as temp_dir:
-        from services.trading.accounting_policy import build_standalone_trading_accounting_params
         from services.trading.account_dashboard import build_trading_account_dashboard_read_model
 
         root = Path(temp_dir)
@@ -614,6 +621,43 @@ def validate_trading_account_state_contract_case(base_params):
         check("account_dashboard_sell_detail_exposes_offset_cost", True, dashboard["sell_details"][0]["offset_holding_cost"] > 0)
         check("account_dashboard_sell_detail_exposes_offset_gross", True, dashboard["sell_details"][0]["offset_gross_amount"] > 0)
         check("account_dashboard_sell_detail_exposes_offset_buy_fee", True, dashboard["sell_details"][0]["offset_buy_fee"] > 0)
+
+    # Historical edit/delete must rebuild account truth rather than reverse-mutating
+    # only the latest position.  The Workbench may omit expected_revision so the
+    # service resolves current truth after acquiring the shared mutation lock.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        state = initialize_trading_account_state(root, cash=1_000_000)
+        state = record_manual_trading_buy(
+            root, ticker="2820", qty=22000, price=18.15, trade_date="2026-09-11", expected_revision=state["revision"]
+        )
+        buy_revision = int(state["revision"])
+        state = record_manual_trading_sell(
+            root, ticker="2820", qty=22000, price=17.55, trade_date="2026-09-14", expected_revision=state["revision"]
+        )
+        sell_revision = int(state["revision"])
+        state = delete_trading_transaction(root, transaction_revision=sell_revision, expected_revision=None)
+        check("historical_full_sell_delete_reopens_inventory", 22000, state["positions"]["2820"]["broker"]["qty"])
+
+        root2 = Path(temp_dir) / "second"
+        state2 = initialize_trading_account_state(root2, cash=1_000_000)
+        state2 = record_manual_trading_buy(
+            root2, ticker="2820", qty=22000, price=18.15, trade_date="2026-09-11", expected_revision=state2["revision"]
+        )
+        buy_revision2 = int(state2["revision"])
+        state2 = record_manual_trading_sell(
+            root2, ticker="2820", qty=22000, price=17.55, trade_date="2026-09-14", expected_revision=state2["revision"]
+        )
+        state2 = delete_trading_transaction(root2, transaction_revision=buy_revision2, expected_revision=None)
+        check("historical_buy_delete_keeps_later_sell_replayable", False, "2820" in state2["positions"])
+
+        root3 = Path(temp_dir) / "third"
+        state3 = initialize_trading_account_state(root3, cash=1_000_000)
+        state3 = set_trading_cash_balance(root3, cash=900_000, expected_revision=state3["revision"])
+        state3 = record_manual_trading_buy(
+            root3, ticker="2330", qty=10, price=100, trade_date="2026-09-03", expected_revision=None
+        )
+        check("latest_revision_inside_lock_allows_user_intent_buy", 2, state3["revision"])
 
     # AI: Pause a real commit after its revision checks; another caller must
     # not accept the same revision and overwrite that pending commit.
@@ -2652,8 +2696,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_center_keeps_risk_dashboard_but_demotes_account_maintenance", True, "for accounting_section in (header, cash_box, form, table_box, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box.grid(row=1' in panel_source)
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_inventory_trade_details_and_performance", True, all(text in accounting_source for text in ("庫存股｜點一下選取，再點同一列取消選取", "買入明細｜未選庫存時顯示全部；選取庫存後只顯示目前庫存對應買入", "賣出明細｜含沖抵持有成本", "沖抵明細｜選取上方賣出紀錄", "績效統計", "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
-    check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ("選取庫存後登錄賣出成交", "record_trading_account_inventory_sell", "系統不管理券商掛單")) and "對應券商 SELL 單" not in accounting_source)
-    check("workbench_accounting_center_supports_manual_and_strategy_edit_delete", True, all(text in accounting_source for text in ("修改庫存", "刪除庫存", "修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_transaction", "delete_trading_transaction", "手動與策略成交皆可修正")))
+    check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ("選取庫存後登錄賣出成交", "record_trading_account_inventory_sell", "先在券商完成賣出")) and "對應券商 SELL 單" not in accounting_source)
+    check("workbench_accounting_center_supports_manual_and_strategy_edit_delete", True, all(text in accounting_source for text in ("修改庫存", "刪除庫存", "修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_transaction", "delete_trading_transaction", "帳務由有效歷史重新計算")))
     date_picker_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "date_picker.py").read_text(encoding="utf-8")
     check("workbench_date_inputs_open_calendar_from_date_field", True, "DatePickerField" in panel_source and "DatePickerField" in accounting_source and 'self.entry.bind("<Button-1>", self._on_entry_click' in date_picker_source and 'text="日曆"' not in date_picker_source)
     paged_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "paged_table.py").read_text(encoding="utf-8")
@@ -2663,6 +2707,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_buy_success_navigates_to_refreshed_accounting_center", True, '_open_accounting_center' in panel_source and 'callback(refresh=True)' in panel_source and "已切換至帳務中心並重新整理" in panel_source)
     check("workbench_primary_ui_does_not_mount_broker_oms_notebook", False, "advanced_notebook.grid(" in panel_source or "advanced_notebook.pack(" in panel_source)
     check("workbench_performance_colour_is_cell_scoped", True, "performance=True" in accounting_source and "column.performance" in paged_source and 'tag_configure("gain"' not in accounting_source)
+    check("workbench_account_dashboard_merges_revision_market_date_and_refresh", True, "帳務中心｜帳戶儀表板" in accounting_source and "self._market_date_var" in accounting_source and "WORKBENCH_INFO if key in {\"cash\", \"equity\"}" in accounting_source)
+    check("workbench_performance_is_fixed_three_row_unsortable_schema", True, all(text in accounting_source for text in ("股票檔數", 'TableColumn("value", "價值"', 'TableColumn("cost", "成本"', 'TableColumn("pnl", "損益"', "sortable=False")))
+    check("workbench_page_mousewheel_binds_static_and_dynamic_table_cells", True, "def _bind_page_mousewheel" in accounting_source and "on_mousewheel=self._on_mousewheel" in accounting_source and "self._bind_mousewheel(cell)" in paged_source)
+    check("workbench_account_mutations_resolve_latest_revision_inside_lock", True, "expected_account_revision=None" in panel_source and "expected_revision=None" in accounting_source)
+    check("workbench_accounting_uses_contextual_footer_hints", True, 'text="操作提示"' in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source)
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
