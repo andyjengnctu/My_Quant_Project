@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date, datetime
+from datetime import date
 import tkinter as tk
 from tkinter import ttk
 
@@ -15,6 +15,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_LABELLF_STYLE,
     WORKBENCH_MUTED,
     WORKBENCH_TEXT,
+    _warn_gui_fallback,
 )
 
 
@@ -39,10 +40,13 @@ class DatePickerField(ttk.Frame):
     def _initial_date(self) -> date:
         raw = self.variable.get().strip()
         if raw:
-            try:
-                return datetime.strptime(raw, "%Y-%m-%d").date()
-            except ValueError:
-                pass
+            parts = raw.split("-")
+            if len(parts) == 3 and all(part.isdigit() for part in parts):
+                year, month, day = (int(part) for part in parts)
+                if 1 <= month <= 12:
+                    last_day = calendar.monthrange(year, month)[1]
+                    if 1 <= day <= last_day:
+                        return date(year, month, day)
         return get_taipei_now().date()
 
     def _open_calendar(self) -> None:
@@ -65,8 +69,8 @@ class DatePickerField(ttk.Frame):
         popup.protocol("WM_DELETE_WINDOW", self._close_calendar)
         try:
             popup.grab_set()
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _warn_gui_fallback("DatePickerField.grab_set", exc)
 
     def _close_calendar(self) -> None:
         popup = self._popup
@@ -74,8 +78,8 @@ class DatePickerField(ttk.Frame):
         if popup is not None and popup.winfo_exists():
             try:
                 popup.grab_release()
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _warn_gui_fallback("DatePickerField.grab_release", exc)
             popup.destroy()
 
     def _shift_month(self, delta: int) -> None:

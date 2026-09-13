@@ -37,6 +37,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_SUCCESS,
     WORKBENCH_TEXT,
     WORKBENCH_VSCROLL_STYLE,
+    _warn_gui_fallback,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -361,15 +362,16 @@ class AccountingCenterPanel(ttk.Frame):
                 target.bind("<MouseWheel>", self._on_mousewheel, add="+")
                 target.bind("<Button-4>", self._on_mousewheel, add="+")
                 target.bind("<Button-5>", self._on_mousewheel, add="+")
-            except tk.TclError:
+            except tk.TclError as exc:
+                _warn_gui_fallback("AccountingCenterPanel.bind_page_mousewheel", exc)
                 continue
 
     def _show_footer_hint(self, text: str) -> None:
         if self._footer_hint_after_id is not None:
             try:
                 self.after_cancel(self._footer_hint_after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _warn_gui_fallback("AccountingCenterPanel.after_cancel(footer_hint)", exc)
             self._footer_hint_after_id = None
         self._footer_hint_var.set(str(text or ""))
 
@@ -377,8 +379,8 @@ class AccountingCenterPanel(ttk.Frame):
         if self._footer_hint_after_id is not None:
             try:
                 self.after_cancel(self._footer_hint_after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _warn_gui_fallback("AccountingCenterPanel.after_cancel(scheduled_footer_hint)", exc)
         self._footer_hint_after_id = self.after(80, self._clear_footer_hint)
 
     def _clear_footer_hint(self) -> None:
@@ -395,7 +397,8 @@ class AccountingCenterPanel(ttk.Frame):
                 targets.extend(child for child in target.winfo_children() if child not in targets)
                 target.bind("<Enter>", lambda _event, value=text: self._show_footer_hint(value), add="+")
                 target.bind("<Leave>", lambda _event: self._schedule_footer_hint_clear(), add="+")
-            except tk.TclError:
+            except tk.TclError as exc:
+                _warn_gui_fallback("AccountingCenterPanel.bind_footer_hint", exc)
                 continue
 
     def refresh(self):
