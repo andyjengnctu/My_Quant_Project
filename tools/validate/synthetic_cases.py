@@ -699,7 +699,15 @@ def run_synthetic_consistency_suite(base_params):
 
     for entry in validator_entries:
         started = time.perf_counter()
-        results, summary = entry.validator(base_params)
+        try:
+            results, summary = entry.validator(base_params)
+        except Exception as exc:
+            # AI: Preserve formal fail-fast semantics but include the exact
+            # synthetic validator identity so a coverage-only crash is diagnosable
+            # from the failure bundle without reproducing the whole suite.
+            raise RuntimeError(
+                f"synthetic validator crashed: {entry.name}: {type(exc).__name__}: {exc}"
+            ) from exc
         duration_sec = round(time.perf_counter() - started, 6)
         all_results.extend(results)
         summary_payload = dict(summary)

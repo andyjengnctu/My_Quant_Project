@@ -816,6 +816,44 @@ def validate_trading_account_state_contract_case(base_params):
         next_state = set_trading_cash_balance(root, cash=80, expected_revision=committed["revision"])
         check("completed_commit_releases_lock_for_next_revision", 2, next_state["revision"])
 
+    # AI: Trading account/orders/fill recovery are one in-process mutation domain.
+    # The mutex must not depend on project-root path identity: Windows path aliases
+    # or an accidentally different root object must never allow a second writer to
+    # enter while another Trading commit is paused.
+    with tempfile.TemporaryDirectory() as temp_dir_a, tempfile.TemporaryDirectory() as temp_dir_b:
+        root_a, root_b = Path(temp_dir_a), Path(temp_dir_b)
+        initialize_trading_account_state(root_a, cash=100)
+        initialize_trading_account_state(root_b, cash=200)
+        root_a_state_path = resolve_trading_account_state_path(root_a).resolve()
+        writing, release = Event(), Event()
+        original_atomic_write_json = atomic_write_json
+
+        def pause_root_a_only(path, payload):
+            if Path(path).resolve() == root_a_state_path:
+                writing.set()
+                if not release.wait(timeout=concurrency_timeout_seconds):
+                    raise RuntimeError("synthetic cross-root commit was not released")
+            original_atomic_write_json(path, payload)
+
+        with patch("services.trading.account_state.atomic_write_json", side_effect=pause_root_a_only):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(set_trading_cash_balance, root_a, cash=90, expected_revision=0)
+                entered_commit_window = writing.wait(timeout=concurrency_timeout_seconds)
+                try:
+                    check("process_wide_cash_test_reaches_commit_window", True, entered_commit_window)
+                    cross_root_rejected = False
+                    if entered_commit_window:
+                        try:
+                            set_trading_cash_balance(root_b, cash=180, expected_revision=0)
+                        except TradingStateBusyError:
+                            cross_root_rejected = True
+                    check("process_wide_mutex_rejects_second_project_root", True, cross_root_rejected)
+                finally:
+                    release.set()
+                pending.result(timeout=concurrency_timeout_seconds)
+        check("process_wide_mutex_preserves_first_project_commit", money_to_milli(90), load_trading_account_state(root_a)["cash_milli"])
+        check("process_wide_mutex_leaves_second_project_unchanged", money_to_milli(200), load_trading_account_state(root_b)["cash_milli"])
+
     summary["checks"] = len(results)
     return results, summary
 
