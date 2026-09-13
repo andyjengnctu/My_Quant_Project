@@ -21,7 +21,7 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_
 from core.runtime_utils import get_taipei_now
 from core.trading_policy import resolve_trading_selected_strategy_param_path
 from services.trading.account_state import load_trading_account_state, resolve_trading_account_state_path
-from core.trading_account_state import effective_trading_account_events
+from core.trading_account_state import effective_trading_account_events, project_trading_account_transactions
 from services.trading.accounting_policy import (
     build_standalone_trading_accounting_params,
     overlay_trading_accounting_params,
@@ -87,10 +87,25 @@ def _load_primary_params(project_root: Path):
 
 
 def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
-    """Reconstruct closed position lifecycles only from immutable account events."""
+    """Reconstruct closed position lifecycles from effective, replayed economics."""
     active: dict[str, dict[str, Any]] = {}
     closed: list[dict[str, Any]] = []
+    projected_trades = project_trading_account_transactions(state)
+    trade_revisions = {int(row.get("revision") or -1) for row in projected_trades}
+    timeline = []
     for event in effective_trading_account_events(state):
+        mutation = str(event.get("mutation_type") or "")
+        revision = int(event.get("revision") or 0)
+        if mutation in {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment", "confirm_sell_fill"}:
+            continue
+        timeline.append((revision, revision, event))
+    for row in projected_trades:
+        details = dict(row.get("details") or {})
+        revision = int(row.get("revision") or 0)
+        logical_revision = int(details.get("replacement_for_revision") or revision)
+        timeline.append((logical_revision, revision, row))
+    timeline.sort(key=lambda item: (item[0], item[1]))
+    for _logical_revision, revision, event in timeline:
         mutation = str(event.get("mutation_type") or "")
         details = dict(event.get("details") or {})
         ticker = str(details.get("ticker") or "").strip().upper()
@@ -179,7 +194,7 @@ def _build_closed_round_trips(state: dict[str, Any]) -> list[dict[str, Any]]:
 def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     buys: list[dict[str, Any]] = []
     sells: list[dict[str, Any]] = []
-    events = effective_trading_account_events(state)
+    events = project_trading_account_transactions(state)
     trade_mutations = {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment", "confirm_sell_fill"}
     latest_trade_revision_by_ticker: dict[str, int] = {}
     for event in events:
@@ -287,19 +302,51 @@ def _build_transaction_details(state: dict[str, Any]) -> tuple[list[dict[str, An
     return buys, sells
 
 
-def _performance_row(label: str, rows: list[dict[str, Any]], *, closed_only: bool) -> dict[str, Any]:
-    cost = sum(float(row.get("cost_basis") or 0) for row in rows)
-    pnl = sum(float(row.get("pnl") or 0) for row in rows)
-    profitable = sum(1 for row in rows if float(row.get("pnl") or 0) > 0)
+def _performance_outcomes(rows: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Equal-weight per-position/trade performance diagnostics.
+
+    PnL/cost remain net of the canonical actual-account fee/tax model.  Win rate,
+    expectancy and reward/risk intentionally weight each inventory/closed
+    lifecycle once instead of letting a large position dominate the rate stats.
+    """
+    returns = []
+    for row in rows:
+        cost = float(row.get("cost_basis") or 0)
+        pnl = float(row.get("pnl") or 0)
+        if cost > 0:
+            returns.append(pnl / cost * 100.0)
+    if not returns:
+        return {"win_rate_pct": None, "expectancy_pct": None, "risk_reward_ratio": None}
+    wins = [value for value in returns if value > 0]
+    losses = [value for value in returns if value < 0]
+    avg_win = None if not wins else sum(wins) / len(wins)
+    avg_loss_abs = None if not losses else abs(sum(losses) / len(losses))
+    return {
+        "win_rate_pct": len(wins) / len(returns) * 100.0,
+        "expectancy_pct": sum(returns) / len(returns),
+        "risk_reward_ratio": (
+            None if avg_win is None or avg_loss_abs in (None, 0) else avg_win / avg_loss_abs
+        ),
+    }
+
+
+def _performance_summary_row(
+    label: str,
+    rows: list[dict[str, Any]],
+    *,
+    market_value: float,
+    unrealized_pnl: float,
+    economic_pnl: float,
+) -> dict[str, Any]:
+    holding_cost = sum(float(row.get("cost_basis") or 0) for row in rows)
+    rates = _performance_outcomes(rows)
     return {
         "scope": label,
-        "position_or_trade_count": len(rows),
-        "cost_basis": cost,
-        "pnl": pnl,
-        "return_pct": None if cost <= 0 else pnl / cost * 100.0,
-        "profitable_count": profitable,
-        "profitable_rate_pct": None if not rows else profitable / len(rows) * 100.0,
-        "rate_semantics": "closed_trade_win_rate" if closed_only else "profitable_position_or_trade_rate",
+        "market_value": float(market_value),
+        "holding_cost": holding_cost,
+        "unrealized_pnl": float(unrealized_pnl),
+        "return_pct": None if holding_cost <= 0 else float(economic_pnl) / holding_cost * 100.0,
+        **rates,
     }
 
 
@@ -472,14 +519,29 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         for row in enriched_positions
         if row.get("unrealized_pnl") is not None
     ]
-    sold_perf_rows = [
-        {"ticker": row["ticker"], "cost_basis": row["offset_holding_cost"], "pnl": row["pnl"]}
-        for row in sell_details
+    # One closed lifecycle = one outcome.  Partial sells are not counted as
+    # independent wins/losses because the user requested 平倉股 statistics.
+    closed_perf_rows = [
+        {"ticker": row["ticker"], "cost_basis": row["cost_basis"], "pnl": row["pnl"]}
+        for row in closed_trades
+        if float(row.get("cost_basis") or 0) > 0
     ]
+    open_market_value = sum(float(row.get("market_value") or 0) for row in enriched_positions)
+    open_unrealized = sum(float(row.get("pnl") or 0) for row in open_perf_rows)
+    closed_realized = sum(float(row.get("pnl") or 0) for row in closed_perf_rows)
     performance = [
-        _performance_row("持有中", open_perf_rows, closed_only=False),
-        _performance_row("已賣出", sold_perf_rows, closed_only=True),
-        _performance_row("持有+賣出", [*open_perf_rows, *sold_perf_rows], closed_only=False),
+        _performance_summary_row(
+            "庫存股", open_perf_rows, market_value=open_market_value,
+            unrealized_pnl=open_unrealized, economic_pnl=open_unrealized,
+        ),
+        _performance_summary_row(
+            "平倉股", closed_perf_rows, market_value=0.0,
+            unrealized_pnl=0.0, economic_pnl=closed_realized,
+        ),
+        _performance_summary_row(
+            "加總", [*open_perf_rows, *closed_perf_rows], market_value=open_market_value,
+            unrealized_pnl=open_unrealized, economic_pnl=open_unrealized + closed_realized,
+        ),
     ]
 
     return {

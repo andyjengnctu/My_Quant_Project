@@ -41,10 +41,22 @@ from services.workbench_ui.workbench import (
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _money(value):
+def _amount(value):
+    """Display TWD account amounts without decimal places."""
+    if value is None:
+        return "-"
+    return f"{float(value):,.0f}"
+
+
+def _price(value):
     if value is None:
         return "-"
     return f"{float(value):,.2f}"
+
+
+def _money(value):
+    # Backward-compatible alias for amount-like fields in this panel.
+    return _amount(value)
 
 
 def _pct(value):
@@ -123,9 +135,9 @@ class AccountingCenterPanel(ttk.Frame):
         dashboard.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         grid = ttk.Frame(dashboard, style=WORKBENCH_FRAME_STYLE)
         grid.pack(fill="x")
-        self._metric_vars = {key: tk.StringVar(value="-") for key in ("cash", "market", "equity", "unrealized", "risk", "count")}
+        self._metric_vars = {key: tk.StringVar(value="-") for key in ("cash", "market", "liquidation", "equity")}
         self._metric_labels = {}
-        for col, (label, key) in enumerate((("現金", "cash"), ("持股市值", "market"), ("帳戶淨值", "equity"), ("未實現損益", "unrealized"), ("持倉 Stop 風險", "risk"), ("庫存檔數", "count"))):
+        for col, (label, key) in enumerate((("現金餘額", "cash"), ("持股市值", "market"), ("可清算淨值", "liquidation"), ("帳戶淨值", "equity"))):
             box = ttk.LabelFrame(grid, text=label, padding=(8, 5), style=WORKBENCH_LABELLF_STYLE)
             box.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
             metric_label = ttk.Label(box, textvariable=self._metric_vars[key], style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT)
@@ -134,7 +146,7 @@ class AccountingCenterPanel(ttk.Frame):
             grid.columnconfigure(col, weight=1)
 
         cash_box = ttk.LabelFrame(content, text="帳戶現金", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        cash_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        cash_box.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         ttk.Label(cash_box, text="現金餘額", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._cash_var = tk.StringVar()
         ttk.Entry(cash_box, textvariable=self._cash_var, width=22, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(8, 8))
@@ -144,16 +156,16 @@ class AccountingCenterPanel(ttk.Frame):
         self._cash_button.pack(side="left", padx=(8, 0))
 
         inventory = ttk.LabelFrame(content, text="庫存股｜點一下選取，再點同一列取消選取", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        inventory.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        inventory.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         inventory.columnconfigure(0, weight=1)
         self._inventory = PagedTable(
             inventory,
             columns=(
                 TableColumn("ticker", "股票", 8),
-                TableColumn("average_cost", "均價", 10, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
+                TableColumn("average_cost", "均價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
                 TableColumn("qty", "股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
                 TableColumn("holding_cost", "持有成本", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
-                TableColumn("current_price", "市價", 10, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
+                TableColumn("current_price", "市價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
                 TableColumn("market_value", "市值", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("unrealized_pnl", "損益", 11, sort_kind="numeric", performance=True, formatter=lambda v, _r: _money(v)),
                 TableColumn("holding_return_pct", "報酬率", 9, sort_kind="numeric", performance=True, formatter=lambda v, _r: _pct(v)),
@@ -198,14 +210,14 @@ class AccountingCenterPanel(ttk.Frame):
         ).grid(row=2, column=0, columnspan=5, sticky="w", pady=(6, 0))
 
         buy_box = ttk.LabelFrame(content, text="買入明細｜未選庫存時顯示全部；選取庫存後只顯示目前庫存對應買入", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        buy_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        buy_box.grid(row=5, column=0, sticky="ew", pady=(0, 8))
         buy_box.columnconfigure(0, weight=1)
         self._buys = PagedTable(
             buy_box,
             columns=(
                 TableColumn("ticker", "股票", 8),
                 TableColumn("trade_date", "成交日", 11, sort_kind="date"),
-                TableColumn("price", "成交價", 10, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
+                TableColumn("price", "成交價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
                 TableColumn("qty", "數量", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
                 TableColumn("gross_amount", "價金", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("buy_fee", "買入手續費", 11, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
@@ -226,10 +238,10 @@ class AccountingCenterPanel(ttk.Frame):
         self._edit_buy_button.pack(side="left")
         self._delete_buy_button = ttk.Button(buy_actions, text="刪除選取買入", command=lambda: self._delete_selected_transaction("BUY"), style=WORKBENCH_BUTTON_STYLE, state="disabled")
         self._delete_buy_button.pack(side="left", padx=(6, 0))
-        ttk.Label(buy_actions, text="手動與策略成交都可修正；若有後續交易，請從同股票最新一筆往回處理。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="right")
+        ttk.Label(buy_actions, text="手動與策略成交皆可修正；原 event 保留於 audit trail，系統重建有效帳務狀態。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="right")
 
         sell_box = ttk.LabelFrame(content, text="賣出明細｜含沖抵持有成本", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        sell_box.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        sell_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
         sell_box.columnconfigure(0, weight=1)
         self._sells = PagedTable(
             sell_box,
@@ -237,7 +249,7 @@ class AccountingCenterPanel(ttk.Frame):
                 TableColumn("ticker", "股票", 8),
                 TableColumn("trade_date", "日期", 11, sort_kind="date"),
                 TableColumn("qty", "股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
-                TableColumn("price", "成交價", 10, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
+                TableColumn("price", "成交價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
                 TableColumn("gross_amount", "價金", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("sell_fee", "賣出手續費", 11, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("tax", "交易稅", 10, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
@@ -262,7 +274,7 @@ class AccountingCenterPanel(ttk.Frame):
         ttk.Label(sell_actions, text="修改/刪除保留原 event，另追加 correction/void；策略與手動成交採同一稽核規則。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).pack(side="right")
 
         offset_box = ttk.LabelFrame(content, text="沖抵明細｜選取上方賣出紀錄", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        offset_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        offset_box.grid(row=7, column=0, sticky="ew", pady=(0, 8))
         offset_box.columnconfigure(0, weight=1)
         self._offset = PagedTable(
             offset_box,
@@ -283,18 +295,19 @@ class AccountingCenterPanel(ttk.Frame):
         self._offset.grid(row=0, column=0, sticky="ew")
 
         perf = ttk.LabelFrame(content, text="績效統計｜只對有方向的損益/報酬率著色：漲紅、跌綠、平白", padding=8, style=WORKBENCH_LABELLF_STYLE)
-        perf.grid(row=7, column=0, sticky="ew")
+        perf.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         perf.columnconfigure(0, weight=1)
         self._perf = PagedTable(
             perf,
             columns=(
-                TableColumn("scope", "範圍", 12),
-                TableColumn("position_or_trade_count", "持股/交易數", 10, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
-                TableColumn("cost_basis", "成本基礎", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
-                TableColumn("pnl", "損益", 12, sort_kind="numeric", performance=True, formatter=lambda v, _r: _money(v)),
+                TableColumn("scope", "範圍", 10),
+                TableColumn("market_value", "股票市值", 12, sort_kind="numeric", formatter=lambda v, _r: _amount(v)),
+                TableColumn("holding_cost", "持有成本", 12, sort_kind="numeric", formatter=lambda v, _r: _amount(v)),
+                TableColumn("unrealized_pnl", "未實現損益", 12, sort_kind="numeric", performance=True, formatter=lambda v, _r: _amount(v)),
                 TableColumn("return_pct", "報酬率", 10, sort_kind="numeric", performance=True, formatter=lambda v, _r: _pct(v)),
-                TableColumn("profitable_count", "獲利數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
-                TableColumn("profitable_rate_pct", "獲利率/勝率", 11, sort_kind="numeric", formatter=lambda v, _r: _pct(v)),
+                TableColumn("win_rate_pct", "勝率", 9, sort_kind="numeric", formatter=lambda v, _r: _pct(v)),
+                TableColumn("expectancy_pct", "期望值", 9, sort_kind="numeric", performance=True, formatter=lambda v, _r: _pct(v)),
+                TableColumn("risk_reward_ratio", "風報比", 9, sort_kind="numeric", formatter=lambda v, _r: "-" if v is None else f"{float(v):.2f}"),
             ),
             page_size=12,
             stock_key=None,
@@ -302,6 +315,39 @@ class AccountingCenterPanel(ttk.Frame):
             empty_text="目前沒有可統計績效",
         )
         self._perf.grid(row=0, column=0, sticky="ew")
+
+        # Windows/macOS/Linux mouse wheel scrolls the page directly regardless
+        # of which table cell/child widget is currently under the pointer.
+        self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+        self.bind_all("<Button-4>", self._on_mousewheel, add="+")
+        self.bind_all("<Button-5>", self._on_mousewheel, add="+")
+
+    def _pointer_is_inside_panel(self, event) -> bool:
+        try:
+            widget = self.winfo_containing(int(event.x_root), int(event.y_root))
+        except (tk.TclError, AttributeError, TypeError, ValueError):
+            return False
+        while widget is not None:
+            if widget is self:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+    def _on_mousewheel(self, event):
+        if not self._pointer_is_inside_panel(event):
+            return None
+        delta = int(getattr(event, "delta", 0) or 0)
+        number = int(getattr(event, "num", 0) or 0)
+        if number == 4:
+            units = -3
+        elif number == 5:
+            units = 3
+        elif delta:
+            units = -max(1, abs(delta) // 120) if delta > 0 else max(1, abs(delta) // 120)
+        else:
+            return None
+        self._canvas.yview_scroll(units, "units")
+        return "break"
 
     def refresh(self):
         if self._refresh_thread is not None and self._refresh_thread.is_alive():
@@ -341,17 +387,11 @@ class AccountingCenterPanel(ttk.Frame):
 
     def _render(self):
         summary = dict(self._dashboard.get("summary") or {})
-        self._metric_vars["cash"].set(_money(summary.get("cash")))
-        self._metric_vars["market"].set(_money(summary.get("holdings_market_value")))
-        self._metric_vars["equity"].set(_money(summary.get("equity")))
-        self._metric_vars["unrealized"].set(_money(summary.get("unrealized_pnl")))
-        self._metric_vars["risk"].set(_money(summary.get("managed_open_risk")))
-        self._metric_vars["count"].set(str(int(summary.get("position_count") or 0)))
-        unrealized = summary.get("unrealized_pnl")
-        self._metric_labels["unrealized"].configure(
-            foreground=WORKBENCH_ERROR if unrealized is not None and float(unrealized) > 0 else WORKBENCH_SUCCESS if unrealized is not None and float(unrealized) < 0 else WORKBENCH_TEXT
-        )
-        self._cash_var.set(_money(self._snapshot.get("cash")) if self._snapshot.get("cash") is not None else "")
+        self._metric_vars["cash"].set(_amount(summary.get("cash")))
+        self._metric_vars["market"].set(_amount(summary.get("holdings_market_value")))
+        self._metric_vars["liquidation"].set(_amount(summary.get("holdings_net_liquidation")))
+        self._metric_vars["equity"].set(_amount(summary.get("equity")))
+        self._cash_var.set(_amount(self._snapshot.get("cash")) if self._snapshot.get("cash") is not None else "")
         self._init_button.configure(state="disabled")
         self._cash_button.configure(state="normal")
         self._status_var.set(f"revision {int(self._snapshot.get('revision') or 0)}｜市價日 {self._dashboard.get('market_date') or '-'}")
@@ -616,7 +656,7 @@ class AccountingCenterPanel(ttk.Frame):
         body.pack(fill="both", expand=True)
         ticker_var = tk.StringVar(value=str(row.get("ticker") or ""))
         qty_var = tk.StringVar(value=str(int(row.get("qty") or 0)))
-        price_var = tk.StringVar(value=_money(row.get("price")))
+        price_var = tk.StringVar(value=_price(row.get("price")))
         date_var = tk.StringVar(value=str(row.get("trade_date") or ""))
         for r, label in enumerate(("股票", "數量", "成交價", "成交日")):
             ttk.Label(body, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=r, column=0, sticky="w", pady=4)
@@ -624,7 +664,7 @@ class AccountingCenterPanel(ttk.Frame):
         ttk.Entry(body, textvariable=qty_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=4)
         ttk.Entry(body, textvariable=price_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=4)
         DatePickerField(body, textvariable=date_var, width=14).grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=4)
-        ttk.Label(body, text="原紀錄保留於 event audit trail；策略與手動成交皆以 void + replacement 修正。若已有後續交易，請先從最新一筆往回修正。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 8))
+        ttk.Label(body, text="原紀錄保留於 event audit trail；策略與手動成交皆以 correction/void 修正並重建有效帳務狀態。", style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_MUTED).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 8))
 
         def save():
             try:

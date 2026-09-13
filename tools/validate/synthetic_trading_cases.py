@@ -567,7 +567,7 @@ def validate_trading_account_state_contract_case(base_params):
             root, ticker="2330", qty=1000, price=100, trade_date="2026-09-01", expected_revision=state["revision"]
         )
         broker = state["positions"]["2330"]["broker"]
-        check("manual_trade_buy_uses_un-discounted_broker_fee", money_to_milli(142.5), expected_buy["buy_fee_milli"])
+        check("manual_trade_buy_uses_un-discounted_broker_fee", money_to_milli(142), expected_buy["buy_fee_milli"])
         check("manual_trade_buy_deducts_holding_cost_from_cash", money_to_milli(1_000_000) - expected_buy["net_buy_total_milli"], state["cash_milli"])
         check("manual_trade_buy_tracks_gross_consideration", expected_buy["gross_buy_milli"], broker["remaining_gross_buy_milli"])
         check("manual_trade_buy_tracks_fee_separately", expected_buy["buy_fee_milli"], broker["remaining_buy_fee_milli"])
@@ -626,27 +626,34 @@ def validate_trading_account_state_contract_case(base_params):
         initialize_trading_account_state(root, cash=100)
         writing, release = Event(), Event()
 
+        # Coverage instrumentation can make the first worker substantially slower
+        # than a normal suite run.  Do not start the competing mutation unless the
+        # first worker has actually entered the patched commit window; otherwise
+        # the test itself can create an unrelated stale-revision race.
+        concurrency_timeout_seconds = 30
+
         def paused_write(path, payload):
             writing.set()
-            if not release.wait(timeout=5):
+            if not release.wait(timeout=concurrency_timeout_seconds):
                 raise RuntimeError("synthetic commit was not released")
             atomic_write_json(path, payload)
 
         with patch("services.trading.account_state.atomic_write_json", side_effect=paused_write):
             with ThreadPoolExecutor(max_workers=1) as pool:
                 pending = pool.submit(set_trading_cash_balance, root, cash=90, expected_revision=0)
+                entered_commit_window = writing.wait(timeout=concurrency_timeout_seconds)
                 try:
-                    check("concurrent_cash_test_reaches_commit_window", True, writing.wait(timeout=5))
-                    try:
-                        set_trading_cash_balance(root, cash=80, expected_revision=0)
-                    except TradingStateBusyError:
-                        busy_rejected = True
-                    else:
-                        busy_rejected = False
+                    check("concurrent_cash_test_reaches_commit_window", True, entered_commit_window)
+                    busy_rejected = False
+                    if entered_commit_window:
+                        try:
+                            set_trading_cash_balance(root, cash=80, expected_revision=0)
+                        except TradingStateBusyError:
+                            busy_rejected = True
                     check("concurrent_cash_change_rejects_before_lost_update", True, busy_rejected)
                 finally:
                     release.set()
-                committed = pending.result(timeout=5)
+                committed = pending.result(timeout=concurrency_timeout_seconds)
         actual = load_trading_account_state(root)
         check("concurrent_cash_change_keeps_one_committed_revision", 1, actual["revision"])
         check("concurrent_cash_change_preserves_first_commit", money_to_milli(90), actual["cash_milli"])
@@ -2646,7 +2653,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_inventory_trade_details_and_performance", True, all(text in accounting_source for text in ("庫存股｜點一下選取，再點同一列取消選取", "買入明細｜未選庫存時顯示全部；選取庫存後只顯示目前庫存對應買入", "賣出明細｜含沖抵持有成本", "沖抵明細｜選取上方賣出紀錄", "績效統計", "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
     check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ("選取庫存後登錄賣出成交", "record_trading_account_inventory_sell", "系統不管理券商掛單")) and "對應券商 SELL 單" not in accounting_source)
-    check("workbench_accounting_center_supports_manual_and_strategy_edit_delete", True, all(text in accounting_source for text in ("修改庫存", "刪除庫存", "修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_transaction", "delete_trading_transaction", "手動與策略成交都可修正")))
+    check("workbench_accounting_center_supports_manual_and_strategy_edit_delete", True, all(text in accounting_source for text in ("修改庫存", "刪除庫存", "修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_transaction", "delete_trading_transaction", "手動與策略成交皆可修正")))
     date_picker_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "date_picker.py").read_text(encoding="utf-8")
     check("workbench_date_inputs_open_calendar_from_date_field", True, "DatePickerField" in panel_source and "DatePickerField" in accounting_source and 'self.entry.bind("<Button-1>", self._on_entry_click' in date_picker_source and 'text="日曆"' not in date_picker_source)
     paged_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "paged_table.py").read_text(encoding="utf-8")

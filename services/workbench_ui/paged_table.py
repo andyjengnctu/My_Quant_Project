@@ -8,6 +8,7 @@ from tkinter import ttk
 from typing import Any, Callable, Iterable
 
 from services.workbench_ui.workbench import (
+    WORKBENCH_ACCENT,
     WORKBENCH_BG,
     WORKBENCH_BORDER,
     WORKBENCH_BUTTON_STYLE,
@@ -252,7 +253,7 @@ class PagedTable(ttk.Frame):
         for row_idx, row in enumerate(page_rows, start=1):
             row_id = str(row.get(self.id_key))
             selected = row_id == self._selected_id
-            bg = "#1a2b3b" if selected else WORKBENCH_BG
+            bg = WORKBENCH_ACCENT if selected else WORKBENCH_BG
             for col_idx, (key, column) in enumerate(visible_columns):
                 if key == "__open__":
                     text = "▣"

@@ -404,12 +404,42 @@ def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None,
     return _round_price_to_tick_milli_cached(str(price), direction, tick_profile)
 
 
-def calc_fee_milli(gross_milli: int, fee_ppm: int, min_fee_milli: int) -> int:
-    fee_milli = (int(gross_milli) * int(fee_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
+CHARGE_ROUNDING_NEAREST_MILLI = "nearest_milli"
+CHARGE_ROUNDING_FLOOR_TWD = "floor_twd"
+
+
+def _resolve_charge_rounding_mode(params) -> str:
+    mode = str(getattr(params, "charge_rounding_mode", CHARGE_ROUNDING_NEAREST_MILLI) or CHARGE_ROUNDING_NEAREST_MILLI)
+    if mode not in {CHARGE_ROUNDING_NEAREST_MILLI, CHARGE_ROUNDING_FLOOR_TWD}:
+        raise ValueError(f"Unsupported charge_rounding_mode: {mode}")
+    return mode
+
+
+def calc_fee_milli(
+    gross_milli: int,
+    fee_ppm: int,
+    min_fee_milli: int,
+    *,
+    rounding_mode: str = CHARGE_ROUNDING_NEAREST_MILLI,
+) -> int:
+    if rounding_mode == CHARGE_ROUNDING_FLOOR_TWD:
+        # Actual broker accounting: discard all fractional TWD unconditionally.
+        fee_twd = (int(gross_milli) * int(fee_ppm)) // (PPM_SCALE * MILLI_SCALE)
+        fee_milli = fee_twd * MILLI_SCALE
+    else:
+        fee_milli = (int(gross_milli) * int(fee_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
     return max(int(fee_milli), int(min_fee_milli))
 
 
-def calc_tax_milli(gross_milli: int, tax_ppm: int) -> int:
+def calc_tax_milli(
+    gross_milli: int,
+    tax_ppm: int,
+    *,
+    rounding_mode: str = CHARGE_ROUNDING_NEAREST_MILLI,
+) -> int:
+    if rounding_mode == CHARGE_ROUNDING_FLOOR_TWD:
+        tax_twd = (int(gross_milli) * int(tax_ppm)) // (PPM_SCALE * MILLI_SCALE)
+        return tax_twd * MILLI_SCALE
     return (int(gross_milli) * int(tax_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
 
 
@@ -447,7 +477,7 @@ def resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, tr
 def calc_buy_net_total_milli_from_milli(fill_price_milli: int, qty: int, params) -> int:
     buy_fee_ppm, _sell_fee_ppm, _tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(params)
     gross_buy_milli = int(fill_price_milli) * int(qty)
-    return gross_buy_milli + calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli)
+    return gross_buy_milli + calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli, rounding_mode=_resolve_charge_rounding_mode(params))
 
 
 def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> int:
@@ -460,8 +490,9 @@ def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params
         security_name=security_name,
     )
     gross_sell_milli = int(exec_price_milli) * int(qty)
-    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli)
-    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm)
+    rounding_mode = _resolve_charge_rounding_mode(params)
+    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli, rounding_mode=rounding_mode)
+    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm, rounding_mode=rounding_mode)
     return gross_sell_milli - sell_fee_milli - tax_milli
 
 
@@ -471,7 +502,7 @@ def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
     buy_fee_ppm, _sell_fee_ppm, _tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(params)
     qty = int(qty)
     gross_buy_milli = int(fill_price_milli) * qty
-    buy_fee_milli = calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli)
+    buy_fee_milli = calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli, rounding_mode=_resolve_charge_rounding_mode(params))
     net_buy_total_milli = gross_buy_milli + buy_fee_milli
     return {
         "fill_price_milli": int(fill_price_milli),
@@ -493,8 +524,9 @@ def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, s
     )
     qty = int(qty)
     gross_sell_milli = int(exec_price_milli) * qty
-    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli)
-    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm)
+    rounding_mode = _resolve_charge_rounding_mode(params)
+    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli, rounding_mode=rounding_mode)
+    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm, rounding_mode=rounding_mode)
     net_sell_total_milli = gross_sell_milli - sell_fee_milli - tax_milli
     return {
         "exec_price_milli": int(exec_price_milli),

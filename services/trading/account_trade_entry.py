@@ -50,11 +50,15 @@ def record_trading_account_buy(
         if candidate_ticker != ticker_key:
             raise ValueError("選取的 Scanner candidate 與成交股票不一致")
         params, member = resolve_trading_candidate_frozen_params(candidate_row)
+        # Strategy geometry is float-based while exact account ledgers accept
+        # decimal-like inputs.  Normalize only at this strategy/account boundary
+        # so UI Decimal input never leaks into stop/risk arithmetic.
+        strategy_price = float(price)
         account = record_strategy_trading_buy(
             project_root,
             ticker=ticker_key,
             qty=int(qty),
-            price=price,
+            price=strategy_price,
             trade_date=trade_date,
             expected_revision=int(expected_account_revision),
             params=params,

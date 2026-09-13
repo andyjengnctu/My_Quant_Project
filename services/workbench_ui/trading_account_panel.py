@@ -732,18 +732,16 @@ class TradingAccountPanel(ttk.Frame):
         dashboard_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self._dashboard_metric_vars = {
             key: tk.StringVar(value="-")
-            for key in ("cash", "market_value", "equity", "unrealized", "risk_budget", "managed_risk")
+            for key in ("cash", "market_value", "liquidation", "equity")
         }
         dashboard_grid = ttk.Frame(dashboard_box, style=WORKBENCH_FRAME_STYLE)
         dashboard_grid.pack(fill="x")
         self._dashboard_metric_labels = {}
         for col, (title, key) in enumerate((
-            ("現金", "cash"),
+            ("現金餘額", "cash"),
             ("持股市值", "market_value"),
+            ("可清算淨值", "liquidation"),
             ("帳戶淨值", "equity"),
-            ("未實現PnL", "unrealized"),
-            ("單筆風險預算", "risk_budget"),
-            ("持倉Stop風險", "managed_risk"),
         )):
             card = ttk.LabelFrame(dashboard_grid, text=title, padding=(8, 5), style=WORKBENCH_LABELLF_STYLE)
             card.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
@@ -2282,17 +2280,8 @@ class TradingAccountPanel(ttk.Frame):
 
         self._dashboard_metric_vars["cash"].set(money_text(summary.get("cash")))
         self._dashboard_metric_vars["market_value"].set(money_text(summary.get("holdings_market_value")))
+        self._dashboard_metric_vars["liquidation"].set(money_text(summary.get("holdings_net_liquidation")))
         self._dashboard_metric_vars["equity"].set(money_text(summary.get("equity")))
-        unrealized = summary.get("unrealized_pnl")
-        self._dashboard_metric_vars["unrealized"].set(money_text(unrealized))
-        if hasattr(self, "_dashboard_metric_labels"):
-            self._dashboard_metric_labels["unrealized"].configure(
-                foreground=WORKBENCH_ERROR if unrealized is not None and float(unrealized) > 0
-                else WORKBENCH_SUCCESS if unrealized is not None and float(unrealized) < 0
-                else WORKBENCH_TEXT
-            )
-        self._dashboard_metric_vars["risk_budget"].set(money_text(summary.get("single_position_risk_budget")))
-        self._dashboard_metric_vars["managed_risk"].set(money_text(summary.get("managed_open_risk")))
         warnings = list(self._account_dashboard_snapshot.get("warnings") or [])
         revision = self._account_dashboard_snapshot.get("source_account_revision")
         market_date = self._account_dashboard_snapshot.get("market_date") or "-"
@@ -2527,6 +2516,9 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             error_title="成交登錄失敗",
+            # Buying only changes account truth.  Do not rebuild the historical
+            # Trading/OMS bundle before switching to Accounting Center.
+            refresh_state=False,
         )
 
     def _position_form_values(self):
