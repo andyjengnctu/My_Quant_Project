@@ -1636,8 +1636,17 @@ class TradingAccountPanel(ttk.Frame):
             self._reload_candidate_rows([], candidate_payload=None)
             self._operations_detail_var.set(f"Scanner snapshot 讀取失敗：{exc}")
             return
+        if not bool(snapshot.get("valid")):
+            self._reload_candidate_rows([], candidate_payload=None)
+            self._operations_detail_var.set(
+                f"Scanner snapshot 無效：{snapshot.get('error') or 'schema 不相容'}；請重新執行 Scanner。"
+            )
+            return
         if not bool(snapshot.get("fresh")):
             self._reload_candidate_rows([], candidate_payload=None)
+            self._operations_detail_var.set(
+                f"Scanner snapshot 已過期：{snapshot.get('error') or 'inputs 已變更'}；請重新執行 Scanner。"
+            )
             return
         try:
             payload = _load_panel_value(

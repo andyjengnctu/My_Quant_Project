@@ -323,6 +323,8 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
         row.pop("_ensemble_context", None)
         normalized_rows.append(row)
 
+    from core.portfolio_ensemble import build_ensemble_candidate_display_metrics
+
     return {
         "schema_version": TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
         "runtime_domain": "trading",
@@ -332,6 +334,9 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
         "param_latest_data_date": runtime["param_latest_data_date"],
         "param_member_count": runtime["member_count"],
         "param_min_agree": runtime["param_min_agree"],
+        "candidate_display_metrics": build_ensemble_candidate_display_metrics(
+            total_member_count=runtime["member_count"]
+        ),
         "selected_params_sha256": runtime["selected_params_sha256"],
         "market_data_consumer_state_sha256": runtime["market_data_consumer_state_sha256"],
         "market_data_source_view_fingerprint": runtime["market_data_source_view_fingerprint"],
@@ -2943,6 +2948,38 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("scanner_pool_ensemble_dynamic_metric_labels", ["共識", "中位超限幅"], [row.get("label") for row in ensemble_metrics])
     check("scanner_pool_consensus_uses_total_member_denominator", 8, ensemble_metrics[0].get("denominator"))
     check("scanner_pool_single_member_has_no_ensemble_dynamic_columns", [], build_ensemble_candidate_display_metrics(total_member_count=1))
+
+    from services.trading.scanner_state import (
+        TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
+        _validate_trading_candidate_snapshot_payload,
+    )
+    legacy_candidate_payload = {
+        "schema_version": TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION - 1,
+        "runtime_domain": "trading",
+        "strategy_id": "synthetic",
+        "param_selector": "synthetic",
+        "latest_data_date": "2026-09-11",
+        "selected_params_sha256": "synthetic",
+        "param_member_count": 8,
+        "param_min_agree": 5,
+    }
+    try:
+        _validate_trading_candidate_snapshot_payload(legacy_candidate_payload)
+    except ValueError as exc:
+        legacy_schema_rejected = "schema_version" in str(exc)
+    else:
+        legacy_schema_rejected = False
+    check("scanner_pool_dynamic_columns_reject_pre_descriptor_snapshot_schema", True, legacy_schema_rejected)
+
+    descriptor_missing_payload = dict(legacy_candidate_payload)
+    descriptor_missing_payload["schema_version"] = TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION
+    try:
+        _validate_trading_candidate_snapshot_payload(descriptor_missing_payload)
+    except ValueError as exc:
+        missing_descriptor_rejected = "candidate_display_metrics" in str(exc)
+    else:
+        missing_descriptor_rejected = False
+    check("scanner_pool_current_snapshot_requires_dynamic_column_descriptor", True, missing_descriptor_rejected)
 
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_trading_page_is_vertically_scrollable", True, "self._page_canvas = tk.Canvas" in panel_source and "self._page_scrollbar = ttk.Scrollbar" in panel_source)

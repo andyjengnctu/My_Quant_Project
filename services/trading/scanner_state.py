@@ -7,6 +7,7 @@ from typing import Any
 from core.console_report import project_relative_display_path
 from core.file_integrity import compute_file_sha256, load_json_strict
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
+from core.portfolio_ensemble import build_ensemble_candidate_display_metrics
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.data_readiness import (
@@ -25,7 +26,7 @@ from services.trading.strategy_param_state import (
 )
 
 
-TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 6
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 7
 
 
 def partition_trading_candidate_rows_for_information_date(
@@ -308,23 +309,27 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
     min_agree = int(payload.get("param_min_agree") or 0)
     if member_count < 1 or min_agree < 1 or min_agree > member_count:
         raise ValueError("Trading candidate snapshot Params ensemble metadata 不合法")
+    if "candidate_display_metrics" not in payload:
+        raise ValueError("Trading candidate snapshot 缺少 candidate_display_metrics；請重新執行 Scanner")
     display_metrics = payload.get("candidate_display_metrics")
-    if display_metrics is not None:
-        if not isinstance(display_metrics, list) or any(not isinstance(item, dict) for item in display_metrics):
-            raise TypeError("Trading candidate snapshot candidate_display_metrics 必須是 object list")
-        metric_keys = [str(item.get("key") or "").strip() for item in display_metrics]
-        if any(not key for key in metric_keys) or len(metric_keys) != len(set(metric_keys)):
-            raise ValueError("Trading candidate snapshot candidate display metric key 不合法")
-        for item in display_metrics:
-            if not str(item.get("label") or "").strip() or not str(item.get("value_field") or "").strip():
-                raise ValueError("Trading candidate snapshot candidate display metric descriptor 不完整")
-            format_kind = str(item.get("format_kind") or "")
-            if format_kind not in {"text", "integer", "integer_grouped", "number", "percent", "r", "fraction"}:
-                raise ValueError("Trading candidate snapshot candidate display metric formatter 不支援")
-            if format_kind == "fraction":
-                denominator = int(item.get("denominator") or 0)
-                if denominator != member_count:
-                    raise ValueError("Trading candidate snapshot candidate display metric denominator 與 Params members 不一致")
+    if not isinstance(display_metrics, list) or any(not isinstance(item, dict) for item in display_metrics):
+        raise TypeError("Trading candidate snapshot candidate_display_metrics 必須是 object list")
+    metric_keys = [str(item.get("key") or "").strip() for item in display_metrics]
+    if any(not key for key in metric_keys) or len(metric_keys) != len(set(metric_keys)):
+        raise ValueError("Trading candidate snapshot candidate display metric key 不合法")
+    for item in display_metrics:
+        if not str(item.get("label") or "").strip() or not str(item.get("value_field") or "").strip():
+            raise ValueError("Trading candidate snapshot candidate display metric descriptor 不完整")
+        format_kind = str(item.get("format_kind") or "")
+        if format_kind not in {"text", "integer", "integer_grouped", "number", "percent", "r", "fraction"}:
+            raise ValueError("Trading candidate snapshot candidate display metric formatter 不支援")
+        if format_kind == "fraction":
+            denominator = int(item.get("denominator") or 0)
+            if denominator != member_count:
+                raise ValueError("Trading candidate snapshot candidate display metric denominator 與 Params members 不一致")
+    expected_display_metrics = build_ensemble_candidate_display_metrics(total_member_count=member_count)
+    if display_metrics != expected_display_metrics:
+        raise ValueError("Trading candidate snapshot candidate display metrics 與目前 canonical selector evidence contract 不一致；請重新執行 Scanner")
     for field in ("market_data_consumer_state_sha256", "market_data_source_view_fingerprint", "param_binding_sha256"):
         if not str(payload.get(field) or "").strip():
             raise ValueError(f"Trading candidate snapshot 缺少 {field}")
