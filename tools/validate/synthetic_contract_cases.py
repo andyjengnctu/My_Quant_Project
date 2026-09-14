@@ -1696,52 +1696,56 @@ def validate_single_ticker_compounding_parity_contract_case(base_params):
         },
     ]
 
-    for scenario in scenarios:
-        single_stats, standalone_logs = run_v16_backtest(
-            scenario["df"].copy(),
-            params,
-            return_logs=True,
-            precomputed_signals=scenario["precomputed_signals"],
-        )
-        prepared_df = scenario["df"].copy()
-        prepared_df["ATR"] = scenario["precomputed_signals"][0]
-        prepared_df["is_setup"] = scenario["precomputed_signals"][1]
-        prepared_df["ind_sell_signal"] = scenario["precomputed_signals"][2]
-        prepared_df["buy_limit"] = scenario["precomputed_signals"][3]
+    # This parity case has fixed no-fee compounding oracles.  Keep the broker-fee
+    # override local to the synthetic so production Research/Trading continue to
+    # consume the canonical broker settlement SSOT unchanged.
+    with patch("core.exact_accounting.calc_broker_fee_milli", return_value=0):
+        for scenario in scenarios:
+            single_stats, standalone_logs = run_v16_backtest(
+                scenario["df"].copy(),
+                params,
+                return_logs=True,
+                precomputed_signals=scenario["precomputed_signals"],
+            )
+            prepared_df = scenario["df"].copy()
+            prepared_df["ATR"] = scenario["precomputed_signals"][0]
+            prepared_df["is_setup"] = scenario["precomputed_signals"][1]
+            prepared_df["ind_sell_signal"] = scenario["precomputed_signals"][2]
+            prepared_df["buy_limit"] = scenario["precomputed_signals"][3]
 
-        parity_params = build_consistency_parity_params(params)
-        portfolio_context = build_single_ticker_portfolio_context(ticker, prepared_df, standalone_logs)
-        portfolio_stats = run_single_ticker_portfolio_check(
-            ticker,
-            prepared_df,
-            standalone_logs,
-            parity_params,
-            portfolio_context=portfolio_context,
-        )
-        portfolio_sim_stats = run_portfolio_sim_tool_check(
-            ticker,
-            f"{ticker}.csv",
-            parity_params,
-            prepared_df=prepared_df,
-            standalone_logs=standalone_logs,
-            packed_fast_data=portfolio_context["fast_data"],
-            sorted_dates=portfolio_context["sorted_dates"],
-            start_year=portfolio_context["start_year"],
-        )
+            parity_params = build_consistency_parity_params(params)
+            portfolio_context = build_single_ticker_portfolio_context(ticker, prepared_df, standalone_logs)
+            portfolio_stats = run_single_ticker_portfolio_check(
+                ticker,
+                prepared_df,
+                standalone_logs,
+                parity_params,
+                portfolio_context=portfolio_context,
+            )
+            portfolio_sim_stats = run_portfolio_sim_tool_check(
+                ticker,
+                f"{ticker}.csv",
+                parity_params,
+                prepared_df=prepared_df,
+                standalone_logs=standalone_logs,
+                packed_fast_data=portfolio_context["fast_data"],
+                sorted_dates=portfolio_context["sorted_dates"],
+                start_year=portfolio_context["start_year"],
+            )
 
-        metric_prefix = f"single_ticker_compounding_{scenario['name']}"
-        check(f"{metric_prefix}_params_keep_compounding_enabled", True, bool(parity_params.use_compounding))
-        check(f"{metric_prefix}_single_backtest_trade_count", 2, int(single_stats["trade_count"]))
-        check(f"{metric_prefix}_single_backtest_final_equity_uses_compounding", scenario["expected_final_eq"], params.initial_capital * (1.0 + float(single_stats["asset_growth"]) / 100.0))
-        check(f"{metric_prefix}_single_backtest_total_return_uses_compounding", scenario["expected_total_return"], float(single_stats["asset_growth"]))
-        check(f"{metric_prefix}_portfolio_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_stats["total_return"]))
-        check(f"{metric_prefix}_portfolio_final_equity_matches_single_backtest", scenario["expected_final_eq"], float(portfolio_stats["final_eq"]))
-        check(f"{metric_prefix}_portfolio_sim_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_sim_stats["total_return"]))
-        check(f"{metric_prefix}_portfolio_sim_final_equity_matches_single_backtest", scenario["expected_final_eq"], float(portfolio_sim_stats["final_eq"]))
+            metric_prefix = f"single_ticker_compounding_{scenario['name']}"
+            check(f"{metric_prefix}_params_keep_compounding_enabled", True, bool(parity_params.use_compounding))
+            check(f"{metric_prefix}_single_backtest_trade_count", 2, int(single_stats["trade_count"]))
+            check(f"{metric_prefix}_single_backtest_final_equity_uses_compounding", scenario["expected_final_eq"], params.initial_capital * (1.0 + float(single_stats["asset_growth"]) / 100.0))
+            check(f"{metric_prefix}_single_backtest_total_return_uses_compounding", scenario["expected_total_return"], float(single_stats["asset_growth"]))
+            check(f"{metric_prefix}_portfolio_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_stats["total_return"]))
+            check(f"{metric_prefix}_portfolio_final_equity_matches_single_backtest", scenario["expected_final_eq"], float(portfolio_stats["final_eq"]))
+            check(f"{metric_prefix}_portfolio_sim_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_sim_stats["total_return"]))
+            check(f"{metric_prefix}_portfolio_sim_final_equity_matches_single_backtest", scenario["expected_final_eq"], float(portfolio_sim_stats["final_eq"]))
 
-        summary[f"single_asset_growth_{scenario['name']}"] = float(single_stats["asset_growth"])
-        summary[f"portfolio_total_return_{scenario['name']}"] = float(portfolio_stats["total_return"])
-        summary[f"portfolio_sim_total_return_{scenario['name']}"] = float(portfolio_sim_stats["total_return"])
+            summary[f"single_asset_growth_{scenario['name']}"] = float(single_stats["asset_growth"])
+            summary[f"portfolio_total_return_{scenario['name']}"] = float(portfolio_stats["total_return"])
+            summary[f"portfolio_sim_total_return_{scenario['name']}"] = float(portfolio_sim_stats["total_return"])
     return results, summary
 
 

@@ -1,5 +1,6 @@
 from .checks import bind_synthetic_case, bind_checks
 from datetime import datetime
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -249,7 +250,12 @@ def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params
         np.array([100.0, np.nan, 100.0, np.nan, np.nan, 100.0], dtype=np.float64),
     )
 
-    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
+    # This case isolates compounding mechanics.  Production Research still uses
+    # the canonical broker-cash fee; the synthetic explicitly removes that fee
+    # so its fixed oracle remains a pure compounding contract rather than an
+    # accounting-policy test.
+    with patch("core.exact_accounting.calc_broker_fee_milli", return_value=0):
+        stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
 
     check("trade_count_after_two_round_trips", 2, int(stats["trade_count"]))
     check("asset_growth_uses_compounding_capital_when_flag_true", 21.0, float(stats["asset_growth"]))
