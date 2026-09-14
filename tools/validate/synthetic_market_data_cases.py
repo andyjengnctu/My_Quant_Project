@@ -3649,6 +3649,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
     check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and "legacy_stage_data_requests" not in update_source)
     check("canonical_full_update_requests_fresh_quota_observation", True, "refresh_provider_quota=True" in update_source)
+    check(
+        "canonical_full_update_force_probes_all_included_v2_datasets",
+        True,
+        "force_refresh_current_target=True" in update_source,
+    )
     check("executor_does_not_count_cache_hit_as_http_attempt", True, "will_issue_data_request" in executor_source and "if will_issue:" in executor_source)
     check(
         "canonical_price_refresh_consumes_provider_adjusted_price_without_local_reconstruction",

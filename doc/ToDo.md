@@ -1,13 +1,12 @@
 - Trading
     - 股票中文名稱
-    - 儲存與自動載入已計算過的侯選股，不要每次開啟workben都動新計算
     - 掛單試算功能
 
+    - 手續費與稅金計算法式同源，以trading目前的算為法為準
 
 
 - Trading (performance)
     - Scanner按下去後一開始會卡很久才開始計算
-    - 下單後都要等很久才跳出訊息
 
 
 - restreucture

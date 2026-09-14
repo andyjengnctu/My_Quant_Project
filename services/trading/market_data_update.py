@@ -48,7 +48,14 @@ def run_trading_market_data_update(
     progress_fn=None,
     quota_wait_fn=None,
 ) -> dict[str, Any]:
-    """Refresh V2 if requested, then publish canonical execution consumer state."""
+    """Force-probe every included Trading V2 dataset, then publish consumer state.
+
+    This is the canonical *Full Update* owner.  Publication schedules remain
+    scheduler hints for automatic/Due-only updates; a user-requested Full Update
+    always asks the provider for every included Trading dataset using the existing
+    bounded current-target refresh geometry.  The force observation does not
+    consume or reschedule automatic publication retry budget.
+    """
 
     root = Path(project_root).resolve()
     account = load_trading_account_state(root, required=False)
@@ -68,6 +75,7 @@ def run_trading_market_data_update(
                 project_root=root,
                 client=provider_client,
                 force_market_date_discovery=True,
+                force_refresh_current_target=True,
                 refresh_provider_quota=True,
                 progress_fn=progress_fn,
                 quota_wait_fn=quota_wait_fn,
