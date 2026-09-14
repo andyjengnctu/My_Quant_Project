@@ -12,8 +12,10 @@ from core.exact_accounting import (
     calc_entry_total_cost,
     calc_total_from_average_price_milli,
     coerce_money_like_to_milli,
+    milli_to_money,
     round_money_for_display,
 )
+from core.fee_rebate import create_fee_rebate_state, settle_fee_rebate
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import extract_precomputed_signals as _extract_precomputed_signals, generate_signals, unpack_precomputed_signals
 from services.trade_analysis.charting import (
@@ -260,9 +262,17 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     active_extended_signal = None
     active_reentry_watchlist = {}
     current_capital = params.initial_capital
+    fee_rebate_state = create_fee_rebate_state()
+    rebate_month_key = None
     trade_logs = []
     chart_context = create_debug_chart_context(df, price_overlay_specs=resolve_chart_price_overlay_specs(params=params)) if (export_chart or return_chart_payload) else None
     for j in range(1, len(c)):
+        current_rebate_month_key = (int(dates[j].year), int(dates[j].month))
+        if rebate_month_key is None:
+            rebate_month_key = current_rebate_month_key
+        elif current_rebate_month_key != rebate_month_key:
+            current_capital += milli_to_money(settle_fee_rebate(fee_rebate_state))
+            rebate_month_key = current_rebate_month_key
         if np.isnan(atr_main[j - 1]):
             continue
         pos_qty_start_of_bar = position['qty']
@@ -317,6 +327,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 stats_index=stats_index,
                 current_capital_before_event=current_capital,
                 overall_max_drawdown=stats_dict.get('max_drawdown', 0.0),
+                fee_rebate_state=fee_rebate_state,
             )
             if reentry_watch_state is not None:
                 active_reentry_watchlist[ticker] = reentry_watch_state
@@ -375,6 +386,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             security_profile=resolved_security_profile,
             trade_date=dates[j],
             signal_date=signal_date,
+            fee_rebate_state=fee_rebate_state,
         )
         if buy_condition[j - 1] and pos_qty_start_of_bar == 0 and active_extended_signal is not previous_extended_signal:
             active_reentry_watchlist.pop(ticker, None)
@@ -448,6 +460,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             current_capital_before_event=current_capital,
             stats_index=stats_index,
             overall_max_drawdown=stats_dict.get('max_drawdown', 0.0),
+            fee_rebate_state=fee_rebate_state,
         )
     _apply_chart_sidebars(chart_context=chart_context, stats_dict=stats_dict, sell_condition=sell_condition, trade_logs=trade_logs)
     return finalize_debug_analysis(

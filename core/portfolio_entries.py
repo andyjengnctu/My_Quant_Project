@@ -1,4 +1,5 @@
 from core.capital_policy import resolve_portfolio_entry_budget
+from core.fee_rebate import accrue_fee_rebate
 from core.exact_accounting import (
     coerce_money_like_to_milli,
     milli_to_money,
@@ -81,6 +82,7 @@ def execute_reserved_entries_for_day(
     total_missed_buys,
     entry_stats=None,
     replay_execution_rows=None,
+    fee_rebate_state=None,
 ):
     pre_market_occupied = len(portfolio) + len(sold_today)
     remaining_orderable_candidates = list(orderable_candidates_today)
@@ -185,8 +187,12 @@ def execute_reserved_entries_for_day(
                 )
 
         if entry_result['filled']:
-            actual_total_cost_milli = entry_result['position']['net_buy_total_milli']
+            actual_total_cost_milli = int(entry_result['position']['cash_buy_total_milli'])
             cash_milli -= actual_total_cost_milli
+            accrue_fee_rebate(
+                fee_rebate_state,
+                entry_result['position']['buy_fee_rebate_receivable_milli'],
+            )
             entry_result['position']['_entry_params_obj'] = candidate_params
             entry_result['position']['_entry_params_signature'] = str(cand.get('params_signature') or '')
             entry_result['position']['_ensemble_vote_count'] = cand.get('ensemble_vote_count')

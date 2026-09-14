@@ -1,6 +1,7 @@
 from core.buy_sort import calc_buy_sort_value, is_sort_value_better
 from core.breakout_reentry import create_breakout_reentry_watch_state
 from core.config import get_buy_sort_method
+from core.fee_rebate import accrue_fee_rebate
 from core.exact_accounting import (
     build_sell_ledger_from_price,
     calc_ratio_from_milli,
@@ -11,7 +12,12 @@ from core.exact_accounting import (
     register_display_realized_pnl,
     round_money_for_display,
 )
-from core.position_step import execute_bar_step, first_exec_context as _first_exec_context
+from core.position_step import (
+    SETTLEMENT_BASIS_BROKER_CASH,
+    execute_bar_step,
+    first_exec_context as _first_exec_context,
+    sum_last_exec_context_cash_milli,
+)
 from core.price_utils import (
     adjust_long_sell_fill_price,
     get_exit_sell_block_reason,
@@ -211,6 +217,7 @@ def try_rotate_weakest_position(
     normal_trade_count,
     extended_trade_count,
     active_level_rows=None,
+    fee_rebate_state=None,
 ):
     if len(portfolio) != max_positions or not enable_rotation or not orderable_candidates_today:
         return cash, normal_trade_count, extended_trade_count
@@ -292,9 +299,11 @@ def try_rotate_weakest_position(
             security_profile=pos.get('security_profile'),
             trade_date=today,
         )
-        est_freed_cash_milli = sell_ledger['net_sell_total_milli']
-        pnl_milli = est_freed_cash_milli - pos['remaining_cost_basis_milli']
+        economic_sell_total_milli = int(sell_ledger['net_sell_total_milli'])
+        est_freed_cash_milli = int(sell_ledger['cash_sell_total_milli'])
+        pnl_milli = economic_sell_total_milli - pos['remaining_cost_basis_milli']
         cash += est_freed_cash_milli
+        accrue_fee_rebate(fee_rebate_state, sell_ledger['sell_fee_rebate_receivable_milli'])
 
         total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli
         total_pnl = milli_to_money(total_pnl_milli)
@@ -357,6 +366,7 @@ def settle_portfolio_positions(
     active_level_rows=None,
     active_reentry_watchlist=None,
     active_reentry_watchlists_by_member=None,
+    fee_rebate_state=None,
 ):
     tickers_to_remove = []
     for ticker in sorted(portfolio.keys()):
@@ -386,9 +396,11 @@ def settle_portfolio_positions(
             return_milli=is_training,
             record_exec_contexts=not is_training,
             sync_display_fields=not is_training,
+            fee_rebate_state=fee_rebate_state,
+            settlement_basis=SETTLEMENT_BASIS_BROKER_CASH,
         )
         if not is_training:
-            freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in pos.get('_last_exec_contexts', []))
+            freed_cash_milli = sum_last_exec_context_cash_milli(pos)
         cash += int(freed_cash_milli)
 
         tp_context = _first_exec_context(pos, 'TP_HALF')
@@ -529,6 +541,7 @@ def closeout_open_positions(
     extended_trade_count,
     last_date,
     active_level_rows=None,
+    fee_rebate_state=None,
 ):
     final_cash = cash
 
@@ -552,7 +565,8 @@ def closeout_open_positions(
             security_profile=pos.get('security_profile'),
             trade_date=last_date,
         )
-        final_cash += sell_ledger['net_sell_total_milli']
+        final_cash += int(sell_ledger['cash_sell_total_milli'])
+        accrue_fee_rebate(fee_rebate_state, sell_ledger['sell_fee_rebate_receivable_milli'])
 
         pnl_milli = sell_ledger['net_sell_total_milli'] - pos['remaining_cost_basis_milli']
         total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli

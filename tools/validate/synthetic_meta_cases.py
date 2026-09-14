@@ -3682,7 +3682,12 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "debug_backtest_buy_signal_preview_threads_security_profile", True, "entry_plan_preview = build_normal_entry_plan(" in debug_backtest_source and "security_profile=resolved_security_profile" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_backtest_latest_raw_signal_preview_threads_security_profile", True, "latest_entry_plan_preview = build_normal_candidate_plan(" in debug_backtest_source and "security_profile=resolved_security_profile" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_backtest_latest_extended_preview_threads_security_profile", True, "latest_extended_preview = build_extended_candidate_plan_from_signal(" in debug_backtest_source and "security_profile=resolved_security_profile" in debug_backtest_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_flow_uses_exact_entry_total_helper", True, "spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_preserves_economic_entry_total_helper", True, "economic_entry_total = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_spends_broker_cash_total", True, "spent_cash = milli_to_money(int(position['cash_buy_total_milli']))" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_fee_rebate_state", True, "fee_rebate_state=None" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_accrues_fee_rebate_receivable", True, "accrue_fee_rebate(fee_rebate_state, position['buy_fee_rebate_receivable_milli'])" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_backtest_passes_fee_rebate_state_to_entry_flow", True, "fee_rebate_state=fee_rebate_state" in debug_backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_backtest_settles_rebate_on_month_boundary", True, "current_capital += milli_to_money(settle_fee_rebate(fee_rebate_state))" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_returns_spent_cash", True, "return position, active_extended_signal, spent_cash" in debug_entry_source)
     summary["source_paths"] = [
         str(debug_backtest_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),

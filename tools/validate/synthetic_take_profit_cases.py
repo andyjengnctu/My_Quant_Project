@@ -11,7 +11,7 @@ from core.entry_plans import (
     build_position_from_entry_fill,
     execute_pre_market_entry_plan,
 )
-from core.position_step import execute_bar_step
+from core.position_step import SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
 from core.exact_accounting import build_buy_ledger_from_price, build_sell_ledger_from_price, milli_to_money
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from core.portfolio_fast_data import calc_mark_to_market_equity, pack_prepared_stock_data, prep_stock_data_and_trades
@@ -63,6 +63,7 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
         t_close=98.0,
         t_volume=1000.0,
         params=params,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
 
     expected_exec_price = adjust_long_sell_fill_price(min(expected_stop_level, 100.0))
@@ -113,6 +114,7 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
         t_close=91.0,
         t_volume=1000.0,
         params=params,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     stop_exec_context = next((ctx for ctx in updated_position.get("_last_exec_contexts", []) if ctx.get("event") == "STOP"), None)
     expected_same_bar_exec_price = adjust_long_sell_fill_price(90.0)
@@ -161,6 +163,7 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
         t_volume=1000.0,
         params=params,
         y_high=100.0,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     deferred_stop_context = next((ctx for ctx in updated_deferred_position.get("_last_exec_contexts", []) if ctx.get("event") == "STOP"), None)
     expected_deferred_sell_ledger = build_sell_ledger_from_price(92.0, deferred_original_qty, params)
@@ -208,6 +211,7 @@ def validate_synthetic_exit_orders_only_for_held_positions_case(base_params):
         t_close=85.0,
         t_volume=1000.0,
         params=params,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
 
     check("zero_qty_has_no_events", [], list(events))
@@ -300,6 +304,7 @@ def validate_synthetic_fee_tax_net_equity_case(base_params):
             t_close=float(prep_df.loc[exit_date, "Close"]),
             t_volume=float(prep_df.loc[exit_date, "Volume"]),
             params=params,
+            settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
         )
         expected_final_eq = float(entry_cash_after_buy + freed_cash)
         expected_total_return = (expected_final_eq - params.initial_capital) / params.initial_capital * 100.0

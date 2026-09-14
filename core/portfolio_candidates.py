@@ -118,7 +118,7 @@ def _make_candidate_row(
 ):
     if est_qty > 0:
         est_ledger = build_buy_ledger_from_price(est_limit_px, est_qty, params)
-        est_cost_milli = int(est_ledger["net_buy_total_milli"])
+        est_cost_milli = int(est_ledger["cash_buy_total_milli"])
         est_cost = milli_to_money(est_cost_milli)
     else:
         est_cost_milli = 0

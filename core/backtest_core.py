@@ -4,8 +4,14 @@ from core.backtest_finalize import build_backtest_stats, finalize_open_position_
 from core.breakout_reentry import create_breakout_reentry_signal_state, create_breakout_reentry_watch_state
 from core.capital_policy import resolve_scanner_live_capital, resolve_single_backtest_sizing_capital
 from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money, money_to_milli, price_to_milli
+from core.fee_rebate import (
+    accrue_fee_rebate,
+    create_fee_rebate_state,
+    get_fee_rebate_receivable_milli,
+    settle_fee_rebate,
+)
 from core.strategy_params import V16StrategyParams
-from core.position_step import execute_bar_step
+from core.position_step import SETTLEMENT_BASIS_BROKER_CASH, execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trade_plans import (
@@ -141,6 +147,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     scanner_extended_signal = None
     pit_stats_builder = _create_pit_stats_builder() if return_pit_stats_index else None
     currentCapital_milli = money_to_milli(params.initial_capital)
+    fee_rebate_state = create_fee_rebate_state()
+    rebate_month_key = None
     tradeCount, fullWins, missedBuyCount, missedSellCount = 0, 0, 0, 0
     totalProfit_milli, totalLoss_milli = 0, 0
     peakCapital_milli, maxDrawdownPct = currentCapital_milli, 0.0
@@ -194,9 +202,17 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
     j = 1
     while j < len(C):
+        current_date = Dates[j]
+        current_rebate_month_key = (int(current_date.year), int(current_date.month))
+        if rebate_month_key is None:
+            rebate_month_key = current_rebate_month_key
+        elif current_rebate_month_key != rebate_month_key:
+            currentCapital_milli += settle_fee_rebate(fee_rebate_state)
+            rebate_month_key = current_rebate_month_key
+
         if np.isnan(ATR_main[j - 1]):
             if collect_stats:
-                currentEquity_milli = currentCapital_milli
+                currentEquity_milli = currentCapital_milli + get_fee_rebate_receivable_milli(fee_rebate_state)
                 peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
                 currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
                 maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
@@ -241,6 +257,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 return_milli=True,
                 record_exec_contexts=return_logs,
                 sync_display_fields=collect_stats or return_logs,
+                fee_rebate_state=fee_rebate_state,
+                settlement_basis=SETTLEMENT_BASIS_BROKER_CASH,
             )
             currentCapital_milli += freed_cash_milli
             if 'STOP' in events or 'IND_SELL' in events:
@@ -384,7 +402,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if entry_filled:
                 position = entry_result['position']
                 position['signal_date'] = Dates[j - 1]
-                currentCapital_milli -= position['net_buy_total_milli']
+                currentCapital_milli -= position['cash_buy_total_milli']
+                accrue_fee_rebate(fee_rebate_state, position['buy_fee_rebate_receivable_milli'])
                 buyTriggered = True
                 active_extended_signal = None
             elif entry_count_as_missed_buy and collect_stats:
@@ -426,7 +445,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if entry_filled:
                 position = entry_result['position']
                 position['signal_date'] = active_extended_signal.get('signal_date')
-                currentCapital_milli -= position['net_buy_total_milli']
+                currentCapital_milli -= position['cash_buy_total_milli']
+                accrue_fee_rebate(fee_rebate_state, position['buy_fee_rebate_receivable_milli'])
                 buyTriggered = True
                 active_extended_signal = None
             elif entry_count_as_missed_buy and collect_stats:
@@ -474,7 +494,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 scanner_extended_signal = None
 
         if collect_stats:
-            currentEquity_milli = currentCapital_milli
+            currentEquity_milli = currentCapital_milli + get_fee_rebate_receivable_milli(fee_rebate_state)
             if position['qty'] > 0:
                 floating_exec_price = adjust_long_sell_fill_price(C[j], ticker=resolved_ticker)
                 floating_sell_ledger = build_sell_ledger_from_price(
@@ -485,7 +505,11 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                     security_profile=position.get('security_profile'),
                     trade_date=Dates[j],
                 )
-                currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']
+                currentEquity_milli = (
+                    currentCapital_milli
+                    + get_fee_rebate_receivable_milli(fee_rebate_state)
+                    + floating_sell_ledger['net_sell_total_milli']
+                )
 
             peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
             currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
@@ -513,6 +537,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         return_logs=return_logs,
         params=params,
         collect_stats=collect_stats,
+        fee_rebate_state=fee_rebate_state,
+        settlement_basis=SETTLEMENT_BASIS_BROKER_CASH,
     )
     currentCapital_milli = final_state['current_capital_milli']
     currentEquity_milli = final_state['current_equity_milli']

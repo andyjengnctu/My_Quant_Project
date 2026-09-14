@@ -193,7 +193,9 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
     ))
 
     def _is_valid_qty(test_qty):
-        exact_entry_cost_milli = calc_buy_net_total_milli_from_milli(buy_price_milli, test_qty, params)
+        entry_ledger = build_buy_ledger_from_price(bPrice, test_qty, params)
+        exact_entry_cost_milli = int(entry_ledger["net_buy_total_milli"])
+        exact_entry_cash_milli = int(entry_ledger["cash_buy_total_milli"])
         exact_exit_net_milli = calc_sell_net_total_milli_from_milli(
             stop_price_milli,
             test_qty,
@@ -204,8 +206,8 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
         )
         actual_risk_milli = exact_entry_cost_milli - exact_exit_net_milli
         return (
-            exact_entry_cost_milli <= cap_milli
-            and exact_entry_cost_milli <= max_position_cap_milli
+            exact_entry_cash_milli <= cap_milli
+            and exact_entry_cash_milli <= max_position_cap_milli
             and actual_risk_milli <= max_risk_milli
         )
 

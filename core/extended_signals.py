@@ -276,7 +276,7 @@ def update_extended_tbd_shadow_trade_for_bar(
     if tbd_state is None:
         return None
 
-    from core.position_step import execute_bar_step
+    from core.position_step import SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
 
     resolved_shadow_position = _resolve_shadow_position(tbd_state)
     shadow_position = clone_shadow_position(resolved_shadow_position) if copy_shadow_position else resolved_shadow_position
@@ -296,6 +296,7 @@ def update_extended_tbd_shadow_trade_for_bar(
         params,
         current_date=current_date,
         y_high=y_high,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     if int(shadow_position.get("qty", 0) or 0) <= 0:
         return None

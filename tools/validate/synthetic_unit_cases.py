@@ -22,6 +22,12 @@ from core.exact_accounting import (
     round_price_to_tick_milli,
     sync_position_display_fields,
 )
+from core.fee_rebate import (
+    accrue_fee_rebate,
+    create_fee_rebate_state,
+    get_fee_rebate_receivable_milli,
+    settle_fee_rebate,
+)
 from core.history_filters import evaluate_history_candidate_metrics
 from core.portfolio_stats import (
     build_full_month_return_stats,
@@ -33,7 +39,7 @@ from core.portfolio_stats import (
     find_sim_start_idx,
 )
 from core.portfolio_exits import closeout_open_positions
-from core.position_step import execute_bar_step
+from core.position_step import SETTLEMENT_BASIS_BROKER_CASH, SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -286,6 +292,8 @@ def validate_exact_accounting_ledger_conservation_case(_base_params):
     check("sell_ledger_gross_minus_fee_minus_tax_equals_net", sell_ledger["gross_sell_milli"] - sell_ledger["sell_fee_milli"] - sell_ledger["tax_milli"], sell_ledger["net_sell_total_milli"])
     check("entry_total_helper_matches_buy_ledger", milli_to_money(buy_ledger["net_buy_total_milli"]), calc_entry_total_cost(10.05, 3000, params), tol=1e-12)
     check("exit_total_helper_matches_sell_ledger", milli_to_money(sell_ledger["net_sell_total_milli"]), calc_exit_net_total(10.95, 3000, params), tol=1e-12)
+    check("buy_broker_cash_minus_rebate_equals_economic_cost", buy_ledger["net_buy_total_milli"], buy_ledger["cash_buy_total_milli"] - buy_ledger["buy_fee_rebate_receivable_milli"])
+    check("sell_broker_cash_plus_rebate_equals_economic_proceeds", sell_ledger["net_sell_total_milli"], sell_ledger["cash_sell_total_milli"] + sell_ledger["sell_fee_rebate_receivable_milli"])
 
     summary["buy_net_total_milli"] = buy_ledger["net_buy_total_milli"]
     return results, summary
@@ -311,6 +319,7 @@ def validate_exact_accounting_cost_basis_allocation_case(_base_params):
         t_close=109.0,
         t_volume=1000.0,
         params=params,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     tp_context = position.get("_last_exec_contexts", [])[0]
 
@@ -325,6 +334,7 @@ def validate_exact_accounting_cost_basis_allocation_case(_base_params):
         t_close=92.0,
         t_volume=1000.0,
         params=params,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     stop_context = position.get("_last_exec_contexts", [])[0]
 
@@ -397,7 +407,7 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     check("reit_sell_tax_ppm_is_exempt", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="01001T", trade_date="2026-03-02"))
     check("bond_etf_sell_tax_ppm_is_exempt_before_deadline", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2026-03-02"))
     check("bond_etf_sell_tax_ppm_reverts_after_deadline", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2027-01-02"))
-    check("etf_sell_ledger_uses_fund_tax_rate", 80350, build_sell_ledger_from_price(80.35, 1000, V16StrategyParams(), ticker="0050", trade_date="2026-03-02")["tax_milli"])
+    check("etf_sell_ledger_uses_fund_tax_rate", 80000, build_sell_ledger_from_price(80.35, 1000, V16StrategyParams(), ticker="0050", trade_date="2026-03-02")["tax_milli"])
     check("bond_etf_sell_ledger_zero_tax_before_deadline", 0, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2026-03-02")["tax_milli"])
     check("bond_etf_sell_ledger_tax_after_deadline_uses_fund_rate", 28000, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2027-01-02")["tax_milli"])
     check("reit_sell_ledger_tax_is_exempt", 0, build_sell_ledger_from_price(10.0, 1000, V16StrategyParams(), ticker="01001T", trade_date="2026-03-02")["tax_milli"])
@@ -435,6 +445,71 @@ def validate_exact_accounting_cash_risk_boundary_case(_base_params):
 
     summary["reserved_cost_milli"] = resized["reserved_cost_milli"]
     summary["resized_down_qty"] = None if resized_down is None else resized_down["qty"]
+    return results, summary
+
+
+def validate_research_fee_rebate_cash_timing_case(_base_params):
+    params = V16StrategyParams()
+    params.min_entry_notional = 0.0
+    params.fixed_risk = 1.0
+    params.max_position_cap_pct = 1.0
+    case_id = "UNIT_RESEARCH_FEE_REBATE_CASH_TIMING"
+    results, summary, check, check_true = bind_synthetic_case(case_id, 'unit_exact_accounting')
+
+    initial_cash_milli = money_to_milli(200_000.0)
+    position = build_position_from_entry_fill(
+        100.0, 1000, init_sl=90.0, init_trail=90.0, params=params, target_price=130.0, ticker="2330", trade_date="2026-01-30"
+    )
+    rebate_state = create_fee_rebate_state()
+    accrue_fee_rebate(rebate_state, position["buy_fee_rebate_receivable_milli"])
+    cash_after_buy = initial_cash_milli - position["cash_buy_total_milli"]
+    economic_equity_after_buy = cash_after_buy + get_fee_rebate_receivable_milli(rebate_state) + position["net_buy_total_milli"]
+
+    check("research_buy_cash_uses_raw_broker_fee", initial_cash_milli - position["cash_buy_total_milli"], cash_after_buy)
+    check("research_buy_rebate_is_receivable_not_cash", position["buy_fee_rebate_receivable_milli"], get_fee_rebate_receivable_milli(rebate_state))
+    check("research_buy_economic_equity_conserves_rebate", initial_cash_milli, economic_equity_after_buy)
+
+    missing_basis_rejected = False
+    try:
+        execute_bar_step(
+            copy.deepcopy(position), y_atr=1.0, y_ind_sell=True, y_close=110.0, t_open=110.0,
+            t_high=111.0, t_low=109.0, t_close=110.0, t_volume=1000.0, params=params,
+            current_date="2026-01-30", return_milli=True, fee_rebate_state=create_fee_rebate_state(),
+        )
+    except ValueError:
+        missing_basis_rejected = True
+    check("research_sell_requires_explicit_settlement_basis", True, missing_basis_rejected)
+
+    missing_rebate_state_rejected = False
+    try:
+        execute_bar_step(
+            copy.deepcopy(position), y_atr=1.0, y_ind_sell=True, y_close=110.0, t_open=110.0,
+            t_high=111.0, t_low=109.0, t_close=110.0, t_volume=1000.0, params=params,
+            current_date="2026-01-30", return_milli=True,
+            settlement_basis=SETTLEMENT_BASIS_BROKER_CASH,
+        )
+    except ValueError:
+        missing_rebate_state_rejected = True
+    check("research_broker_cash_sell_rejects_missing_rebate_state", True, missing_rebate_state_rejected)
+
+    position, freed_cash_milli, _pnl_milli, events = execute_bar_step(
+        position, y_atr=1.0, y_ind_sell=True, y_close=110.0, t_open=110.0, t_high=111.0, t_low=109.0, t_close=110.0, t_volume=1000.0,
+        params=params, current_date="2026-01-30", return_milli=True, fee_rebate_state=rebate_state,
+        settlement_basis=SETTLEMENT_BASIS_BROKER_CASH,
+    )
+    check("research_sell_executes", True, "IND_SELL" in events)
+    sell_context = position.get("_last_exec_contexts", [])[0]
+    check("research_sell_returns_broker_cash_not_economic_proceeds", int(sell_context["cash_total_milli"]), int(freed_cash_milli))
+    pre_settlement_cash = cash_after_buy + freed_cash_milli
+    pre_settlement_receivable = get_fee_rebate_receivable_milli(rebate_state)
+    economic_equity_before_settlement = pre_settlement_cash + pre_settlement_receivable
+    settled = settle_fee_rebate(rebate_state)
+    post_settlement_cash = pre_settlement_cash + settled
+    check("month_end_settlement_moves_full_receivable_to_cash", pre_settlement_receivable, settled)
+    check("month_end_settlement_clears_receivable", 0, get_fee_rebate_receivable_milli(rebate_state))
+    check("month_end_settlement_preserves_economic_equity", economic_equity_before_settlement, post_settlement_cash)
+
+    summary["rebate_settled_milli"] = settled
     return results, summary
 
 
@@ -639,6 +714,7 @@ def validate_position_management_rollforward_parity_case(_base_params):
         params=params,
         current_date=pd.Timestamp("2026-09-04"),
         y_high=completed_high,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     check("no_exit_fixture_events", [], events)
     check("no_exit_fixture_freed_cash", 0.0, freed_cash)
@@ -670,7 +746,11 @@ def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
     portfolio_position = copy.deepcopy(base_position)
     portfolio_position["last_px"] = 110.0
     initial_capital_milli = money_to_milli(params.initial_capital)
-    starting_cash_milli = initial_capital_milli - base_position["net_buy_total_milli"]
+    starting_cash_milli = initial_capital_milli - base_position["cash_buy_total_milli"]
+    single_rebate_state = create_fee_rebate_state()
+    portfolio_rebate_state = create_fee_rebate_state()
+    accrue_fee_rebate(single_rebate_state, base_position["buy_fee_rebate_receivable_milli"])
+    accrue_fee_rebate(portfolio_rebate_state, base_position["buy_fee_rebate_receivable_milli"])
 
     single_state = finalize_open_position_at_end(
         position=single_position,
@@ -690,6 +770,8 @@ def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
         trade_logs=[],
         return_logs=False,
         params=params,
+        fee_rebate_state=single_rebate_state,
+        settlement_basis=SETTLEMENT_BASIS_BROKER_CASH,
     )
     closed_trades_stats = []
     portfolio_cash_milli, normal_trade_count, extended_trade_count = closeout_open_positions(
@@ -702,6 +784,7 @@ def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
         normal_trade_count=0,
         extended_trade_count=0,
         last_date=pd.Timestamp("2025-01-03"),
+        fee_rebate_state=portfolio_rebate_state,
     )
 
     check("single_and_portfolio_closeout_final_cash_match", single_state["current_capital_milli"], portfolio_cash_milli)

@@ -10,7 +10,13 @@ from core.exact_accounting import (
     round_money_for_display,
 )
 from core.breakout_reentry import create_breakout_reentry_watch_state
-from core.position_step import execute_bar_step, first_exec_context as _first_exec_context, sum_last_exec_contexts_milli
+from core.position_step import (
+    SETTLEMENT_BASIS_BROKER_CASH,
+    execute_bar_step,
+    first_exec_context as _first_exec_context,
+    sum_last_exec_contexts_milli,
+)
+from core.fee_rebate import accrue_fee_rebate
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from services.trade_analysis.charting import record_active_levels, record_trade_marker, resolve_position_tp_half_line
 from services.trade_analysis.history_snapshot import build_pit_history_snapshot
@@ -160,12 +166,13 @@ def process_debug_position_step(
     stats_index=None,
     current_capital_before_event=None,
     overall_max_drawdown=0.0,
+    fee_rebate_state=None,
 ):
     prev_qty = position['qty']
     prev_realized = position.get('realized_pnl', 0.0)
     prev_tp_half = position.get('tp_half', np.nan)
 
-    position, _freed_cash, pnl_realized, events = execute_bar_step(
+    position, freed_cash, pnl_realized, events = execute_bar_step(
         position,
         atr_prev,
         sell_condition_prev,
@@ -176,11 +183,13 @@ def process_debug_position_step(
         t_close,
         t_volume,
         params,
+        current_date=current_date,
         y_high=high_prev,
+        fee_rebate_state=fee_rebate_state,
+        settlement_basis=SETTLEMENT_BASIS_BROKER_CASH,
     )
 
-    freed_cash_milli, pnl_realized_milli = sum_last_exec_contexts_milli(position)
-    freed_cash = milli_to_money(freed_cash_milli)
+    _economic_freed_cash_milli, pnl_realized_milli = sum_last_exec_contexts_milli(position)
     realized_delta = milli_to_money(pnl_realized_milli)
     active_stop_after_update = position.get('sl', np.nan)
     date_str = current_date.strftime('%Y-%m-%d')
@@ -201,7 +210,8 @@ def process_debug_position_step(
             qty=sold_qty,
             params=params,
         )
-        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + tp_sell_total
+        tp_cash_total = milli_to_money(int(tp_context.get('cash_total_milli', tp_context.get('net_total_milli', 0)) or 0))
+        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + tp_cash_total
         append_debug_trade_row(
             trade_logs,
             date_str=date_str,
@@ -372,6 +382,7 @@ def append_debug_forced_closeout(
     current_capital_before_event=None,
     stats_index=None,
     overall_max_drawdown=0.0,
+    fee_rebate_state=None,
 ):
     exec_sell_price = adjust_long_sell_fill_price(position['close_price'], ticker=position.get('ticker'))
     sell_net_price = calc_net_sell_price(
@@ -394,7 +405,8 @@ def append_debug_forced_closeout(
     total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0) + int(final_leg_actual_pnl_milli)
     total_pnl = milli_to_money(total_pnl_milli)
     final_leg_pnl = calc_reconciled_exit_display_pnl(position, total_pnl)
-    current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(sell_ledger['net_sell_total_milli'])
+    accrue_fee_rebate(fee_rebate_state, sell_ledger['sell_fee_rebate_receivable_milli'])
+    current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(sell_ledger['cash_sell_total_milli'])
     completed_trade_snapshot = _build_completed_trade_snapshot(
         stats_index,
         current_date,

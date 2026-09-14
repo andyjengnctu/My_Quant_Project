@@ -28,9 +28,9 @@ from core.portfolio_fast_access import (
 
 
 # # (AI註: 單一真理來源 - 浮動權益估值與延續候選的 next-day sizing 共用同一口徑)
-def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
+def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params, fee_rebate_receivable_milli=0):
     cash_template = cash
-    equity_milli = coerce_money_like_to_milli(cash)
+    equity_milli = coerce_money_like_to_milli(cash) + int(fee_rebate_receivable_milli or 0)
 
     for ticker in sorted(portfolio.keys()):
         pos = portfolio[ticker]

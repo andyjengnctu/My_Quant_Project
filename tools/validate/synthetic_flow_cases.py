@@ -5,12 +5,13 @@ import tempfile
 import pandas as pd
 
 from core.exact_accounting import build_buy_ledger_from_price, build_sell_ledger_from_price, calc_initial_risk_total_milli, rate_to_ppm
+from core.fee_rebate import create_fee_rebate_state
 from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
 from core.price_utils import calc_half_take_profit_sell_qty
 from core.trade_plans import build_normal_candidate_plan, clone_shadow_position, create_signal_tracking_state, execute_pre_market_entry_plan
-from core.position_step import execute_bar_step
+from core.position_step import SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
 
 from .checks import bind_synthetic_case, bind_checks, add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
@@ -111,6 +112,7 @@ def _run_failed_fill_no_switch_scenario(base_params, *, case_id, module_name, in
         trade_history=trade_history,
         is_training=False,
         total_missed_buys=0,
+        fee_rebate_state=create_fee_rebate_state(),
     )
 
     miss_rows = [row for row in trade_history if row.get("Ticker") == "9801" and str(row.get("Type", "")).startswith("錯失買進")]
@@ -178,6 +180,7 @@ def _run_entry_layer_outcome_case(params, *, low_on_entry_day, volume_on_entry_d
         trade_history=trade_history,
         is_training=False,
         total_missed_buys=0,
+        fee_rebate_state=create_fee_rebate_state(),
     )
     return {
         "portfolio": portfolio,
@@ -372,6 +375,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         trade_history=[],
         is_training=True,
         total_missed_buys=0,
+        fee_rebate_state=create_fee_rebate_state(),
     )
     inherited_position = buy_portfolio.get(ticker) or {}
     check("day3_portfolio_extended_fill_inherits_shadow_management_state", True, bool(inherited_position.get("inherited_shadow_management", False)))
@@ -415,6 +419,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         trade_history=display_trade_history,
         is_training=False,
         total_missed_buys=0,
+        fee_rebate_state=create_fee_rebate_state(),
     )
     display_buy_row = display_trade_history[0] if display_trade_history else {}
     check("day3_portfolio_extended_buy_history_keeps_order_limit", 100.0, None if not display_buy_row else float(display_buy_row.get("買入限價", float("nan"))))
@@ -526,6 +531,7 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
         t_volume=1000.0,
         params=params,
         y_high=109.0,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
 
     updated_stop_position, stop_freed_cash, stop_pnl_realized, stop_events = execute_bar_step(
@@ -540,6 +546,7 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
         t_volume=1000.0,
         params=params,
         y_high=100.0,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     stop_exec_context = next((ctx for ctx in updated_stop_position.get('_last_exec_contexts', []) if ctx.get('event') == 'STOP'), None)
 
@@ -753,6 +760,7 @@ def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_cas
         trade_history=trade_history,
         is_training=False,
         total_missed_buys=0,
+        fee_rebate_state=create_fee_rebate_state(),
     )
 
     position = portfolio.get(ticker)
@@ -1182,6 +1190,7 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
     check("entry_consensus_persists_all_member_params", sorted(params_by_key), sorted((aggregated.get("ensemble_member_params_by_key") or {}).keys()))
 
     portfolio = {}
+    fee_rebate_state = create_fee_rebate_state()
     cash, total_missed_buys = execute_reserved_entries_for_day(
         portfolio,
         {},
@@ -1197,6 +1206,7 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
         [],
         True,
         0,
+        fee_rebate_state=fee_rebate_state,
     )
     filled_position = portfolio.get(ticker) or {}
     check("entry_fill_exists", True, ticker in portfolio)
@@ -1220,6 +1230,7 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
         0,
         0,
         active_reentry_watchlists_by_member=watchlists_by_member,
+        fee_rebate_state=fee_rebate_state,
     )
 
     check("stop_registers_watchlist_for_every_entry_voter", sorted(params_by_key), sorted(watchlists_by_member))

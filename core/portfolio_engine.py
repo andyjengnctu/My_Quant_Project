@@ -2,6 +2,12 @@ import pandas as pd
 import time
 
 from core.exact_accounting import milli_to_money, money_to_milli
+from core.fee_rebate import (
+    create_fee_rebate_state,
+    get_fee_rebate_receivable_milli,
+    get_fee_rebate_settled_milli,
+    settle_fee_rebate,
+)
 from core.capital_policy import resolve_portfolio_sizing_equity
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.config import get_ev_calc_method
@@ -151,6 +157,8 @@ def run_portfolio_timeline(
     initial_capital = params.initial_capital
     initial_capital_milli = money_to_milli(initial_capital)
     cash = initial_capital_milli
+    fee_rebate_state = create_fee_rebate_state()
+    rebate_month_key = None
     portfolio = {}
     active_extended_signals = {}
     active_extended_signals_by_member = {}
@@ -223,6 +231,12 @@ def run_portfolio_timeline(
         t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
         today = sorted_dates[i]
+        today_rebate_month_key = (int(today.year), int(today.month))
+        if rebate_month_key is None:
+            rebate_month_key = today_rebate_month_key
+        elif today_rebate_month_key != rebate_month_key:
+            cash += settle_fee_rebate(fee_rebate_state)
+            rebate_month_key = today_rebate_month_key
         day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
         day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
         day_ensemble_min_agree = resolve_seed_ensemble_min_agree(
@@ -373,7 +387,9 @@ def run_portfolio_timeline(
         cash_money = milli_to_money(cash)
 
         if verbose and (not is_training) and ((i - start_idx) % 5 == 0):
-            exp = ((current_equity_money - cash_money) / current_equity_money) * 100 if current_equity_money > 0 else 0
+            rebate_receivable_money = milli_to_money(get_fee_rebate_receivable_milli(fee_rebate_state))
+            invested_for_display = max(0.0, current_equity_money - cash_money - rebate_receivable_money)
+            exp = (invested_for_display / current_equity_money) * 100 if current_equity_money > 0 else 0
             replay_day_number = i - start_idx + 1
             replay_elapsed = _format_replay_elapsed(time.perf_counter() - replay_progress_start)
             print(
@@ -688,6 +704,7 @@ def run_portfolio_timeline(
                         normal_trade_count=normal_trade_count,
                         extended_trade_count=extended_trade_count,
                         active_level_rows=active_level_rows,
+                        fee_rebate_state=fee_rebate_state,
                     )
                     if profile_timing_enabled:
                         rotation_sec += time.perf_counter() - t0
@@ -714,6 +731,7 @@ def run_portfolio_timeline(
                 active_level_rows=active_level_rows,
                 active_reentry_watchlist=active_reentry_watchlist if not use_param_ensemble else None,
                 active_reentry_watchlists_by_member=active_reentry_watchlists_by_member if use_param_ensemble else None,
+                fee_rebate_state=fee_rebate_state,
             )
             if profile_timing_enabled:
                 settle_sec += time.perf_counter() - t0
@@ -745,6 +763,7 @@ def run_portfolio_timeline(
                     total_missed_buys=total_missed_buys,
                     entry_stats=portfolio_entry_stats,
                     replay_execution_rows=replay_execution_rows,
+                    fee_rebate_state=fee_rebate_state,
                 )
                 if profile_timing_enabled:
                     buy_sec += time.perf_counter() - t0
@@ -781,10 +800,18 @@ def run_portfolio_timeline(
             before_trade_rows = -1
 
         t0 = time.perf_counter() if profile_timing_enabled else None
+        rebate_receivable_milli = get_fee_rebate_receivable_milli(fee_rebate_state)
         if portfolio:
-            today_equity = calc_mark_to_market_equity(cash, portfolio, day_all_dfs_fast, today, day_params)
+            today_equity = calc_mark_to_market_equity(
+                cash,
+                portfolio,
+                day_all_dfs_fast,
+                today,
+                day_params,
+                fee_rebate_receivable_milli=rebate_receivable_milli,
+            )
         else:
-            today_equity = cash
+            today_equity = cash + rebate_receivable_milli
         today_equity_money = milli_to_money(today_equity)
         cash_money = milli_to_money(cash)
         if profile_timing_enabled:
@@ -915,7 +942,8 @@ def run_portfolio_timeline(
 
         current_equity = today_equity
         current_equity_money = today_equity_money
-        invested_capital = current_equity_money - cash_money
+        rebate_receivable_money = milli_to_money(get_fee_rebate_receivable_milli(fee_rebate_state))
+        invested_capital = max(0.0, current_equity_money - cash_money - rebate_receivable_money)
         exposure_pct = (invested_capital / current_equity_money) * 100 if current_equity_money > 0 else 0
         total_exposure += exposure_pct
         if exposure_pct > max_exp:
@@ -1000,12 +1028,14 @@ def run_portfolio_timeline(
         extended_trade_count=extended_trade_count,
         last_date=last_date,
         active_level_rows=active_level_rows,
+        fee_rebate_state=fee_rebate_state,
     )
 
     if profile_timing_enabled:
         closeout_sec = time.perf_counter() - t0
 
     final_cash = today_equity
+    today_equity = int(today_equity) + get_fee_rebate_receivable_milli(fee_rebate_state)
     if last_date is not None and last_date.year in year_end_equity:
         year_end_equity[last_date.year] = milli_to_money(today_equity)
         last_month_key = (int(last_date.year), int(last_date.month))
@@ -1163,6 +1193,8 @@ def run_portfolio_timeline(
         )
 
     if profile_stats is not None:
+        profile_stats['fee_rebate_settled'] = milli_to_money(get_fee_rebate_settled_milli(fee_rebate_state))
+        profile_stats['fee_rebate_receivable_end'] = milli_to_money(get_fee_rebate_receivable_milli(fee_rebate_state))
         profile_stats['portfolio_wall_sec'] = (time.perf_counter() - t_portfolio_start) if profile_timing_enabled else 0.0
         profile_stats['portfolio_ticker_dates_sec'] = ticker_dates_sec
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec

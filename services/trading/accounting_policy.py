@@ -1,22 +1,28 @@
 """Actual-broker accounting policy for Trading account records.
 
-Research/backtest execution policy intentionally remains unchanged.  Only real
-Trading account valuation and manually/broker-confirmed fills use the broker
-fee rate and broker integer-charge semantics declared here.
+Research/backtest may apply a separate economic fee-rebate policy, while this
+module always consumes the shared raw broker settlement constants.  Real
+Trading account valuation and manually/broker-confirmed fills therefore keep
+the broker cash semantics unchanged.
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from config.execution_policy import BROKER_FEE_RATE, EXECUTION_POLICY_PARAM_SPECS
-from core.exact_accounting import CHARGE_ROUNDING_FLOOR_TWD
+from config.broker_accounting import (
+    BROKER_CHARGE_ROUNDING_MODE,
+    BROKER_FEE_RATE,
+    BROKER_MIN_FEE_TWD,
+    BROKER_STOCK_TAX_RATE,
+)
+from config.execution_policy import EXECUTION_POLICY_PARAM_SPECS
 
 TRADING_ACCOUNT_BROKER_FEE_RATE = float(BROKER_FEE_RATE)
 # User-defined broker accounting: fee = consideration * 0.001425, then discard
 # all fractional TWD.  Do not apply strategy/backtest discount or an unstated
 # minimum fee to actual account records.
-TRADING_ACCOUNT_MIN_FEE = 0.0
-TRADING_ACCOUNT_STOCK_TAX_RATE = float(EXECUTION_POLICY_PARAM_SPECS["tax_rate"]["default"])
+TRADING_ACCOUNT_MIN_FEE = float(BROKER_MIN_FEE_TWD)
+TRADING_ACCOUNT_STOCK_TAX_RATE = float(BROKER_STOCK_TAX_RATE)
 TRADING_ACCOUNT_FIXED_RISK_FALLBACK = float(EXECUTION_POLICY_PARAM_SPECS["fixed_risk"]["default"])
 
 
@@ -28,7 +34,7 @@ class _TradingAccountingParamsProxy:
         self.buy_fee = TRADING_ACCOUNT_BROKER_FEE_RATE
         self.sell_fee = TRADING_ACCOUNT_BROKER_FEE_RATE
         self.min_fee = TRADING_ACCOUNT_MIN_FEE
-        self.charge_rounding_mode = CHARGE_ROUNDING_FLOOR_TWD
+        self.charge_rounding_mode = BROKER_CHARGE_ROUNDING_MODE
 
     def __getattr__(self, name):
         return getattr(self._base, name)
@@ -51,7 +57,7 @@ def build_standalone_trading_accounting_params(*, fixed_risk=None):
             if fixed_risk is None
             else float(fixed_risk)
         ),
-        charge_rounding_mode=CHARGE_ROUNDING_FLOOR_TWD,
+        charge_rounding_mode=BROKER_CHARGE_ROUNDING_MODE,
     )
 
 

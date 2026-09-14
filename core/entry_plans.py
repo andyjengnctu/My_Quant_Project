@@ -45,16 +45,16 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
     if candidate_qty <= 0:
         return 0, 0
 
-    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["net_buy_total_milli"]
+    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["cash_buy_total_milli"]
     while candidate_qty > 0 and reserved_cost_milli > int(available_cash_milli):
         candidate_qty -= 1
         if candidate_qty <= 0:
             return 0, 0
-        reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["net_buy_total_milli"]
+        reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["cash_buy_total_milli"]
 
     while candidate_qty < int(max_qty):
         next_qty = candidate_qty + 1
-        next_cost_milli = build_buy_ledger(price_milli, next_qty, params)["net_buy_total_milli"]
+        next_cost_milli = build_buy_ledger(price_milli, next_qty, params)["cash_buy_total_milli"]
         if next_cost_milli > int(available_cash_milli):
             break
         candidate_qty = next_qty
@@ -64,7 +64,7 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
     if candidate_qty <= 0:
         return 0, 0
 
-    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["net_buy_total_milli"]
+    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["cash_buy_total_milli"]
     if reserved_cost_milli > int(available_cash_milli):
         return 0, 0
 
@@ -430,7 +430,10 @@ def build_position_from_entry_fill(
         "entry_fill_price": milli_to_price(buy_price_milli),
         "gross_buy_milli": buy_ledger["gross_buy_milli"],
         "buy_fee_milli": buy_ledger["buy_fee_milli"],
+        "broker_buy_fee_milli": buy_ledger["broker_buy_fee_milli"],
+        "buy_fee_rebate_receivable_milli": buy_ledger["buy_fee_rebate_receivable_milli"],
         "net_buy_total_milli": buy_ledger["net_buy_total_milli"],
+        "cash_buy_total_milli": buy_ledger["cash_buy_total_milli"],
         "remaining_cost_basis_milli": buy_ledger["net_buy_total_milli"],
         "sl_milli": effective_stop_milli,
         "initial_stop_milli": initial_stop_milli,
@@ -480,6 +483,8 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         "entry_day_tp_triggered": False,
         "entry_day_pending_action": None,
         "net_buy_total_milli": 0,
+        "cash_buy_total_milli": 0,
+        "buy_fee_rebate_receivable_milli": 0,
     }
     if entry_plan is None:
         return result
@@ -545,5 +550,7 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     result["entry_day_tp_triggered"] = bool(position["entry_day_tp_triggered"])
     result["entry_day_pending_action"] = position["pending_exit_action"]
     result["net_buy_total_milli"] = position["net_buy_total_milli"]
+    result["cash_buy_total_milli"] = position["cash_buy_total_milli"]
+    result["buy_fee_rebate_receivable_milli"] = position["buy_fee_rebate_receivable_milli"]
     result["entry_cost"] = milli_to_money(position["net_buy_total_milli"])
     return result

@@ -1,5 +1,11 @@
 import pandas as pd
 
+from core.fee_rebate import (
+    SETTLEMENT_BASIS_BROKER_CASH,
+    SETTLEMENT_BASIS_LEDGER_NET,
+    accrue_fee_rebate,
+    validate_fee_rebate_settlement_basis,
+)
 from core.exit_priority import resolve_stop_tp_hits
 from core.exact_accounting import (
     allocate_cost_basis_milli,
@@ -16,6 +22,7 @@ from core.price_utils import (
     calc_half_take_profit_sell_qty,
     get_exit_sell_block_reason,
 )
+
 
 
 def _reset_exec_contexts(position, *, enabled=True):
@@ -36,6 +43,8 @@ def _record_exec_context(
     deferred=False,
     trigger_price=None,
     net_total_milli=0,
+    cash_total_milli=None,
+    fee_rebate_receivable_milli=0,
     allocated_cost_milli=0,
     pnl_milli=0,
     enabled=True,
@@ -52,6 +61,8 @@ def _record_exec_context(
             'deferred': bool(deferred),
             'trigger_price': None if pd.isna(trigger_price) else float(trigger_price),
             'net_total_milli': int(net_total_milli),
+            'cash_total_milli': int(net_total_milli if cash_total_milli is None else cash_total_milli),
+            'fee_rebate_receivable_milli': int(fee_rebate_receivable_milli or 0),
             'allocated_cost_milli': int(allocated_cost_milli),
             'pnl_milli': int(pnl_milli),
         }
@@ -72,7 +83,12 @@ def sum_last_exec_contexts_milli(position):
     return freed_cash_milli, pnl_realized_milli
 
 
-def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None, record_exec_contexts=True, sync_display_fields=True):
+def sum_last_exec_context_cash_milli(position):
+    contexts = position.get('_last_exec_contexts', [])
+    return sum(int(ctx['cash_total_milli']) for ctx in contexts)
+
+
+def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None, record_exec_contexts=True, sync_display_fields=True, fee_rebate_state=None, settlement_basis=None):
     sell_ledger = build_sell_ledger_from_price(
         exec_price,
         sell_qty,
@@ -82,8 +98,15 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
         trade_date=trade_date,
     )
     allocated_cost_milli = allocate_cost_basis_milli(position['remaining_cost_basis_milli'], position['qty'], sell_qty)
-    freed_cash_milli = sell_ledger['net_sell_total_milli']
-    pnl_milli = freed_cash_milli - allocated_cost_milli
+    economic_freed_cash_milli = int(sell_ledger['net_sell_total_milli'])
+    cash_freed_milli = int(sell_ledger['cash_sell_total_milli'])
+    fee_rebate_receivable_milli = int(sell_ledger['sell_fee_rebate_receivable_milli'])
+    pnl_milli = economic_freed_cash_milli - allocated_cost_milli
+    validate_fee_rebate_settlement_basis(settlement_basis, fee_rebate_state)
+    if settlement_basis == SETTLEMENT_BASIS_BROKER_CASH:
+        accrue_fee_rebate(fee_rebate_state, fee_rebate_receivable_milli)
+    else:
+        cash_freed_milli = economic_freed_cash_milli
 
     position['realized_pnl_milli'] += pnl_milli
     position['remaining_cost_basis_milli'] -= allocated_cost_milli
@@ -95,7 +118,7 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
         sync_position_display_fields(position)
 
     if record_exec_contexts:
-        avg_net_price = calc_average_price_from_total_milli(freed_cash_milli, sell_qty)
+        avg_net_price = calc_average_price_from_total_milli(economic_freed_cash_milli, sell_qty)
         _record_exec_context(
             position,
             event=event,
@@ -105,12 +128,14 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
             pnl=milli_to_money(pnl_milli),
             deferred=deferred,
             trigger_price=trigger_price,
-            net_total_milli=freed_cash_milli,
+            net_total_milli=economic_freed_cash_milli,
+            cash_total_milli=cash_freed_milli,
+            fee_rebate_receivable_milli=fee_rebate_receivable_milli,
             allocated_cost_milli=allocated_cost_milli,
             pnl_milli=pnl_milli,
             enabled=True,
         )
-    return freed_cash_milli, pnl_milli
+    return cash_freed_milli, pnl_milli
 
 
 def _sync_trailing_stop_display_fields(position):
@@ -173,7 +198,7 @@ def rollforward_position_management_from_completed_bar(
     return position
 
 
-def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True, sync_display_fields=True):
+def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True, sync_display_fields=True, fee_rebate_state=None, settlement_basis=None):
     pending_action = position.get('pending_exit_action')
     if pending_action is None or position.get('qty', 0) <= 0:
         return False, 0, 0, []
@@ -195,6 +220,8 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
             trade_date=current_date,
             record_exec_contexts=record_exec_contexts,
             sync_display_fields=sync_display_fields,
+            fee_rebate_state=fee_rebate_state,
+            settlement_basis=settlement_basis,
         )
         position['pending_exit_action'] = None
         position['pending_exit_trigger_price'] = float('nan')
@@ -217,6 +244,8 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
             trade_date=current_date,
             record_exec_contexts=record_exec_contexts,
             sync_display_fields=sync_display_fields,
+            fee_rebate_state=fee_rebate_state,
+            settlement_basis=settlement_basis,
         )
         position['sold_half'] = True
         position['pending_exit_action'] = None
@@ -226,7 +255,8 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
     return False, 0, 0, []
 
 
-def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None, return_milli=False, record_exec_contexts=True, sync_display_fields=True):
+def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None, return_milli=False, record_exec_contexts=True, sync_display_fields=True, fee_rebate_state=None, settlement_basis=None):
+    validate_fee_rebate_settlement_basis(settlement_basis, fee_rebate_state)
     freed_cash_milli, pnl_realized_milli = 0, 0
     events = []
     _reset_exec_contexts(position, enabled=record_exec_contexts)
@@ -251,6 +281,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         current_date=current_date,
         record_exec_contexts=record_exec_contexts,
         sync_display_fields=sync_display_fields,
+        fee_rebate_state=fee_rebate_state,
+        settlement_basis=settlement_basis,
     )
     if pending_consumed:
         freed_cash_milli += pending_freed_cash_milli
@@ -275,6 +307,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 trade_date=current_date,
                 record_exec_contexts=record_exec_contexts,
                 sync_display_fields=sync_display_fields,
+                fee_rebate_state=fee_rebate_state,
+                settlement_basis=settlement_basis,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli
@@ -302,6 +336,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             trade_date=current_date,
             record_exec_contexts=record_exec_contexts,
             sync_display_fields=sync_display_fields,
+            fee_rebate_state=fee_rebate_state,
+            settlement_basis=settlement_basis,
         )
         freed_cash_milli += leg_freed_cash_milli
         pnl_realized_milli += leg_pnl_milli
@@ -324,6 +360,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 trade_date=current_date,
                 record_exec_contexts=record_exec_contexts,
                 sync_display_fields=sync_display_fields,
+                fee_rebate_state=fee_rebate_state,
+                settlement_basis=settlement_basis,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli
@@ -360,4 +398,5 @@ def execute_confirmed_position_sell_fill(
         trade_date=trade_date,
         record_exec_contexts=True,
         sync_display_fields=True,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )

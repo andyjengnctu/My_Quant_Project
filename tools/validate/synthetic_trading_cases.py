@@ -581,6 +581,8 @@ def validate_trading_account_state_contract_case(base_params):
         )
         broker = state["positions"]["2330"]["broker"]
         check("manual_trade_buy_uses_un-discounted_broker_fee", money_to_milli(142), expected_buy["buy_fee_milli"])
+        check("trading_buy_cash_ledger_equals_existing_net_ledger", expected_buy["net_buy_total_milli"], expected_buy["cash_buy_total_milli"])
+        check("trading_buy_has_no_research_rebate_receivable", 0, expected_buy["buy_fee_rebate_receivable_milli"])
         check("manual_trade_buy_deducts_holding_cost_from_cash", money_to_milli(1_000_000) - expected_buy["net_buy_total_milli"], state["cash_milli"])
         check("manual_trade_buy_tracks_gross_consideration", expected_buy["gross_buy_milli"], broker["remaining_gross_buy_milli"])
         check("manual_trade_buy_tracks_fee_separately", expected_buy["buy_fee_milli"], broker["remaining_buy_fee_milli"])
@@ -606,6 +608,8 @@ def validate_trading_account_state_contract_case(base_params):
         check("manual_trade_sell_records_gross_consideration", expected_sell["gross_sell_milli"], sell_details["gross_sell_milli"])
         check("manual_trade_sell_records_fee", expected_sell["sell_fee_milli"], sell_details["sell_fee_milli"])
         check("manual_trade_sell_records_tax", expected_sell["tax_milli"], sell_details["tax_milli"])
+        check("trading_sell_cash_ledger_equals_existing_net_ledger", expected_sell["net_sell_total_milli"], expected_sell["cash_sell_total_milli"])
+        check("trading_sell_has_no_research_rebate_receivable", 0, expected_sell["sell_fee_rebate_receivable_milli"])
         check("manual_trade_sell_pnl_formula", int(sell_details["gross_sell_milli"]) - int(sell_details["sell_fee_milli"]) - int(sell_details["tax_milli"]) - int(sell_details["allocated_cost_milli"]), int(sell_details["realized_pnl_milli"]))
         try:
             record_manual_trading_buy(

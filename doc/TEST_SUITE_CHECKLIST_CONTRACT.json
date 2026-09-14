@@ -1239,9 +1239,9 @@
       "initial_status": "NEW",
       "order": 110,
       "category": "契約 / 一致性",
-      "item": "正式帳務中的 `cash` / `pnl` / `equity` / `reserved_cost` / `risk`、partial-exit cost-basis allocation、商品別驅動的賣出交易稅與 tick/limit hit 判斷，必須收斂到整數 exact-accounting 單一真理來源；directional tick rounding、tick band lookup、商品 profile 自動辨識、漲跌停 raw-limit 對齊與賣出稅率，也必須先依 raw price、ticker/metadata 與交易日期決定方向、區間、商品別與稅率，再轉為合法 tick 價與 net sell total；不得再以含費每股價或 per-share × qty 回推正式總額，也不得先做 0.001 量化後再決定 up/down、band，或把 ETF / ETN / REIT / 債券 ETF 類誤套股票 tick ladder / 單一 stock-only 交易稅",
-      "gap": "已補 exact-accounting unit-like contract，直接釘死 ledger 守恆、partial-exit cost-basis 回沖、integer tick/limit hit、cash/risk boundary、單股/投組 closeout parity、display-derived 欄位，以及 raw-price directional tick rounding / band lookup 邊界、跨級距漲跌停 raw-limit tick-band 對齊、ETF / ETN / REIT 類商品 profile 自動辨識後的兩級 tick 規則，與依商品別 / 交易日期決定的賣出交易稅（股票 0.3%、ETF / ETN 0.1%、REIT 免稅、債券 ETF 免徵期限內 0 稅率）；並同步把正式核心 cash/pnl/equity/reserved_cost 與商品別驅動的 raw-price tick 正規化 / limit-price 對齊 / sell-tax 路徑收斂到 `core/exact_accounting.py`",
-      "entry": "`tools/validate/synthetic_unit_cases.py`, `core/exact_accounting.py`"
+      "item": "正式帳務中的 `cash` / `pnl` / `equity` / `reserved_cost` / `risk`、partial-exit cost-basis allocation、商品別驅動的賣出交易稅與 tick/limit hit 判斷，必須收斂到整數 exact-accounting 單一真理來源；broker cash settlement 與 Research economic net/rebate receivable 必須由同一 raw broker fee/tax/rounding SSOT 推導，不得把未結算 rebate 當成 spendable cash；directional tick rounding、tick band lookup、商品 profile 自動辨識、漲跌停 raw-limit 對齊與賣出稅率，也必須先依 raw price、ticker/metadata 與交易日期決定方向、區間、商品別與稅率，再轉為合法 tick 價與 net sell total。",
+      "gap": "exact-accounting contract 同時釘死 broker cash ledger、Research economic ledger/rebate receivable 守恆、partial-exit cost-basis 回沖、integer tick/limit hit、cash/risk boundary、單股/投組 closeout parity、display-derived 欄位與商品別稅率；raw fee/tax/rounding 由 `config/broker_accounting.py` 共用，Research rebate 只作 economic overlay，sell tax 一律用 broker floor-TWD settlement rounding。",
+      "entry": "`config/broker_accounting.py`, `tools/validate/synthetic_unit_cases.py`, `core/exact_accounting.py`, `core/fee_rebate.py`"
     },
     {
       "id": "B124",
@@ -1261,9 +1261,9 @@
       "initial_status": "NEW",
       "order": 112,
       "category": "契約 / 一致性",
-      "item": "單股 backtest / debug 的 `currentCapital` 必須固定代表可用現金；任何半倉、全倉與期末結算都只能加回 `net sell total`，`currentEquity` 必須以 `cash + 當前可變現淨值` 計；不得再沿用 `+ realized pnl` 或 `cash + floating pnl` 的舊路徑，否則會讓單股與投組 trade_count / asset_growth / completed-trade PnL 分叉",
-      "gap": "已補 static meta contract，直接掃描 `core/backtest_core.py`、`core/backtest_finalize.py`、`services/trade_analysis/backtest.py` 與 `services/trade_analysis/exit_flow.py`，釘死單股 / debug 現金更新必須使用 freed cash / net sell total，mark-to-market equity 必須使用 net liquidation value；避免 exact-accounting 遷移後把 `currentCapital` 誤當 accumulated pnl",
-      "entry": "`tools/validate/synthetic_meta_cases.py`, `core/backtest_core.py`"
+      "item": "單股 backtest / debug 的 `currentCapital` 必須固定代表可用 broker cash；任何半倉、全倉與期末結算都只能加回 broker `cash sell total`，Research 未結算 fee-rebate receivable 不得進入 sizing / affordability；`currentEquity` 則必須以 `cash + rebate receivable + 當前 economic liquidation value` 計，月界線 settlement 只在 cash 與 receivable 間移轉且不得改變 equity。",
+      "gap": "static/meta 與 functional contract 釘死單股 / debug 現金更新使用 broker cash totals、economic equity 納入 receivable、月界線 settlement equity-neutral；避免把 rebate 提前拿來下單，並維持 Research 最終 effective-fee 經濟績效口徑。",
+      "entry": "`tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_unit_cases.py`, `core/backtest_core.py`, `core/backtest_finalize.py`, `core/fee_rebate.py`"
     },
     {
       "id": "B126",
@@ -1272,9 +1272,9 @@
       "initial_status": "NEW",
       "order": 113,
       "category": "Meta / 契約",
-      "item": "debug backtest / GUI 重播現金路徑時，買進當下也必須扣除實際 `net buy total`，且凡 entry flow 或 preview builder 新增 `ticker` / `security_profile` / `trade_date` 等商品 profile / 日期感知 keyword 參數時，必須同步更新 callee 函式簽名與 caller 傳遞；不得只在賣出時更新 `current_capital`，也不得只改 caller 造成 `unexpected keyword argument` 或商品 profile / 交易日期傳遞中斷，否則會讓 debug trade log sizing、completed-trade PnL sequence 與核心單股回測分叉",
-      "gap": "已補 static meta contract，直接掃描 `services/trade_analysis/backtest.py` 與 `services/trade_analysis/entry_flow.py`，釘死 debug entry flow 必須回傳 `spent_cash` 並由主流程扣減 `current_capital`，且當 caller 傳入 `ticker` / `security_profile` / `trade_date` 時，callee 簽名與 normal / extended entry builder、買訊預覽與 latest raw / extended preview 呼叫也必須同步接收並傳遞；避免重播路徑只補賣出現金、漏扣買進現金或讓 GUI 預覽仍走缺 profile 的舊路徑",
-      "entry": "`tools/validate/synthetic_meta_cases.py`, `services/trade_analysis/backtest.py`, `services/trade_analysis/entry_flow.py`"
+      "item": "debug backtest / GUI 重播的 `currentCapital` 買進必須扣 broker `cash buy total`、賣出必須加 broker `cash sell total`；Research economic `net buy/sell total` 只供成本基礎/PnL/display，fee rebate 需透過 receivable state 於月界線才轉為 cash。凡 entry flow/preview builder 新增 ticker/security_profile/trade_date 等參數時仍必須同步 caller/callee。",
+      "gap": "static meta contract 釘死 debug entry flow 同時保留 economic entry display、以 broker cash total 回傳 `spent_cash`、accrue fee-rebate receivable，主流程傳入 fee state 並於跨月 settlement；既有 ticker/security_profile/trade_date 傳遞契約維持。",
+      "entry": "`tools/validate/synthetic_meta_cases.py`, `services/trade_analysis/backtest.py`, `services/trade_analysis/entry_flow.py`, `core/fee_rebate.py`"
     },
     {
       "id": "B127",
@@ -4518,6 +4518,17 @@
       "entry": "`core/portfolio_ensemble.py`, `core/extended_signals.py`, `core/trading_order_state.py`, `services/trading/live_reentry.py`, `services/trading/daily_workflow.py`, `services/trading/order_planning.py`, `services/trading/entry_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/market_data_consumer.py`, `services/trading/market_data_update.py`, `tools/validate/synthetic_unit_cases.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 407
+    },
+    {
+      "id": "B420",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Research / Trading accounting SSOT / fee rebate cash timing",
+      "item": "Research 與 Trading 必須共用 raw broker settlement fee/tax/rounding SSOT；Research 的手續費回饋只能作為 economic rebate receivable，未到月界線 settlement 前不得成為可下單現金；Trading 既有 broker-aligned per-trade accounting 數字不得因 Research rebate policy 改變。",
+      "gap": "Raw broker fee rate、stock tax 與 charge rounding 已抽到 `config/broker_accounting.py`；`core/exact_accounting.py` 同時輸出 broker cash ledger 與 Research economic ledger/rebate receivable。Research affordability/sizing/cash movement 改讀 broker cash total，PnL/cost basis 保留 economic net total，receivable 只計入 economic equity 並於跨月時轉回 spendable cash；Trading raw fee path 維持 cash==net、rebate==0。",
+      "entry": "`config/broker_accounting.py`, `config/execution_policy.py`, `services/trading/accounting_policy.py`, `core/exact_accounting.py`, `core/fee_rebate.py`, `core/backtest_core.py`, `core/portfolio_engine.py`, `tools/validate/synthetic_unit_cases.py`, `tools/validate/synthetic_trading_cases.py`",
+      "initial_status": "NEW",
+      "order": 408
     }
   ],
   "tests": [
@@ -8315,6 +8326,13 @@
       "description": "validate_trading_live_reentry_broker_truth_contract_case 鎖定 broker-confirmed full STOP truth、original agreeing-voter frozen Params lineage、canonical finalist re-agreement、historical hypothetical re-entry 排除與 V2 re-entry ticker continuity。",
       "initial_status": "NEW",
       "order": 533
+    },
+    {
+      "id": "T544",
+      "b_id": "B420",
+      "description": "validate_research_fee_rebate_cash_timing_case 鎖定 Research broker-cash / economic-net / rebate-receivable 守恆、未結算 rebate 不可下單與月界線 settlement equity-neutral；Trading accounting contract 另鎖定 cash==net、rebate==0。",
+      "initial_status": "NEW",
+      "order": 534
     }
   ],
   "transitions": [
@@ -26701,6 +26719,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "Only confirmed full STOP may seed live re-entry; original entry voters and min-agree are immutable lineage."
+    },
+    {
+      "date": "2026-09-15",
+      "id": "B420",
+      "description": "Close shared broker settlement SSOT and Research month-boundary fee-rebate cash timing contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Trading broker-aligned transaction accounting remains numerically unchanged; Research keeps effective economic fee while rebate is non-spendable until settlement."
+    },
+    {
+      "date": "2026-09-15",
+      "id": "T544",
+      "description": "Register Research fee-rebate cash-timing and Trading broker-cash parity regression.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Locks broker cash/economic net/rebate conservation and month-boundary settlement semantics."
     }
   ]
 }

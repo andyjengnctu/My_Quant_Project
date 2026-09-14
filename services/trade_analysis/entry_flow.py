@@ -8,6 +8,7 @@ from core.extended_signals import (
     should_clear_extended_signal,
 )
 from core.exact_accounting import calc_entry_total_cost, milli_to_money, round_money_for_display
+from core.fee_rebate import accrue_fee_rebate
 from services.trade_analysis.charting import record_active_levels, record_shadow_active_levels, record_limit_order, record_trade_marker
 from services.trade_analysis.log_rows import append_debug_trade_row, get_debug_tp_half_price
 
@@ -156,6 +157,7 @@ def process_debug_entry_for_day(
     security_profile=None,
     trade_date=None,
     signal_date=None,
+    fee_rebate_state=None,
 ):
     buy_triggered = False
     spent_cash = 0.0
@@ -210,7 +212,9 @@ def process_debug_entry_for_day(
             position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
-            spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
+            economic_entry_total = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
+            spent_cash = milli_to_money(int(position['cash_buy_total_milli']))
+            accrue_fee_rebate(fee_rebate_state, position['buy_fee_rebate_receivable_milli'])
             reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
@@ -219,7 +223,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
-                gross_amount=spent_cash,
+                gross_amount=economic_entry_total,
                 stop_price=_resolve_entry_display_stop_price(position),
                 tp_half_price=_resolve_entry_display_tp_half_price(position, qty=entry_plan['qty'], params=params),
                 atr_prev=atr_prev,
@@ -321,7 +325,9 @@ def process_debug_entry_for_day(
             position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
-            spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
+            economic_entry_total = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
+            spent_cash = milli_to_money(int(position['cash_buy_total_milli']))
+            accrue_fee_rebate(fee_rebate_state, position['buy_fee_rebate_receivable_milli'])
             reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
@@ -330,7 +336,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
-                gross_amount=spent_cash,
+                gross_amount=economic_entry_total,
                 stop_price=_resolve_entry_display_stop_price(position),
                 tp_half_price=_resolve_entry_display_tp_half_price(position, qty=entry_plan['qty'], params=params),
                 atr_prev=atr_prev,

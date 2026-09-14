@@ -26,7 +26,7 @@ from core.extended_signals import (
     create_signal_tracking_state,
     should_clear_extended_signal,
 )
-from core.position_step import execute_bar_step
+from core.position_step import SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from filters.breakout_quality.artifacts import compute_file_sha256
@@ -498,6 +498,7 @@ def simulate_realized_trade_path_label(
                 return_milli=True,
                 record_exec_contexts=True,
                 sync_display_fields=False,
+                settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
             )
             terminal_events = [value for value in ("STOP", "IND_SELL") if value in events]
             if terminal_events:
@@ -649,6 +650,7 @@ def simulate_realized_trade_path_label(
         return_logs=False,
         params=params,
         collect_stats=False,
+        settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
     realized_pnl = final_state.get("final_trade_pnl")
     realized_r = final_state.get("final_trade_r_mult")

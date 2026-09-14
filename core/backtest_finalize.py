@@ -1,4 +1,11 @@
 from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money
+from core.fee_rebate import (
+    SETTLEMENT_BASIS_BROKER_CASH,
+    SETTLEMENT_BASIS_LEDGER_NET,
+    accrue_fee_rebate,
+    get_fee_rebate_receivable_milli,
+    validate_fee_rebate_settlement_basis,
+)
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -37,11 +44,16 @@ def finalize_open_position_at_end(
     params,
     ticker=None,
     collect_stats=True,
+    fee_rebate_state=None,
+    settlement_basis=None,
 ):
+    validate_fee_rebate_settlement_basis(settlement_basis, fee_rebate_state)
     end_position_qty = position['qty']
     had_open_position_at_end = end_position_qty > 0
 
     if not had_open_position_at_end:
+        if fee_rebate_state is not None:
+            current_equity_milli = current_capital_milli + get_fee_rebate_receivable_milli(fee_rebate_state)
         return {
             'position': position,
             'current_capital_milli': current_capital_milli,
@@ -107,8 +119,13 @@ def finalize_open_position_at_end(
             total_loss_milli += abs(total_pnl_milli)
             total_r_loss += abs(trade_r_mult)
 
-    current_capital_milli += sell_ledger['net_sell_total_milli']
-    current_equity_milli = current_capital_milli
+    if settlement_basis == SETTLEMENT_BASIS_BROKER_CASH:
+        current_capital_milli += sell_ledger['cash_sell_total_milli']
+        accrue_fee_rebate(fee_rebate_state, sell_ledger['sell_fee_rebate_receivable_milli'])
+        current_equity_milli = current_capital_milli + get_fee_rebate_receivable_milli(fee_rebate_state)
+    else:
+        current_capital_milli += sell_ledger['net_sell_total_milli']
+        current_equity_milli = current_capital_milli
     if collect_stats:
         peak_capital_milli = max(peak_capital_milli, current_equity_milli)
         current_drawdown_pct = ((peak_capital_milli - current_equity_milli) / peak_capital_milli) * 100 if peak_capital_milli > 0 else 0.0
