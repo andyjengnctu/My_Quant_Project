@@ -2653,6 +2653,178 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             tamper_blocked = False
         check("dataset_state_fingerprint_blocks_manual_tamper", True, tamper_blocked)
 
+    # Readiness and provider scheduling are intentionally independent.  Exact
+    # target-date feeds fail closed when the target row is missing; roll-forward
+    # periodic/event feeds remain usable while preserving their later scheduled
+    # provider check.
+    from core.market_data_dataset_readiness import is_market_data_dataset_ready
+
+    with TemporaryDirectory() as roll_forward_periodic_temp_dir:
+        periodic_root = Path(roll_forward_periodic_temp_dir)
+        periodic_state = record_market_data_sync_success(
+            periodic_root,
+            target_date="2026-09-07",
+            finished_at=datetime(2026, 9, 8, 2, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockMonthRevenue": {
+                    "row_count": 1,
+                    "observed_min_date": "2026-09-01",
+                    "observed_max_date": "2026-09-01",
+                }
+            },
+            attempted_datasets={"TaiwanStockMonthRevenue"},
+        )
+        periodic_contract = by_dataset["TaiwanStockMonthRevenue"]
+        periodic_before = plan_market_data_due_datasets(
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 8, 23, 30, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=periodic_state,
+            contracts=(periodic_contract,),
+        ).decisions[0]
+        check(
+            "periodic_old_latest_remains_ready_before_scheduled_probe",
+            ("READY", False, "2026-09-09T01:45:00+08:00"),
+            (periodic_before.status, periodic_before.due, periodic_before.next_check_at),
+        )
+        periodic_early = record_market_data_sync_success(
+            periodic_root,
+            target_date="2026-09-08",
+            finished_at=datetime(2026, 9, 8, 23, 31, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockMonthRevenue": {
+                    "row_count": 1,
+                    "observed_min_date": "2026-09-01",
+                    "observed_max_date": "2026-09-01",
+                }
+            },
+            attempted_datasets={"TaiwanStockMonthRevenue"},
+            count_publication_retry=False,
+        )
+        periodic_early_row = periodic_early["datasets"]["TaiwanStockMonthRevenue"]
+        check(
+            "periodic_early_manual_probe_keeps_data_ready_and_future_check",
+            ("READY", "2026-09-01", "2026-09-09T01:45:00+08:00"),
+            (periodic_early_row["status"], periodic_early_row["latest_data_date"], periodic_early_row["next_check_at"]),
+        )
+        periodic_due = plan_market_data_due_datasets(
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 9, 1, 46, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=periodic_early,
+            contracts=(periodic_contract,),
+        ).decisions[0]
+        check(
+            "periodic_ready_data_still_becomes_probe_due_at_expected_window",
+            ("READY", True),
+            (periodic_due.status, periodic_due.due),
+        )
+        periodic_post = record_market_data_sync_success(
+            periodic_root,
+            target_date="2026-09-08",
+            finished_at=datetime(2026, 9, 9, 1, 46, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockMonthRevenue": {
+                    "row_count": 1,
+                    "observed_min_date": "2026-09-01",
+                    "observed_max_date": "2026-09-01",
+                }
+            },
+            attempted_datasets={"TaiwanStockMonthRevenue"},
+        )
+        periodic_post_decision = plan_market_data_due_datasets(
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 9, 1, 47, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=periodic_post,
+            contracts=(periodic_contract,),
+        ).decisions[0]
+        check(
+            "periodic_post_window_no_change_satisfies_probe_without_staling_data",
+            ("READY", False, None),
+            (periodic_post_decision.status, periodic_post_decision.due, periodic_post_decision.next_check_at),
+        )
+
+    with TemporaryDirectory() as roll_forward_event_temp_dir:
+        event_root = Path(roll_forward_event_temp_dir)
+        event_state = record_market_data_sync_success(
+            event_root,
+            target_date="2026-09-07",
+            finished_at=datetime(2026, 9, 7, 23, 50, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={"TaiwanStockDelisting": {"row_count": 0}},
+            attempted_datasets={"TaiwanStockDelisting"},
+        )
+        event_early = record_market_data_sync_success(
+            event_root,
+            target_date="2026-09-08",
+            finished_at=datetime(2026, 9, 8, 22, 30, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={"TaiwanStockDelisting": {"row_count": 0}},
+            attempted_datasets={"TaiwanStockDelisting"},
+            count_publication_retry=False,
+        )
+        event_row = event_early["datasets"]["TaiwanStockDelisting"]
+        event_decision = plan_market_data_due_datasets(
+            target_date="2026-09-08",
+            now=datetime(2026, 9, 8, 22, 31, tzinfo=ZoneInfo("Asia/Taipei")),
+            state=event_early,
+            contracts=(by_dataset["TaiwanStockDelisting"],),
+        ).decisions[0]
+        check(
+            "event_no_change_early_probe_stays_ready_but_keeps_scheduled_check",
+            ("READY", None, "2026-09-08T23:45:00+08:00", False),
+            (event_row["status"], event_row["latest_data_date"], event_decision.next_check_at, event_decision.due),
+        )
+
+    with TemporaryDirectory() as target_required_temp_dir:
+        target_root = Path(target_required_temp_dir)
+        target_state = record_market_data_sync_success(
+            target_root,
+            target_date="2026-09-07",
+            finished_at=datetime(2026, 9, 7, 23, 50, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockMarketValue": {
+                    "row_count": 1,
+                    "request_count": 1,
+                    "nonempty_request_count": 1,
+                    "target_covering_request_count": 1,
+                    "target_fresh_request_count": 1,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+            },
+            attempted_datasets={"TaiwanStockMarketValue"},
+        )
+        target_early = record_market_data_sync_success(
+            target_root,
+            target_date="2026-09-08",
+            finished_at=datetime(2026, 9, 8, 22, 30, tzinfo=ZoneInfo("Asia/Taipei")),
+            observations={
+                "TaiwanStockMarketValue": {
+                    "row_count": 1,
+                    "request_count": 1,
+                    "nonempty_request_count": 1,
+                    "target_covering_request_count": 1,
+                    "target_fresh_request_count": 0,
+                    "observed_min_date": "2026-09-07",
+                    "observed_max_date": "2026-09-07",
+                }
+            },
+            attempted_datasets={"TaiwanStockMarketValue"},
+            count_publication_retry=False,
+        )
+        target_row = target_early["datasets"]["TaiwanStockMarketValue"]
+        check(
+            "target_required_early_probe_without_target_row_remains_not_ready",
+            ("WAIT_PUBLISH", "2026-09-07", "2026-09-08T23:45:00+08:00", False),
+            (
+                target_row["status"],
+                target_row["last_ready_target_date"],
+                target_row["next_check_at"],
+                is_market_data_dataset_ready(
+                    target_row,
+                    target_date="2026-09-08",
+                    contract=by_dataset["TaiwanStockMarketValue"],
+                ),
+            ),
+        )
+
     with TemporaryDirectory() as force_validation_temp_dir:
         force_validation_root = Path(force_validation_temp_dir)
         prior_ready_state = record_market_data_sync_success(
@@ -3696,6 +3868,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("smart_downloader_does_not_report_missing_stockinfo_as_zero_broad_reference", True, "StockInfo in fresh batch" in downloader_source and "NOT_IN_BATCH" in downloader_source)
     check("smart_downloader_displays_execution_pool_at_common_ready_horizon", True, "Trading safe horizon" in downloader_source and "safe_date = min(target_date, str(horizon.training_through_date))" in downloader_source)
     check("smart_downloader_labels_target_freshness_without_claiming_archive_completeness", True, "Target freshness READY" in downloader_source and "Archive datasets READY" not in downloader_source)
+    check("smart_downloader_pending_table_labels_provider_attempt_as_last_check", True, "最後檢查時間" in downloader_source and 'row.get("last_attempt_at")' in downloader_source)
     check("smart_downloader_labels_market_date_target_advance_without_claiming_completed_day", True, "V2 target 推進" in downloader_source and "新 completed day" not in downloader_source)
     check("smart_downloader_displays_dynamic_request_window_policy_source", True, "Window start policy" in downloader_source and "request_date_start_sources" in auto_update_source and '"request_mode"' in v2_sync_source)
     check("smart_downloader_uses_shared_console_color_contract", True, "console_color_enabled" in downloader_source and "C_GREEN" in downloader_source and "C_YELLOW" in downloader_source and "C_RED" in downloader_source)
@@ -3709,6 +3882,13 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "resolve_trading_market_data_update_target_date as _resolve_target_date" in auto_update_source and "find_latest_ready_provider_snapshot" in state_source and "load_market_date_discovery_state" in state_source)
     check("v2_failure_state_remains_owned_by_v2_sync_path", True, "publish_trading_market_data_v2_state(" in v2_sync_source and '"last_error": error' in v2_sync_source)
     check("workbench_exposes_v2_archive_status", True, "V2 Archive" in data_ops_panel_source)
+    check(
+        "workbench_dataset_table_labels_provider_attempt_as_last_check",
+        True,
+        "Last Check" in data_ops_panel_source
+        and 'row.get("last_attempt_at")' in data_ops_panel_source
+        and "Last Success" not in data_ops_panel_source,
+    )
     check("scanner_snapshot_exposes_sidecar_without_replacing_market_ready", True, "market_data_v2_archive_status" in scanner_source and '"market_data_ready": market_ready' in scanner_source)
     check("scanner_runtime_uses_canonical_trading_data_readiness_gate", True, "assert_trading_data_readiness" in scanner_source and "build_trading_data_readiness_for_consumer_evidence" in scanner_source)
     check("operations_status_uses_strategy_data_readiness_not_aggregate_v2_synced", True, "trading_data_ready" in operations_source and "overall_v2_ready" not in operations_source)

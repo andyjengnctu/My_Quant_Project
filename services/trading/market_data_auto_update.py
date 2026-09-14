@@ -29,6 +29,7 @@ from core.trading_policy import get_trading_strategy_profile
 from core.market_data_freshness_contract import (
     FRESHNESS_STATUS_READY,
     FRESHNESS_STATUS_WAIT_PUBLISH,
+    get_market_data_freshness_contracts,
 )
 from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_auto_update_lock_path
 from services.downloader.finmind_http import FinMindHttpClient, FinMindHttpError
@@ -133,10 +134,15 @@ def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
     from core.market_data_dataset_registry import get_market_dataset_display_name_zh
 
     rows = dict((state or {}).get("datasets") or {})
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
     total = len(rows)
     archive_ready = sum(
-        is_market_data_dataset_ready(dict(row or {}), target_date=target_date)
-        for row in rows.values()
+        is_market_data_dataset_ready(
+            dict(row or {}),
+            target_date=target_date,
+            contract=contracts.get(str(dataset)),
+        )
+        for dataset, row in rows.items()
     )
     schema_ready = 0
     coverage_ready = 0
@@ -158,13 +164,21 @@ def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
     dependency = get_trading_data_dependency_spec(strategy_id)
     required = tuple(dependency.required_v2_datasets)
     required_ready = sum(
-        is_market_data_dataset_ready(dict(rows.get(dataset) or {}), target_date=target_date)
+        is_market_data_dataset_ready(
+            dict(rows.get(dataset) or {}),
+            target_date=target_date,
+            contract=contracts.get(dataset),
+        )
         for dataset in required
     )
     blocking_required = tuple(
         dataset
         for dataset in required
-        if not is_market_data_dataset_ready(dict(rows.get(dataset) or {}), target_date=target_date)
+        if not is_market_data_dataset_ready(
+            dict(rows.get(dataset) or {}),
+            target_date=target_date,
+            contract=contracts.get(dataset),
+        )
     )
     archive_incomplete = tuple(
         {
@@ -172,6 +186,7 @@ def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
             "display_name_zh": get_market_dataset_display_name_zh(dataset),
             "status": str(dict(rows.get(dataset) or {}).get("status") or "UNKNOWN"),
             "latest_data_date": dict(rows.get(dataset) or {}).get("latest_data_date"),
+            "last_attempt_at": dict(rows.get(dataset) or {}).get("last_attempt_at"),
             "last_success_at": dict(rows.get(dataset) or {}).get("last_success_at"),
             "expected_publish_at": dict(rows.get(dataset) or {}).get("expected_publish_at"),
             "next_check_at": dict(rows.get(dataset) or {}).get("next_check_at"),
@@ -180,7 +195,11 @@ def _dataset_readiness_summary(state, *, target_date: str) -> dict[str, object]:
             "last_error": dict(rows.get(dataset) or {}).get("last_error"),
         }
         for dataset in sorted(rows)
-        if not is_market_data_dataset_ready(dict(rows.get(dataset) or {}), target_date=target_date)
+        if not is_market_data_dataset_ready(
+            dict(rows.get(dataset) or {}),
+            target_date=target_date,
+            contract=contracts.get(dataset),
+        )
     )
     return {
         "archive_ready_dataset_count": int(archive_ready),
@@ -530,7 +549,7 @@ def run_trading_market_data_auto_update(
         wait_publish = {
             dataset
             for dataset in completed
-            if str(dict(rows.get(dataset) or {}).get("status") or "") == FRESHNESS_STATUS_WAIT_PUBLISH
+            if str(dict(rows.get(dataset) or {}).get("last_attempt_result") or "") == FRESHNESS_STATUS_WAIT_PUBLISH
         }
         if wait_publish and not force_refresh_current_target:
             schedule_market_data_auto_update_outcomes(

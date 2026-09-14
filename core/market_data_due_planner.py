@@ -13,7 +13,10 @@ from typing import Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
-from core.market_data_dataset_readiness import is_market_data_dataset_ready
+from core.market_data_dataset_readiness import (
+    is_market_data_dataset_ready,
+    market_data_contract_requires_target_freshness,
+)
 from core.market_data_freshness_contract import (
     EXPECTED_DATE_LATEST_AVAILABLE,
     FRESHNESS_STATUS_BLOCKED,
@@ -117,6 +120,32 @@ def _expected_date(
     return target_date
 
 
+def _state_datetime(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return normalize_market_data_planner_now(datetime.fromisoformat(text))
+    except ValueError:
+        return None
+
+
+def _scheduled_probe_satisfied(
+    item: Mapping[str, object],
+    *,
+    target_date: str,
+    expected_publish: datetime,
+) -> bool:
+    """Whether the target's scheduler observation happened in its due window."""
+
+    if str(item.get("last_attempt_target_date") or "").strip() != str(target_date):
+        return False
+    if str(item.get("last_attempt_result") or "").strip() != "SUCCESS":
+        return False
+    observed_at = _state_datetime(item.get("last_success_at") or item.get("last_attempt_at"))
+    return bool(observed_at is not None and observed_at >= expected_publish)
+
+
 def plan_market_data_due_datasets(
     *,
     target_date: str,
@@ -124,7 +153,13 @@ def plan_market_data_due_datasets(
     state: Mapping[str, object] | None = None,
     contracts: Iterable[MarketDataFreshnessContract] | None = None,
 ) -> MarketDataDuePlan:
-    """Return a provider-free due plan for one Trading target date."""
+    """Return a provider-free due plan for one Trading target date.
+
+    Dataset usability and provider scheduling are separate contracts. Exact
+    target-date feeds stop being due once current-target freshness is READY.
+    Roll-forward feeds may remain READY while still carrying a scheduled probe
+    obligation at their publication window.
+    """
 
     target_text = _iso_date(target_date, field="target_date")
     local_now = normalize_market_data_planner_now(now)
@@ -136,10 +171,18 @@ def plan_market_data_due_datasets(
         row = dynamic.get(contract.dataset)
         item = row if isinstance(row, Mapping) else {}
         expected_publish = resolve_market_data_expected_publish_at(contract, target_date=target_text)
-        ready_target = str(item.get("last_ready_target_date") or "").strip()
         latest_expected = _expected_date(contract, target_text, item)
+        target_required = market_data_contract_requires_target_freshness(contract)
+        data_ready = is_market_data_dataset_ready(
+            item,
+            target_date=target_text,
+            contract=contract,
+        )
 
-        if is_market_data_dataset_ready(item, target_date=target_text):
+        # Exact target-date feeds have no independent probe obligation after
+        # current-target freshness is proven; the data evidence itself is the
+        # scheduler completion evidence.
+        if data_ready and target_required:
             decisions.append(
                 MarketDataDueDecision(
                     dataset=contract.dataset,
@@ -153,9 +196,100 @@ def plan_market_data_due_datasets(
             )
             continue
 
-        persisted_next = str(item.get("next_check_at") or "").strip()
-        persisted_status = str(item.get("status") or "").strip()
         attempt_target = str(item.get("last_attempt_target_date") or "").strip()
+        last_attempt_result = str(item.get("last_attempt_result") or "").strip()
+        persisted_status = str(item.get("status") or "").strip()
+        persisted_next = str(item.get("next_check_at") or "").strip()
+
+        # Roll-forward feeds remain usable across targets, but a successful
+        # provider observation before the documented/estimated publication
+        # window does not consume that target's scheduled check.
+        if data_ready and not target_required:
+            if _scheduled_probe_satisfied(
+                item,
+                target_date=target_text,
+                expected_publish=expected_publish,
+            ):
+                decisions.append(
+                    MarketDataDueDecision(
+                        dataset=contract.dataset,
+                        status=FRESHNESS_STATUS_READY,
+                        due=False,
+                        expected_publish_at=expected_publish.isoformat(),
+                        latest_expected_date=latest_expected,
+                        next_check_at=None,
+                        reason="roll_forward_scheduled_probe_satisfied",
+                    )
+                )
+                continue
+
+            if attempt_target == target_text and last_attempt_result in {
+                FRESHNESS_STATUS_WAIT_PUBLISH,
+                FRESHNESS_STATUS_WAIT_QUOTA,
+                FRESHNESS_STATUS_ERROR,
+            } and persisted_next:
+                retry_at = _state_datetime(persisted_next) or expected_publish
+                if local_now < retry_at:
+                    decisions.append(
+                        MarketDataDueDecision(
+                            dataset=contract.dataset,
+                            status=FRESHNESS_STATUS_READY,
+                            due=False,
+                            expected_publish_at=expected_publish.isoformat(),
+                            latest_expected_date=latest_expected,
+                            next_check_at=retry_at.isoformat(),
+                            reason="roll_forward_retry_not_due",
+                        )
+                    )
+                    continue
+
+            if attempt_target == target_text and last_attempt_result in {
+                FRESHNESS_STATUS_STALE,
+                FRESHNESS_STATUS_BLOCKED,
+            }:
+                decisions.append(
+                    MarketDataDueDecision(
+                        dataset=contract.dataset,
+                        status=FRESHNESS_STATUS_READY,
+                        due=False,
+                        expected_publish_at=expected_publish.isoformat(),
+                        latest_expected_date=latest_expected,
+                        next_check_at=None,
+                        reason="roll_forward_probe_terminal_data_still_ready",
+                    )
+                )
+                continue
+
+            if local_now < expected_publish:
+                decisions.append(
+                    MarketDataDueDecision(
+                        dataset=contract.dataset,
+                        status=FRESHNESS_STATUS_READY,
+                        due=False,
+                        expected_publish_at=expected_publish.isoformat(),
+                        latest_expected_date=latest_expected,
+                        next_check_at=expected_publish.isoformat(),
+                        reason="roll_forward_ready_before_scheduled_probe",
+                    )
+                )
+                continue
+
+            decisions.append(
+                MarketDataDueDecision(
+                    dataset=contract.dataset,
+                    status=FRESHNESS_STATUS_READY,
+                    due=True,
+                    expected_publish_at=expected_publish.isoformat(),
+                    latest_expected_date=latest_expected,
+                    next_check_at=local_now.isoformat(),
+                    reason="roll_forward_scheduled_probe_due",
+                )
+            )
+            continue
+
+        # Non-ready target-date feeds retain the existing bounded publication
+        # retry lifecycle.  A roll-forward feed reaches this branch only before
+        # it has any current validated usable state.
         if attempt_target == target_text and persisted_status in {FRESHNESS_STATUS_STALE, FRESHNESS_STATUS_BLOCKED}:
             decisions.append(
                 MarketDataDueDecision(
@@ -179,11 +313,7 @@ def plan_market_data_due_datasets(
             }
             and persisted_next
         ):
-            try:
-                retry_at = datetime.fromisoformat(persisted_next)
-                retry_at = normalize_market_data_planner_now(retry_at)
-            except ValueError:
-                retry_at = expected_publish
+            retry_at = _state_datetime(persisted_next) or expected_publish
             if local_now < retry_at:
                 decisions.append(
                     MarketDataDueDecision(

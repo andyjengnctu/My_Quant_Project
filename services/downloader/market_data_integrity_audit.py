@@ -24,6 +24,7 @@ from core.market_data_dataset_registry import (
     get_market_dataset_specs,
     resolve_market_dataset_row_identity,
 )
+from core.market_data_freshness_contract import get_market_data_freshness_contracts
 from core.market_data_integrity_contract import (
     AUTHORITATIVE_TRADING_CALENDAR_DATASET,
     STOCK_MARKET_ACTIVITY_ANCHOR_DATASETS,
@@ -308,6 +309,7 @@ def _dataset_validation_summary(project_root: Path, *, fallback_target_date: str
     expected = {spec.dataset for spec in specs}
     state = load_market_data_dataset_state(project_root, required=False)
     rows = dict((state or {}).get("datasets") or {})
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
     actual = set(rows)
     missing = sorted(expected - actual)
     unexpected = sorted(actual - expected)
@@ -328,7 +330,11 @@ def _dataset_validation_summary(project_root: Path, *, fallback_target_date: str
                 schema_valid += 1
             if str(row.get("coverage_status") or "") in VALID_DATASET_VALIDATION_STATUSES:
                 coverage_valid += 1
-        if is_market_data_dataset_ready(row, target_date=str(target_date)):
+        if is_market_data_dataset_ready(
+            row,
+            target_date=str(target_date),
+            contract=contracts.get(dataset),
+        ):
             ready += 1
     total = len(expected)
     state_contract_status = "PASS" if (

@@ -9,7 +9,10 @@ from typing import Any
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.market_data_dataset_readiness import is_market_data_dataset_ready
-from core.market_data_freshness_contract import build_market_data_freshness_contract_summary
+from core.market_data_freshness_contract import (
+    build_market_data_freshness_contract_summary,
+    get_market_data_freshness_contracts,
+)
 from services.market_data.provider_snapshot_repository import (
     find_latest_ready_provider_snapshot,
     find_ready_provider_snapshot_by_fingerprint,
@@ -136,10 +139,15 @@ def publish_trading_market_data_v2_auto_rollup(
 
     dataset_state = load_market_data_dataset_state(project_root, required=False)
     rows = dict((dataset_state or {}).get("datasets") or {})
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
     ready = [
         dataset
         for dataset, raw in rows.items()
-        if is_market_data_dataset_ready(dict(raw or {}), target_date=str(target_date))
+        if is_market_data_dataset_ready(
+            dict(raw or {}),
+            target_date=str(target_date),
+            contract=contracts.get(str(dataset)),
+        )
     ]
     total = len(rows)
     all_ready = bool(total and len(ready) == total)

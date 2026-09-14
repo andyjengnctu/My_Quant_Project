@@ -26,6 +26,7 @@ from core.market_data_freshness_contract import (
     EXPECTED_DATE_TRADING_TARGET,
     FRESHNESS_STATUS_NOT_APPLICABLE,
     FRESHNESS_STATUS_READY,
+    get_market_data_freshness_contracts,
 )
 from services.trading.data_readiness import build_trading_data_readiness
 from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
@@ -189,11 +190,16 @@ def build_market_data_ops_read_model(
         status = str(row.get("projected_status") or row.get("status") or "UNKNOWN")
         status_counts[status] = status_counts.get(status, 0) + 1
 
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
     ready_count = sum(
         1
         for row in rows
         if update_target_date is not None
-        and is_market_data_dataset_ready(row, target_date=str(update_target_date))
+        and is_market_data_dataset_ready(
+            row,
+            target_date=str(update_target_date),
+            contract=contracts.get(str(row.get("dataset") or "")),
+        )
     )
     due_count = sum(bool(row.get("due")) for row in rows)
     dataset_next_check_at = _earliest_iso(row.get("next_check_at") for row in rows)

@@ -14,8 +14,9 @@ from core.market_data_dataset_readiness import (
     MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
     VALID_DATASET_VALIDATION_STATUSES,
     is_market_data_dataset_ready,
+    market_data_contract_requires_target_freshness,
 )
-from core.market_data_freshness_contract import FRESHNESS_STATUS_READY
+from core.market_data_freshness_contract import FRESHNESS_STATUS_READY, get_market_data_freshness_contract
 from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_policy import get_trading_strategy_profile
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
@@ -33,6 +34,7 @@ def _evaluate_v2_dependency(
     dynamic: Mapping[str, object] | None,
 ) -> dict[str, Any]:
     row = dict(dynamic or {})
+    contract = get_market_data_freshness_contract(dataset)
     status = str(row.get("status") or "MISSING")
     ready_target = str(row.get("last_ready_target_date") or "") or None
     schema_status = str(row.get("schema_status") or "UNKNOWN")
@@ -44,15 +46,25 @@ def _evaluate_v2_dependency(
     if dynamic is None:
         reasons.append("dataset operational state 尚未建立")
     else:
-        if not ready_target or (target_date and ready_target < target_date):
-            reasons.append(f"last_ready_target_date={ready_target or '-'} 未達 target={target_date or '-'}")
+        if not ready_target:
+            reasons.append("last_ready_target_date=-")
+        elif (
+            target_date
+            and market_data_contract_requires_target_freshness(contract)
+            and ready_target < target_date
+        ):
+            reasons.append(f"last_ready_target_date={ready_target} 未達 target={target_date}")
         if status != FRESHNESS_STATUS_READY:
             reasons.append(f"status={status}")
         if schema_status not in _VALID_REQUIRED_VALIDATION_STATUSES:
             reasons.append(f"schema={schema_status}")
         if coverage_status not in _VALID_REQUIRED_VALIDATION_STATUSES:
             reasons.append(f"coverage={coverage_status}")
-        if not is_market_data_dataset_ready(row, target_date=str(target_date or "")):
+        if not is_market_data_dataset_ready(
+            row,
+            target_date=str(target_date or ""),
+            contract=contract,
+        ):
             if validation_contract_version is None:
                 reasons.append("validation_contract=missing")
             elif not any(text.startswith("validation_contract=") for text in reasons):

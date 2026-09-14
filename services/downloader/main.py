@@ -241,7 +241,7 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
                 row.get("display_name_zh") or "-",
                 _paint(status_text, _status_color(status_text)),
                 row.get("latest_data_date") or "-",
-                _format_local_datetime(row.get("last_success_at")),
+                _format_local_datetime(row.get("last_attempt_at") or row.get("last_success_at")),
                 _format_local_datetime(row.get("expected_publish_at")),
                 _format_local_datetime(row.get("next_check_at")),
                 _paint(schema_text, _status_color(schema_text)),
@@ -251,7 +251,7 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             if reason:
                 reason_groups.setdefault(reason, []).append(str(row.get("dataset") or "-"))
         _print_console_table(
-            ("Dataset", "中文名稱", "Status", "最新資料日", "最後成功時間", "預期可查時間", "下次檢查時間", "Schema", "Coverage"),
+            ("Dataset", "中文名稱", "Status", "最新資料日", "最後檢查時間", "預期可查時間", "下次檢查時間", "Schema", "Coverage"),
             tuple(table_rows),
         )
         if reason_groups:
