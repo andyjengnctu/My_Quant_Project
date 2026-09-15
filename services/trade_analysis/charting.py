@@ -185,10 +185,14 @@ def _coerce_positive_overlay_period(value):
 
 
 def resolve_chart_price_overlay_specs(*, params=None, overlay_specs=None):
-    if overlay_specs:
-        raw_specs = list(overlay_specs)
+    # The GUI "均線" toggle controls visibility only; the chart payload must
+    # always carry the canonical default overlays so a redraw can show them
+    # without rerunning the backtest.  An explicit empty overlay list still
+    # means "no overlays" for callers that intentionally disable them.
+    if overlay_specs is None:
+        raw_specs = list(CHART_DEFAULT_PRICE_OVERLAY_SPECS)
     else:
-        raw_specs = []
+        raw_specs = list(overlay_specs)
 
     resolved_specs = []
     seen_labels = set()

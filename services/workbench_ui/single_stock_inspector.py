@@ -78,7 +78,6 @@ from services.trading.strategy_param_runtime import (
 from services.workbench_ui.workbench import (
     WorkbenchConsoleWriter,
     WorkbenchInspectorSharedMixin,
-    build_workbench_chart_overlay_checkbutton,
     build_workbench_scrollable_sidebar,
     grid_workbench_selected_ohlcv_labels,
     resolve_workbench_capital_display_mode_for_snapshot,
@@ -702,8 +701,13 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._holdings_combo.bind("<<ComboboxSelected>>", self._on_holding_selected)
 
         volume_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        self._price_ma_check = ttk.Checkbutton(
+            volume_group, text="均線", variable=self._show_price_ma_var,
+            command=self._rerender_current_chart, style="Workbench.TCheckbutton",
+        )
+        self._price_ma_check.pack(side="left", padx=(0, 8), pady=uniform_pady)
         self._show_volume_check = ttk.Checkbutton(
-            volume_group, text="顯示成交量", variable=self._show_volume_var,
+            volume_group, text="成交量", variable=self._show_volume_var,
             command=self._rerender_current_chart, style="Workbench.TCheckbutton",
         )
         self._show_volume_check.pack(side="left", pady=uniform_pady)
@@ -748,13 +752,6 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             font=("Microsoft JhengHei", 12),
         )
         self._chart_placeholder.pack(fill="both", expand=True)
-        self._price_ma_check = build_workbench_chart_overlay_checkbutton(
-            self._chart_canvas_host,
-            text="顯示均線",
-            variable=self._show_price_ma_var,
-            command=self._rerender_current_chart,
-        )
-
         sidebar_outer, sidebar = build_workbench_scrollable_sidebar(
             chart_tab,
             width=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH,
@@ -2306,7 +2303,6 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             canvas_widget = canvas.get_tk_widget()
             canvas_widget.configure(background="#02050a", highlightthickness=0, bd=0, takefocus=1)
             canvas_widget.pack(fill="both", expand=True)
-            self._price_ma_check.lift()
             canvas_widget.focus_set()
         except Exception as exc:
             self._clear_embedded_chart()
@@ -2341,7 +2337,6 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._current_chart_trade_cursor_index = None
         if not self._chart_placeholder.winfo_ismapped():
             self._chart_placeholder.pack(fill="both", expand=True)
-        self._price_ma_check.lift()
 
     def _open_excel(self):
         self._open_result_path("excel_path")

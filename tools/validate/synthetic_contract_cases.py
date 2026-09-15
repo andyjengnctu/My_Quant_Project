@@ -49,6 +49,7 @@ from services.trade_analysis.charting import (
     create_matplotlib_trade_chart_figure,
     get_matplotlib_cjk_font_candidates,
     record_signal_annotation,
+    resolve_chart_price_overlay_specs,
     set_chart_status_box,
     set_chart_summary_box,
 )
@@ -1951,12 +1952,22 @@ def validate_gui_embedded_chart_contract_case(base_params):
     outlier_ranges = compute_visible_value_ranges(outlier_payload, start_idx=outlier_window_start, end_idx=outlier_window_end)
     check("gui_embedded_chart_offscreen_outlier_ignored", base_outlier_ranges["price_max"], outlier_ranges["price_max"])
 
+    default_overlay_specs = resolve_chart_price_overlay_specs()
+    check("gui_embedded_chart_default_ma_overlay_labels", ["MA20", "MA60", "MA120"], [str(spec.get("label")) for spec in default_overlay_specs])
+    check("gui_embedded_chart_payload_carries_default_ma_lines", ["MA20", "MA60", "MA120"], list(dict(chart_payload.get("price_ma_lines") or {}).keys()))
+
     figure = create_matplotlib_trade_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=False)
     contract = getattr(figure, "_stock_chart_contract", {})
     check("gui_embedded_chart_figure_axes_count_without_volume", 1, len(figure.axes))
     check("gui_embedded_chart_contract_volume_hidden", False, contract.get("volume_visible"))
     check("gui_embedded_chart_contract_default_view_preserved", True, contract.get("default_view", {}).get("end_idx", -1) >= contract.get("default_view", {}).get("start_idx", 0))
     figure.clear()
+
+    figure_with_ma = create_matplotlib_trade_chart_figure(chart_payload=chart_payload, ticker=ticker, show_price_ma=True, show_volume=False)
+    contract_with_ma = getattr(figure_with_ma, "_stock_chart_contract", {})
+    check("gui_embedded_chart_contract_ma_visible", True, contract_with_ma.get("price_ma_visible"))
+    check("gui_embedded_chart_contract_ma_labels", ["MA20", "MA60", "MA120"], contract_with_ma.get("price_ma_labels"))
+    figure_with_ma.clear()
 
     figure_with_volume = create_matplotlib_trade_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=True)
     contract_with_volume = getattr(figure_with_volume, "_stock_chart_contract", {})
