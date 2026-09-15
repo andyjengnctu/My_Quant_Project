@@ -846,7 +846,7 @@ class TradingAccountPanel(ttk.Frame):
             default_sort_key="rank",
             empty_text="目前沒有 Scanner 候選",
             on_select=self._on_candidate_selected,
-            on_open_stock=self._open_ticker_in_inspector,
+            on_open_stock=self._open_candidate_ticker_in_inspector,
             on_mousewheel=self._on_page_mousewheel,
             on_pointer_enter=lambda _event: self._show_footer_hint(SCANNER_HINT),
             on_pointer_leave=lambda _event: self._schedule_footer_hint_clear(),
@@ -1903,7 +1903,7 @@ class TradingAccountPanel(ttk.Frame):
         ticker = str((row or {}).get("ticker") or "").strip().upper()
         self._trade_ticker_var.set(ticker)
 
-    def _open_ticker_in_inspector(self, ticker):
+    def _open_ticker_in_inspector(self, ticker, *, candidate_row=None):
         ticker = str(ticker or "").strip().upper()
         if not ticker:
             return
@@ -1911,7 +1911,17 @@ class TradingAccountPanel(ttk.Frame):
         if not callable(callback):
             messagebox.showerror("單股回測檢視", "Workbench 尚未提供單股回測導覽。", parent=self)
             return
-        callback(ticker, runtime_domain="trading", auto_run=True)
+        callback(
+            ticker,
+            runtime_domain="trading",
+            auto_run=True,
+            candidate_row=dict(candidate_row or {}),
+        )
+
+    def _open_candidate_ticker_in_inspector(self, ticker):
+        ticker = str(ticker or "").strip().upper()
+        candidate_row = dict(getattr(self, "_candidate_by_ticker", {}).get(ticker) or {})
+        self._open_ticker_in_inspector(ticker, candidate_row=candidate_row)
 
     def _open_selected_candidate_in_inspector(self, _event=None):
         ticker = self._selected_candidate_ticker()

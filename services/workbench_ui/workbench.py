@@ -868,7 +868,9 @@ class StockToolsWorkbench:
         else:
             self._request_panel_load(panel_id)
 
-    def open_single_stock_inspector(self, ticker, *, runtime_domain="trading", auto_run=True):
+    def open_single_stock_inspector(
+        self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None
+    ):
         ticker_text = str(ticker or "").strip().upper()
         if not ticker_text:
             return
@@ -877,6 +879,7 @@ class StockToolsWorkbench:
             "ticker": ticker_text,
             "runtime_domain": str(runtime_domain or "trading"),
             "auto_run": bool(auto_run),
+            "candidate_row": dict(candidate_row or {}),
         }
         host = self._panel_hosts.get(panel_id)
         if host is None:
@@ -900,6 +903,7 @@ class StockToolsWorkbench:
             request["ticker"],
             runtime_domain=request["runtime_domain"],
             auto_run=bool(request["auto_run"]),
+            candidate_row=dict(request.get("candidate_row") or {}),
         )
 
     def run(self):

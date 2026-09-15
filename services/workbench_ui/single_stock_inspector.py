@@ -545,7 +545,15 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
         self._candidate_scan_button = ttk.Button(controls_bar, text="計算候選股", command=self._run_scanner, style="Workbench.TButton")
         self._candidate_scan_button.grid(row=0, column=4, padx=(0, 8), pady=uniform_pady, sticky="w")
-        self._candidate_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
+        self._candidate_combo = ttk.Combobox(
+            controls_bar,
+            state="readonly",
+            width=22,
+            textvariable=self._candidate_display_var,
+            style="Workbench.TCombobox",
+            values=[],
+            postcommand=self._refresh_candidate_options_on_open,
+        )
         self._autosize_combobox(self._candidate_combo, values=[], current_text=self._candidate_display_var.get(), rule_key="candidate")
         self._candidate_combo.grid(row=0, column=5, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
@@ -992,7 +1000,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._ticker_var.set(ticker)
             self.after_idle(self._run_analysis)
 
-    def _load_current_trading_candidate_pool(self):
+    def _refresh_candidate_options_on_open(self):
+        if self._runtime_domain_key() == "trading":
+            self._load_current_trading_candidate_pool(sync_ticker=False)
+
+    def _load_current_trading_candidate_pool(self, *, sync_ticker=False):
         try:
             payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=True)
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
@@ -1001,9 +1013,13 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
             return
         rows = list(payload.get("candidate_rows") or [])
-        self._apply_trading_candidate_rows(rows, latest_data_date=payload.get("latest_data_date"))
+        self._apply_trading_candidate_rows(
+            rows,
+            latest_data_date=payload.get("latest_data_date"),
+            sync_ticker=sync_ticker,
+        )
 
-    def _apply_trading_candidate_rows(self, rows, *, latest_data_date=None):
+    def _apply_trading_candidate_rows(self, rows, *, latest_data_date=None, sync_ticker=True):
         self._trading_candidate_rows_by_ticker = {
             str(row.get("ticker") or "").strip().upper(): dict(row) for row in list(rows or [])
             if str(row.get("ticker") or "").strip()
@@ -1015,6 +1031,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             mapping=self._candidate_map,
             display_values=display_values,
             rule_key="candidate",
+            sync_ticker=sync_ticker,
         )
         self._apply_scanner_pool_rows(rows)
         self._scanner_info_var.set(
@@ -1064,15 +1081,23 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._ticker_var.set(ticker)
             self.after_idle(self._run_analysis)
 
-    def open_ticker(self, ticker, *, runtime_domain="trading", auto_run=True):
+    def open_ticker(
+        self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None
+    ):
         domain = "Trading" if str(runtime_domain or "").strip().lower() == "trading" else "Research"
+        ticker_text = str(ticker or "").strip().upper()
         self._runtime_domain_var.set(domain)
         self._apply_runtime_domain_controls()
-        self._ticker_var.set(str(ticker or "").strip().upper())
-        if domain == "Trading":
-            self._refresh_holdings_options()
-            self._load_current_trading_candidate_pool()
-        if auto_run and self._ticker_var.get().strip():
+        self._ticker_var.set(ticker_text)
+        if domain == "Trading" and ticker_text and candidate_row:
+            row = dict(candidate_row)
+            row_ticker = str(row.get("ticker") or "").strip().upper()
+            if row_ticker == ticker_text:
+                self._trading_candidate_rows_by_ticker[ticker_text] = row
+        # Cross-panel navigation must be immediate.  Holdings and candidate-pool
+        # dropdowns are auxiliary controls and load lazily when the user opens
+        # them; they must not block navigation or overwrite the requested ticker.
+        if auto_run and ticker_text:
             self.after_idle(self._run_analysis)
 
     def _on_reduced_stock_selected(self, _event=None):
@@ -1225,13 +1250,16 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             trade_count_text = "-" if probe_trade_count is None else str(probe_trade_count)
         return f"{ticker}|{kind_label}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
 
-    def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values, rule_key):
+    def _apply_scan_dropdown(
+        self, *, combo, value_var, mapping, display_values, rule_key, sync_ticker=True
+    ):
         mapping.clear()
         combo.configure(values=display_values)
         if display_values:
             value_var.set(display_values[0])
             mapping.update({label: label.split("|", 1)[0].strip() for label in display_values})
-            self._ticker_var.set(mapping[display_values[0]])
+            if sync_ticker:
+                self._ticker_var.set(mapping[display_values[0]])
             self._autosize_combobox(combo, values=display_values, current_text=display_values[0], rule_key=rule_key)
             return
         value_var.set("")

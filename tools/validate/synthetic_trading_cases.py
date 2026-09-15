@@ -3049,7 +3049,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_constructor_defers_state_reads_until_after_paint", True, "self.after(80, self._start_initial_state_load)" in panel_source and "self.refresh_account()\n        self.refresh_candidate_snapshot_rows()" not in panel_source.split("def __init__", 1)[1].split("def _set_initial_loading_state", 1)[0])
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_center_exposes_scanner_and_buy_entry", True, all(text in panel_source for text in ("今日 Scanner Pool", "買入成交登錄", "登錄買入成交", "BUY_ENTRY_HINT")))
-    check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", ticker', "def _on_position_tree_click", "on_open_stock=self._open_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
+    check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in panel_source.split('trade_box = ttk.LabelFrame(content, text="買入成交登錄', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0])
     check("workbench_trading_center_keeps_position_decisions_without_duplicate_account_dashboard", True, "text=\"持股決策\"" in panel_source and "for accounting_section in (header, cash_box, form, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box = ttk.LabelFrame' not in panel_source)
@@ -3112,8 +3112,60 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_scanner_pool_uses_take_profit_reference_qty_cost_without_summary", True, 'TableColumn("target_price", "停利線"' in candidate_static_schema and 'TableColumn("proj_qty", "參考股數"' in candidate_static_schema and 'TableColumn("proj_cost", "參考投入"' in candidate_static_schema and 'Scanner 摘要' not in scanner_schema and candidate_static_schema.index('"停利線"') < candidate_static_schema.index('"參考股數"') < candidate_static_schema.index('"參考投入"'))
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
+    workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
     check("workbench_single_stock_exposes_trading_holdings_and_scanner_pool", True, all(text in inspector_source for text in ("持有股", "Scanner Pool", "get_trading_account_read_model")))
+    open_ticker_body = inspector_source.split("def open_ticker", 1)[1].split("def ", 1)[0]
+    check("workbench_single_stock_cross_panel_navigation_does_not_sync_refresh_auxiliary_lists", False, "_refresh_holdings_options()" in open_ticker_body or "_load_current_trading_candidate_pool()" in open_ticker_body)
+    check("workbench_single_stock_candidate_dropdown_lazy_loads_trading_pool", True, "postcommand=self._refresh_candidate_options_on_open" in inspector_source and "sync_ticker=False" in inspector_source)
+    check("workbench_cross_panel_navigation_preserves_candidate_row_to_inspector", True, all(token in workbench_source for token in ('"candidate_row": dict(candidate_row or {})', 'candidate_row=dict(request.get("candidate_row") or {})')) and "on_open_stock=self._open_candidate_ticker_in_inspector" in panel_source and "candidate_row=dict(candidate_row or {})" in panel_source)
+
+    from services.workbench_ui.single_stock_inspector import SingleStockBacktestInspectorPanel
+    class _Var:
+        def __init__(self, value=""):
+            self.value = value
+        def set(self, value):
+            self.value = value
+        def get(self):
+            return self.value
+    queued = []
+    navigation_panel = SimpleNamespace(
+        _runtime_domain_var=_Var("Research"),
+        _ticker_var=_Var("00938"),
+        _trading_candidate_rows_by_ticker={},
+        _apply_runtime_domain_controls=lambda: None,
+        after_idle=lambda callback: queued.append(callback),
+        _run_analysis=lambda: None,
+    )
+    SingleStockBacktestInspectorPanel.open_ticker(
+        navigation_panel,
+        "2455",
+        runtime_domain="trading",
+        auto_run=True,
+        candidate_row={"ticker": "2455", "kind": "extended_tbd"},
+    )
+    check("workbench_single_stock_link_keeps_requested_row_ticker", "2455", navigation_panel._ticker_var.get())
+    check("workbench_single_stock_link_keeps_requested_candidate_frozen_context", "2455", navigation_panel._trading_candidate_rows_by_ticker.get("2455", {}).get("ticker"))
+    check("workbench_single_stock_link_schedules_analysis_without_auxiliary_refresh", 1, len(queued))
+
+    dropdown_ticker_var = _Var("2455")
+    dropdown_value_var = _Var("")
+    dropdown_mapping = {}
+    dropdown_combo = SimpleNamespace(configure=lambda **_kwargs: None)
+    dropdown_panel = SimpleNamespace(
+        _ticker_var=dropdown_ticker_var,
+        _autosize_combobox=lambda *_args, **_kwargs: None,
+    )
+    SingleStockBacktestInspectorPanel._apply_scan_dropdown(
+        dropdown_panel,
+        combo=dropdown_combo,
+        value_var=dropdown_value_var,
+        mapping=dropdown_mapping,
+        display_values=["00938|延續|超限幅 0.00%|勝率 0.0%|次 1", "2455|延續|超限幅 0.00%|勝率 31.0%|次 29"],
+        rule_key="candidate",
+        sync_ticker=False,
+    )
+    check("workbench_lazy_candidate_dropdown_does_not_overwrite_opened_ticker", "2455", dropdown_ticker_var.get())
 
     # AI: Exercise persisted read-model reload without creating a Tk window.
     persisted_rows, persisted_status = [], []
