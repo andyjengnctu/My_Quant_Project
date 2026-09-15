@@ -1332,14 +1332,17 @@ CHART_INFO_FIELD_SPECS = {
 }
 
 CHART_INFO_BOX_SCHEMAS = {
-    "買訊": ("capital", "qty", "limit_price", "reserved_capital"),
-    "買進": ("capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type"),
-    "錯失買進": ("capital", "qty", "limit_price", "reserved_capital", "entry_type"),
-    "賣訊": ("capital", "qty", "reference_close"),
-    "停利": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct"),
-    "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
-    "指標賣出": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
-    "強制結算": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
+    # 右側 sidebar 已固定顯示 OHLCV、停利／限價／成交／停損、預留／實支，
+    # 歷史績效摘要亦已顯示勝率／交易次數／最大回撤。資訊框只保留
+    # 該交易事件本身仍有辨識價值、且 sidebar 不重複的欄位，縮小遮擋面積。
+    "買訊": ("qty",),
+    "買進": ("qty", "entry_type"),
+    "錯失買進": ("qty", "entry_type"),
+    "賣訊": ("qty",),
+    "停利": ("qty", "sell_capital", "pnl", "pnl_pct"),
+    "停損": ("qty", "sell_capital", "pnl", "pnl_pct"),
+    "指標賣出": ("qty", "sell_capital", "pnl", "pnl_pct"),
+    "強制結算": ("qty", "sell_capital", "pnl", "pnl_pct"),
 }
 
 
@@ -1403,7 +1406,12 @@ def _build_chart_info_box_text(title, meta, *, marker=None):
     if not schema:
         return str(title or "")
     lines = [normalized_title]
-    lines.extend(_format_chart_info_field(field_key, meta, marker=marker) for field_key in schema)
+    for field_key in schema:
+        spec = CHART_INFO_FIELD_SPECS[field_key]
+        value = _first_present_info_value(meta, spec["keys"], marker=marker)
+        if _is_missing_info_value(value):
+            continue
+        lines.append(_format_chart_info_field(field_key, meta, marker=marker))
     return "\n".join(lines)
 
 
@@ -1512,12 +1520,13 @@ def _compute_dynamic_linewidths(axis_price, figure):
     return body_px * pt_scale, wick_px * pt_scale
 
 
-def _build_visible_candle_obstacle_bboxes(axis_price, chart_payload):
+def _build_visible_candle_obstacle_bboxes(axis_price, chart_payload, *, pad_x_px=3.0, pad_y_px=3.0):
     """Return display-space bboxes for currently visible candlesticks.
 
     The obstacle covers each candle's full high-low wick and its current rendered
-    body width. Annotation layout can then move info boxes just far enough to
-    reveal the K-line while keeping the arrow anchored to the original trade.
+    body width plus a small pixel safety margin. Annotation layout can then move
+    info boxes just far enough to reveal the K-line while keeping the arrow
+    anchored to the original trade.
     """
 
     from matplotlib.transforms import Bbox
@@ -1551,14 +1560,109 @@ def _build_visible_candle_obstacle_bboxes(axis_price, chart_payload):
 
     body_width_pt, _ = _compute_dynamic_linewidths(axis_price, axis_price.figure)
     body_width_px = max(float(body_width_pt) * float(axis_price.figure.dpi) / 72.0, 1.0)
-    half_width_px = body_width_px / 2.0
+    half_width_px = body_width_px / 2.0 + float(pad_x_px)
 
     obstacles = []
     for low_point, high_point in zip(low_points, high_points):
         x_px = float(low_point[0])
-        y0 = min(float(low_point[1]), float(high_point[1]))
-        y1 = max(float(low_point[1]), float(high_point[1]))
+        y0 = min(float(low_point[1]), float(high_point[1])) - float(pad_y_px)
+        y1 = max(float(low_point[1]), float(high_point[1])) + float(pad_y_px)
         obstacles.append(Bbox.from_extents(x_px - half_width_px, y0, x_px + half_width_px, y1))
+    return obstacles
+
+
+def _build_visible_trade_line_obstacle_bboxes(axis_price, chart_payload, *, pad_px=4.0):
+    """Return display-space obstacle bboxes for visible Trading price-line segments.
+
+    Stop / target / entry / limit lines use ``step(..., where='mid')``.  Build
+    narrow pixel bboxes for each visible horizontal segment plus its vertical
+    transition so annotation boxes cannot cover the actual execution geometry.
+    Shadow lines and the latest future-preview segments follow the same rule.
+    """
+
+    from matplotlib.transforms import Bbox
+
+    x_values = np.asarray(chart_payload.get("x", []), dtype=float)
+    if x_values.size == 0:
+        return []
+
+    shadow_entry = _mask_entry_line_when_same_as_limit_for_render(
+        chart_payload.get("shadow_entry_line", []),
+        chart_payload.get("shadow_limit_line", []),
+    )
+    entry = _mask_entry_line_when_same_as_limit_for_render(
+        chart_payload.get("entry_line", []),
+        chart_payload.get("limit_line", []),
+    )
+    line_arrays = (
+        chart_payload.get("shadow_stop_line", []),
+        chart_payload.get("shadow_tp_line", []),
+        shadow_entry,
+        chart_payload.get("shadow_limit_line", []),
+        chart_payload.get("stop_line", []),
+        chart_payload.get("tp_line", []),
+        entry,
+        chart_payload.get("limit_line", []),
+    )
+
+    left, right = axis_price.get_xlim()
+    visible_left = min(float(left), float(right))
+    visible_right = max(float(left), float(right))
+    obstacles = []
+
+    def _segment_bbox(x0, y0, x1, y1):
+        if not (np.isfinite(x0) and np.isfinite(y0) and np.isfinite(x1) and np.isfinite(y1)):
+            return None
+        points = axis_price.transData.transform(np.asarray([[x0, y0], [x1, y1]], dtype=float))
+        px0, py0 = map(float, points[0])
+        px1, py1 = map(float, points[1])
+        pad = float(pad_px)
+        return Bbox.from_extents(min(px0, px1) - pad, min(py0, py1) - pad, max(px0, px1) + pad, max(py0, py1) + pad)
+
+    total_points = int(len(x_values))
+    for values in line_arrays:
+        arr = np.asarray(values, dtype=float)
+        if arr.size == 0:
+            continue
+        n = min(total_points, int(arr.size))
+        if n <= 0:
+            continue
+        start_idx = max(0, int(np.floor(visible_left)) - 1)
+        end_idx = min(n - 1, int(np.ceil(visible_right)) + 1)
+        for idx in range(start_idx, end_idx + 1):
+            y_value = float(arr[idx])
+            if not np.isfinite(y_value):
+                continue
+            x_center = float(x_values[idx])
+            x0 = max(visible_left, x_center - 0.5)
+            x1 = min(visible_right, x_center + 0.5)
+            if x1 >= x0:
+                bbox = _segment_bbox(x0, y_value, x1, y_value)
+                if bbox is not None:
+                    obstacles.append(bbox)
+            if idx < n - 1 and idx + 1 < len(x_values):
+                next_y = float(arr[idx + 1])
+                if np.isfinite(next_y) and abs(next_y - y_value) > 1e-12:
+                    mid_x = (float(x_values[idx]) + float(x_values[idx + 1])) / 2.0
+                    if visible_left <= mid_x <= visible_right:
+                        bbox = _segment_bbox(mid_x, y_value, mid_x, next_y)
+                        if bbox is not None:
+                            obstacles.append(bbox)
+
+    preview = dict(chart_payload.get("future_preview") or {})
+    if preview:
+        last_x = float(len(x_values) - 1)
+        preview_x0 = last_x + 0.55
+        preview_x1 = last_x + 1.55
+        for key in ("tp_half_price", "limit_price", "entry_price", "stop_price"):
+            value = preview.get(key)
+            if value is None or pd.isna(value):
+                continue
+            if preview_x1 < visible_left or preview_x0 > visible_right:
+                continue
+            bbox = _segment_bbox(max(preview_x0, visible_left), float(value), min(preview_x1, visible_right), float(value))
+            if bbox is not None:
+                obstacles.append(bbox)
     return obstacles
 
 
@@ -1592,57 +1696,100 @@ def _annotation_base_bbox(artist, renderer, *, dpi):
     )
 
 
-def _choose_annotation_vertical_shift(base_bbox, *, placement, occupied_bboxes, axes_bbox, margin_px=6.0, gap_px=7.0):
-    """Choose the nearest non-overlapping vertical position.
+def _choose_annotation_shift(base_bbox, *, placement, occupied_bboxes, axes_bbox, margin_px=6.0, gap_px=7.0):
+    """Choose the nearest clear annotation offset.
 
-    Distance is the primary objective. ``placement`` is only a tie-breaker, so
-    an annotation is never pushed a long way toward the top/bottom merely to
-    preserve its original above/below preference.
+    Vertical motion is always tried first.  Only when no in-bounds vertical
+    solution exists do we allow the smallest horizontal fallback.  This keeps
+    boxes visually attached to their trade while prioritizing the hard rule:
+    do not cover other boxes, visible candles, or Trading price-line segments.
     """
-    candidate_shifts = {0.0}
+
+    candidate_y = {0.0}
     for occupied in occupied_bboxes:
         if float(base_bbox.x0) >= float(occupied.x1) + 4.0 or float(base_bbox.x1) <= float(occupied.x0) - 4.0:
             continue
-        # These are the exact minimum shifts needed to clear this occupied box.
-        candidate_shifts.add(float(occupied.y1) + float(gap_px) - float(base_bbox.y0))
-        candidate_shifts.add(float(occupied.y0) - float(gap_px) - float(base_bbox.y1))
+        candidate_y.add(float(occupied.y1) + float(gap_px) - float(base_bbox.y0))
+        candidate_y.add(float(occupied.y0) - float(gap_px) - float(base_bbox.y1))
 
     preferred_positive = str(placement) != "below"
-    ordered = sorted(
-        candidate_shifts,
+    ordered_y = sorted(
+        candidate_y,
         key=lambda shift: (
             abs(float(shift)),
             0 if (float(shift) >= -1e-9 if preferred_positive else float(shift) <= 1e-9) else 1,
         ),
     )
-    in_bounds = []
-    for shift in ordered:
-        shifted = base_bbox.translated(0.0, float(shift))
+    in_bounds_vertical = []
+    for shift_y in ordered_y:
+        shifted = base_bbox.translated(0.0, float(shift_y))
         if float(shifted.y0) < float(axes_bbox.y0) + float(margin_px):
             continue
         if float(shifted.y1) > float(axes_bbox.y1) - float(margin_px):
             continue
-        in_bounds.append((float(shift), shifted))
+        in_bounds_vertical.append((0.0, float(shift_y), shifted))
         if any(_bbox_overlaps_with_padding(shifted, occupied, pad_x=4.0, pad_y=gap_px) for occupied in occupied_bboxes):
             continue
-        return float(shift), shifted
+        return 0.0, float(shift_y), shifted
 
-    # In an unusually dense cluster there may be no fully clear position inside
-    # the axes. Stay as close as possible to the original annotation rather than
-    # jumping to an axis edge; choose the nearest in-bounds candidate with the
-    # smallest residual overlap.
+    # Dense clusters can make every pure vertical candidate collide.  Try the
+    # smallest horizontal displacement from each near vertical candidate before
+    # accepting any residual overlap.
+    two_dimensional = []
+    for _, shift_y, shifted_y in in_bounds_vertical:
+        candidate_x = {0.0}
+        for occupied in occupied_bboxes:
+            if not _bbox_overlaps_with_padding(shifted_y, occupied, pad_x=4.0, pad_y=gap_px):
+                continue
+            candidate_x.add(float(occupied.x1) + float(gap_px) - float(shifted_y.x0))
+            candidate_x.add(float(occupied.x0) - float(gap_px) - float(shifted_y.x1))
+        for shift_x in candidate_x:
+            shifted = shifted_y.translated(float(shift_x), 0.0)
+            if float(shifted.x0) < float(axes_bbox.x0) + float(margin_px):
+                continue
+            if float(shifted.x1) > float(axes_bbox.x1) - float(margin_px):
+                continue
+            score = (abs(float(shift_y)) + 1.20 * abs(float(shift_x)), abs(float(shift_x)), abs(float(shift_y)))
+            two_dimensional.append((score, float(shift_x), float(shift_y), shifted))
+    for _, shift_x, shift_y, shifted in sorted(two_dimensional, key=lambda item: item[0]):
+        if any(_bbox_overlaps_with_padding(shifted, occupied, pad_x=4.0, pad_y=gap_px) for occupied in occupied_bboxes):
+            continue
+        return float(shift_x), float(shift_y), shifted
+
+    # Last-resort deterministic fallback: minimize residual overlap area, then
+    # total displacement.  Smaller info boxes make this path rare in practice.
+    fallback_candidates = [
+        (0.0, float(shift_y), shifted)
+        for _, shift_y, shifted in in_bounds_vertical
+    ]
+    fallback_candidates.extend((shift_x, shift_y, shifted) for _, shift_x, shift_y, shifted in two_dimensional)
     best = None
-    for shift, shifted in in_bounds:
+    for shift_x, shift_y, shifted in fallback_candidates:
         overlap_penalty = 0.0
         for occupied in occupied_bboxes:
             x_overlap = max(0.0, min(float(shifted.x1), float(occupied.x1)) - max(float(shifted.x0), float(occupied.x0)))
             y_overlap = max(0.0, min(float(shifted.y1), float(occupied.y1)) - max(float(shifted.y0), float(occupied.y0)))
             overlap_penalty += x_overlap * y_overlap
-        score = (overlap_penalty, abs(float(shift)))
+        score = (overlap_penalty, abs(float(shift_y)) + 1.20 * abs(float(shift_x)))
         if best is None or score < best[0]:
-            best = (score, float(shift), shifted)
+            best = (score, float(shift_x), float(shift_y), shifted)
     if best is not None:
-        return best[1], best[2]
+        return best[1], best[2], best[3]
+    return 0.0, 0.0, base_bbox
+
+
+def _choose_annotation_vertical_shift(base_bbox, *, placement, occupied_bboxes, axes_bbox, margin_px=6.0, gap_px=7.0):
+    """Compatibility wrapper for vertical-only contract tests/callers."""
+    shift_x, shift_y, final_bbox = _choose_annotation_shift(
+        base_bbox,
+        placement=placement,
+        occupied_bboxes=occupied_bboxes,
+        axes_bbox=axes_bbox,
+        margin_px=margin_px,
+        gap_px=gap_px,
+    )
+    if abs(float(shift_x)) <= 1e-9:
+        return float(shift_y), final_bbox
     return 0.0, base_bbox
 
 
@@ -1684,14 +1831,17 @@ def _layout_chart_annotation_boxes(axis_price, artists, renderer, *, reserved_ar
     px_per_point = float(figure.dpi) / 72.0
     for _, artist, layout, base_bbox in candidates:
         placement = str(layout.get("placement") or "above")
-        shift_px, final_bbox = _choose_annotation_vertical_shift(
+        shift_x_px, shift_y_px, final_bbox = _choose_annotation_shift(
             base_bbox,
             placement=placement,
             occupied_bboxes=occupied_bboxes,
             axes_bbox=axes_bbox,
         )
         base_x, base_y = layout.get("base_position", artist.get_position())
-        next_position = (float(base_x), float(base_y) + float(shift_px) / px_per_point)
+        next_position = (
+            float(base_x) + float(shift_x_px) / px_per_point,
+            float(base_y) + float(shift_y_px) / px_per_point,
+        )
         current_position = artist.get_position()
         if abs(float(current_position[0]) - next_position[0]) > 0.05 or abs(float(current_position[1]) - next_position[1]) > 0.05:
             artist.set_position(next_position)
@@ -2150,9 +2300,11 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "dynamic_candle_width_enabled": True,
         "buy_trade_label_boxes_enabled": True,
         "dynamic_annotation_collision_layout": True,
-        "annotation_layout_axis": "vertical",
+        "annotation_layout_axis": "vertical_then_minimal_horizontal_fallback",
         "annotation_layout_policy": "minimal_shift_once_per_generation",
         "annotation_avoids_visible_candles": True,
+        "annotation_avoids_trade_price_lines": True,
+        "trade_info_sidebar_deduplicated": True,
         "trade_info_result_row_visible": False,
         "mouse_drag_pan_mode": "pixel_anchor",
         "grid_alpha": 0.12,
@@ -2497,12 +2649,13 @@ def bind_matplotlib_chart_navigation(figure, canvas):
             ]
             renderer = getattr(event, "renderer", None)
             candle_obstacles = _build_visible_candle_obstacle_bboxes(axis_price, chart_payload) if renderer is not None else []
+            trade_line_obstacles = _build_visible_trade_line_obstacle_bboxes(axis_price, chart_payload) if renderer is not None else []
             changed = _layout_chart_annotation_boxes(
                 axis_price,
                 artists,
                 renderer,
                 reserved_artists=reserved,
-                obstacle_bboxes=candle_obstacles,
+                obstacle_bboxes=[*candle_obstacles, *trade_line_obstacles],
             )
             # Mark this generation complete before requesting the one redraw
             # needed to display moved artists. The follow-up draw must not solve
