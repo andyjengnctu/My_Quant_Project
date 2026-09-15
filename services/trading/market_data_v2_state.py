@@ -7,7 +7,7 @@ from pathlib import Path
 from core.console_report import project_relative_display_path
 from typing import Any
 
-from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from core.file_integrity import atomic_write_json, canonical_json_sha256
 from core.market_data_dataset_readiness import is_market_data_dataset_ready
 from core.market_data_freshness_contract import (
     build_market_data_freshness_contract_summary,
@@ -21,28 +21,13 @@ from core.market_data_trading_storage_contract import (
     TRADING_MARKET_DATA_V2_SCHEMA_VERSION,
     resolve_trading_market_data_v2_state_path,
 )
+from services.trading.market_data_v2_state_store import load_trading_market_data_v2_state
+
 
 TRADING_V2_ARCHIVE_STATUS_SYNCED = "SYNCED"
 TRADING_V2_ARCHIVE_STATUS_NOT_BOOTSTRAPPED = "NOT_BOOTSTRAPPED"
 TRADING_V2_ARCHIVE_STATUS_STALE = "STALE"
 
-
-
-def load_trading_market_data_v2_state(project_root, *, required: bool = False) -> dict[str, Any] | None:
-    path = resolve_trading_market_data_v2_state_path(project_root)
-    if not path.is_file():
-        if required:
-            raise FileNotFoundError("Trading Market Data V2 archive state 尚未建立")
-        return None
-    payload = load_json_strict(path)
-    if not isinstance(payload, dict):
-        raise ValueError("Trading Market Data V2 archive state 必須是 object")
-    if int(payload.get("schema_version", -1)) != TRADING_MARKET_DATA_V2_SCHEMA_VERSION:
-        raise ValueError("Trading Market Data V2 archive state schema 不相容")
-    core = {key: value for key, value in payload.items() if key != "state_fingerprint"}
-    if str(payload.get("state_fingerprint") or "") != canonical_json_sha256(core):
-        raise ValueError("Trading Market Data V2 archive state fingerprint 不一致")
-    return payload
 
 
 def resolve_trading_market_data_update_target_date(

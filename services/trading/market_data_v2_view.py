@@ -38,7 +38,7 @@ from services.market_data.daily_pit_universe import read_market_data_v2_daily_pi
 from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
 from services.market_data.provider_snapshot_view import ProviderSnapshotView, read_parquet_frame
 from services.trading.market_data_dataset_state import load_market_data_dataset_state
-from services.trading.market_data_v2_state import load_trading_market_data_v2_state
+from services.trading.market_data_v2_state_store import load_trading_market_data_v2_state
 
 
 @dataclass(frozen=True)

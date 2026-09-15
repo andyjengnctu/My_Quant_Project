@@ -69,7 +69,7 @@ AUTO_UPDATE_STATUS_TARGET_ADVANCED = "TARGET_ADVANCED"
 def _promote_execution_consumer_if_ready(*, root: Path, target_date: str) -> dict[str, object]:
     # Local import avoids making the Full Update owner and the one-shot updater
     # a module-import cycle while still sharing one promotion contract.
-    from services.trading.market_data_consumer import promote_trading_v2_consumer_state_if_ready
+    from services.trading.market_data_consumer_promotion import promote_trading_v2_consumer_state_if_ready
 
     try:
         return dict(

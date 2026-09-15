@@ -13,7 +13,7 @@ from core.market_data_scan_freshness import (
 )
 from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
 from services.trading.market_data_auto_update import run_trading_market_data_auto_update
-from services.trading.market_data_consumer import reconcile_trading_v2_consumer_state_from_local_evidence
+from services.trading.market_data_consumer_promotion import reconcile_trading_v2_consumer_state_from_local_evidence
 from services.trading.market_data_ops import build_market_data_ops_read_model
 from services.trading.market_data_dataset_state import set_market_data_scan_freshness_mode
 from services.trading.market_data_scheduler import (
@@ -582,7 +582,11 @@ class MarketDataOpsPanel(ttk.Frame):
         try:
             column_index = int(column_id[1:]) - 1
             column_name = str(tree["columns"][column_index])
-        except (ValueError, IndexError, tk.TclError):
+        except (ValueError, IndexError):
+            return None
+        except tk.TclError as exc:
+            self._status_var.set(f"Dataset table cell 解析失敗：TclError: {exc}")
+            self._status_label.configure(style=WORKBENCH_WARNING_LABEL_STYLE)
             return None
         if column_name != "latest_ok":
             return None

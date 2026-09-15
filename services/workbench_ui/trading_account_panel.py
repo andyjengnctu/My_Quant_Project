@@ -40,7 +40,7 @@ from services.trading.scanner_state import (
 )
 from services.trading.position_rollforward import run_trading_position_rollforward
 from services.trading.operations_status import build_trading_operations_status
-from services.trading.market_data_consumer import reconcile_trading_v2_consumer_state_from_local_evidence
+from services.trading.market_data_consumer_promotion import reconcile_trading_v2_consumer_state_from_local_evidence
 from services.trading.operational_audit import run_trading_operational_audit
 from services.trading.protection_planning import (
     PROTECTION_STOP_REMAINDER_ACTION,

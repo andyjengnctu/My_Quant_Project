@@ -6593,6 +6593,8 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         build_trading_v2_ohlcv_frames,
         load_trading_v2_consumer_state,
         publish_trading_v2_consumer_state,
+    )
+    from services.trading.market_data_consumer_promotion import (
         reconcile_trading_v2_consumer_state_from_local_evidence,
     )
 
@@ -6749,11 +6751,11 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
 
         with (
             patch(
-                "services.trading.market_data_v2_state.resolve_trading_market_data_update_target_date",
+                "services.trading.market_data_consumer_promotion.resolve_trading_market_data_update_target_date",
                 return_value="2026-09-15",
             ),
             patch(
-                "services.trading.market_data_consumer.promote_trading_v2_consumer_state_if_ready",
+                "services.trading.market_data_consumer_promotion.promote_trading_v2_consumer_state_if_ready",
                 return_value={
                     "promoted": True,
                     "reason": "PROMOTED",
