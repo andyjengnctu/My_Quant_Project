@@ -3174,7 +3174,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_candidate_dropdown_prefetches_current_pool_in_background", True, "_request_trading_candidate_pool_refresh()" in candidate_post_body and "threading.Thread(" in inspector_source and 'name="workbench-trading-candidate-pool"' in inspector_source)
     check("workbench_single_stock_candidate_pool_reads_shared_persisted_snapshot_without_recalculation", True, "load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)" in inspector_source and "never triggers candidate recalculation" in inspector_source)
     check("workbench_single_stock_combobox_popup_geometry_is_screen_limited", True, "_configure_combobox_popup_geometry" in inspector_source and "resolve_workbench_combobox_popup_rows" in workbench_source and "_fit_posted_combobox_popdown" in workbench_source and 'ttk::combobox::PopdownWindow' in workbench_source)
-    check("workbench_single_stock_controls_reflow_with_available_width", True, "_apply_single_stock_controls_layout" in inspector_source and all(mode in inspector_source for mode in ('mode == "wide"', 'mode == "compact"', 'else:')) )
+    check("workbench_single_stock_controls_reflow_with_available_width", True, "_apply_single_stock_controls_layout" in inspector_source and "resolve_single_stock_controls_rows" in inspector_source and "for row_index, row_keys in enumerate(rows)" in inspector_source)
     check(
         "workbench_combobox_popup_rows_shrink_to_available_screen_space",
         5,
@@ -3206,8 +3206,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_primes_single_stock_factory_before_first_cross_panel_navigation", True, "def _prime_initial_panel_factories" in workbench_source and 'self._request_panel_load("single_stock_backtest_inspector")' in workbench_source)
     check("workbench_pending_single_stock_navigation_wins_lazy_import_selection_race", True, 'panel_id == "single_stock_backtest_inspector" and self._pending_single_stock_request' in workbench_source and 'self._notebook.select(host)' in workbench_source)
     check("workbench_single_stock_defaults_to_trading_mode", True, 'self._runtime_domain_var = tk.StringVar(value="Trading")' in inspector_source)
-    check("workbench_single_stock_trading_hides_research_only_param_and_risk_controls", True, 'self._research_params_controls.pack_forget()' in inspector_source and 'before=self._show_volume_check' in inspector_source)
-    check("workbench_single_stock_trading_layout_omits_history_controls", True, 'visible_keys = ("identity", "candidate", "params", "runtime") if trading else' in inspector_source)
+    check("workbench_single_stock_trading_hides_research_only_param_and_risk_controls", True, '("runtime", "identity", "candidate", "holdings", "volume")' in inspector_source and '"params"' not in inspector_source.split('if trading\n                else', 1)[0].split('visible_keys =', 1)[1])
+    check("workbench_single_stock_trading_layout_omits_history_controls", True, '("runtime", "identity", "candidate", "holdings", "volume")' in inspector_source)
+    check("workbench_single_stock_trading_uses_shared_candidate_label_instead_of_recompute_button", True, 'self._candidate_label = ttk.Label(candidate_group, text="候選股"' in inspector_source and 'self._candidate_label.pack(side="left", before=self._candidate_combo' in inspector_source and 'self._candidate_scan_button.pack(side="left", before=self._candidate_combo' in inspector_source)
+    check("workbench_single_stock_controls_order_mode_first_volume_last", True, '("runtime", "identity", "candidate", "holdings", "volume")' in inspector_source and '("runtime", "identity", "candidate", "history", "params", "holdings", "volume")' in inspector_source)
     check("workbench_single_stock_form_omits_scanner_annotation_row", False, '_scanner_info_label' in inspector_source)
     check("workbench_single_stock_prefetches_trading_pool_before_trading_mode_first_use", True, 'allow_inactive=True' in inspector_source and 'self.after_idle(lambda: self._request_trading_candidate_pool_refresh(allow_inactive=True))' in inspector_source)
     check("workbench_single_stock_prefetch_validates_same_candidate_freshness_as_trading_center", True, "get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)" in inspector_source and 'if not bool(read_model.get("fresh"))' in inspector_source)
@@ -3219,6 +3221,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.workbench_ui.single_stock_inspector import (
         SingleStockBacktestInspectorPanel,
         resolve_single_stock_controls_layout_mode,
+        resolve_single_stock_controls_rows,
     )
     with tempfile.TemporaryDirectory() as identity_temp_dir:
         identity_root = Path(identity_temp_dir)
@@ -3258,9 +3261,28 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             self.value = value
         def get(self):
             return self.value
-    layout_req = {"identity": 420, "candidate": 300, "history": 400, "params": 500, "runtime": 300, "status": 200}
-    check("workbench_single_stock_controls_choose_compact_before_1680px_right_edge_clips", "compact", resolve_single_stock_controls_layout_mode(available_width=1680, required_widths=layout_req))
-    check("workbench_single_stock_controls_keep_wide_layout_when_1920px_has_safe_room", "wide", resolve_single_stock_controls_layout_mode(available_width=1920, required_widths=layout_req))
+    trading_layout_widths = [("runtime", 150), ("identity", 420), ("candidate", 330), ("holdings", 280), ("volume", 120)]
+    trading_rows_1680 = resolve_single_stock_controls_rows(
+        available_width=1680, ordered_widths=trading_layout_widths
+    )
+    check(
+        "workbench_single_stock_trading_controls_stay_one_row_when_they_fit",
+        (("runtime", "identity", "candidate", "holdings", "volume"),),
+        trading_rows_1680,
+    )
+    check(
+        "workbench_single_stock_trading_controls_label_wide_when_one_row_fits",
+        "wide",
+        resolve_single_stock_controls_layout_mode(
+            available_width=1680, required_widths=dict(trading_layout_widths)
+        ),
+    )
+    research_layout_widths = trading_layout_widths[:3] + [("history", 420), ("params", 500)] + trading_layout_widths[3:]
+    check(
+        "workbench_single_stock_research_controls_wrap_only_when_required",
+        True,
+        len(resolve_single_stock_controls_rows(available_width=1680, ordered_widths=research_layout_widths)) > 1,
+    )
 
     queued = []
     candidate_prefetch_calls = []

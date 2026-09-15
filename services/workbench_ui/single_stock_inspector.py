@@ -130,26 +130,44 @@ SINGLE_STOCK_CONTROLS_LAYOUT_GAP = 10
 SINGLE_STOCK_CONTROLS_SAFE_MARGIN = 72
 
 
-def resolve_single_stock_controls_layout_mode(*, available_width, required_widths):
-    """Choose a control-row layout with a Windows-theme safety margin.
+def resolve_single_stock_controls_rows(*, available_width, ordered_widths):
+    """Pack ordered control groups into the fewest rows that actually fit.
 
-    Tk requested widths can under-report the final painted width after DPI/theme
-    metrics settle.  Reserve a small right-edge budget so labels/checkbox text are
-    reflowed before they are visibly clipped.
+    The layout is content-aware: if all visible groups fit in one row they stay
+    in one row.  Wrapping happens only when adding the next group would cross the
+    current usable width after reserving a Windows/DPI safety margin.
     """
 
     available = max(1, int(available_width or 1) - SINGLE_STOCK_CONTROLS_SAFE_MARGIN)
-    req = {key: max(1, int(value or 1)) for key, value in dict(required_widths or {}).items()}
     gap = SINGLE_STOCK_CONTROLS_LAYOUT_GAP
-    wide_required = req.get("identity", 0) + req.get("candidate", 0) + req.get("history", 0) + req.get("params", 0) + 3 * gap
-    compact_required = max(
-        req.get("identity", 0) + req.get("candidate", 0) + gap,
-        req.get("history", 0) + req.get("params", 0) + gap,
-        req.get("runtime", 0),
+    rows = []
+    current = []
+    used = 0
+    for key, raw_width in list(ordered_widths or []):
+        width = max(1, int(raw_width or 1))
+        added = width if not current else gap + width
+        if current and used + added > available:
+            rows.append(tuple(current))
+            current = [(str(key), width)]
+            used = width
+        else:
+            current.append((str(key), width))
+            used += added
+    if current:
+        rows.append(tuple(current))
+    return tuple(tuple(key for key, _width in row) for row in rows)
+
+
+def resolve_single_stock_controls_layout_mode(*, available_width, required_widths):
+    """Compatibility label for tests/diagnostics; actual placement is row-driven."""
+
+    rows = resolve_single_stock_controls_rows(
+        available_width=available_width,
+        ordered_widths=list(dict(required_widths or {}).items()),
     )
-    if available >= wide_required:
+    if len(rows) <= 1:
         return "wide"
-    if available >= compact_required:
+    if len(rows) == 2:
         return "compact"
     return "narrow"
 
@@ -593,6 +611,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         candidate_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
         self._candidate_scan_button = ttk.Button(candidate_group, text="計算候選股", command=self._run_scanner, style="Workbench.TButton")
         self._candidate_scan_button.pack(side="left", padx=(0, 8), pady=uniform_pady)
+        self._candidate_label = ttk.Label(candidate_group, text="候選股", style="Workbench.TLabel")
         self._candidate_combo = ttk.Combobox(
             candidate_group, state="readonly", width=22, textvariable=self._candidate_display_var,
             style="Workbench.TCombobox", values=[], postcommand=self._refresh_candidate_options_on_open,
@@ -639,11 +658,6 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._custom_fixed_risk_entry.pack(side="left", padx=(0, 10), pady=uniform_pady)
         self._custom_fixed_risk_entry.state(["disabled"])
         self._research_params_controls.pack(side="left")
-        self._show_volume_check = ttk.Checkbutton(
-            params_group, text="顯示成交量", variable=self._show_volume_var,
-            command=self._rerender_current_chart, style="Workbench.TCheckbutton",
-        )
-        self._show_volume_check.pack(side="left", pady=uniform_pady)
 
         runtime_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
         ttk.Label(runtime_group, text="檢視模式", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
@@ -652,21 +666,35 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             style="Workbench.TCombobox", values=("Research", "Trading"),
             postcommand=lambda: self._configure_combobox_popup_geometry(self._runtime_domain_combo),
         )
-        self._runtime_domain_combo.pack(side="left", padx=(0, 10), pady=uniform_pady)
+        self._runtime_domain_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._runtime_domain_combo.bind("<<ComboboxSelected>>", self._on_runtime_domain_selected)
-        ttk.Label(runtime_group, text="持有股", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
+
+        holdings_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        ttk.Label(holdings_group, text="持有股", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._holdings_combo = ttk.Combobox(
-            runtime_group, state="readonly", width=22, textvariable=self._holdings_display_var,
+            holdings_group, state="readonly", width=22, textvariable=self._holdings_display_var,
             style="Workbench.TCombobox", values=(), postcommand=self._refresh_holdings_options_on_open,
         )
         self._holdings_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._holdings_combo.bind("<<ComboboxSelected>>", self._on_holding_selected)
 
+        volume_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        self._show_volume_check = ttk.Checkbutton(
+            volume_group, text="顯示成交量", variable=self._show_volume_var,
+            command=self._rerender_current_chart, style="Workbench.TCheckbutton",
+        )
+        self._show_volume_check.pack(side="left", pady=uniform_pady)
+
         self._history_group = history_group
         self._params_group = params_group
         self._controls_groups = {
-            "identity": identity_group, "candidate": candidate_group, "history": history_group,
-            "params": params_group, "runtime": runtime_group,
+            "runtime": runtime_group,
+            "identity": identity_group,
+            "candidate": candidate_group,
+            "history": history_group,
+            "params": params_group,
+            "holdings": holdings_group,
+            "volume": volume_group,
         }
         self._controls_layout_mode = None
         controls.bind("<Configure>", self._on_single_stock_controls_resize, add="+")
@@ -994,51 +1022,33 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             available = int(width or self._controls_host.winfo_width() or 1)
             gap = SINGLE_STOCK_CONTROLS_LAYOUT_GAP
             trading = self._runtime_domain_key() == "trading"
-            visible_keys = ("identity", "candidate", "params", "runtime") if trading else (
-                "identity", "candidate", "history", "params", "runtime"
+            visible_keys = (
+                ("runtime", "identity", "candidate", "holdings", "volume")
+                if trading
+                else ("runtime", "identity", "candidate", "history", "params", "holdings", "volume")
             )
-            req = {
-                key: max(1, int(groups[key].winfo_reqwidth()))
+            ordered_widths = [
+                (key, max(1, int(groups[key].winfo_reqwidth())))
                 for key in visible_keys
-            }
-            mode = resolve_single_stock_controls_layout_mode(
-                available_width=available, required_widths=req
+            ]
+            rows = resolve_single_stock_controls_rows(
+                available_width=available,
+                ordered_widths=ordered_widths,
             )
-
-            def place(layout_mode):
-                for widget in groups.values():
-                    widget.grid_forget()
-                if trading:
-                    if layout_mode == "wide":
-                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("params", 0, 2), ("runtime", 1, 0))
-                    elif layout_mode == "compact":
-                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("params", 1, 0), ("runtime", 1, 1))
-                    else:
-                        placements = (("identity", 0, 0), ("candidate", 1, 0), ("params", 2, 0), ("runtime", 3, 0))
-                else:
-                    if layout_mode == "wide":
-                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 0, 2), ("params", 0, 3), ("runtime", 1, 0))
-                    elif layout_mode == "compact":
-                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 1, 0), ("params", 1, 1), ("runtime", 2, 0))
-                    else:
-                        placements = (("identity", 0, 0), ("candidate", 1, 0), ("history", 2, 0), ("params", 3, 0), ("runtime", 4, 0))
-                for key, row, column in placements:
+            for widget in groups.values():
+                widget.grid_forget()
+            for row_index, row_keys in enumerate(rows):
+                for column_index, key in enumerate(row_keys):
                     groups[key].grid(
-                        row=row, column=column, sticky="w",
-                        padx=(0, gap), pady=(0, 2),
+                        row=row_index,
+                        column=column_index,
+                        sticky="w",
+                        padx=(0, gap),
+                        pady=(0, 2),
                     )
-                return layout_mode
-
-            mode = place(mode)
-            self.update_idletasks()
-            safe_width = max(1, available - 12)
-            if self._controls_bar.winfo_reqwidth() > safe_width and mode == "wide":
-                mode = place("compact")
-                self.update_idletasks()
-            if self._controls_bar.winfo_reqwidth() > safe_width and mode == "compact":
-                mode = place("narrow")
-                self.update_idletasks()
-            self._controls_layout_mode = mode
+            self._controls_layout_mode = (
+                "wide" if len(rows) <= 1 else "compact" if len(rows) == 2 else "narrow"
+            )
         except (tk.TclError, TypeError, ValueError) as exc:
             _warn_gui_fallback("single-stock responsive controls", exc)
 
@@ -1080,15 +1090,16 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         trading = self._runtime_domain_key() == "trading"
         self._param_source_combo.configure(state="disabled" if trading else "readonly")
         self._risk_combo.configure(state="disabled" if trading else "readonly")
+        self._candidate_scan_button.pack_forget()
+        self._candidate_label.pack_forget()
         if trading:
             self._custom_fixed_risk_entry.state(["disabled"])
             self._history_scan_button.configure(state="disabled")
-            self._research_params_controls.pack_forget()
+            self._candidate_label.pack(side="left", before=self._candidate_combo, padx=(0, 6), pady=(2, 2))
             self._scanner_info_var.set("Trading canonical Scanner Pool / Params / V2")
         else:
             self._history_scan_button.configure(state="normal")
-            if not self._research_params_controls.winfo_manager():
-                self._research_params_controls.pack(side="left", before=self._show_volume_check)
+            self._candidate_scan_button.pack(side="left", before=self._candidate_combo, padx=(0, 8), pady=(2, 2))
             self._on_fixed_risk_selected()
             self._scanner_info_var.set("Research")
         self._schedule_single_stock_controls_layout()
