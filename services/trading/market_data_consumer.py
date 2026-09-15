@@ -209,6 +209,58 @@ def build_trading_v2_ohlcv_frame(
     )
 
 
+def build_trading_v2_ohlcv_frames(
+    view: TradingMarketDataV2View,
+    *,
+    tickers: Iterable[str],
+    through_date: str,
+) -> dict[str, pd.DataFrame]:
+    """Build many Trading OHLCV frames with one Price/PriceAdj read pass.
+
+    This is the Scanner hot path.  Full-market Trading overlay artifacts are
+    verified/read once per dataset instead of once per ticker.
+    """
+
+    requested = tuple(
+        dict.fromkeys(normalize_trading_ticker(ticker) for ticker in tickers)
+    )
+    if not requested:
+        return {}
+    adjusted = view.read_dataset_frame_many_data_ids(
+        FINMIND_ADJUSTED_PRICE_DATASET,
+        data_ids=requested,
+        columns=("date", "stock_id", "open", "max", "min", "close"),
+        end_date=through_date,
+    )
+    raw = view.read_dataset_frame_many_data_ids(
+        FINMIND_RAW_PRICE_ARCHIVE_DATASET,
+        data_ids=requested,
+        columns=("date", "stock_id", "Trading_Volume"),
+        end_date=through_date,
+    )
+
+    adjusted_groups = {
+        str(stock_id): frame.reset_index(drop=True)
+        for stock_id, frame in adjusted.groupby(adjusted["stock_id"].astype(str).str.strip(), sort=False)
+    } if not adjusted.empty and "stock_id" in adjusted.columns else {}
+    raw_groups = {
+        str(stock_id): frame.reset_index(drop=True)
+        for stock_id, frame in raw.groupby(raw["stock_id"].astype(str).str.strip(), sort=False)
+    } if not raw.empty and "stock_id" in raw.columns else {}
+
+    empty_adjusted = adjusted.iloc[0:0].copy()
+    empty_raw = raw.iloc[0:0].copy()
+    return {
+        sid: build_market_data_v2_ohlcv_compatibility_frame(
+            adjusted_groups.get(sid, empty_adjusted),
+            raw_groups.get(sid, empty_raw),
+            stock_id=sid,
+            through_date=str(through_date),
+        )
+        for sid in requested
+    }
+
+
 def compute_trading_v2_ohlcv_frame_sha256(frame: pd.DataFrame) -> str:
     payload = {
         "columns": [str(column) for column in frame.columns],
@@ -568,6 +620,7 @@ __all__ = [
     "TRADING_V2_CONSUMER_STATE_RELATIVE_PATH",
     "resolve_trading_v2_current_execution_pool",
     "build_trading_v2_ohlcv_frame",
+    "build_trading_v2_ohlcv_frames",
     "compute_trading_v2_ohlcv_frame_sha256",
     "load_trading_v2_sanitized_ohlcv_frame",
     "load_trading_v2_consumer_state",

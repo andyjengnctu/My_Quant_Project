@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 from core.console_report import project_relative_display_path
@@ -14,7 +15,7 @@ from core.portfolio_ensemble import (
     build_ensemble_candidate_display_metrics,
     sort_aggregated_ensemble_candidate_rows,
 )
-from services.trading.market_data_consumer import build_trading_v2_ohlcv_frame, open_trading_v2_consumer_view
+from services.trading.market_data_consumer import build_trading_v2_ohlcv_frames, open_trading_v2_consumer_view
 from services.trading.market_data_update import run_trading_market_data_update
 from services.trading.live_reentry import build_trading_live_reentry_candidate_rows
 from services.scanner.scan_runner import run_daily_scanner
@@ -137,7 +138,10 @@ def _run_trading_scanner_param_runtime(
 
 
 def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
+    started = time.perf_counter()
+    print("⏳ Trading Scanner 前置：驗證 finalized lineage 與準備 V2 OHLCV...", flush=True)
     runtime = load_trading_scanner_runtime(project_root, verify_dataset_content=True)
+    lineage_elapsed = time.perf_counter() - started
     root = runtime["root"]
     output_dir = resolve_runtime_output_dir(
         root, domain=RUNTIME_DOMAIN_TRADING, category="scanner"
@@ -146,12 +150,18 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     if not expected_scanned_tickers:
         raise RuntimeError("Trading Scanner 缺少 canonical current universe membership；請重新更新 Trading 資料")
     v2_view = open_trading_v2_consumer_view(root)
-    prepared_frames = {
-        ticker: build_trading_v2_ohlcv_frame(
-            v2_view, ticker=ticker, through_date=str(runtime["latest_data_date"])
-        )
-        for ticker in expected_scanned_tickers
-    }
+    prep_started = time.perf_counter()
+    prepared_frames = build_trading_v2_ohlcv_frames(
+        v2_view,
+        tickers=expected_scanned_tickers,
+        through_date=str(runtime["latest_data_date"]),
+    )
+    prep_elapsed = time.perf_counter() - prep_started
+    print(
+        f"✅ Trading Scanner 前置完成 | lineage={lineage_elapsed:.2f}s | "
+        f"bulk_ohlcv={prep_elapsed:.2f}s | tickers={len(expected_scanned_tickers)}",
+        flush=True,
+    )
     result = _run_trading_scanner_param_runtime(
         runtime=runtime,
         output_dir=output_dir,

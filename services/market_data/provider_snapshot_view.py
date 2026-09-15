@@ -87,6 +87,49 @@ class ProviderSnapshotView:
             yield frame
 
 
+    def iter_verified_frames_many_data_ids(
+        self,
+        dataset: str,
+        *,
+        columns: tuple[str, ...] | None = None,
+        data_ids,
+    ) -> Iterator[pd.DataFrame]:
+        """Yield verified fragments once for a requested set of data IDs.
+
+        Per-ID artifacts are selected directly while aggregate/full-market
+        artifacts are read once and filtered in-memory.  This avoids N× rereads
+        of the same full-market parquet when Scanner prepares many tickers.
+        """
+
+        name = str(dataset or "").strip()
+        wanted = {str(value).strip() for value in data_ids if str(value).strip()}
+        if not wanted:
+            return
+        for artifact in self.dataset_artifacts(name):
+            artifact_id = str(artifact.data_id or "").strip()
+            if artifact_id and artifact_id not in wanted:
+                continue
+            request = artifact.to_request()
+            path = resolve_market_data_request_parquet_path(
+                self.project_root,
+                self.archive.manifest_fingerprint,
+                request,
+            )
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"Provider Snapshot artifact 不存在: {project_relative_display_path(path, project_root=self.project_root)}"
+                )
+            actual_hash = str(self._hash_fn(path) or "").strip().lower()
+            if actual_hash != artifact.content_sha256:
+                raise ValueError(f"Provider Snapshot artifact SHA256 drift: {request.request_id}")
+            frame = self._frame_reader(path, columns)
+            if not isinstance(frame, pd.DataFrame):
+                raise TypeError("Market Data V2 provider frame reader 必須回傳 pandas.DataFrame")
+            if not artifact_id and "stock_id" in frame.columns:
+                frame = frame.loc[frame["stock_id"].astype(str).str.strip().isin(wanted)]
+            yield frame.reset_index(drop=True)
+
+
     def latest_data_dates(self, dataset: str) -> dict[str, object]:
         """Return immutable provider-snapshot latest-date evidence by request lane.
 

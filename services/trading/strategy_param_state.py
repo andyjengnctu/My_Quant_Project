@@ -90,6 +90,7 @@ def publish_trading_strategy_param_binding(
     project_root: str | Path,
     *,
     usage_mode: str = TRADING_PARAM_USAGE_TRAINED_CURRENT,
+    verify_consumer_view: bool = True,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     profile = get_trading_strategy_profile()
@@ -99,7 +100,11 @@ def publish_trading_strategy_param_binding(
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     if not selected_path.is_file():
         raise FileNotFoundError("Trading selected strategy params 尚未產生")
-    consumer_state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
+    consumer_state = load_trading_v2_consumer_state(
+        root,
+        required=True,
+        verify_current_view=bool(verify_consumer_view),
+    )
     current_data_date = str(consumer_state["market_date"])
     param_metadata = _selected_param_metadata(
         selected_path,

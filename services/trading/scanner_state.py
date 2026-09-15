@@ -126,8 +126,12 @@ def load_trading_scanner_runtime(
             "Trading strategy params 訓練資料日晚於目前 Trading data；"
             f"data={latest_data_date}, params={param_latest_data_date}。"
         )
+    # ``market_state`` above already performed the expensive finalized-view
+    # verification when requested.  Binding currentness only needs to compare
+    # against that persisted consumer identity; repeating the same V2 view scan
+    # here roughly doubles Scanner startup latency.
     param_binding = load_trading_strategy_param_binding(
-        root, required=True, verify_current=True, verify_dataset_content=verify_dataset_content
+        root, required=True, verify_current=True, verify_dataset_content=False
     )
 
     return {

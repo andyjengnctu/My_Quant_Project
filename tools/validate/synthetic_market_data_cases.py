@@ -6583,6 +6583,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     from core.trading_data_dependencies import get_trading_data_dependency_spec
     from services.trading.market_data_consumer import (
         build_trading_v2_ohlcv_frame,
+        build_trading_v2_ohlcv_frames,
         load_trading_v2_consumer_state,
         publish_trading_v2_consumer_state,
         reconcile_trading_v2_consumer_state_from_local_evidence,
@@ -6623,6 +6624,19 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
                 "view_fingerprint": "verified-v2-view-fp",
                 "overlay_batch_fingerprints": ["batch-a", "batch-b"],
             }
+
+        def read_dataset_frame_many_data_ids(self, dataset, *, data_ids, columns=None, start_date=None, end_date=None):
+            frames = [
+                self.read_dataset_frame(
+                    dataset,
+                    columns=columns,
+                    data_id=str(data_id),
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                for data_id in data_ids
+            ]
+            return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=list(columns or ()))
 
         def read_dataset_frame(self, dataset, *, columns=None, data_id=None, start_date=None, end_date=None):
             if dataset == "TaiwanStockInfo":
@@ -6676,6 +6690,13 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     frame = build_trading_v2_ohlcv_frame(fake, ticker="2330", through_date="2026-09-09")
     check("direct_v2_ohlcv_frame_keeps_legacy_strategy_shape", ["Date", "Open", "High", "Low", "Close", "Volume"], list(frame.columns))
     check("direct_v2_ohlcv_frame_uses_raw_price_volume", [1111, 2222], frame["Volume"].tolist())
+    bulk_frames = build_trading_v2_ohlcv_frames(
+        fake,
+        tickers=("2330", "2317"),
+        through_date="2026-09-09",
+    )
+    check("bulk_v2_ohlcv_preparation_preserves_requested_membership", ["2317", "2330"], sorted(bulk_frames))
+    check("bulk_v2_ohlcv_preparation_matches_single_ticker_semantics", frame.to_dict(orient="records"), bulk_frames["2330"].to_dict(orient="records"))
 
     with TemporaryDirectory(prefix="round8_v2_consumer_") as temp_dir:
         root = Path(temp_dir)
@@ -6751,6 +6772,8 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     check_true("params_inject_v2_optimizer_loader", "raw_data_loader=load_trading_v2_optimizer_raw_data" in sources["params"])
     check_true("scanner_runtime_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["scanner_state"])
     check_true("trading_daily_scanner_passes_v2_prepared_frames", "prepared_frames=prepared_frames" in sources["daily"])
+    check_true("trading_daily_scanner_uses_bulk_v2_ohlcv_preparation", "build_trading_v2_ohlcv_frames" in sources["daily"])
+    check_true("reuse_params_skips_redundant_full_view_reaudit", "verify_consumer_view=False" in sources["params"])
     check("position_context_has_no_legacy_csv_read", False, "pd.read_csv" in sources["position"] or "discover_unique_csv_map" in sources["position"])
     check("allocator_has_no_legacy_csv_read", False, "pd.read_csv" in sources["allocator"] or "discover_unique_csv_map" in sources["allocator"])
     check_true("workbench_data_ops_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["data_ops"])

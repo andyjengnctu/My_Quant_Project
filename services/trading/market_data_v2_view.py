@@ -187,7 +187,18 @@ class TradingMarketDataV2View:
             self._overlay_batches = ()
             return self._overlay_batches
 
-        for manifest_path in sorted(base.glob(f"*/{TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME}")):
+        if self._overlay_batch_fingerprints is None:
+            manifest_paths = sorted(base.glob(f"*/{TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME}"))
+        else:
+            manifest_paths = []
+            for batch_fp in self._overlay_batch_fingerprints:
+                manifest_path = base / batch_fp / TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME
+                if not manifest_path.is_file():
+                    raise FileNotFoundError(f"Trading V2 pinned batch manifest 不存在: {batch_fp}")
+                manifest_paths.append(manifest_path)
+
+        pinned_set = None if self._overlay_batch_fingerprints is None else set(self._overlay_batch_fingerprints)
+        for manifest_path in manifest_paths:
             payload = validate_trading_sync_batch_manifest_payload_for_read(load_json_strict(manifest_path))
             batch_fp = str(payload["batch_fingerprint"])
             if manifest_path.parent.name != batch_fp:
@@ -202,8 +213,8 @@ class TradingMarketDataV2View:
             ):
                 continue
             if (
-                self._overlay_batch_fingerprints is not None
-                and batch_fp not in set(self._overlay_batch_fingerprints)
+                pinned_set is not None
+                and batch_fp not in pinned_set
             ):
                 continue
             ledger_path = resolve_trading_market_data_v2_ledger_path(self.project_root, batch_fp)
@@ -298,6 +309,104 @@ class TradingMarketDataV2View:
                     end_date=end_date,
                     data_id=data_id,
                 )
+
+    def _iter_verified_overlay_frames_many_data_ids(
+        self,
+        dataset: str,
+        *,
+        columns: tuple[str, ...] | None,
+        data_ids,
+        start_date: str | None,
+        end_date: str | None,
+    ) -> Iterator[pd.DataFrame]:
+        wanted = {str(value).strip() for value in data_ids if str(value).strip()}
+        if not wanted:
+            return
+        for batch in self._load_overlay_batches():
+            for artifact in batch.artifacts:
+                if str(artifact.dataset) != dataset:
+                    continue
+                artifact_id = str(artifact.data_id or "").strip()
+                if artifact_id and artifact_id not in wanted:
+                    continue
+                request = artifact.to_request()
+                path = resolve_trading_market_data_v2_request_path(
+                    self.project_root,
+                    batch.batch_fingerprint,
+                    request,
+                )
+                if not path.is_file():
+                    raise FileNotFoundError(
+                        f"Trading V2 committed overlay artifact 不存在: batch={batch.batch_fingerprint}, request={artifact.request_id}"
+                    )
+                if str(self._hash_fn(path) or "").strip().lower() != str(artifact.content_sha256):
+                    raise ValueError(f"Trading V2 overlay artifact SHA256 drift: {artifact.request_id}")
+                frame = self._frame_reader(path, columns)
+                if not isinstance(frame, pd.DataFrame):
+                    raise TypeError("Trading V2 frame reader 必須回傳 pandas.DataFrame")
+                if not artifact_id and "stock_id" in frame.columns:
+                    frame = frame.loc[frame["stock_id"].astype(str).str.strip().isin(wanted)]
+                yield self._filter_frame(
+                    frame,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data_id=None,
+                )
+
+    def read_dataset_frame_many_data_ids(
+        self,
+        dataset: str,
+        *,
+        data_ids,
+        columns: tuple[str, ...] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        """Read one latest dataset view for many stock IDs in one I/O pass."""
+
+        name = str(dataset or "").strip()
+        wanted = tuple(dict.fromkeys(str(value).strip() for value in data_ids if str(value).strip()))
+        if not wanted:
+            return pd.DataFrame(columns=list(columns or ()))
+        spec = get_market_dataset_spec(name)
+        if not spec.included:
+            raise ValueError(f"Trading V2 view 不允許讀未納入 archive 的 dataset: {name}")
+        keys = resolve_market_dataset_row_identity(spec)
+        if not keys:
+            raise RuntimeError(f"{name} 尚未宣告 row identity，禁止建立可覆寫 latest view")
+        requested = None if columns is None else tuple(dict.fromkeys(str(value) for value in columns))
+        read_columns = None if requested is None else tuple(dict.fromkeys((*requested, *keys)))
+        fragments: list[pd.DataFrame] = []
+        for frame in self._provider_view.iter_verified_frames_many_data_ids(
+            name, columns=read_columns, data_ids=wanted
+        ):
+            fragments.append(
+                self._filter_frame(
+                    frame,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data_id=None,
+                )
+            )
+        fragments.extend(
+            self._iter_verified_overlay_frames_many_data_ids(
+                name,
+                columns=read_columns,
+                data_ids=wanted,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+        merged = merge_market_data_v2_fragments(fragments, primary_key=keys)
+        if "stock_id" in merged.columns:
+            merged = merged.loc[merged["stock_id"].astype(str).str.strip().isin(set(wanted))].reset_index(drop=True)
+        if requested is not None:
+            missing = [column for column in requested if column not in merged.columns]
+            if missing and not merged.empty:
+                raise ValueError(f"Trading V2 latest view 缺 requested columns: {missing}")
+            return merged.reindex(columns=list(requested))
+        return merged
+
 
     def read_dataset_frame(
         self,

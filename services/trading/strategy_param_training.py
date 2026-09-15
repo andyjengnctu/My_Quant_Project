@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -105,18 +106,26 @@ def reuse_trading_strategy_params(
     intact; only the Trading usage binding advances to the current information date.
     """
 
+    started = time.perf_counter()
+    print("⏳ 套用既有 Trading Params：綁定 finalized consumer identity...", flush=True)
     root = Path(project_root).resolve()
     plan = build_trading_strategy_param_training_plan(root)
-    market_state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
     selected_path = Path(str(plan["selected_params_path"]))
     if not selected_path.is_file():
         raise FileNotFoundError(
             "目前沒有可沿用的 Trading Params；請先選擇「重新訓練 Params」建立第一份正式參數。"
         )
+    # Reuse binds an already-finalized immutable consumer identity; it does not
+    # consume market frames.  Re-auditing every pinned V2 batch here made a
+    # metadata-only binding action take ~minutes. Scanner preflight still
+    # performs the full finalized-view verification before consuming data.
     binding = publish_trading_strategy_param_binding(
         root,
         usage_mode=TRADING_PARAM_USAGE_REUSE_EXISTING,
+        verify_consumer_view=False,
     )
+    elapsed = time.perf_counter() - started
+    print(f"✅ Trading Params 綁定完成 | elapsed={elapsed:.2f}s", flush=True)
     return {
         "status": "READY",
         "runtime_domain": "trading",
@@ -124,13 +133,13 @@ def reuse_trading_strategy_params(
         "param_selector": str(plan["param_selector"]),
         "selected_params_path": _display_path(root, selected_path),
         "selected_params_sha256": compute_file_sha256(selected_path),
-        "latest_data_date": str(market_state["market_date"]),
+        "latest_data_date": str(binding["latest_data_date"]),
         "param_training_data_date": str(binding["param_training_data_date"]),
         "param_usage_mode": str(binding["usage_mode"]),
         "param_member_count": int(binding["param_member_count"]),
         "param_min_agree": int(binding["param_min_agree"]),
-        "market_data_consumer_state_sha256": get_trading_v2_consumer_state_sha256(root),
-        "market_data_source_view_fingerprint": str(market_state["source_view_fingerprint"]),
+        "market_data_consumer_state_sha256": str(binding["market_data_consumer_state_sha256"]),
+        "market_data_source_view_fingerprint": str(binding["market_data_source_view_fingerprint"]),
         "param_binding_fingerprint": str(binding["binding_fingerprint"]),
     }
 
