@@ -19,6 +19,8 @@ from core.display import C_GRAY, C_RESET
 from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.log_utils import write_issue_log
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET, FINMIND_RAW_PRICE_ARCHIVE_DATASET
+from core.market_data_dataset_readiness import market_data_contract_requires_target_freshness
+from core.market_data_freshness_contract import get_market_data_freshness_contract
 from core.market_data_ohlcv_compatibility import build_market_data_v2_ohlcv_compatibility_frame
 from core.market_data_instrument_universe import build_current_stock_etf_universe
 from core.market_data_pool_contract import screen_daily_trading_execution_pool
@@ -26,6 +28,7 @@ from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_identity import normalize_trading_ticker
 from core.trading_policy import get_trading_strategy_profile
 from services.trading.market_data_v2_view import TradingMarketDataV2View
+from services.trading.market_data_dataset_state import load_market_data_dataset_state
 
 TRADING_V2_CONSUMER_STATE_SCHEMA_VERSION = 1
 TRADING_V2_CONSUMER_STATE_ROLE = "trading_v2_execution_consumer_state"
@@ -78,10 +81,75 @@ def _current_market_member_records(
     return records, len(broad_reference)
 
 
+def _execution_market_value_rows(
+    view: TradingMarketDataV2View,
+    *,
+    project_root: Path,
+    market_date: str,
+) -> pd.DataFrame:
+    """Resolve MarketValue rows under its canonical Scan freshness policy."""
+
+    dataset = "TaiwanStockMarketValue"
+    state = load_market_data_dataset_state(project_root, required=False)
+    row = dict(((state or {}).get("datasets") or {}).get(dataset) or {})
+    contract = get_market_data_freshness_contract(dataset)
+    exact_target = market_data_contract_requires_target_freshness(contract, row)
+    if exact_target:
+        return view.read_dataset_frame(
+            dataset,
+            columns=("date", "stock_id", "market_value"),
+            start_date=market_date,
+            end_date=market_date,
+        )
+
+    latest_data_date = str(row.get("latest_data_date") or "").strip() or None
+    if latest_data_date is not None:
+        # ``latest_synced`` means use the newest provider-confirmed snapshot that
+        # was knowable for this Scan target.  When the current dataset state has
+        # already advanced beyond a finalized older Scanner target, the target's
+        # own daily snapshot is the newest admissible one in the target-as-of view.
+        usable_date = min(latest_data_date, str(market_date))
+        frame = view.read_dataset_frame(
+            dataset,
+            columns=("date", "stock_id", "market_value"),
+            start_date=usable_date,
+            end_date=usable_date,
+        )
+        if not frame.empty:
+            return frame.reset_index(drop=True)
+
+    # Compatibility fallback for an old state that predates latest_data_date.
+    # The target-as-of view still prevents future batches from entering the scan.
+    frame = view.read_dataset_frame(
+        dataset,
+        columns=("date", "stock_id", "market_value"),
+        end_date=market_date,
+    )
+    if frame.empty:
+        return frame
+    work = frame.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    work["stock_id"] = work["stock_id"].astype("string").str.strip()
+    work = work.loc[
+        work["date"].notna()
+        & (work["date"] <= str(market_date))
+        & work["stock_id"].notna()
+        & (work["stock_id"] != "")
+    ]
+    if work.empty:
+        return work.reset_index(drop=True)
+    return (
+        work.sort_values(["stock_id", "date"], kind="stable")
+        .drop_duplicates("stock_id", keep="last")
+        .reset_index(drop=True)
+    )
+
+
 def resolve_trading_v2_current_execution_pool(
     view: TradingMarketDataV2View,
     *,
     market_date: str,
+    project_root: str | Path | None = None,
 ) -> tuple[list[str], dict[str, int]]:
     """Resolve today's new-entry execution pool from V2-only local evidence."""
 
@@ -92,11 +160,13 @@ def resolve_trading_v2_current_execution_pool(
         start_date=market_date,
         end_date=market_date,
     ).rename(columns={"Trading_Volume": "trading_volume"})
-    market_value = view.read_dataset_frame(
-        "TaiwanStockMarketValue",
-        columns=("date", "stock_id", "market_value"),
-        start_date=market_date,
-        end_date=market_date,
+    root_value = project_root if project_root is not None else getattr(view, "project_root", None)
+    if root_value is None:
+        raise ValueError("Trading execution pool 缺 project_root，無法解析 MarketValue Scan freshness policy")
+    market_value = _execution_market_value_rows(
+        view,
+        project_root=Path(root_value).resolve(),
+        market_date=market_date,
     )
     tickers, stats = screen_daily_trading_execution_pool(
         members,
@@ -222,10 +292,16 @@ def load_trading_v2_consumer_state(
     payload = load_json_strict(path)
     _validate_consumer_state(payload)
     if verify_current_view:
-        view = TradingMarketDataV2View.open(root)
-        identity = view.view_identity(required_datasets=_required_v2_datasets())
+        market_date = str(payload.get("market_date") or "")
+        view = TradingMarketDataV2View.open_as_of_target(root, target_date=market_date)
+        identity = view.view_identity(
+            required_datasets=tuple(payload.get("required_v2_datasets") or _required_v2_datasets()),
+            maximum_training_date=market_date,
+        )
         if str(payload.get("source_view_fingerprint") or "") != str(identity.get("view_fingerprint") or ""):
-            raise RuntimeError("Trading V2 execution consumer state 與目前 verified V2 view identity 不一致")
+            raise RuntimeError(
+                "Trading V2 execution consumer state 與其 finalized target view identity 不一致"
+            )
     return payload
 
 
@@ -248,16 +324,25 @@ def publish_trading_v2_consumer_state(
     """Publish local V2 consumer membership/lineage after a successful V2 update."""
 
     root = Path(project_root).resolve()
-    local_view = view or TradingMarketDataV2View.open(root)
-    required_datasets = _required_v2_datasets()
-    horizon = local_view.training_horizon(required_datasets=required_datasets)
     date_text = str(market_date)
+    local_view = view or TradingMarketDataV2View.open_as_of_target(
+        root, target_date=date_text
+    )
+    required_datasets = _required_v2_datasets()
+    horizon = local_view.training_horizon(
+        required_datasets=required_datasets,
+        maximum_training_date=date_text,
+    )
     if date_text > str(horizon.training_through_date):
         raise RuntimeError(
             "Trading V2 consumer state market_date 超過 required dataset READY horizon；"
             f"requested={date_text}, ready_through={horizon.training_through_date}"
         )
-    execution_tickers, execution_stats = resolve_trading_v2_current_execution_pool(local_view, market_date=date_text)
+    execution_tickers, execution_stats = resolve_trading_v2_current_execution_pool(
+        local_view,
+        market_date=date_text,
+        project_root=root,
+    )
     required = sorted({normalize_trading_ticker(item) for item in required_position_tickers})
     required_reentry = sorted({normalize_trading_ticker(item) for item in required_reentry_tickers})
     prior = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
@@ -272,7 +357,10 @@ def publish_trading_v2_consumer_state(
     if not training:
         raise RuntimeError("Trading V2 consumer state 沒有任何 training/consumer ticker")
 
-    identity = local_view.view_identity(required_datasets=required_datasets)
+    identity = local_view.view_identity(
+        required_datasets=required_datasets,
+        maximum_training_date=date_text,
+    )
     state: dict[str, Any] = {
         "schema_version": TRADING_V2_CONSUMER_STATE_SCHEMA_VERSION,
         "role": TRADING_V2_CONSUMER_STATE_ROLE,
@@ -305,8 +393,8 @@ def load_trading_v2_optimizer_raw_data(data_dir, required_min_rows, output_dir, 
 
     root = Path(data_dir).resolve()
     state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
-    view = TradingMarketDataV2View.open(root)
     through_date = str(state["market_date"])
+    view = TradingMarketDataV2View.open_as_of_target(root, target_date=through_date)
     tickers = list(state["training_tickers"])
     cache: dict[str, pd.DataFrame] = {}
     issues: list[str] = []

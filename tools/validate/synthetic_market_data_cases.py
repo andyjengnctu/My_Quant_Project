@@ -6181,6 +6181,21 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
         "2026-03-02",
         stale_state.training_through_date,
     )
+    finalized_horizon = resolve_trading_v2_training_horizon(
+        provider_as_of_date="2026-03-02",
+        required_datasets=("Price", "PriceAdj", "MarketValue"),
+        dataset_state={
+            "Price": {"last_ready_target_date": "2026-03-06"},
+            "PriceAdj": {"last_ready_target_date": "2026-03-06"},
+            "MarketValue": {"last_ready_target_date": "2026-03-06"},
+        },
+        maximum_training_date="2026-03-04",
+    )
+    check(
+        "finalized_consumer_horizon_caps_later_dataset_state_without_lookahead",
+        {"Price": "2026-03-04", "PriceAdj": "2026-03-04", "MarketValue": "2026-03-04"},
+        dict(finalized_horizon.dataset_ready_through),
+    )
 
     base = pd.DataFrame(
         {
@@ -6220,6 +6235,11 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
         "trading_v2_read_seam_does_not_call_execution_pool_screening",
         False,
         "screen_daily_trading_execution_pool" in service_source,
+    )
+    check(
+        "trading_v2_read_seam_supports_finalized_target_overlay_cutoff",
+        True,
+        "open_as_of_target" in service_source and "_overlay_target_date_cutoff" in service_source,
     )
 
     from core.file_integrity import canonical_json_sha256
@@ -6587,14 +6607,14 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
                 as_of_date="2026-03-02",
             )
 
-        def training_horizon(self, *, required_datasets):
+        def training_horizon(self, *, required_datasets, maximum_training_date=None):
             return SimpleNamespace(training_through_date="2026-09-09")
 
         def daily_pit_market_members(self, market_date):
             assert market_date == "2026-09-09"
             return ("0050", "2330", "2317")
 
-        def view_identity(self, *, required_datasets):
+        def view_identity(self, *, required_datasets, maximum_training_date=None):
             return {"view_fingerprint": "verified-v2-view-fp"}
 
         def read_dataset_frame(self, dataset, *, columns=None, data_id=None, start_date=None, end_date=None):
@@ -6606,8 +6626,12 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
                     "industry_category": ["ETF", "半導體業", "電子業"],
                 })
             elif dataset == "TaiwanStockMarketValue":
+                # MarketValue is daily upstream but defaults to latest_synced for
+                # Scan readiness because the provider publishes it very late.
+                # A finalized 09-09 Scanner may therefore legitimately use the
+                # latest provider-synchronized 09-08 market-cap snapshot.
                 frame = pd.DataFrame({
-                    "date": ["2026-09-09", "2026-09-09"],
+                    "date": ["2026-09-08", "2026-09-08"],
                     "stock_id": ["2330", "2317"],
                     "market_value": [20_000_000_000, 1],
                 })
@@ -6663,6 +6687,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         check("consumer_state_pool_funnel_high_volume_count", 2, pool_stats["high_volume_count"])
         check("consumer_state_pool_funnel_etf_pass_count", 1, pool_stats["high_volume_etf_count"])
         check("consumer_state_pool_funnel_stock_cap_pass_count", 1, pool_stats["market_cap_pass_stock_count"])
+        check("consumer_state_pool_accepts_latest_synced_prior_day_market_value", 2, pool_stats["market_value_usable_count"])
         check("consumer_state_pool_funnel_final_count", 2, pool_stats["qualified_count"])
         check("consumer_state_training_membership_preserves_positions_and_history", ["0050", "2330", "2454", "9999"], first["training_tickers"])
         check("consumer_state_has_zero_provider_calls", 0, first["provider_calls"])
@@ -6674,8 +6699,16 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
             view=fake,
         )
         loaded = load_trading_v2_consumer_state(root, required=True, verify_current_view=False)
+        from unittest.mock import patch
+        with patch(
+            "services.trading.market_data_consumer.TradingMarketDataV2View.open_as_of_target",
+            return_value=fake,
+        ) as open_finalized:
+            verified = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
         check("consumer_state_carries_prior_training_membership_without_csv_membership_read", ["0050", "2330", "2454", "9999"], second["training_tickers"])
         check("consumer_state_roundtrip_fingerprint_is_stable", second["state_fingerprint"], loaded["state_fingerprint"])
+        check("consumer_state_verify_reopens_finalized_target_view", "2026-09-09", open_finalized.call_args.kwargs["target_date"])
+        check("consumer_state_finalized_target_identity_verifies", second["state_fingerprint"], verified["state_fingerprint"])
 
     repo = Path(__file__).resolve().parents[2]
     sources = {

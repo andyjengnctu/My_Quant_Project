@@ -68,6 +68,7 @@ def resolve_trading_v2_training_horizon(
     provider_as_of_date: str,
     required_datasets: Iterable[str],
     dataset_state: Mapping[str, Mapping[str, object]] | None,
+    maximum_training_date: str | None = None,
 ) -> TradingV2TrainingHorizon:
     """Resolve the latest common information date for one production training contract.
 
@@ -78,6 +79,9 @@ def resolve_trading_v2_training_horizon(
     """
 
     base = _iso(provider_as_of_date, field="provider_as_of_date")
+    cap = None if maximum_training_date is None else _iso(maximum_training_date, field="maximum_training_date")
+    if cap is not None and cap < base:
+        raise ValueError("Trading V2 maximum_training_date 不得早於 Provider Snapshot")
     required: list[str] = []
     seen: set[str] = set()
     for raw in required_datasets:
@@ -104,9 +108,10 @@ def resolve_trading_v2_training_horizon(
             # collapse a valid historical READY horizon merely because the row's
             # current validation contract changed.  The Provider Snapshot still
             # remains the minimum complete baseline.
-            ready[dataset] = max(base, candidate)
+            resolved = max(base, candidate)
         else:
-            ready[dataset] = base
+            resolved = base
+        ready[dataset] = min(resolved, cap) if cap is not None else resolved
 
     through = min(ready.values())
     return TradingV2TrainingHorizon(

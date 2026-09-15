@@ -17,6 +17,7 @@ from core.exact_accounting import (
 )
 from core.file_integrity import atomic_write_json
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET
+from core.market_data_dataset_readiness import has_current_market_data_dataset_validation
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.runtime_utils import get_taipei_now
 from core.trading_policy import resolve_trading_selected_strategy_param_path
@@ -27,10 +28,11 @@ from services.trading.accounting_policy import (
     overlay_trading_accounting_params,
 )
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
+from services.trading.market_data_dataset_state import load_market_data_dataset_state
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
 
-ACCOUNT_DASHBOARD_SCHEMA_VERSION = 2
+ACCOUNT_DASHBOARD_SCHEMA_VERSION = 3
 ACCOUNT_DASHBOARD_ROLE = "derived_read_only_trading_account_dashboard"
 ACCOUNT_DASHBOARD_FILENAME = "account_snapshot.json"
 ACCOUNT_PERFORMANCE_FILENAME = "performance_summary.json"
@@ -40,6 +42,37 @@ def _safe_pct(numerator: int | float, denominator: int | float) -> float | None:
     if float(denominator or 0) <= 0:
         return None
     return float(numerator) / float(denominator) * 100.0
+
+
+def _resolve_account_valuation_market_date(
+    project_root: Path,
+    *,
+    consumer_state: dict[str, Any] | None,
+) -> tuple[str | None, str | None]:
+    """Resolve the latest verified adjusted-price date for account MTM.
+
+    Account valuation is a different consumer from Scanner eligibility.  Scanner
+    stays on the latest fully-safe execution ``market_date`` while the account
+    dashboard may mark current holdings as soon as the canonical adjusted-price
+    dataset itself has a newer verified date.
+    """
+
+    scan_market_date = (
+        None if consumer_state is None else str(consumer_state.get("market_date") or "").strip() or None
+    )
+    try:
+        dataset_state = load_market_data_dataset_state(project_root, required=False)
+    except (FileNotFoundError, ValueError, RuntimeError, OSError, TypeError) as exc:
+        return scan_market_date, f"Trading V2 dataset state: {type(exc).__name__}: {exc}"
+    row = dict(((dataset_state or {}).get("datasets") or {}).get(FINMIND_ADJUSTED_PRICE_DATASET) or {})
+    if not has_current_market_data_dataset_validation(row):
+        return scan_market_date, None
+    latest_price_date = str(row.get("latest_data_date") or "").strip() or None
+    if latest_price_date is None:
+        return scan_market_date, None
+    if scan_market_date is None:
+        return latest_price_date, None
+    return max(scan_market_date, latest_price_date), None
 
 
 def _current_close_by_ticker(project_root: Path, tickers: list[str], market_date: str | None) -> tuple[dict[str, float], dict[str, str]]:
@@ -406,6 +439,7 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
             "source_state_path": project_relative_display_path(state_path, project_root=root),
             "source_account_revision": None,
             "market_date": None,
+            "scan_market_date": None,
             "positions": [],
             "buy_details": [],
             "sell_details": [],
@@ -431,7 +465,12 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         consumer_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
         warnings.append(f"Trading V2 state: {type(exc).__name__}: {exc}")
-    market_date = None if consumer_state is None else str(consumer_state.get("market_date") or "") or None
+    scan_market_date = None if consumer_state is None else str(consumer_state.get("market_date") or "").strip() or None
+    market_date, valuation_date_warning = _resolve_account_valuation_market_date(
+        root, consumer_state=consumer_state
+    )
+    if valuation_date_warning:
+        warnings.append(valuation_date_warning)
 
     params, params_path, params_error = _load_primary_params(root)
     if params_error:
@@ -609,6 +648,7 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         "source_account_revision": int(state["revision"]),
         "source_params_path": params_path,
         "market_date": market_date,
+        "scan_market_date": scan_market_date,
         "fixed_risk": fixed_risk,
         "positions": enriched_positions,
         "buy_details": buy_details,
@@ -648,6 +688,7 @@ def publish_trading_account_dashboard_snapshot(project_root, snapshot: dict[str,
             "source_state_path": payload.get("source_state_path"),
             "source_account_revision": payload.get("source_account_revision"),
             "market_date": payload.get("market_date"),
+            "scan_market_date": payload.get("scan_market_date"),
             "performance": list(payload.get("performance") or []),
             "buy_details": list(payload.get("buy_details") or []),
             "sell_details": list(payload.get("sell_details") or []),

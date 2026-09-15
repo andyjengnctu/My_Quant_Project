@@ -50,9 +50,20 @@ class VerifiedTradingOverlayBatch:
 
 
 class TradingMarketDataV2View:
-    def __init__(self, *, project_root, archive, frame_reader=None, hash_fn=None):
+    def __init__(
+        self,
+        *,
+        project_root,
+        archive,
+        frame_reader=None,
+        hash_fn=None,
+        overlay_target_date_cutoff: str | None = None,
+    ):
         self.project_root = Path(project_root).resolve()
         self.archive = archive
+        self._overlay_target_date_cutoff = (
+            None if overlay_target_date_cutoff is None else pd.to_datetime(overlay_target_date_cutoff, errors="raise").date().isoformat()
+        )
         self._frame_reader = frame_reader or read_parquet_frame
         self._hash_fn = hash_fn or compute_file_sha256
         self._provider_view = ProviderSnapshotView(
@@ -79,13 +90,50 @@ class TradingMarketDataV2View:
             hash_fn=hash_fn,
         )
 
-    def training_horizon(self, *, required_datasets) -> TradingV2TrainingHorizon:
+    @classmethod
+    def open_as_of_target(
+        cls,
+        project_root,
+        *,
+        target_date: str,
+        frame_reader=None,
+        hash_fn=None,
+    ):
+        """Open the immutable operational view that was eligible through ``target_date``.
+
+        Later verified batches are intentionally excluded.  This preserves a
+        finalized Scanner/Params consumer when a newer target is only partially
+        synchronized, including current-vintage adjusted-price restatements.
+        """
+
+        root = Path(project_root).resolve()
+        state = load_trading_market_data_v2_state(root, required=False)
+        pinned = None if state is None else str(state.get("base_provider_snapshot_fingerprint") or "").strip()
+        archive = load_ready_provider_snapshot_archive(
+            root,
+            snapshot_fingerprint=pinned or None,
+        )
+        return cls(
+            project_root=root,
+            archive=archive,
+            frame_reader=frame_reader,
+            hash_fn=hash_fn,
+            overlay_target_date_cutoff=str(target_date),
+        )
+
+    def training_horizon(
+        self,
+        *,
+        required_datasets,
+        maximum_training_date: str | None = None,
+    ) -> TradingV2TrainingHorizon:
         state = load_market_data_dataset_state(self.project_root, required=False)
         rows = dict((state or {}).get("datasets") or {})
         return resolve_trading_v2_training_horizon(
             provider_as_of_date=self.archive.as_of_date,
             required_datasets=required_datasets,
             dataset_state=rows,
+            maximum_training_date=maximum_training_date,
         )
 
     def _load_overlay_batches(self) -> tuple[VerifiedTradingOverlayBatch, ...]:
@@ -105,6 +153,11 @@ class TradingMarketDataV2View:
             if str(payload.get("base_provider_snapshot_fingerprint") or "") != self.archive.snapshot_fingerprint:
                 # A retained batch pinned to another immutable Provider Snapshot
                 # belongs to another lineage and is not part of this view.
+                continue
+            if (
+                self._overlay_target_date_cutoff is not None
+                and str(payload.get("target_date") or "") > self._overlay_target_date_cutoff
+            ):
                 continue
             ledger_path = resolve_trading_market_data_v2_ledger_path(self.project_root, batch_fp)
             if not ledger_path.is_file():
@@ -321,8 +374,16 @@ class TradingMarketDataV2View:
             requested_members=requested_members,
         )
 
-    def view_identity(self, *, required_datasets) -> dict[str, object]:
-        horizon = self.training_horizon(required_datasets=required_datasets)
+    def view_identity(
+        self,
+        *,
+        required_datasets,
+        maximum_training_date: str | None = None,
+    ) -> dict[str, object]:
+        horizon = self.training_horizon(
+            required_datasets=required_datasets,
+            maximum_training_date=maximum_training_date,
+        )
         payload = {
             "role": "trading_market_data_v2_historical_latest_view",
             "provider_snapshot_fingerprint": self.archive.snapshot_fingerprint,

@@ -65,7 +65,9 @@ def _build_account_mark_inputs(*, project_root: Path, state: dict[str, Any], inf
     portfolio: dict[str, dict[str, Any]] = {}
     all_dfs_fast: dict[str, dict[pd.Timestamp, dict[str, float]]] = {}
     marks: list[dict[str, Any]] = []
-    view = TradingMarketDataV2View.open(project_root)
+    view = TradingMarketDataV2View.open_as_of_target(
+        project_root, target_date=str(information_date)
+    )
 
     for ticker, record in sorted((state.get("positions") or {}).items()):
         broker = record.get("broker") or {}

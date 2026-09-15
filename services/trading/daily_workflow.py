@@ -146,7 +146,9 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     expected_scanned_tickers = list(runtime.get("current_universe_tickers") or [])
     if not expected_scanned_tickers:
         raise RuntimeError("Trading Scanner 缺少 canonical current universe membership；請重新更新 Trading 資料")
-    v2_view = TradingMarketDataV2View.open(root)
+    v2_view = TradingMarketDataV2View.open_as_of_target(
+        root, target_date=str(runtime["latest_data_date"])
+    )
     prepared_frames = {
         ticker: build_trading_v2_ohlcv_frame(
             v2_view, ticker=ticker, through_date=str(runtime["latest_data_date"])

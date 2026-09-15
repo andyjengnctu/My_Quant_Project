@@ -632,6 +632,40 @@ def validate_trading_account_state_contract_case(base_params):
         check("account_dashboard_sell_detail_exposes_offset_gross", True, dashboard["sell_details"][0]["offset_gross_amount"] > 0)
         check("account_dashboard_sell_detail_exposes_offset_buy_fee", True, dashboard["sell_details"][0]["offset_buy_fee"] > 0)
 
+        # Account MTM freshness is intentionally independent from the latest
+        # fully-safe Scanner date.  If adjusted prices have a verified 9/15 row
+        # while the execution consumer is still finalized at 9/14, the account
+        # dashboard marks holdings at 9/15 without advancing Scanner lineage.
+        mtm_dataset_state = {
+            "datasets": {
+                "TaiwanStockPriceAdj": {
+                    "validation_contract_version": 3,
+                    "schema_status": "READY",
+                    "coverage_status": "READY",
+                    "latest_data_date": "2026-09-15",
+                    "last_ready_target_date": "2026-09-15",
+                    "last_exact_ready_target_date": "2026-09-15",
+                }
+            }
+        }
+        with (
+            patch(
+                "services.trading.account_dashboard.load_trading_v2_consumer_state",
+                return_value={"market_date": "2026-09-14"},
+            ),
+            patch(
+                "services.trading.account_dashboard.load_market_data_dataset_state",
+                return_value=mtm_dataset_state,
+            ),
+            patch(
+                "services.trading.account_dashboard._current_close_by_ticker",
+                return_value=({"2330": 121.0}, {}),
+            ),
+        ):
+            mtm_dashboard = build_trading_account_dashboard_read_model(root)
+        check("account_dashboard_mtm_date_can_advance_ahead_of_valid_scan_date", "2026-09-15", mtm_dashboard["market_date"])
+        check("account_dashboard_preserves_separate_valid_scan_date", "2026-09-14", mtm_dashboard["scan_market_date"])
+
     # Historical edit/delete must rebuild account truth rather than reverse-mutating
     # only the latest position.  The Workbench may omit expected_revision so the
     # service resolves current truth after acquiring the shared mutation lock.

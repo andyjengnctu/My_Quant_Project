@@ -277,6 +277,7 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             _tickers, pool = resolve_trading_v2_current_execution_pool(
                 local_view,
                 market_date=safe_date,
+                project_root=PROJECT_ROOT,
             )
             print(_paint("-" * 88, C_CYAN))
             print(_paint(f" Trading execution pool｜{safe_date}", C_CYAN))

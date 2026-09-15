@@ -18,7 +18,7 @@ import pandas as pd
 
 from core.file_integrity import canonical_json_sha256
 
-MARKET_DATA_POOL_LAYER_CONTRACT_VERSION = 1
+MARKET_DATA_POOL_LAYER_CONTRACT_VERSION = 2
 MARKET_DATA_MODEL_CONTEXT_POOL_ROLE = "date_local_pit_projection"
 MARKET_DATA_TRADING_EXECUTION_POOL_ROLE = "date_local_new_entry_eligibility"
 MARKET_DATA_POOL_SOURCE_ROLE = "neutral_daily_pit_market_universe"
@@ -28,7 +28,7 @@ MARKET_DATA_POOL_SOURCE_ROLE = "neutral_daily_pit_market_universe"
 class TradingExecutionPoolStats:
     listed_count: int
     price_exact_date_count: int
-    market_value_exact_date_count: int
+    market_value_usable_count: int
     listed_without_exact_price_count: int
     listed_with_exact_price_count: int
     below_min_volume_count: int
@@ -43,7 +43,7 @@ class TradingExecutionPoolStats:
         return {
             "listed_count": int(self.listed_count),
             "price_exact_date_count": int(self.price_exact_date_count),
-            "market_value_exact_date_count": int(self.market_value_exact_date_count),
+            "market_value_usable_count": int(self.market_value_usable_count),
             "listed_without_exact_price_count": int(self.listed_without_exact_price_count),
             "listed_with_exact_price_count": int(self.listed_with_exact_price_count),
             "below_min_volume_count": int(self.below_min_volume_count),
@@ -70,6 +70,8 @@ def market_data_pool_layer_contract_payload() -> dict[str, object]:
         "current_execution_pool_may_define_historical_training_universe": False,
         "trading_execution_pool_source": MARKET_DATA_POOL_SOURCE_ROLE,
         "trading_execution_pool_scope": "new_entry_only",
+        "trading_price_input_freshness": "exact_target",
+        "trading_market_value_input_freshness": "caller_resolved_scan_freshness_policy",
         "execution_pool_must_not_reduce_model_context": True,
         "holdings_data_retention_independent_of_current_execution_pool": True,
     }
@@ -131,23 +133,23 @@ def _normalized_numeric_map(
     dataset_label: str,
 ) -> dict[str, float]:
     if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
-        raise ValueError(f"{dataset_label} exact-date frame 不可為空")
+        raise ValueError(f"{dataset_label} frame 不可為空")
     required = {"stock_id", value_column}
     missing = required.difference(frame.columns)
     if missing:
-        raise ValueError(f"{dataset_label} exact-date frame 缺少欄位: {sorted(missing)}")
+        raise ValueError(f"{dataset_label} frame 缺少欄位: {sorted(missing)}")
     work = frame.loc[:, ["stock_id", value_column]].copy()
     work["stock_id"] = work["stock_id"].astype("string").str.strip()
     if work["stock_id"].isna().any() or (work["stock_id"] == "").any():
-        raise ValueError(f"{dataset_label} exact-date frame 存在空白 stock_id")
+        raise ValueError(f"{dataset_label} frame 存在空白 stock_id")
     duplicated = sorted(
         work.loc[work["stock_id"].duplicated(keep=False), "stock_id"].astype(str).unique().tolist()
     )
     if duplicated:
-        raise ValueError(f"{dataset_label} exact-date frame 存在重複 stock_id: {duplicated[:10]}")
+        raise ValueError(f"{dataset_label} frame 存在重複 stock_id: {duplicated[:10]}")
     work[value_column] = pd.to_numeric(work[value_column], errors="coerce")
     if work[value_column].isna().any():
-        raise ValueError(f"{dataset_label} exact-date frame 存在非數值 {value_column}")
+        raise ValueError(f"{dataset_label} frame 存在非數值 {value_column}")
     return dict(zip(work["stock_id"].astype(str), work[value_column].astype(float)))
 
 
@@ -233,14 +235,14 @@ def screen_daily_trading_execution_pool(
     if missing_market_value_for_high_volume_stock:
         sample = ",".join(missing_market_value_for_high_volume_stock[:20])
         raise RuntimeError(
-            "Trading execution pool 對高成交量股票缺少同日 market_value，依保守原則中止；"
+            "Trading execution pool 對高成交量股票缺少符合 Scan freshness policy 的 market_value，依保守原則中止；"
             f"count={len(missing_market_value_for_high_volume_stock)} sample={sample}"
         )
 
     stats = TradingExecutionPoolStats(
         listed_count=len(universe_by_sid),
         price_exact_date_count=len(volume_by_sid),
-        market_value_exact_date_count=len(market_value_by_sid),
+        market_value_usable_count=len(market_value_by_sid),
         listed_without_exact_price_count=int(listed_without_exact_price),
         listed_with_exact_price_count=len(universe_by_sid) - int(listed_without_exact_price),
         below_min_volume_count=int(below_min_volume_count),

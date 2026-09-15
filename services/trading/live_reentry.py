@@ -320,7 +320,9 @@ def build_trading_live_reentry_candidate_rows(
     records = build_trading_live_reentry_watch_records(root)
     if not records:
         return []
-    view = TradingMarketDataV2View.open(root)
+    view = TradingMarketDataV2View.open_as_of_target(
+        root, target_date=str(information_date)
+    )
     aggregated_rows: list[dict[str, Any]] = []
 
     for record in records:
