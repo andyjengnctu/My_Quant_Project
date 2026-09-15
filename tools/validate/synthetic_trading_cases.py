@@ -2977,7 +2977,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.workbench_ui.trading_account_panel import build_trading_account_panel_initial_bundle
     with tempfile.TemporaryDirectory() as temp_dir:
         initial_bundle = build_trading_account_panel_initial_bundle(Path(temp_dir))
-    expected_initial_keys = {"account", "dashboard", "candidate_read", "candidate_payload", "protection", "indicator", "workflow", "operations"}
+    expected_initial_keys = {"reconcile", "account", "dashboard", "candidate_read", "candidate_payload", "protection", "indicator", "workflow", "operations"}
     check("workbench_trading_initial_bundle_has_all_canonical_read_models", expected_initial_keys, set(initial_bundle))
     check_true("workbench_trading_initial_bundle_reads_empty_state_without_exception", all(bool(value[0]) for value in initial_bundle.values()))
 
@@ -3037,6 +3037,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_refresh_reloads_persisted_proposed_plan", True, "def refresh_proposed_order_plan" in panel_source and "load_current_trading_proposed_order_plan" in panel_source)
     check("workbench_refresh_reloads_persisted_scanner_snapshot", True, "def refresh_candidate_snapshot_rows" in panel_source and "load_trading_candidate_snapshot" in panel_source)
     check("workbench_trading_initial_state_reads_off_tk_thread", True, 'name="workbench-trading-initial-state"' in panel_source and "build_trading_account_panel_initial_bundle" in panel_source and "_initial_state_results.put" in panel_source)
+    check("workbench_trading_consumer_reconcile_runs_inside_background_bundle", True, 'bundle["reconcile"] = _capture_initial_panel_value' in panel_source and 'reconcile_trading_v2_consumer_state_from_local_evidence(root)' in panel_source)
+    operations_refresh_body = panel_source.split("def refresh_operations_status", 1)[1].split("def ", 1)[0]
+    check("workbench_trading_status_render_never_reconciles_on_tk_thread", False, "reconcile_trading_v2_consumer_state_from_local_evidence" in operations_refresh_body)
     check("workbench_trading_background_worker_never_calls_tk_after", True, "self.after(0, self._finish_initial_state_load" not in panel_source and "def _drain_initial_state_results" in panel_source)
     check("workbench_trading_constructor_defers_state_reads_until_after_paint", True, "self.after(80, self._start_initial_state_load)" in panel_source and "self.refresh_account()\n        self.refresh_candidate_snapshot_rows()" not in panel_source.split("def __init__", 1)[1].split("def _set_initial_loading_state", 1)[0])
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)

@@ -13,6 +13,7 @@ from core.market_data_scan_freshness import (
 )
 from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
 from services.trading.market_data_auto_update import run_trading_market_data_auto_update
+from services.trading.market_data_consumer import reconcile_trading_v2_consumer_state_from_local_evidence
 from services.trading.market_data_ops import build_market_data_ops_read_model
 from services.trading.market_data_dataset_state import set_market_data_scan_freshness_mode
 from services.trading.market_data_scheduler import (
@@ -213,11 +214,14 @@ class MarketDataOpsPanel(ttk.Frame):
         self._kpi_detail_vars = {key: tk.StringVar(value="-") for key in self._kpi_vars}
         self._build_ui()
         self.refresh_local_status()
+        # AI: Paint Data Center first. Local consumer promotion can rebuild a V2
+        # execution view and must never run on the Tk thread.
+        self.after(80, lambda: self._start_action("reconcile"))
 
     def _build_ui(self):
         controls = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
         controls.pack(fill="x", pady=(0, 6))
-        ttk.Button(controls, text="刷新狀態（0 quota）", command=self.refresh_local_status, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(0, 6))
+        ttk.Button(controls, text="刷新狀態（0 quota）", command=lambda: self._start_action("reconcile"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(0, 6))
         self._due_button = ttk.Button(controls, text="立即檢查 Due", command=lambda: self._start_action("due"), style=WORKBENCH_BUTTON_STYLE)
         self._due_button.pack(side="left", padx=(0, 6))
         self._full_button = ttk.Button(controls, text="完整更新 Trading 資料", command=lambda: self._start_action("full"), style=WORKBENCH_BUTTON_STYLE)
@@ -634,6 +638,8 @@ class MarketDataOpsPanel(ttk.Frame):
         )
 
     def refresh_local_status(self):
+        """Render persisted Market Data state only; never promote on the Tk thread."""
+
         try:
             snapshot = build_market_data_ops_read_model(WORKBENCH_PROJECT_ROOT)
         except Exception as exc:
@@ -645,7 +651,9 @@ class MarketDataOpsPanel(ttk.Frame):
         blockers = [str(item) for item in list(snapshot.get("trading_blocking_dependencies") or []) if str(item)]
         suffix = "" if not blockers else " | Trading BLOCKED: " + "；".join(blockers[:2])
         self._status_var.set(f"本地狀態已刷新（provider calls={snapshot.get('provider_calls', 0)}）{suffix}")
-        self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE if blockers else WORKBENCH_INFO_LABEL_STYLE)
+        self._status_label.configure(
+            style=(WORKBENCH_ERROR_LABEL_STYLE if blockers else WORKBENCH_INFO_LABEL_STYLE)
+        )
 
     def _clear_tree(self, tree: ttk.Treeview) -> None:
         overlay = self._cell_overlays.get(tree)
@@ -992,6 +1000,7 @@ class MarketDataOpsPanel(ttk.Frame):
             return
         self._set_action_state("disabled")
         labels = {
+            "reconcile": "本地狀態同步",
             "due": "Due 檢查",
             "full": "完整 Trading 更新",
             "scheduler_install": "安裝 / 更新 Auto Sync",
@@ -1006,7 +1015,11 @@ class MarketDataOpsPanel(ttk.Frame):
     def _run_action(self, action: str):
         console_progress = MarketDataDailyConsoleProgress() if action in {"due", "full"} else None
         try:
-            if action == "due":
+            if action == "reconcile":
+                result = reconcile_trading_v2_consumer_state_from_local_evidence(
+                    WORKBENCH_PROJECT_ROOT
+                )
+            elif action == "due":
                 result = run_trading_market_data_auto_update(
                     project_root=WORKBENCH_PROJECT_ROOT,
                     progress_fn=console_progress.progress,

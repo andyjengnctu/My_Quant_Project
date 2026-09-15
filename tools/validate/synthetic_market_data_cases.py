@@ -3963,6 +3963,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("v2_auto_updater_resolves_target_from_provider_and_v2_operational_state", True, "resolve_trading_market_data_update_target_date as _resolve_target_date" in auto_update_source and "find_latest_ready_provider_snapshot" in state_source and "load_market_date_discovery_state" in state_source)
     check("v2_failure_state_remains_owned_by_v2_sync_path", True, "publish_trading_market_data_v2_state(" in v2_sync_source and '"last_error": error' in v2_sync_source)
     check("workbench_exposes_v2_archive_status", True, "V2 Archive" in data_ops_panel_source)
+    data_ops_refresh_body = data_ops_panel_source.split("def refresh_local_status", 1)[1].split("def ", 1)[0]
+    check("workbench_data_ops_render_never_reconciles_on_tk_thread", False, "reconcile_trading_v2_consumer_state_from_local_evidence" in data_ops_refresh_body)
+    check("workbench_data_ops_local_reconcile_uses_background_action_thread", True, 'self.after(80, lambda: self._start_action("reconcile"))' in data_ops_panel_source and 'if action == "reconcile"' in data_ops_panel_source and 'command=lambda: self._start_action("reconcile")' in data_ops_panel_source)
     check(
         "workbench_dataset_table_labels_provider_attempt_as_last_check",
         True,
@@ -6582,6 +6585,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         build_trading_v2_ohlcv_frame,
         load_trading_v2_consumer_state,
         publish_trading_v2_consumer_state,
+        reconcile_trading_v2_consumer_state_from_local_evidence,
     )
 
     case_id = "MARKET_DATA_V2_TRADING_DIRECT_CONSUMER_CUTOVER"
@@ -6714,6 +6718,26 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         check("consumer_state_verify_reopens_exact_pinned_overlay_set", ("batch-a", "batch-b"), tuple(open_finalized.call_args.kwargs["overlay_batch_fingerprints"]))
         check("consumer_state_verify_reopens_pinned_provider_snapshot", "provider-snapshot-fp", open_finalized.call_args.kwargs["provider_snapshot_fingerprint"])
         check("consumer_state_finalized_target_identity_verifies", second["state_fingerprint"], verified["state_fingerprint"])
+
+        with (
+            patch(
+                "services.trading.market_data_v2_state.resolve_trading_market_data_update_target_date",
+                return_value="2026-09-15",
+            ),
+            patch(
+                "services.trading.market_data_consumer.promote_trading_v2_consumer_state_if_ready",
+                return_value={
+                    "promoted": True,
+                    "reason": "PROMOTED",
+                    "market_date": "2026-09-15",
+                },
+            ) as promote_local,
+        ):
+            reconciled = reconcile_trading_v2_consumer_state_from_local_evidence(root)
+        check("local_refresh_reconcile_uses_candidate_scan_target", "2026-09-15", reconciled["target_date"])
+        check("local_refresh_reconcile_promotes_ready_consumer", True, reconciled["promoted"])
+        check("local_refresh_reconcile_has_zero_provider_calls", 0, reconciled.get("provider_calls", 0))
+        check("local_refresh_reconcile_delegates_once", 1, promote_local.call_count)
 
     repo = Path(__file__).resolve().parents[2]
     sources = {

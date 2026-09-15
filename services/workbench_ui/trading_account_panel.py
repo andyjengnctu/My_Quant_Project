@@ -40,6 +40,7 @@ from services.trading.scanner_state import (
 )
 from services.trading.position_rollforward import run_trading_position_rollforward
 from services.trading.operations_status import build_trading_operations_status
+from services.trading.market_data_consumer import reconcile_trading_v2_consumer_state_from_local_evidence
 from services.trading.operational_audit import run_trading_operational_audit
 from services.trading.protection_planning import (
     PROTECTION_STOP_REMAINDER_ACTION,
@@ -365,6 +366,11 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
 
     root = Path(project_root).resolve()
     bundle: dict[str, object] = {}
+    # AI: Consumer promotion may rebuild execution membership and therefore
+    # belongs in this background bundle worker, never in a Tk refresh method.
+    bundle["reconcile"] = _capture_initial_panel_value(
+        lambda: reconcile_trading_v2_consumer_state_from_local_evidence(root)
+    )
     bundle["account"] = _capture_initial_panel_value(lambda: build_trading_account_panel_snapshot(root))
 
     def _load_dashboard():

@@ -346,6 +346,44 @@ def get_trading_v2_consumer_state_sha256(project_root: str | Path) -> str:
     return compute_file_sha256(path)
 
 
+def reconcile_trading_v2_consumer_state_from_local_evidence(
+    project_root: str | Path,
+    *,
+    now=None,
+) -> dict[str, Any]:
+    """Provider-free reconciliation of candidate target and finalized consumer.
+
+    This is the local-state counterpart of Auto/Due/Full Update.  It never
+    calls FinMind.  When persisted dataset evidence already proves the active
+    strategy dependency set READY for the current candidate Scan Target, it
+    promotes the execution consumer immediately; otherwise it leaves the prior
+    finalized consumer untouched.
+    """
+
+    from services.trading.market_data_v2_state import resolve_trading_market_data_update_target_date
+
+    root = Path(project_root).resolve()
+    target_date = resolve_trading_market_data_update_target_date(root, now=now)
+    if not target_date:
+        prior = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
+        return {
+            "promoted": False,
+            "reason": "NO_TARGET",
+            "target_date": None,
+            "market_date": None if prior is None else prior.get("market_date"),
+            "provider_calls": 0,
+        }
+    result = promote_trading_v2_consumer_state_if_ready(
+        root,
+        target_date=str(target_date),
+    )
+    return {
+        **dict(result),
+        "target_date": str(target_date),
+        "provider_calls": 0,
+    }
+
+
 def promote_trading_v2_consumer_state_if_ready(
     project_root: str | Path,
     *,
@@ -535,6 +573,7 @@ __all__ = [
     "load_trading_v2_consumer_state",
     "open_trading_v2_consumer_view",
     "promote_trading_v2_consumer_state_if_ready",
+    "reconcile_trading_v2_consumer_state_from_local_evidence",
     "get_trading_v2_consumer_state_sha256",
     "publish_trading_v2_consumer_state",
     "load_trading_v2_optimizer_raw_data",
