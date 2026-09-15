@@ -2658,21 +2658,45 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
 
-    check("buy_trade_label_uses_trade_info_wording", True, "資金: -" in buy_label_text and "股數: 1,000" in buy_label_text and "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "實支: 123,456" in buy_label_text and "進場類型: 正常" in buy_label_text and "結果: 成交" in buy_label_text)
+    check("buy_trade_label_uses_trade_info_wording", True, "資金: -" in buy_label_text and "股數: 1,000" in buy_label_text and "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "實支: 123,456" in buy_label_text and "進場類型: 正常" in buy_label_text)
     reentry_label_text = build_trade_label_text("買進(重進)", {"qty": 1000, "meta": {"entry_price": 55.2, "entry_type": "reentry", "result": "成交"}})
-    check("buy_trade_label_formats_reentry_as_heavy_reentry", True, "進場類型: 重進" in reentry_label_text and "結果: 成交" in reentry_label_text)
-    check("buy_trade_label_includes_result_last", "結果: 成交", buy_label_text.split("\n")[-1] if buy_label_text else "")
+    check("buy_trade_label_formats_reentry_as_heavy_reentry", True, "進場類型: 重進" in reentry_label_text)
+    check("trade_info_boxes_omit_result_row", False, any(line.startswith("結果:") for line in buy_label_text.split("\n")))
     check("buy_trade_label_overlay_includes_buy_and_missed_traces", True, "CHART_TRADE_LABEL_TRACE_NAMES" in charting_source and '"買進(延續候選)"' in charting_source and '"買進(重進)"' in charting_source and '"錯失買進(重進)"' in charting_source and "supported_traces = set(CHART_TRADE_LABEL_TRACE_NAMES)" in charting_source)
-    check("buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(slot_index, placement=placement, trace_name=trace_name)' in charting_source and 'base_y = -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
-    check("buy_trade_label_overlay_offsets_when_signal_or_nearby_trade_boxes_cluster", True, '_count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=collision_window)' in charting_source and 'collision_window = 5 if placement == "below" else 4' in charting_source and 'occupied_positions.append({"x": x_value, "placement": placement})' in charting_source)
+    check("buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(placement=placement, trace_name=trace_name)' in charting_source and 'return 0, -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
+    check("trade_info_boxes_use_actual_bbox_vertical_collision_layout", True, '_layout_chart_annotation_boxes' in charting_source and '_annotation_base_bbox' in charting_source and '_bbox_overlaps_with_padding' in charting_source and 'draw_event' in charting_source and 'annotation_layout_axis": "vertical"' in charting_source)
     check("single_stock_sidebar_trade_info_includes_reserved_and_actual_spend_fields", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_limit_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source and '_selected_capital_var' in inspector_source and 'set_workbench_capital_display_text(' in workbench_source)
     check("single_stock_sidebar_sets_reserved_and_actual_spend_from_hover_snapshot", True, 'reserved_text=self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital"))' in workbench_source and 'actual_text=self._format_sidebar_amount_value("實支", snapshot.get("buy_capital"))' in workbench_source and 'display_mode=resolve_workbench_capital_display_mode_for_snapshot(snapshot)' in workbench_source and 'reserved_capital = buy_signal_meta.get("reserved_capital")' in charting_source and 'reserved_capital = buy_trade_meta.get("reserved_capital")' in charting_source and 'buy_capital = buy_trade_meta.get("buy_capital")' in charting_source and '"buy_capital": buy_capital' in charting_source)
     check("single_stock_filled_buy_marker_writes_reserved_capital", True, "'reserved_capital': reserved_cost" in entry_flow_source and "reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)" in entry_flow_source)
     check("tp_trade_label_includes_fill_amount_and_leg_pnl", True, "成交: -" in tp_label_text and "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
-    check("exit_trade_label_includes_trade_pnl_drawdown_trade_count_and_result", True, "損益: +3,333" in exit_label_text and "最大回撤: 5.43%" in exit_label_text and "交易次數: 第 11 次" in exit_label_text and exit_label_text.split("\n")[-1] == "結果: 停損")
+    check("exit_trade_label_includes_trade_pnl_drawdown_and_trade_count", True, "損益: +3,333" in exit_label_text and "最大回撤: 5.43%" in exit_label_text and "交易次數: 第 11 次" in exit_label_text)
+    check("exit_trade_info_box_omits_result_row", False, any(line.startswith("結果:") for line in exit_label_text.split("\n")))
     check("exit_trade_label_includes_current_capital_and_no_total_pnl_label", True, "資金: 2,012,345" in exit_label_text and "總損益:" not in exit_label_text and "風報比:" not in exit_label_text and "EV:" not in exit_label_text)
     check("chart_legend_lists_complete_event_and_line_contract", True, "CHART_EVENT_LEGEND_ORDER" in charting_source and "CHART_LINE_LEGEND_SPECS" in charting_source and "_build_complete_matplotlib_legend_handles" in charting_source and 'visible="legendonly"' in charting_source)
     check("chart_limit_buy_legend_is_unified", True, 'trace_name = "限價買進"' in charting_source and '"限價買進(延續候選)"' not in charting_source and '("限價線", MATPLOTLIB_LIMIT_COLOR' in charting_source and '進場類型: {entry_type_label}' in charting_source)
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    layout_chart_annotation_boxes = getattr(charting_module, "_layout_chart_annotation_boxes")
+    tag_chart_annotation_layout = getattr(charting_module, "_tag_chart_annotation_layout")
+    layout_figure = Figure(figsize=(8, 5), dpi=96)
+    layout_canvas = FigureCanvasAgg(layout_figure)
+    layout_axis = layout_figure.add_subplot(111)
+    layout_axis.set_xlim(0, 10)
+    layout_axis.set_ylim(0, 10)
+    layout_artists = []
+    for text in ("買進\n資金: 2,000,000\n股數: 1,000\n成交: 55.20", "停損\n資金: 2,010,000\n股數: 1,000\n損益: -1,000"):
+        artist = layout_axis.annotate(text, xy=(5, 5), xytext=(0, 18), textcoords="offset points", ha="center", va="bottom", bbox={"boxstyle": "round,pad=0.38", "fc": "#123456"})
+        tag_chart_annotation_layout(artist, placement="above", base_position=(0, 18), kind="trade")
+        layout_artists.append(artist)
+    layout_canvas.draw()
+    layout_renderer = layout_canvas.get_renderer()
+    changed = layout_chart_annotation_boxes(layout_axis, layout_artists, layout_renderer)
+    layout_canvas.draw()
+    layout_renderer = layout_canvas.get_renderer()
+    layout_boxes = [artist.get_window_extent(layout_renderer) for artist in layout_artists]
+    check("trade_info_boxes_dynamic_layout_moves_overlapping_box", True, changed)
+    check("trade_info_boxes_dynamic_layout_removes_bbox_overlap", False, layout_boxes[0].overlaps(layout_boxes[1]))
 
     summary["buy_label"] = buy_label_text
     summary["tp_label"] = tp_label_text
@@ -2786,7 +2810,7 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
         },
     )
     exit_lines = exit_label_text.split("\n")
-    check("exit_trade_label_places_result_last_for_stop", "結果: 停損", exit_lines[-1] if exit_lines else "")
+    check("exit_trade_label_omits_result_row_for_stop", False, any(line.startswith("結果:") for line in exit_lines))
     check("exit_trade_label_trade_count_matches_latest_completed_trade", True, "交易次數: 第 14 次" in exit_label_text)
 
     summary["expected_trade_count"] = expected_trade_count

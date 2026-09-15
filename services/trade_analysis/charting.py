@@ -1333,13 +1333,13 @@ CHART_INFO_FIELD_SPECS = {
 
 CHART_INFO_BOX_SCHEMAS = {
     "買訊": ("capital", "qty", "limit_price", "reserved_capital"),
-    "買進": ("capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type", "result"),
-    "錯失買進": ("capital", "qty", "limit_price", "reserved_capital", "entry_type", "result"),
+    "買進": ("capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type"),
+    "錯失買進": ("capital", "qty", "limit_price", "reserved_capital", "entry_type"),
     "賣訊": ("capital", "qty", "reference_close"),
     "停利": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct"),
-    "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
-    "指標賣出": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
-    "強制結算": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
+    "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
+    "指標賣出": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
+    "強制結算": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
 }
 
 
@@ -1512,39 +1512,151 @@ def _compute_dynamic_linewidths(axis_price, figure):
     return body_px * pt_scale, wick_px * pt_scale
 
 
-def _count_nearby_annotation_slots(x_value, placement, occupied_positions, *, collision_window):
-    return sum(
-        1
-        for item in occupied_positions
-        if item.get("placement") == placement and abs(int(item.get("x", -10**9)) - int(x_value)) <= int(collision_window)
+def _tag_chart_annotation_layout(artist, *, placement, base_position, kind):
+    artist._stock_chart_annotation_layout = {
+        "placement": str(placement),
+        "base_position": (float(base_position[0]), float(base_position[1])),
+        "kind": str(kind),
+    }
+    return artist
+
+
+def _bbox_overlaps_with_padding(left, right, *, pad_x=4.0, pad_y=6.0):
+    return bool(
+        float(left.x0) < float(right.x1) + float(pad_x)
+        and float(left.x1) > float(right.x0) - float(pad_x)
+        and float(left.y0) < float(right.y1) + float(pad_y)
+        and float(left.y1) > float(right.y0) - float(pad_y)
     )
 
 
-def _resolve_trade_label_offsets(slot_index, *, placement, trace_name):
+def _annotation_base_bbox(artist, renderer, *, dpi):
+    layout = getattr(artist, "_stock_chart_annotation_layout", None) or {}
+    base_x, base_y = layout.get("base_position", artist.get_position())
+    current_x, current_y = artist.get_position()
+    px_per_point = float(dpi) / 72.0
+    current_bbox = artist.get_window_extent(renderer)
+    return current_bbox.translated(
+        (float(base_x) - float(current_x)) * px_per_point,
+        (float(base_y) - float(current_y)) * px_per_point,
+    )
+
+
+def _choose_annotation_vertical_shift(base_bbox, *, placement, occupied_bboxes, axes_bbox, margin_px=6.0, gap_px=7.0):
+    candidate_shifts = {0.0}
+    for occupied in occupied_bboxes:
+        if float(base_bbox.x0) >= float(occupied.x1) + 4.0 or float(base_bbox.x1) <= float(occupied.x0) - 4.0:
+            continue
+        candidate_shifts.add(float(occupied.y1) + float(gap_px) - float(base_bbox.y0))
+        candidate_shifts.add(float(occupied.y0) - float(gap_px) - float(base_bbox.y1))
+
+    candidate_shifts.add(float(axes_bbox.y1) - float(margin_px) - float(base_bbox.y1))
+    candidate_shifts.add(float(axes_bbox.y0) + float(margin_px) - float(base_bbox.y0))
+
+    preferred_positive = str(placement) != "below"
+    ordered = sorted(
+        candidate_shifts,
+        key=lambda shift: (
+            0 if (float(shift) >= -1e-9 if preferred_positive else float(shift) <= 1e-9) else 1,
+            abs(float(shift)),
+        ),
+    )
+    for shift in ordered:
+        shifted = base_bbox.translated(0.0, float(shift))
+        if float(shifted.y0) < float(axes_bbox.y0) + float(margin_px):
+            continue
+        if float(shifted.y1) > float(axes_bbox.y1) - float(margin_px):
+            continue
+        if any(_bbox_overlaps_with_padding(shifted, occupied, pad_x=4.0, pad_y=gap_px) for occupied in occupied_bboxes):
+            continue
+        return float(shift), shifted
+
+    # Extremely dense clusters may exceed the visible vertical space. Keep the
+    # box inside the axes and choose the candidate with the least overlap area.
+    best = None
+    for shift in ordered:
+        shifted = base_bbox.translated(0.0, float(shift))
+        boundary_penalty = max(0.0, float(axes_bbox.y0) + float(margin_px) - float(shifted.y0))
+        boundary_penalty += max(0.0, float(shifted.y1) - (float(axes_bbox.y1) - float(margin_px)))
+        overlap_penalty = 0.0
+        for occupied in occupied_bboxes:
+            x_overlap = max(0.0, min(float(shifted.x1), float(occupied.x1)) - max(float(shifted.x0), float(occupied.x0)))
+            y_overlap = max(0.0, min(float(shifted.y1), float(occupied.y1)) - max(float(shifted.y0), float(occupied.y0)))
+            overlap_penalty += x_overlap * y_overlap
+        score = boundary_penalty * 1000.0 + overlap_penalty + abs(float(shift)) * 0.001
+        if best is None or score < best[0]:
+            best = (score, float(shift), shifted)
+    if best is not None:
+        return best[1], best[2]
+    return 0.0, base_bbox
+
+
+def _layout_chart_annotation_boxes(axis_price, artists, renderer, *, reserved_artists=()):
+    if renderer is None:
+        return False
+    figure = axis_price.figure
+    axes_bbox = axis_price.get_window_extent(renderer)
+    occupied_bboxes = []
+    for reserved in reserved_artists or ():
+        if reserved is None or not getattr(reserved, "get_visible", lambda: True)():
+            continue
+        try:
+            bbox = reserved.get_window_extent(renderer)
+        except (AttributeError, RuntimeError, ValueError):
+            continue
+        if bbox.width > 0 and bbox.height > 0:
+            occupied_bboxes.append(bbox)
+
+    candidates = []
+    for artist in artists or ():
+        if artist is None or not artist.get_visible():
+            continue
+        layout = getattr(artist, "_stock_chart_annotation_layout", None)
+        if not layout:
+            continue
+        try:
+            base_bbox = _annotation_base_bbox(artist, renderer, dpi=figure.dpi)
+        except (AttributeError, RuntimeError, ValueError):
+            continue
+        candidates.append((float(base_bbox.x0 + base_bbox.x1) / 2.0, artist, layout, base_bbox))
+
+    candidates.sort(key=lambda item: (item[0], 0 if item[2].get("placement") == "below" else 1, item[2].get("kind", "")))
+    changed = False
+    px_per_point = float(figure.dpi) / 72.0
+    for _, artist, layout, base_bbox in candidates:
+        placement = str(layout.get("placement") or "above")
+        shift_px, final_bbox = _choose_annotation_vertical_shift(
+            base_bbox,
+            placement=placement,
+            occupied_bboxes=occupied_bboxes,
+            axes_bbox=axes_bbox,
+        )
+        base_x, base_y = layout.get("base_position", artist.get_position())
+        next_position = (float(base_x), float(base_y) + float(shift_px) / px_per_point)
+        current_position = artist.get_position()
+        if abs(float(current_position[0]) - next_position[0]) > 0.05 or abs(float(current_position[1]) - next_position[1]) > 0.05:
+            artist.set_position(next_position)
+            changed = True
+        occupied_bboxes.append(final_bbox)
+    return changed
+
+
+def _resolve_trade_label_offsets(*, placement, trace_name):
     if trace_name in CHART_BUY_AND_MISSED_BUY_TRACE_NAMES:
-        base_y = -64
-        step_y = 32
-    elif placement == "below":
-        base_y = -82
-        step_y = 30
-    else:
-        base_y = 18
-        step_y = 28
-    x_offset = 0
-    tier = max(0, int(slot_index))
-    y_offset = base_y - (tier * step_y) if placement == "below" else base_y + (tier * step_y)
-    return x_offset, y_offset
-
-
-def _resolve_signal_label_offsets(slot_index, *, placement):
+        return 0, -64
     if placement == "below":
-        return 0, -64 - (max(0, int(slot_index)) * 32), "top"
-    return 0, 18 + (max(0, int(slot_index)) * 28), "bottom"
+        return 0, -82
+    return 0, 18
+
+
+def _resolve_signal_label_offsets(*, placement):
+    if placement == "below":
+        return 0, -64, "top"
+    return 0, 18, "bottom"
 
 
 def _render_signal_annotations(axis_price, signal_annotations, label_font, *, start_idx=None, end_idx=None):
     rendered = []
-    occupied_positions = []
     visible_items = []
     for item in signal_annotations:
         x_value = int(item["x"])
@@ -1557,46 +1669,33 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
     visible_items.sort(key=lambda current: (current[0], current[1], str(current[2].get("title", ""))))
 
     for x_value, _, item, placement in visible_items:
-        slot_index = _count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=5)
-        x_offset, y_offset, va = _resolve_signal_label_offsets(slot_index, placement=placement)
-        occupied_positions.append({"x": x_value, "placement": placement})
+        x_offset, y_offset, va = _resolve_signal_label_offsets(placement=placement)
         face_color, arrow_color = _resolve_signal_annotation_face(item)
         annotation_text = item["title"]
         if item.get("detail_text"):
             annotation_text = f"{annotation_text}\n{item['detail_text']}"
-        rendered.append(
-            axis_price.annotate(
-                annotation_text,
-                xy=(item["x"], item["anchor_price"]),
-                xytext=(x_offset, y_offset),
-                textcoords="offset points",
-                ha="center",
-                va=va,
-                color=MATPLOTLIB_TEXT_COLOR,
-                fontsize=MATPLOTLIB_SIGNAL_FONT_SIZE if label_font is None else None,
-                fontproperties=label_font,
-                bbox={"boxstyle": "round,pad=0.46", "fc": face_color, "ec": arrow_color},
-                arrowprops={"arrowstyle": "-|>", "color": arrow_color, "lw": 1.55, "alpha": 0.96, "mutation_scale": MATPLOTLIB_SIGNAL_ARROW_MUTATION_SCALE},
-                zorder=7,
-                annotation_clip=True,
-            )
+        artist = axis_price.annotate(
+            annotation_text,
+            xy=(item["x"], item["anchor_price"]),
+            xytext=(x_offset, y_offset),
+            textcoords="offset points",
+            ha="center",
+            va=va,
+            color=MATPLOTLIB_TEXT_COLOR,
+            fontsize=MATPLOTLIB_SIGNAL_FONT_SIZE if label_font is None else None,
+            fontproperties=label_font,
+            bbox={"boxstyle": "round,pad=0.46", "fc": face_color, "ec": arrow_color},
+            arrowprops={"arrowstyle": "-|>", "color": arrow_color, "lw": 1.55, "alpha": 0.96, "mutation_scale": MATPLOTLIB_SIGNAL_ARROW_MUTATION_SCALE},
+            zorder=7,
+            annotation_clip=True,
         )
+        rendered.append(_tag_chart_annotation_layout(artist, placement=placement, base_position=(x_offset, y_offset), kind="signal"))
     return rendered
 
 
 def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
     supported_traces = set(CHART_TRADE_LABEL_TRACE_NAMES)
-    occupied_positions = []
-    for item in signal_annotations or []:
-        x_value = int(item.get("x", -10**9))
-        if start_idx is not None and x_value < int(start_idx):
-            continue
-        if end_idx is not None and x_value > int(end_idx):
-            continue
-        placement = "below" if item.get("signal_type") == "buy" else "above"
-        occupied_positions.append({"x": x_value, "placement": placement})
-
     trade_items = []
     for trace_name, markers in marker_groups.items():
         if trace_name not in supported_traces:
@@ -1613,30 +1712,25 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annota
     trade_items.sort(key=lambda item: (item[0], item[1], item[2]))
     for x_value, _, trace_name, marker in trade_items:
         face_color, text_color, placement = _resolve_trade_box_style(trace_name, marker)
-        collision_window = 5 if placement == "below" else 4
-        slot_index = _count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=collision_window)
-        x_offset, y_offset = _resolve_trade_label_offsets(slot_index, placement=placement, trace_name=trace_name)
-        occupied_positions.append({"x": x_value, "placement": placement})
+        x_offset, y_offset = _resolve_trade_label_offsets(placement=placement, trace_name=trace_name)
         va = "top" if placement == "below" else "bottom"
-        rendered.append(
-            axis_price.annotate(
-                _build_trade_label_text(trace_name, marker),
-                xy=(marker["x"], marker["price"]),
-                xytext=(x_offset, y_offset),
-                textcoords="offset points",
-                ha="center",
-                va=va,
-                color=MATPLOTLIB_TEXT_COLOR if placement == "below" else text_color,
-                fontsize=MATPLOTLIB_SIGNAL_FONT_SIZE if label_font is None else None,
-                fontproperties=label_font,
-                bbox={"boxstyle": "round,pad=0.38", "fc": face_color, "ec": "none"},
-                arrowprops={"arrowstyle": "-|>", "color": text_color, "lw": 1.45, "alpha": 0.94, "mutation_scale": MATPLOTLIB_SIGNAL_ARROW_MUTATION_SCALE},
-                zorder=6,
-                annotation_clip=True,
-            )
+        artist = axis_price.annotate(
+            _build_trade_label_text(trace_name, marker),
+            xy=(marker["x"], marker["price"]),
+            xytext=(x_offset, y_offset),
+            textcoords="offset points",
+            ha="center",
+            va=va,
+            color=MATPLOTLIB_TEXT_COLOR if placement == "below" else text_color,
+            fontsize=MATPLOTLIB_SIGNAL_FONT_SIZE if label_font is None else None,
+            fontproperties=label_font,
+            bbox={"boxstyle": "round,pad=0.38", "fc": face_color, "ec": "none"},
+            arrowprops={"arrowstyle": "-|>", "color": text_color, "lw": 1.45, "alpha": 0.94, "mutation_scale": MATPLOTLIB_SIGNAL_ARROW_MUTATION_SCALE},
+            zorder=6,
+            annotation_clip=True,
         )
+        rendered.append(_tag_chart_annotation_layout(artist, placement=placement, base_position=(x_offset, y_offset), kind="trade"))
     return rendered
-
 
 def _render_future_preview_lines(axis_price, chart_payload):
     preview = dict(chart_payload.get("future_preview") or {})
@@ -1994,6 +2088,9 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "signal_annotation_count": int(len(chart_payload.get("signal_annotations", []))),
         "dynamic_candle_width_enabled": True,
         "buy_trade_label_boxes_enabled": True,
+        "dynamic_annotation_collision_layout": True,
+        "annotation_layout_axis": "vertical",
+        "trade_info_result_row_visible": False,
         "mouse_drag_pan_mode": "pixel_anchor",
         "grid_alpha": 0.12,
     }
@@ -2019,6 +2116,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "wick_collection": wick_collection,
         "volume_collection": volume_collection,
         "interaction_flags": interaction_flags,
+        "annotation_layout_state": {"running": False, "redraw_pending": False},
     }
     return figure
 
@@ -2302,6 +2400,40 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         if not drag_state["active"]:
             canvas_widget.configure(cursor="")
 
+    def _on_draw(event):
+        layout_state = state.setdefault("annotation_layout_state", {"running": False, "redraw_pending": False})
+        if layout_state.get("running"):
+            return
+        layout_state["running"] = True
+        try:
+            artists = [
+                *(state.get("signal_artists") or []),
+                *(state.get("trade_label_artists") or []),
+            ]
+            reserved = [
+                axis_price.get_legend(),
+                state.get("summary_artist"),
+                *(state.get("status_chip_artists") or []),
+            ]
+            changed = _layout_chart_annotation_boxes(
+                axis_price,
+                artists,
+                getattr(event, "renderer", None),
+                reserved_artists=reserved,
+            )
+        finally:
+            layout_state["running"] = False
+        if not changed or layout_state.get("redraw_pending"):
+            return
+        layout_state["redraw_pending"] = True
+
+        def _redraw_after_layout():
+            layout_state["redraw_pending"] = False
+            if figure.canvas is not None:
+                figure.canvas.draw_idle()
+
+        canvas_widget.after_idle(_redraw_after_layout)
+
     connection_ids = {
         "button_press_event": canvas.mpl_connect("button_press_event", _on_press),
         "motion_notify_event": canvas.mpl_connect("motion_notify_event", _on_motion),
@@ -2309,6 +2441,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         "scroll_event": canvas.mpl_connect("scroll_event", _on_scroll),
         "figure_leave_event": canvas.mpl_connect("figure_leave_event", _on_leave),
         "key_press_event": canvas.mpl_connect("key_press_event", _on_key_press),
+        "draw_event": canvas.mpl_connect("draw_event", _on_draw),
     }
     state["connection_ids"] = connection_ids
     figure._stock_chart_contract["mouse_wheel_zoom_enabled"] = True
