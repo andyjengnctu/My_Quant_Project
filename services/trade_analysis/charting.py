@@ -1543,47 +1543,52 @@ def _annotation_base_bbox(artist, renderer, *, dpi):
 
 
 def _choose_annotation_vertical_shift(base_bbox, *, placement, occupied_bboxes, axes_bbox, margin_px=6.0, gap_px=7.0):
+    """Choose the nearest non-overlapping vertical position.
+
+    Distance is the primary objective. ``placement`` is only a tie-breaker, so
+    an annotation is never pushed a long way toward the top/bottom merely to
+    preserve its original above/below preference.
+    """
     candidate_shifts = {0.0}
     for occupied in occupied_bboxes:
         if float(base_bbox.x0) >= float(occupied.x1) + 4.0 or float(base_bbox.x1) <= float(occupied.x0) - 4.0:
             continue
+        # These are the exact minimum shifts needed to clear this occupied box.
         candidate_shifts.add(float(occupied.y1) + float(gap_px) - float(base_bbox.y0))
         candidate_shifts.add(float(occupied.y0) - float(gap_px) - float(base_bbox.y1))
-
-    candidate_shifts.add(float(axes_bbox.y1) - float(margin_px) - float(base_bbox.y1))
-    candidate_shifts.add(float(axes_bbox.y0) + float(margin_px) - float(base_bbox.y0))
 
     preferred_positive = str(placement) != "below"
     ordered = sorted(
         candidate_shifts,
         key=lambda shift: (
-            0 if (float(shift) >= -1e-9 if preferred_positive else float(shift) <= 1e-9) else 1,
             abs(float(shift)),
+            0 if (float(shift) >= -1e-9 if preferred_positive else float(shift) <= 1e-9) else 1,
         ),
     )
+    in_bounds = []
     for shift in ordered:
         shifted = base_bbox.translated(0.0, float(shift))
         if float(shifted.y0) < float(axes_bbox.y0) + float(margin_px):
             continue
         if float(shifted.y1) > float(axes_bbox.y1) - float(margin_px):
             continue
+        in_bounds.append((float(shift), shifted))
         if any(_bbox_overlaps_with_padding(shifted, occupied, pad_x=4.0, pad_y=gap_px) for occupied in occupied_bboxes):
             continue
         return float(shift), shifted
 
-    # Extremely dense clusters may exceed the visible vertical space. Keep the
-    # box inside the axes and choose the candidate with the least overlap area.
+    # In an unusually dense cluster there may be no fully clear position inside
+    # the axes. Stay as close as possible to the original annotation rather than
+    # jumping to an axis edge; choose the nearest in-bounds candidate with the
+    # smallest residual overlap.
     best = None
-    for shift in ordered:
-        shifted = base_bbox.translated(0.0, float(shift))
-        boundary_penalty = max(0.0, float(axes_bbox.y0) + float(margin_px) - float(shifted.y0))
-        boundary_penalty += max(0.0, float(shifted.y1) - (float(axes_bbox.y1) - float(margin_px)))
+    for shift, shifted in in_bounds:
         overlap_penalty = 0.0
         for occupied in occupied_bboxes:
             x_overlap = max(0.0, min(float(shifted.x1), float(occupied.x1)) - max(float(shifted.x0), float(occupied.x0)))
             y_overlap = max(0.0, min(float(shifted.y1), float(occupied.y1)) - max(float(shifted.y0), float(occupied.y0)))
             overlap_penalty += x_overlap * y_overlap
-        score = boundary_penalty * 1000.0 + overlap_penalty + abs(float(shift)) * 0.001
+        score = (overlap_penalty, abs(float(shift)))
         if best is None or score < best[0]:
             best = (score, float(shift), shifted)
     if best is not None:
@@ -1996,6 +2001,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         axis_volume.set_ylim(ranges["volume_min"], ranges["volume_max"])
     interaction_flags = {"dragging": False}
     sync_state = {"updating": False, "last_window": None}
+    annotation_layout_generation = {"value": 0}
 
     def _replace_artist_list(target_list, new_items):
         for artist in target_list:
@@ -2011,6 +2017,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         visible_signal_annotations = chart_payload.get("signal_annotations", [])
         _replace_artist_list(rendered_signal_annotations, _render_signal_annotations(axis_price, visible_signal_annotations, legend_font, start_idx=render_start, end_idx=render_end))
         _replace_artist_list(rendered_trade_labels, _render_trade_labels(axis_price, chart_payload["marker_groups"], legend_font, signal_annotations=visible_signal_annotations, start_idx=render_start, end_idx=render_end))
+        annotation_layout_generation["value"] += 1
 
     def _refresh_candle_widths():
         body_width, wick_width = _compute_dynamic_linewidths(axis_price, figure)
@@ -2090,6 +2097,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "buy_trade_label_boxes_enabled": True,
         "dynamic_annotation_collision_layout": True,
         "annotation_layout_axis": "vertical",
+        "annotation_layout_policy": "minimal_shift_once_per_generation",
         "trade_info_result_row_visible": False,
         "mouse_drag_pan_mode": "pixel_anchor",
         "grid_alpha": 0.12,
@@ -2116,7 +2124,13 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "wick_collection": wick_collection,
         "volume_collection": volume_collection,
         "interaction_flags": interaction_flags,
-        "annotation_layout_state": {"running": False, "redraw_pending": False},
+        "annotation_layout_state": {
+            "running": False,
+            "laid_out_generation": -1,
+            "redraw_generation": -1,
+            "resize_token": 0,
+            "generation_ref": annotation_layout_generation,
+        },
     }
     return figure
 
@@ -2401,8 +2415,19 @@ def bind_matplotlib_chart_navigation(figure, canvas):
             canvas_widget.configure(cursor="")
 
     def _on_draw(event):
-        layout_state = state.setdefault("annotation_layout_state", {"running": False, "redraw_pending": False})
-        if layout_state.get("running"):
+        layout_state = state.setdefault(
+            "annotation_layout_state",
+            {
+                "running": False,
+                "laid_out_generation": -1,
+                "redraw_generation": -1,
+                "resize_token": 0,
+                "generation_ref": {"value": 0},
+            },
+        )
+        generation_ref = layout_state.get("generation_ref") or {"value": 0}
+        generation = int(generation_ref.get("value", 0))
+        if layout_state.get("running") or int(layout_state.get("laid_out_generation", -1)) == generation:
             return
         layout_state["running"] = True
         try:
@@ -2421,18 +2446,35 @@ def bind_matplotlib_chart_navigation(figure, canvas):
                 getattr(event, "renderer", None),
                 reserved_artists=reserved,
             )
+            # Mark this generation complete before requesting the one redraw
+            # needed to display moved artists. The follow-up draw must not solve
+            # the same layout again, which prevents visual oscillation/loops.
+            layout_state["laid_out_generation"] = generation
         finally:
             layout_state["running"] = False
-        if not changed or layout_state.get("redraw_pending"):
+        if not changed or int(layout_state.get("redraw_generation", -1)) == generation:
             return
-        layout_state["redraw_pending"] = True
+        layout_state["redraw_generation"] = generation
+        canvas_widget.after_idle(lambda: figure.canvas.draw_idle() if figure.canvas is not None else None)
 
-        def _redraw_after_layout():
-            layout_state["redraw_pending"] = False
+    def _on_resize(_event):
+        layout_state = state.get("annotation_layout_state") or {}
+        resize_token = int(layout_state.get("resize_token", 0)) + 1
+        layout_state["resize_token"] = resize_token
+
+        def _relayout_after_resize():
+            # Tk can emit many resize events while the user drags the window.
+            # Only the last scheduled callback is allowed to create a new layout
+            # generation, so annotations do not chase the intermediate sizes.
+            if int(layout_state.get("resize_token", 0)) != resize_token:
+                return
+            generation_ref = layout_state.get("generation_ref") or annotation_layout_generation
+            generation_ref["value"] = int(generation_ref.get("value", 0)) + 1
+            layout_state["laid_out_generation"] = -1
             if figure.canvas is not None:
                 figure.canvas.draw_idle()
 
-        canvas_widget.after_idle(_redraw_after_layout)
+        canvas_widget.after(120, _relayout_after_resize)
 
     connection_ids = {
         "button_press_event": canvas.mpl_connect("button_press_event", _on_press),
@@ -2442,6 +2484,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         "figure_leave_event": canvas.mpl_connect("figure_leave_event", _on_leave),
         "key_press_event": canvas.mpl_connect("key_press_event", _on_key_press),
         "draw_event": canvas.mpl_connect("draw_event", _on_draw),
+        "resize_event": canvas.mpl_connect("resize_event", _on_resize),
     }
     state["connection_ids"] = connection_ids
     figure._stock_chart_contract["mouse_wheel_zoom_enabled"] = True

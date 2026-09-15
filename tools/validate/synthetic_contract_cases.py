@@ -2665,6 +2665,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     check("buy_trade_label_overlay_includes_buy_and_missed_traces", True, "CHART_TRADE_LABEL_TRACE_NAMES" in charting_source and '"買進(延續候選)"' in charting_source and '"買進(重進)"' in charting_source and '"錯失買進(重進)"' in charting_source and "supported_traces = set(CHART_TRADE_LABEL_TRACE_NAMES)" in charting_source)
     check("buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(placement=placement, trace_name=trace_name)' in charting_source and 'return 0, -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
     check("trade_info_boxes_use_actual_bbox_vertical_collision_layout", True, '_layout_chart_annotation_boxes' in charting_source and '_annotation_base_bbox' in charting_source and '_bbox_overlaps_with_padding' in charting_source and 'draw_event' in charting_source and 'annotation_layout_axis": "vertical"' in charting_source)
+    check("trade_info_boxes_use_minimal_shift_single_generation_policy", True, 'annotation_layout_policy": "minimal_shift_once_per_generation"' in charting_source and 'laid_out_generation' in charting_source and 'redraw_generation' in charting_source and 'resize_token' in charting_source)
     check("single_stock_sidebar_trade_info_includes_reserved_and_actual_spend_fields", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_limit_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source and '_selected_capital_var' in inspector_source and 'set_workbench_capital_display_text(' in workbench_source)
     check("single_stock_sidebar_sets_reserved_and_actual_spend_from_hover_snapshot", True, 'reserved_text=self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital"))' in workbench_source and 'actual_text=self._format_sidebar_amount_value("實支", snapshot.get("buy_capital"))' in workbench_source and 'display_mode=resolve_workbench_capital_display_mode_for_snapshot(snapshot)' in workbench_source and 'reserved_capital = buy_signal_meta.get("reserved_capital")' in charting_source and 'reserved_capital = buy_trade_meta.get("reserved_capital")' in charting_source and 'buy_capital = buy_trade_meta.get("buy_capital")' in charting_source and '"buy_capital": buy_capital' in charting_source)
     check("single_stock_filled_buy_marker_writes_reserved_capital", True, "'reserved_capital': reserved_cost" in entry_flow_source and "reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)" in entry_flow_source)
@@ -2691,12 +2692,30 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         layout_artists.append(artist)
     layout_canvas.draw()
     layout_renderer = layout_canvas.get_renderer()
+    choose_vertical_shift = getattr(charting_module, "_choose_annotation_vertical_shift")
+    annotation_base_bbox = getattr(charting_module, "_annotation_base_bbox")
+    first_bbox_before = layout_artists[0].get_window_extent(layout_renderer)
+    second_base_bbox = annotation_base_bbox(layout_artists[1], layout_renderer, dpi=layout_figure.dpi)
+    minimal_shift_px, _ = choose_vertical_shift(
+        second_base_bbox,
+        placement="above",
+        occupied_bboxes=[first_bbox_before],
+        axes_bbox=layout_axis.get_window_extent(layout_renderer),
+    )
+    expected_minimal_shift_px = float(first_bbox_before.y1) + 7.0 - float(second_base_bbox.y0)
+    check("trade_info_boxes_choose_nearest_clear_vertical_shift", True, abs(float(minimal_shift_px) - expected_minimal_shift_px) < 1e-6)
+
     changed = layout_chart_annotation_boxes(layout_axis, layout_artists, layout_renderer)
+    first_positions = [tuple(float(value) for value in artist.get_position()) for artist in layout_artists]
     layout_canvas.draw()
     layout_renderer = layout_canvas.get_renderer()
     layout_boxes = [artist.get_window_extent(layout_renderer) for artist in layout_artists]
+    changed_again = layout_chart_annotation_boxes(layout_axis, layout_artists, layout_renderer)
+    second_positions = [tuple(float(value) for value in artist.get_position()) for artist in layout_artists]
     check("trade_info_boxes_dynamic_layout_moves_overlapping_box", True, changed)
     check("trade_info_boxes_dynamic_layout_removes_bbox_overlap", False, layout_boxes[0].overlaps(layout_boxes[1]))
+    check("trade_info_boxes_dynamic_layout_is_idempotent_after_first_solution", False, changed_again)
+    check("trade_info_boxes_dynamic_layout_positions_remain_stable", first_positions, second_positions)
 
     summary["buy_label"] = buy_label_text
     summary["tp_label"] = tp_label_text
