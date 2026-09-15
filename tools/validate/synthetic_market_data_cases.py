@@ -2273,6 +2273,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         check("trading_v2_state_persists_last_observed_quota_used", 1590, quota_read_model.get("quota_user_count"))
         check("trading_v2_state_persists_last_observed_quota_limit", 1600, quota_read_model.get("quota_limit"))
 
+    from core.market_data_scan_freshness import (
+        SCAN_FRESHNESS_EXACT_TARGET,
+        SCAN_FRESHNESS_LATEST_SYNCED,
+        default_market_data_scan_freshness_mode,
+    )
     from core.market_data_freshness_contract import (
         CADENCE_CURRENT_VINTAGE,
         CADENCE_EVENT_DRIVEN,
@@ -2281,6 +2286,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         EXPECTED_DATE_LATEST_AVAILABLE,
         EXPECTED_DATE_NONE,
         EXPECTED_DATE_PERIOD_DUE,
+        EXPECTED_DATE_TRADING_TARGET,
         FRESHNESS_STATUSES,
         ROW_EXPECTATION_OPTIONAL,
         get_market_data_freshness_contracts,
@@ -2310,6 +2316,16 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("documented_day_trading_schedule_waits_for_close_values", ("21:45", 0, True), (by_dataset["TaiwanStockDayTrading"].publication_first_check_time, by_dataset["TaiwanStockDayTrading"].publication_day_offset, by_dataset["TaiwanStockDayTrading"].publication_schedule_verified))
     check("documented_large_trader_schedule_uses_derivatives_grace", ("16:45", 0, True), (by_dataset["TaiwanFuturesOpenInterestLargeTraders"].publication_first_check_time, by_dataset["TaiwanFuturesOpenInterestLargeTraders"].publication_day_offset, by_dataset["TaiwanFuturesOpenInterestLargeTraders"].publication_schedule_verified))
     check("undocumented_schedule_uses_next_day_fallback", ("01:45", 1, False), (by_dataset["TaiwanStockHoldingSharesPer"].publication_first_check_time, by_dataset["TaiwanStockHoldingSharesPer"].publication_day_offset, by_dataset["TaiwanStockHoldingSharesPer"].publication_schedule_verified))
+    check(
+        "market_value_default_scan_policy_accepts_latest_synced",
+        SCAN_FRESHNESS_LATEST_SYNCED,
+        default_market_data_scan_freshness_mode(by_dataset["TaiwanStockMarketValue"]),
+    )
+    check(
+        "price_default_scan_policy_requires_exact_target",
+        SCAN_FRESHNESS_EXACT_TARGET,
+        default_market_data_scan_freshness_mode(by_dataset["TaiwanStockPrice"]),
+    )
 
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -2322,6 +2338,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         record_market_data_sync_success,
         refresh_market_data_due_state,
         schedule_market_data_auto_update_outcomes,
+        set_market_data_scan_freshness_mode,
     )
 
     with TemporaryDirectory() as state_temp_dir:
@@ -2333,6 +2350,10 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             if contract.cadence == CADENCE_EVENT_DRIVEN:
                 observations[contract.dataset] = {
                     "row_count": 0,
+                    "request_count": 1,
+                    "target_covering_request_count": (
+                        1 if contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET else 0
+                    ),
                     "observed_min_date": None,
                     "observed_max_date": None,
                 }
@@ -2459,7 +2480,19 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             patch("services.trading.market_data_v2_state.find_latest_ready_provider_snapshot", return_value=(Path("provider.json"), {"as_of_date": "2026-09-07"})),
             patch("services.trading.market_data_v2_state.load_trading_market_data_v2_state", return_value={"last_attempt_target_date": "2026-09-08"}),
             patch("services.trading.market_data_ops.load_trading_v2_consumer_state", return_value={"market_date": "2026-09-07"}),
-            patch("services.trading.market_data_ops.build_trading_data_readiness", return_value={}),
+            patch(
+                "services.trading.market_data_ops.build_trading_data_readiness_from_evidence",
+                return_value={
+                    "strategy_id": "full_rule_based_no_dl",
+                    "ready": False,
+                    "status": "BLOCKED",
+                    "required_v2_dataset_count": 0,
+                    "ready_v2_dataset_count": 0,
+                    "blocking_v2_dataset_count": 0,
+                    "required_v2_datasets": [],
+                    "blocking_dependencies": [],
+                },
+            ),
             patch("services.trading.market_data_ops.build_trading_market_data_v2_read_model", return_value={}),
             patch("services.trading.market_data_ops.plan_market_data_due_datasets", wraps=plan_market_data_due_datasets) as due_planner,
         ):
@@ -2543,6 +2576,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         )
         v2_rows = {key: dict(value) for key, value in v2_state["datasets"].items()}
         for row in v2_rows.values():
+            # Validation-contract v2 predates the split exact-target horizon.
+            row.pop("last_exact_ready_target_date", None)
             row["validation_contract_version"] = 2
             row["status"] = "READY"
             row["last_ready_target_date"] = "2026-09-10"
@@ -2682,8 +2717,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             contracts=(periodic_contract,),
         ).decisions[0]
         check(
-            "periodic_old_latest_remains_ready_before_scheduled_probe",
-            ("READY", False, "2026-09-09T01:45:00+08:00"),
+            "periodic_old_latest_waits_for_current_target_sync_confirmation",
+            ("WAIT_PUBLISH", False, "2026-09-09T01:45:00+08:00"),
             (periodic_before.status, periodic_before.due, periodic_before.next_check_at),
         )
         periodic_early = record_market_data_sync_success(
@@ -2748,14 +2783,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             event_root,
             target_date="2026-09-07",
             finished_at=datetime(2026, 9, 7, 23, 50, tzinfo=ZoneInfo("Asia/Taipei")),
-            observations={"TaiwanStockDelisting": {"row_count": 0}},
+            observations={"TaiwanStockDelisting": {"row_count": 0, "request_count": 1}},
             attempted_datasets={"TaiwanStockDelisting"},
         )
         event_early = record_market_data_sync_success(
             event_root,
             target_date="2026-09-08",
             finished_at=datetime(2026, 9, 8, 22, 30, tzinfo=ZoneInfo("Asia/Taipei")),
-            observations={"TaiwanStockDelisting": {"row_count": 0}},
+            observations={"TaiwanStockDelisting": {"row_count": 0, "request_count": 1}},
             attempted_datasets={"TaiwanStockDelisting"},
             count_publication_retry=False,
         )
@@ -2811,8 +2846,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         )
         target_row = target_early["datasets"]["TaiwanStockMarketValue"]
         check(
-            "target_required_early_probe_without_target_row_remains_not_ready",
-            ("WAIT_PUBLISH", "2026-09-07", "2026-09-08T23:45:00+08:00", False),
+            "latest_synced_daily_default_allows_prior_valid_market_value",
+            ("READY", "2026-09-08", "2026-09-08T23:45:00+08:00", True, "2026-09-07"),
             (
                 target_row["status"],
                 target_row["last_ready_target_date"],
@@ -2822,6 +2857,40 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
                     target_date="2026-09-08",
                     contract=by_dataset["TaiwanStockMarketValue"],
                 ),
+                target_row["last_exact_ready_target_date"],
+            ),
+        )
+        exact_state = set_market_data_scan_freshness_mode(
+            target_root,
+            dataset="TaiwanStockMarketValue",
+            mode=SCAN_FRESHNESS_EXACT_TARGET,
+        )
+        exact_row = exact_state["datasets"]["TaiwanStockMarketValue"]
+        check(
+            "user_can_require_exact_target_without_rewriting_exact_evidence",
+            (SCAN_FRESHNESS_EXACT_TARGET, "2026-09-07", False),
+            (
+                exact_row["scan_freshness_mode"],
+                exact_row["last_exact_ready_target_date"],
+                is_market_data_dataset_ready(
+                    exact_row,
+                    target_date="2026-09-08",
+                    contract=by_dataset["TaiwanStockMarketValue"],
+                ),
+            ),
+        )
+        restored_state = set_market_data_scan_freshness_mode(
+            target_root,
+            dataset="TaiwanStockMarketValue",
+            mode=SCAN_FRESHNESS_LATEST_SYNCED,
+        )
+        check(
+            "user_can_restore_latest_synced_daily_policy",
+            True,
+            is_market_data_dataset_ready(
+                restored_state["datasets"]["TaiwanStockMarketValue"],
+                target_date="2026-09-08",
+                contract=by_dataset["TaiwanStockMarketValue"],
             ),
         )
 
@@ -2886,6 +2955,14 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         from services.trading.market_data_dataset_state import publish_market_data_dataset_state
 
         force_repair_root = Path(force_repair_temp_dir)
+        # This fixture specifically exercises the exact-target WAIT/repair
+        # lifecycle. MarketValue now defaults to latest-synced, so keep this
+        # regression isolated by opting it into exact-target semantics.
+        set_market_data_scan_freshness_mode(
+            force_repair_root,
+            dataset="TaiwanStockMarketValue",
+            mode=SCAN_FRESHNESS_EXACT_TARGET,
+        )
         ready_market_value_state = record_market_data_sync_success(
             force_repair_root,
             target_date="2026-09-10",
@@ -3783,7 +3860,11 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             consumer_state_ready=True,
             dataset_state=synthetic_v2_state,
         )
-        check("future_v2_dependency_fails_closed_on_same_target_error", False, future_error["ready"])
+        check(
+            "future_v2_dependency_keeps_validated_target_usable_on_later_worker_error",
+            True,
+            future_error["ready"],
+        )
 
     from datetime import timedelta
     from services.trading.market_data_auto_update import _auto_update_lock

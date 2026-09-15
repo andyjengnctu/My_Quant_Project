@@ -16,7 +16,7 @@ from core.market_data_dataset_readiness import (
     is_market_data_dataset_ready,
     market_data_contract_requires_target_freshness,
 )
-from core.market_data_freshness_contract import FRESHNESS_STATUS_READY, get_market_data_freshness_contract
+from core.market_data_freshness_contract import get_market_data_freshness_contract
 from core.trading_data_dependencies import get_trading_data_dependency_spec
 from core.trading_policy import get_trading_strategy_profile
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
@@ -37,25 +37,32 @@ def _evaluate_v2_dependency(
     contract = get_market_data_freshness_contract(dataset)
     status = str(row.get("status") or "MISSING")
     ready_target = str(row.get("last_ready_target_date") or "") or None
+    exact_raw = (
+        row.get("last_exact_ready_target_date")
+        if "last_exact_ready_target_date" in row
+        else row.get("last_ready_target_date")
+    )
+    exact_ready_target = str(exact_raw or "") or None
     schema_status = str(row.get("schema_status") or "UNKNOWN")
     coverage_status = str(row.get("coverage_status") or "UNKNOWN")
     validation_contract_version = row.get("validation_contract_version")
     reasons: list[str] = []
     if not target_date:
-        reasons.append("Trading V2 consumer target date 尚未建立")
+        reasons.append("Trading V2 target date 尚未建立")
     if dynamic is None:
         reasons.append("dataset operational state 尚未建立")
     else:
         if not ready_target:
             reasons.append("last_ready_target_date=-")
-        elif (
-            target_date
-            and market_data_contract_requires_target_freshness(contract)
-            and ready_target < target_date
-        ):
-            reasons.append(f"last_ready_target_date={ready_target} 未達 target={target_date}")
-        if status != FRESHNESS_STATUS_READY:
-            reasons.append(f"status={status}")
+        elif target_date and market_data_contract_requires_target_freshness(contract, row):
+            if not exact_ready_target or exact_ready_target < target_date:
+                reasons.append(
+                    f"last_exact_ready_target_date={exact_ready_target or '-'} 未達 target={target_date}"
+                )
+        elif target_date and ready_target < target_date:
+            reasons.append(
+                f"latest_synced_target={ready_target} 尚未確認 target={target_date}"
+            )
         if schema_status not in _VALID_REQUIRED_VALIDATION_STATUSES:
             reasons.append(f"schema={schema_status}")
         if coverage_status not in _VALID_REQUIRED_VALIDATION_STATUSES:
@@ -75,6 +82,7 @@ def _evaluate_v2_dependency(
         "ready": not reasons,
         "status": status,
         "last_ready_target_date": ready_target,
+        "last_exact_ready_target_date": exact_ready_target,
         "latest_data_date": row.get("latest_data_date"),
         "schema_status": schema_status,
         "coverage_status": coverage_status,
@@ -90,11 +98,12 @@ def build_trading_data_readiness_from_evidence(
     consumer_state_ready: bool,
     consumer_state_reason: str | None = None,
     dataset_state: Mapping[str, object] | None = None,
+    consumer_state_required: bool = True,
 ) -> dict[str, Any]:
     spec = get_trading_data_dependency_spec(strategy_id)
     blockers: list[str] = []
-    consumer_ready = bool(consumer_state_ready and target_date)
-    if not consumer_ready:
+    consumer_ready = bool(target_date) if not consumer_state_required else bool(consumer_state_ready and target_date)
+    if consumer_state_required and not consumer_ready:
         blockers.append(consumer_state_reason or "Trading V2 execution consumer state 尚未就緒")
 
     state_rows = {}
@@ -119,7 +128,7 @@ def build_trading_data_readiness_from_evidence(
         "strategy_id": spec.strategy_id,
         "target_date": target_date,
         "dependency_fingerprint": spec.fingerprint,
-        "consumer_state_required": True,
+        "consumer_state_required": bool(consumer_state_required),
         "consumer_state_ready": consumer_ready,
         "required_v2_dataset_count": len(v2_rows),
         "ready_v2_dataset_count": ready_v2_count,

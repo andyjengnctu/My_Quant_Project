@@ -45,8 +45,22 @@ def load_trading_market_data_v2_state(project_root, *, required: bool = False) -
     return payload
 
 
-def resolve_trading_market_data_update_target_date(project_root: Path, explicit: str | None = None) -> str | None:
+def resolve_trading_market_data_update_target_date(
+    project_root: Path,
+    explicit: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Resolve the candidate Trading Scan Target from local canonical evidence.
+
+    After the Taiwan cash-market close the local ``TaiwanStockTradingDate``
+    calendar may advance the candidate target before any target-day provider
+    price row is published. Publication windows remain scheduler/probe hints;
+    they do not define which closed session readiness is being evaluated for.
+    """
+
     from services.trading.market_data_market_date_discovery import load_market_date_discovery_state
+    from core.trading_market_clock import select_latest_closed_trading_session_date
 
     if explicit:
         return str(explicit)
@@ -64,6 +78,24 @@ def resolve_trading_market_data_update_target_date(project_root: Path, explicit:
     discovery_state = load_market_date_discovery_state(project_root, required=False)
     if discovery_state is not None:
         candidates.append(str(discovery_state.get("current_market_date") or "").strip())
+    # Local-only candidate-target advancement. TradingDate is a schedule/calendar
+    # dataset and can identify the just-closed session before Price/PriceAdj are
+    # published. Keep provider discovery as a fallback/cross-check owner.
+    from services.trading.market_data_v2_view import TradingMarketDataV2View
+
+    try:
+        calendar = TradingMarketDataV2View.open(project_root).read_dataset_frame(
+            "TaiwanStockTradingDate",
+            columns=("date",),
+        )
+    except FileNotFoundError:
+        calendar = None
+    if calendar is not None:
+        if "date" not in calendar.columns:
+            raise ValueError("Trading V2 TaiwanStockTradingDate 缺 date，無法解析 candidate Scan Target")
+        closed_session = select_latest_closed_trading_session_date(calendar["date"].tolist(), now=now)
+        if closed_session:
+            candidates.append(closed_session)
     resolved = [value for value in candidates if value]
     return max(resolved) if resolved else None
 

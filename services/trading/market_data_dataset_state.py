@@ -22,6 +22,7 @@ from core.market_data_due_planner import (
     resolve_market_data_expected_publish_at,
 )
 from core.market_data_freshness_contract import (
+    CADENCE_TRADING_DAILY,
     EXPECTED_DATE_LATEST_AVAILABLE,
     EXPECTED_DATE_NONE,
     EXPECTED_DATE_PERIOD_DUE,
@@ -36,6 +37,11 @@ from core.market_data_freshness_contract import (
     ROW_EXPECTATION_OPTIONAL,
     ROW_EXPECTATION_REQUIRED,
     get_market_data_freshness_contracts,
+)
+from core.market_data_scan_freshness import (
+    SCAN_FRESHNESS_MODES,
+    market_data_scan_freshness_is_user_configurable,
+    resolve_market_data_scan_freshness_mode,
 )
 from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_dataset_state_path
 
@@ -87,6 +93,7 @@ def _empty_dataset_row() -> dict[str, object]:
         "last_success_target_date": None,
         "last_ready_at": None,
         "last_ready_target_date": None,
+        "last_exact_ready_target_date": None,
         "latest_data_date": None,
         "latest_data_date_by_data_id": {},
         "latest_expected_date": None,
@@ -226,6 +233,21 @@ def _later_date(a: object, b: object) -> str | None:
     return max(values) if values else None
 
 
+def _materialize_legacy_exact_ready_horizon(
+    row: dict[str, object],
+    *,
+    contract,
+) -> None:
+    """Freeze pre-policy Trading-daily READY evidence before roll-forward use."""
+
+    if "last_exact_ready_target_date" in row:
+        return
+    if contract.cadence == CADENCE_TRADING_DAILY and has_current_market_data_dataset_validation(row):
+        row["last_exact_ready_target_date"] = str(row.get("last_ready_target_date") or "").strip() or None
+    else:
+        row["last_exact_ready_target_date"] = None
+
+
 def _prior_ready_validation_can_self_heal(
     row: Mapping[str, object],
     *,
@@ -272,10 +294,10 @@ def record_market_data_sync_success(
     """Persist evidence from a fully completed Trading V2 sync batch.
 
     A successful provider request is not automatically a freshness transition.
-    Exact target-date feeds must prove current-target rows.  Roll-forward feeds
-    may keep prior validated data READY while the independent scheduler still
-    owns publication-window checks/retries.  Manual force observations never
-    consume or reschedule that automatic retry lifecycle.
+    ``exact_target`` feeds must prove current-target rows. ``latest_synced``
+    feeds must complete a current Scan-Target provider observation, but may
+    remain on an older data date when the provider itself has no newer version.
+    Publication windows remain an independent scheduler/re-probe concern.
     """
 
     previous = load_market_data_dataset_state(project_root, required=False)
@@ -295,6 +317,7 @@ def record_market_data_sync_success(
         if dataset not in attempted:
             continue
         row = dict(datasets[dataset])
+        _materialize_legacy_exact_ready_horizon(row, contract=contract)
         prior_attempt_target = str(row.get("last_attempt_target_date") or "")
         prior_publication_retry_count = int(row.get("publication_retry_count") or 0)
         prior_validation_current = has_current_market_data_dataset_validation(row)
@@ -303,12 +326,7 @@ def record_market_data_sync_success(
         )
         prior_schema_status = str(row.get("schema_status") or VALIDATION_STATUS_UNKNOWN)
         prior_coverage_status = str(row.get("coverage_status") or VALIDATION_STATUS_NOT_EVALUATED)
-        prior_data_usable = is_market_data_dataset_ready(
-            row,
-            target_date=target_text,
-            contract=contract,
-        )
-        target_required = market_data_contract_requires_target_freshness(contract)
+        target_required = market_data_contract_requires_target_freshness(contract, row)
 
         evidence = observed.get(dataset) if isinstance(observed.get(dataset), Mapping) else {}
         row_count = int(evidence.get("row_count") or 0)
@@ -402,7 +420,54 @@ def record_market_data_sync_success(
             schema_status in {VALIDATION_STATUS_READY, VALIDATION_STATUS_NO_ROW_VALID}
             and coverage_status in {VALIDATION_STATUS_READY, VALIDATION_STATUS_NO_ROW_VALID}
         )
-        if contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}:
+        exact_target_observation_ready = bool(
+            validation_ready
+            and contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET
+            and target_covering_request_count > 0
+            and target_fresh_request_count == target_covering_request_count
+        )
+        if exact_target_observation_ready:
+            prior_exact = str(row.get("last_exact_ready_target_date") or "").strip()
+            row["last_exact_ready_target_date"] = (
+                target_text if not prior_exact else max(prior_exact, target_text)
+            )
+
+        if not target_required:
+            # ``latest_synced`` means this Scan Target has actually observed the
+            # provider.  For a slow Trading-daily feed an exact-date request that
+            # completed with zero rows is still authoritative evidence that the
+            # provider has no T version yet, so the prior local latest version may
+            # be used.  Other cadences only need a completed request scope.
+            current_scope_observed = bool(request_count > 0)
+            if contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET:
+                # Slow daily inputs may legitimately have no T rows yet. An
+                # authoritative exact-T request with zero rows confirms that the
+                # provider latest is still the previously synchronized version.
+                current_scope_observed = bool(
+                    current_scope_observed
+                    and target_covering_request_count > 0
+                    and target_covering_request_count == request_count
+                )
+            elif contract.row_expectation != ROW_EXPECTATION_OPTIONAL:
+                # Current-vintage/periodic required scopes should still return
+                # their latest available records; an all-empty response is not
+                # enough to claim provider-version equality.
+                current_scope_observed = bool(
+                    current_scope_observed
+                    and nonempty_request_count > 0
+                    and nonempty_request_count == request_count
+                )
+            version_evidence_ready = bool(
+                contract.expected_date_mode == EXPECTED_DATE_NONE
+                or str(row.get("latest_data_date") or "").strip()
+                or contract.row_expectation == ROW_EXPECTATION_OPTIONAL
+            )
+            observation_ready = bool(
+                validation_ready
+                and current_scope_observed
+                and version_evidence_ready
+            )
+        elif contract.expected_date_mode in {EXPECTED_DATE_NONE, EXPECTED_DATE_PERIOD_DUE}:
             observation_ready = bool(
                 validation_ready
                 and (row_count > 0 or contract.row_expectation == ROW_EXPECTATION_OPTIONAL)
@@ -425,8 +490,10 @@ def record_market_data_sync_success(
             )
             observation_ready = bool(validation_ready and target_freshness_ready)
 
-        roll_forward_ready = bool(not target_required and prior_data_usable)
-        data_ready = bool(observation_ready or roll_forward_ready)
+        # A new Scan Target never inherits latest-synced READY merely because an
+        # older target was valid. The target-specific provider observation above
+        # is the evidence that local == provider latest for this scan cycle.
+        data_ready = bool(observation_ready)
 
         if not observation_ready and (prior_validation_current or prior_validation_recoverable):
             # A weak/early provider observation must never erase previously
@@ -462,18 +529,7 @@ def record_market_data_sync_success(
                     row["publication_retry_count"] = 0
                 row["last_error"] = None
             else:
-                prior_count = prior_publication_retry_count if prior_attempt_target == target_text else 0
-                if count_publication_retry:
-                    row["publication_retry_count"] = prior_count + 1
-                    row["next_check_at"] = None
-                else:
-                    row["publication_retry_count"] = prior_count
-                    if finished_local < expected_publish:
-                        row["next_check_at"] = expected_publish.isoformat()
-                row["last_error"] = (
-                    "provider observation did not satisfy the current probe contract; "
-                    "prior validated roll-forward data remains usable"
-                )
+                raise AssertionError("READY dataset observation must be current-target valid")
         else:
             prior_count = prior_publication_retry_count if prior_attempt_target == target_text else 0
             row["status"] = FRESHNESS_STATUS_WAIT_PUBLISH
@@ -516,8 +572,9 @@ def schedule_market_data_auto_update_outcomes(
     """Persist auto-updater probe outcomes without redefining data usability.
 
     Exact target-date datasets fail closed while their target freshness is
-    missing. Roll-forward datasets keep validated prior data READY and record
-    retry/error state through ``last_attempt_result`` + ``next_check_at``.
+    missing. A latest-synced dataset remains READY only after this target was
+    confirmed; later scheduled retry/error state is recorded separately through
+    ``last_attempt_result`` + ``next_check_at``.
     """
 
     state = load_market_data_dataset_state(project_root, required=False)
@@ -547,10 +604,10 @@ def schedule_market_data_auto_update_outcomes(
     if max_publication_retries < 1 or len(publication_retry_minutes) < max_publication_retries:
         raise ValueError("publication retry policy 不合法")
 
-    def _preserve_roll_forward_ready(dataset: str, row: Mapping[str, object]) -> bool:
+    def _preserve_confirmed_latest_sync_ready(dataset: str, row: Mapping[str, object]) -> bool:
         contract = contracts[dataset]
         return bool(
-            not market_data_contract_requires_target_freshness(contract)
+            not market_data_contract_requires_target_freshness(contract, row)
             and is_market_data_dataset_ready(
                 row,
                 target_date=str(target_date),
@@ -560,7 +617,7 @@ def schedule_market_data_auto_update_outcomes(
 
     for dataset in groups["wait_publish"]:
         row = dict(datasets[dataset])
-        preserve_ready = _preserve_roll_forward_ready(dataset, row)
+        preserve_ready = _preserve_confirmed_latest_sync_ready(dataset, row)
         count = int(row.get("publication_retry_count") or 0)
         row["last_attempt_at"] = now.isoformat()
         row["last_attempt_target_date"] = str(target_date)
@@ -575,7 +632,7 @@ def schedule_market_data_auto_update_outcomes(
             row["last_attempt_result"] = FRESHNESS_STATUS_WAIT_PUBLISH
             row["next_check_at"] = (now + timedelta(minutes=delay)).isoformat()
             row["last_error"] = (
-                "provider probe evidence not yet sufficient; prior validated roll-forward data remains usable"
+                "scheduled provider re-probe incomplete; current Scan Target remains latest-synced READY"
                 if preserve_ready
                 else "provider target-date freshness evidence not yet present"
             )
@@ -583,7 +640,7 @@ def schedule_market_data_auto_update_outcomes(
 
     for dataset in groups["wait_quota"]:
         row = dict(datasets[dataset])
-        preserve_ready = _preserve_roll_forward_ready(dataset, row)
+        preserve_ready = _preserve_confirmed_latest_sync_ready(dataset, row)
         row["status"] = FRESHNESS_STATUS_READY if preserve_ready else FRESHNESS_STATUS_WAIT_QUOTA
         row["last_attempt_at"] = now.isoformat()
         row["last_attempt_target_date"] = str(target_date)
@@ -595,7 +652,7 @@ def schedule_market_data_auto_update_outcomes(
 
     for dataset in groups["error"]:
         row = dict(datasets[dataset])
-        preserve_ready = _preserve_roll_forward_ready(dataset, row)
+        preserve_ready = _preserve_confirmed_latest_sync_ready(dataset, row)
         row["status"] = FRESHNESS_STATUS_READY if preserve_ready else FRESHNESS_STATUS_ERROR
         row["last_attempt_at"] = now.isoformat()
         row["last_attempt_target_date"] = str(target_date)
@@ -607,7 +664,7 @@ def schedule_market_data_auto_update_outcomes(
 
     for dataset in groups["blocked"]:
         row = dict(datasets[dataset])
-        preserve_ready = _preserve_roll_forward_ready(dataset, row)
+        preserve_ready = _preserve_confirmed_latest_sync_ready(dataset, row)
         row["status"] = FRESHNESS_STATUS_READY if preserve_ready else FRESHNESS_STATUS_BLOCKED
         row["last_attempt_at"] = now.isoformat()
         row["last_attempt_target_date"] = str(target_date)
@@ -631,50 +688,38 @@ def refresh_market_data_due_state(
     *,
     target_date: str,
     now: datetime,
+    immediate_latest_sync_datasets: Iterable[str] = (),
 ):
     """Persist a local-only due-plan projection without any provider request."""
 
     state = load_market_data_dataset_state(project_root, required=False)
     if state is None:
         state = build_initial_market_data_dataset_state(updated_at=now)
-    plan = plan_market_data_due_datasets(target_date=target_date, now=now, state=state)
+    plan = plan_market_data_due_datasets(
+        target_date=target_date,
+        now=now,
+        state=state,
+        immediate_latest_sync_datasets=immediate_latest_sync_datasets,
+    )
     datasets = {key: dict(value) for key, value in dict(state["datasets"]).items()}
     contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
     for decision in plan.decisions:
         row = dict(datasets[decision.dataset])
         contract = contracts[decision.dataset]
-        prior_roll_forward_ready = bool(
-            not market_data_contract_requires_target_freshness(contract)
-            and is_market_data_dataset_ready(
-                row,
-                target_date=str(target_date),
-                contract=contract,
-            )
-        )
+        _materialize_legacy_exact_ready_horizon(row, contract=contract)
         row["status"] = decision.status
         row["latest_expected_date"] = decision.latest_expected_date
         row["expected_publish_at"] = decision.expected_publish_at
         row["next_check_at"] = decision.next_check_at
         if decision.reason in {
             "before_publication_window",
-            "roll_forward_ready_before_scheduled_probe",
+            "latest_sync_ready_before_scheduled_probe",
         }:
             # Publication timing is scheduler metadata. Before that window no
             # automatic retry budget should be consumed merely because a manual
             # force observation happened early.
             row["publication_retry_count"] = 0
             row["last_error"] = None
-        if prior_roll_forward_ready and decision.status == FRESHNESS_STATUS_READY:
-            # ``last_ready_target_date`` is a ready-through horizon, not a claim
-            # that provider content has a row dated target_date.  Roll-forward
-            # contracts may therefore extend this horizon locally while the
-            # independent provider probe remains scheduled via next_check_at.
-            prior_ready_target = str(row.get("last_ready_target_date") or "").strip()
-            row["last_ready_target_date"] = (
-                str(target_date)
-                if not prior_ready_target
-                else max(prior_ready_target, str(target_date))
-            )
         if _prior_ready_validation_can_self_heal(
             row, contract=contract, target_date=str(target_date)
         ):
@@ -700,11 +745,52 @@ def build_market_data_due_plan(
     *,
     target_date: str,
     now: datetime,
+    immediate_latest_sync_datasets: Iterable[str] = (),
 ):
     """Local-only read/plan facade used by future scheduler and Workbench Data Ops."""
 
     state = load_market_data_dataset_state(project_root, required=False)
-    return plan_market_data_due_datasets(target_date=target_date, now=now, state=state)
+    return plan_market_data_due_datasets(
+        target_date=target_date,
+        now=now,
+        state=state,
+        immediate_latest_sync_datasets=immediate_latest_sync_datasets,
+    )
+
+
+def set_market_data_scan_freshness_mode(
+    project_root,
+    *,
+    dataset: str,
+    mode: str,
+) -> dict[str, Any]:
+    """Persist one user-configurable Trading-daily scan freshness preference."""
+
+    key = str(dataset or "").strip()
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
+    contract = contracts.get(key)
+    if contract is None:
+        raise ValueError(f"未知 Market Data dataset: {key!r}")
+    if not market_data_scan_freshness_is_user_configurable(contract):
+        raise ValueError(f"{key} 的 cadence={contract.cadence} 不支援 scan freshness 手動切換")
+    normalized = str(mode or "").strip().lower()
+    if normalized not in SCAN_FRESHNESS_MODES:
+        raise ValueError(f"{key} scan freshness mode 不合法: {mode!r}")
+
+    state = load_market_data_dataset_state(project_root, required=False)
+    if state is None:
+        state = build_initial_market_data_dataset_state()
+    datasets = {name: dict(value) for name, value in dict(state["datasets"]).items()}
+    _materialize_legacy_exact_ready_horizon(datasets[key], contract=contract)
+    datasets[key]["scan_freshness_mode"] = normalized
+    return publish_market_data_dataset_state(
+        project_root,
+        {
+            **{field: value for field, value in state.items() if field not in {"state_fingerprint", "datasets", "updated_at"}},
+            "updated_at": datetime.now().astimezone().isoformat(),
+            "datasets": datasets,
+        },
+    )
 
 
 def build_market_data_dataset_state_read_model(project_root) -> dict[str, object]:
@@ -729,6 +815,10 @@ def build_market_data_dataset_state_read_model(project_root) -> dict[str, object
                 "publication_schedule_verified": contract.publication_schedule_verified,
                 "primary_key_hint": contract.primary_key_hint,
                 **dynamic,
+                "scan_freshness_mode": resolve_market_data_scan_freshness_mode(
+                    contract, dynamic.get("scan_freshness_mode")
+                ),
+                "scan_freshness_user_configurable": market_data_scan_freshness_is_user_configurable(contract),
             }
         )
     return {
@@ -753,4 +843,5 @@ __all__ = [
     "refresh_market_data_due_state",
     "build_market_data_due_plan",
     "build_market_data_dataset_state_read_model",
+    "set_market_data_scan_freshness_mode",
 ]

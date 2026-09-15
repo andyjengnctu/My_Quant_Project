@@ -11,11 +11,8 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from core.market_data_freshness_contract import (
-    EXPECTED_DATE_TRADING_TARGET,
-    FRESHNESS_STATUS_READY,
-    MarketDataFreshnessContract,
-)
+from core.market_data_freshness_contract import MarketDataFreshnessContract
+from core.market_data_scan_freshness import market_data_scan_requires_exact_target
 
 MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION = 3
 VALIDATION_STATUS_READY = "READY"
@@ -40,15 +37,21 @@ def has_current_market_data_dataset_validation(row: Mapping[str, object] | None)
 
 def market_data_contract_requires_target_freshness(
     contract: MarketDataFreshnessContract,
+    row: Mapping[str, object] | None = None,
 ) -> bool:
-    """Whether usability requires evidence for the exact Trading target.
+    """Whether scan usability requires content for the exact Trading target.
 
-    Every other expected-date mode is a roll-forward contract: the currently
-    validated provider state remains usable while a separate schedule decides
-    when the provider should be checked again.
+    Dataset source cadence and provider publication timing do not define this
+    decision.  Trading-daily feeds may be user-configured as ``latest_synced``
+    (for example a slow-publishing input); non-daily feeds are inherently
+    latest-synchronized because an exact Trading-day row has no valid meaning.
     """
 
-    return contract.expected_date_mode == EXPECTED_DATE_TRADING_TARGET
+    item = row if isinstance(row, Mapping) else {}
+    return market_data_scan_requires_exact_target(
+        contract,
+        item.get("scan_freshness_mode"),
+    )
 
 
 def is_market_data_dataset_ready(
@@ -70,14 +73,28 @@ def is_market_data_dataset_ready(
     ready_target = str(item.get("last_ready_target_date") or "").strip()
     base_ready = bool(
         has_current_market_data_dataset_validation(item)
-        and str(item.get("status") or "") == FRESHNESS_STATUS_READY
         and ready_target
     )
     if not base_ready:
         return False
-    if contract is not None and not market_data_contract_requires_target_freshness(contract):
-        return True
-    return ready_target >= str(target_date)
+    if contract is not None and not market_data_contract_requires_target_freshness(contract, item):
+        # ``latest_synced`` does not mean an old local version is reusable
+        # forever.  ``last_ready_target_date`` advances only after that Scan
+        # Target has completed a provider observation proving local == the
+        # provider's latest available version at that observation time.
+        return ready_target >= str(target_date)
+    # ``last_ready_target_date`` may be advanced by a latest-synced policy even
+    # when provider content has no row dated T.  Exact-target authorization must
+    # therefore use its own evidence horizon.  Missing legacy field is safe to
+    # fall back because pre-policy dataset state only advanced this horizon from
+    # exact-target evidence for Trading-daily feeds.
+    exact_raw = (
+        item.get("last_exact_ready_target_date")
+        if "last_exact_ready_target_date" in item
+        else item.get("last_ready_target_date")
+    )
+    exact_ready_target = str(exact_raw or "").strip()
+    return bool(exact_ready_target and exact_ready_target >= str(target_date))
 
 
 __all__ = [

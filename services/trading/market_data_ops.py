@@ -28,8 +28,11 @@ from core.market_data_freshness_contract import (
     FRESHNESS_STATUS_READY,
     get_market_data_freshness_contracts,
 )
-from services.trading.data_readiness import build_trading_data_readiness
-from services.trading.market_data_dataset_state import build_market_data_dataset_state_read_model
+from services.trading.data_readiness import build_trading_data_readiness_from_evidence
+from services.trading.market_data_dataset_state import (
+    build_market_data_dataset_state_read_model,
+    load_market_data_dataset_state,
+)
 from services.trading.market_data_consumer import load_trading_v2_consumer_state
 from services.trading.market_data_v2_state import (
     build_trading_market_data_v2_read_model,
@@ -40,6 +43,7 @@ from services.trading.market_data_market_date_discovery import (
     load_market_date_discovery_state,
 )
 from services.trading.market_data_scheduler import get_market_data_scheduler_status
+from core.trading_policy import get_trading_strategy_profile
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -130,22 +134,31 @@ def build_market_data_ops_read_model(
     target_date = None if consumer_state is None else str(consumer_state.get("market_date") or "") or None
     # AI: Execution may remain at the common READY horizon while the updater
     # already targets a newer date. Due/freshness must use the updater's owner.
-    update_target_date = resolve_trading_market_data_update_target_date(root)
-    trading_readiness = build_trading_data_readiness(root, verify_consumer_view=False)
+    update_target_date = resolve_trading_market_data_update_target_date(root, now=local_now)
     dataset_state = build_market_data_dataset_state_read_model(root)
+    state_payload = load_market_data_dataset_state(root, required=False) if dataset_state.get("state_ready") else None
+    profile = get_trading_strategy_profile()
+    trading_readiness = build_trading_data_readiness_from_evidence(
+        strategy_id=profile.strategy_id,
+        target_date=update_target_date,
+        consumer_state_ready=True,
+        dataset_state=state_payload,
+        consumer_state_required=False,
+    )
     v2 = build_trading_market_data_v2_read_model(root)
     auto_policy = get_market_data_auto_update_policy()
     scheduler = get_market_data_scheduler_status(root)
 
+    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
     dynamic_rows = {str(row.get("dataset")): dict(row) for row in dataset_state.get("datasets") or []}
     decisions = {}
     if update_target_date:
-        state_payload = None
-        if dataset_state.get("state_ready"):
-            from services.trading.market_data_dataset_state import load_market_data_dataset_state
-
-            state_payload = load_market_data_dataset_state(root, required=False)
-        plan = plan_market_data_due_datasets(target_date=update_target_date, now=local_now, state=state_payload)
+        plan = plan_market_data_due_datasets(
+            target_date=update_target_date,
+            now=local_now,
+            state=state_payload,
+            immediate_latest_sync_datasets=tuple(trading_readiness.get("required_v2_datasets") or ()),
+        )
         decisions = {item.dataset: item for item in plan.decisions}
     else:
         plan = None
@@ -165,10 +178,20 @@ def build_market_data_ops_read_model(
             next_check_at = decision.next_check_at
             due = bool(decision.due)
             due_reason = decision.reason
+        ready_for_target = bool(
+            update_target_date is not None
+            and is_market_data_dataset_ready(
+                row,
+                target_date=str(update_target_date),
+                contract=contracts.get(dataset),
+            )
+        )
         rows.append(
             {
                 **row,
                 "display_name_zh": get_market_dataset_display_name_zh(dataset),
+                "readiness_status": "READY" if ready_for_target else "NOT READY",
+                "ready_for_target": ready_for_target,
                 "projected_status": projected_status,
                 "expected_publish_at": expected_publish_at,
                 "next_check_at": next_check_at,
@@ -190,17 +213,7 @@ def build_market_data_ops_read_model(
         status = str(row.get("projected_status") or row.get("status") or "UNKNOWN")
         status_counts[status] = status_counts.get(status, 0) + 1
 
-    contracts = {item.dataset: item for item in get_market_data_freshness_contracts()}
-    ready_count = sum(
-        1
-        for row in rows
-        if update_target_date is not None
-        and is_market_data_dataset_ready(
-            row,
-            target_date=str(update_target_date),
-            contract=contracts.get(str(row.get("dataset") or "")),
-        )
-    )
+    ready_count = sum(bool(row.get("ready_for_target")) for row in rows)
     due_count = sum(bool(row.get("due")) for row in rows)
     dataset_next_check_at = _earliest_iso(row.get("next_check_at") for row in rows)
     discovery_state = load_market_date_discovery_state(root, required=False)
@@ -285,6 +298,7 @@ def build_market_data_ops_read_model(
         "generated_at": local_now.isoformat(),
         "provider_calls": 0,
         "trading_target_date": target_date,
+        "trading_ready_target_date": update_target_date,
         "update_target_date": update_target_date,
         "trading_consumer_state_exists": consumer_state is not None,
         "trading_market_data_source": None if consumer_state is None else consumer_state.get("source"),

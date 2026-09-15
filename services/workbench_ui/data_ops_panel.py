@@ -7,9 +7,14 @@ from tkinter import messagebox, ttk
 
 from config.market_data import MARKET_DATA_V2_PUBLICATION_POLICY
 from core.console_report import format_datetime_in_timezone
+from core.market_data_scan_freshness import (
+    SCAN_FRESHNESS_EXACT_TARGET,
+    SCAN_FRESHNESS_LATEST_SYNCED,
+)
 from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
 from services.trading.market_data_auto_update import run_trading_market_data_auto_update
 from services.trading.market_data_ops import build_market_data_ops_read_model
+from services.trading.market_data_dataset_state import set_market_data_scan_freshness_mode
 from services.trading.market_data_scheduler import (
     install_or_update_market_data_scheduler,
     remove_market_data_scheduler,
@@ -282,7 +287,7 @@ class MarketDataOpsPanel(ttk.Frame):
 
         readiness_box = ttk.LabelFrame(
             summary_grid,
-            text="V2 Target Freshness",
+            text="V2 Ready",
             padding=(8, 4),
             style=WORKBENCH_LABELLF_STYLE,
         )
@@ -350,6 +355,7 @@ class MarketDataOpsPanel(ttk.Frame):
             ("dataset", "Dataset", 205, 135),
             ("name_zh", "中文名稱", 190, 120),
             ("status", "Status", 115, 90),
+            ("latest_ok", "最新同步可用", 105, 90),
             ("latest", "Latest", 110, 85),
             ("expected_publish", "Expected Publish", 140, 110),
             ("check", "Last Check", 120, 95),
@@ -383,6 +389,7 @@ class MarketDataOpsPanel(ttk.Frame):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         tree.bind("<<TreeviewSelect>>", self._on_dataset_select)
+        tree.bind("<Button-1>", self._on_dataset_policy_click, add="+")
         self._cell_overlays[tree] = _TreeCellColorOverlay(tree, ("status", "schema", "coverage"))
         self._bind_overlay_scroll_refresh(tree, sx, sy)
         return tree
@@ -560,6 +567,51 @@ class MarketDataOpsPanel(ttk.Frame):
         sx.configure(command=xview)
         sy.configure(command=yview)
 
+    def _on_dataset_policy_click(self, event):
+        tree = event.widget
+        if tree.identify_region(event.x, event.y) != "cell":
+            return None
+        iid = str(tree.identify_row(event.y) or "")
+        column_id = str(tree.identify_column(event.x) or "")
+        if not iid or not column_id.startswith("#"):
+            return None
+        try:
+            column_index = int(column_id[1:]) - 1
+            column_name = str(tree["columns"][column_index])
+        except (ValueError, IndexError, tk.TclError):
+            return None
+        if column_name != "latest_ok":
+            return None
+        row = self._dataset_by_iid.get(iid, {})
+        if not row:
+            return "break"
+        dataset = str(row.get("dataset") or "")
+        if not bool(row.get("scan_freshness_user_configurable")):
+            self._status_var.set(f"{dataset} 為 {row.get('cadence') or '-'}；Scan freshness 固定使用最新同步版本。")
+            self._status_label.configure(style=WORKBENCH_INFO_LABEL_STYLE)
+            return "break"
+        current = str(row.get("scan_freshness_mode") or SCAN_FRESHNESS_EXACT_TARGET)
+        next_mode = (
+            SCAN_FRESHNESS_EXACT_TARGET
+            if current == SCAN_FRESHNESS_LATEST_SYNCED
+            else SCAN_FRESHNESS_LATEST_SYNCED
+        )
+        try:
+            set_market_data_scan_freshness_mode(
+                WORKBENCH_PROJECT_ROOT,
+                dataset=dataset,
+                mode=next_mode,
+            )
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            self._status_var.set(f"Scan freshness 設定失敗：{type(exc).__name__}: {exc}")
+            self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
+            return "break"
+        self.refresh_local_status()
+        label = "最新同步可用" if next_mode == SCAN_FRESHNESS_LATEST_SYNCED else "當日必要"
+        self._status_var.set(f"{dataset} Scan freshness：{label}")
+        self._status_label.configure(style=WORKBENCH_SUCCESS_LABEL_STYLE)
+        return "break"
+
     def _on_dataset_select(self, event) -> None:
         selected = event.widget.selection()
         if selected:
@@ -572,6 +624,10 @@ class MarketDataOpsPanel(ttk.Frame):
         verified = "provider-verified" if row.get("publication_schedule_verified") else "fallback"
         self._detail_var.set(
             f"{row.get('dataset')}｜{row.get('display_name_zh') or '-'} | category={row.get('category')} cadence={row.get('cadence')} | "
+            f"ready={row.get('readiness_status') or '-'} target={self._snapshot.get('update_target_date') or '-'} | "
+            f"scan_freshness={row.get('scan_freshness_mode') or '-'}"
+            f"{' (user)' if row.get('scan_freshness_user_configurable') else ' (cadence-fixed)'} | "
+            f"scheduler={row.get('projected_status') or row.get('status') or '-'} | "
             f"publication={row.get('publication_first_check_time')} D+{row.get('publication_day_offset')} ({verified}) | "
             f"PK={row.get('primary_key_hint') or '-'} | last_result={row.get('last_attempt_result') or '-'} | "
             f"error={row.get('last_error') or '-'}"
@@ -611,7 +667,7 @@ class MarketDataOpsPanel(ttk.Frame):
         iid: str,
         row: dict[str, object],
     ) -> None:
-        projected_status = row.get("projected_status") or row.get("status") or "-"
+        readiness_status = row.get("readiness_status") or "NOT READY"
         schema_status = row.get("schema_status") or "-"
         coverage_status = row.get("coverage_status") or "-"
         tree.insert(
@@ -621,7 +677,8 @@ class MarketDataOpsPanel(ttk.Frame):
             values=(
                 row.get("dataset") or "-",
                 row.get("display_name_zh") or "-",
-                str(projected_status),
+                str(readiness_status),
+                "☑" if row.get("scan_freshness_mode") == SCAN_FRESHNESS_LATEST_SYNCED else "☐",
                 row.get("latest_data_date") or "-",
                 _fmt_datetime(row.get("expected_publish_at")),
                 _fmt_datetime(row.get("last_attempt_at")),
@@ -637,7 +694,8 @@ class MarketDataOpsPanel(ttk.Frame):
             {
                 "dataset": row.get("dataset"),
                 "name_zh": row.get("display_name_zh"),
-                "status": projected_status,
+                "status": readiness_status,
+                "latest_ok": row.get("scan_freshness_mode"),
                 "latest": row.get("latest_data_date"),
                 "expected_publish": row.get("expected_publish_at"),
                 "check": row.get("last_attempt_at"),
@@ -651,7 +709,7 @@ class MarketDataOpsPanel(ttk.Frame):
             },
         )
         overlay = self._cell_overlays[tree]
-        overlay.set_cell(iid, "status", projected_status)
+        overlay.set_cell(iid, "status", readiness_status)
         overlay.set_cell(iid, "schema", schema_status)
         overlay.set_cell(iid, "coverage", coverage_status)
 
@@ -691,7 +749,8 @@ class MarketDataOpsPanel(ttk.Frame):
         self._cell_overlays[self._schedule_tree].set_cell(iid, "status", status)
 
     def _render(self, snapshot: dict[str, object]):
-        target = snapshot.get("trading_target_date") or "-"
+        target = snapshot.get("trading_ready_target_date") or snapshot.get("update_target_date") or "-"
+        valid_scan_date = snapshot.get("trading_target_date") or "-"
         strategy_id = snapshot.get("trading_strategy_id") or "-"
         required_v2 = int(snapshot.get("trading_required_v2_count") or 0)
         ready_v2 = int(snapshot.get("trading_ready_v2_count") or 0)
@@ -700,7 +759,7 @@ class MarketDataOpsPanel(ttk.Frame):
         if not snapshot.get("trading_ready"):
             trading_primary += " · BLOCKED"
         self._kpi_vars["trading"].set(trading_primary)
-        self._kpi_detail_vars["trading"].set(f"{target} | {strategy_id}")
+        self._kpi_detail_vars["trading"].set(f"target {target} | valid scan {valid_scan_date} | {strategy_id}")
         self._kpi_labels["trading"].configure(foreground=_color_for_tag(trading_tag))
 
         v2_status = snapshot.get("v2_status") or "-"
@@ -713,7 +772,7 @@ class MarketDataOpsPanel(ttk.Frame):
         due_count = int(snapshot.get("due_count") or 0)
         self._kpi_vars["datasets"].set(f"{ready_count}/{dataset_count} READY")
         self._kpi_detail_vars["datasets"].set(f"Due {due_count}")
-        datasets_ready = ready_count == dataset_count and due_count == 0
+        datasets_ready = ready_count == dataset_count
         self._kpi_labels["datasets"].configure(foreground=_color_for_tag("success" if datasets_ready else "warning"))
 
         self._kpi_vars["next"].set(_fmt_datetime(snapshot.get("next_check_at")))
@@ -757,9 +816,9 @@ class MarketDataOpsPanel(ttk.Frame):
         ready = ready_count
         readiness_pct = 100.0 * ready / total if total else 0.0
         self._readiness_progress["value"] = readiness_pct
-        counts = dict(snapshot.get("status_counts") or {})
-        count_text = " | ".join(f"{key} {counts[key]}" for key in sorted(counts))
-        self._readiness_text.set(f"target {snapshot.get('update_target_date') or '-'} | {ready}/{total} ({readiness_pct:.1f}%) | {count_text or '-'}")
+        self._readiness_text.set(
+            f"target {snapshot.get('update_target_date') or '-'} | {ready}/{total} ({readiness_pct:.1f}%)"
+        )
         self._readiness_label.configure(style=WORKBENCH_LABEL_STYLE)
 
         quota_pct = snapshot.get("quota_percent")

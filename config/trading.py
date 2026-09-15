@@ -11,10 +11,16 @@ TRADING_PARAM_FAMILY = "full"
 TRADING_DL_FILTER_ENABLED = False
 TRADING_DL_RANKING_ENABLED = False
 
+# Candidate Scan Target switches to the just-closed Taiwan session at this
+# local market time. Provider publication times are a separate Market Data
+# scheduler concern and must not delay the target/readiness question itself.
+TRADING_MARKET_SESSION_CLOSE_TIME = "13:30"
+
 __all__ = [
     "TRADING_ACTIVE_STRATEGY_ID",
     "TRADING_DATASET_PROFILE",
     "TRADING_PARAM_FAMILY",
     "TRADING_DL_FILTER_ENABLED",
     "TRADING_DL_RANKING_ENABLED",
+    "TRADING_MARKET_SESSION_CLOSE_TIME",
 ]

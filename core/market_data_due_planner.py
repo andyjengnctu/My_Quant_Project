@@ -152,19 +152,22 @@ def plan_market_data_due_datasets(
     now: datetime,
     state: Mapping[str, object] | None = None,
     contracts: Iterable[MarketDataFreshnessContract] | None = None,
+    immediate_latest_sync_datasets: Iterable[str] = (),
 ) -> MarketDataDuePlan:
     """Return a provider-free due plan for one Trading target date.
 
     Dataset usability and provider scheduling are separate contracts. Exact
-    target-date feeds stop being due once current-target freshness is READY.
-    Roll-forward feeds may remain READY while still carrying a scheduled probe
-    obligation at their publication window.
+    target-date feeds wait for T content. ``latest_synced`` feeds must first
+    perform one provider observation for each new Scan Target; once confirmed
+    they may remain READY while still carrying a later publication-window
+    re-probe obligation.
     """
 
     target_text = _iso_date(target_date, field="target_date")
     local_now = normalize_market_data_planner_now(now)
     resolved_contracts = tuple(contracts) if contracts is not None else get_market_data_freshness_contracts()
     dynamic = _dataset_state_map(state)
+    immediate_latest_sync = {str(value).strip() for value in immediate_latest_sync_datasets if str(value).strip()}
     decisions: list[MarketDataDueDecision] = []
 
     for contract in resolved_contracts:
@@ -172,7 +175,7 @@ def plan_market_data_due_datasets(
         item = row if isinstance(row, Mapping) else {}
         expected_publish = resolve_market_data_expected_publish_at(contract, target_date=target_text)
         latest_expected = _expected_date(contract, target_text, item)
-        target_required = market_data_contract_requires_target_freshness(contract)
+        target_required = market_data_contract_requires_target_freshness(contract, item)
         data_ready = is_market_data_dataset_ready(
             item,
             target_date=target_text,
@@ -201,8 +204,48 @@ def plan_market_data_due_datasets(
         persisted_status = str(item.get("status") or "").strip()
         persisted_next = str(item.get("next_check_at") or "").strip()
 
-        # Roll-forward feeds remain usable across targets, but a successful
-        # provider observation before the documented/estimated publication
+        # ``latest_synced`` is target-specific evidence: when a new Scan Target
+        # appears, probe immediately to confirm that the local latest version is
+        # still equal to FinMind's latest available version. This confirmation
+        # is intentionally independent from the later publication-window probe.
+        if not target_required and not data_ready and contract.dataset in immediate_latest_sync:
+            if (
+                attempt_target == target_text
+                and last_attempt_result in {
+                    FRESHNESS_STATUS_WAIT_QUOTA,
+                    FRESHNESS_STATUS_ERROR,
+                }
+                and persisted_next
+            ):
+                retry_at = _state_datetime(persisted_next) or local_now
+                if local_now < retry_at:
+                    decisions.append(
+                        MarketDataDueDecision(
+                            dataset=contract.dataset,
+                            status=persisted_status or last_attempt_result,
+                            due=False,
+                            expected_publish_at=expected_publish.isoformat(),
+                            latest_expected_date=latest_expected,
+                            next_check_at=retry_at.isoformat(),
+                            reason="latest_sync_confirmation_retry_not_due",
+                        )
+                    )
+                    continue
+            decisions.append(
+                MarketDataDueDecision(
+                    dataset=contract.dataset,
+                    status=FRESHNESS_STATUS_DUE,
+                    due=True,
+                    expected_publish_at=expected_publish.isoformat(),
+                    latest_expected_date=latest_expected,
+                    next_check_at=local_now.isoformat(),
+                    reason="latest_sync_confirmation_due",
+                )
+            )
+            continue
+
+        # Latest-synced feeds are usable after the target-specific confirmation,
+        # but a successful observation before the documented/estimated publication
         # window does not consume that target's scheduled check.
         if data_ready and not target_required:
             if _scheduled_probe_satisfied(
@@ -218,7 +261,7 @@ def plan_market_data_due_datasets(
                         expected_publish_at=expected_publish.isoformat(),
                         latest_expected_date=latest_expected,
                         next_check_at=None,
-                        reason="roll_forward_scheduled_probe_satisfied",
+                        reason="latest_sync_scheduled_probe_satisfied",
                     )
                 )
                 continue
@@ -238,7 +281,7 @@ def plan_market_data_due_datasets(
                             expected_publish_at=expected_publish.isoformat(),
                             latest_expected_date=latest_expected,
                             next_check_at=retry_at.isoformat(),
-                            reason="roll_forward_retry_not_due",
+                            reason="latest_sync_retry_not_due",
                         )
                     )
                     continue
@@ -255,7 +298,7 @@ def plan_market_data_due_datasets(
                         expected_publish_at=expected_publish.isoformat(),
                         latest_expected_date=latest_expected,
                         next_check_at=None,
-                        reason="roll_forward_probe_terminal_data_still_ready",
+                        reason="latest_sync_probe_terminal_data_still_ready",
                     )
                 )
                 continue
@@ -269,7 +312,7 @@ def plan_market_data_due_datasets(
                         expected_publish_at=expected_publish.isoformat(),
                         latest_expected_date=latest_expected,
                         next_check_at=expected_publish.isoformat(),
-                        reason="roll_forward_ready_before_scheduled_probe",
+                        reason="latest_sync_ready_before_scheduled_probe",
                     )
                 )
                 continue
@@ -282,14 +325,13 @@ def plan_market_data_due_datasets(
                     expected_publish_at=expected_publish.isoformat(),
                     latest_expected_date=latest_expected,
                     next_check_at=local_now.isoformat(),
-                    reason="roll_forward_scheduled_probe_due",
+                    reason="latest_sync_scheduled_probe_due",
                 )
             )
             continue
 
-        # Non-ready target-date feeds retain the existing bounded publication
-        # retry lifecycle.  A roll-forward feed reaches this branch only before
-        # it has any current validated usable state.
+        # Non-ready exact-target feeds retain the existing bounded publication
+        # retry lifecycle. Latest-synced datasets are handled above.
         if attempt_target == target_text and persisted_status in {FRESHNESS_STATUS_STALE, FRESHNESS_STATUS_BLOCKED}:
             decisions.append(
                 MarketDataDueDecision(

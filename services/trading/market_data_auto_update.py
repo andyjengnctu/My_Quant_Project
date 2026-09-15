@@ -369,7 +369,7 @@ def run_trading_market_data_auto_update(
     if not policy.enabled:
         return {"status": AUTO_UPDATE_STATUS_DISABLED, "provider_requests_required": False, "data_requests": 0, "usage_requests": 0}
 
-    resolved_target = _resolve_target_date(root, target_date)
+    resolved_target = _resolve_target_date(root, target_date, now=now)
     if not resolved_target:
         return {"status": AUTO_UPDATE_STATUS_NO_TARGET, "provider_requests_required": False, "data_requests": 0, "usage_requests": 0, "next_check_at": None}
 
@@ -413,7 +413,14 @@ def run_trading_market_data_auto_update(
                     "next_check_at": discovery_next_check,
                 }
 
-        plan, _state = refresh_market_data_due_state(root, target_date=resolved_target, now=now)
+        active_dependency = get_trading_data_dependency_spec(get_trading_strategy_profile().strategy_id)
+        immediate_latest_sync = tuple(active_dependency.required_v2_datasets)
+        plan, _state = refresh_market_data_due_state(
+            root,
+            target_date=resolved_target,
+            now=now,
+            immediate_latest_sync_datasets=immediate_latest_sync,
+        )
         due = (
             tuple(sorted(spec.dataset for spec in get_market_dataset_specs(included_only=True)))
             if force_refresh_current_target
@@ -528,7 +535,12 @@ def run_trading_market_data_auto_update(
                 error_datasets=due,
                 error_message=f"{type(exc).__name__}: {exc}",
             )
-            post = build_market_data_due_plan(root, target_date=resolved_target, now=now)
+            post = build_market_data_due_plan(
+                root,
+                target_date=resolved_target,
+                now=now,
+                immediate_latest_sync_datasets=immediate_latest_sync,
+            )
             publish_trading_market_data_v2_auto_rollup(root, target_date=resolved_target, updated_at=now, batch_result=None)
             return {
                 "status": AUTO_UPDATE_STATUS_DEFERRED,
@@ -633,7 +645,12 @@ def run_trading_market_data_auto_update(
             updated_at=now,
             batch_result=batch_for_rollup,
         )
-        post_plan = build_market_data_due_plan(root, target_date=resolved_target, now=now)
+        post_plan = build_market_data_due_plan(
+            root,
+            target_date=resolved_target,
+            now=now,
+            immediate_latest_sync_datasets=immediate_latest_sync,
+        )
         overall = AUTO_UPDATE_STATUS_UPDATED if ready_count == len(final_rows) else AUTO_UPDATE_STATUS_DEFERRED
         if any(str(dict(final_rows.get(name) or {}).get("status") or "") == "BLOCKED" for name in due):
             overall = AUTO_UPDATE_STATUS_BLOCKED
