@@ -3995,7 +3995,7 @@ def validate_trading_live_reentry_broker_truth_contract_case(base_params):
         "execution_plan_seed": dict(plan), "entry_source": "reentry", "source_entry_order_id": "ENTRY-1",
     }
     with patch.object(live_reentry, "build_trading_live_reentry_watch_records", return_value=[candidate_watch]), patch.object(
-        live_reentry.TradingMarketDataV2View, "open", return_value=object()
+        live_reentry, "open_trading_v2_consumer_view", return_value=object()
     ), patch.object(live_reentry, "load_trading_v2_sanitized_ohlcv_frame", return_value=fake_frame), patch.object(
         live_reentry, "_replay_member_reentry_signal", return_value=({"source": "reentry"}, plan, True)
     ), patch.object(live_reentry, "run_v16_backtest", return_value={}), patch.object(
