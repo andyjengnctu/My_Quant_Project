@@ -64,6 +64,8 @@ WORKBENCH_RIGHT_SIDEBAR_FONT_SCALE = 0.81
 WORKBENCH_COMBOBOX_POPUP_MAX_ROWS = 18
 WORKBENCH_COMBOBOX_POPUP_SCREEN_MARGIN = 18
 WORKBENCH_COMBOBOX_POPUP_ROW_PADDING = 8
+WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES = 4
+WORKBENCH_COMBOBOX_POPUP_FIT_RETRY_MS = 8
 
 
 def _scale_right_sidebar_font_size(base_size):
@@ -572,12 +574,23 @@ class WorkbenchInspectorSharedMixin:
         except tk.TclError as exc:
             _warn_gui_fallback('combobox popup geometry', exc)
 
-    def _fit_posted_combobox_popdown(self, combo):
-        """Move/resize the actual ttk popdown window so it cannot leave the screen."""
+    def _fit_posted_combobox_popdown(self, combo, attempt=0):
+        """Move/resize the actual ttk popdown window so it cannot leave the screen.
+
+        ``postcommand`` runs before some Tk builds map the popdown.  Retry a few
+        milliseconds later instead of silently giving up on the geometry fit.
+        """
 
         try:
             popdown = combo.tk.call("ttk::combobox::PopdownWindow", combo._w)
             if not int(combo.tk.call("winfo", "ismapped", popdown)):
+                if int(attempt) < WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES:
+                    combo.after(
+                        WORKBENCH_COMBOBOX_POPUP_FIT_RETRY_MS,
+                        self._fit_posted_combobox_popdown,
+                        combo,
+                        int(attempt) + 1,
+                    )
                 return
             combo.update_idletasks()
             requested_width = max(
@@ -860,7 +873,19 @@ class StockToolsWorkbench:
         # AI: Load only the selected tab after the shell has had a chance to paint.
         # Other tabs are first-use lazy, so opening Workbench does not import every
         # charting / portfolio / Trading module up front.
-        self.root.after(60, self._ensure_selected_panel_loaded)
+        self.root.after(60, self._prime_initial_panel_factories)
+
+    def _prime_initial_panel_factories(self):
+        """Load the visible panel plus the single-stock factory off the Tk thread.
+
+        Cross-panel Trading navigation is allowed before the inspector was ever
+        opened manually.  Priming only imports its factory; it does not construct
+        hidden Tk widgets.
+        """
+
+        self._ensure_selected_panel_loaded()
+        if self._selected_panel_id() != "single_stock_backtest_inspector":
+            self._request_panel_load("single_stock_backtest_inspector")
 
     def _build_ui(self):
         container = ttk.Frame(self.root, padding=4, style=WORKBENCH_FRAME_STYLE)
@@ -965,6 +990,10 @@ class StockToolsWorkbench:
                 status.configure(text=f"頁面載入失敗：{type(error).__name__}: {error}")
             return
         self._panel_factories[panel_id] = factory
+        if panel_id == "single_stock_backtest_inspector" and self._pending_single_stock_request:
+            # Explicit Trading -> inspector navigation must not be lost if the
+            # lazy import finishes while a notebook selection event is still in flight.
+            self._notebook.select(host)
         if self._selected_panel_id() != panel_id:
             if status is not None:
                 status.configure(text="頁面已準備｜切換到此頁時顯示")

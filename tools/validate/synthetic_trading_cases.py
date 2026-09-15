@@ -2928,6 +2928,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     from services.workbench_ui.workbench import (
         PANEL_SPECS,
+        StockToolsWorkbench,
         build_workbench_spec,
         resolve_workbench_combobox_popup_rows,
         resolve_workbench_combobox_popdown_geometry,
@@ -3157,8 +3158,18 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_combobox_popdown_repositions_above_when_bottom_space_is_insufficient", True, bottom_edge_geometry["y"] < 980 and bottom_edge_geometry["y"] >= 18)
     check("workbench_cross_panel_navigation_preserves_candidate_row_to_inspector", True, all(token in workbench_source for token in ('"candidate_row": dict(candidate_row or {})', 'candidate_row=dict(request.get("candidate_row") or {})')) and "on_open_stock=self._open_candidate_ticker_in_inspector" in panel_source and "candidate_row=dict(candidate_row or {})" in panel_source)
     check("workbench_cross_panel_navigation_shares_entire_trading_candidate_pool", True, all(token in workbench_source for token in ('"candidate_rows": [dict(row) for row in list(candidate_rows or [])]', 'candidate_rows=[dict(row) for row in list(request.get("candidate_rows") or [])]')) and "candidate_rows=[dict(row) for row in list(self._candidate_rows or [])]" in panel_source and 'candidate_latest_data_date=self._candidate_payload.get("latest_data_date")' in panel_source)
+    check("workbench_primes_single_stock_factory_before_first_cross_panel_navigation", True, "def _prime_initial_panel_factories" in workbench_source and 'self._request_panel_load("single_stock_backtest_inspector")' in workbench_source)
+    check("workbench_pending_single_stock_navigation_wins_lazy_import_selection_race", True, 'panel_id == "single_stock_backtest_inspector" and self._pending_single_stock_request' in workbench_source and 'self._notebook.select(host)' in workbench_source)
+    check("workbench_single_stock_prefetches_trading_pool_before_trading_mode_first_use", True, 'allow_inactive=True' in inspector_source and 'self.after_idle(lambda: self._request_trading_candidate_pool_refresh(allow_inactive=True))' in inspector_source)
+    check("workbench_single_stock_prefetch_validates_same_candidate_freshness_as_trading_center", True, "get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)" in inspector_source and 'if not bool(read_model.get("fresh"))' in inspector_source)
+    check("workbench_single_stock_trading_analysis_uses_finalized_consumer_view", True, "open_trading_v2_consumer_view(" in inspector_source and "TradingMarketDataV2View.open(WORKBENCH_PROJECT_ROOT)" not in inspector_source)
+    check("workbench_single_stock_combobox_reflow_rechecks_after_autosize", True, "def _autosize_combobox" in inspector_source and "self._schedule_single_stock_controls_layout()" in inspector_source)
+    check("workbench_combobox_popdown_fit_retries_until_tcl_window_is_mapped", True, "WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES" in workbench_source and "int(attempt) + 1" in workbench_source)
 
-    from services.workbench_ui.single_stock_inspector import SingleStockBacktestInspectorPanel
+    from services.workbench_ui.single_stock_inspector import (
+        SingleStockBacktestInspectorPanel,
+        resolve_single_stock_controls_layout_mode,
+    )
     class _Var:
         def __init__(self, value=""):
             self.value = value
@@ -3166,6 +3177,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             self.value = value
         def get(self):
             return self.value
+    layout_req = {"identity": 420, "candidate": 300, "history": 400, "params": 500, "runtime": 300, "status": 200}
+    check("workbench_single_stock_controls_choose_compact_before_1680px_right_edge_clips", "compact", resolve_single_stock_controls_layout_mode(available_width=1680, required_widths=layout_req))
+    check("workbench_single_stock_controls_keep_wide_layout_when_1920px_has_safe_room", "wide", resolve_single_stock_controls_layout_mode(available_width=1920, required_widths=layout_req))
+
     queued = []
     candidate_prefetch_calls = []
     shared_pool_calls = []
@@ -3173,6 +3188,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _runtime_domain_var=_Var("Research"),
         _ticker_var=_Var("00938"),
         _trading_candidate_rows_by_ticker={},
+        _prefetched_trading_candidate_rows=[],
+        _prefetched_trading_candidate_latest_data_date=None,
+        _candidate_pool_refresh_token=0,
+        _candidate_pool_last_error="old",
         _candidate_pool_checked_identity=None,
         _apply_runtime_domain_controls=lambda: None,
         _apply_trading_candidate_rows=lambda rows, **kwargs: (
@@ -3202,6 +3221,58 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_link_schedules_analysis_without_auxiliary_refresh", 1, len(queued))
     check("workbench_single_stock_link_receives_entire_trading_candidate_pool_immediately", 2, len(shared_pool_calls[0][0]) if shared_pool_calls else 0)
     check("workbench_single_stock_link_does_not_reload_pool_when_trading_center_already_supplied_it", 0, len(candidate_prefetch_calls))
+    check("workbench_single_stock_link_invalidates_older_background_pool_prefetch", 1, navigation_panel._candidate_pool_refresh_token)
+    check("workbench_single_stock_link_clears_stale_pool_prefetch_error", None, navigation_panel._candidate_pool_last_error)
+
+    # First cross-panel navigation must survive a lazy factory import without any
+    # prior manual interaction with the single-stock panel.
+    selected = {"panel_id": "trading_account"}
+    selected_calls = []
+    constructed = []
+    class _FakeNotebook:
+        def select(self, host):
+            selected_calls.append(host)
+            selected["panel_id"] = "single_stock_backtest_inspector"
+    lazy_nav = SimpleNamespace(
+        _panel_loading={"single_stock_backtest_inspector"},
+        _panel_hosts={"single_stock_backtest_inspector": "single-host"},
+        _panel_status_labels={"single_stock_backtest_inspector": None},
+        _panel_factories={},
+        _pending_single_stock_request={"ticker": "2455"},
+        _notebook=_FakeNotebook(),
+        _selected_panel_id=lambda: selected["panel_id"],
+        _construct_ready_panel_if_selected=lambda panel_id: constructed.append(panel_id),
+    )
+    StockToolsWorkbench._finish_panel_load(
+        lazy_nav, "single_stock_backtest_inspector", object(), None
+    )
+    check("workbench_first_trading_link_selects_lazy_single_stock_panel", ["single-host"], selected_calls)
+    check("workbench_first_trading_link_constructs_lazy_single_stock_panel", ["single_stock_backtest_inspector"], constructed)
+
+    research_prefetch_apply_calls = []
+    research_prefetch_panel = SimpleNamespace(
+        _candidate_pool_refresh_token=7,
+        _candidate_pool_refresh_thread=object(),
+        _candidate_pool_checked_identity=None,
+        _candidate_pool_last_error="old",
+        _prefetched_trading_candidate_rows=[],
+        _prefetched_trading_candidate_latest_data_date=None,
+        _runtime_domain_key=lambda: "research",
+        _apply_trading_candidate_rows=lambda *args, **kwargs: research_prefetch_apply_calls.append((args, kwargs)),
+        _configure_combobox_popup_geometry=lambda *_args, **_kwargs: None,
+        _candidate_combo=object(),
+    )
+    SingleStockBacktestInspectorPanel._finish_trading_candidate_pool_refresh(
+        research_prefetch_panel,
+        7,
+        ("snapshot",),
+        {
+            "candidate_rows": [{"ticker": "00938"}, {"ticker": "2455"}],
+            "latest_data_date": "2026-09-15",
+        },
+    )
+    check("workbench_single_stock_startup_prefetch_caches_trading_pool_while_research_visible", 2, len(research_prefetch_panel._prefetched_trading_candidate_rows))
+    check("workbench_single_stock_startup_prefetch_does_not_pollute_research_candidate_dropdown", 0, len(research_prefetch_apply_calls))
 
     dropdown_ticker_var = _Var("2455")
     dropdown_value_var = _Var("")

@@ -54,14 +54,18 @@ from services.trade_analysis.trade_log import (
 )
 from services.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 from services.trading.daily_workflow import run_trading_candidate_scan
-from services.trading.scanner_state import load_trading_candidate_snapshot, resolve_trading_candidate_snapshot_path
+from services.trading.scanner_state import (
+    get_trading_candidate_snapshot_read_model,
+    load_trading_candidate_snapshot,
+    resolve_trading_candidate_snapshot_path,
+)
 from services.trading.account_state import get_trading_account_read_model
 from services.trading.market_data_consumer import (
     TRADING_V2_CONSUMER_STATE_RELATIVE_PATH,
     load_trading_v2_consumer_state,
     load_trading_v2_sanitized_ohlcv_frame,
+    open_trading_v2_consumer_view,
 )
-from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.trading.strategy_param_state import resolve_trading_strategy_param_binding_path
 from services.trading.strategy_param_runtime import (
     load_trading_strategy_param_runtime,
@@ -120,6 +124,34 @@ COMBOBOX_WIDTH_RULES = {
     "param_source": {"min_chars": 18, "max_chars": 36, "extra_px": 32},
     "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
 }
+
+SINGLE_STOCK_CONTROLS_LAYOUT_GAP = 10
+SINGLE_STOCK_CONTROLS_SAFE_MARGIN = 72
+
+
+def resolve_single_stock_controls_layout_mode(*, available_width, required_widths):
+    """Choose a control-row layout with a Windows-theme safety margin.
+
+    Tk requested widths can under-report the final painted width after DPI/theme
+    metrics settle.  Reserve a small right-edge budget so labels/checkbox text are
+    reflowed before they are visibly clipped.
+    """
+
+    available = max(1, int(available_width or 1) - SINGLE_STOCK_CONTROLS_SAFE_MARGIN)
+    req = {key: max(1, int(value or 1)) for key, value in dict(required_widths or {}).items()}
+    gap = SINGLE_STOCK_CONTROLS_LAYOUT_GAP
+    wide_required = req.get("identity", 1) + req.get("candidate", 1) + req.get("history", 1) + req.get("params", 1) + 3 * gap
+    compact_required = max(
+        req.get("identity", 1) + req.get("candidate", 1) + gap,
+        req.get("history", 1) + req.get("params", 1) + gap,
+        req.get("runtime", 1),
+    )
+    if available >= wide_required:
+        return "wide"
+    if available >= compact_required:
+        return "compact"
+    return "narrow"
+
 SCAN_DROPDOWN_KIND_LABELS = {
     "buy": "新訊號",
     "extended": "延續",
@@ -519,6 +551,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._candidate_pool_refresh_token = 0
         self._candidate_pool_checked_identity = ("__uninitialized__",)
         self._candidate_pool_last_error = None
+        self._prefetched_trading_candidate_rows: list[dict] = []
+        self._prefetched_trading_candidate_latest_data_date = None
+        self._controls_layout_after_id = None
         self._company_name_refresh_inflight = False
         self._build_ui()
 
@@ -766,6 +801,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._apply_runtime_domain_controls()
         self.after_idle(self._refresh_reduced_stock_company_names_if_needed)
         self.after_idle(self._refresh_holdings_options)
+        # Prime the persisted Trading Scanner Pool even while Research mode is
+        # visible.  The data stays cached until Trading mode is selected, so
+        # first-use Trading does not depend on visiting Trading Center first.
+        self.after_idle(lambda: self._request_trading_candidate_pool_refresh(allow_inactive=True))
 
 
 
@@ -920,6 +959,25 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
 
 
+    def _schedule_single_stock_controls_layout(self):
+        if not hasattr(self, "_controls_host"):
+            return
+        if self._controls_layout_after_id is not None:
+            return
+        self._controls_layout_after_id = self.after_idle(self._run_scheduled_single_stock_controls_layout)
+
+    def _run_scheduled_single_stock_controls_layout(self):
+        self._controls_layout_after_id = None
+        self._apply_single_stock_controls_layout()
+
+    def _autosize_combobox(self, combo, *, values, current_text, rule_key):
+        super()._autosize_combobox(
+            combo, values=values, current_text=current_text, rule_key=rule_key
+        )
+        # Combobox values can grow after the initial <Configure>. Re-evaluate
+        # wrapping whenever their requested width changes.
+        self._schedule_single_stock_controls_layout()
+
     def _on_single_stock_controls_resize(self, event=None):
         width = None if event is None else int(getattr(event, "width", 0) or 0)
         self._apply_single_stock_controls_layout(width=width)
@@ -931,22 +989,19 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         try:
             self.update_idletasks()
             available = int(width or self._controls_host.winfo_width() or 1)
-            gap = 10
+            gap = SINGLE_STOCK_CONTROLS_LAYOUT_GAP
             req = {key: max(1, int(widget.winfo_reqwidth())) for key, widget in groups.items()}
-            wide_required = req["identity"] + req["candidate"] + req["history"] + req["params"] + 3 * gap
-            compact_required = max(
-                req["identity"] + req["candidate"] + gap,
-                req["history"] + req["params"] + gap,
-                req["runtime"],
+            mode = resolve_single_stock_controls_layout_mode(
+                available_width=available, required_widths=req
             )
-            mode = "wide" if available >= wide_required else ("compact" if available >= compact_required else "narrow")
-            if mode != self._controls_layout_mode:
+
+            def place(layout_mode):
                 for widget in groups.values():
                     widget.grid_forget()
-                if mode == "wide":
+                if layout_mode == "wide":
                     placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 0, 2), ("params", 0, 3), ("runtime", 1, 0), ("status", 2, 0))
                     status_span = 4
-                elif mode == "compact":
+                elif layout_mode == "compact":
                     placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 1, 0), ("params", 1, 1), ("runtime", 2, 0), ("status", 3, 0))
                     status_span = 2
                 else:
@@ -954,11 +1009,26 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                     status_span = 1
                 for key, row, column in placements:
                     groups[key].grid(
-                        row=row, column=column, columnspan=(status_span if key == "status" else 1),
-                        sticky="ew" if key == "status" else "w", padx=(0, gap), pady=(0, 2),
+                        row=row, column=column,
+                        columnspan=(status_span if key == "status" else 1),
+                        sticky="ew" if key == "status" else "w",
+                        padx=(0, gap), pady=(0, 2),
                     )
-                self._controls_layout_mode = mode
+                return layout_mode
+
+            mode = place(mode)
             self._scanner_info_label.configure(wraplength=max(260, available - 24))
+            self.update_idletasks()
+            # Theme/DPI metrics can settle after the requested-width calculation.
+            # If the painted row still overflows, downgrade one layout level.
+            safe_width = max(1, available - 12)
+            if self._controls_bar.winfo_reqwidth() > safe_width and mode == "wide":
+                mode = place("compact")
+                self.update_idletasks()
+            if self._controls_bar.winfo_reqwidth() > safe_width and mode == "compact":
+                mode = place("narrow")
+                self.update_idletasks()
+            self._controls_layout_mode = mode
         except (tk.TclError, TypeError, ValueError) as exc:
             _warn_gui_fallback("single-stock responsive controls", exc)
 
@@ -1013,7 +1083,13 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._apply_runtime_domain_controls()
         self._refresh_holdings_options()
         if self._runtime_domain_key() == "trading":
-            self._request_trading_candidate_pool_refresh()
+            if self._prefetched_trading_candidate_rows:
+                self._apply_trading_candidate_rows(
+                    self._prefetched_trading_candidate_rows,
+                    latest_data_date=self._prefetched_trading_candidate_latest_data_date,
+                    sync_ticker=False,
+                )
+            self._request_trading_candidate_pool_refresh(allow_inactive=True)
         ticker = self._ticker_var.get().strip()
         if ticker:
             self.after_idle(self._run_analysis)
@@ -1076,8 +1152,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             file_identity(resolve_trading_strategy_param_binding_path(root)),
         )
 
-    def _request_trading_candidate_pool_refresh(self, *, force=False):
-        if self._runtime_domain_key() != "trading":
+    def _request_trading_candidate_pool_refresh(self, *, force=False, allow_inactive=False):
+        if self._runtime_domain_key() != "trading" and not allow_inactive:
             return False
         snapshot_identity = self._candidate_snapshot_identity()
         if not force and snapshot_identity == self._candidate_pool_checked_identity:
@@ -1087,7 +1163,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             return False
         self._candidate_pool_refresh_token += 1
         request_token = self._candidate_pool_refresh_token
-        self._scanner_info_var.set("Scanner：背景載入 Trading pool…")
+        if self._runtime_domain_key() == "trading":
+            self._scanner_info_var.set("Scanner：背景載入 Trading pool…")
         refresh_thread = threading.Thread(
             target=self._load_trading_candidate_pool_worker,
             args=(request_token, snapshot_identity),
@@ -1100,9 +1177,14 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
     def _load_trading_candidate_pool_worker(self, request_token, snapshot_identity):
         try:
-            # The inspector consumes the same persisted Scanner Pool artifact as
-            # Trading Center.  It never recalculates candidates merely to fill a
-            # dropdown; execution freshness remains owned by Trading Center/runtime.
+            # The inspector and Trading Center consume the same freshness decision.
+            # This can be non-trivial, so it stays off the Tk thread; it never
+            # recalculates Scanner candidates merely to fill a dropdown.
+            read_model = get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)
+            if not bool(read_model.get("valid")):
+                raise RuntimeError(read_model.get("error") or "Trading Scanner snapshot schema 不相容")
+            if not bool(read_model.get("fresh")):
+                raise RuntimeError(read_model.get("error") or "Trading Scanner snapshot inputs 已變更")
             payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
             self.after(0, self._finish_trading_candidate_pool_error, request_token, snapshot_identity, exc)
@@ -1115,13 +1197,16 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._candidate_pool_refresh_thread = None
         self._candidate_pool_checked_identity = snapshot_identity
         self._candidate_pool_last_error = None
-        rows = list(payload.get("candidate_rows") or [])
-        self._apply_trading_candidate_rows(
-            rows,
-            latest_data_date=payload.get("latest_data_date"),
-            sync_ticker=False,
-        )
-        self._configure_combobox_popup_geometry(self._candidate_combo)
+        rows = [dict(row) for row in list(payload.get("candidate_rows") or [])]
+        self._prefetched_trading_candidate_rows = rows
+        self._prefetched_trading_candidate_latest_data_date = payload.get("latest_data_date")
+        if self._runtime_domain_key() == "trading":
+            self._apply_trading_candidate_rows(
+                rows,
+                latest_data_date=payload.get("latest_data_date"),
+                sync_ticker=False,
+            )
+            self._configure_combobox_popup_geometry(self._candidate_combo)
 
     def _finish_trading_candidate_pool_error(self, request_token, snapshot_identity, exc):
         if request_token != self._candidate_pool_refresh_token:
@@ -1132,7 +1217,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         # Keep any already-known candidate row/context (for example from a
         # Trading-center link).  A background refresh failure must not erase the
         # frozen Params context of the ticker the user is currently inspecting.
-        self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
+        if self._runtime_domain_key() == "trading":
+            self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
 
     def _load_current_trading_candidate_pool(self, *, sync_ticker=False):
         """Compatibility helper for explicit synchronous callers/tests.
@@ -1148,7 +1234,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
             return
         self._candidate_pool_checked_identity = self._candidate_snapshot_identity()
-        rows = list(payload.get("candidate_rows") or [])
+        rows = [dict(row) for row in list(payload.get("candidate_rows") or [])]
+        self._prefetched_trading_candidate_rows = rows
+        self._prefetched_trading_candidate_latest_data_date = payload.get("latest_data_date")
         self._apply_trading_candidate_rows(
             rows,
             latest_data_date=payload.get("latest_data_date"),
@@ -1239,14 +1327,25 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         shared_rows = [dict(row) for row in list(candidate_rows or []) if isinstance(row, dict)]
         if domain == "Trading" and shared_rows:
             # Cross-panel navigation consumes the exact candidate pool already
-            # validated and displayed by Trading Center. No second Scanner run or
-            # V2 reload is needed just to populate the inspector dropdown.
+            # validated and displayed by Trading Center. Invalidate any older
+            # background prefetch so it cannot overwrite this newer shared view.
+            self._candidate_pool_refresh_token += 1
+            self._candidate_pool_last_error = None
+            self._prefetched_trading_candidate_rows = shared_rows
+            self._prefetched_trading_candidate_latest_data_date = candidate_latest_data_date
             self._apply_trading_candidate_rows(
                 shared_rows,
                 latest_data_date=candidate_latest_data_date,
                 sync_ticker=False,
             )
             self._candidate_pool_checked_identity = self._candidate_snapshot_identity()
+            self._select_candidate_dropdown_ticker(ticker_text)
+        elif domain == "Trading" and self._prefetched_trading_candidate_rows:
+            self._apply_trading_candidate_rows(
+                self._prefetched_trading_candidate_rows,
+                latest_data_date=self._prefetched_trading_candidate_latest_data_date,
+                sync_ticker=False,
+            )
             self._select_candidate_dropdown_ticker(ticker_text)
 
         if domain == "Trading" and ticker_text and candidate_row:
@@ -1260,7 +1359,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         # canonical persisted Scanner Pool in the background. This is read-only and
         # never triggers candidate recalculation.
         if domain == "Trading" and not shared_rows:
-            self._request_trading_candidate_pool_refresh()
+            self._request_trading_candidate_pool_refresh(allow_inactive=True)
         if auto_run and ticker_text:
             self.after_idle(self._run_analysis)
 
@@ -1497,6 +1596,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if mode == "candidate":
             candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
             if runtime_domain == "trading":
+                self._prefetched_trading_candidate_rows = [dict(row) for row in candidate_rows]
+                self._prefetched_trading_candidate_latest_data_date = (scan_result or {}).get("latest_data_date")
                 self._apply_trading_candidate_rows(
                     candidate_rows, latest_data_date=(scan_result or {}).get("latest_data_date")
                 )
@@ -1558,7 +1659,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                     runtime = load_trading_strategy_param_runtime(params_path)
                     params = runtime["primary_params"]
                     params_source = "trading_primary_params"
-                view = TradingMarketDataV2View.open(WORKBENCH_PROJECT_ROOT)
+                view = open_trading_v2_consumer_view(
+                    WORKBENCH_PROJECT_ROOT, consumer_state=consumer_state
+                )
                 clean_df = load_trading_v2_sanitized_ohlcv_frame(
                     view,
                     ticker=ticker,
