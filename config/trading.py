@@ -16,6 +16,11 @@ TRADING_DL_RANKING_ENABLED = False
 # scheduler concern and must not delay the target/readiness question itself.
 TRADING_MARKET_SESSION_CLOSE_TIME = "13:30"
 
+# Workbench Trading Center initial-state reads are independent read-only I/O
+# after local consumer reconciliation. Parallelism only changes execution
+# strategy; canonical state ownership and derivation remain unchanged.
+TRADING_WORKBENCH_INITIAL_READ_WORKERS = 6
+
 __all__ = [
     "TRADING_ACTIVE_STRATEGY_ID",
     "TRADING_DATASET_PROFILE",
@@ -23,4 +28,5 @@ __all__ = [
     "TRADING_DL_FILTER_ENABLED",
     "TRADING_DL_RANKING_ENABLED",
     "TRADING_MARKET_SESSION_CLOSE_TIME",
+    "TRADING_WORKBENCH_INITIAL_READ_WORKERS",
 ]

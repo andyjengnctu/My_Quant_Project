@@ -3037,6 +3037,49 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_has_all_canonical_read_models", expected_initial_keys, set(initial_bundle))
     check_true("workbench_trading_initial_bundle_reads_empty_state_without_exception", all(bool(value[0]) for value in initial_bundle.values()))
 
+    import services.trading.operations_status as operations_status_module
+    preloaded_operations = {
+        "fill_transaction_pending": False,
+        "workflow": {
+            "runtime_domain": "trading",
+            "latest_data_date": None,
+            "market_data_ready": False,
+            "trading_data_ready": False,
+            "trading_data_blockers": [],
+            "params_ready_for_scan": False,
+            "params_reusable": False,
+        },
+        "candidate": operations_status_module._empty_candidate(),
+        "account": operations_status_module._empty_account(),
+        "position_rollforward": operations_status_module._empty_position_rollforward(),
+        "orders": operations_status_module._empty_orders(),
+        "proposed": operations_status_module._empty_proposed(),
+        "protection": operations_status_module._empty_protection(),
+        "indicator_exit": operations_status_module._empty_indicator_exit(),
+    }
+    with tempfile.TemporaryDirectory() as temp_dir, patch(
+        "services.trading.operations_status.build_trading_daily_workflow_snapshot",
+        side_effect=AssertionError("preloaded workflow must be reused"),
+    ), patch(
+        "services.trading.operations_status.get_trading_candidate_snapshot_read_model",
+        side_effect=AssertionError("preloaded candidate must be reused"),
+    ), patch(
+        "services.trading.operations_status.build_trading_position_rollforward_snapshot",
+        side_effect=AssertionError("preloaded rollforward must be reused"),
+    ):
+        reused_operations = operations_status_module.derive_trading_operations_status_from_preloaded(
+            workflow=preloaded_operations["workflow"],
+            account=preloaded_operations["account"],
+            orders=preloaded_operations["orders"],
+            candidate=preloaded_operations["candidate"],
+            proposed=preloaded_operations["proposed"],
+            protection=preloaded_operations["protection"],
+            indicator_exit=preloaded_operations["indicator_exit"],
+            position_rollforward=preloaded_operations["position_rollforward"],
+            fill_transaction_pending=False,
+        )
+    check_true("workbench_trading_operations_status_accepts_preloaded_refresh_generation", isinstance(reused_operations, dict) and "overall_status" in reused_operations)
+
     sample_segments = build_trading_status_segments("READY | Data 2026-09-11 | 現金 1,500,000 | 持股 0 | 一般說明")
     sample_tones = {text: tone for text, tone in sample_segments if text.strip()}
     check("workbench_status_highlights_ready_token_only", "success", sample_tones.get("READY"))
@@ -3099,6 +3142,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_background_worker_never_calls_tk_after", True, "self.after(0, self._finish_initial_state_load" not in panel_source and "def _drain_initial_state_results" in panel_source)
     check("workbench_trading_constructor_defers_state_reads_until_after_paint", True, "self.after(80, self._start_initial_state_load)" in panel_source and "self.refresh_account()\n        self.refresh_candidate_snapshot_rows()" not in panel_source.split("def __init__", 1)[1].split("def _set_initial_loading_state", 1)[0])
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
+    check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
+    check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
     check("workbench_trading_center_exposes_scanner_and_buy_entry", True, all(text in panel_source for text in ("今日 Scanner Pool", "買入成交登錄", "登錄買入成交", "BUY_ENTRY_HINT")))
     check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)

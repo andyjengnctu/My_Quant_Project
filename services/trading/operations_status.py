@@ -729,6 +729,49 @@ def assert_trading_proposed_submission_allowed(status: dict[str, Any]) -> None:
 
 
 
+def derive_trading_operations_status_from_preloaded(
+    *,
+    workflow: dict[str, Any] | None,
+    account: dict[str, Any] | None,
+    orders: dict[str, Any] | None,
+    candidate: dict[str, Any] | None,
+    proposed: dict[str, Any] | None,
+    protection: dict[str, Any] | None,
+    indicator_exit: dict[str, Any] | None,
+    position_rollforward: dict[str, Any] | None,
+    fill_transaction_pending: bool = False,
+    component_errors: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Derive Operations Status from one already-read refresh generation.
+
+    This is an execution-only seam for Workbench initial load.  It preserves the
+    same canonical derivation while avoiding a second pass over identical state
+    files and V2 lineage.
+    """
+
+    workflow_value = dict(workflow or {
+        "runtime_domain": RUNTIME_DOMAIN_TRADING,
+        "latest_data_date": None,
+        "market_data_ready": False,
+        "trading_data_ready": False,
+        "trading_data_blockers": ["Trading workflow state 無法讀取"],
+        "params_ready_for_scan": False,
+        "param_selector": None,
+    })
+    return derive_trading_operations_status(
+        workflow=workflow_value,
+        account=dict(account or _empty_account()),
+        orders=dict(orders or _empty_orders()),
+        candidate=dict(candidate or _empty_candidate()),
+        proposed=dict(proposed or _empty_proposed()),
+        protection=dict(protection or _empty_protection()),
+        indicator_exit=dict(indicator_exit or _empty_indicator_exit()),
+        position_rollforward=dict(position_rollforward or _empty_position_rollforward()),
+        fill_transaction_pending=bool(fill_transaction_pending),
+        component_errors=component_errors,
+    )
+
+
 def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
     """Read all canonical Trading status owners and compose one Workbench summary."""
 
@@ -853,6 +896,7 @@ __all__ = [
     "NEXT_MONITOR",
     "NEXT_READY",
     "derive_trading_operations_status",
+    "derive_trading_operations_status_from_preloaded",
     "assert_trading_new_allocation_allowed",
     "assert_trading_proposed_submission_allowed",
     "build_trading_operations_status",
