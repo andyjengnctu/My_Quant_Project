@@ -1512,6 +1512,56 @@ def _compute_dynamic_linewidths(axis_price, figure):
     return body_px * pt_scale, wick_px * pt_scale
 
 
+def _build_visible_candle_obstacle_bboxes(axis_price, chart_payload):
+    """Return display-space bboxes for currently visible candlesticks.
+
+    The obstacle covers each candle's full high-low wick and its current rendered
+    body width. Annotation layout can then move info boxes just far enough to
+    reveal the K-line while keeping the arrow anchored to the original trade.
+    """
+
+    from matplotlib.transforms import Bbox
+
+    lows = np.asarray(chart_payload.get("low", []), dtype=float)
+    highs = np.asarray(chart_payload.get("high", []), dtype=float)
+    total_points = int(min(len(lows), len(highs)))
+    if total_points <= 0:
+        return []
+
+    left, right = axis_price.get_xlim()
+    visible_left = min(float(left), float(right))
+    visible_right = max(float(left), float(right))
+    start_idx = max(0, int(np.floor(visible_left)) - 1)
+    end_idx = min(total_points - 1, int(np.ceil(visible_right)) + 1)
+    if end_idx < start_idx:
+        return []
+
+    indices = np.arange(start_idx, end_idx + 1, dtype=float)
+    low_slice = lows[start_idx : end_idx + 1]
+    high_slice = highs[start_idx : end_idx + 1]
+    finite = np.isfinite(low_slice) & np.isfinite(high_slice)
+    if not np.any(finite):
+        return []
+
+    indices = indices[finite]
+    low_slice = low_slice[finite]
+    high_slice = high_slice[finite]
+    low_points = axis_price.transData.transform(np.column_stack((indices, low_slice)))
+    high_points = axis_price.transData.transform(np.column_stack((indices, high_slice)))
+
+    body_width_pt, _ = _compute_dynamic_linewidths(axis_price, axis_price.figure)
+    body_width_px = max(float(body_width_pt) * float(axis_price.figure.dpi) / 72.0, 1.0)
+    half_width_px = body_width_px / 2.0
+
+    obstacles = []
+    for low_point, high_point in zip(low_points, high_points):
+        x_px = float(low_point[0])
+        y0 = min(float(low_point[1]), float(high_point[1]))
+        y1 = max(float(low_point[1]), float(high_point[1]))
+        obstacles.append(Bbox.from_extents(x_px - half_width_px, y0, x_px + half_width_px, y1))
+    return obstacles
+
+
 def _tag_chart_annotation_layout(artist, *, placement, base_position, kind):
     artist._stock_chart_annotation_layout = {
         "placement": str(placement),
@@ -1596,12 +1646,16 @@ def _choose_annotation_vertical_shift(base_bbox, *, placement, occupied_bboxes, 
     return 0.0, base_bbox
 
 
-def _layout_chart_annotation_boxes(axis_price, artists, renderer, *, reserved_artists=()):
+def _layout_chart_annotation_boxes(axis_price, artists, renderer, *, reserved_artists=(), obstacle_bboxes=()):
     if renderer is None:
         return False
     figure = axis_price.figure
     axes_bbox = axis_price.get_window_extent(renderer)
-    occupied_bboxes = []
+    occupied_bboxes = [
+        bbox
+        for bbox in (obstacle_bboxes or ())
+        if bbox is not None and float(getattr(bbox, "width", 0.0)) > 0.0 and float(getattr(bbox, "height", 0.0)) > 0.0
+    ]
     for reserved in reserved_artists or ():
         if reserved is None or not getattr(reserved, "get_visible", lambda: True)():
             continue
@@ -2098,6 +2152,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "dynamic_annotation_collision_layout": True,
         "annotation_layout_axis": "vertical",
         "annotation_layout_policy": "minimal_shift_once_per_generation",
+        "annotation_avoids_visible_candles": True,
         "trade_info_result_row_visible": False,
         "mouse_drag_pan_mode": "pixel_anchor",
         "grid_alpha": 0.12,
@@ -2440,11 +2495,14 @@ def bind_matplotlib_chart_navigation(figure, canvas):
                 state.get("summary_artist"),
                 *(state.get("status_chip_artists") or []),
             ]
+            renderer = getattr(event, "renderer", None)
+            candle_obstacles = _build_visible_candle_obstacle_bboxes(axis_price, chart_payload) if renderer is not None else []
             changed = _layout_chart_annotation_boxes(
                 axis_price,
                 artists,
-                getattr(event, "renderer", None),
+                renderer,
                 reserved_artists=reserved,
+                obstacle_bboxes=candle_obstacles,
             )
             # Mark this generation complete before requesting the one redraw
             # needed to display moved artists. The follow-up draw must not solve

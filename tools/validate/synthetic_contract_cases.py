@@ -2666,6 +2666,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     check("buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(placement=placement, trace_name=trace_name)' in charting_source and 'return 0, -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
     check("trade_info_boxes_use_actual_bbox_vertical_collision_layout", True, '_layout_chart_annotation_boxes' in charting_source and '_annotation_base_bbox' in charting_source and '_bbox_overlaps_with_padding' in charting_source and 'draw_event' in charting_source and 'annotation_layout_axis": "vertical"' in charting_source)
     check("trade_info_boxes_use_minimal_shift_single_generation_policy", True, 'annotation_layout_policy": "minimal_shift_once_per_generation"' in charting_source and 'laid_out_generation' in charting_source and 'redraw_generation' in charting_source and 'resize_token' in charting_source)
+    check("trade_info_boxes_treat_visible_candles_as_collision_obstacles", True, '_build_visible_candle_obstacle_bboxes' in charting_source and 'obstacle_bboxes=candle_obstacles' in charting_source and 'annotation_avoids_visible_candles": True' in charting_source)
     check("single_stock_sidebar_trade_info_includes_reserved_and_actual_spend_fields", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_limit_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source and '_selected_capital_var' in inspector_source and 'set_workbench_capital_display_text(' in workbench_source)
     check("single_stock_sidebar_sets_reserved_and_actual_spend_from_hover_snapshot", True, 'reserved_text=self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital"))' in workbench_source and 'actual_text=self._format_sidebar_amount_value("實支", snapshot.get("buy_capital"))' in workbench_source and 'display_mode=resolve_workbench_capital_display_mode_for_snapshot(snapshot)' in workbench_source and 'reserved_capital = buy_signal_meta.get("reserved_capital")' in charting_source and 'reserved_capital = buy_trade_meta.get("reserved_capital")' in charting_source and 'buy_capital = buy_trade_meta.get("buy_capital")' in charting_source and '"buy_capital": buy_capital' in charting_source)
     check("single_stock_filled_buy_marker_writes_reserved_capital", True, "'reserved_capital': reserved_cost" in entry_flow_source and "reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)" in entry_flow_source)
@@ -2716,6 +2717,43 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     check("trade_info_boxes_dynamic_layout_removes_bbox_overlap", False, layout_boxes[0].overlaps(layout_boxes[1]))
     check("trade_info_boxes_dynamic_layout_is_idempotent_after_first_solution", False, changed_again)
     check("trade_info_boxes_dynamic_layout_positions_remain_stable", first_positions, second_positions)
+
+    build_candle_obstacles = getattr(charting_module, "_build_visible_candle_obstacle_bboxes")
+    candle_figure = Figure(figsize=(8, 5), dpi=96)
+    candle_canvas = FigureCanvasAgg(candle_figure)
+    candle_axis = candle_figure.add_subplot(111)
+    candle_axis.set_xlim(0, 10)
+    candle_axis.set_ylim(0, 10)
+    candle_payload = {
+        "low": np.asarray([np.nan, np.nan, np.nan, np.nan, np.nan, 3.0, np.nan, np.nan, np.nan, np.nan, np.nan]),
+        "high": np.asarray([np.nan, np.nan, np.nan, np.nan, np.nan, 8.0, np.nan, np.nan, np.nan, np.nan, np.nan]),
+    }
+    candle_artist = candle_axis.annotate(
+        "買進\n資金: 2,000,000\n股數: 1,000\n成交: 55.20",
+        xy=(5, 5),
+        xytext=(0, 18),
+        textcoords="offset points",
+        ha="center",
+        va="bottom",
+        bbox={"boxstyle": "round,pad=0.38", "fc": "#123456"},
+    )
+    tag_chart_annotation_layout(candle_artist, placement="above", base_position=(0, 18), kind="trade")
+    candle_canvas.draw()
+    candle_renderer = candle_canvas.get_renderer()
+    candle_obstacles = build_candle_obstacles(candle_axis, candle_payload)
+    candle_bbox_before = candle_artist.get_window_extent(candle_renderer)
+    check("trade_info_box_test_fixture_initially_overlaps_visible_candle", True, any(candle_bbox_before.overlaps(obstacle) for obstacle in candle_obstacles))
+    candle_changed = layout_chart_annotation_boxes(
+        candle_axis,
+        [candle_artist],
+        candle_renderer,
+        obstacle_bboxes=candle_obstacles,
+    )
+    candle_canvas.draw()
+    candle_renderer = candle_canvas.get_renderer()
+    candle_bbox_after = candle_artist.get_window_extent(candle_renderer)
+    check("trade_info_boxes_move_to_reveal_visible_candle", True, candle_changed)
+    check("trade_info_boxes_do_not_cover_visible_candle_after_layout", False, any(candle_bbox_after.overlaps(obstacle) for obstacle in candle_obstacles))
 
     summary["buy_label"] = buy_label_text
     summary["tp_label"] = tp_label_text
