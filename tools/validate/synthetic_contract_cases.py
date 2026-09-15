@@ -2424,7 +2424,7 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     sell_fn_end = backtest_source.index('\n\ndef _apply_chart_sidebars', sell_fn_start)
     sell_fn_source = backtest_source[sell_fn_start:sell_fn_end]
 
-    check("single_stock_sell_signal_annotation_uses_shared_schema", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source and '"賣訊": ("capital", "qty", "reference_close")' in charting_source)
+    check("single_stock_sell_signal_annotation_uses_shared_schema", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source and '"賣訊": ("qty",)' in charting_source)
     check("single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '金額:' not in sell_fn_source and '損益:' not in sell_fn_source and '報酬率:' not in sell_fn_source)
     check("forced_close_marker_uses_yellow_visual", True, '"強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
 
@@ -2914,7 +2914,7 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     )
     exit_lines = exit_label_text.split("\n")
     check("exit_trade_label_omits_result_row_for_stop", False, any(line.startswith("結果:") for line in exit_lines))
-    check("exit_trade_label_trade_count_matches_latest_completed_trade", True, "交易次數: 第 14 次" in exit_label_text)
+    check("exit_trade_label_omits_sidebar_trade_count", False, "交易次數:" in exit_label_text)
 
     summary["expected_trade_count"] = expected_trade_count
     summary["forced_close_trade_count"] = forced_close_meta.get("trade_count")
