@@ -2180,6 +2180,13 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         chart_payload = dict(result.get("chart_payload") or {})
         chart_payload["summary_box"] = []
         chart_payload["status_box"] = {}
+        if self._runtime_domain_key() == "trading":
+            # Formal backtest statistics still include data-end forced closeout.
+            # Trading visualization must not present that accounting-only closeout
+            # as a real SELL signal on the latest market date.
+            hidden = {str(name).strip() for name in (chart_payload.get("hidden_trace_names") or []) if str(name).strip()}
+            hidden.add("強制結算")
+            chart_payload["hidden_trace_names"] = sorted(hidden)
         return chart_payload
 
     def _render_trade_table(self, trade_logs_df: pd.DataFrame | None):

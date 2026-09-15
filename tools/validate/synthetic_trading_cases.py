@@ -3165,6 +3165,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
     workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
+    gui_payload_body = inspector_source.split("def _build_gui_chart_payload", 1)[1].split("def ", 1)[0]
+    check("workbench_single_stock_trading_hides_backtest_forced_close_visual_only", True, 'self._runtime_domain_key() == "trading"' in gui_payload_body and 'hidden.add("強制結算")' in gui_payload_body and 'chart_payload["hidden_trace_names"]' in gui_payload_body)
     check("workbench_single_stock_exposes_trading_holdings_and_scanner_pool", True, all(text in inspector_source for text in ("持有股", "Scanner Pool", "get_trading_account_read_model")))
     open_ticker_body = inspector_source.split("def open_ticker", 1)[1].split("def ", 1)[0]
     check("workbench_single_stock_cross_panel_navigation_does_not_sync_refresh_auxiliary_lists", False, "_refresh_holdings_options()" in open_ticker_body or "_load_current_trading_candidate_pool()" in open_ticker_body)

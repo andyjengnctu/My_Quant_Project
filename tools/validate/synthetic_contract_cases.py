@@ -2453,6 +2453,26 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=0.0, end_idx=4.8)
     check("future_preview_tp_participates_in_visible_price_range", True, float(visible_ranges.get("price_max", 0.0)) > 130.0)
 
+    hidden_payload = dict(chart_payload)
+    hidden_payload["marker_groups"] = {
+        "強制結算": [{"trace_name": "強制結算", "date": dates[-1], "x": 3, "price": 103.5, "qty": 100, "note": "", "hover_text": "強制結算", "meta": {}}],
+        "買進": [{"trace_name": "買進", "date": dates[1], "x": 1, "price": 101.5, "qty": 100, "note": "", "hover_text": "買進", "meta": {}}],
+    }
+    hidden_payload["hidden_trace_names"] = ["強制結算"]
+    normalized_hidden_payload = normalize_chart_payload_contract(hidden_payload)
+    check("chart_hidden_trace_contract_removes_forced_close_marker_group", False, "強制結算" in normalized_hidden_payload.get("marker_groups", {}))
+    check("chart_hidden_trace_contract_keeps_unrelated_trade_markers", True, "買進" in normalized_hidden_payload.get("marker_groups", {}))
+    hidden_figure = create_matplotlib_trade_chart_figure(
+        chart_payload=normalized_hidden_payload,
+        ticker="2330",
+        show_volume=False,
+        show_price_ma=False,
+    )
+    hidden_legend = hidden_figure.axes[0].get_legend()
+    hidden_legend_labels = [] if hidden_legend is None else [text.get_text() for text in hidden_legend.get_texts()]
+    check("chart_hidden_trace_contract_removes_forced_close_legend", False, "強制結算" in hidden_legend_labels)
+    hidden_figure.clear()
+
     summary["future_preview_price_max"] = float(visible_ranges.get("price_max", 0.0))
     return results, summary
 

@@ -812,7 +812,13 @@ def normalize_chart_payload_contract(chart_payload):
     for key in ("stop_line", "tp_line", "limit_line", "entry_line", "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line"):
         normalized[key] = _normalize_line_array(normalized.get(key), total_bars)
 
-    normalized["marker_groups"] = {str(name): list(markers) for name, markers in dict(normalized.get("marker_groups") or {}).items()}
+    hidden_trace_names = {str(name).strip() for name in (normalized.get("hidden_trace_names") or []) if str(name).strip()}
+    normalized["hidden_trace_names"] = sorted(hidden_trace_names)
+    normalized["marker_groups"] = {
+        str(name): list(markers)
+        for name, markers in dict(normalized.get("marker_groups") or {}).items()
+        if str(name) not in hidden_trace_names
+    }
     normalized["signal_annotations"] = list(normalized.get("signal_annotations") or [])
     focus_positions = normalized.get("focus_positions") or []
     normalized["focus_positions"] = [int(pos) for pos in focus_positions if 0 <= int(pos) < total_bars]
@@ -1654,7 +1660,7 @@ def _render_future_preview_lines(axis_price, chart_payload):
     return rendered
 
 
-def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_overlay_specs=None):
+def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_overlay_specs=None, hidden_trace_names=None):
     from matplotlib.lines import Line2D
 
     def _build_line_handle(label, color, linestyle, linewidth, alpha=1.0):
@@ -1693,8 +1699,11 @@ def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_over
                 alpha=CHART_PRICE_MA_ALPHA,
             )
 
+    hidden_trace_names = {str(name).strip() for name in (hidden_trace_names or []) if str(name).strip()}
     event_handle_lookup = {}
     for label in CHART_EVENT_LEGEND_ORDER:
+        if label in hidden_trace_names:
+            continue
         style = CHART_SIGNAL_LEGEND_STYLE.get(label) or ACTION_STYLE_MAP.get(label)
         if style:
             event_handle_lookup[label] = _build_marker_handle(label, style)
@@ -1704,10 +1713,10 @@ def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_over
             return _build_spacer_handle()
         return line_handle_lookup.get(label) or event_handle_lookup.get(label) or _build_spacer_handle()
 
-    top_row_labels = list(CHART_LEGEND_FIRST_ROW_ITEMS)
+    top_row_labels = [label if label not in hidden_trace_names else None for label in CHART_LEGEND_FIRST_ROW_ITEMS]
     if show_price_ma:
         top_row_labels.extend(str(spec.get("label") or "") for spec in normalized_price_overlay_specs if str(spec.get("label") or "").strip())
-    bottom_row_labels = list(CHART_LEGEND_SECOND_ROW_ITEMS)
+    bottom_row_labels = [label if label not in hidden_trace_names else None for label in CHART_LEGEND_SECOND_ROW_ITEMS]
     total_columns = max(len(top_row_labels), len(bottom_row_labels), int(CHART_MATPLOTLIB_LEGEND_COLUMNS))
     top_row_labels.extend([None] * (total_columns - len(top_row_labels)))
     bottom_row_labels.extend([None] * (total_columns - len(bottom_row_labels)))
@@ -1863,7 +1872,11 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         return date_labels[rounded] if 0 <= rounded < len(date_labels) else ""
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
-    legend_handles = _build_complete_matplotlib_legend_handles(show_price_ma=bool(show_price_ma), price_overlay_specs=chart_payload.get("price_overlay_specs"))
+    legend_handles = _build_complete_matplotlib_legend_handles(
+        show_price_ma=bool(show_price_ma),
+        price_overlay_specs=chart_payload.get("price_overlay_specs"),
+        hidden_trace_names=chart_payload.get("hidden_trace_names"),
+    )
     legend_columns = max(int(CHART_MATPLOTLIB_LEGEND_COLUMNS), int(len(legend_handles) / 2))
     axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=legend_columns, frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
     hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
@@ -2370,8 +2383,9 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
         plotly_dash = "solid" if dash == "solid" else ("dot" if dash in {"dotted", "dot"} else "dash")
         fig.add_trace(go.Scatter(x=[dates[0]], y=[None], mode="lines", name=label, line={"color": color, "width": width, "dash": plotly_dash}, visible="legendonly", hoverinfo="skip"), row=1, col=1)
         present_plotly_legends.add(label)
+    hidden_trace_names = {str(name).strip() for name in (chart_payload.get("hidden_trace_names") or []) if str(name).strip()}
     for label in CHART_EVENT_LEGEND_ORDER:
-        if label in present_plotly_legends:
+        if label in hidden_trace_names or label in present_plotly_legends:
             continue
         style = CHART_SIGNAL_LEGEND_STYLE.get(label) or ACTION_STYLE_MAP.get(label)
         if not style:
