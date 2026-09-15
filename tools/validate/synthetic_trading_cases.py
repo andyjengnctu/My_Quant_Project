@@ -2935,6 +2935,51 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     from types import SimpleNamespace
 
+    # Historical regression: first-use GUI callbacks can compile successfully yet
+    # fail at runtime when a newly referenced module global was never imported.
+    # Scan every Workbench UI module for unresolved global references so startup /
+    # lazy-navigation callbacks cannot hide this class of NameError.
+    import builtins as _builtins
+    import symtable as _symtable
+
+    workbench_ui_root = Path(__file__).resolve().parents[2] / "services" / "workbench_ui"
+    unresolved_workbench_globals = {}
+    allowed_runtime_globals = set(dir(_builtins)) | {
+        "__file__", "__name__", "__package__", "__spec__", "__loader__",
+        "__cached__", "__builtins__",
+    }
+    for module_path in sorted(workbench_ui_root.glob("*.py")):
+        module_source = module_path.read_text(encoding="utf-8")
+        table = _symtable.symtable(module_source, str(module_path), "exec")
+        module_defs = {
+            symbol.get_name()
+            for symbol in table.get_symbols()
+            if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace()
+        }
+        missing = set()
+
+        def _collect_unresolved_globals(symbol_table):
+            for symbol in symbol_table.get_symbols():
+                name = symbol.get_name()
+                if (
+                    symbol.is_global()
+                    and symbol.is_referenced()
+                    and name not in module_defs
+                    and name not in allowed_runtime_globals
+                ):
+                    missing.add(name)
+            for child in symbol_table.get_children():
+                _collect_unresolved_globals(child)
+
+        _collect_unresolved_globals(table)
+        if missing:
+            unresolved_workbench_globals[module_path.name] = sorted(missing)
+    check(
+        "workbench_ui_modules_have_no_unresolved_global_names",
+        {},
+        unresolved_workbench_globals,
+    )
+
     workbench_spec = build_workbench_spec()
     panel_specs = {row["panel_id"]: row for row in workbench_spec.get("panels", [])}
     check("actual_trading_panel_is_registered", True, "trading_account" in panel_specs)
@@ -3166,9 +3211,41 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_combobox_reflow_rechecks_after_autosize", True, "def _autosize_combobox" in inspector_source and "self._schedule_single_stock_controls_layout()" in inspector_source)
     check("workbench_combobox_popdown_fit_retries_until_tcl_window_is_mapped", True, "WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES" in workbench_source and "int(attempt) + 1" in workbench_source)
 
+    from services.workbench_ui import single_stock_inspector as single_stock_inspector_module
     from services.workbench_ui.single_stock_inspector import (
         SingleStockBacktestInspectorPanel,
         resolve_single_stock_controls_layout_mode,
+    )
+    with tempfile.TemporaryDirectory() as identity_temp_dir:
+        identity_root = Path(identity_temp_dir)
+        candidate_path = identity_root / "candidate.json"
+        consumer_path = identity_root / "consumer.json"
+        binding_path = identity_root / "binding.json"
+        for fixture_path in (candidate_path, consumer_path, binding_path):
+            fixture_path.write_text("{}", encoding="utf-8")
+        with (
+            patch.object(single_stock_inspector_module, "WORKBENCH_PROJECT_ROOT", str(identity_root)),
+            patch.object(
+                single_stock_inspector_module,
+                "resolve_trading_candidate_snapshot_path",
+                return_value=candidate_path,
+            ),
+            patch.object(
+                single_stock_inspector_module,
+                "TRADING_V2_CONSUMER_STATE_RELATIVE_PATH",
+                Path("consumer.json"),
+            ),
+            patch.object(
+                single_stock_inspector_module,
+                "resolve_trading_strategy_param_binding_path",
+                return_value=binding_path,
+            ),
+        ):
+            first_use_identity = SingleStockBacktestInspectorPanel._candidate_snapshot_identity()
+    check(
+        "workbench_single_stock_first_use_candidate_identity_executes_without_nameerror",
+        True,
+        len(first_use_identity) == 3 and all(value is not None for value in first_use_identity),
     )
     class _Var:
         def __init__(self, value=""):

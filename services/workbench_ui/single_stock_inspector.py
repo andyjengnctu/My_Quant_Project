@@ -14,6 +14,7 @@ import tkinter as tk
 import warnings
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
+from pathlib import Path
 from html import unescape
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
