@@ -141,11 +141,11 @@ def resolve_single_stock_controls_layout_mode(*, available_width, required_width
     available = max(1, int(available_width or 1) - SINGLE_STOCK_CONTROLS_SAFE_MARGIN)
     req = {key: max(1, int(value or 1)) for key, value in dict(required_widths or {}).items()}
     gap = SINGLE_STOCK_CONTROLS_LAYOUT_GAP
-    wide_required = req.get("identity", 1) + req.get("candidate", 1) + req.get("history", 1) + req.get("params", 1) + 3 * gap
+    wide_required = req.get("identity", 0) + req.get("candidate", 0) + req.get("history", 0) + req.get("params", 0) + 3 * gap
     compact_required = max(
-        req.get("identity", 1) + req.get("candidate", 1) + gap,
-        req.get("history", 1) + req.get("params", 1) + gap,
-        req.get("runtime", 1),
+        req.get("identity", 0) + req.get("candidate", 0) + gap,
+        req.get("history", 0) + req.get("params", 0) + gap,
+        req.get("runtime", 0),
     )
     if available >= wide_required:
         return "wide"
@@ -505,7 +505,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._reduced_stock_map = {}
         self._reduced_stock_company_name_map = {}
         self._show_volume_var = tk.BooleanVar(value=False)
-        self._runtime_domain_var = tk.StringVar(value="Research")
+        self._runtime_domain_var = tk.StringVar(value="Trading")
         self._holdings_display_var = tk.StringVar()
         self._holdings_map = {}
         self._scanner_info_var = tk.StringVar(value="Scanner：尚未載入")
@@ -614,27 +614,31 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
 
         params_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
-        ttk.Label(params_group, text="參數", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
+        self._research_params_controls = ttk.Frame(params_group, style="Workbench.TFrame")
+        self._param_source_label = ttk.Label(self._research_params_controls, text="參數", style="Workbench.TLabel")
+        self._param_source_label.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._param_source_combo = ttk.Combobox(
-            params_group, state="readonly", width=20, textvariable=self._param_source_display_var,
+            self._research_params_controls, state="readonly", width=20, textvariable=self._param_source_display_var,
             style="Workbench.TCombobox", values=self._param_source_labels,
             postcommand=self._refresh_param_source_options_on_open,
         )
         self._autosize_combobox(self._param_source_combo, values=self._param_source_labels, current_text=self._param_source_display_var.get(), rule_key="param_source")
         self._param_source_combo.pack(side="left", padx=(0, 10), pady=uniform_pady)
         self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
-        ttk.Label(params_group, text="固定風險", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
+        self._fixed_risk_label = ttk.Label(self._research_params_controls, text="固定風險", style="Workbench.TLabel")
+        self._fixed_risk_label.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._risk_combo = ttk.Combobox(
-            params_group, state="readonly", width=7, textvariable=self._fixed_risk_display_var,
+            self._research_params_controls, state="readonly", width=7, textvariable=self._fixed_risk_display_var,
             style="Workbench.TCombobox", values=FIXED_RISK_LABELS,
             postcommand=lambda: self._configure_combobox_popup_geometry(self._risk_combo),
         )
         self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
         self._risk_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
-        self._custom_fixed_risk_entry = ttk.Entry(params_group, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
+        self._custom_fixed_risk_entry = ttk.Entry(self._research_params_controls, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
         self._custom_fixed_risk_entry.pack(side="left", padx=(0, 10), pady=uniform_pady)
         self._custom_fixed_risk_entry.state(["disabled"])
+        self._research_params_controls.pack(side="left")
         self._show_volume_check = ttk.Checkbutton(
             params_group, text="顯示成交量", variable=self._show_volume_var,
             command=self._rerender_current_chart, style="Workbench.TCheckbutton",
@@ -658,13 +662,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._holdings_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._holdings_combo.bind("<<ComboboxSelected>>", self._on_holding_selected)
 
-        status_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
-        self._scanner_info_label = ttk.Label(status_group, textvariable=self._scanner_info_var, style="Workbench.TLabel", justify="left")
-        self._scanner_info_label.pack(side="left", fill="x", expand=True, pady=uniform_pady)
-
+        self._history_group = history_group
+        self._params_group = params_group
         self._controls_groups = {
             "identity": identity_group, "candidate": candidate_group, "history": history_group,
-            "params": params_group, "runtime": runtime_group, "status": status_group,
+            "params": params_group, "runtime": runtime_group,
         }
         self._controls_layout_mode = None
         controls.bind("<Configure>", self._on_single_stock_controls_resize, add="+")
@@ -991,7 +993,14 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self.update_idletasks()
             available = int(width or self._controls_host.winfo_width() or 1)
             gap = SINGLE_STOCK_CONTROLS_LAYOUT_GAP
-            req = {key: max(1, int(widget.winfo_reqwidth())) for key, widget in groups.items()}
+            trading = self._runtime_domain_key() == "trading"
+            visible_keys = ("identity", "candidate", "params", "runtime") if trading else (
+                "identity", "candidate", "history", "params", "runtime"
+            )
+            req = {
+                key: max(1, int(groups[key].winfo_reqwidth()))
+                for key in visible_keys
+            }
             mode = resolve_single_stock_controls_layout_mode(
                 available_width=available, required_widths=req
             )
@@ -999,29 +1008,29 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             def place(layout_mode):
                 for widget in groups.values():
                     widget.grid_forget()
-                if layout_mode == "wide":
-                    placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 0, 2), ("params", 0, 3), ("runtime", 1, 0), ("status", 2, 0))
-                    status_span = 4
-                elif layout_mode == "compact":
-                    placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 1, 0), ("params", 1, 1), ("runtime", 2, 0), ("status", 3, 0))
-                    status_span = 2
+                if trading:
+                    if layout_mode == "wide":
+                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("params", 0, 2), ("runtime", 1, 0))
+                    elif layout_mode == "compact":
+                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("params", 1, 0), ("runtime", 1, 1))
+                    else:
+                        placements = (("identity", 0, 0), ("candidate", 1, 0), ("params", 2, 0), ("runtime", 3, 0))
                 else:
-                    placements = (("identity", 0, 0), ("candidate", 1, 0), ("history", 2, 0), ("params", 3, 0), ("runtime", 4, 0), ("status", 5, 0))
-                    status_span = 1
+                    if layout_mode == "wide":
+                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 0, 2), ("params", 0, 3), ("runtime", 1, 0))
+                    elif layout_mode == "compact":
+                        placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 1, 0), ("params", 1, 1), ("runtime", 2, 0))
+                    else:
+                        placements = (("identity", 0, 0), ("candidate", 1, 0), ("history", 2, 0), ("params", 3, 0), ("runtime", 4, 0))
                 for key, row, column in placements:
                     groups[key].grid(
-                        row=row, column=column,
-                        columnspan=(status_span if key == "status" else 1),
-                        sticky="ew" if key == "status" else "w",
+                        row=row, column=column, sticky="w",
                         padx=(0, gap), pady=(0, 2),
                     )
                 return layout_mode
 
             mode = place(mode)
-            self._scanner_info_label.configure(wraplength=max(260, available - 24))
             self.update_idletasks()
-            # Theme/DPI metrics can settle after the requested-width calculation.
-            # If the painted row still overflows, downgrade one layout level.
             safe_width = max(1, available - 12)
             if self._controls_bar.winfo_reqwidth() > safe_width and mode == "wide":
                 mode = place("compact")
@@ -1074,11 +1083,15 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if trading:
             self._custom_fixed_risk_entry.state(["disabled"])
             self._history_scan_button.configure(state="disabled")
-            self._scanner_info_var.set("Scanner：Trading 模式與實際交易頁共用 canonical pool / Params / V2 市場資料")
+            self._research_params_controls.pack_forget()
+            self._scanner_info_var.set("Trading canonical Scanner Pool / Params / V2")
         else:
             self._history_scan_button.configure(state="normal")
+            if not self._research_params_controls.winfo_manager():
+                self._research_params_controls.pack(side="left", before=self._show_volume_check)
             self._on_fixed_risk_selected()
-            self._scanner_info_var.set("Scanner：Research 模式")
+            self._scanner_info_var.set("Research")
+        self._schedule_single_stock_controls_layout()
 
     def _on_runtime_domain_selected(self, _event=None):
         self._apply_runtime_domain_controls()
