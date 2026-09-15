@@ -251,6 +251,13 @@ def _validate_consumer_state(payload: dict[str, Any]) -> None:
     for field in ("market_date", "source_view_fingerprint", "provider_snapshot_fingerprint", "state_fingerprint"):
         if not str(payload.get(field) or ""):
             raise ValueError(f"Trading V2 consumer state 缺少 {field}")
+    overlay_batches = payload.get("source_overlay_batch_fingerprints")
+    if overlay_batches is not None:
+        if not isinstance(overlay_batches, list):
+            raise ValueError("Trading V2 consumer state source_overlay_batch_fingerprints 必須是 list")
+        normalized_batches = [str(value).strip() for value in overlay_batches]
+        if any(not value for value in normalized_batches) or normalized_batches != list(dict.fromkeys(normalized_batches)):
+            raise ValueError("Trading V2 consumer state source_overlay_batch_fingerprints 不得含空值，且須去重並保持發布順序")
     for field in ("current_execution_pool_tickers", "required_position_tickers", "training_tickers"):
         values = payload.get(field)
         if not isinstance(values, list):
@@ -277,6 +284,33 @@ def _validate_consumer_state(payload: dict[str, Any]) -> None:
         raise ValueError("Trading V2 consumer state fingerprint 不一致")
 
 
+def open_trading_v2_consumer_view(
+    project_root: str | Path,
+    *,
+    consumer_state: dict[str, Any] | None = None,
+) -> TradingMarketDataV2View:
+    """Open the exact immutable V2 view pinned by execution consumer state."""
+
+    root = Path(project_root).resolve()
+    state = consumer_state or load_trading_v2_consumer_state(
+        root,
+        required=True,
+        verify_current_view=False,
+    )
+    market_date = str(state.get("market_date") or "")
+    pinned_batches = state.get("source_overlay_batch_fingerprints")
+    if isinstance(pinned_batches, list):
+        return TradingMarketDataV2View.open_pinned(
+            root,
+            target_date=market_date,
+            overlay_batch_fingerprints=tuple(pinned_batches),
+            provider_snapshot_fingerprint=str(state.get("provider_snapshot_fingerprint") or "") or None,
+        )
+    # Compatibility for pre-pinning consumer states. They remain target-capped
+    # and will be replaced on the next legal consumer promotion/publication.
+    return TradingMarketDataV2View.open_as_of_target(root, target_date=market_date)
+
+
 def load_trading_v2_consumer_state(
     project_root: str | Path,
     *,
@@ -293,7 +327,7 @@ def load_trading_v2_consumer_state(
     _validate_consumer_state(payload)
     if verify_current_view:
         market_date = str(payload.get("market_date") or "")
-        view = TradingMarketDataV2View.open_as_of_target(root, target_date=market_date)
+        view = open_trading_v2_consumer_view(root, consumer_state=payload)
         identity = view.view_identity(
             required_datasets=tuple(payload.get("required_v2_datasets") or _required_v2_datasets()),
             maximum_training_date=market_date,
@@ -310,6 +344,75 @@ def get_trading_v2_consumer_state_sha256(project_root: str | Path) -> str:
     if not path.is_file():
         raise FileNotFoundError("Trading V2 execution consumer state 尚未建立")
     return compute_file_sha256(path)
+
+
+def promote_trading_v2_consumer_state_if_ready(
+    project_root: str | Path,
+    *,
+    target_date: str,
+) -> dict[str, Any]:
+    """Finalize a newer execution target once active dependencies are READY.
+
+    Promotion is monotonic by market date. Once a target is finalized, later
+    same-target archive batches must not rewrite its execution lineage.
+    """
+
+    from core.trading_policy import get_trading_strategy_profile
+    from services.market_data.provider_snapshot_repository import find_latest_ready_provider_snapshot
+    from services.trading.account_state import load_trading_account_state
+    from services.trading.data_readiness import build_trading_data_readiness_from_evidence
+    from services.trading.live_reentry import resolve_trading_live_reentry_required_tickers
+    from services.trading.market_data_dataset_state import load_market_data_dataset_state
+
+    root = Path(project_root).resolve()
+    candidate = str(target_date or "").strip()
+    if not candidate:
+        return {"promoted": False, "reason": "NO_TARGET", "market_date": None}
+    if find_latest_ready_provider_snapshot(root) is None:
+        return {"promoted": False, "reason": "NO_PROVIDER_SNAPSHOT", "market_date": None}
+
+    prior = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
+    prior_date = None if prior is None else str(prior.get("market_date") or "").strip() or None
+    if prior_date is not None and prior_date >= candidate:
+        return {"promoted": False, "reason": "ALREADY_FINALIZED", "market_date": prior_date}
+
+    profile = get_trading_strategy_profile()
+    dataset_state = load_market_data_dataset_state(root, required=False)
+    readiness = build_trading_data_readiness_from_evidence(
+        strategy_id=profile.strategy_id,
+        target_date=candidate,
+        consumer_state_ready=True,
+        dataset_state=dataset_state,
+        consumer_state_required=False,
+    )
+    if not bool(readiness.get("ready")):
+        return {
+            "promoted": False,
+            "reason": "DEPENDENCIES_NOT_READY",
+            "market_date": prior_date,
+            "blocking_dependencies": list(readiness.get("blocking_dependencies") or []),
+        }
+
+    account = load_trading_account_state(root, required=False)
+    required_position_tickers = sorted(
+        normalize_trading_ticker(ticker)
+        for ticker, record in ((account or {}).get("positions") or {}).items()
+        if int(((record or {}).get("broker") or {}).get("qty") or 0) > 0
+    )
+    required_reentry_tickers = resolve_trading_live_reentry_required_tickers(root)
+    state = publish_trading_v2_consumer_state(
+        root,
+        market_date=candidate,
+        required_position_tickers=required_position_tickers,
+        required_reentry_tickers=required_reentry_tickers,
+    )
+    return {
+        "promoted": True,
+        "reason": "PROMOTED",
+        "market_date": str(state["market_date"]),
+        "consumer_state_fingerprint": str(state["state_fingerprint"]),
+        "source_view_fingerprint": str(state["source_view_fingerprint"]),
+    }
 
 
 def publish_trading_v2_consumer_state(
@@ -368,6 +471,7 @@ def publish_trading_v2_consumer_state(
         "market_date": date_text,
         "source": "trading_market_data_v2_historical_latest_view",
         "source_view_fingerprint": identity["view_fingerprint"],
+        "source_overlay_batch_fingerprints": list(identity.get("overlay_batch_fingerprints") or []),
         "provider_snapshot_fingerprint": local_view.archive.snapshot_fingerprint,
         "provider_as_of_date": local_view.archive.as_of_date,
         "required_v2_datasets": list(required_datasets),
@@ -394,7 +498,7 @@ def load_trading_v2_optimizer_raw_data(data_dir, required_min_rows, output_dir, 
     root = Path(data_dir).resolve()
     state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
     through_date = str(state["market_date"])
-    view = TradingMarketDataV2View.open_as_of_target(root, target_date=through_date)
+    view = open_trading_v2_consumer_view(root, consumer_state=state)
     tickers = list(state["training_tickers"])
     cache: dict[str, pd.DataFrame] = {}
     issues: list[str] = []
@@ -429,6 +533,8 @@ __all__ = [
     "compute_trading_v2_ohlcv_frame_sha256",
     "load_trading_v2_sanitized_ohlcv_frame",
     "load_trading_v2_consumer_state",
+    "open_trading_v2_consumer_view",
+    "promote_trading_v2_consumer_state_if_ready",
     "get_trading_v2_consumer_state_sha256",
     "publish_trading_v2_consumer_state",
     "load_trading_v2_optimizer_raw_data",

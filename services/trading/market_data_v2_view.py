@@ -58,11 +58,17 @@ class TradingMarketDataV2View:
         frame_reader=None,
         hash_fn=None,
         overlay_target_date_cutoff: str | None = None,
+        overlay_batch_fingerprints: tuple[str, ...] | None = None,
     ):
         self.project_root = Path(project_root).resolve()
         self.archive = archive
         self._overlay_target_date_cutoff = (
             None if overlay_target_date_cutoff is None else pd.to_datetime(overlay_target_date_cutoff, errors="raise").date().isoformat()
+        )
+        self._overlay_batch_fingerprints = (
+            None
+            if overlay_batch_fingerprints is None
+            else tuple(dict.fromkeys(str(value).strip() for value in overlay_batch_fingerprints if str(value).strip()))
         )
         self._frame_reader = frame_reader or read_parquet_frame
         self._hash_fn = hash_fn or compute_file_sha256
@@ -121,6 +127,42 @@ class TradingMarketDataV2View:
             overlay_target_date_cutoff=str(target_date),
         )
 
+
+    @classmethod
+    def open_pinned(
+        cls,
+        project_root,
+        *,
+        target_date: str,
+        overlay_batch_fingerprints,
+        provider_snapshot_fingerprint: str | None = None,
+        frame_reader=None,
+        hash_fn=None,
+    ):
+        """Open an immutable consumer view pinned to an exact verified overlay set.
+
+        This is stronger than ``open_as_of_target``: later DONE batches carrying
+        the same target date are excluded as well, so a finalized Scanner/Params
+        lineage cannot drift after its consumer state has been published.
+        """
+
+        root = Path(project_root).resolve()
+        state = load_trading_market_data_v2_state(root, required=False)
+        current_pinned = None if state is None else str(state.get("base_provider_snapshot_fingerprint") or "").strip()
+        pinned = str(provider_snapshot_fingerprint or "").strip() or current_pinned
+        archive = load_ready_provider_snapshot_archive(
+            root,
+            snapshot_fingerprint=pinned or None,
+        )
+        return cls(
+            project_root=root,
+            archive=archive,
+            frame_reader=frame_reader,
+            hash_fn=hash_fn,
+            overlay_target_date_cutoff=str(target_date),
+            overlay_batch_fingerprints=tuple(overlay_batch_fingerprints or ()),
+        )
+
     def training_horizon(
         self,
         *,
@@ -157,6 +199,11 @@ class TradingMarketDataV2View:
             if (
                 self._overlay_target_date_cutoff is not None
                 and str(payload.get("target_date") or "") > self._overlay_target_date_cutoff
+            ):
+                continue
+            if (
+                self._overlay_batch_fingerprints is not None
+                and batch_fp not in set(self._overlay_batch_fingerprints)
             ):
                 continue
             ledger_path = resolve_trading_market_data_v2_ledger_path(self.project_root, batch_fp)

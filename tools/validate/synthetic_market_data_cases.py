@@ -6615,7 +6615,10 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
             return ("0050", "2330", "2317")
 
         def view_identity(self, *, required_datasets, maximum_training_date=None):
-            return {"view_fingerprint": "verified-v2-view-fp"}
+            return {
+                "view_fingerprint": "verified-v2-view-fp",
+                "overlay_batch_fingerprints": ["batch-a", "batch-b"],
+            }
 
         def read_dataset_frame(self, dataset, *, columns=None, data_id=None, start_date=None, end_date=None):
             if dataset == "TaiwanStockInfo":
@@ -6701,13 +6704,15 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         loaded = load_trading_v2_consumer_state(root, required=True, verify_current_view=False)
         from unittest.mock import patch
         with patch(
-            "services.trading.market_data_consumer.TradingMarketDataV2View.open_as_of_target",
+            "services.trading.market_data_consumer.TradingMarketDataV2View.open_pinned",
             return_value=fake,
         ) as open_finalized:
             verified = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
         check("consumer_state_carries_prior_training_membership_without_csv_membership_read", ["0050", "2330", "2454", "9999"], second["training_tickers"])
         check("consumer_state_roundtrip_fingerprint_is_stable", second["state_fingerprint"], loaded["state_fingerprint"])
         check("consumer_state_verify_reopens_finalized_target_view", "2026-09-09", open_finalized.call_args.kwargs["target_date"])
+        check("consumer_state_verify_reopens_exact_pinned_overlay_set", ("batch-a", "batch-b"), tuple(open_finalized.call_args.kwargs["overlay_batch_fingerprints"]))
+        check("consumer_state_verify_reopens_pinned_provider_snapshot", "provider-snapshot-fp", open_finalized.call_args.kwargs["provider_snapshot_fingerprint"])
         check("consumer_state_finalized_target_identity_verifies", second["state_fingerprint"], verified["state_fingerprint"])
 
     repo = Path(__file__).resolve().parents[2]

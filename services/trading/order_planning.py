@@ -30,8 +30,7 @@ from core.portfolio_entry_selection import (
 from core.portfolio_fast_data import calc_mark_to_market_equity, pack_static_market_data
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from services.trading.account_state import load_trading_account_state
-from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame
-from services.trading.market_data_v2_view import TradingMarketDataV2View
+from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame, open_trading_v2_consumer_view
 from services.trading.proposed_order_state import (
     PROPOSED_ORDER_SCHEMA_VERSION,
     PROPOSED_ORDER_STATUS,
@@ -65,9 +64,7 @@ def _build_account_mark_inputs(*, project_root: Path, state: dict[str, Any], inf
     portfolio: dict[str, dict[str, Any]] = {}
     all_dfs_fast: dict[str, dict[pd.Timestamp, dict[str, float]]] = {}
     marks: list[dict[str, Any]] = []
-    view = TradingMarketDataV2View.open_as_of_target(
-        project_root, target_date=str(information_date)
-    )
+    view = open_trading_v2_consumer_view(project_root)
 
     for ticker, record in sorted((state.get("positions") or {}).items()):
         broker = record.get("broker") or {}

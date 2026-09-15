@@ -1429,12 +1429,12 @@ class TradingAccountPanel(ttk.Frame):
         overall = str(snapshot.get("overall_status") or "-")
         latest_data_date = snapshot.get("latest_data_date") or "-"
         data_ready = bool(snapshot.get("trading_data_ready"))
-        v2_status = str(snapshot.get("market_data_v2_archive_status") or "NOT_BOOTSTRAPPED")
-        sync_tone = "success" if data_ready and v2_status == "SYNCED" else ("error" if overall in {"BLOCKED", "LIVE_BLOCKED"} else "warning")
+        sync_status = "READY" if data_ready else "NOT READY"
+        sync_tone = "success" if data_ready else ("error" if overall in {"BLOCKED", "LIVE_BLOCKED"} else "warning")
         self._set_overview_card(
             "sync",
-            v2_status,
-            f"資料日 {latest_data_date} | Trading Data {'READY' if data_ready else 'NOT READY'}",
+            sync_status,
+            f"資料日 {latest_data_date} | Trading Data {sync_status}",
             tone=sync_tone,
         )
 

@@ -66,6 +66,30 @@ AUTO_UPDATE_STATUS_BLOCKED = "BLOCKED"
 AUTO_UPDATE_STATUS_TARGET_ADVANCED = "TARGET_ADVANCED"
 
 
+def _promote_execution_consumer_if_ready(*, root: Path, target_date: str) -> dict[str, object]:
+    # Local import avoids making the Full Update owner and the one-shot updater
+    # a module-import cycle while still sharing one promotion contract.
+    from services.trading.market_data_consumer import promote_trading_v2_consumer_state_if_ready
+
+    try:
+        return dict(
+            promote_trading_v2_consumer_state_if_ready(
+                project_root=root,
+                target_date=str(target_date),
+            )
+        )
+    except (OSError, TypeError, ValueError, RuntimeError) as exc:
+        # Archive synchronization and execution-consumer publication are distinct
+        # commit layers. Keep the previous finalized consumer fail-closed if its
+        # immutable source view cannot be opened, and expose the reason to callers.
+        return {
+            "promoted": False,
+            "reason": "PROMOTION_BLOCKED",
+            "market_date": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _local_now(now_fn: Callable[[], datetime] | None) -> datetime:
     value = now_fn() if now_fn is not None else datetime.now().astimezone()
     if value.tzinfo is None:
@@ -453,6 +477,10 @@ def run_trading_market_data_auto_update(
                         **quota_observation,
                     },
                 )
+            consumer_promotion = _promote_execution_consumer_if_ready(
+                root=root,
+                target_date=resolved_target,
+            )
             return {
                 "status": AUTO_UPDATE_STATUS_TARGET_ADVANCED if target_advanced else AUTO_UPDATE_STATUS_NO_DUE,
                 "target_date": resolved_target,
@@ -478,6 +506,7 @@ def run_trading_market_data_auto_update(
                 "quota_refresh_error": quota_refresh_error,
                 **quota_observation,
                 "verification": {},
+                "consumer_promotion": consumer_promotion,
                 **state_summary,
             }
 
@@ -651,6 +680,10 @@ def run_trading_market_data_auto_update(
             now=now,
             immediate_latest_sync_datasets=immediate_latest_sync,
         )
+        consumer_promotion = _promote_execution_consumer_if_ready(
+            root=root,
+            target_date=resolved_target,
+        )
         overall = AUTO_UPDATE_STATUS_UPDATED if ready_count == len(final_rows) else AUTO_UPDATE_STATUS_DEFERRED
         if any(str(dict(final_rows.get(name) or {}).get("status") or "") == "BLOCKED" for name in due):
             overall = AUTO_UPDATE_STATUS_BLOCKED
@@ -678,6 +711,7 @@ def run_trading_market_data_auto_update(
                 default=None,
             ),
             "archive_status": None if rollup is None else rollup.get("status"),
+            "consumer_promotion": consumer_promotion,
             "batch_fingerprint": batch.get("batch_fingerprint"),
             "force_refresh": bool(force_refresh_current_target),
             "quota_refresh_requested": bool(refresh_provider_quota),

@@ -47,8 +47,7 @@ from core.data_utils import get_required_min_rows
 from core.backtest_core import run_v16_backtest
 from services.scanner.stock_processor import build_extended_scanner_row_from_plan
 from services.trading.account_state import load_trading_account_state
-from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame
-from services.trading.market_data_v2_view import TradingMarketDataV2View
+from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame, open_trading_v2_consumer_view
 from services.trading.order_state import load_trading_order_state
 
 
@@ -320,9 +319,7 @@ def build_trading_live_reentry_candidate_rows(
     records = build_trading_live_reentry_watch_records(root)
     if not records:
         return []
-    view = TradingMarketDataV2View.open_as_of_target(
-        root, target_date=str(information_date)
-    )
+    view = open_trading_v2_consumer_view(root)
     aggregated_rows: list[dict[str, Any]] = []
 
     for record in records:

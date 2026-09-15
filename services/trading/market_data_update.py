@@ -14,7 +14,7 @@ from core.trading_identity import normalize_trading_ticker
 from core.trading_policy import get_trading_strategy_profile
 from services.trading.account_state import load_trading_account_state
 from services.trading.live_reentry import resolve_trading_live_reentry_required_tickers
-from services.trading.market_data_consumer import publish_trading_v2_consumer_state
+from services.trading.market_data_consumer import load_trading_v2_consumer_state, publish_trading_v2_consumer_state
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 
 
@@ -95,12 +95,23 @@ def run_trading_market_data_update(
         }
 
     market_date = _resolve_consumer_market_date(root, v2_update)
-    consumer_state = publish_trading_v2_consumer_state(
-        root,
-        market_date=market_date,
-        required_position_tickers=required_position_tickers,
-        required_reentry_tickers=required_reentry_tickers,
+    prior_consumer_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
+    prior_market_date = (
+        None
+        if prior_consumer_state is None
+        else str(prior_consumer_state.get("market_date") or "").strip() or None
     )
+    if prior_market_date is not None and prior_market_date >= market_date:
+        # A finalized target is immutable. A later Full Update may add same-day
+        # archive batches, but it must not silently rewrite Params/Scanner lineage.
+        consumer_state = prior_consumer_state
+    else:
+        consumer_state = publish_trading_v2_consumer_state(
+            root,
+            market_date=market_date,
+            required_position_tickers=required_position_tickers,
+            required_reentry_tickers=required_reentry_tickers,
+        )
     return {
         "status": "READY",
         "runtime_domain": "trading",
