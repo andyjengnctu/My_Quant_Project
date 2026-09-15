@@ -3213,6 +3213,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_form_omits_scanner_annotation_row", False, '_scanner_info_label' in inspector_source)
     check("workbench_single_stock_prefetches_trading_pool_before_trading_mode_first_use", True, 'allow_inactive=True' in inspector_source and 'self.after_idle(lambda: self._request_trading_candidate_pool_refresh(allow_inactive=True))' in inspector_source)
     check("workbench_single_stock_prefetch_validates_same_candidate_freshness_as_trading_center", True, "get_trading_candidate_snapshot_read_model(WORKBENCH_PROJECT_ROOT)" in inspector_source and 'if not bool(read_model.get("fresh"))' in inspector_source)
+    check("workbench_single_stock_bulk_prefetches_trading_ohlcv_once_per_candidate_pool", True, "build_trading_v2_ohlcv_frames(" in inspector_source and 'name="workbench-single-stock-analysis-prefetch"' in inspector_source)
+    check("workbench_single_stock_analysis_cache_is_keyed_by_consumer_and_params_identity", True, 'cache_key = (context_key, str(ticker).strip().upper(), params_signature)' in inspector_source)
+    check("workbench_single_stock_analysis_switch_emits_phase_timing_for_regression", True, "[single_stock_perf]" in inspector_source and "analysis_cache=" in inspector_source and "render=" in inspector_source)
     check("workbench_single_stock_trading_analysis_uses_finalized_consumer_view", True, "open_trading_v2_consumer_view(" in inspector_source and "TradingMarketDataV2View.open(WORKBENCH_PROJECT_ROOT)" not in inspector_source)
     check("workbench_single_stock_combobox_reflow_rechecks_after_autosize", True, "def _autosize_combobox" in inspector_source and "self._schedule_single_stock_controls_layout()" in inspector_source)
     check("workbench_combobox_popdown_fit_retries_until_tcl_window_is_mapped", True, "WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES" in workbench_source and "int(attempt) + 1" in workbench_source)
@@ -3254,6 +3257,91 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         True,
         len(first_use_identity) == 3 and all(value is not None for value in first_use_identity),
     )
+
+    # Execute the Trading analysis cache path, not just source-string checks.
+    # The second request for the same finalized consumer + ticker + Params must
+    # reuse both OHLCV and analysis result without another V2 read/backtest.
+    from collections import OrderedDict as _OrderedDict
+    import threading as _threading
+    cache_panel = object.__new__(SingleStockBacktestInspectorPanel)
+    cache_panel._trading_cache_lock = _threading.RLock()
+    cache_panel._trading_ohlcv_cache = _OrderedDict()
+    cache_panel._trading_analysis_cache = _OrderedDict()
+    cache_panel._trading_prefetch_thread = None
+    cache_panel._trading_prefetch_data_ready = None
+    cache_panel._trading_prefetch_tickers = set()
+    cache_panel._resolve_cached_trading_consumer_context = lambda: (
+        {"market_date": "2026-09-15"}, object(), ("consumer-fp", "view-fp", "2026-09-15")
+    )
+    cache_panel._resolve_trading_analysis_params = lambda _path, _row: (base_params, "params-sig", "scanner_frozen_candidate")
+    cache_rows = max(400, int(single_stock_inspector_module.get_required_min_rows(base_params)) + 5)
+    cache_df = pd.DataFrame(
+        {
+            "Open": [100.0] * cache_rows,
+            "High": [101.0] * cache_rows,
+            "Low": [99.0] * cache_rows,
+            "Close": [100.5] * cache_rows,
+            "Volume": [1000000.0] * cache_rows,
+        },
+        index=pd.bdate_range("2025-01-01", periods=cache_rows),
+    )
+    with tempfile.TemporaryDirectory() as cache_output_dir:
+        with (
+            patch.object(single_stock_inspector_module, "load_trading_v2_sanitized_ohlcv_frame", return_value=cache_df) as cached_data_read,
+            patch.object(
+                single_stock_inspector_module,
+                "run_trade_analysis",
+                return_value={"trade_logs_df": pd.DataFrame(), "chart_payload": {"x": [0.0], "date_labels": ["2026-09-15"]}},
+            ) as cached_analysis_run,
+            patch.object(single_stock_inspector_module, "resolve_runtime_output_dir", return_value=cache_output_dir),
+        ):
+            first_cached_result = SingleStockBacktestInspectorPanel._build_cached_trading_analysis_result(
+                cache_panel, "2330", "params.json", {"ticker": "2330"}
+            )
+            second_cached_result = SingleStockBacktestInspectorPanel._build_cached_trading_analysis_result(
+                cache_panel, "2330", "params.json", {"ticker": "2330"}
+            )
+    check("workbench_single_stock_trading_cache_reads_v2_once_for_repeat_switch", 1, cached_data_read.call_count)
+    check("workbench_single_stock_trading_cache_runs_analysis_once_for_repeat_switch", 1, cached_analysis_run.call_count)
+    check("workbench_single_stock_trading_cache_marks_second_result_as_hit", True, bool((second_cached_result.get("_workbench_perf") or {}).get("analysis_cache_hit")))
+
+    prefetch_panel = object.__new__(SingleStockBacktestInspectorPanel)
+    prefetch_panel._trading_cache_lock = _threading.RLock()
+    prefetch_panel._trading_ohlcv_cache = _OrderedDict()
+    prefetch_panel._trading_analysis_cache = _OrderedDict()
+    prefetch_panel._trading_prefetch_thread = object()
+    prefetch_panel._trading_prefetch_pending_rows = None
+    prefetch_panel._trading_prefetch_tickers = {"2330", "2317"}
+    prefetch_panel._trading_prefetch_data_ready = _threading.Event()
+    prefetch_panel._resolve_cached_trading_consumer_context = lambda: (
+        {"market_date": "2026-09-15"}, object(), ("consumer-fp", "view-fp", "2026-09-15")
+    )
+    prefetch_panel._resolve_trading_analysis_params = lambda _path, _row: (base_params, "params-sig", "scanner_frozen_candidate")
+    prefetch_panel.after = lambda _delay, callback, *args: callback(*args)
+    prefetch_panel._append_console_text = lambda _text: None
+    raw_prefetch = cache_df.reset_index().rename(columns={"index": "Date"})
+    with tempfile.TemporaryDirectory() as prefetch_output_dir:
+        with (
+            patch.object(
+                single_stock_inspector_module,
+                "build_trading_v2_ohlcv_frames",
+                return_value={"2330": raw_prefetch, "2317": raw_prefetch},
+            ) as bulk_ohlcv_read,
+            patch.object(
+                single_stock_inspector_module,
+                "run_trade_analysis",
+                return_value={"trade_logs_df": pd.DataFrame(), "chart_payload": {"x": [0.0], "date_labels": ["2026-09-15"]}},
+            ) as prefetched_analysis_run,
+            patch.object(single_stock_inspector_module, "resolve_runtime_output_dir", return_value=prefetch_output_dir),
+            patch.object(single_stock_inspector_module, "resolve_trading_selected_strategy_param_path", return_value=Path(prefetch_output_dir) / "params.json"),
+        ):
+            SingleStockBacktestInspectorPanel._trading_analysis_prefetch_worker(
+                prefetch_panel, [{"ticker": "2330"}, {"ticker": "2317"}]
+            )
+    check("workbench_single_stock_prefetch_bulk_reads_candidate_pool_once", 1, bulk_ohlcv_read.call_count)
+    check("workbench_single_stock_prefetch_warms_each_candidate_analysis", 2, prefetched_analysis_run.call_count)
+    check("workbench_single_stock_prefetch_warms_two_ohlcv_cache_entries", 2, len(prefetch_panel._trading_ohlcv_cache))
+    check("workbench_single_stock_prefetch_warms_two_analysis_cache_entries", 2, len(prefetch_panel._trading_analysis_cache))
     class _Var:
         def __init__(self, value=""):
             self.value = value
@@ -3286,6 +3374,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     queued = []
     candidate_prefetch_calls = []
+    analysis_prefetch_calls = []
     shared_pool_calls = []
     navigation_panel = SimpleNamespace(
         _runtime_domain_var=_Var("Research"),
@@ -3304,6 +3393,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _candidate_snapshot_identity=lambda: ("snapshot",),
         _select_candidate_dropdown_ticker=lambda ticker: None,
         _request_trading_candidate_pool_refresh=lambda: candidate_prefetch_calls.append(True),
+        _schedule_trading_analysis_prefetch=lambda rows: analysis_prefetch_calls.append([dict(row) for row in rows]),
         after_idle=lambda callback: queued.append(callback),
         _run_analysis=lambda: None,
     )
@@ -3324,6 +3414,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_link_schedules_analysis_without_auxiliary_refresh", 1, len(queued))
     check("workbench_single_stock_link_receives_entire_trading_candidate_pool_immediately", 2, len(shared_pool_calls[0][0]) if shared_pool_calls else 0)
     check("workbench_single_stock_link_does_not_reload_pool_when_trading_center_already_supplied_it", 0, len(candidate_prefetch_calls))
+    check("workbench_single_stock_link_warms_shared_pool_analysis_cache", 2, len(analysis_prefetch_calls[0]) if analysis_prefetch_calls else 0)
     check("workbench_single_stock_link_invalidates_older_background_pool_prefetch", 1, navigation_panel._candidate_pool_refresh_token)
     check("workbench_single_stock_link_clears_stale_pool_prefetch_error", None, navigation_panel._candidate_pool_last_error)
 
@@ -3361,6 +3452,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _prefetched_trading_candidate_rows=[],
         _prefetched_trading_candidate_latest_data_date=None,
         _runtime_domain_key=lambda: "research",
+        _schedule_trading_analysis_prefetch=lambda _rows: None,
         _apply_trading_candidate_rows=lambda *args, **kwargs: research_prefetch_apply_calls.append((args, kwargs)),
         _configure_combobox_popup_geometry=lambda *_args, **_kwargs: None,
         _candidate_combo=object(),

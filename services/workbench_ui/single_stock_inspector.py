@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from collections import OrderedDict
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import traceback
 import threading
+import time
 import tkinter as tk
 import warnings
 from contextlib import redirect_stderr, redirect_stdout
@@ -29,7 +31,7 @@ from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_
 from core.output_paths import ensure_output_dir
 from core.console_report import project_relative_display_path
 from core.runtime_utils import parse_float_strict
-from core.data_utils import get_required_min_rows
+from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.trading_policy import resolve_trading_selected_strategy_param_path
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method, sort_candidate_rows
@@ -63,6 +65,7 @@ from services.trading.scanner_state import (
 from services.trading.account_state import get_trading_account_read_model
 from services.trading.market_data_consumer import (
     TRADING_V2_CONSUMER_STATE_RELATIVE_PATH,
+    build_trading_v2_ohlcv_frames,
     load_trading_v2_consumer_state,
     load_trading_v2_sanitized_ohlcv_frame,
     open_trading_v2_consumer_view,
@@ -128,6 +131,15 @@ COMBOBOX_WIDTH_RULES = {
 
 SINGLE_STOCK_CONTROLS_LAYOUT_GAP = 10
 SINGLE_STOCK_CONTROLS_SAFE_MARGIN = 72
+
+# UI-only execution caches.  They change neither Trading data membership nor
+# backtest semantics; cache identities include the finalized consumer fingerprint
+# and candidate Params signature.
+SINGLE_STOCK_TRADING_OHLCV_PREFETCH_MAX_TICKERS = 128
+SINGLE_STOCK_TRADING_ANALYSIS_PREFETCH_MAX_TICKERS = 24
+SINGLE_STOCK_TRADING_OHLCV_CACHE_SIZE = 160
+SINGLE_STOCK_TRADING_ANALYSIS_CACHE_SIZE = 48
+SINGLE_STOCK_TRADING_PREFETCH_WAIT_SECONDS = 3.0
 
 
 def resolve_single_stock_controls_rows(*, available_width, ordered_widths):
@@ -572,6 +584,17 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._candidate_pool_last_error = None
         self._prefetched_trading_candidate_rows: list[dict] = []
         self._prefetched_trading_candidate_latest_data_date = None
+        self._trading_cache_lock = threading.RLock()
+        self._trading_consumer_cache_file_identity = None
+        self._trading_consumer_cache_state = None
+        self._trading_consumer_cache_view = None
+        self._trading_consumer_cache_key = None
+        self._trading_ohlcv_cache = OrderedDict()
+        self._trading_analysis_cache = OrderedDict()
+        self._trading_prefetch_thread = None
+        self._trading_prefetch_pending_rows = None
+        self._trading_prefetch_tickers = set()
+        self._trading_prefetch_data_ready = None
         self._controls_layout_after_id = None
         self._company_name_refresh_inflight = False
         self._build_ui()
@@ -1216,6 +1239,297 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             return
         self.after(0, self._finish_trading_candidate_pool_refresh, request_token, snapshot_identity, payload)
 
+    @staticmethod
+    def _trading_consumer_file_identity():
+        path = Path(WORKBENCH_PROJECT_ROOT).resolve() / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return (int(stat.st_mtime_ns), int(stat.st_size))
+
+    @staticmethod
+    def _lru_get(cache, key):
+        value = cache.get(key)
+        if value is None:
+            return None
+        cache.move_to_end(key)
+        return value
+
+    @staticmethod
+    def _lru_put(cache, key, value, max_size):
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > int(max_size):
+            cache.popitem(last=False)
+
+    def _resolve_cached_trading_consumer_context(self):
+        file_identity = self._trading_consumer_file_identity()
+        with self._trading_cache_lock:
+            if (
+                file_identity is not None
+                and file_identity == self._trading_consumer_cache_file_identity
+                and self._trading_consumer_cache_state is not None
+                and self._trading_consumer_cache_view is not None
+                and self._trading_consumer_cache_key is not None
+            ):
+                return (
+                    self._trading_consumer_cache_state,
+                    self._trading_consumer_cache_view,
+                    self._trading_consumer_cache_key,
+                )
+
+        state = load_trading_v2_consumer_state(
+            WORKBENCH_PROJECT_ROOT, required=True, verify_current_view=True
+        )
+        market_date = str(state.get("market_date") or "").strip()
+        if not market_date:
+            raise RuntimeError("Trading V2 consumer state 缺少 market_date")
+        state_fingerprint = str(state.get("state_fingerprint") or "").strip()
+        source_view_fingerprint = str(state.get("source_view_fingerprint") or "").strip()
+        context_key = (state_fingerprint, source_view_fingerprint, market_date)
+        view = open_trading_v2_consumer_view(
+            WORKBENCH_PROJECT_ROOT, consumer_state=state
+        )
+        with self._trading_cache_lock:
+            self._trading_consumer_cache_file_identity = file_identity
+            self._trading_consumer_cache_state = state
+            self._trading_consumer_cache_view = view
+            self._trading_consumer_cache_key = context_key
+        return state, view, context_key
+
+    def _resolve_trading_analysis_params(self, params_path, candidate_row):
+        if candidate_row:
+            params, member = resolve_trading_candidate_frozen_params(candidate_row)
+            signature = str(member.get("params_signature") or "").strip()
+            return params, signature, "scanner_frozen_candidate"
+        runtime = load_trading_strategy_param_runtime(params_path)
+        params = runtime["primary_params"]
+        signature = str((runtime.get("source") or {}).get("primary_params_signature") or "").strip()
+        if not signature:
+            members = list(runtime.get("members") or [])
+            signature = str((members[0] if members else {}).get("params_signature") or "").strip()
+        return params, signature, "trading_primary_params"
+
+    def _get_cached_trading_clean_df(self, context_key, ticker, min_rows, *, allow_prefetch_wait=True):
+        cache_key = (context_key, str(ticker).strip().upper())
+        with self._trading_cache_lock:
+            cached = self._lru_get(self._trading_ohlcv_cache, cache_key)
+            prefetch_thread = self._trading_prefetch_thread
+            prefetch_event = self._trading_prefetch_data_ready
+            prefetch_tickers = set(self._trading_prefetch_tickers)
+        if cached is not None:
+            if len(cached) < int(min_rows):
+                raise ValueError(f"有效資料不足: 清洗後僅剩 {len(cached)} 列")
+            return cached, True
+
+        sid = str(ticker).strip().upper()
+        if (
+            allow_prefetch_wait
+            and sid in prefetch_tickers
+            and prefetch_thread is not None
+            and prefetch_thread.is_alive()
+            and prefetch_event is not None
+        ):
+            prefetch_event.wait(timeout=SINGLE_STOCK_TRADING_PREFETCH_WAIT_SECONDS)
+            with self._trading_cache_lock:
+                cached = self._lru_get(self._trading_ohlcv_cache, cache_key)
+            if cached is not None:
+                if len(cached) < int(min_rows):
+                    raise ValueError(f"有效資料不足: 清洗後僅剩 {len(cached)} 列")
+                return cached, True
+
+        _state, view, _resolved_key = self._resolve_cached_trading_consumer_context()
+        if _resolved_key != context_key:
+            raise RuntimeError("Trading consumer state 在單股資料載入期間已更新，請重試目前股票")
+        market_date = str(context_key[2])
+        clean_df = load_trading_v2_sanitized_ohlcv_frame(
+            view,
+            ticker=sid,
+            through_date=market_date,
+            min_rows=int(min_rows),
+        )
+        with self._trading_cache_lock:
+            self._lru_put(
+                self._trading_ohlcv_cache,
+                cache_key,
+                clean_df,
+                SINGLE_STOCK_TRADING_OHLCV_CACHE_SIZE,
+            )
+        return clean_df, False
+
+    def _build_cached_trading_analysis_result(
+        self, ticker, params_path, candidate_row, *, allow_prefetch_wait=True
+    ):
+        started = time.perf_counter()
+        consumer_state, _view, context_key = self._resolve_cached_trading_consumer_context()
+        context_elapsed = time.perf_counter() - started
+        params, params_signature, params_source = self._resolve_trading_analysis_params(
+            params_path, candidate_row
+        )
+        cache_key = (context_key, str(ticker).strip().upper(), params_signature)
+        with self._trading_cache_lock:
+            cached_result = self._lru_get(self._trading_analysis_cache, cache_key)
+        if cached_result is not None:
+            result = dict(cached_result)
+            result["_workbench_perf"] = {
+                "analysis_cache_hit": True,
+                "context_seconds": context_elapsed,
+                "data_seconds": 0.0,
+                "analysis_seconds": 0.0,
+                "worker_seconds": time.perf_counter() - started,
+            }
+            return result
+
+        min_rows = get_required_min_rows(params)
+        data_started = time.perf_counter()
+        clean_df, data_cache_hit = self._get_cached_trading_clean_df(
+            context_key, ticker, min_rows, allow_prefetch_wait=allow_prefetch_wait
+        )
+        data_elapsed = time.perf_counter() - data_started
+        analysis_params = build_trade_analysis_view_params(params)
+        output_dir = resolve_runtime_output_dir(
+            WORKBENCH_PROJECT_ROOT, domain=RUNTIME_DOMAIN_TRADING, category=WORKBENCH_OUTPUT_CATEGORY
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        analysis_started = time.perf_counter()
+        analysis_result = run_trade_analysis(
+            clean_df,
+            ticker,
+            analysis_params,
+            export_excel=False,
+            export_chart=False,
+            return_chart_payload=True,
+            verbose=False,
+            output_dir=output_dir,
+        )
+        analysis_elapsed = time.perf_counter() - analysis_started
+        market_date = str(consumer_state.get("market_date") or "")
+        result = {
+            "ticker": ticker,
+            "params": analysis_params,
+            "clean_df": clean_df,
+            "source": "TRADING_V2",
+            "dataset_profile_key": "trading",
+            "dataset_label": f"Trading V2 through {market_date}",
+            "trading_market_date": market_date,
+            "trading_params_source": params_source,
+            **analysis_result,
+        }
+        cache_payload = dict(result)
+        with self._trading_cache_lock:
+            self._lru_put(
+                self._trading_analysis_cache,
+                cache_key,
+                cache_payload,
+                SINGLE_STOCK_TRADING_ANALYSIS_CACHE_SIZE,
+            )
+        result["_workbench_perf"] = {
+            "analysis_cache_hit": False,
+            "data_cache_hit": bool(data_cache_hit),
+            "context_seconds": context_elapsed,
+            "data_seconds": data_elapsed,
+            "analysis_seconds": analysis_elapsed,
+            "worker_seconds": time.perf_counter() - started,
+        }
+        return result
+
+    def _schedule_trading_analysis_prefetch(self, rows):
+        normalized_rows = [dict(row) for row in list(rows or []) if str((row or {}).get("ticker") or "").strip()]
+        if not normalized_rows:
+            return False
+        thread = self._trading_prefetch_thread
+        if thread is not None and thread.is_alive():
+            self._trading_prefetch_pending_rows = normalized_rows
+            return False
+        self._trading_prefetch_pending_rows = None
+        data_rows = normalized_rows[:SINGLE_STOCK_TRADING_OHLCV_PREFETCH_MAX_TICKERS]
+        self._trading_prefetch_tickers = {str(row.get("ticker") or "").strip().upper() for row in data_rows}
+        self._trading_prefetch_data_ready = threading.Event()
+        prefetch_thread = threading.Thread(
+            target=self._trading_analysis_prefetch_worker,
+            args=(data_rows,),
+            name="workbench-single-stock-analysis-prefetch",
+            daemon=True,
+        )
+        self._trading_prefetch_thread = prefetch_thread
+        prefetch_thread.start()
+        return True
+
+    def _trading_analysis_prefetch_worker(self, rows):
+        error = None
+        try:
+            consumer_state, view, context_key = self._resolve_cached_trading_consumer_context()
+            market_date = str(consumer_state.get("market_date") or "")
+            tickers = tuple(
+                dict.fromkeys(
+                    str(row.get("ticker") or "").strip().upper()
+                    for row in rows
+                    if str(row.get("ticker") or "").strip()
+                )
+            )
+            missing = []
+            with self._trading_cache_lock:
+                for ticker in tickers:
+                    if (context_key, ticker) not in self._trading_ohlcv_cache:
+                        missing.append(ticker)
+            if missing:
+                raw_frames = build_trading_v2_ohlcv_frames(
+                    view,
+                    tickers=missing,
+                    through_date=market_date,
+                )
+                for ticker in missing:
+                    raw = raw_frames.get(ticker)
+                    if raw is None or raw.empty:
+                        continue
+                    try:
+                        clean_df, _stats = sanitize_ohlcv_dataframe(raw, ticker, min_rows=1)
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    with self._trading_cache_lock:
+                        self._lru_put(
+                            self._trading_ohlcv_cache,
+                            (context_key, ticker),
+                            clean_df,
+                            SINGLE_STOCK_TRADING_OHLCV_CACHE_SIZE,
+                        )
+            if self._trading_prefetch_data_ready is not None:
+                self._trading_prefetch_data_ready.set()
+
+            params_path = str(resolve_trading_selected_strategy_param_path(WORKBENCH_PROJECT_ROOT))
+            for row in rows[:SINGLE_STOCK_TRADING_ANALYSIS_PREFETCH_MAX_TICKERS]:
+                ticker = str(row.get("ticker") or "").strip().upper()
+                if not ticker:
+                    continue
+                try:
+                    self._build_cached_trading_analysis_result(
+                        ticker, params_path, row, allow_prefetch_wait=False
+                    )
+                except (FileNotFoundError, KeyError, TypeError, ValueError, RuntimeError, OSError):
+                    continue
+        except (FileNotFoundError, KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
+            error = exc
+        finally:
+            if self._trading_prefetch_data_ready is not None:
+                self._trading_prefetch_data_ready.set()
+            try:
+                self.after(0, self._finish_trading_analysis_prefetch, error)
+            except tk.TclError as exc:
+                _warn_gui_fallback("single-stock analysis prefetch completion", exc)
+                return
+
+    def _finish_trading_analysis_prefetch(self, error):
+        self._trading_prefetch_thread = None
+        if error is not None:
+            self._append_console_text(
+                f"[single_stock_prefetch] {type(error).__name__}: {error}\n"
+            )
+        pending = self._trading_prefetch_pending_rows
+        self._trading_prefetch_pending_rows = None
+        if pending:
+            self._schedule_trading_analysis_prefetch(pending)
+
     def _finish_trading_candidate_pool_refresh(self, request_token, snapshot_identity, payload):
         if request_token != self._candidate_pool_refresh_token:
             return
@@ -1225,6 +1539,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         rows = [dict(row) for row in list(payload.get("candidate_rows") or [])]
         self._prefetched_trading_candidate_rows = rows
         self._prefetched_trading_candidate_latest_data_date = payload.get("latest_data_date")
+        self._schedule_trading_analysis_prefetch(rows)
         if self._runtime_domain_key() == "trading":
             self._apply_trading_candidate_rows(
                 rows,
@@ -1262,6 +1577,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         rows = [dict(row) for row in list(payload.get("candidate_rows") or [])]
         self._prefetched_trading_candidate_rows = rows
         self._prefetched_trading_candidate_latest_data_date = payload.get("latest_data_date")
+        self._schedule_trading_analysis_prefetch(rows)
         self._apply_trading_candidate_rows(
             rows,
             latest_data_date=payload.get("latest_data_date"),
@@ -1358,6 +1674,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._candidate_pool_last_error = None
             self._prefetched_trading_candidate_rows = shared_rows
             self._prefetched_trading_candidate_latest_data_date = candidate_latest_data_date
+            self._schedule_trading_analysis_prefetch(shared_rows)
             self._apply_trading_candidate_rows(
                 shared_rows,
                 latest_data_date=candidate_latest_data_date,
@@ -1623,6 +1940,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             if runtime_domain == "trading":
                 self._prefetched_trading_candidate_rows = [dict(row) for row in candidate_rows]
                 self._prefetched_trading_candidate_latest_data_date = (scan_result or {}).get("latest_data_date")
+                self._schedule_trading_analysis_prefetch(candidate_rows)
                 self._apply_trading_candidate_rows(
                     candidate_rows, latest_data_date=(scan_result or {}).get("latest_data_date")
                 )
@@ -1671,54 +1989,12 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
     def _run_analysis_worker(self, ticker, params_path, fixed_risk, request_token, runtime_domain, candidate_row):
         try:
             if runtime_domain == "trading":
-                consumer_state = load_trading_v2_consumer_state(
-                    WORKBENCH_PROJECT_ROOT, required=True, verify_current_view=True
-                )
-                market_date = str(consumer_state.get("market_date") or "")
-                if not market_date:
-                    raise RuntimeError("Trading V2 consumer state 缺少 market_date")
-                if candidate_row:
-                    params, _member = resolve_trading_candidate_frozen_params(candidate_row)
-                    params_source = "scanner_frozen_candidate"
-                else:
-                    runtime = load_trading_strategy_param_runtime(params_path)
-                    params = runtime["primary_params"]
-                    params_source = "trading_primary_params"
-                view = open_trading_v2_consumer_view(
-                    WORKBENCH_PROJECT_ROOT, consumer_state=consumer_state
-                )
-                clean_df = load_trading_v2_sanitized_ohlcv_frame(
-                    view,
-                    ticker=ticker,
-                    through_date=market_date,
-                    min_rows=get_required_min_rows(params),
-                )
-                analysis_params = build_trade_analysis_view_params(params)
-                output_dir = resolve_runtime_output_dir(
-                    WORKBENCH_PROJECT_ROOT, domain=RUNTIME_DOMAIN_TRADING, category=WORKBENCH_OUTPUT_CATEGORY
-                )
-                os.makedirs(output_dir, exist_ok=True)
-                analysis_result = run_trade_analysis(
-                    clean_df,
+                result = self._build_cached_trading_analysis_result(
                     ticker,
-                    analysis_params,
-                    export_excel=False,
-                    export_chart=False,
-                    return_chart_payload=True,
-                    verbose=False,
-                    output_dir=output_dir,
+                    params_path,
+                    dict(candidate_row or {}),
+                    allow_prefetch_wait=True,
                 )
-                result = {
-                    "ticker": ticker,
-                    "params": analysis_params,
-                    "clean_df": clean_df,
-                    "source": "TRADING_V2",
-                    "dataset_profile_key": "trading",
-                    "dataset_label": f"Trading V2 through {market_date}",
-                    "trading_market_date": market_date,
-                    "trading_params_source": params_source,
-                    **analysis_result,
-                }
             else:
                 result = run_ticker_analysis(
                     ticker,
@@ -1798,7 +2074,20 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             return
         self._analysis_thread = None
         self._result = result
+        render_started = time.perf_counter()
         render_error_text = self._render_result(result)
+        render_seconds = time.perf_counter() - render_started
+        perf = dict(result.get("_workbench_perf") or {})
+        if runtime_domain == "trading" and perf:
+            self._append_console_text(
+                "[single_stock_perf] "
+                f"ticker={ticker} | analysis_cache={int(bool(perf.get('analysis_cache_hit')))} "
+                f"| data_cache={int(bool(perf.get('data_cache_hit')))} "
+                f"| context={float(perf.get('context_seconds') or 0.0):.3f}s "
+                f"| data={float(perf.get('data_seconds') or 0.0):.3f}s "
+                f"| analysis={float(perf.get('analysis_seconds') or 0.0):.3f}s "
+                f"| render={render_seconds:.3f}s\n"
+            )
         if not render_error_text:
             context = "Trading" if runtime_domain == "trading" else get_dataset_profile_label(DEFAULT_DATASET_PROFILE)
             self._status_var.set(f"完成：{ticker} / {context}")
