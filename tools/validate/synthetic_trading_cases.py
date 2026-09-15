@@ -69,6 +69,8 @@ def _publish_synthetic_trading_input_lineage(
         get_market_dataset_spec,
         get_market_dataset_specs,
     )
+    from core.market_data_dataset_readiness import market_data_contract_requires_target_freshness
+    from core.market_data_freshness_contract import get_market_data_freshness_contract
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from services.trading.market_data_consumer import publish_trading_v2_consumer_state
     from services.trading.market_data_dataset_state import (
@@ -236,6 +238,9 @@ def _publish_synthetic_trading_input_lineage(
             "schema_status": VALIDATION_STATUS_READY,
             "coverage_status": VALIDATION_STATUS_READY,
         })
+        contract = get_market_data_freshness_contract(dataset)
+        if market_data_contract_requires_target_freshness(contract, row):
+            row["last_exact_ready_target_date"] = str(market_date)
     publish_market_data_dataset_state(root, dataset_state)
 
     view = TradingMarketDataV2View.open(root)

@@ -3773,7 +3773,10 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         validate_trading_data_dependency_registry,
     )
     from services.trading import data_readiness as trading_data_readiness
-    from core.market_data_dataset_readiness import MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
+    from core.market_data_dataset_readiness import (
+        MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
+        market_data_contract_requires_target_freshness,
+    )
     from services.trading.market_data_dataset_state import (
         VALIDATION_STATUS_NOT_EVALUATED,
         VALIDATION_STATUS_READY,
@@ -3796,6 +3799,9 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             for dataset in current_dependency.required_v2_datasets
         }
     }
+    for dataset, row in current_dataset_state["datasets"].items():
+        if market_data_contract_requires_target_freshness(by_dataset[dataset], row):
+            row["last_exact_ready_target_date"] = "2026-09-07"
     current_ready = trading_data_readiness.build_trading_data_readiness_from_evidence(
         strategy_id="full_rule_based_no_dl",
         target_date="2026-09-07",
@@ -3828,6 +3834,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
             "TaiwanStockPER": {
                 "status": "READY",
                 "last_ready_target_date": "2026-09-07",
+                "last_exact_ready_target_date": "2026-09-07",
                 "last_attempt_target_date": "2026-09-07",
                 "latest_data_date": "2026-09-07",
                 "schema_status": VALIDATION_STATUS_READY,
