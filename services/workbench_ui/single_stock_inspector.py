@@ -54,13 +54,15 @@ from services.trade_analysis.trade_log import (
 )
 from services.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 from services.trading.daily_workflow import run_trading_candidate_scan
-from services.trading.scanner_state import load_trading_candidate_snapshot
+from services.trading.scanner_state import load_trading_candidate_snapshot, resolve_trading_candidate_snapshot_path
 from services.trading.account_state import get_trading_account_read_model
 from services.trading.market_data_consumer import (
+    TRADING_V2_CONSUMER_STATE_RELATIVE_PATH,
     load_trading_v2_consumer_state,
     load_trading_v2_sanitized_ohlcv_frame,
 )
 from services.trading.market_data_v2_view import TradingMarketDataV2View
+from services.trading.strategy_param_state import resolve_trading_strategy_param_binding_path
 from services.trading.strategy_param_runtime import (
     load_trading_strategy_param_runtime,
     resolve_trading_candidate_frozen_params,
@@ -513,6 +515,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._analysis_active_token = 0
         self._scanner_thread = None
         self._scanner_active_token = 0
+        self._candidate_pool_refresh_thread = None
+        self._candidate_pool_refresh_token = 0
+        self._candidate_pool_checked_identity = ("__uninitialized__",)
+        self._candidate_pool_last_error = None
         self._company_name_refresh_inflight = False
         self._build_ui()
 
@@ -538,7 +544,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         ttk.Label(controls_bar, text="常用股票", style="Workbench.TLabel").grid(row=0, column=2, padx=(0, 6), pady=uniform_pady, sticky="w")
         self._reduced_stock_company_name_map = self._build_initial_reduced_stock_company_name_map()
         _, reduced_display_values, self._reduced_stock_map = _build_reduced_stock_dropdown_options(company_name_map=self._reduced_stock_company_name_map)
-        self._reduced_stock_combo = ttk.Combobox(controls_bar, state="readonly", width=18, textvariable=self._reduced_stock_display_var, style="Workbench.TCombobox", values=reduced_display_values)
+        self._reduced_stock_combo = ttk.Combobox(
+            controls_bar, state="readonly", width=18, textvariable=self._reduced_stock_display_var,
+            style="Workbench.TCombobox", values=reduced_display_values,
+            postcommand=lambda: self._configure_combobox_popup_geometry(self._reduced_stock_combo),
+        )
         self._autosize_combobox(self._reduced_stock_combo, values=reduced_display_values, current_text=self._reduced_stock_display_var.get(), rule_key="reduced")
         self._reduced_stock_combo.grid(row=0, column=3, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
@@ -560,7 +570,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
         self._history_scan_button = ttk.Button(controls_bar, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton")
         self._history_scan_button.grid(row=0, column=6, padx=(0, 8), pady=uniform_pady, sticky="w")
-        self._history_combo = ttk.Combobox(controls_bar, state="readonly", width=30, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
+        self._history_combo = ttk.Combobox(
+            controls_bar, state="readonly", width=30, textvariable=self._history_display_var,
+            style="Workbench.TCombobox", values=[],
+            postcommand=lambda: self._configure_combobox_popup_geometry(self._history_combo),
+        )
         self._autosize_combobox(self._history_combo, values=[], current_text=self._history_display_var.get(), rule_key="history")
         self._history_combo.grid(row=0, column=7, padx=(0, 14), pady=uniform_pady, sticky="w")
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
@@ -573,7 +587,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             textvariable=self._param_source_display_var,
             style="Workbench.TCombobox",
             values=self._param_source_labels,
-            postcommand=self._refresh_param_source_options,
+            postcommand=self._refresh_param_source_options_on_open,
         )
         self._autosize_combobox(self._param_source_combo, values=self._param_source_labels, current_text=self._param_source_display_var.get(), rule_key="param_source")
         self._param_source_combo.grid(row=0, column=9, padx=(0, 10), pady=uniform_pady, sticky="w")
@@ -586,6 +600,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             textvariable=self._fixed_risk_display_var,
             style="Workbench.TCombobox",
             values=FIXED_RISK_LABELS,
+            postcommand=lambda: self._configure_combobox_popup_geometry(self._risk_combo),
         )
         self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
         self._risk_combo.grid(row=0, column=11, padx=(0, 6), pady=uniform_pady, sticky="w")
@@ -610,6 +625,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             textvariable=self._runtime_domain_var,
             style="Workbench.TCombobox",
             values=("Research", "Trading"),
+            postcommand=lambda: self._configure_combobox_popup_geometry(self._runtime_domain_combo),
         )
         self._runtime_domain_combo.grid(row=1, column=1, padx=(0, 10), pady=uniform_pady, sticky="w")
         self._runtime_domain_combo.bind("<<ComboboxSelected>>", self._on_runtime_domain_selected)
@@ -621,7 +637,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             textvariable=self._holdings_display_var,
             style="Workbench.TCombobox",
             values=(),
-            postcommand=self._refresh_holdings_options,
+            postcommand=self._refresh_holdings_options_on_open,
         )
         self._holdings_combo.grid(row=1, column=3, columnspan=2, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._holdings_combo.bind("<<ComboboxSelected>>", self._on_holding_selected)
@@ -968,7 +984,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._apply_runtime_domain_controls()
         self._refresh_holdings_options()
         if self._runtime_domain_key() == "trading":
-            self._load_current_trading_candidate_pool()
+            self._request_trading_candidate_pool_refresh()
         ticker = self._ticker_var.get().strip()
         if ticker:
             self.after_idle(self._run_analysis)
@@ -1000,11 +1016,98 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._ticker_var.set(ticker)
             self.after_idle(self._run_analysis)
 
+    def _refresh_param_source_options_on_open(self):
+        self._refresh_param_source_options()
+        self._configure_combobox_popup_geometry(self._param_source_combo)
+
+    def _refresh_holdings_options_on_open(self):
+        self._refresh_holdings_options()
+        self._configure_combobox_popup_geometry(self._holdings_combo)
+
     def _refresh_candidate_options_on_open(self):
+        # Posting a Combobox must stay UI-only.  Current-snapshot verification can
+        # traverse Trading lineage/V2 content and therefore runs in the background.
+        self._configure_combobox_popup_geometry(self._candidate_combo)
         if self._runtime_domain_key() == "trading":
-            self._load_current_trading_candidate_pool(sync_ticker=False)
+            self._request_trading_candidate_pool_refresh()
+
+    @staticmethod
+    def _candidate_snapshot_identity():
+        def file_identity(path):
+            try:
+                stat = path.stat()
+            except OSError:
+                return None
+            return (int(stat.st_mtime_ns), int(stat.st_size))
+
+        root = Path(WORKBENCH_PROJECT_ROOT).resolve()
+        return (
+            file_identity(resolve_trading_candidate_snapshot_path(root)),
+            file_identity(root / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH),
+            file_identity(resolve_trading_strategy_param_binding_path(root)),
+        )
+
+    def _request_trading_candidate_pool_refresh(self, *, force=False):
+        if self._runtime_domain_key() != "trading":
+            return False
+        snapshot_identity = self._candidate_snapshot_identity()
+        if not force and snapshot_identity == self._candidate_pool_checked_identity:
+            return False
+        thread = self._candidate_pool_refresh_thread
+        if thread is not None and thread.is_alive():
+            return False
+        self._candidate_pool_refresh_token += 1
+        request_token = self._candidate_pool_refresh_token
+        self._scanner_info_var.set("Scanner：背景載入 Trading pool…")
+        refresh_thread = threading.Thread(
+            target=self._load_trading_candidate_pool_worker,
+            args=(request_token, snapshot_identity),
+            name="workbench-trading-candidate-pool",
+            daemon=True,
+        )
+        self._candidate_pool_refresh_thread = refresh_thread
+        refresh_thread.start()
+        return True
+
+    def _load_trading_candidate_pool_worker(self, request_token, snapshot_identity):
+        try:
+            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=True)
+        except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+            self.after(0, self._finish_trading_candidate_pool_error, request_token, snapshot_identity, exc)
+            return
+        self.after(0, self._finish_trading_candidate_pool_refresh, request_token, snapshot_identity, payload)
+
+    def _finish_trading_candidate_pool_refresh(self, request_token, snapshot_identity, payload):
+        if request_token != self._candidate_pool_refresh_token:
+            return
+        self._candidate_pool_refresh_thread = None
+        self._candidate_pool_checked_identity = snapshot_identity
+        self._candidate_pool_last_error = None
+        rows = list(payload.get("candidate_rows") or [])
+        self._apply_trading_candidate_rows(
+            rows,
+            latest_data_date=payload.get("latest_data_date"),
+            sync_ticker=False,
+        )
+        self._configure_combobox_popup_geometry(self._candidate_combo)
+
+    def _finish_trading_candidate_pool_error(self, request_token, snapshot_identity, exc):
+        if request_token != self._candidate_pool_refresh_token:
+            return
+        self._candidate_pool_refresh_thread = None
+        self._candidate_pool_checked_identity = snapshot_identity
+        self._candidate_pool_last_error = f"{type(exc).__name__}: {exc}"
+        # Keep any already-known candidate row/context (for example from a
+        # Trading-center link).  A background refresh failure must not erase the
+        # frozen Params context of the ticker the user is currently inspecting.
+        self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
 
     def _load_current_trading_candidate_pool(self, *, sync_ticker=False):
+        """Compatibility helper for explicit synchronous callers/tests.
+
+        Interactive Combobox posting never calls this path; it uses the background
+        refresh above so opening the list cannot block Tk.
+        """
         try:
             payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=True)
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
@@ -1012,6 +1115,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._apply_scanner_pool_rows([])
             self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
             return
+        self._candidate_pool_checked_identity = self._candidate_snapshot_identity()
         rows = list(payload.get("candidate_rows") or [])
         self._apply_trading_candidate_rows(
             rows,
@@ -1094,9 +1198,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             row_ticker = str(row.get("ticker") or "").strip().upper()
             if row_ticker == ticker_text:
                 self._trading_candidate_rows_by_ticker[ticker_text] = row
-        # Cross-panel navigation must be immediate.  Holdings and candidate-pool
-        # dropdowns are auxiliary controls and load lazily when the user opens
-        # them; they must not block navigation or overwrite the requested ticker.
+        # Cross-panel navigation must be immediate.  Auxiliary candidate data is
+        # prefetched in the background so the dropdown is ready by the time the
+        # user opens it, without delaying navigation or overwriting this ticker.
+        if domain == "Trading":
+            self._request_trading_candidate_pool_refresh()
         if auto_run and ticker_text:
             self.after_idle(self._run_analysis)
 
@@ -1336,6 +1442,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 self._apply_trading_candidate_rows(
                     candidate_rows, latest_data_date=(scan_result or {}).get("latest_data_date")
                 )
+                self._candidate_pool_checked_identity = self._candidate_snapshot_identity()
                 display_values = list(self._candidate_combo.cget("values") or ())
                 self._notebook.select(3)
             else:

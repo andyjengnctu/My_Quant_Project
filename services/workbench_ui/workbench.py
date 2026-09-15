@@ -61,6 +61,9 @@ WORKBENCH_NOTEBOOK_FONT = ("Microsoft JhengHei", 11)
 WORKBENCH_RIGHT_SIDEBAR_WIDTH = 195
 WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH = 182
 WORKBENCH_RIGHT_SIDEBAR_FONT_SCALE = 0.81
+WORKBENCH_COMBOBOX_POPUP_MAX_ROWS = 18
+WORKBENCH_COMBOBOX_POPUP_SCREEN_MARGIN = 18
+WORKBENCH_COMBOBOX_POPUP_ROW_PADDING = 8
 
 
 def _scale_right_sidebar_font_size(base_size):
@@ -428,6 +431,38 @@ class WorkbenchConsoleWriter(io.TextIOBase):
         return None
 
 
+def resolve_workbench_combobox_popup_rows(
+    *,
+    value_count,
+    screen_height,
+    widget_root_y,
+    widget_height,
+    row_height_px,
+    max_rows=WORKBENCH_COMBOBOX_POPUP_MAX_ROWS,
+    screen_margin=WORKBENCH_COMBOBOX_POPUP_SCREEN_MARGIN,
+):
+    """Return a screen-safe maximum visible row count for a ttk Combobox popup.
+
+    ttk/Tk may choose to post above or below the widget.  Use the larger free
+    side, while always capping the popup to a compact number of rows so long
+    lists scroll instead of extending beyond the monitor.
+    """
+
+    count = max(0, int(value_count or 0))
+    if count <= 0:
+        return 1
+    screen_h = max(1, int(screen_height or 1))
+    root_y = max(0, int(widget_root_y or 0))
+    widget_h = max(1, int(widget_height or 1))
+    row_h = max(1, int(row_height_px or 1))
+    margin = max(0, int(screen_margin or 0))
+    below = max(0, screen_h - (root_y + widget_h) - margin)
+    above = max(0, root_y - margin)
+    available = max(below, above)
+    space_rows = max(1, available // row_h)
+    return max(1, min(count, int(max_rows), space_rows))
+
+
 class WorkbenchInspectorSharedMixin:
     """Behavior shared by the single-stock and portfolio inspector panels."""
 
@@ -463,7 +498,34 @@ class WorkbenchInspectorSharedMixin:
         average_char_px = max(font_obj.measure("0"), 1)
         text_px = font_obj.measure(longest_text) + int(rule.get("extra_px") or 0)
         width_chars = max(int(rule.get("min_chars") or 0), (text_px + average_char_px - 1) // average_char_px)
-        combo.configure(width=min(width_chars, int(rule.get("max_chars") or width_chars)))
+        desired_width = min(width_chars, int(rule.get("max_chars") or width_chars))
+        combo._workbench_desired_width_chars = int(desired_width)
+        combo.configure(width=desired_width)
+
+    def _configure_combobox_popup_geometry(self, combo, *, values=None):
+        """Keep a ttk Combobox popup within the currently available screen area."""
+
+        popup_values = list(combo.cget("values") or ()) if values is None else list(values or [])
+        font_obj = self._get_workbench_combobox_font()
+        row_height_px = max(18, int(font_obj.metrics("linespace")) + WORKBENCH_COMBOBOX_POPUP_ROW_PADDING)
+        try:
+            combo.update_idletasks()
+            popup_rows = resolve_workbench_combobox_popup_rows(
+                value_count=len(popup_values),
+                screen_height=combo.winfo_screenheight(),
+                widget_root_y=combo.winfo_rooty(),
+                widget_height=combo.winfo_height(),
+                row_height_px=row_height_px,
+            )
+            combo.configure(height=popup_rows)
+
+            average_char_px = max(font_obj.measure("0"), 1)
+            desired_width = int(getattr(combo, "_workbench_desired_width_chars", combo.cget("width") or 1))
+            available_px = max(1, int(combo.winfo_screenwidth()) - int(combo.winfo_rootx()) - WORKBENCH_COMBOBOX_POPUP_SCREEN_MARGIN)
+            screen_width_chars = max(1, available_px // average_char_px)
+            combo.configure(width=max(1, min(desired_width, screen_width_chars)))
+        except tk.TclError as exc:
+            _warn_gui_fallback('combobox popup geometry', exc)
 
     def _configure_console_tags(self):
         self._console_text.tag_configure("default", foreground="#f7fbff")
