@@ -463,6 +463,47 @@ def resolve_workbench_combobox_popup_rows(
     return max(1, min(count, int(max_rows), space_rows))
 
 
+def resolve_workbench_combobox_popdown_geometry(
+    *,
+    widget_x,
+    widget_y,
+    widget_width,
+    widget_height,
+    popup_width,
+    popup_height,
+    screen_x,
+    screen_y,
+    screen_width,
+    screen_height,
+    screen_margin=WORKBENCH_COMBOBOX_POPUP_SCREEN_MARGIN,
+):
+    """Return a screen-contained geometry for a posted ttk Combobox popdown."""
+
+    margin = max(0, int(screen_margin or 0))
+    left = int(screen_x or 0) + margin
+    top = int(screen_y or 0) + margin
+    right = int(screen_x or 0) + max(1, int(screen_width or 1)) - margin
+    bottom = int(screen_y or 0) + max(1, int(screen_height or 1)) - margin
+    usable_width = max(1, right - left)
+    usable_height = max(1, bottom - top)
+    width = min(usable_width, max(int(widget_width or 1), int(popup_width or 1)))
+    requested_height = min(usable_height, max(1, int(popup_height or 1)))
+    wx = int(widget_x or 0)
+    wy = int(widget_y or 0)
+    wh = max(1, int(widget_height or 1))
+    below_y = wy + wh
+    below_space = max(0, bottom - below_y)
+    above_space = max(0, wy - top)
+    if requested_height <= below_space or below_space >= above_space:
+        height = min(requested_height, max(1, below_space or usable_height))
+        y = min(max(top, below_y), max(top, bottom - height))
+    else:
+        height = min(requested_height, max(1, above_space))
+        y = max(top, wy - height)
+    x = min(max(left, wx), max(left, right - width))
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
 class WorkbenchInspectorSharedMixin:
     """Behavior shared by the single-stock and portfolio inspector panels."""
 
@@ -503,7 +544,7 @@ class WorkbenchInspectorSharedMixin:
         combo.configure(width=desired_width)
 
     def _configure_combobox_popup_geometry(self, combo, *, values=None):
-        """Keep a ttk Combobox popup within the currently available screen area."""
+        """Size before posting, then fit the real Tcl popdown after it is mapped."""
 
         popup_values = list(combo.cget("values") or ()) if values is None else list(values or [])
         font_obj = self._get_workbench_combobox_font()
@@ -518,14 +559,55 @@ class WorkbenchInspectorSharedMixin:
                 row_height_px=row_height_px,
             )
             combo.configure(height=popup_rows)
-
-            average_char_px = max(font_obj.measure("0"), 1)
-            desired_width = int(getattr(combo, "_workbench_desired_width_chars", combo.cget("width") or 1))
-            available_px = max(1, int(combo.winfo_screenwidth()) - int(combo.winfo_rootx()) - WORKBENCH_COMBOBOX_POPUP_SCREEN_MARGIN)
-            screen_width_chars = max(1, available_px // average_char_px)
-            combo.configure(width=max(1, min(desired_width, screen_width_chars)))
+            longest = max((str(value or "") for value in popup_values), key=font_obj.measure, default="")
+            combo._workbench_popup_desired_width_px = max(
+                int(combo.winfo_width() or 1),
+                int(font_obj.measure(longest)) + 42,
+            )
+            combo._workbench_popup_desired_height_px = max(
+                row_height_px + 8,
+                popup_rows * row_height_px + 12,
+            )
+            combo.after_idle(self._fit_posted_combobox_popdown, combo)
         except tk.TclError as exc:
             _warn_gui_fallback('combobox popup geometry', exc)
+
+    def _fit_posted_combobox_popdown(self, combo):
+        """Move/resize the actual ttk popdown window so it cannot leave the screen."""
+
+        try:
+            popdown = combo.tk.call("ttk::combobox::PopdownWindow", combo._w)
+            if not int(combo.tk.call("winfo", "ismapped", popdown)):
+                return
+            combo.update_idletasks()
+            requested_width = max(
+                int(combo.tk.call("winfo", "reqwidth", popdown)),
+                int(getattr(combo, "_workbench_popup_desired_width_px", 1)),
+            )
+            requested_height = max(
+                int(combo.tk.call("winfo", "reqheight", popdown)),
+                int(getattr(combo, "_workbench_popup_desired_height_px", 1)),
+            )
+            geometry = resolve_workbench_combobox_popdown_geometry(
+                widget_x=combo.winfo_rootx(),
+                widget_y=combo.winfo_rooty(),
+                widget_width=combo.winfo_width(),
+                widget_height=combo.winfo_height(),
+                popup_width=requested_width,
+                popup_height=requested_height,
+                screen_x=combo.winfo_vrootx(),
+                screen_y=combo.winfo_vrooty(),
+                screen_width=combo.winfo_vrootwidth() or combo.winfo_screenwidth(),
+                screen_height=combo.winfo_vrootheight() or combo.winfo_screenheight(),
+            )
+            combo.tk.call(
+                "wm",
+                "geometry",
+                popdown,
+                f"{geometry['width']}x{geometry['height']}+{geometry['x']}+{geometry['y']}",
+            )
+        except (tk.TclError, TypeError, ValueError) as exc:
+            _warn_gui_fallback('posted combobox popdown fit', exc)
 
     def _configure_console_tags(self):
         self._console_text.tag_configure("default", foreground="#f7fbff")
@@ -931,7 +1013,8 @@ class StockToolsWorkbench:
             self._request_panel_load(panel_id)
 
     def open_single_stock_inspector(
-        self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None
+        self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None,
+        candidate_rows=None, candidate_latest_data_date=None,
     ):
         ticker_text = str(ticker or "").strip().upper()
         if not ticker_text:
@@ -942,6 +1025,8 @@ class StockToolsWorkbench:
             "runtime_domain": str(runtime_domain or "trading"),
             "auto_run": bool(auto_run),
             "candidate_row": dict(candidate_row or {}),
+            "candidate_rows": [dict(row) for row in list(candidate_rows or [])],
+            "candidate_latest_data_date": candidate_latest_data_date,
         }
         host = self._panel_hosts.get(panel_id)
         if host is None:
@@ -966,6 +1051,8 @@ class StockToolsWorkbench:
             runtime_domain=request["runtime_domain"],
             auto_run=bool(request["auto_run"]),
             candidate_row=dict(request.get("candidate_row") or {}),
+            candidate_rows=[dict(row) for row in list(request.get("candidate_rows") or [])],
+            candidate_latest_data_date=request.get("candidate_latest_data_date"),
         )
 
     def run(self):

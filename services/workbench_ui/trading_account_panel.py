@@ -417,6 +417,7 @@ class TradingAccountPanel(ttk.Frame):
         self._performance_rows: list[dict[str, object]] = []
         self._position_rows: dict[str, dict[str, object]] = {}
         self._candidate_rows: list[dict[str, object]] = []
+        self._candidate_payload: dict[str, object] = {}
         self._proposed_order_rows: list[dict[str, object]] = []
         self._order_snapshot: dict[str, object] = {}
         self._order_rows: dict[str, dict[str, object]] = {}
@@ -1854,6 +1855,7 @@ class TradingAccountPanel(ttk.Frame):
         return []
 
     def _reload_candidate_rows(self, rows, *, candidate_payload=None):
+        self._candidate_payload = dict(candidate_payload or {})
         display_metrics = self._candidate_display_metrics(candidate_payload)
         self._candidate_tree.set_columns(self._build_candidate_table_columns(display_metrics))
         self._candidate_rows = [dict(row) for row in list(rows or [])]
@@ -1916,6 +1918,8 @@ class TradingAccountPanel(ttk.Frame):
             runtime_domain="trading",
             auto_run=True,
             candidate_row=dict(candidate_row or {}),
+            candidate_rows=[dict(row) for row in list(self._candidate_rows or [])],
+            candidate_latest_data_date=self._candidate_payload.get("latest_data_date"),
         )
 
     def _open_candidate_ticker_in_inspector(self, ticker):
@@ -1926,7 +1930,8 @@ class TradingAccountPanel(ttk.Frame):
     def _open_selected_candidate_in_inspector(self, _event=None):
         ticker = self._selected_candidate_ticker()
         if ticker:
-            self._open_ticker_in_inspector(ticker)
+            candidate_row = dict(getattr(self, "_candidate_by_ticker", {}).get(ticker) or {})
+            self._open_ticker_in_inspector(ticker, candidate_row=candidate_row)
 
     def _open_selected_position_in_inspector(self, _event=None):
         ticker = self._selected_ticker()

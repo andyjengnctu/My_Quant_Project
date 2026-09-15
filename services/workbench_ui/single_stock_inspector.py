@@ -529,123 +529,110 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
     def _build_ui(self):
         controls = ttk.Frame(self, padding=(8, 2, 8, 2), style="Workbench.TFrame")
         controls.pack(fill="x", pady=(0, 4))
+        self._controls_host = controls
 
         controls_bar = ttk.Frame(controls, style="Workbench.TFrame")
-        controls_bar.pack(side="left", anchor="w")
+        controls_bar.pack(fill="x", expand=True, anchor="w")
+        self._controls_bar = controls_bar
         uniform_pady = (2, 2)
 
-        ttk.Label(controls_bar, text="股票代號", style="Workbench.TLabel").grid(row=0, column=0, padx=(0, 6), pady=uniform_pady, sticky="w")
-        ticker_entry = ttk.Entry(controls_bar, textvariable=self._ticker_var, width=12, style="Workbench.TEntry")
-        ticker_entry.grid(row=0, column=1, padx=(0, 10), pady=uniform_pady, sticky="w")
+        identity_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        ttk.Label(identity_group, text="股票代號", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
+        ticker_entry = ttk.Entry(identity_group, textvariable=self._ticker_var, width=12, style="Workbench.TEntry")
+        ticker_entry.pack(side="left", padx=(0, 10), pady=uniform_pady)
         ticker_entry.focus_set()
-
         ticker_entry.bind("<Return>", self._on_ticker_enter)
-
-        ttk.Label(controls_bar, text="常用股票", style="Workbench.TLabel").grid(row=0, column=2, padx=(0, 6), pady=uniform_pady, sticky="w")
+        ttk.Label(identity_group, text="常用股票", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._reduced_stock_company_name_map = self._build_initial_reduced_stock_company_name_map()
         _, reduced_display_values, self._reduced_stock_map = _build_reduced_stock_dropdown_options(company_name_map=self._reduced_stock_company_name_map)
         self._reduced_stock_combo = ttk.Combobox(
-            controls_bar, state="readonly", width=18, textvariable=self._reduced_stock_display_var,
+            identity_group, state="readonly", width=18, textvariable=self._reduced_stock_display_var,
             style="Workbench.TCombobox", values=reduced_display_values,
             postcommand=lambda: self._configure_combobox_popup_geometry(self._reduced_stock_combo),
         )
         self._autosize_combobox(self._reduced_stock_combo, values=reduced_display_values, current_text=self._reduced_stock_display_var.get(), rule_key="reduced")
-        self._reduced_stock_combo.grid(row=0, column=3, padx=(0, 12), pady=uniform_pady, sticky="w")
+        self._reduced_stock_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
 
-        self._candidate_scan_button = ttk.Button(controls_bar, text="計算候選股", command=self._run_scanner, style="Workbench.TButton")
-        self._candidate_scan_button.grid(row=0, column=4, padx=(0, 8), pady=uniform_pady, sticky="w")
+        candidate_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        self._candidate_scan_button = ttk.Button(candidate_group, text="計算候選股", command=self._run_scanner, style="Workbench.TButton")
+        self._candidate_scan_button.pack(side="left", padx=(0, 8), pady=uniform_pady)
         self._candidate_combo = ttk.Combobox(
-            controls_bar,
-            state="readonly",
-            width=22,
-            textvariable=self._candidate_display_var,
-            style="Workbench.TCombobox",
-            values=[],
-            postcommand=self._refresh_candidate_options_on_open,
+            candidate_group, state="readonly", width=22, textvariable=self._candidate_display_var,
+            style="Workbench.TCombobox", values=[], postcommand=self._refresh_candidate_options_on_open,
         )
         self._autosize_combobox(self._candidate_combo, values=[], current_text=self._candidate_display_var.get(), rule_key="candidate")
-        self._candidate_combo.grid(row=0, column=5, padx=(0, 12), pady=uniform_pady, sticky="w")
+        self._candidate_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
-        self._history_scan_button = ttk.Button(controls_bar, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton")
-        self._history_scan_button.grid(row=0, column=6, padx=(0, 8), pady=uniform_pady, sticky="w")
+        history_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        self._history_scan_button = ttk.Button(history_group, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton")
+        self._history_scan_button.pack(side="left", padx=(0, 8), pady=uniform_pady)
         self._history_combo = ttk.Combobox(
-            controls_bar, state="readonly", width=30, textvariable=self._history_display_var,
+            history_group, state="readonly", width=30, textvariable=self._history_display_var,
             style="Workbench.TCombobox", values=[],
             postcommand=lambda: self._configure_combobox_popup_geometry(self._history_combo),
         )
         self._autosize_combobox(self._history_combo, values=[], current_text=self._history_display_var.get(), rule_key="history")
-        self._history_combo.grid(row=0, column=7, padx=(0, 14), pady=uniform_pady, sticky="w")
+        self._history_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
 
-        ttk.Label(controls_bar, text="參數", style="Workbench.TLabel").grid(row=0, column=8, padx=(0, 6), pady=uniform_pady, sticky="w")
+        params_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        ttk.Label(params_group, text="參數", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._param_source_combo = ttk.Combobox(
-            controls_bar,
-            state="readonly",
-            width=20,
-            textvariable=self._param_source_display_var,
-            style="Workbench.TCombobox",
-            values=self._param_source_labels,
+            params_group, state="readonly", width=20, textvariable=self._param_source_display_var,
+            style="Workbench.TCombobox", values=self._param_source_labels,
             postcommand=self._refresh_param_source_options_on_open,
         )
         self._autosize_combobox(self._param_source_combo, values=self._param_source_labels, current_text=self._param_source_display_var.get(), rule_key="param_source")
-        self._param_source_combo.grid(row=0, column=9, padx=(0, 10), pady=uniform_pady, sticky="w")
+        self._param_source_combo.pack(side="left", padx=(0, 10), pady=uniform_pady)
         self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
-        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=10, padx=(0, 6), pady=uniform_pady, sticky="w")
+        ttk.Label(params_group, text="固定風險", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._risk_combo = ttk.Combobox(
-            controls_bar,
-            state="readonly",
-            width=7,
-            textvariable=self._fixed_risk_display_var,
-            style="Workbench.TCombobox",
-            values=FIXED_RISK_LABELS,
+            params_group, state="readonly", width=7, textvariable=self._fixed_risk_display_var,
+            style="Workbench.TCombobox", values=FIXED_RISK_LABELS,
             postcommand=lambda: self._configure_combobox_popup_geometry(self._risk_combo),
         )
         self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
-        self._risk_combo.grid(row=0, column=11, padx=(0, 6), pady=uniform_pady, sticky="w")
+        self._risk_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
-        self._custom_fixed_risk_entry = ttk.Entry(controls_bar, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
-        self._custom_fixed_risk_entry.grid(row=0, column=12, padx=(0, 10), pady=uniform_pady, sticky="w")
+        self._custom_fixed_risk_entry = ttk.Entry(params_group, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
+        self._custom_fixed_risk_entry.pack(side="left", padx=(0, 10), pady=uniform_pady)
         self._custom_fixed_risk_entry.state(["disabled"])
+        self._show_volume_check = ttk.Checkbutton(
+            params_group, text="顯示成交量", variable=self._show_volume_var,
+            command=self._rerender_current_chart, style="Workbench.TCheckbutton",
+        )
+        self._show_volume_check.pack(side="left", pady=uniform_pady)
 
-        ttk.Checkbutton(
-            controls_bar,
-            text="顯示成交量",
-            variable=self._show_volume_var,
-            command=self._rerender_current_chart,
-            style="Workbench.TCheckbutton",
-        ).grid(row=0, column=13, padx=(0, 0), pady=uniform_pady, sticky="w")
-
-        ttk.Label(controls_bar, text="檢視模式", style="Workbench.TLabel").grid(row=1, column=0, padx=(0, 6), pady=uniform_pady, sticky="w")
+        runtime_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        ttk.Label(runtime_group, text="檢視模式", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._runtime_domain_combo = ttk.Combobox(
-            controls_bar,
-            state="readonly",
-            width=12,
-            textvariable=self._runtime_domain_var,
-            style="Workbench.TCombobox",
-            values=("Research", "Trading"),
+            runtime_group, state="readonly", width=12, textvariable=self._runtime_domain_var,
+            style="Workbench.TCombobox", values=("Research", "Trading"),
             postcommand=lambda: self._configure_combobox_popup_geometry(self._runtime_domain_combo),
         )
-        self._runtime_domain_combo.grid(row=1, column=1, padx=(0, 10), pady=uniform_pady, sticky="w")
+        self._runtime_domain_combo.pack(side="left", padx=(0, 10), pady=uniform_pady)
         self._runtime_domain_combo.bind("<<ComboboxSelected>>", self._on_runtime_domain_selected)
-        ttk.Label(controls_bar, text="持有股", style="Workbench.TLabel").grid(row=1, column=2, padx=(0, 6), pady=uniform_pady, sticky="w")
+        ttk.Label(runtime_group, text="持有股", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._holdings_combo = ttk.Combobox(
-            controls_bar,
-            state="readonly",
-            width=22,
-            textvariable=self._holdings_display_var,
-            style="Workbench.TCombobox",
-            values=(),
-            postcommand=self._refresh_holdings_options_on_open,
+            runtime_group, state="readonly", width=22, textvariable=self._holdings_display_var,
+            style="Workbench.TCombobox", values=(), postcommand=self._refresh_holdings_options_on_open,
         )
-        self._holdings_combo.grid(row=1, column=3, columnspan=2, padx=(0, 12), pady=uniform_pady, sticky="w")
+        self._holdings_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._holdings_combo.bind("<<ComboboxSelected>>", self._on_holding_selected)
-        ttk.Label(
-            controls_bar,
-            textvariable=self._scanner_info_var,
-            style="Workbench.TLabel",
-        ).grid(row=1, column=5, columnspan=9, padx=(0, 0), pady=uniform_pady, sticky="w")
+
+        status_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        self._scanner_info_label = ttk.Label(status_group, textvariable=self._scanner_info_var, style="Workbench.TLabel", justify="left")
+        self._scanner_info_label.pack(side="left", fill="x", expand=True, pady=uniform_pady)
+
+        self._controls_groups = {
+            "identity": identity_group, "candidate": candidate_group, "history": history_group,
+            "params": params_group, "runtime": runtime_group, "status": status_group,
+        }
+        self._controls_layout_mode = None
+        controls.bind("<Configure>", self._on_single_stock_controls_resize, add="+")
+        self.after_idle(self._apply_single_stock_controls_layout)
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -933,6 +920,48 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
 
 
+    def _on_single_stock_controls_resize(self, event=None):
+        width = None if event is None else int(getattr(event, "width", 0) or 0)
+        self._apply_single_stock_controls_layout(width=width)
+
+    def _apply_single_stock_controls_layout(self, *, width=None):
+        groups = getattr(self, "_controls_groups", None)
+        if not groups:
+            return
+        try:
+            self.update_idletasks()
+            available = int(width or self._controls_host.winfo_width() or 1)
+            gap = 10
+            req = {key: max(1, int(widget.winfo_reqwidth())) for key, widget in groups.items()}
+            wide_required = req["identity"] + req["candidate"] + req["history"] + req["params"] + 3 * gap
+            compact_required = max(
+                req["identity"] + req["candidate"] + gap,
+                req["history"] + req["params"] + gap,
+                req["runtime"],
+            )
+            mode = "wide" if available >= wide_required else ("compact" if available >= compact_required else "narrow")
+            if mode != self._controls_layout_mode:
+                for widget in groups.values():
+                    widget.grid_forget()
+                if mode == "wide":
+                    placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 0, 2), ("params", 0, 3), ("runtime", 1, 0), ("status", 2, 0))
+                    status_span = 4
+                elif mode == "compact":
+                    placements = (("identity", 0, 0), ("candidate", 0, 1), ("history", 1, 0), ("params", 1, 1), ("runtime", 2, 0), ("status", 3, 0))
+                    status_span = 2
+                else:
+                    placements = (("identity", 0, 0), ("candidate", 1, 0), ("history", 2, 0), ("params", 3, 0), ("runtime", 4, 0), ("status", 5, 0))
+                    status_span = 1
+                for key, row, column in placements:
+                    groups[key].grid(
+                        row=row, column=column, columnspan=(status_span if key == "status" else 1),
+                        sticky="ew" if key == "status" else "w", padx=(0, gap), pady=(0, 2),
+                    )
+                self._controls_layout_mode = mode
+            self._scanner_info_label.configure(wraplength=max(260, available - 24))
+        except (tk.TclError, TypeError, ValueError) as exc:
+            _warn_gui_fallback("single-stock responsive controls", exc)
+
     def _report_runtime_exception(self, context, exc, *, status_prefix, show_dialog=True, switch_to_console=False):
         error_text = f"{status_prefix}：{type(exc).__name__}: {exc}"
         trace_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -1071,7 +1100,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
     def _load_trading_candidate_pool_worker(self, request_token, snapshot_identity):
         try:
-            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=True)
+            # The inspector consumes the same persisted Scanner Pool artifact as
+            # Trading Center.  It never recalculates candidates merely to fill a
+            # dropdown; execution freshness remains owned by Trading Center/runtime.
+            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
             self.after(0, self._finish_trading_candidate_pool_error, request_token, snapshot_identity, exc)
             return
@@ -1109,7 +1141,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         refresh above so opening the list cannot block Tk.
         """
         try:
-            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=True)
+            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
             self._trading_candidate_rows_by_ticker = {}
             self._apply_scanner_pool_rows([])
@@ -1141,6 +1173,15 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._scanner_info_var.set(
             f"Scanner：Trading {latest_data_date or '-'} | pool {len(display_values)} 檔 | 與實際交易頁一致"
         )
+
+    def _select_candidate_dropdown_ticker(self, ticker):
+        ticker_text = str(ticker or "").strip().upper()
+        if not ticker_text:
+            return
+        for label, mapped_ticker in dict(self._candidate_map or {}).items():
+            if str(mapped_ticker or "").strip().upper() == ticker_text:
+                self._candidate_display_var.set(label)
+                return
 
     def _apply_scanner_pool_rows(self, rows):
         if not hasattr(self, "_scanner_pool_tree"):
@@ -1186,22 +1227,39 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self.after_idle(self._run_analysis)
 
     def open_ticker(
-        self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None
+        self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None,
+        candidate_rows=None, candidate_latest_data_date=None,
     ):
         domain = "Trading" if str(runtime_domain or "").strip().lower() == "trading" else "Research"
         ticker_text = str(ticker or "").strip().upper()
         self._runtime_domain_var.set(domain)
         self._apply_runtime_domain_controls()
         self._ticker_var.set(ticker_text)
+
+        shared_rows = [dict(row) for row in list(candidate_rows or []) if isinstance(row, dict)]
+        if domain == "Trading" and shared_rows:
+            # Cross-panel navigation consumes the exact candidate pool already
+            # validated and displayed by Trading Center. No second Scanner run or
+            # V2 reload is needed just to populate the inspector dropdown.
+            self._apply_trading_candidate_rows(
+                shared_rows,
+                latest_data_date=candidate_latest_data_date,
+                sync_ticker=False,
+            )
+            self._candidate_pool_checked_identity = self._candidate_snapshot_identity()
+            self._select_candidate_dropdown_ticker(ticker_text)
+
         if domain == "Trading" and ticker_text and candidate_row:
             row = dict(candidate_row)
             row_ticker = str(row.get("ticker") or "").strip().upper()
             if row_ticker == ticker_text:
                 self._trading_candidate_rows_by_ticker[ticker_text] = row
-        # Cross-panel navigation must be immediate.  Auxiliary candidate data is
-        # prefetched in the background so the dropdown is ready by the time the
-        # user opens it, without delaying navigation or overwriting this ticker.
-        if domain == "Trading":
+                self._select_candidate_dropdown_ticker(ticker_text)
+
+        # If the inspector was opened directly (not from Trading Center), load the
+        # canonical persisted Scanner Pool in the background. This is read-only and
+        # never triggers candidate recalculation.
+        if domain == "Trading" and not shared_rows:
             self._request_trading_candidate_pool_refresh()
         if auto_run and ticker_text:
             self.after_idle(self._run_analysis)

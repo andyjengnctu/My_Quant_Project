@@ -2930,6 +2930,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         PANEL_SPECS,
         build_workbench_spec,
         resolve_workbench_combobox_popup_rows,
+        resolve_workbench_combobox_popdown_geometry,
     )
     from types import SimpleNamespace
 
@@ -3125,7 +3126,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_candidate_dropdown_lazy_loads_trading_pool", True, "postcommand=self._refresh_candidate_options_on_open" in inspector_source and "sync_ticker=False" in inspector_source)
     check("workbench_single_stock_candidate_dropdown_never_sync_loads_current_snapshot_on_post", False, "_load_current_trading_candidate_pool(" in candidate_post_body)
     check("workbench_single_stock_candidate_dropdown_prefetches_current_pool_in_background", True, "_request_trading_candidate_pool_refresh()" in candidate_post_body and "threading.Thread(" in inspector_source and 'name="workbench-trading-candidate-pool"' in inspector_source)
-    check("workbench_single_stock_combobox_popup_geometry_is_screen_limited", True, "_configure_combobox_popup_geometry" in inspector_source and "resolve_workbench_combobox_popup_rows" in workbench_source)
+    check("workbench_single_stock_candidate_pool_reads_shared_persisted_snapshot_without_recalculation", True, "load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)" in inspector_source and "never triggers candidate recalculation" in inspector_source)
+    check("workbench_single_stock_combobox_popup_geometry_is_screen_limited", True, "_configure_combobox_popup_geometry" in inspector_source and "resolve_workbench_combobox_popup_rows" in workbench_source and "_fit_posted_combobox_popdown" in workbench_source and 'ttk::combobox::PopdownWindow' in workbench_source)
+    check("workbench_single_stock_controls_reflow_with_available_width", True, "_apply_single_stock_controls_layout" in inspector_source and all(mode in inspector_source for mode in ('mode == "wide"', 'mode == "compact"', 'else:')) )
     check(
         "workbench_combobox_popup_rows_shrink_to_available_screen_space",
         5,
@@ -3140,7 +3143,20 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             value_count=3, screen_height=1080, widget_root_y=80, widget_height=24, row_height_px=24
         ),
     )
+    right_edge_geometry = resolve_workbench_combobox_popdown_geometry(
+        widget_x=1700, widget_y=100, widget_width=180, widget_height=28,
+        popup_width=520, popup_height=400, screen_x=0, screen_y=0,
+        screen_width=1920, screen_height=1080,
+    )
+    check("workbench_combobox_popdown_repositions_inside_right_screen_edge", True, right_edge_geometry["x"] + right_edge_geometry["width"] <= 1920 - 18)
+    bottom_edge_geometry = resolve_workbench_combobox_popdown_geometry(
+        widget_x=200, widget_y=980, widget_width=180, widget_height=28,
+        popup_width=320, popup_height=420, screen_x=0, screen_y=0,
+        screen_width=1920, screen_height=1080,
+    )
+    check("workbench_combobox_popdown_repositions_above_when_bottom_space_is_insufficient", True, bottom_edge_geometry["y"] < 980 and bottom_edge_geometry["y"] >= 18)
     check("workbench_cross_panel_navigation_preserves_candidate_row_to_inspector", True, all(token in workbench_source for token in ('"candidate_row": dict(candidate_row or {})', 'candidate_row=dict(request.get("candidate_row") or {})')) and "on_open_stock=self._open_candidate_ticker_in_inspector" in panel_source and "candidate_row=dict(candidate_row or {})" in panel_source)
+    check("workbench_cross_panel_navigation_shares_entire_trading_candidate_pool", True, all(token in workbench_source for token in ('"candidate_rows": [dict(row) for row in list(candidate_rows or [])]', 'candidate_rows=[dict(row) for row in list(request.get("candidate_rows") or [])]')) and "candidate_rows=[dict(row) for row in list(self._candidate_rows or [])]" in panel_source and 'candidate_latest_data_date=self._candidate_payload.get("latest_data_date")' in panel_source)
 
     from services.workbench_ui.single_stock_inspector import SingleStockBacktestInspectorPanel
     class _Var:
@@ -3152,11 +3168,19 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             return self.value
     queued = []
     candidate_prefetch_calls = []
+    shared_pool_calls = []
     navigation_panel = SimpleNamespace(
         _runtime_domain_var=_Var("Research"),
         _ticker_var=_Var("00938"),
         _trading_candidate_rows_by_ticker={},
+        _candidate_pool_checked_identity=None,
         _apply_runtime_domain_controls=lambda: None,
+        _apply_trading_candidate_rows=lambda rows, **kwargs: (
+            navigation_panel._trading_candidate_rows_by_ticker.update({str(row.get("ticker")): dict(row) for row in rows}),
+            shared_pool_calls.append((list(rows), dict(kwargs))),
+        ),
+        _candidate_snapshot_identity=lambda: ("snapshot",),
+        _select_candidate_dropdown_ticker=lambda ticker: None,
         _request_trading_candidate_pool_refresh=lambda: candidate_prefetch_calls.append(True),
         after_idle=lambda callback: queued.append(callback),
         _run_analysis=lambda: None,
@@ -3167,11 +3191,17 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         runtime_domain="trading",
         auto_run=True,
         candidate_row={"ticker": "2455", "kind": "extended_tbd"},
+        candidate_rows=[
+            {"ticker": "00938", "kind": "extended_tbd"},
+            {"ticker": "2455", "kind": "extended_tbd"},
+        ],
+        candidate_latest_data_date="2026-09-15",
     )
     check("workbench_single_stock_link_keeps_requested_row_ticker", "2455", navigation_panel._ticker_var.get())
     check("workbench_single_stock_link_keeps_requested_candidate_frozen_context", "2455", navigation_panel._trading_candidate_rows_by_ticker.get("2455", {}).get("ticker"))
     check("workbench_single_stock_link_schedules_analysis_without_auxiliary_refresh", 1, len(queued))
-    check("workbench_single_stock_link_prefetches_candidate_pool_without_blocking_navigation", 1, len(candidate_prefetch_calls))
+    check("workbench_single_stock_link_receives_entire_trading_candidate_pool_immediately", 2, len(shared_pool_calls[0][0]) if shared_pool_calls else 0)
+    check("workbench_single_stock_link_does_not_reload_pool_when_trading_center_already_supplied_it", 0, len(candidate_prefetch_calls))
 
     dropdown_ticker_var = _Var("2455")
     dropdown_value_var = _Var("")
