@@ -3161,6 +3161,12 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_scanner_dynamic_columns_are_descriptor_driven_not_selector_named", True, "candidate_display_metrics" in panel_source and "_candidate_metric_formatter" in panel_source and "if selector ==" not in panel_source)
     scanner_columns_block = panel_source.split("def _candidate_static_columns_after_dynamic", 1)[1].split("@staticmethod", 1)[0]
     check("workbench_scanner_pool_shows_market_price_before_buy_limit", True, 'TableColumn("market_price", "市價"' in scanner_columns_block and scanner_columns_block.index('TableColumn("market_price", "市價"') < scanner_columns_block.index('TableColumn("limit_price", "買入限價"'))
+    check("workbench_scanner_pool_places_signal_date_and_freshness_before_market_price", True, all(token in scanner_columns_block for token in ('TableColumn("signal_date", "買訊日"', 'TableColumn("signal_age_days", "新鮮度"', 'TableColumn("market_price", "市價"')) and scanner_columns_block.index('TableColumn("signal_date", "買訊日"') < scanner_columns_block.index('TableColumn("signal_age_days", "新鮮度"') < scanner_columns_block.index('TableColumn("market_price", "市價"'))
+    from services.workbench_ui.trading_account_panel import _candidate_signal_age_days, _candidate_signal_date_text
+    check("workbench_scanner_pool_signal_freshness_same_day_is_zero", 0, _candidate_signal_age_days("2026-09-15", "2026-09-15"))
+    check("workbench_scanner_pool_signal_freshness_uses_calendar_day_distance", 3, _candidate_signal_age_days("2026-09-12", "2026-09-15"))
+    check("workbench_scanner_pool_signal_freshness_rejects_future_signal_date", None, _candidate_signal_age_days("2026-09-16", "2026-09-15"))
+    check("workbench_scanner_pool_signal_date_formats_canonically", "2026-09-12", _candidate_signal_date_text("2026-09-12 00:00:00"))
     check("workbench_scanner_pool_market_price_uses_candidate_prev_close", True, '"market_price": row.get("prev_close")' in panel_source)
     check("workbench_scanner_pool_hides_median_sort_evidence_column", False, any(row.get("key") == "ensemble_median_sort_value" for row in ensemble_metrics))
     check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'self._page_scrollbar = ttk.Scrollbar' in accounting_source)

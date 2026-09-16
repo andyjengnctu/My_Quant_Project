@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import queue
@@ -464,6 +465,33 @@ def _load_panel_value(panel, key: str, loader):
             raise value
         return value
     return loader()
+
+
+def _parse_candidate_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return None
+
+
+def _candidate_signal_age_days(signal_date, candidate_date):
+    signal = _parse_candidate_date(signal_date)
+    candidate = _parse_candidate_date(candidate_date)
+    if signal is None or candidate is None or candidate < signal:
+        return None
+    return int((candidate - signal).days)
+
+
+def _candidate_signal_date_text(value):
+    parsed = _parse_candidate_date(value)
+    return "-" if parsed is None else parsed.isoformat()
 
 
 class TradingAccountPanel(ttk.Frame):
@@ -1858,6 +1886,8 @@ class TradingAccountPanel(ttk.Frame):
 
     def _candidate_static_columns_after_dynamic(self):
         return (
+            TableColumn("signal_date", "買訊日", 10),
+            TableColumn("signal_age_days", "新鮮度", 7, sort_kind="numeric", formatter=lambda v, _r: "-" if v is None else f"{int(v)}天"),
             TableColumn("market_price", "市價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
             TableColumn("limit_price", "買入限價", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
             TableColumn("stop_price", "初始Stop", 9, sort_kind="numeric", formatter=lambda v, _r: self._format_candidate_number(v, digits=2)),
@@ -1926,11 +1956,18 @@ class TradingAccountPanel(ttk.Frame):
         for idx, row in enumerate(self._candidate_rows, 1):
             seed = dict(row.get("execution_plan_seed") or {})
             ticker = str(row.get("ticker") or "-").strip().upper()
+            candidate_date = (
+                row.get("candidate_date")
+                or row.get("trade_date")
+                or self._candidate_payload.get("latest_data_date")
+            )
             display_row = {
                 "_table_id": f"candidate:{ticker}",
                 "rank": idx,
                 "ticker": ticker,
                 "kind_label": kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
+                "signal_date": _candidate_signal_date_text(row.get("signal_date")),
+                "signal_age_days": _candidate_signal_age_days(row.get("signal_date"), candidate_date),
                 "market_price": row.get("prev_close"),
                 "limit_price": row.get("limit_price") if row.get("limit_price") is not None else seed.get("limit_price"),
                 "stop_price": seed.get("init_sl"),
