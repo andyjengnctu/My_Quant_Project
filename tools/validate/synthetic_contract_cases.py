@@ -2346,7 +2346,11 @@ def validate_gui_single_stock_refined_visual_contract_case(_base_params):
     check("single_stock_gui_moves_ohlcv_to_sidebar", True, '_selected_open_var' in inspector_source and '_selected_volume_var' in inspector_source)
     check("single_stock_hover_overlay_no_longer_repeats_top_left_text_box", True, 'hover_text_artist.set_visible(False)' in charting_source)
     check("single_stock_sell_trade_label_includes_max_drawdown", True, '最大回撤:' in charting_source)
-    check("single_stock_entry_preview_lines_start_next_day_before_fill", True, '_record_entry_plan_preview_levels(' in entry_flow_source and 'record_active_levels(' in entry_flow_source)
+    preview_helper_start = entry_flow_source.index('def _record_entry_plan_preview_levels(')
+    preview_helper_end = entry_flow_source.index('\n\ndef _record_active_extended_shadow_levels', preview_helper_start)
+    preview_helper_source = entry_flow_source[preview_helper_start:preview_helper_end]
+    check("single_stock_entry_preview_lines_start_next_day_before_fill", True, 'record_shadow_active_levels(' in preview_helper_source)
+    check("single_stock_entry_preview_does_not_claim_position_before_fill", False, 'record_active_levels(' in preview_helper_source)
     check("single_stock_sidebar_fonts_scaled_10_percent", True, "WORKBENCH_RIGHT_SIDEBAR_FONT_SCALE = 0.81" in workbench_source and "WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT" in workbench_source and "WORKBENCH_RIGHT_SIDEBAR_BODY_FONT" in workbench_source)
     return results, summary
 
@@ -2399,14 +2403,20 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
             output_dir=temp_dir,
         )
     payload = analysis_result.get("chart_payload") or {}
-    limit_line = np.asarray(payload.get("limit_line", []), dtype=np.float64)
-    stop_line = np.asarray(payload.get("stop_line", []), dtype=np.float64)
-    tp_line = np.asarray(payload.get("tp_line", []), dtype=np.float64)
+    position_limit_line = np.asarray(payload.get("limit_line", []), dtype=np.float64)
+    position_stop_line = np.asarray(payload.get("stop_line", []), dtype=np.float64)
+    position_tp_line = np.asarray(payload.get("tp_line", []), dtype=np.float64)
+    shadow_limit_line = np.asarray(payload.get("shadow_limit_line", []), dtype=np.float64)
+    shadow_stop_line = np.asarray(payload.get("shadow_stop_line", []), dtype=np.float64)
+    shadow_tp_line = np.asarray(payload.get("shadow_tp_line", []), dtype=np.float64)
     continued_preview_days = [2, 3, 4, 5]
 
-    check("extended_preview_limit_line_continues_across_candidate_days", True, bool(limit_line.size > max(continued_preview_days) and np.isfinite(limit_line[continued_preview_days]).all()))
-    check("extended_preview_stop_line_stays_absent_before_fill", True, bool(stop_line.size > max(continued_preview_days) and np.isnan(stop_line[continued_preview_days]).all()))
-    check("extended_preview_tp_line_stays_absent_before_fill", True, bool(tp_line.size > max(continued_preview_days) and np.isnan(tp_line[continued_preview_days]).all()))
+    check("extended_preview_shadow_limit_line_continues_across_candidate_days", True, bool(shadow_limit_line.size > max(continued_preview_days) and np.isfinite(shadow_limit_line[continued_preview_days]).all()))
+    check("extended_preview_shadow_stop_line_continues_across_candidate_days", True, bool(shadow_stop_line.size > max(continued_preview_days) and np.isfinite(shadow_stop_line[continued_preview_days]).all()))
+    check("extended_preview_shadow_tp_line_continues_across_candidate_days", True, bool(shadow_tp_line.size > max(continued_preview_days) and np.isfinite(shadow_tp_line[continued_preview_days]).all()))
+    check("extended_preview_position_limit_line_stays_absent_before_fill", True, bool(position_limit_line.size > max(continued_preview_days) and np.isnan(position_limit_line[continued_preview_days]).all()))
+    check("extended_preview_position_stop_line_stays_absent_before_fill", True, bool(position_stop_line.size > max(continued_preview_days) and np.isnan(position_stop_line[continued_preview_days]).all()))
+    check("extended_preview_position_tp_line_stays_absent_before_fill", True, bool(position_tp_line.size > max(continued_preview_days) and np.isnan(position_tp_line[continued_preview_days]).all()))
     check("extended_preview_stays_visual_even_when_entry_plan_not_orderable", 0, len((payload.get("marker_groups") or {}).get("買進", [])))
 
     summary["continued_preview_days"] = [signal_dates[idx].strftime("%Y-%m-%d") for idx in continued_preview_days]
