@@ -959,32 +959,6 @@ def validate_trading_daily_workflow_contract_case(base_params):
     profile = get_trading_strategy_profile()
     project_root = Path(__file__).resolve().parents[2]
 
-    _scanner_sized_candidate = _build_allocator_candidate(
-        {
-            "ticker": "2454",
-            "kind": "buy",
-            "proj_qty": 777,
-            "signal_date": "2026-09-04",
-            "execution_plan_seed": {
-                "ticker": "2454",
-                "trade_date": "2026-09-04",
-                "limit_price": 200.0,
-                "init_sl": 190.0,
-                "init_trail": 192.0,
-                "target_price": 210.0,
-                "entry_atr": 4.0,
-                "sizing_capital": 1_000_000.0,
-            },
-        },
-        sizing_equity=3_000_000.0,
-        params=base_params,
-    )
-    check(
-        "proposed_allocator_preserves_scanner_reference_qty_before_resource_capping",
-        777,
-        None if _scanner_sized_candidate is None else _scanner_sized_candidate.get("qty"),
-    )
-
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
@@ -1365,6 +1339,32 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
 
     profile = get_trading_strategy_profile()
     project_root = Path(__file__).resolve().parents[2]
+
+    _scanner_sized_candidate = _build_allocator_candidate(
+        {
+            "ticker": "2454",
+            "kind": "buy",
+            "proj_qty": 777,
+            "signal_date": "2026-09-04",
+            "execution_plan_seed": {
+                "ticker": "2454",
+                "trade_date": "2026-09-04",
+                "limit_price": 200.0,
+                "init_sl": 190.0,
+                "init_trail": 192.0,
+                "target_price": 210.0,
+                "entry_atr": 4.0,
+                "sizing_capital": 1_000_000.0,
+            },
+        },
+        sizing_equity=3_000_000.0,
+        params=base_params,
+    )
+    check(
+        "proposed_allocator_preserves_scanner_reference_qty_before_resource_capping",
+        777,
+        None if _scanner_sized_candidate is None else _scanner_sized_candidate.get("qty"),
+    )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
