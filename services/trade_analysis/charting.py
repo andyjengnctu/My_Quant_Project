@@ -9,6 +9,7 @@ import pandas as pd
 from services.trade_analysis.lifecycle_contract import (
     TRADE_LIFECYCLE_POSITION,
     TRADE_LIFECYCLE_SHADOW,
+    build_strategy_lifecycle_timeline_from_chart_payload,
     iter_trade_lifecycle_line_values,
 )
 
@@ -797,6 +798,9 @@ def build_debug_chart_payload(price_df, chart_context):
         "future_preview": dict((chart_context or {}).get("future_preview") or {}),
     }
     payload = _apply_chart_display_line_clipping(payload)
+    payload["strategy_lifecycle_by_index"] = build_strategy_lifecycle_timeline_from_chart_payload(
+        payload, buy_trace_names=CHART_BUY_TRACE_NAMES
+    )
     payload["default_view"] = compute_default_view_window(dates, total_bars, focus_positions)
     payload["gui_render_window"] = compute_gui_render_window(payload)
     return payload
@@ -857,6 +861,9 @@ def normalize_chart_payload_contract(chart_payload):
     normalized["status_box"] = dict(normalized.get("status_box") or {})
     normalized["future_preview"] = dict(normalized.get("future_preview") or {})
     normalized = _apply_chart_display_line_clipping(normalized)
+    normalized["strategy_lifecycle_by_index"] = build_strategy_lifecycle_timeline_from_chart_payload(
+        normalized, buy_trace_names=CHART_BUY_TRACE_NAMES
+    )
 
     default_view = dict(normalized.get("default_view") or {})
     if not default_view:

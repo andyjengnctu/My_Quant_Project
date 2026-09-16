@@ -3369,7 +3369,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "entry_orders": [], "account_events": [], "current_position": None,
     }
     check("workbench_single_stock_current_normal_candidate_is_user_facing_signal", "SIGNAL", resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-15").get("state"))
-    check("workbench_single_stock_scanner_snapshot_alone_never_invents_future_shadow_or_fill", None, resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-16"))
+    check(
+        "workbench_single_stock_scanner_plan_persists_shadow_after_signal_without_fake_fill",
+        "SHADOW",
+        resolve_trading_single_stock_sidebar_state(
+            _inspection_candidate, "2026-09-16", last_date="2026-09-16"
+        ).get("state"),
+    )
 
     _fill_qty = 1000
     _fill_price = 98.0
@@ -3395,7 +3401,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _information_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-15")
     check("workbench_single_stock_persisted_normal_order_information_date_remains_signal", "SIGNAL", _information_sidebar.get("state"))
     check("workbench_single_stock_order_can_remain_shadow_across_multiple_days", ["SHADOW", None], [_ordered_sidebar.get("state"), _ordered_sidebar.get("entry_price")])
-    check("workbench_single_stock_actual_spend_appears_only_on_confirmed_fill_date", ["POSITION", 98.0], [_filled_sidebar.get("state"), _filled_sidebar.get("entry_price")])
+    check(
+        "workbench_single_stock_broker_fill_without_effective_account_transaction_remains_shadow",
+        ["SHADOW", None],
+        [_filled_sidebar.get("state"), _filled_sidebar.get("entry_price")],
+    )
 
     # Trading chart must keep Research as historical context, but replace only
     # the persisted live lifecycle interval.  The frozen order plan stays shadow
@@ -3487,16 +3497,20 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "qty": 885,
         "meta": {"entry_type": "normal", "result": "成交"},
     }
+    _nan = float("nan")
     _base_overlay_payload = {
         "date_labels": _overlay_dates,
-        "stop_line": [70.0] * 5,
-        "tp_line": [130.0] * 5,
-        "limit_line": [101.0] * 5,
-        "entry_line": [101.0] * 5,
-        "shadow_stop_line": [71.0] * 5,
-        "shadow_tp_line": [131.0] * 5,
-        "shadow_limit_line": [102.0] * 5,
-        "shadow_entry_line": [102.0] * 5,
+        # Research counterfactual strategy geometry: its simulated fill occurs on
+        # 09/15, but Trading must reinterpret that evolving strategy position as
+        # SHADOW until the effective account fill on 09/18.
+        "stop_line": [_nan, 95.0, 96.0, 97.0, 98.0],
+        "tp_line": [_nan, 105.0, 105.0, 105.0, 105.0],
+        "limit_line": [_nan, 100.0, 100.0, 100.0, 100.0],
+        "entry_line": [_nan, 99.0, 99.0, 99.0, 99.0],
+        "shadow_stop_line": [_nan] * 5,
+        "shadow_tp_line": [_nan] * 5,
+        "shadow_limit_line": [_nan] * 5,
+        "shadow_entry_line": [_nan] * 5,
         "marker_groups": {"買進": [_fake_replay_marker]},
         "signal_annotations": [{
             "signal_type": "buy",
@@ -3521,20 +3535,52 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check(
         "workbench_single_stock_trading_chart_uses_one_signal_shadow_position_timeline",
-        [None, "SIGNAL", "SHADOW", "SHADOW", "POSITION"],
+        ["SIGNAL", "SHADOW", "SHADOW", "SHADOW", "POSITION"],
         [
             (_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("state")
             for idx in range(len(_overlay_dates))
         ],
     )
+    # Regression: opening a ticker that is held *now* must still reconstruct the
+    # pre-fill historical interval as SIGNAL/SHADOW.  The current position must
+    # never be back-projected over dates before its effective account fill.
+    _held_now_inspection = {
+        **_overlay_inspection,
+        "current_position": deepcopy(_overlay_event["details"]["position_after"]),
+    }
+    _held_now_projected = project_trading_single_stock_chart_payload(
+        _base_overlay_payload, _held_now_inspection
+    )
+    check(
+        "workbench_single_stock_currently_held_ticker_preserves_prefill_shadow_history",
+        [
+            ["SIGNAL", "SHADOW", "SHADOW", "SHADOW", "POSITION"],
+            [100.0, 100.0, 100.0],
+            [95.0, 96.0, 97.0],
+            [[4, 333, 98.0]],
+        ],
+        [
+            [
+                (_held_now_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("state")
+                for idx in range(len(_overlay_dates))
+            ],
+            _held_now_projected["shadow_limit_line"][1:4],
+            _held_now_projected["shadow_stop_line"][1:4],
+            [
+                [m.get("x"), m.get("qty"), m.get("price")]
+                for m in _held_now_projected.get("marker_groups", {}).get("買進", [])
+                if bool((m.get("meta") or {}).get("canonical_trading"))
+            ],
+        ],
+    )
     check(
         "workbench_single_stock_trading_overlay_keeps_frozen_shadow_plan_until_real_fill",
-        [True, [100.0, 100.0], [95.0, 95.0], [105.0, 105.0]],
+        [True, [100.0, 100.0, 100.0], [95.0, 96.0, 97.0], [105.0, 105.0, 105.0]],
         [
-            all(pd.isna(_projected[key][1]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
-            _projected["shadow_limit_line"][2:4],
-            _projected["shadow_stop_line"][2:4],
-            _projected["shadow_tp_line"][2:4],
+            all(pd.isna(_projected[key][0]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
+            _projected["shadow_limit_line"][1:4],
+            _projected["shadow_stop_line"][1:4],
+            _projected["shadow_tp_line"][1:4],
         ],
     )
     check(
@@ -3589,6 +3635,28 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             for marker in _projected.get("marker_groups", {}).get("買進", [])
         ],
     )
+    _voided_fill_inspection = {
+        **_overlay_inspection,
+        # The immutable broker order still has a historical fill, but the account
+        # transaction was voided/deleted and therefore is absent from effective
+        # account_events. It must not resurrect POSITION or a buy marker.
+        "account_events": [],
+        "current_position": None,
+    }
+    _voided_fill_projected = project_trading_single_stock_chart_payload(
+        _base_overlay_payload, _voided_fill_inspection
+    )
+    check(
+        "workbench_single_stock_deleted_account_fill_never_reappears_as_actual_trade",
+        [[], ["SIGNAL", "SHADOW", "SHADOW", "SHADOW", "SHADOW"]],
+        [
+            _voided_fill_projected.get("marker_groups", {}).get("買進", []),
+            [
+                (_voided_fill_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("state")
+                for idx in range(len(_overlay_dates))
+            ],
+        ],
+    )
     _direct_event = deepcopy(_overlay_event)
     _direct_event["details"]["entry_order_id"] = None
     _direct_event["details"]["position_after"]["broker"]["entry_order_id"] = None
@@ -3600,25 +3668,25 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _direct_projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _direct_inspection)
     check(
         "workbench_single_stock_trading_overlay_reconstructs_non_oms_shadow_from_frozen_lineage",
-        [True, [100.0, 100.0], [95.0, 95.0], [105.0, 105.0], 333],
+        [True, [100.0, 100.0, 100.0], [95.0, 96.0, 97.0], [105.0, 105.0, 105.0], 333],
         [
-            all(pd.isna(_direct_projected[key][1]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
-            _direct_projected["shadow_limit_line"][2:4],
-            _direct_projected["shadow_stop_line"][2:4],
-            _direct_projected["shadow_tp_line"][2:4],
+            all(pd.isna(_direct_projected[key][0]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
+            _direct_projected["shadow_limit_line"][1:4],
+            _direct_projected["shadow_stop_line"][1:4],
+            _direct_projected["shadow_tp_line"][1:4],
             _direct_projected["marker_groups"]["買進"][0].get("qty"),
         ],
     )
     _candidate_chart = {
         "date_labels": ["2026-09-12", "2026-09-15"],
-        "stop_line": [70.0, 70.0],
-        "tp_line": [130.0, 130.0],
-        "limit_line": [101.0, 101.0],
-        "entry_line": [101.0, 101.0],
-        "shadow_stop_line": [71.0, 71.0],
-        "shadow_tp_line": [131.0, 131.0],
-        "shadow_limit_line": [102.0, 102.0],
-        "shadow_entry_line": [102.0, 102.0],
+        "stop_line": [_nan, _nan],
+        "tp_line": [_nan, _nan],
+        "limit_line": [_nan, _nan],
+        "entry_line": [_nan, _nan],
+        "shadow_stop_line": [_nan, _nan],
+        "shadow_tp_line": [_nan, _nan],
+        "shadow_limit_line": [_nan, _nan],
+        "shadow_entry_line": [_nan, _nan],
         "marker_groups": {"買進": [{**_fake_replay_marker, "x": 1, "date": "2026-09-15"}]},
         "signal_annotations": [{
             "signal_type": "buy", "date": "2026-09-15", "x": 1,
@@ -3648,6 +3716,58 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "workbench_single_stock_trading_projection_invalidates_stale_research_view_window",
         [None, None],
         [_candidate_projected.get("default_view"), _candidate_projected.get("gui_render_window")],
+    )
+    # Regression: an unheld ticker that remains in the current Scanner pool may
+    # have an older signal date.  Every bar after that signal must be SHADOW with
+    # the same L/S/TP contract; the latest bar is not a special line-less state.
+    _cross_day_candidate = deepcopy(_inspection_candidate)
+    _cross_day_candidate["candidate"] = deepcopy(_inspection_candidate["candidate"])
+    _cross_day_candidate["candidate"]["signal_date"] = "2026-09-15"
+    _cross_day_candidate["candidate"]["trade_date"] = "2026-09-17"
+    _cross_day_candidate["candidate"]["execution_plan_seed"]["trade_date"] = "2026-09-17"
+    _cross_day_chart = {
+        "date_labels": ["2026-09-15", "2026-09-16", "2026-09-17"],
+        "stop_line": [_nan] * 3, "tp_line": [_nan] * 3,
+        "limit_line": [_nan] * 3, "entry_line": [_nan] * 3,
+        "shadow_stop_line": [_nan] * 3, "shadow_tp_line": [_nan] * 3,
+        "shadow_limit_line": [_nan] * 3, "shadow_entry_line": [_nan] * 3,
+        "marker_groups": {"買進": []},
+        "signal_annotations": [{
+            "signal_type": "buy", "date": "2026-09-15", "x": 0,
+            "price": 99.0, "meta": {},
+        }],
+    }
+    _cross_day_projected = project_trading_single_stock_chart_payload(
+        _cross_day_chart, _cross_day_candidate
+    )
+    check(
+        "workbench_single_stock_unheld_scanner_signal_becomes_cross_day_shadow_with_lines",
+        [
+            ["SIGNAL", "SHADOW", "SHADOW"],
+            [100.0, 100.0], [95.0, 95.0], [105.0, 105.0],
+            [],
+        ],
+        [
+            [
+                (_cross_day_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("state")
+                for idx in range(3)
+            ],
+            _cross_day_projected["shadow_limit_line"][1:3],
+            _cross_day_projected["shadow_stop_line"][1:3],
+            _cross_day_projected["shadow_tp_line"][1:3],
+            _cross_day_projected.get("marker_groups", {}).get("買進", []),
+        ],
+    )
+    check(
+        "workbench_single_stock_cross_day_shadow_keeps_reservation_not_actual_spend",
+        [[100000.0, None], [100000.0, None]],
+        [
+            [
+                (_cross_day_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("reserved_capital"),
+                (_cross_day_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("buy_capital"),
+            ]
+            for idx in (1, 2)
+        ],
     )
     _extended_candidate_inspection = deepcopy(_inspection_candidate)
     _extended_candidate_inspection["candidate"] = deepcopy(_inspection_candidate["candidate"])
