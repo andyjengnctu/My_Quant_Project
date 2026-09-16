@@ -20,6 +20,7 @@ from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import extract_precomputed_signals as _extract_precomputed_signals, generate_signals, unpack_precomputed_signals
 from core.trade_lifecycle import (
     TRADE_LIFECYCLE_SIGNAL,
+    build_prefill_lifecycle_timeline_from_plans,
     build_trade_lifecycle_row,
     record_lifecycle_row,
 )
@@ -106,6 +107,21 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
             'reserved_capital': float(reserved_capital),
             'qty': int(entry_plan['qty']),
         })
+        chart_context.setdefault("strategy_prefill_plans", []).append({
+            "signal_date": signal_date,
+            "information_date": signal_date,
+            "limit_price": entry_plan.get("limit_price"),
+            "stop_price": entry_plan.get("init_sl"),
+            "init_trail": entry_plan.get("init_trail"),
+            "tp_price": entry_plan.get("target_price"),
+            "entry_atr": entry_plan.get("entry_atr"),
+            "planned_qty": entry_plan.get("qty"),
+            "reserved_capital": float(reserved_capital),
+            "ticker": entry_plan.get("ticker"),
+            "security_profile": entry_plan.get("security_profile"),
+            "entry_type": "normal",
+            "source": "research_signal_plan",
+        })
     record_signal_annotation(
         chart_context,
         current_date=signal_date,
@@ -132,6 +148,24 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
             planned_qty=(None if entry_plan is None else entry_plan.get("qty")),
             remaining_order_qty=(None if entry_plan is None else entry_plan.get("qty")),
         ),
+    )
+
+
+def _finalize_strategy_prefill_lifecycle(chart_context, *, dates, o, h, l, c, v, atr_main, sell_condition, params):
+    if chart_context is None:
+        return
+    plans = [dict(row) for row in list(chart_context.get("strategy_prefill_plans") or []) if isinstance(row, dict)]
+    chart_context["strategy_prefill_lifecycle_by_index"] = build_prefill_lifecycle_timeline_from_plans(
+        date_labels=list(dates),
+        open_values=o,
+        high_values=h,
+        low_values=l,
+        close_values=c,
+        volume_values=v,
+        atr_values=atr_main,
+        sell_signals=sell_condition,
+        plans=plans,
+        params=params,
     )
 
 
@@ -479,6 +513,18 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 history_snapshot=latest_history_snapshot,
                 params=params,
             )
+    _finalize_strategy_prefill_lifecycle(
+        chart_context,
+        dates=dates,
+        o=o,
+        h=h,
+        l=l,
+        c=c,
+        v=v,
+        atr_main=atr_main,
+        sell_condition=sell_condition,
+        params=params,
+    )
     if position['qty'] > 0:
         position['close_price'] = c[-1]
         append_debug_forced_closeout(

@@ -313,6 +313,8 @@ def create_debug_chart_context(df, *, price_overlay_specs=None):
         "status_box": None,
         "future_preview": {},
         "strategy_lifecycle_by_date": {},
+        "strategy_prefill_plans": [],
+        "strategy_prefill_lifecycle_by_index": {},
         "strategy_lifecycle_inputs": {},
     }
 
@@ -824,6 +826,11 @@ def build_debug_chart_payload(price_df, chart_context):
             str(key): np.asarray(values).copy()
             for key, values in dict((chart_context or {}).get("strategy_lifecycle_inputs") or {}).items()
         },
+        "strategy_prefill_lifecycle_by_index": {
+            int(idx): dict(row)
+            for idx, row in dict((chart_context or {}).get("strategy_prefill_lifecycle_by_index") or {}).items()
+            if isinstance(row, dict)
+        },
     }
     payload = _apply_chart_display_line_clipping(payload)
     payload["strategy_lifecycle_by_index"] = lifecycle_rows_to_index(
@@ -892,6 +899,11 @@ def normalize_chart_payload_contract(chart_payload):
     normalized["strategy_lifecycle_inputs"] = {
         str(key): np.asarray(values).copy()
         for key, values in dict(normalized.get("strategy_lifecycle_inputs") or {}).items()
+    }
+    normalized["strategy_prefill_lifecycle_by_index"] = {
+        int(idx): dict(row)
+        for idx, row in dict(normalized.get("strategy_prefill_lifecycle_by_index") or {}).items()
+        if isinstance(row, dict)
     }
     normalized = _apply_chart_display_line_clipping(normalized)
     normalized["strategy_lifecycle_by_index"] = {

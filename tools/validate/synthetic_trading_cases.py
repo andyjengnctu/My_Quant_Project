@@ -3872,6 +3872,203 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         True,
         all(right + 1e-9 >= left for left, right in zip(_finite_shadow_stops, _finite_shadow_stops[1:])),
     )
+
+    # End-to-end architecture regression: the Research analysis must emit a
+    # fill-independent strategy pre-fill timeline from the signal/plan itself.
+    # Trading consumes that timeline even when Research simulated a fill on D+1.
+    # This is the critical seam that keeps historical never-filled trades and a
+    # currently-held ticker's pre-actual-fill SHADOW history visible.
+    import numpy as _np
+    from services.trade_analysis.backtest import run_debug_analysis as _run_debug_analysis
+    _history_dates = _pd.to_datetime([
+        "2026-09-01", "2026-09-02", "2026-09-03",
+        "2026-09-04", "2026-09-07", "2026-09-08",
+    ])
+    _history_df = _pd.DataFrame(
+        {
+            # Research simulates a fill at 99 on 09/03.  Trading may still have
+            # no actual fill, so its lifecycle must remain SHADOW after 09/03.
+            "Open": [99.0, 99.0, 99.0, 100.0, 101.0, 102.0],
+            "High": [100.0, 100.0, 101.0, 102.0, 103.0, 104.0],
+            "Low": [98.0, 98.0, 98.0, 99.0, 100.0, 101.0],
+            "Close": [99.0, 99.0, 100.0, 101.0, 102.0, 103.0],
+            "Volume": [1_000_000.0] * 6,
+        },
+        index=_history_dates,
+    )
+    _history_precomputed = (
+        _np.asarray([_synth_atr] * 6, dtype=float),
+        _np.asarray([False, True, False, False, False, False], dtype=bool),
+        _np.asarray([False] * 6, dtype=bool),
+        _np.asarray([_np.nan, _synth_limit, _np.nan, _np.nan, _np.nan, _np.nan], dtype=float),
+    )
+    with tempfile.TemporaryDirectory(prefix="stock2_strategy_prefill_") as _history_tmp:
+        _history_result = _run_debug_analysis(
+            _history_df,
+            "2330",
+            base_params,
+            _history_tmp,
+            colors={"yellow": "", "reset": "", "green": "", "cyan": ""},
+            export_excel=False,
+            export_chart=False,
+            return_chart_payload=True,
+            verbose=False,
+            precomputed_signals=_history_precomputed,
+        )
+    _history_payload = _history_result["chart_payload"]
+    _strategy_prefill = _history_payload.get("strategy_prefill_lifecycle_by_index", {})
+    check(
+        "workbench_single_stock_research_emits_fill_independent_historical_prefill_lifecycle",
+        ["SIGNAL", "SHADOW", "SHADOW", "SHADOW", "SHADOW"],
+        [(_strategy_prefill.get(idx) or {}).get("state") for idx in range(1, 6)],
+    )
+    check(
+        "workbench_single_stock_research_prefill_survives_research_simulated_fill",
+        ["2026-09-03", True],
+        [
+            str((_history_payload.get("marker_groups", {}).get("買進", [{}])[0] or {}).get("date"))[:10],
+            bool((_strategy_prefill.get(3) or {}).get("state") == "SHADOW"),
+        ],
+    )
+
+    _history_no_fill_inspection = {
+        "ticker": "2330",
+        "candidate": {},
+        "entry_orders": [],
+        "account_events": [],
+        "current_position": None,
+        "decision_errors": [],
+        "protection": {"fresh": False, "positions": []},
+        "indicator_exit": {"fresh": False, "exits": []},
+    }
+    _history_no_fill_projected = project_trading_single_stock_chart_payload(
+        _history_payload, _history_no_fill_inspection, params=base_params
+    )
+    check(
+        "workbench_single_stock_historical_never_filled_signal_keeps_shadow_until_invalidation",
+        [
+            ["SIGNAL", "SHADOW", "SHADOW", "SHADOW", "SHADOW"],
+            [2, 3, 4, 5],
+            [],
+            [],
+        ],
+        [
+            [
+                (_history_no_fill_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("state")
+                for idx in range(1, 6)
+            ],
+            [
+                idx for idx, value in enumerate(_history_no_fill_projected.get("shadow_limit_line", []))
+                if not _pd.isna(value)
+            ],
+            _history_no_fill_projected.get("marker_groups", {}).get("買進", []),
+            [
+                idx for idx, value in enumerate(_history_no_fill_projected.get("entry_line", []))
+                if not _pd.isna(value)
+            ],
+        ],
+    )
+
+    _history_actual_position = _build_position_from_entry_fill(
+        buy_price=101.0,
+        qty=333,
+        init_sl=_synth_stop,
+        init_trail=_synth_trail,
+        target_price=_synth_tp,
+        limit_price=_synth_limit,
+        entry_atr=_synth_atr,
+        params=base_params,
+        ticker="2330",
+        security_profile={},
+        trade_date="2026-09-07",
+    )
+    _history_fill_ledger = build_buy_ledger_from_price(101.0, 333, base_params)
+    _history_actual_event = {
+        "mutation_type": "confirm_strategy_buy_fill",
+        "timestamp": "2026-09-07T10:00:00+08:00",
+        "details": {
+            "ticker": "2330",
+            "qty": 333,
+            "trade_date": "2026-09-07",
+            "entry_fill_price_milli": _price_to_milli(101.0),
+            "net_buy_total_milli": int(_history_fill_ledger["net_buy_total_milli"]),
+            "position_after": {
+                "ticker": "2330",
+                "source": "strategy_fill",
+                "broker": {
+                    "qty": 333,
+                    "initial_qty": 333,
+                    "entry_date": "2026-09-07",
+                },
+                "strategy_management": {
+                    "status": "active",
+                    "management_start_date": "2026-09-07",
+                    "position_state": _history_actual_position,
+                },
+            },
+        },
+    }
+    _history_held_inspection = {
+        **_history_no_fill_inspection,
+        "account_events": [_history_actual_event],
+        "current_position": deepcopy(_history_actual_event["details"]["position_after"]),
+    }
+    _history_held_projected = project_trading_single_stock_chart_payload(
+        _history_payload, _history_held_inspection, params=base_params
+    )
+    check(
+        "workbench_single_stock_actual_fill_replaces_shared_shadow_only_on_effective_fill_date",
+        [
+            ["SIGNAL", "SHADOW", "SHADOW", "POSITION", "POSITION"],
+            [2, 3],
+            [[4, 333, 101.0]],
+        ],
+        [
+            [
+                (_history_held_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("state")
+                for idx in range(1, 6)
+            ],
+            [
+                idx for idx, value in enumerate(_history_held_projected.get("shadow_limit_line", []))
+                if not _pd.isna(value)
+            ],
+            [
+                [marker.get("x"), marker.get("qty"), marker.get("price")]
+                for marker in _history_held_projected.get("marker_groups", {}).get("買進", [])
+            ],
+        ],
+    )
+
+    from core.trade_lifecycle import build_prefill_lifecycle_timeline as _build_prefill_lifecycle_timeline
+    _expiry_dates = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07"]
+    _expiry_timeline = _build_prefill_lifecycle_timeline(
+        date_labels=_expiry_dates,
+        open_values=[99.0, 99.0, 100.0, 100.0, 100.0],
+        high_values=[100.0, 101.0, 102.0, 101.0, 101.0],
+        low_values=[98.0, 98.0, 99.0, 88.0, 99.0],
+        close_values=[99.0, 100.0, 101.0, 90.0, 100.0],
+        volume_values=[1_000_000.0] * 5,
+        atr_values=[_synth_atr] * 5,
+        sell_signals=[False] * 5,
+        plan={
+            "signal_date": "2026-09-01",
+            "information_date": "2026-09-01",
+            "limit_price": _synth_limit,
+            "stop_price": _synth_stop,
+            "init_trail": _synth_trail,
+            "tp_price": _synth_tp,
+            "entry_atr": _synth_atr,
+            "planned_qty": 1000,
+            "ticker": "2330",
+            "security_profile": {},
+        },
+        params=base_params,
+    )
+    check(
+        "workbench_single_stock_historical_shadow_stays_visible_through_terminal_invalidation_bar_then_ends",
+        ["SIGNAL", "SHADOW", "SHADOW", "SHADOW", None],
+        [(_expiry_timeline.get(idx) or {}).get("state") for idx in range(5)],
+    )
     # Rendering regression: a latest-bar SHADOW value is one finite bar between
     # NaNs.  It must still produce a visible horizontal segment.
     from matplotlib.figure import Figure as _Figure

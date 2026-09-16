@@ -439,6 +439,55 @@ def build_prefill_lifecycle_timeline(
     return timeline
 
 
+def build_prefill_lifecycle_timeline_from_plans(
+    *,
+    date_labels: Sequence[object],
+    open_values: Sequence[Any],
+    high_values: Sequence[Any],
+    low_values: Sequence[Any],
+    close_values: Sequence[Any],
+    volume_values: Sequence[Any] | None,
+    atr_values: Sequence[Any] | None,
+    sell_signals: Sequence[Any] | None,
+    plans: Sequence[Mapping[str, Any]],
+    params: Any,
+) -> dict[int, dict[str, Any]]:
+    """Build one non-overlapping pre-fill timeline from historical signal plans.
+
+    Each signal owns its information bar and all later SHADOW bars until its
+    canonical invalidation.  If a newer eligible signal appears while an older
+    shadow would otherwise still be alive, the newer signal supersedes the older
+    display lifecycle from its information bar onward.  This mirrors the strategy
+    candidate lifecycle while remaining independent from any Research or Trading
+    fill source.
+    """
+    merged: dict[int, dict[str, Any]] = {}
+    owner_key: dict[int, tuple[str, int]] = {}
+    for sequence, raw_plan in enumerate(list(plans or [])):
+        if not isinstance(raw_plan, Mapping):
+            continue
+        plan = dict(raw_plan)
+        timeline = build_prefill_lifecycle_timeline(
+            date_labels=date_labels,
+            open_values=open_values,
+            high_values=high_values,
+            low_values=low_values,
+            close_values=close_values,
+            volume_values=volume_values,
+            atr_values=atr_values,
+            sell_signals=sell_signals,
+            plan=plan,
+            params=params,
+        )
+        signal_key = str(_date_text(plan.get("signal_date")) or _date_text(plan.get("information_date")) or "")
+        key = (signal_key, int(sequence))
+        for idx, row in timeline.items():
+            if idx not in owner_key or key >= owner_key[idx]:
+                merged[int(idx)] = deepcopy(dict(row))
+                owner_key[int(idx)] = key
+    return merged
+
+
 __all__ = [
     "TRADE_LIFECYCLE_POSITION",
     "TRADE_LIFECYCLE_SHADOW",
@@ -446,6 +495,7 @@ __all__ = [
     "TRADE_LIFECYCLE_STATES",
     "TRADE_TRANSACTION_LINE_KEYS",
     "build_prefill_lifecycle_timeline",
+    "build_prefill_lifecycle_timeline_from_plans",
     "build_trade_lifecycle_row",
     "iter_trade_lifecycle_line_values",
     "lifecycle_rows_to_index",
