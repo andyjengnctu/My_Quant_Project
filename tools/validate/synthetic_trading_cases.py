@@ -3322,7 +3322,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     from core.params_io import params_to_json_dict as _params_to_json_dict
     from core.exact_accounting import price_to_milli as _price_to_milli
-    from services.trading.single_stock_inspection import resolve_trading_single_stock_sidebar_state
+    from services.trading.single_stock_inspection import (
+        project_trading_single_stock_chart_payload,
+        resolve_trading_single_stock_sidebar_state,
+    )
     _inspection_candidate = {
         "ticker": "2330",
         "candidate": {
@@ -3364,6 +3367,260 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _filled_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-18")
     check("workbench_single_stock_order_can_remain_reserved_across_multiple_days", ["ORDERED", None], [_ordered_sidebar.get("state"), _ordered_sidebar.get("entry_price")])
     check("workbench_single_stock_actual_spend_appears_only_on_confirmed_fill_date", ["FILLED", 98.0], [_filled_sidebar.get("state"), _filled_sidebar.get("entry_price")])
+
+    # Trading chart must keep Research as historical context, but replace only
+    # the persisted live lifecycle interval.  The frozen order plan stays shadow
+    # until the real broker/account fill; only then may actual entry/stop/TP and
+    # actual quantity replace the simulated replay transaction.
+    from core.entry_plans import build_position_from_entry_fill as _build_position_from_entry_fill
+    _overlay_dates = ["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"]
+    _position_state = _build_position_from_entry_fill(
+        buy_price=_fill_price,
+        qty=333,
+        init_sl=95.0,
+        init_trail=95.0,
+        target_price=105.0,
+        limit_price=100.0,
+        entry_atr=5.0,
+        params=base_params,
+        ticker="2330",
+        security_profile={},
+        trade_date="2026-09-18",
+    )
+    _overlay_order = deepcopy(_inspection_order["entry_orders"][0])
+    _overlay_order["qty"] = 333
+    _overlay_order["signal_date"] = "2026-09-14"
+    _overlay_order["fills"] = [{
+        "fill_id": "SINGLE-STOCK-FILL-OVERLAY",
+        "qty": 333,
+        "fill_price_milli": _price_to_milli(_fill_price),
+        "trade_date": "2026-09-18",
+        "net_buy_total_milli": int(build_buy_ledger_from_price(_fill_price, 333, base_params)["net_buy_total_milli"]),
+        "confirmed_at": "2026-09-18T10:00:00+08:00",
+    }]
+    _overlay_order["reserved_cost_milli"] = int(build_buy_ledger_from_price(100.0, 333, base_params)["net_buy_total_milli"])
+    _overlay_event = {
+        "mutation_type": "confirm_strategy_buy_fill",
+        "timestamp": "2026-09-18T10:00:01+08:00",
+        "details": {
+            "ticker": "2330",
+            "qty": 333,
+            "trade_date": "2026-09-18",
+            "entry_fill_price_milli": _price_to_milli(_fill_price),
+            "gross_buy_milli": int(build_buy_ledger_from_price(_fill_price, 333, base_params)["gross_buy_milli"]),
+            "net_buy_total_milli": int(build_buy_ledger_from_price(_fill_price, 333, base_params)["net_buy_total_milli"]),
+            "entry_order_id": "SINGLE-STOCK-SYN-001",
+            "strategy_lineage": {
+                "execution_plan_seed": {
+                    "trade_date": "2026-09-15",
+                    "limit_price": 100.0,
+                    "init_sl": 95.0,
+                    "init_trail": 95.0,
+                    "target_price": 105.0,
+                    "entry_atr": 5.0,
+                },
+                "candidate_trade_date": "2026-09-15",
+                "signal_date": "2026-09-14",
+                "planned_qty": 333,
+            },
+            "position_after": {
+                "ticker": "2330",
+                "source": "strategy_fill",
+                "broker": {
+                    "qty": 333,
+                    "initial_qty": 333,
+                    "entry_date": "2026-09-18",
+                    "entry_order_id": "SINGLE-STOCK-SYN-001",
+                },
+                "strategy_management": {
+                    "status": "active",
+                    "management_start_date": "2026-09-18",
+                    "position_state": _position_state,
+                },
+            },
+        },
+    }
+    _overlay_inspection = {
+        "ticker": "2330",
+        "candidate": {},
+        "entry_orders": [_overlay_order],
+        "account_events": [_overlay_event],
+        "current_position": None,
+        "decision_errors": [],
+        "protection": {"fresh": False, "positions": []},
+        "indicator_exit": {"fresh": False, "exits": []},
+    }
+    _fake_replay_marker = {
+        "trace_name": "買進",
+        "date": "2026-09-18",
+        "x": 4,
+        "price": 101.0,
+        "qty": 885,
+        "meta": {"entry_type": "normal", "result": "成交"},
+    }
+    _base_overlay_payload = {
+        "date_labels": _overlay_dates,
+        "stop_line": [70.0] * 5,
+        "tp_line": [130.0] * 5,
+        "limit_line": [101.0] * 5,
+        "entry_line": [101.0] * 5,
+        "shadow_stop_line": [71.0] * 5,
+        "shadow_tp_line": [131.0] * 5,
+        "shadow_limit_line": [102.0] * 5,
+        "shadow_entry_line": [102.0] * 5,
+        "marker_groups": {"買進": [_fake_replay_marker]},
+        "signal_annotations": [{
+            "signal_type": "buy",
+            "date": "2026-09-14",
+            "x": 0,
+            "price": 99.0,
+            "meta": {"qty": 885, "source": "research"},
+        }],
+        "future_preview": {"some": "research-only-preview"},
+    }
+    _projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _overlay_inspection)
+    check(
+        "workbench_single_stock_trading_overlay_preserves_research_history_before_live_plan",
+        [70.0, 130.0, 101.0, 101.0],
+        [_projected["stop_line"][0], _projected["tp_line"][0], _projected["limit_line"][0], _projected["entry_line"][0]],
+    )
+    check(
+        "workbench_single_stock_trading_overlay_keeps_frozen_shadow_plan_until_real_fill",
+        [True, [100.0, 100.0], [95.0, 95.0], [105.0, 105.0]],
+        [
+            all(pd.isna(_projected[key][1]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
+            _projected["shadow_limit_line"][2:4],
+            _projected["shadow_stop_line"][2:4],
+            _projected["shadow_tp_line"][2:4],
+        ],
+    )
+    check(
+        "workbench_single_stock_trading_overlay_switches_to_actual_only_on_confirmed_fill",
+        [True, 98.0, float(_position_state["sl"]), float(_position_state["tp_half"])],
+        [
+            all(pd.isna(_projected["entry_line"][idx]) for idx in (1, 2, 3)),
+            _projected["entry_line"][4],
+            _projected["stop_line"][4],
+            _projected["tp_line"][4],
+        ],
+    )
+    _canonical_buy_markers = [
+        marker
+        for marker in _projected.get("marker_groups", {}).get("買進", [])
+        if bool((marker.get("meta") or {}).get("canonical_trading"))
+    ]
+    check(
+        "workbench_single_stock_trading_overlay_replaces_replay_qty_with_actual_fill_qty",
+        [[4, 333, 98.0]],
+        [[marker.get("x"), marker.get("qty"), marker.get("price")] for marker in _canonical_buy_markers],
+    )
+    check(
+        "workbench_single_stock_trading_overlay_keeps_research_signal_anchor_but_hides_replay_sizing",
+        [0, "2026-09-14", None, ""],
+        [
+            _projected["signal_annotations"][0].get("x"),
+            _projected["signal_annotations"][0].get("date"),
+            (_projected["signal_annotations"][0].get("meta") or {}).get("qty"),
+            _projected["signal_annotations"][0].get("detail_text"),
+        ],
+    )
+    check(
+        "workbench_single_stock_trading_overlay_does_not_keep_simulated_fill_on_live_cycle",
+        1,
+        len(_projected.get("marker_groups", {}).get("買進", [])),
+    )
+    _direct_event = deepcopy(_overlay_event)
+    _direct_event["details"]["entry_order_id"] = None
+    _direct_event["details"]["position_after"]["broker"]["entry_order_id"] = None
+    _direct_inspection = {
+        **_overlay_inspection,
+        "entry_orders": [],
+        "account_events": [_direct_event],
+    }
+    _direct_projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _direct_inspection)
+    check(
+        "workbench_single_stock_trading_overlay_reconstructs_non_oms_shadow_from_frozen_lineage",
+        [True, [100.0, 100.0], [95.0, 95.0], [105.0, 105.0], 333],
+        [
+            all(pd.isna(_direct_projected[key][1]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
+            _direct_projected["shadow_limit_line"][2:4],
+            _direct_projected["shadow_stop_line"][2:4],
+            _direct_projected["shadow_tp_line"][2:4],
+            _direct_projected["marker_groups"]["買進"][0].get("qty"),
+        ],
+    )
+    _candidate_chart = {
+        "date_labels": ["2026-09-12", "2026-09-15"],
+        "stop_line": [70.0, 70.0],
+        "tp_line": [130.0, 130.0],
+        "limit_line": [101.0, 101.0],
+        "entry_line": [101.0, 101.0],
+        "shadow_stop_line": [71.0, 71.0],
+        "shadow_tp_line": [131.0, 131.0],
+        "shadow_limit_line": [102.0, 102.0],
+        "shadow_entry_line": [102.0, 102.0],
+        "marker_groups": {"買進": [{**_fake_replay_marker, "x": 1, "date": "2026-09-15"}]},
+        "signal_annotations": [{
+            "signal_type": "buy", "date": "2026-09-15", "x": 1,
+            "price": 99.0, "detail_text": "股數: 885", "meta": {"qty": 885},
+        }],
+        "future_preview": {"limit_price": 999.0},
+    }
+    _candidate_projected = project_trading_single_stock_chart_payload(_candidate_chart, _inspection_candidate)
+    check(
+        "workbench_single_stock_trading_scanner_uses_future_preview_not_signal_bar_transaction_lines",
+        [True, {"limit_price": 100.0, "stop_price": 95.0, "tp_half_price": 105.0, "entry_price": None}, 0],
+        [
+            all(
+                pd.isna(_candidate_projected[key][1])
+                for key in (
+                    "stop_line", "tp_line", "limit_line", "entry_line",
+                    "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line",
+                )
+            ),
+            _candidate_projected.get("future_preview"),
+            len(_candidate_projected.get("marker_groups", {}).get("買進", [])),
+        ],
+    )
+
+    _rollforward_payload = deepcopy(_base_overlay_payload)
+    _rollforward_dates = [
+        "2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17",
+        "2026-09-18", "2026-09-21", "2026-09-22",
+    ]
+    _rollforward_payload["date_labels"] = _rollforward_dates
+    for _line_key in (
+        "stop_line", "tp_line", "limit_line", "entry_line",
+        "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line",
+    ):
+        _rollforward_payload[_line_key] = [70.0] * len(_rollforward_dates)
+    _rollforward_payload["marker_groups"] = {"買進": [{**_fake_replay_marker, "x": 4, "date": "2026-09-18"}]}
+    _rollforward_event = {
+        "mutation_type": "rollforward_strategy_management",
+        "timestamp": "2026-09-21T18:00:00+08:00",
+        "details": {
+            "positions": [{
+                "ticker": "2330",
+                "processed_through_date": "2026-09-21",
+                "stop_milli": _price_to_milli(92.0),
+            }],
+        },
+    }
+    _rollforward_inspection = {
+        **_direct_inspection,
+        "account_events": [_direct_event, _rollforward_event],
+    }
+    _rollforward_projected = project_trading_single_stock_chart_payload(_rollforward_payload, _rollforward_inspection)
+    check(
+        "workbench_single_stock_trading_actual_stop_follows_persisted_rollforward_evidence",
+        [float(_position_state["sl"]), 92.0, 92.0],
+        [_rollforward_projected["stop_line"][4], _rollforward_projected["stop_line"][5], _rollforward_projected["stop_line"][6]],
+    )
+    check(
+        "workbench_single_stock_trading_gui_applies_lifecycle_overlay_only_in_trading_mode",
+        True,
+        "project_trading_single_stock_chart_payload(" in gui_payload_body,
+    )
     check("workbench_combobox_popdown_fit_retries_until_tcl_window_is_mapped", True, "WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES" in workbench_source and "int(attempt) + 1" in workbench_source)
 
     from services.workbench_ui import single_stock_inspector as single_stock_inspector_module

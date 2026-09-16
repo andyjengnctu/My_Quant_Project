@@ -43,6 +43,32 @@ _BUY_MUTATIONS = {
     TRADE_MUTATION_STRATEGY_BUY_INCREMENT,
 }
 
+_TRADING_TRANSACTION_LINE_KEYS = (
+    "stop_line",
+    "tp_line",
+    "limit_line",
+    "entry_line",
+    "shadow_stop_line",
+    "shadow_tp_line",
+    "shadow_limit_line",
+    "shadow_entry_line",
+)
+
+_TRADING_REPLAY_TRANSACTION_TRACES = {
+    "限價買進",
+    "買進",
+    "買進(延續候選)",
+    "買進(重進)",
+    "錯失買進",
+    "錯失買進(延續候選)",
+    "錯失買進(重進)",
+    "停利",
+    "停損賣出",
+    "指標賣出",
+    "錯失賣出",
+    "強制結算",
+}
+
 
 def _date_text(value: object) -> str | None:
     if value is None:
@@ -479,6 +505,15 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         if mutation == TRADE_MUTATION_SELL and qty > 0:
             sell_qty = int(details.get("qty") or 0)
             qty = max(0, qty - sell_qty)
+            if isinstance(position_state, Mapping) and qty > 0:
+                position_state = deepcopy(dict(position_state))
+                position_state["qty"] = qty
+                if str(details.get("event") or "").upper() == "TP_HALF":
+                    # Historical account events persist the pre-sell position,
+                    # not a second post-sell snapshot.  The confirmed TP event is
+                    # sufficient evidence that subsequent dates must no longer
+                    # show the half-take-profit line.
+                    position_state["sold_half"] = True
             if qty <= 0:
                 closed_date = event_date
 
@@ -549,7 +584,11 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
             else position_state.get("trailing_stop")
         ),
         "stop_price": None if not isinstance(position_state, Mapping) else position_state.get("sl"),
-        "tp_price": None if not isinstance(position_state, Mapping) else position_state.get("tp_half"),
+        "tp_price": (
+            None
+            if not isinstance(position_state, Mapping) or bool(position_state.get("sold_half", False))
+            else position_state.get("tp_half")
+        ),
         "reserved_capital": None,
         "buy_capital": None if net_buy_milli <= 0 else milli_to_money(net_buy_milli),
         "buy_qty": entry_qty or None,
@@ -606,8 +645,577 @@ def resolve_trading_single_stock_sidebar_state(
     return candidate
 
 
+def _chart_date_labels(chart_payload: Mapping[str, Any]) -> list[str | None]:
+    labels = list(chart_payload.get("date_labels") or [])
+    if labels:
+        return [_date_text(value) for value in labels]
+    return [_date_text(value) for value in list(chart_payload.get("dates") or [])]
+
+
+def _copy_chart_line(chart_payload: Mapping[str, Any], key: str, total: int) -> list[float]:
+    values = chart_payload.get(key)
+    try:
+        copied = list(values) if values is not None else []
+    except TypeError:
+        copied = []
+    nan = float("nan")
+    normalized = [nan] * total
+    for idx, value in enumerate(copied[:total]):
+        try:
+            normalized[idx] = float(value)
+        except (TypeError, ValueError):
+            normalized[idx] = nan
+    return normalized
+
+
+def _shadow_plan_from_candidate(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(candidate, Mapping) or not candidate:
+        return None
+    seed = dict(candidate.get("execution_plan_seed") or {})
+    start_date = _date_text(candidate.get("trade_date")) or _date_text(seed.get("trade_date"))
+    if start_date is None:
+        return None
+    return {
+        "information_date": start_date,
+        "limit_price": seed.get("limit_price", candidate.get("limit_price")),
+        "stop_price": seed.get("init_sl"),
+        "tp_price": seed.get("target_price"),
+        "entry_price": seed.get("shadow_entry_price", seed.get("entry_ref_price")),
+        "planned_qty": candidate.get("proj_qty"),
+        "reserved_capital": candidate.get("proj_cost"),
+        "signal_date": _date_text(candidate.get("signal_date")) or start_date,
+        "entry_type": str(seed.get("entry_type") or seed.get("entry_source") or candidate.get("kind") or "normal"),
+        "source": "scanner_candidate",
+    }
+
+
+def _shadow_plan_from_order(order: Mapping[str, Any], *, last_date: str | None) -> dict[str, Any] | None:
+    if not isinstance(order, Mapping):
+        return None
+    start_date = _date_text(order.get("information_date")) or _date_text(order.get("ordered_at"))
+    if start_date is None:
+        return None
+    fills = [dict(row) for row in list(order.get("fills") or []) if isinstance(row, Mapping)]
+    fill_dates = sorted(filter(None, (_date_text(row.get("trade_date")) for row in fills)))
+    first_fill_date = fill_dates[0] if fill_dates else None
+    cancel_date = _order_cancel_date(order)
+    # Shadow geometry is valid through the last pre-fill day.  If no fill has
+    # occurred, keep it through cancellation or the latest chart date.
+    end_before_date = first_fill_date
+    end_date = None if first_fill_date is not None else (cancel_date or last_date)
+
+    def _order_price(field: str):
+        raw = order.get(field)
+        if raw is None:
+            return None
+        try:
+            return milli_to_price(int(raw))
+        except (TypeError, ValueError):
+            return None
+
+    reserved_raw = order.get("reserved_cost_milli")
+    return {
+        # information_date is the completed-bar decision date.  The order can
+        # first be acted on only afterward, matching Research's T+1 entry seam.
+        "start_after_date": start_date,
+        "end_date": end_date,
+        "end_before_date": end_before_date,
+        "limit_price": _order_price("limit_price_milli"),
+        "stop_price": _order_price("init_sl_milli"),
+        "tp_price": _order_price("target_price_milli"),
+        "entry_price": None,
+        "planned_qty": int(order.get("qty") or 0) or None,
+        "reserved_capital": None if reserved_raw is None else milli_to_money(int(reserved_raw)),
+        "signal_date": _date_text(order.get("signal_date")) or start_date,
+        "entry_type": str(order.get("entry_type") or order.get("kind") or "normal"),
+        "source": "broker_entry_order",
+    }
+
+
+def _shadow_plan_from_strategy_buy_event(
+    event: Mapping[str, Any],
+    *,
+    order_by_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    if str(event.get("mutation_type") or "") != TRADE_MUTATION_STRATEGY_BUY:
+        return None
+    details = dict(event.get("details") or {})
+    entry_date = _date_text(details.get("trade_date"))
+    if entry_date is None:
+        return None
+    lineage = details.get("strategy_lineage")
+    if not isinstance(lineage, Mapping):
+        position_after = details.get("position_after") or {}
+        lineage = position_after.get("strategy_lineage") if isinstance(position_after, Mapping) else None
+    lineage = dict(lineage or {})
+    seed = dict(lineage.get("execution_plan_seed") or {})
+    if not seed:
+        return None
+    order_id = str(details.get("entry_order_id") or "")
+    matching_order = order_by_id.get(order_id) if order_id else None
+    start_date = (
+        _date_text(lineage.get("candidate_trade_date"))
+        or _date_text(seed.get("trade_date"))
+        or (_order_start_date(matching_order) if isinstance(matching_order, Mapping) else None)
+        or entry_date
+    )
+    planned_qty = lineage.get("planned_qty")
+    reserved_capital = lineage.get("planned_cost")
+    if isinstance(matching_order, Mapping):
+        if planned_qty is None:
+            planned_qty = int(matching_order.get("qty") or 0) or None
+        if reserved_capital is None and matching_order.get("reserved_cost_milli") is not None:
+            reserved_capital = milli_to_money(int(matching_order.get("reserved_cost_milli") or 0))
+    return {
+        # execution_plan_seed.trade_date is the completed-bar/candidate date;
+        # historical shadow geometry starts on the following market bar.
+        "start_after_date": start_date,
+        "end_date": None,
+        "end_before_date": entry_date,
+        "limit_price": seed.get("limit_price"),
+        "stop_price": seed.get("init_sl"),
+        "tp_price": seed.get("target_price"),
+        "entry_price": seed.get("shadow_entry_price", seed.get("entry_ref_price")),
+        "planned_qty": planned_qty,
+        "reserved_capital": reserved_capital,
+        "signal_date": _date_text(lineage.get("signal_date")) or start_date,
+        "entry_type": str(seed.get("entry_type") or seed.get("entry_source") or "normal"),
+        "source": "position_strategy_lineage",
+    }
+
+
+def _plan_covers_date(plan: Mapping[str, Any], date_text: str) -> bool:
+    start_after_date = _date_text(plan.get("start_after_date"))
+    if start_after_date is not None:
+        if date_text <= start_after_date:
+            return False
+    else:
+        start_date = _date_text(plan.get("start_date"))
+        if start_date is None or date_text < start_date:
+            return False
+    end_before = _date_text(plan.get("end_before_date"))
+    if end_before is not None and date_text >= end_before:
+        return False
+    end_date = _date_text(plan.get("end_date"))
+    return end_date is None or date_text <= end_date
+
+
+def _account_cycle_ranges(inspection: Mapping[str, Any], *, last_date: str | None) -> list[tuple[str, str]]:
+    ticker = str(inspection.get("ticker") or "")
+    qty = 0
+    cycle_start = None
+    ranges: list[tuple[str, str]] = []
+    for event in list(inspection.get("account_events") or []):
+        mutation = str(event.get("mutation_type") or "")
+        details = dict(event.get("details") or {})
+        if not _ticker_matches(details, ticker):
+            continue
+        event_date = _trade_event_date(event)
+        if event_date is None:
+            continue
+        if mutation in _BUY_MUTATIONS:
+            add_qty = int(details.get("qty") or details.get("fill_qty") or 0)
+            if add_qty <= 0:
+                continue
+            if qty <= 0:
+                cycle_start = event_date
+            qty += add_qty
+            continue
+        if mutation == TRADE_MUTATION_SELL and qty > 0:
+            qty = max(0, qty - int(details.get("qty") or 0))
+            if qty <= 0 and cycle_start is not None:
+                ranges.append((cycle_start, event_date))
+                cycle_start = None
+    if qty > 0 and cycle_start is not None and last_date is not None:
+        ranges.append((cycle_start, last_date))
+
+    # A legacy/current position may predate the retained journal evidence.
+    current = inspection.get("current_position")
+    if isinstance(current, Mapping) and last_date is not None:
+        broker = current.get("broker") or {}
+        entry_date = _date_text(broker.get("entry_date"))
+        if entry_date is not None and not any(start <= entry_date <= end for start, end in ranges):
+            ranges.append((entry_date, last_date))
+    return ranges
+
+
+def _sell_event_position_before(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    if str(event.get("mutation_type") or "") != TRADE_MUTATION_SELL:
+        return None
+    details = event.get("details") or {}
+    before = details.get("position_before") if isinstance(details, Mapping) else None
+    if not isinstance(before, Mapping):
+        return None
+    management = before.get("strategy_management") or {}
+    state = management.get("position_state") if isinstance(management, Mapping) else None
+    return state if isinstance(state, Mapping) else None
+
+
+def _entry_trace_name(entry_type: object) -> str:
+    normalized = str(entry_type or "").strip().lower()
+    if normalized in {"reentry", "re-entry", "重進"}:
+        return "買進(重進)"
+    if normalized in {"extended", "extended_candidate", "延續", "延續候選"}:
+        return "買進(延續候選)"
+    return "買進"
+
+
+def _sell_trace_name(event_name: object) -> str:
+    normalized = str(event_name or "").strip().upper()
+    if normalized == "STOP":
+        return "停損賣出"
+    if normalized == "TP_HALF":
+        return "停利"
+    if normalized == "IND_SELL":
+        return "指標賣出"
+    return "指標賣出"
+
+
+def _canonical_marker(
+    *,
+    trace_name: str,
+    date_text: str,
+    x: int,
+    price: float,
+    qty: int,
+    note: str,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    hover = (
+        f"{trace_name}<br>日期: {date_text}<br>成交: {float(price):.2f}"
+        f"<br>股數: {int(qty):,}"
+    )
+    if note:
+        hover += f"<br>備註: {note}"
+    return {
+        "trace_name": trace_name,
+        "date": date_text,
+        "x": int(x),
+        "price": float(price),
+        "qty": int(qty),
+        "note": str(note or ""),
+        "hover_text": hover,
+        "meta": {"canonical_trading": True, **dict(meta or {})},
+    }
+
+
+def _canonical_account_marker_groups(
+    inspection: Mapping[str, Any],
+    *,
+    date_to_x: Mapping[str, int],
+) -> dict[str, list[dict[str, Any]]]:
+    ticker = str(inspection.get("ticker") or "")
+    buy_buckets: dict[str, dict[str, Any]] = {}
+    groups: dict[str, list[dict[str, Any]]] = {}
+    order_by_id = {
+        str(row.get("order_id") or ""): row
+        for row in list(inspection.get("entry_orders") or [])
+        if isinstance(row, Mapping)
+    }
+
+    for event in list(inspection.get("account_events") or []):
+        mutation = str(event.get("mutation_type") or "")
+        details = dict(event.get("details") or {})
+        if not _ticker_matches(details, ticker):
+            continue
+        date_text = _trade_event_date(event)
+        if date_text is None or date_text not in date_to_x:
+            continue
+        if mutation in _BUY_MUTATIONS:
+            qty = int(details.get("qty") or details.get("fill_qty") or 0)
+            price_milli = details.get("fill_price_milli")
+            if price_milli is None:
+                price_milli = details.get("entry_fill_price_milli")
+            if qty <= 0 or price_milli is None:
+                continue
+            bucket = buy_buckets.setdefault(
+                date_text,
+                {"qty": 0, "weighted_price_milli": 0, "buy_capital_milli": 0, "entry_type": "normal", "order_id": ""},
+            )
+            bucket["qty"] += qty
+            bucket["weighted_price_milli"] += int(price_milli) * qty
+            bucket["buy_capital_milli"] += int(details.get("net_buy_total_milli") or 0)
+            order_id = str(details.get("entry_order_id") or "")
+            if order_id:
+                bucket["order_id"] = order_id
+                order = order_by_id.get(order_id) or {}
+                bucket["entry_type"] = str(order.get("entry_type") or order.get("kind") or bucket["entry_type"])
+            position_after = details.get("position_after")
+            if isinstance(position_after, Mapping):
+                state = ((position_after.get("strategy_management") or {}).get("position_state") or {})
+                if isinstance(state, Mapping):
+                    bucket["entry_type"] = str(state.get("entry_type") or bucket["entry_type"])
+            continue
+
+        if mutation != TRADE_MUTATION_SELL:
+            continue
+        qty = int(details.get("qty") or 0)
+        price_milli = details.get("exec_price_milli")
+        if qty <= 0 or price_milli is None:
+            continue
+        trace_name = _sell_trace_name(details.get("event"))
+        allocated = int(details.get("allocated_cost_milli") or 0)
+        pnl_milli = int(details.get("realized_pnl_milli") or 0)
+        pnl_pct = None if allocated <= 0 else (pnl_milli / allocated) * 100.0
+        marker = _canonical_marker(
+            trace_name=trace_name,
+            date_text=date_text,
+            x=date_to_x[date_text],
+            price=milli_to_price(int(price_milli)),
+            qty=qty,
+            note="Trading 實際賣出成交",
+            meta={
+                "sell_capital": milli_to_money(int(details.get("net_sell_total_milli") or 0)),
+                "pnl_value": milli_to_money(pnl_milli),
+                "pnl_pct": pnl_pct,
+                "result": str(details.get("event") or "實際成交"),
+            },
+        )
+        groups.setdefault(trace_name, []).append(marker)
+
+    for date_text, bucket in buy_buckets.items():
+        qty = int(bucket["qty"])
+        if qty <= 0:
+            continue
+        average_price = milli_to_price((int(bucket["weighted_price_milli"]) + qty // 2) // qty)
+        state = resolve_trading_single_stock_sidebar_state(inspection, date_text) or {}
+        trace_name = _entry_trace_name(bucket.get("entry_type"))
+        marker = _canonical_marker(
+            trace_name=trace_name,
+            date_text=date_text,
+            x=date_to_x[date_text],
+            price=average_price,
+            qty=qty,
+            note="Trading 實際買入成交",
+            meta={
+                "entry_type": bucket.get("entry_type") or "normal",
+                "limit_price": state.get("limit_price"),
+                "entry_price": average_price,
+                "stop_price": state.get("stop_price"),
+                "tp_price": state.get("tp_price"),
+                "buy_capital": milli_to_money(int(bucket.get("buy_capital_milli") or 0)),
+                "order_id": bucket.get("order_id") or "",
+                "result": "實際成交",
+            },
+        )
+        groups.setdefault(trace_name, []).append(marker)
+
+    for markers in groups.values():
+        markers.sort(key=lambda row: (int(row.get("x") or 0), str(row.get("trace_name") or "")))
+    return groups
+
+
+def project_trading_single_stock_chart_payload(
+    chart_payload: Mapping[str, Any] | None,
+    inspection: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Overlay canonical Trading lifecycle on the Research chart without erasing history.
+
+    The Research replay remains the historical strategy/indicator context.  Only
+    dates covered by persisted Trading evidence are masked and replaced: frozen
+    pre-fill plan geometry is rendered as shadow L/S/T, confirmed fills switch to
+    account-position entry/stop/TP, and confirmed broker/account fills replace
+    simulated trade markers.  Dates outside the Trading lifecycle are untouched.
+    """
+    payload = deepcopy(dict(chart_payload or {}))
+    if not payload or not isinstance(inspection, Mapping):
+        return payload
+    date_labels = _chart_date_labels(payload)
+    total = len(date_labels)
+    if total <= 0:
+        return payload
+    last_date = next((value for value in reversed(date_labels) if value is not None), None)
+    date_to_x = {value: idx for idx, value in enumerate(date_labels) if value is not None}
+    nan = float("nan")
+
+    lines = {key: _copy_chart_line(payload, key, total) for key in _TRADING_TRANSACTION_LINE_KEYS}
+    shadow_plans: list[dict[str, Any]] = []
+    candidate_plan = _shadow_plan_from_candidate(dict(inspection.get("candidate") or {}))
+    for order in list(inspection.get("entry_orders") or []):
+        plan = _shadow_plan_from_order(order, last_date=last_date)
+        if plan is not None:
+            shadow_plans.append(plan)
+    order_by_id = {
+        str(row.get("order_id") or ""): row
+        for row in list(inspection.get("entry_orders") or [])
+        if isinstance(row, Mapping)
+    }
+    for event in list(inspection.get("account_events") or []):
+        plan = _shadow_plan_from_strategy_buy_event(event, order_by_id=order_by_id)
+        if plan is not None:
+            shadow_plans.append(plan)
+
+    # ENTRY order terminal dates and confirmed sell dates must also suppress the
+    # simulated marker for that exact bar even when no position remains afterward.
+    point_dates: set[str] = set()
+    if candidate_plan is not None:
+        candidate_date = _date_text(candidate_plan.get("information_date"))
+        if candidate_date is not None:
+            point_dates.add(candidate_date)
+    for plan in shadow_plans:
+        decision_date = _date_text(plan.get("start_after_date"))
+        if decision_date is not None:
+            # The completed-bar decision date itself must not retain a simulated
+            # Research fill/position line, but the canonical shadow line begins
+            # only on the following actionable market bar.
+            point_dates.add(decision_date)
+    for order in list(inspection.get("entry_orders") or []):
+        cancel_date = _order_cancel_date(order)
+        if cancel_date is not None:
+            point_dates.add(cancel_date)
+        for fill in list(order.get("fills") or []):
+            fill_date = _date_text((fill or {}).get("trade_date")) if isinstance(fill, Mapping) else None
+            if fill_date is not None:
+                point_dates.add(fill_date)
+    for event in list(inspection.get("account_events") or []):
+        event_date = _trade_event_date(event)
+        if event_date is not None:
+            point_dates.add(event_date)
+
+    account_ranges = _account_cycle_ranges(inspection, last_date=last_date)
+    covered_indexes: set[int] = set()
+    for idx, date_text in enumerate(date_labels):
+        if date_text is None:
+            continue
+        if date_text in point_dates:
+            covered_indexes.add(idx)
+            continue
+        if any(_plan_covers_date(plan, date_text) for plan in shadow_plans):
+            covered_indexes.add(idx)
+            continue
+        if any(start <= date_text <= end for start, end in account_ranges):
+            covered_indexes.add(idx)
+
+    # Mask only the Trading-covered bars.  Older Research backtest transactions
+    # remain intact, which avoids the previous regression where the whole chart
+    # was replaced by today's snapshot.
+    for key in _TRADING_TRANSACTION_LINE_KEYS:
+        for idx in covered_indexes:
+            lines[key][idx] = nan
+
+    for plan in shadow_plans:
+        for idx, date_text in enumerate(date_labels):
+            if date_text is None or not _plan_covers_date(plan, date_text):
+                continue
+            for field, key in (
+                ("stop_price", "shadow_stop_line"),
+                ("tp_price", "shadow_tp_line"),
+                ("limit_price", "shadow_limit_line"),
+                ("entry_price", "shadow_entry_line"),
+            ):
+                value = plan.get(field)
+                if value is not None:
+                    try:
+                        lines[key][idx] = float(value)
+                    except (TypeError, ValueError):
+                        pass
+
+    # Confirmed account state has priority from the actual fill date onward.
+    for idx, date_text in enumerate(date_labels):
+        if date_text is None:
+            continue
+        position_state = _account_cycle_as_of(inspection, date_text)
+        if not isinstance(position_state, Mapping):
+            continue
+        for field, key in (
+            ("stop_price", "stop_line"),
+            ("tp_price", "tp_line"),
+            ("entry_price", "entry_line"),
+        ):
+            value = position_state.get(field)
+            if value is not None:
+                try:
+                    lines[key][idx] = float(value)
+                except (TypeError, ValueError):
+                    pass
+
+    # On a full-exit day _account_cycle_as_of() correctly returns no open
+    # position.  Persisted position_before is nevertheless valid pre-fill
+    # evidence for drawing that day's actual stop/TP/entry geometry.
+    for event in list(inspection.get("account_events") or []):
+        event_date = _trade_event_date(event)
+        if event_date is None or event_date not in date_to_x:
+            continue
+        state = _sell_event_position_before(event)
+        if not isinstance(state, Mapping):
+            continue
+        idx = date_to_x[event_date]
+        values = {
+            "entry_line": state.get("entry_fill_price"),
+            "stop_line": state.get("sl", state.get("initial_stop")),
+            "tp_line": None if bool(state.get("sold_half", False)) else state.get("tp_half"),
+        }
+        for key, value in values.items():
+            if value is not None:
+                try:
+                    lines[key][idx] = float(value)
+                except (TypeError, ValueError):
+                    pass
+
+    for key, values in lines.items():
+        payload[key] = values
+
+    # A current Scanner candidate is a completed-bar decision for the NEXT
+    # actionable market bar.  Match Research's future-preview seam instead of
+    # drawing one-bar L/S/T stubs on the signal candle itself.  Once later bars
+    # exist, persisted order/lineage evidence above paints them as shadow lines.
+    if candidate_plan is not None and last_date is not None:
+        candidate_date = _date_text(candidate_plan.get("information_date"))
+        if candidate_date == last_date:
+            payload["future_preview"] = {
+                "limit_price": candidate_plan.get("limit_price"),
+                "stop_price": candidate_plan.get("stop_price"),
+                "tp_half_price": candidate_plan.get("tp_price"),
+                "entry_price": candidate_plan.get("entry_price"),
+            }
+
+    # Remove replay trade/order markers only inside Trading-owned lifecycle bars.
+    marker_groups = {}
+    for trace_name, markers in dict(payload.get("marker_groups") or {}).items():
+        kept = []
+        for marker in list(markers or []):
+            marker_x = marker.get("x") if isinstance(marker, Mapping) else None
+            is_replay_transaction = str(trace_name) in _TRADING_REPLAY_TRANSACTION_TRACES
+            if is_replay_transaction and marker_x is not None and int(marker_x) in covered_indexes:
+                continue
+            kept.append(deepcopy(dict(marker)))
+        if kept:
+            marker_groups[str(trace_name)] = kept
+    canonical_groups = _canonical_account_marker_groups(inspection, date_to_x=date_to_x)
+    for trace_name, markers in canonical_groups.items():
+        marker_groups.setdefault(trace_name, []).extend(markers)
+        marker_groups[trace_name].sort(key=lambda row: int(row.get("x") or 0))
+    payload["marker_groups"] = marker_groups
+
+    # Keep Research signal dates/anchors untouched, but hide replay sizing in
+    # Trading mode.  A signal is strategy context, not broker/account truth; its
+    # simulated Research qty (for example 885) must not look like a live planned
+    # or filled quantity.  Canonical plan/fill quantities remain visible on the
+    # Trading sidebar and actual account markers.
+    signal_annotations = []
+    for raw in list(payload.get("signal_annotations") or []):
+        item = deepcopy(dict(raw))
+        if str(item.get("signal_type") or "").lower() in {"buy", "sell"}:
+            meta = dict(item.get("meta") or {})
+            meta.pop("qty", None)
+            item["meta"] = meta
+            item["detail_text"] = ""
+        signal_annotations.append(item)
+    payload["signal_annotations"] = signal_annotations
+
+    if (total - 1) in covered_indexes and not (
+        candidate_plan is not None
+        and _date_text(candidate_plan.get("information_date")) == last_date
+    ):
+        payload["future_preview"] = {}
+    payload["trading_overlay_source"] = "canonical_lifecycle_overlay"
+    payload["trading_overlay_covered_indexes"] = sorted(covered_indexes)
+    return payload
+
+
 __all__ = [
     "build_trading_single_stock_inspection",
     "load_trading_single_stock_position_binding",
+    "project_trading_single_stock_chart_payload",
     "resolve_trading_single_stock_sidebar_state",
 ]

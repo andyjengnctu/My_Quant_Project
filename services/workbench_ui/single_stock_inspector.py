@@ -67,6 +67,7 @@ from services.trading.account_state import get_trading_account_read_model
 from services.trading.single_stock_inspection import (
     build_trading_single_stock_inspection,
     load_trading_single_stock_position_binding,
+    project_trading_single_stock_chart_payload,
     resolve_trading_single_stock_sidebar_state,
 )
 from services.trading.market_data_consumer import (
@@ -2264,6 +2265,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         chart_payload["summary_box"] = []
         chart_payload["status_box"] = {}
         if self._runtime_domain_key() == "trading":
+            chart_payload = project_trading_single_stock_chart_payload(
+                chart_payload,
+                result.get("trading_inspection"),
+            )
             # Formal backtest statistics still include data-end forced closeout.
             # Trading visualization must not present that accounting-only closeout
             # as a real SELL signal on the latest market date.
@@ -2303,6 +2308,23 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if chart_payload is None and self._chart_figure is not None:
             state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
             chart_payload = state.get("chart_payload") if isinstance(state, dict) else None
+        if self._runtime_domain_key() == "trading":
+            canonical_indexes = []
+            marker_groups = dict((chart_payload or {}).get("marker_groups") or {})
+            for trace_name in BUY_TRADE_TRACE_NAMES:
+                for marker in list(marker_groups.get(trace_name) or []):
+                    if not isinstance(marker, dict):
+                        continue
+                    meta = marker.get("meta") or {}
+                    if not isinstance(meta, dict) or not bool(meta.get("canonical_trading")):
+                        continue
+                    try:
+                        canonical_indexes.append(int(marker.get("x")))
+                    except (TypeError, ValueError):
+                        continue
+            canonical_indexes = sorted(set(canonical_indexes))
+            if canonical_indexes:
+                return canonical_indexes
         indexes = extract_buy_signal_annotation_indexes(chart_payload)
         if not indexes:
             indexes = extract_trade_marker_indexes(chart_payload, trace_names=BUY_TRADE_TRACE_NAMES)
@@ -2356,11 +2378,12 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 backend_error_text = f"{backend_error_text} {FIGURE_CANVAS_TKAGG_IMPORT_ERROR}"
             self._status_var.set(backend_error_text)
             return backend_error_text
-        trade_indexes = self._resolve_chart_navigation_indexes(chart_payload)
+        gui_chart_payload = self._build_gui_chart_payload(result)
+        trade_indexes = self._resolve_chart_navigation_indexes(gui_chart_payload)
         self._current_chart_trade_indexes = trade_indexes
         self._current_chart_trade_cursor_index = None
         payload_bar_count = 0
-        payload_dates = chart_payload.get("date_labels") if isinstance(chart_payload, dict) else None
+        payload_dates = gui_chart_payload.get("date_labels") if isinstance(gui_chart_payload, dict) else None
         if payload_dates is not None:
             try:
                 payload_bar_count = len(payload_dates)
@@ -2371,7 +2394,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         )
         try:
             figure = create_matplotlib_trade_chart_figure(
-                chart_payload=self._build_gui_chart_payload(result),
+                chart_payload=gui_chart_payload,
                 ticker=ticker,
                 show_volume=bool(self._show_volume_var.get()),
                 show_price_ma=bool(self._show_price_ma_var.get()),
