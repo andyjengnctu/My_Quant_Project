@@ -68,7 +68,6 @@ from services.trading.single_stock_inspection import (
     build_trading_single_stock_inspection,
     load_trading_single_stock_position_binding,
     project_trading_single_stock_chart_payload,
-    resolve_trading_single_stock_sidebar_state,
 )
 from services.trading.market_data_consumer import (
     TRADING_V2_CONSUMER_STATE_RELATIVE_PATH,
@@ -2183,41 +2182,46 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         return values[idx]
 
     def _update_selected_value_sidebar(self, snapshot):
-        # Research owns dates outside persisted Trading evidence.  On Trading-owned
-        # dates the same lifecycle resolver drives both sidebar and chart overlay:
-        # SIGNAL -> SHADOW -> POSITION.  Backend evidence labels such as SCANNER,
-        # ORDERED, PARTIAL or FILLED are never exposed as separate user states.
+        # K-line/OHLC fields remain shared with Research.  In Trading mode the
+        # transaction fields below consume the exact lifecycle state embedded in
+        # the projected chart payload; there is no second date resolver.
         super()._update_selected_value_sidebar(snapshot)
         if self._runtime_domain_key() != "trading" or not snapshot:
             return
-        inspection = dict((self._result or {}).get("trading_inspection") or {})
-        canonical = resolve_trading_single_stock_sidebar_state(
-            inspection, snapshot.get("date_label")
-        )
-        if canonical is None:
-            # No persisted Trading lifecycle owns this historical date.  Keep the
-            # Research replay values already rendered by the shared sidebar.
+
+        canonical = snapshot.get("trading_lifecycle_state")
+        if not isinstance(canonical, dict):
+            # Trading mode never falls back to simulated Research transaction
+            # values.  Strategy signals remain on the chart, but absent persisted
+            # execution evidence means there is simply no Trading transaction.
+            self._selected_tp_var.set("停利線: -")
+            self._selected_limit_var.set("限價: -")
+            self._selected_entry_var.set("成交: -")
+            self._selected_stop_var.set("停損: -")
+            self._selected_capital_var.set("Trading狀態: 無交易\n預留: -\n實支: -")
             return
 
+        lifecycle_state = str(canonical.get("state") or "")
         self._selected_tp_var.set(
             self._format_sidebar_line_value("停利線", canonical.get("tp_price"))
         )
         self._selected_limit_var.set(
             self._format_sidebar_line_value("限價", canonical.get("limit_price"))
         )
-        lifecycle_state = str(canonical.get("state") or "")
-        entry_label = "Shadow買進" if lifecycle_state in {"SIGNAL", "SHADOW"} else "成交"
+        entry_label = "Shadow價" if lifecycle_state in {"SIGNAL", "SHADOW"} else "成交"
         self._selected_entry_var.set(
             self._format_sidebar_line_value(entry_label, canonical.get("entry_price"))
         )
-        # User-facing risk has one canonical value: the current effective stop.
+        # User-facing risk has one value only: the effective stop for this bar.
         self._selected_stop_var.set(
             self._format_sidebar_line_value("停損", canonical.get("stop_price"))
         )
 
         display_state = str(canonical.get("display_state") or "").strip()
         if not display_state:
-            display_state = {"SIGNAL": "買訊", "SHADOW": "SHADOW", "POSITION": "持股"}.get(lifecycle_state, lifecycle_state or "-")
+            display_state = {"SIGNAL": "買訊", "SHADOW": "Shadow", "POSITION": "持股"}.get(
+                lifecycle_state, "無交易"
+            )
         trading_status = f"Trading狀態: {display_state}"
         if canonical.get("sell_signal"):
             trading_status += f"｜SELL訊號: {canonical.get('sell_signal')}"
@@ -2227,9 +2231,13 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
         reserved = canonical.get("reserved_capital")
         actual = canonical.get("buy_capital")
-        if reserved is not None:
+        if lifecycle_state in {"SIGNAL", "SHADOW"}:
             capital_lines.append(self._format_sidebar_amount_value("預留", reserved))
-        if actual is not None:
+        elif reserved is not None:
+            # PARTIAL or fill-day plan-vs-actual inspection may legitimately show
+            # both reservation and actual spend, but POSITION remains one state.
+            capital_lines.append(self._format_sidebar_amount_value("預留", reserved))
+        if lifecycle_state == "POSITION":
             capital_lines.append(self._format_sidebar_amount_value("實支", actual))
 
         planned_qty = canonical.get("planned_qty")
@@ -2245,8 +2253,6 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if lifecycle_state == "POSITION" and remaining_order_qty not in (None, 0):
             capital_lines.append(self._format_sidebar_qty_value("未成交股數", remaining_order_qty))
 
-        if reserved is None and actual is None:
-            capital_lines.append("預留: -")
         self._selected_capital_var.set("\n".join(capital_lines))
 
     def _update_sidebar_from_result(self, result):
@@ -2257,11 +2263,12 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)
         self._sidebar_summary_var.set("\n".join(str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()) or "-")
         self._apply_sidebar_chip_styles(signal_active, history_active)
-        dates = chart_payload.get("date_labels") or []
+        display_payload = self._build_gui_chart_payload(result) if self._runtime_domain_key() == "trading" else chart_payload
+        dates = display_payload.get("date_labels") or []
         if dates:
-            idx = int((chart_payload.get("default_view") or {}).get("end_idx", len(dates) - 1))
+            idx = int((display_payload.get("default_view") or {}).get("end_idx", len(dates) - 1))
             idx = max(0, min(idx, len(dates) - 1))
-            snapshot = build_chart_hover_snapshot(chart_payload, idx)
+            snapshot = build_chart_hover_snapshot(display_payload, idx)
             self._update_selected_value_sidebar(snapshot)
         else:
             self._update_selected_value_sidebar(None)

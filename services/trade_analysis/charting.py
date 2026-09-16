@@ -6,6 +6,12 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from services.trade_analysis.lifecycle_contract import (
+    TRADE_LIFECYCLE_POSITION,
+    TRADE_LIFECYCLE_SHADOW,
+    iter_trade_lifecycle_line_values,
+)
+
 
 CHART_SIGNAL_BOX_ALPHA = 0.44
 CHART_RIGHT_PADDING_BARS = 8
@@ -373,28 +379,53 @@ def resolve_position_tp_half_line(position, *, fallback_qty=None, fallback_tp_ha
     return value
 
 
-def record_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan, limit_price=np.nan, entry_price=np.nan):
+def _record_trade_lifecycle_levels(
+    chart_context,
+    *,
+    current_date,
+    lifecycle_state,
+    stop_price=np.nan,
+    tp_half_price=np.nan,
+    limit_price=np.nan,
+    entry_price=np.nan,
+):
     if chart_context is None:
         return
     pos = _resolve_optional_chart_pos(chart_context, current_date)
     if pos is None:
         return
-    _set_optional_chart_line_value(chart_context, "stop_line", pos, stop_price)
-    _set_optional_chart_line_value(chart_context, "tp_line", pos, tp_half_price)
-    _set_optional_chart_line_value(chart_context, "limit_line", pos, limit_price)
-    _set_optional_chart_line_value(chart_context, "entry_line", pos, entry_price)
+    for key, value in iter_trade_lifecycle_line_values(
+        lifecycle_state,
+        stop_price=stop_price,
+        tp_price=tp_half_price,
+        limit_price=limit_price,
+        entry_price=entry_price,
+    ):
+        _set_optional_chart_line_value(chart_context, key, pos, value)
+
+
+def record_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan, limit_price=np.nan, entry_price=np.nan):
+    _record_trade_lifecycle_levels(
+        chart_context,
+        current_date=current_date,
+        lifecycle_state=TRADE_LIFECYCLE_POSITION,
+        stop_price=stop_price,
+        tp_half_price=tp_half_price,
+        limit_price=limit_price,
+        entry_price=entry_price,
+    )
 
 
 def record_shadow_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan, limit_price=np.nan, entry_price=np.nan):
-    if chart_context is None:
-        return
-    pos = _resolve_optional_chart_pos(chart_context, current_date)
-    if pos is None:
-        return
-    _set_optional_chart_line_value(chart_context, "shadow_stop_line", pos, stop_price)
-    _set_optional_chart_line_value(chart_context, "shadow_tp_line", pos, tp_half_price)
-    _set_optional_chart_line_value(chart_context, "shadow_limit_line", pos, limit_price)
-    _set_optional_chart_line_value(chart_context, "shadow_entry_line", pos, entry_price)
+    _record_trade_lifecycle_levels(
+        chart_context,
+        current_date=current_date,
+        lifecycle_state=TRADE_LIFECYCLE_SHADOW,
+        stop_price=stop_price,
+        tp_half_price=tp_half_price,
+        limit_price=limit_price,
+        entry_price=entry_price,
+    )
 
 
 def _format_order_entry_type_label(entry_type):
@@ -1081,6 +1112,14 @@ def build_chart_hover_snapshot(chart_payload, index):
     buy_qty = None if buy_trade_marker is None else int(buy_trade_marker.get("qty", 0) or 0)
     if buy_qty is None and active_buy_trade_marker is not None:
         buy_qty = int(active_buy_trade_marker.get("qty", 0) or 0)
+    lifecycle_map = dict(chart_payload.get("trading_lifecycle_by_index") or {})
+    lifecycle_state = lifecycle_map.get(idx)
+    if lifecycle_state is None:
+        lifecycle_state = lifecycle_map.get(str(idx))
+    if isinstance(lifecycle_state, dict):
+        lifecycle_state = dict(lifecycle_state)
+    else:
+        lifecycle_state = None
     return {
         "index": idx,
         "date_label": chart_payload["date_labels"][idx],
@@ -1096,6 +1135,7 @@ def build_chart_hover_snapshot(chart_payload, index):
         "reserved_capital": reserved_capital,
         "buy_capital": buy_capital,
         "buy_qty": buy_qty,
+        "trading_lifecycle_state": lifecycle_state,
         **line_values,
     }
 

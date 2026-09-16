@@ -158,6 +158,15 @@ def build_trading_candidate_strategy_lineage(candidate: Mapping[str, Any]) -> di
         "frozen_params": frozen_params,
         "frozen_params_sha256": frozen_params_sha256,
         "execution_plan_seed": seed,
+        # Preserve the pre-fill lifecycle evidence on the position itself.  The
+        # account journal is the durable source after the Scanner snapshot has
+        # moved on, so historical Trading inspection must not depend on today's
+        # candidate pool to reconstruct SIGNAL -> SHADOW -> POSITION.
+        "candidate_trade_date": str(candidate.get("trade_date") or seed.get("trade_date") or "") or None,
+        "signal_date": str(candidate.get("signal_date") or candidate.get("trade_date") or seed.get("trade_date") or "") or None,
+        "planned_qty": candidate.get("proj_qty"),
+        "planned_cost": candidate.get("proj_cost"),
+        "candidate_kind": str(candidate.get("kind") or seed.get("entry_source") or "normal"),
         "origin": "scanner_candidate",
     }
 

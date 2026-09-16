@@ -761,15 +761,26 @@ def validate_trading_account_state_contract_case(base_params):
         params_payload = params_to_json_dict(base_params)
         candidate = {
             "ticker": "2317",
+            "trade_date": "2026-09-03",
+            "signal_date": "2026-09-03",
+            "kind": "buy",
+            "proj_qty": 120,
+            "proj_cost": 12_345.0,
             "ensemble_member_key": "1",
             "params_signature": build_portfolio_params_signature(base_params),
             "ensemble_member_params_by_key": {"1": params_payload},
             "execution_plan_seed": {
                 "init_sl": 90, "init_trail": 92, "target_price": 120,
                 "limit_price": 100, "entry_atr": 5, "entry_type": "normal",
+                "trade_date": "2026-09-03",
             },
         }
         lineage = build_trading_candidate_strategy_lineage(candidate)
+        check(
+            "scanner_strategy_lineage_persists_prefill_lifecycle_evidence",
+            ["2026-09-03", "2026-09-03", 120, 12_345.0],
+            [lineage.get("candidate_trade_date"), lineage.get("signal_date"), lineage.get("planned_qty"), lineage.get("planned_cost")],
+        )
         lineage_state = record_strategy_trading_buy(
             lineage_root, ticker="2317", qty=100, price=100, trade_date="2026-09-04",
             expected_revision=None, params=base_params,
@@ -3320,7 +3331,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_analysis_cache_is_keyed_by_consumer_and_params_identity", True, 'cache_key = (context_key, str(ticker).strip().upper(), params_signature)' in inspector_source)
     check("workbench_single_stock_analysis_switch_emits_phase_timing_for_regression", True, "[single_stock_perf]" in inspector_source and "analysis_cache=" in inspector_source and "render=" in inspector_source)
     check("workbench_single_stock_trading_analysis_uses_finalized_consumer_view", True, "open_trading_v2_consumer_view(" in inspector_source and "TradingMarketDataV2View.open(WORKBENCH_PROJECT_ROOT)" not in inspector_source)
-    check("workbench_single_stock_trading_sidebar_reads_canonical_transaction_projection", True, "resolve_trading_single_stock_sidebar_state" in inspector_source and "build_trading_single_stock_inspection" in inspector_source)
+    check(
+        "workbench_single_stock_trading_sidebar_reads_same_projected_lifecycle_as_chart",
+        True,
+        "trading_lifecycle_state" in inspector_source
+        and "project_trading_single_stock_chart_payload(" in inspector_source
+        and "resolve_trading_single_stock_sidebar_state" not in inspector_source,
+    )
     _trading_sidebar_body = inspector_source.split("def _update_selected_value_sidebar(self, snapshot):", 1)[1].split("def _update_sidebar_from_result", 1)[0]
     check("workbench_single_stock_trading_sidebar_uses_one_effective_stop_value", True, 'self._format_sidebar_line_value("停損", canonical.get("stop_price"))' in _trading_sidebar_body)
     check("workbench_single_stock_trading_sidebar_marks_prefill_entry_as_shadow_not_fill", True, 'lifecycle_state in {"SIGNAL", "SHADOW"}' in _trading_sidebar_body and 'else "成交"' in _trading_sidebar_body)
@@ -3492,9 +3509,23 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     }
     _projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _overlay_inspection)
     check(
-        "workbench_single_stock_trading_overlay_preserves_research_history_before_live_plan",
-        [70.0, 130.0, 101.0, 101.0],
-        [_projected["stop_line"][0], _projected["tp_line"][0], _projected["limit_line"][0], _projected["entry_line"][0]],
+        "workbench_single_stock_trading_execution_layer_never_mixes_research_simulated_transaction_geometry",
+        True,
+        all(
+            pd.isna(_projected[key][0])
+            for key in (
+                "stop_line", "tp_line", "limit_line", "entry_line",
+                "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line",
+            )
+        ),
+    )
+    check(
+        "workbench_single_stock_trading_chart_uses_one_signal_shadow_position_timeline",
+        [None, "SIGNAL", "SHADOW", "SHADOW", "POSITION"],
+        [
+            (_projected.get("trading_lifecycle_by_index", {}).get(idx) or {}).get("state")
+            for idx in range(len(_overlay_dates))
+        ],
     )
     check(
         "workbench_single_stock_trading_overlay_keeps_frozen_shadow_plan_until_real_fill",
@@ -3550,6 +3581,14 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         1,
         len(_projected.get("marker_groups", {}).get("買進", [])),
     )
+    check(
+        "workbench_single_stock_trading_buy_icon_requires_canonical_fill_evidence",
+        [True],
+        [
+            bool((marker.get("meta") or {}).get("canonical_trading"))
+            for marker in _projected.get("marker_groups", {}).get("買進", [])
+        ],
+    )
     _direct_event = deepcopy(_overlay_event)
     _direct_event["details"]["entry_order_id"] = None
     _direct_event["details"]["position_after"]["broker"]["entry_order_id"] = None
@@ -3586,6 +3625,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "price": 99.0, "detail_text": "股數: 885", "meta": {"qty": 885},
         }],
         "future_preview": {"limit_price": 999.0},
+        "default_view": {"start_idx": 0, "end_idx": 0},
+        "gui_render_window": {"start_idx": 0, "end_idx": 0},
     }
     _candidate_projected = project_trading_single_stock_chart_payload(_candidate_chart, _inspection_candidate)
     check(
@@ -3602,6 +3643,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             _candidate_projected.get("future_preview"),
             len(_candidate_projected.get("marker_groups", {}).get("買進", [])),
         ],
+    )
+    check(
+        "workbench_single_stock_trading_projection_invalidates_stale_research_view_window",
+        [None, None],
+        [_candidate_projected.get("default_view"), _candidate_projected.get("gui_render_window")],
     )
     _extended_candidate_inspection = deepcopy(_inspection_candidate)
     _extended_candidate_inspection["candidate"] = deepcopy(_inspection_candidate["candidate"])
