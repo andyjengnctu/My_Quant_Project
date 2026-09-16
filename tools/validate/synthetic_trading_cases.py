@@ -323,6 +323,7 @@ def _build_synthetic_candidate_snapshot_payload(root: Path, *, candidate_rows):
             row["ensemble_member_keys"] = [member_key]
             row["ensemble_member_params_by_key"] = {member_key: member["params_obj"]}
             row["param_lineage_source"] = "current_selected_artifact"
+        row.setdefault("signal_date", row.get("trade_date"))
         row["ensemble_member_params_by_key"] = serialize_trading_candidate_member_params(row)
         row.pop("params_obj", None)
         row.pop("_ensemble_context", None)
@@ -1010,6 +1011,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
                 "proj_cost": 100000,
                 "text": "synthetic candidate",
                 "trade_date": "2026-09-04",
+                "signal_date": "2026-09-04",
                 "execution_plan_seed": {"ticker": "2330", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0, "target_price": 106.0, "entry_atr": 2.0, "trade_date": "2026-09-04"},
             }],
             "scanner_issue_log_path": None,
@@ -1236,6 +1238,7 @@ def validate_trading_actionable_universe_scanner_membership_contract_case(base_p
                 "proj_cost": 100000,
                 "text": "membership candidate",
                 "trade_date": "2026-09-04",
+                "signal_date": "2026-09-04",
                 "execution_plan_seed": {
                     "ticker": "2330", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0,
                     "target_price": 106.0, "entry_atr": 2.0, "trade_date": "2026-09-04",
@@ -1376,6 +1379,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
             {
                 "ticker": "2454",
                 "trade_date": "2026-09-04",
+                "signal_date": "2026-09-02",
                 "kind": "buy",
                 "sort_value": 2.0,
                 "expected_value": 0.4,
@@ -1411,6 +1415,8 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
         check("proposed_plan_writes_human_readable_output", True, (root / "outputs" / "trading" / "proposed_orders" / "proposed_orders.txt").is_file())
         check("proposed_plan_carries_account_revision", starting_revision, plan.get("account_revision"))
         check("proposed_plan_carries_candidate_snapshot_identity", compute_file_sha256(candidate_snapshot_path), plan.get("candidate_snapshot_sha256"))
+        proposed_2454 = next((row for row in plan.get("orders") or [] if row.get("ticker") == "2454"), None)
+        check("proposed_order_preserves_original_candidate_signal_date", "2026-09-02", None if proposed_2454 is None else proposed_2454.get("signal_date"))
 
         selected_path.write_text(selected_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
         try:
@@ -3167,6 +3173,27 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_scanner_pool_signal_freshness_uses_calendar_day_distance", 3, _candidate_signal_age_days("2026-09-12", "2026-09-15"))
     check("workbench_scanner_pool_signal_freshness_rejects_future_signal_date", None, _candidate_signal_age_days("2026-09-16", "2026-09-15"))
     check("workbench_scanner_pool_signal_date_formats_canonically", "2026-09-12", _candidate_signal_date_text("2026-09-12 00:00:00"))
+    from services.scanner.stock_processor import build_extended_scanner_row_from_plan, build_history_qualified_row_from_stats
+    synthetic_stats = {
+        "is_candidate": True, "expected_value": 0.25, "win_rate": 50.0, "trade_count": 12,
+        "asset_growth": 8.0, "close_last": 100.0, "hasOpenPositionAtEnd": False,
+        "current_position": 0, "is_setup_today": True, "buy_limit": 101.0, "entry_atr": 2.0,
+        "stop_loss": 95.0, "extended_candidate_today": None, "extended_candidate_tbd_today": None,
+    }
+    fresh_row = build_history_qualified_row_from_stats(
+        ticker="2330", stats=synthetic_stats, params=base_params, sanitize_stats={}, trade_date="2026-09-15"
+    )
+    check("scanner_new_signal_row_persists_same_day_signal_date", "2026-09-15", fresh_row.get("signal_date"))
+    extended_plan = {
+        "limit_price": 101.0, "init_sl": 95.0, "init_trail": 96.0, "target_price": 110.0,
+        "entry_atr": 2.0, "orig_limit": 101.0, "orig_atr": 2.0, "max_qty": 1000,
+        "signal_date": "2026-09-12", "entry_source": "extended",
+    }
+    extended_row = build_extended_scanner_row_from_plan(
+        ticker="2330", stats=synthetic_stats, params=base_params, trade_date="2026-09-15",
+        candidate_plan=extended_plan, orderable_today=True, label_prefix="延續", kind_if_orderable="extended",
+    )
+    check("scanner_extended_row_preserves_original_signal_date", "2026-09-12", extended_row.get("signal_date"))
     check("workbench_scanner_pool_market_price_uses_candidate_prev_close", True, '"market_price": row.get("prev_close")' in panel_source)
     check("workbench_scanner_pool_hides_median_sort_evidence_column", False, any(row.get("key") == "ensemble_median_sort_value" for row in ensemble_metrics))
     check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'self._page_scrollbar = ttk.Scrollbar' in accounting_source)
@@ -4664,7 +4691,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             "pool_start_method": "spawn", "scanner_issue_log_path": None,
             "scanned_tickers": ["2330"],
             "candidate_rows": [{
-                "ticker": "2330", "trade_date": "2026-09-04", "kind": "buy", "sort_value": 1.0,
+                "ticker": "2330", "trade_date": "2026-09-04", "signal_date": "2026-09-04", "kind": "buy", "sort_value": 1.0,
                 "expected_value": 0.2,
                 "execution_plan_seed": {
                     "ticker": "2330", "trade_date": "2026-09-04", "limit_price": 102.0,

@@ -26,7 +26,19 @@ from services.trading.strategy_param_state import (
 )
 
 
-TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 8
+TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION = 9
+
+
+def _require_candidate_signal_date(row: dict[str, Any], *, trade_date: str) -> str:
+    signal_date = normalize_trading_date(
+        row.get("signal_date"), field_name="candidate.signal_date", allow_none=False
+    )
+    if signal_date > trade_date:
+        raise ValueError(
+            f"Trading candidate signal_date 晚於 trade_date: "
+            f"{row.get('ticker') or '-'} {signal_date}/{trade_date}"
+        )
+    return signal_date
 
 
 def partition_trading_candidate_rows_for_information_date(
@@ -34,12 +46,13 @@ def partition_trading_candidate_rows_for_information_date(
     *,
     information_date: object,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Keep only actionable rows whose own signal bar is the information date.
+    """Keep only actionable rows whose candidate information date is current.
 
     The dataset-wide latest date is not sufficient proof that every ticker was
-    updated to that date (suspension/provider lag are both possible).  Trading
+    updated to that date (suspension/provider lag are both possible). Trading
     may therefore persist an old per-ticker scanner row for diagnostics, but it
-    must never turn that old signal into today's proposed order.
+    must never turn that old candidate into today's proposed order. The original
+    buy-signal date is separate evidence and may legitimately precede trade_date.
     """
 
     expected_date = normalize_trading_date(information_date, field_name="information_date", allow_none=False)
@@ -51,6 +64,7 @@ def partition_trading_candidate_rows_for_information_date(
         row = dict(raw)
         ticker = normalize_trading_ticker(row.get("ticker"))
         row_date = normalize_trading_date(row.get("trade_date"), field_name="trade_date", allow_none=False)
+        _require_candidate_signal_date(row, trade_date=row_date)
         seed = row.get("execution_plan_seed")
         if not isinstance(seed, dict):
             raise ValueError(f"Trading Scanner candidate 缺少 canonical execution_plan_seed: {ticker}")
@@ -362,6 +376,8 @@ def _validate_trading_candidate_snapshot_payload(payload: dict[str, Any]) -> Non
             raise ValueError("Trading candidate 缺少 agreeing-voter immutable Params lineage")
         if not str(row.get("params_signature") or "").strip() or not str(row.get("ensemble_member_key") or "").strip():
             raise ValueError("Trading candidate 缺少 representative Params identity")
+        trade_date = normalize_trading_date(row.get("trade_date"), field_name="candidate.trade_date", allow_none=False)
+        _require_candidate_signal_date(row, trade_date=trade_date)
         lineage_source = str(row.get("param_lineage_source") or "current_selected_artifact")
         if lineage_source not in {"current_selected_artifact", "entry_order_frozen_ensemble"}:
             raise ValueError("Trading candidate param_lineage_source 不合法")

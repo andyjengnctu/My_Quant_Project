@@ -69,7 +69,7 @@ def _normalize_execution_plan_seed(candidate_plan, *, ticker, trade_date):
     return seed
 
 
-def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, prev_close=None, limit_price=None, execution_plan_seed=None, trade_date=None, proj_qty=None):
+def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, prev_close=None, limit_price=None, execution_plan_seed=None, trade_date=None, signal_date=None, proj_qty=None):
     sort_value = _calc_sort_value(
         expected_value=expected_value,
         proj_cost=proj_cost,
@@ -102,6 +102,7 @@ def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_coun
         'trade_count': trade_count,
         'asset_growth': asset_growth_pct,
         'trade_date': _normalize_scanner_trade_date(trade_date),
+        'signal_date': _normalize_scanner_trade_date(signal_date),
         'execution_plan_seed': execution_plan_seed,
     }
 
@@ -166,6 +167,7 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
         limit_price=limit_price,
         execution_plan_seed=_normalize_execution_plan_seed(candidate_plan, ticker=ticker, trade_date=trade_date),
         trade_date=trade_date,
+        signal_date=(candidate_plan or {}).get('signal_date'),
     )
 
 
@@ -274,6 +276,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             limit_price=stats['buy_limit'],
             execution_plan_seed=_normalize_execution_plan_seed(normal_candidate_plan, ticker=ticker, trade_date=trade_date),
             trade_date=trade_date,
+            signal_date=trade_date,
         )
 
     if extended_candidate is not None:
