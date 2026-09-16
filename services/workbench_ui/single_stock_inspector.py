@@ -2183,10 +2183,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         return values[idx]
 
     def _update_selected_value_sidebar(self, snapshot):
-        # Research keeps the formal backtest hover contract.  Trading first uses
-        # it for OHLCV, then replaces transaction fields with broker/account
-        # truth for the selected date.  Absence of canonical evidence must stay
-        # blank rather than falling back to a simulated next-day fill.
+        # Research owns dates outside persisted Trading evidence.  On Trading-owned
+        # dates the same lifecycle resolver drives both sidebar and chart overlay:
+        # SIGNAL -> SHADOW -> POSITION.  Backend evidence labels such as SCANNER,
+        # ORDERED, PARTIAL or FILLED are never exposed as separate user states.
         super()._update_selected_value_sidebar(snapshot)
         if self._runtime_domain_key() != "trading" or not snapshot:
             return
@@ -2195,11 +2195,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             inspection, snapshot.get("date_label")
         )
         if canonical is None:
-            self._selected_tp_var.set("停利線: -")
-            self._selected_limit_var.set("限價: -")
-            self._selected_entry_var.set("成交: -")
-            self._selected_stop_var.set("停損: -")
-            self._selected_capital_var.set("Trading狀態: 無 canonical 交易狀態")
+            # No persisted Trading lifecycle owns this historical date.  Keep the
+            # Research replay values already rendered by the shared sidebar.
             return
 
         self._selected_tp_var.set(
@@ -2208,37 +2205,46 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._selected_limit_var.set(
             self._format_sidebar_line_value("限價", canonical.get("limit_price"))
         )
+        lifecycle_state = str(canonical.get("state") or "")
+        entry_label = "Shadow買進" if lifecycle_state in {"SIGNAL", "SHADOW"} else "成交"
         self._selected_entry_var.set(
-            self._format_sidebar_line_value("成交", canonical.get("entry_price"))
+            self._format_sidebar_line_value(entry_label, canonical.get("entry_price"))
         )
-        effective_stop = canonical.get("stop_price")
-        stop_text = self._format_sidebar_line_value("停損", effective_stop)
-        if canonical.get("source") == "canonical_account_position":
-            initial_stop = canonical.get("initial_stop_price")
-            trailing_stop = canonical.get("trailing_stop_price")
-            detail = []
-            if initial_stop is not None:
-                detail.append(f"初始 {float(initial_stop):.2f}")
-            if trailing_stop is not None:
-                detail.append(f"Trailing {float(trailing_stop):.2f}")
-            if detail:
-                stop_text = f"{stop_text}｜{' / '.join(detail)}"
-        self._selected_stop_var.set(stop_text)
+        # User-facing risk has one canonical value: the current effective stop.
+        self._selected_stop_var.set(
+            self._format_sidebar_line_value("停損", canonical.get("stop_price"))
+        )
 
-        trading_status = f"Trading狀態: {canonical.get('state') or '-'}"
+        display_state = str(canonical.get("display_state") or "").strip()
+        if not display_state:
+            display_state = {"SIGNAL": "買訊", "SHADOW": "SHADOW", "POSITION": "持股"}.get(lifecycle_state, lifecycle_state or "-")
+        trading_status = f"Trading狀態: {display_state}"
         if canonical.get("sell_signal"):
             trading_status += f"｜SELL訊號: {canonical.get('sell_signal')}"
         if canonical.get("decision_errors"):
             trading_status += "｜SELL狀態: ERROR"
         capital_lines = [trading_status]
+
         reserved = canonical.get("reserved_capital")
-        if canonical.get("state") == "FILLED" and canonical.get("original_reserved_capital") is not None:
-            reserved = canonical.get("original_reserved_capital")
         actual = canonical.get("buy_capital")
         if reserved is not None:
             capital_lines.append(self._format_sidebar_amount_value("預留", reserved))
         if actual is not None:
             capital_lines.append(self._format_sidebar_amount_value("實支", actual))
+
+        planned_qty = canonical.get("planned_qty")
+        buy_qty = canonical.get("buy_qty")
+        held_qty = canonical.get("position_qty") if lifecycle_state == "POSITION" else None
+        remaining_order_qty = canonical.get("remaining_order_qty")
+        if lifecycle_state in {"SIGNAL", "SHADOW"} and planned_qty is not None:
+            capital_lines.append(self._format_sidebar_qty_value("參考股數", planned_qty))
+        if lifecycle_state == "POSITION" and buy_qty is not None:
+            capital_lines.append(self._format_sidebar_qty_value("成交股數", buy_qty))
+        if lifecycle_state == "POSITION" and held_qty is not None:
+            capital_lines.append(self._format_sidebar_qty_value("持有股數", held_qty))
+        if lifecycle_state == "POSITION" and remaining_order_qty not in (None, 0):
+            capital_lines.append(self._format_sidebar_qty_value("未成交股數", remaining_order_qty))
+
         if reserved is None and actual is None:
             capital_lines.append("預留: -")
         self._selected_capital_var.set("\n".join(capital_lines))

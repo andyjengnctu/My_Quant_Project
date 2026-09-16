@@ -235,6 +235,13 @@ def build_trading_single_stock_inspection(
     }
 
 
+def _entry_lifecycle_state(entry_type: object) -> str:
+    normalized = str(entry_type or "").strip().lower()
+    if normalized in {"extended", "extended_candidate", "extended_tbd", "reentry", "re-entry", "延續", "延續候選", "重進"}:
+        return "SHADOW"
+    return "SIGNAL"
+
+
 def _candidate_state(candidate: Mapping[str, Any], date_text: str) -> dict[str, Any] | None:
     if not candidate:
         return None
@@ -243,11 +250,15 @@ def _candidate_state(candidate: Mapping[str, Any], date_text: str) -> dict[str, 
         return None
     seed = dict(candidate.get("execution_plan_seed") or {})
     limit_price = seed.get("limit_price", candidate.get("limit_price"))
+    entry_type = str(seed.get("entry_source") or candidate.get("kind") or "normal")
+    lifecycle_state = _entry_lifecycle_state(entry_type)
     return {
-        "state": "SCANNER",
+        "state": lifecycle_state,
+        "display_state": "SHADOW" if lifecycle_state == "SHADOW" else "買訊",
         "source": "scanner_candidate",
+        "entry_type": entry_type,
         "limit_price": limit_price,
-        "entry_price": None,
+        "entry_price": seed.get("shadow_entry_price", seed.get("entry_ref_price")),
         "initial_stop_price": seed.get("init_sl"),
         "trailing_stop_price": seed.get("init_trail"),
         "stop_price": seed.get("init_sl"),
@@ -255,7 +266,10 @@ def _candidate_state(candidate: Mapping[str, Any], date_text: str) -> dict[str, 
         "reserved_capital": candidate.get("proj_cost"),
         "buy_capital": None,
         "buy_qty": None,
+        "planned_qty": candidate.get("proj_qty"),
         "remaining_qty": candidate.get("proj_qty"),
+        "position_qty": None,
+        "remaining_order_qty": candidate.get("proj_qty"),
         "sell_signal": False,
     }
 
@@ -363,6 +377,7 @@ def _order_state_as_of(order: Mapping[str, Any], date_text: str) -> dict[str, An
         "state": state,
         "source": "broker_entry_order",
         "order_id": str(order.get("order_id") or ""),
+        "entry_type": str(order.get("entry_type") or order.get("kind") or "normal"),
         "limit_price": milli_to_price(int(order["limit_price_milli"])),
         "entry_price": None if position is None else position.get("entry_fill_price"),
         "initial_stop_price": (
@@ -381,7 +396,10 @@ def _order_state_as_of(order: Mapping[str, Any], date_text: str) -> dict[str, An
         "original_reserved_capital": milli_to_money(int(order.get("reserved_cost_milli") or 0)),
         "buy_capital": None if actual_spend_milli <= 0 else milli_to_money(actual_spend_milli),
         "buy_qty": filled_qty or None,
+        "planned_qty": qty or None,
         "remaining_qty": remaining_qty,
+        "position_qty": filled_qty or None,
+        "remaining_order_qty": remaining_qty,
         "sell_signal": False,
     }
 
@@ -599,6 +617,7 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
 
     return {
         "state": "POSITION",
+        "display_state": "持股",
         "source": "canonical_account_position",
         "entry_date": entry_date,
         "entry_order_id": entry_order_id,
@@ -618,7 +637,10 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         "reserved_capital": None,
         "buy_capital": None if net_buy_milli <= 0 else milli_to_money(net_buy_milli),
         "buy_qty": entry_qty or None,
+        "planned_qty": None,
         "remaining_qty": qty,
+        "position_qty": qty,
+        "remaining_order_qty": 0,
         "last_rollforward_date": last_rollforward_date,
         "strategy_lineage": lineage,
         "sell_signal": _sell_signal_as_of(inspection, date_text),
@@ -630,19 +652,18 @@ def resolve_trading_single_stock_sidebar_state(
     inspection: Mapping[str, Any] | None,
     date_value: object,
 ) -> dict[str, Any] | None:
-    """Resolve Trading transaction fields for one selected market date.
+    """Resolve one user-facing Trading lifecycle state for the selected market date.
 
-    Priority is broker/account truth, then active broker order, then the current
-    Scanner plan.  No state transition is inferred merely because a calendar day
-    followed a buy signal.
+    Scanner/order/fill/account records are evidence sources, not UI states.  The
+    inspector exposes one lifecycle only: SIGNAL -> SHADOW -> POSITION.  Dates
+    outside persisted Trading evidence intentionally return ``None`` so the GUI
+    keeps the Research historical view instead of showing backend-status noise.
     """
     if not isinstance(inspection, Mapping):
         return None
     date_text = _date_text(date_value)
     if date_text is None:
         return None
-
-    candidate = _candidate_state(dict(inspection.get("candidate") or {}), date_text)
 
     order_states = []
     for order in list(inspection.get("entry_orders") or []):
@@ -651,24 +672,49 @@ def resolve_trading_single_stock_sidebar_state(
             order_states.append(state)
     order_state = order_states[-1] if order_states else None
 
+    # Actual account position is the highest-priority truth from the first
+    # confirmed fill onward.  Broker order evidence only contributes remaining
+    # reservation/fill status; it never changes the user-facing POSITION state.
     position_state = _account_cycle_as_of(inspection, date_text)
     if position_state is not None:
-        # A still-active PARTIAL order contributes the remaining reservation while
-        # account state supplies the actual fill, stop and target truth.
-        if order_state is not None and str(order_state.get("state") or "") == "PARTIAL":
-            position_state["state"] = "PARTIAL"
-            position_state["reserved_capital"] = order_state.get("reserved_capital")
-            position_state["original_reserved_capital"] = order_state.get("original_reserved_capital")
-        elif order_state is not None and str(order_state.get("state") or "") == "FILLED":
-            # Preserve the original plan reservation on the actual fill date for
-            # plan-vs-fill inspection; it is not a remaining cash lock.
-            position_state["state"] = "FILLED"
-            position_state["reserved_capital"] = order_state.get("original_reserved_capital")
+        if order_state is not None:
+            raw_order_state = str(order_state.get("state") or "")
+            position_state["fill_status"] = raw_order_state or None
+            position_state["planned_qty"] = order_state.get("planned_qty")
+            position_state["remaining_order_qty"] = order_state.get("remaining_order_qty")
+            if raw_order_state == "PARTIAL":
+                position_state["reserved_capital"] = order_state.get("reserved_capital")
+                position_state["original_reserved_capital"] = order_state.get("original_reserved_capital")
+            elif raw_order_state == "FILLED":
+                # On the fill date keep the original reservation beside actual
+                # spend for plan-vs-fill inspection.  It is no longer cash lock.
+                position_state["reserved_capital"] = order_state.get("original_reserved_capital")
+        position_state["state"] = "POSITION"
         return position_state
 
-    if order_state is not None:
-        return order_state
-    return candidate
+    # A broker-confirmed fill is sufficient actual evidence even if account
+    # journal projection is momentarily unavailable.  Never expose PARTIAL/FILLED
+    # as separate UI lifecycle states.
+    if order_state is not None and order_state.get("entry_price") is not None:
+        actual = deepcopy(dict(order_state))
+        raw_order_state = str(actual.get("state") or "")
+        actual["fill_status"] = raw_order_state or None
+        actual["state"] = "POSITION"
+        actual["display_state"] = "持股"
+        actual["position_qty"] = actual.get("buy_qty")
+        return actual
+
+    # Persisted order/lineage plans own the entire pre-fill lifecycle.  On the
+    # completed-bar information date a new normal setup is SIGNAL; from the next
+    # actionable bar until real fill/cancel it is SHADOW.  Extended / re-entry
+    # plans are already SHADOW on their information date.
+    prefill_state = _prefill_state_as_of(inspection, date_text)
+    if prefill_state is not None:
+        return prefill_state
+
+    # Current Scanner evidence describes the completed-bar decision.  New normal
+    # setups are SIGNAL; extended/re-entry candidates are already SHADOW.
+    return _candidate_state(dict(inspection.get("candidate") or {}), date_text)
 
 
 def _chart_date_labels(chart_payload: Mapping[str, Any]) -> list[str | None]:
@@ -824,6 +870,88 @@ def _plan_covers_date(plan: Mapping[str, Any], date_text: str) -> bool:
         return False
     end_date = _date_text(plan.get("end_date"))
     return end_date is None or date_text <= end_date
+
+
+def _build_shadow_plans(
+    inspection: Mapping[str, Any],
+    *,
+    last_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Collect persisted pre-fill plans without inventing a second strategy path."""
+    plans: list[dict[str, Any]] = []
+    order_by_id = {
+        str(row.get("order_id") or ""): row
+        for row in list(inspection.get("entry_orders") or [])
+        if isinstance(row, Mapping)
+    }
+    for order in list(inspection.get("entry_orders") or []):
+        plan = _shadow_plan_from_order(order, last_date=last_date)
+        if plan is not None:
+            plans.append(plan)
+    for event in list(inspection.get("account_events") or []):
+        plan = _shadow_plan_from_strategy_buy_event(event, order_by_id=order_by_id)
+        if plan is not None:
+            plans.append(plan)
+    plans.sort(
+        key=lambda row: (
+            str(_date_text(row.get("start_after_date")) or _date_text(row.get("start_date")) or ""),
+            str(row.get("source") or ""),
+        )
+    )
+    return plans
+
+
+def _shadow_state_from_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
+    planned_qty = plan.get("planned_qty")
+    return {
+        "state": "SHADOW",
+        "display_state": "SHADOW",
+        "source": str(plan.get("source") or "shadow_plan"),
+        "entry_type": str(plan.get("entry_type") or "normal"),
+        "limit_price": plan.get("limit_price"),
+        "entry_price": plan.get("entry_price"),
+        "initial_stop_price": plan.get("stop_price"),
+        "trailing_stop_price": None,
+        "stop_price": plan.get("stop_price"),
+        "tp_price": plan.get("tp_price"),
+        "reserved_capital": plan.get("reserved_capital"),
+        "buy_capital": None,
+        "buy_qty": None,
+        "planned_qty": planned_qty,
+        "remaining_qty": planned_qty,
+        "position_qty": None,
+        "remaining_order_qty": planned_qty,
+        "sell_signal": False,
+    }
+
+
+def _prefill_state_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[str, Any] | None:
+    """Resolve persisted plan evidence to the Research-equivalent pre-fill lifecycle."""
+    plans = _build_shadow_plans(inspection)
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for plan in plans:
+        start_after = _date_text(plan.get("start_after_date"))
+        if start_after is not None and date_text == start_after:
+            end_before = _date_text(plan.get("end_before_date"))
+            if end_before is not None and date_text >= end_before:
+                continue
+            state = _shadow_state_from_plan(plan)
+            lifecycle_state = _entry_lifecycle_state(plan.get("entry_type"))
+            state["state"] = lifecycle_state
+            state["display_state"] = "SHADOW" if lifecycle_state == "SHADOW" else "買訊"
+            candidates.append((1, state))
+            continue
+        if _plan_covers_date(plan, date_text):
+            candidates.append((2, _shadow_state_from_plan(plan)))
+    if not candidates:
+        return None
+    # _build_shadow_plans is chronological.  Prefer an actual shadow interval over
+    # an information-date seam, then the most recent persisted plan.
+    best_priority = max(priority for priority, _state in candidates)
+    for priority, state in reversed(candidates):
+        if priority == best_priority:
+            return state
+    return None
 
 
 def _account_cycle_ranges(inspection: Mapping[str, Any], *, last_date: str | None) -> list[tuple[str, str]]:
@@ -1035,13 +1163,14 @@ def project_trading_single_stock_chart_payload(
     chart_payload: Mapping[str, Any] | None,
     inspection: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Overlay canonical Trading lifecycle on the Research chart without erasing history.
+    """Overlay the same Trading lifecycle used by the sidebar on Research history.
 
-    The Research replay remains the historical strategy/indicator context.  Only
-    dates covered by persisted Trading evidence are masked and replaced: frozen
-    pre-fill plan geometry is rendered as shadow L/S/T, confirmed fills switch to
-    account-position entry/stop/TP, and confirmed broker/account fills replace
-    simulated trade markers.  Dates outside the Trading lifecycle are untouched.
+    Research owns historical strategy context.  Trading only replaces bars for
+    which persisted Trading evidence resolves to SIGNAL, SHADOW or POSITION.
+    SIGNAL has no transaction line on its candle and previews the next actionable
+    bar; SHADOW draws frozen plan L/S/T without a buy marker; POSITION draws
+    confirmed fill/account geometry and only confirmed account events create buy
+    or sell markers.
     """
     payload = deepcopy(dict(chart_payload or {}))
     if not payload or not isinstance(inspection, Mapping):
@@ -1055,115 +1184,66 @@ def project_trading_single_stock_chart_payload(
     nan = float("nan")
 
     lines = {key: _copy_chart_line(payload, key, total) for key in _TRADING_TRANSACTION_LINE_KEYS}
-    shadow_plans: list[dict[str, Any]] = []
-    candidate_plan = _shadow_plan_from_candidate(dict(inspection.get("candidate") or {}))
-    for order in list(inspection.get("entry_orders") or []):
-        plan = _shadow_plan_from_order(order, last_date=last_date)
-        if plan is not None:
-            shadow_plans.append(plan)
-    order_by_id = {
-        str(row.get("order_id") or ""): row
-        for row in list(inspection.get("entry_orders") or [])
-        if isinstance(row, Mapping)
-    }
-    for event in list(inspection.get("account_events") or []):
-        plan = _shadow_plan_from_strategy_buy_event(event, order_by_id=order_by_id)
-        if plan is not None:
-            shadow_plans.append(plan)
-
-    # ENTRY order terminal dates and confirmed sell dates must also suppress the
-    # simulated marker for that exact bar even when no position remains afterward.
-    point_dates: set[str] = set()
-    if candidate_plan is not None:
-        candidate_date = _date_text(candidate_plan.get("information_date"))
-        if candidate_date is not None:
-            point_dates.add(candidate_date)
-    for plan in shadow_plans:
-        decision_date = _date_text(plan.get("start_after_date"))
-        if decision_date is not None:
-            # The completed-bar decision date itself must not retain a simulated
-            # Research fill/position line, but the canonical shadow line begins
-            # only on the following actionable market bar.
-            point_dates.add(decision_date)
-    for order in list(inspection.get("entry_orders") or []):
-        cancel_date = _order_cancel_date(order)
-        if cancel_date is not None:
-            point_dates.add(cancel_date)
-        for fill in list(order.get("fills") or []):
-            fill_date = _date_text((fill or {}).get("trade_date")) if isinstance(fill, Mapping) else None
-            if fill_date is not None:
-                point_dates.add(fill_date)
-    for event in list(inspection.get("account_events") or []):
-        event_date = _trade_event_date(event)
-        if event_date is not None:
-            point_dates.add(event_date)
-
-    account_ranges = _account_cycle_ranges(inspection, last_date=last_date)
+    lifecycle_by_index: dict[int, dict[str, Any]] = {}
     covered_indexes: set[int] = set()
     for idx, date_text in enumerate(date_labels):
         if date_text is None:
             continue
-        if date_text in point_dates:
-            covered_indexes.add(idx)
+        state = resolve_trading_single_stock_sidebar_state(inspection, date_text)
+        if state is None:
             continue
-        if any(_plan_covers_date(plan, date_text) for plan in shadow_plans):
-            covered_indexes.add(idx)
-            continue
-        if any(start <= date_text <= end for start, end in account_ranges):
+        lifecycle_by_index[idx] = deepcopy(dict(state))
+        covered_indexes.add(idx)
+
+    # Confirmed account sell dates are Trading-owned transaction bars even when a
+    # full exit leaves no open POSITION state after the fill.
+    point_dates: set[str] = set()
+    for event in list(inspection.get("account_events") or []):
+        event_date = _trade_event_date(event)
+        if event_date is not None:
+            point_dates.add(event_date)
+    for date_text in point_dates:
+        idx = date_to_x.get(date_text)
+        if idx is not None:
             covered_indexes.add(idx)
 
-    # Mask only the Trading-covered bars.  Older Research backtest transactions
-    # remain intact, which avoids the previous regression where the whole chart
-    # was replaced by today's snapshot.
+    # Trading-owned bars must not retain simulated Research transaction geometry.
+    # Outside those bars the Research replay is left exactly as produced.
     for key in _TRADING_TRANSACTION_LINE_KEYS:
         for idx in covered_indexes:
             lines[key][idx] = nan
 
-    for plan in shadow_plans:
-        for idx, date_text in enumerate(date_labels):
-            if date_text is None or not _plan_covers_date(plan, date_text):
-                continue
-            for field, key in (
+    for idx, state in lifecycle_by_index.items():
+        lifecycle_state = str(state.get("state") or "")
+        if lifecycle_state == "SHADOW":
+            assignments = (
                 ("stop_price", "shadow_stop_line"),
                 ("tp_price", "shadow_tp_line"),
                 ("limit_price", "shadow_limit_line"),
                 ("entry_price", "shadow_entry_line"),
-            ):
-                value = plan.get(field)
-                if value is not None:
-                    _assign_chart_float(
-                        lines,
-                        key=key,
-                        idx=idx,
-                        value=value,
-                        evidence=f"shadow_plan:{field}",
-                    )
-
-    # Confirmed account state has priority from the actual fill date onward.
-    for idx, date_text in enumerate(date_labels):
-        if date_text is None:
-            continue
-        position_state = _account_cycle_as_of(inspection, date_text)
-        if not isinstance(position_state, Mapping):
-            continue
-        for field, key in (
-            ("stop_price", "stop_line"),
-            ("tp_price", "tp_line"),
-            ("entry_price", "entry_line"),
-        ):
-            value = position_state.get(field)
+            )
+        elif lifecycle_state == "POSITION":
+            assignments = (
+                ("stop_price", "stop_line"),
+                ("tp_price", "tp_line"),
+                ("limit_price", "limit_line"),
+                ("entry_price", "entry_line"),
+            )
+        else:
+            # SIGNAL owns the transaction bar only to prevent a replay fill from
+            # masquerading as actual Trading execution.  Its plan is shown in the
+            # right-side preview, matching Research's completed-bar timing seam.
+            assignments = ()
+        for field, key in assignments:
+            value = state.get(field)
             if value is not None:
                 _assign_chart_float(
-                    lines,
-                    key=key,
-                    idx=idx,
-                    value=value,
-                    evidence=f"position_state:{field}",
+                    lines, key=key, idx=idx, value=value,
+                    evidence=f"lifecycle:{lifecycle_state}:{field}",
                 )
 
-    # On a full-exit day _account_cycle_as_of() correctly returns no open
-    # position.  Persisted position_before is nevertheless valid pre-fill
-    # evidence for drawing that day's actual stop/TP/entry geometry.
+    # On a full-exit day the post-fill lifecycle has no open POSITION.  Persisted
+    # position_before remains exact pre-fill evidence for that day's lines.
     for event in list(inspection.get("account_events") or []):
         event_date = _trade_event_date(event)
         if event_date is None or event_date not in date_to_x:
@@ -1176,35 +1256,38 @@ def project_trading_single_stock_chart_payload(
             "entry_line": state.get("entry_fill_price"),
             "stop_line": state.get("sl", state.get("initial_stop")),
             "tp_line": None if bool(state.get("sold_half", False)) else state.get("tp_half"),
+            "limit_line": state.get("limit_price"),
         }
         for key, value in values.items():
             if value is not None:
                 _assign_chart_float(
-                    lines,
-                    key=key,
-                    idx=idx,
-                    value=value,
+                    lines, key=key, idx=idx, value=value,
                     evidence=f"sell_event_position_before:{key}",
                 )
 
     for key, values in lines.items():
         payload[key] = values
 
-    # A current Scanner candidate is a completed-bar decision for the NEXT
-    # actionable market bar.  Match Research's future-preview seam instead of
-    # drawing one-bar L/S/T stubs on the signal candle itself.  Once later bars
-    # exist, persisted order/lineage evidence above paints them as shadow lines.
-    if candidate_plan is not None and last_date is not None:
-        candidate_date = _date_text(candidate_plan.get("information_date"))
-        if candidate_date == last_date:
-            payload["future_preview"] = {
-                "limit_price": candidate_plan.get("limit_price"),
-                "stop_price": candidate_plan.get("stop_price"),
-                "tp_half_price": candidate_plan.get("tp_price"),
-                "entry_price": candidate_plan.get("entry_price"),
-            }
+    # Latest SIGNAL previews the next actionable day.  An ongoing SHADOW also
+    # previews the same frozen plan forward while its current bar keeps shadow
+    # L/S/T visible.  POSITION never inherits a Research future preview.
+    last_state = None
+    if last_date is not None:
+        last_idx = date_to_x.get(last_date)
+        last_state = None if last_idx is None else lifecycle_by_index.get(last_idx)
+    if isinstance(last_state, Mapping) and str(last_state.get("state") or "") in {"SIGNAL", "SHADOW"}:
+        payload["future_preview"] = {
+            "limit_price": last_state.get("limit_price"),
+            "stop_price": last_state.get("stop_price"),
+            "tp_half_price": last_state.get("tp_price"),
+            "entry_price": last_state.get("entry_price"),
+        }
+    elif last_date is not None and date_to_x.get(last_date) in covered_indexes:
+        payload["future_preview"] = {}
 
-    # Remove replay trade/order markers only inside Trading-owned lifecycle bars.
+    # Replay order/trade markers are suppressed only on Trading-owned lifecycle
+    # bars.  No shadow marker is synthesized.  Confirmed account events are the
+    # only source of Trading buy/sell icons.
     marker_groups = {}
     for trace_name, markers in dict(payload.get("marker_groups") or {}).items():
         kept = []
@@ -1222,11 +1305,8 @@ def project_trading_single_stock_chart_payload(
         marker_groups[trace_name].sort(key=lambda row: int(row.get("x") or 0))
     payload["marker_groups"] = marker_groups
 
-    # Keep Research signal dates/anchors untouched, but hide replay sizing in
-    # Trading mode.  A signal is strategy context, not broker/account truth; its
-    # simulated Research qty (for example 885) must not look like a live planned
-    # or filled quantity.  Canonical plan/fill quantities remain visible on the
-    # Trading sidebar and actual account markers.
+    # A Research buy/sell signal remains useful strategy context, but replay qty
+    # must never look like actual Trading execution.
     signal_annotations = []
     for raw in list(payload.get("signal_annotations") or []):
         item = deepcopy(dict(raw))
@@ -1238,13 +1318,16 @@ def project_trading_single_stock_chart_payload(
         signal_annotations.append(item)
     payload["signal_annotations"] = signal_annotations
 
-    if (total - 1) in covered_indexes and not (
-        candidate_plan is not None
-        and _date_text(candidate_plan.get("information_date")) == last_date
-    ):
-        payload["future_preview"] = {}
     payload["trading_overlay_source"] = "canonical_lifecycle_overlay"
     payload["trading_overlay_covered_indexes"] = sorted(covered_indexes)
+    payload["trading_lifecycle_by_index"] = {
+        int(idx): {
+            "state": state.get("state"),
+            "display_state": state.get("display_state"),
+            "source": state.get("source"),
+        }
+        for idx, state in lifecycle_by_index.items()
+    }
     return payload
 
 

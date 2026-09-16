@@ -3321,6 +3321,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_analysis_switch_emits_phase_timing_for_regression", True, "[single_stock_perf]" in inspector_source and "analysis_cache=" in inspector_source and "render=" in inspector_source)
     check("workbench_single_stock_trading_analysis_uses_finalized_consumer_view", True, "open_trading_v2_consumer_view(" in inspector_source and "TradingMarketDataV2View.open(WORKBENCH_PROJECT_ROOT)" not in inspector_source)
     check("workbench_single_stock_trading_sidebar_reads_canonical_transaction_projection", True, "resolve_trading_single_stock_sidebar_state" in inspector_source and "build_trading_single_stock_inspection" in inspector_source)
+    _trading_sidebar_body = inspector_source.split("def _update_selected_value_sidebar(self, snapshot):", 1)[1].split("def _update_sidebar_from_result", 1)[0]
+    check("workbench_single_stock_trading_sidebar_uses_one_effective_stop_value", True, 'self._format_sidebar_line_value("停損", canonical.get("stop_price"))' in _trading_sidebar_body)
+    check("workbench_single_stock_trading_sidebar_marks_prefill_entry_as_shadow_not_fill", True, 'lifecycle_state in {"SIGNAL", "SHADOW"}' in _trading_sidebar_body and 'else "成交"' in _trading_sidebar_body)
+    check("workbench_single_stock_trading_sidebar_does_not_expose_no_canonical_backend_state", False, "無 canonical" in _trading_sidebar_body)
     check("workbench_single_stock_trading_sidebar_surfaces_canonical_sell_signal", True, "SELL訊號:" in inspector_source and "SELL狀態: ERROR" in inspector_source)
     check("workbench_single_stock_held_ticker_replay_prefers_position_frozen_params", True, "position_frozen_params" in inspector_source and "load_trading_single_stock_position_binding" in inspector_source)
     check("workbench_single_stock_combobox_reflow_rechecks_after_autosize", True, "def _autosize_combobox" in inspector_source and "self._schedule_single_stock_controls_layout()" in inspector_source)
@@ -3336,6 +3340,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "candidate": {
             "ticker": "2330",
             "trade_date": "2026-09-15",
+            "signal_date": "2026-09-15",
             "proj_cost": 100000.0,
             "proj_qty": 1000,
             "execution_plan_seed": {
@@ -3346,8 +3351,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         },
         "entry_orders": [], "account_events": [], "current_position": None,
     }
-    check("workbench_single_stock_scanner_plan_exists_only_on_information_date", "SCANNER", resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-15").get("state"))
-    check("workbench_single_stock_never_infers_next_day_fill_from_scanner_plan", None, resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-16"))
+    check("workbench_single_stock_current_normal_candidate_is_user_facing_signal", "SIGNAL", resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-15").get("state"))
+    check("workbench_single_stock_scanner_snapshot_alone_never_invents_future_shadow_or_fill", None, resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-16"))
 
     _fill_qty = 1000
     _fill_price = 98.0
@@ -3370,8 +3375,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     }]
     _ordered_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-16")
     _filled_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-18")
-    check("workbench_single_stock_order_can_remain_reserved_across_multiple_days", ["ORDERED", None], [_ordered_sidebar.get("state"), _ordered_sidebar.get("entry_price")])
-    check("workbench_single_stock_actual_spend_appears_only_on_confirmed_fill_date", ["FILLED", 98.0], [_filled_sidebar.get("state"), _filled_sidebar.get("entry_price")])
+    _information_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-15")
+    check("workbench_single_stock_persisted_normal_order_information_date_remains_signal", "SIGNAL", _information_sidebar.get("state"))
+    check("workbench_single_stock_order_can_remain_shadow_across_multiple_days", ["SHADOW", None], [_ordered_sidebar.get("state"), _ordered_sidebar.get("entry_price")])
+    check("workbench_single_stock_actual_spend_appears_only_on_confirmed_fill_date", ["POSITION", 98.0], [_filled_sidebar.get("state"), _filled_sidebar.get("entry_price")])
 
     # Trading chart must keep Research as historical context, but replace only
     # the persisted live lifecycle interval.  The frozen order plan stays shadow
@@ -3520,6 +3527,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         [[marker.get("x"), marker.get("qty"), marker.get("price")] for marker in _canonical_buy_markers],
     )
     check(
+        "workbench_single_stock_shadow_interval_never_synthesizes_buy_icon",
+        [],
+        [
+            marker.get("x")
+            for marker in _projected.get("marker_groups", {}).get("買進", [])
+            if marker.get("x") in {1, 2, 3}
+        ],
+    )
+    check(
         "workbench_single_stock_trading_overlay_keeps_research_signal_anchor_but_hides_replay_sizing",
         [0, "2026-09-14", None, ""],
         [
@@ -3586,6 +3602,23 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             _candidate_projected.get("future_preview"),
             len(_candidate_projected.get("marker_groups", {}).get("買進", [])),
         ],
+    )
+    _extended_candidate_inspection = deepcopy(_inspection_candidate)
+    _extended_candidate_inspection["candidate"] = deepcopy(_inspection_candidate["candidate"])
+    _extended_candidate_inspection["candidate"]["kind"] = "extended"
+    _extended_candidate_inspection["candidate"]["signal_date"] = "2026-09-12"
+    _extended_candidate_inspection["candidate"]["execution_plan_seed"]["entry_source"] = "extended"
+    _extended_state = resolve_trading_single_stock_sidebar_state(_extended_candidate_inspection, "2026-09-15")
+    _extended_projected = project_trading_single_stock_chart_payload(_candidate_chart, _extended_candidate_inspection)
+    check(
+        "workbench_single_stock_current_extended_candidate_is_continuing_shadow",
+        ["SHADOW", 100.0, 95.0, 105.0],
+        [_extended_state.get("state"), _extended_state.get("limit_price"), _extended_state.get("stop_price"), _extended_state.get("tp_price")],
+    )
+    check(
+        "workbench_single_stock_current_extended_candidate_keeps_shadow_lines_and_forward_preview",
+        [[100.0, 95.0, 105.0], {"limit_price": 100.0, "stop_price": 95.0, "tp_half_price": 105.0, "entry_price": None}],
+        [[_extended_projected["shadow_limit_line"][1], _extended_projected["shadow_stop_line"][1], _extended_projected["shadow_tp_line"][1]], _extended_projected.get("future_preview")],
     )
 
     _rollforward_payload = deepcopy(_base_overlay_payload)
