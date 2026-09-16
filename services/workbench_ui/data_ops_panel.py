@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import queue
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -199,6 +200,10 @@ class MarketDataOpsPanel(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=6, style=WORKBENCH_FRAME_STYLE)
         self._action_thread: threading.Thread | None = None
+        self._status_refresh_token = 0
+        self._status_refresh_threads: dict[int, threading.Thread] = {}
+        self._status_refresh_results: queue.Queue = queue.Queue()
+        self._status_refresh_poll_after_id: str | None = None
         self._snapshot: dict[str, object] = {}
         self._dataset_by_iid: dict[str, dict[str, object]] = {}
         self._cell_overlays: dict[ttk.Treeview, _TreeCellColorOverlay] = {}
@@ -213,9 +218,13 @@ class MarketDataOpsPanel(ttk.Frame):
         )}
         self._kpi_detail_vars = {key: tk.StringVar(value="-") for key in self._kpi_vars}
         self._build_ui()
+        # AI: The local read model includes Windows Task Scheduler status, whose
+        # PowerShell probe can block for seconds.  The panel constructor must return
+        # immediately so Tk can grid/paint the full-size Data Center before any OS
+        # or filesystem status read completes.
         self.refresh_local_status()
-        # AI: Paint Data Center first. Local consumer promotion can rebuild a V2
-        # execution view and must never run on the Tk thread.
+        # AI: Local consumer promotion can rebuild a V2 execution view and must
+        # never run on the Tk thread.
         self.after(80, lambda: self._start_action("reconcile"))
 
     def _build_ui(self):
@@ -614,7 +623,7 @@ class MarketDataOpsPanel(ttk.Frame):
             self._status_var.set(f"Scan freshness 設定失敗：{type(exc).__name__}: {exc}")
             self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
             return "break"
-        self.refresh_local_status()
+        self.refresh_local_status(update_status=False)
         label = "最新同步可用" if next_mode == SCAN_FRESHNESS_LATEST_SYNCED else "當日必要"
         self._status_var.set(f"{dataset} Scan freshness：{label}")
         self._status_label.configure(style=WORKBENCH_SUCCESS_LABEL_STYLE)
@@ -641,17 +650,82 @@ class MarketDataOpsPanel(ttk.Frame):
             f"error={row.get('last_error') or '-'}"
         )
 
-    def refresh_local_status(self):
-        """Render persisted Market Data state only; never promote on the Tk thread."""
+    def refresh_local_status(self, *, update_status: bool = True):
+        """Read persisted Market Data state off the Tk thread, then render on Tk.
 
+        The canonical read model is provider-free, but on Windows it also reads
+        Task Scheduler status through PowerShell.  That OS query is intentionally
+        kept out of the UI thread so first-open layout and repaint cannot freeze.
+        """
+
+        self._status_refresh_token += 1
+        token = int(self._status_refresh_token)
+        if update_status:
+            self._status_var.set("讀取 Market Data 狀態…")
+            self._status_label.configure(style=WORKBENCH_INFO_LABEL_STYLE)
+        thread = threading.Thread(
+            target=self._refresh_local_status_worker,
+            args=(token, bool(update_status)),
+            name=f"workbench-data-ops-status-{token}",
+            daemon=True,
+        )
+        self._status_refresh_threads[token] = thread
+        thread.start()
+        self._schedule_status_refresh_poll()
+
+    def _refresh_local_status_worker(self, token: int, update_status: bool) -> None:
+        snapshot = None
+        error = None
         try:
             snapshot = build_market_data_ops_read_model(WORKBENCH_PROJECT_ROOT)
         except Exception as exc:
-            self._status_var.set(f"狀態讀取失敗：{type(exc).__name__}: {exc}")
+            error = exc
+        self._status_refresh_results.put((int(token), snapshot, error, bool(update_status)))
+
+    def _schedule_status_refresh_poll(self) -> None:
+        if self._status_refresh_poll_after_id is not None:
+            return
+        try:
+            self._status_refresh_poll_after_id = self.after(25, self._drain_status_refresh_results)
+        except tk.TclError as exc:
+            _warn_gui_fallback("Data Center status refresh after()", exc)
+            self._status_refresh_poll_after_id = None
+
+    def _drain_status_refresh_results(self) -> None:
+        self._status_refresh_poll_after_id = None
+        while True:
+            try:
+                token, snapshot, error, update_status = self._status_refresh_results.get_nowait()
+            except queue.Empty:
+                break
+            self._status_refresh_threads.pop(int(token), None)
+            self._finish_local_status_refresh(
+                int(token),
+                snapshot,
+                error,
+                update_status=bool(update_status),
+            )
+        if any(thread.is_alive() for thread in self._status_refresh_threads.values()):
+            self._schedule_status_refresh_poll()
+
+    def _finish_local_status_refresh(self, token: int, snapshot, error, *, update_status: bool) -> None:
+        # A later refresh request supersedes an older snapshot.  This matters on
+        # first open because the automatic reconcile may finish before a slow
+        # Windows Task Scheduler status probe.
+        if int(token) != int(self._status_refresh_token):
+            return
+        if error is not None:
+            self._status_var.set(f"狀態讀取失敗：{type(error).__name__}: {error}")
+            self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
+            return
+        if not isinstance(snapshot, dict):
+            self._status_var.set("狀態讀取失敗：Market Data read model 格式不合法")
             self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
             return
         self._snapshot = snapshot
         self._render(snapshot)
+        if not update_status:
+            return
         blockers = [str(item) for item in list(snapshot.get("trading_blocking_dependencies") or []) if str(item)]
         suffix = "" if not blockers else " | Trading BLOCKED: " + "；".join(blockers[:2])
         self._status_var.set(f"本地狀態已刷新（provider calls={snapshot.get('provider_calls', 0)}）{suffix}")
@@ -1062,7 +1136,7 @@ class MarketDataOpsPanel(ttk.Frame):
     def _finish_action_success(self, result):
         self._action_thread = None
         self._set_action_state("normal")
-        self.refresh_local_status()
+        self.refresh_local_status(update_status=False)
         status = result.get("status") if isinstance(result, dict) else None
         canonical_result = (
             result.get("market_data_v2_archive")
@@ -1080,7 +1154,7 @@ class MarketDataOpsPanel(ttk.Frame):
     def _finish_action_error(self, exc: Exception):
         self._action_thread = None
         self._set_action_state("normal")
-        self.refresh_local_status()
+        self.refresh_local_status(update_status=False)
         self._status_var.set(f"FAIL：{type(exc).__name__}: {exc}")
         self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
         messagebox.showerror("Market Data Ops", f"{type(exc).__name__}: {exc}", parent=self)

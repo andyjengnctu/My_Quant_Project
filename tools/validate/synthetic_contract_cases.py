@@ -3269,6 +3269,7 @@ def validate_gui_workbench_contract_case(base_params):
             ('gui_workbench_unselected_imported_panel_constructor_is_deferred', True, '_panel_factories' in workbench_source and '_construct_ready_panel_if_selected' in workbench_source and 'self._selected_panel_id() != panel_id' in workbench_source,),
             ('gui_trading_account_panel_uses_account_service_not_raw_json', True, 'services.trading.account_state' in trading_account_panel_source and 'atomic_write_json' not in trading_account_panel_source and ('load_json_strict' not in trading_account_panel_source),),
             ('gui_data_ops_panel_consumes_canonical_read_model', True, 'build_market_data_ops_read_model' in data_ops_panel_source,),
+            ('gui_data_ops_panel_reads_local_status_off_tk_thread', True, 'target=self._refresh_local_status_worker' in data_ops_panel_source and 'name=f"workbench-data-ops-status-{token}"' in data_ops_panel_source and 'self._status_refresh_results.put' in data_ops_panel_source,),
             ('gui_data_ops_panel_uses_canonical_due_worker', True, 'run_trading_market_data_auto_update' in data_ops_panel_source,),
             ('gui_data_ops_panel_uses_canonical_full_update', True, 'run_trading_market_data_update' in data_ops_panel_source,),
             ('gui_data_ops_panel_uses_shared_downloader_console_progress', True, 'MarketDataDailyConsoleProgress' in data_ops_panel_source and 'progress_fn=console_progress.progress' in data_ops_panel_source,),

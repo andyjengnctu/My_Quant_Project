@@ -3972,6 +3972,8 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("workbench_exposes_v2_archive_status", True, "V2 Archive" in data_ops_panel_source)
     data_ops_refresh_body = data_ops_panel_source.split("def refresh_local_status", 1)[1].split("def ", 1)[0]
     check("workbench_data_ops_render_never_reconciles_on_tk_thread", False, "reconcile_trading_v2_consumer_state_from_local_evidence" in data_ops_refresh_body)
+    check("workbench_data_ops_read_model_never_runs_on_tk_refresh_body", False, "build_market_data_ops_read_model" in data_ops_refresh_body)
+    check("workbench_data_ops_read_model_uses_background_status_worker", True, 'target=self._refresh_local_status_worker' in data_ops_panel_source and 'self._status_refresh_results.put' in data_ops_panel_source)
     check("workbench_data_ops_local_reconcile_uses_background_action_thread", True, 'self.after(80, lambda: self._start_action("reconcile"))' in data_ops_panel_source and 'if action == "reconcile"' in data_ops_panel_source and 'command=lambda: self._start_action("reconcile")' in data_ops_panel_source)
     check(
         "workbench_dataset_table_labels_provider_attempt_as_last_check",
