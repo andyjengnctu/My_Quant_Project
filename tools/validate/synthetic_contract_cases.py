@@ -2491,8 +2491,14 @@ def validate_gui_buy_signal_annotation_anchor_price_contract_case(base_params):
     check("buy_trade_marker_uses_fill_price", True, 'action="買進"' in entry_flow_source and "price=entry_result['buy_price']" in entry_flow_source)
 
     case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
-    frame = case["frames"][case["primary_ticker"]].copy()
+    ticker = case["primary_ticker"]
     params = case["params"]
+    raw_frame = case["frames"][ticker].copy()
+    frame, _sanitize_stats = sanitize_ohlcv_dataframe(
+        raw_frame,
+        ticker,
+        min_rows=get_required_min_rows(params),
+    )
     chart_context = create_debug_chart_context(frame)
     entry_plan = {
         "qty": 1000,
