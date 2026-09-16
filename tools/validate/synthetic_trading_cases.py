@@ -3100,10 +3100,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check(
         "workbench_status_ascii_tokens_require_word_boundaries",
         True,
-        any(text == "canonical " and tone == "muted" for text, tone in boundary_segments)
-        and any(text == "ON" and tone == "info" for text, tone in boundary_segments)
-        and any(text == "offline " and tone == "muted" for text, tone in boundary_segments)
-        and any(text == "OFF" and tone == "info" for text, tone in boundary_segments),
+        [text for text, tone in boundary_segments if tone == "info"] == ["ON", "OFF"]
+        and any("canonical" in text and tone == "muted" for text, tone in boundary_segments)
+        and any("offline" in text and tone == "muted" for text, tone in boundary_segments),
     )
 
     from core.portfolio_ensemble import build_ensemble_candidate_display_metrics
@@ -3827,12 +3826,14 @@ def validate_trading_live_readiness_hardening_contract_case(base_params):
         "ticker": "2330",
         "kind": "buy",
         "trade_date": "2026-09-04",
+        "signal_date": "2026-09-02",
         "execution_plan_seed": {"ticker": "2330", "trade_date": "2026-09-04"},
     }
     stale_row = {
         "ticker": "2454",
         "kind": "buy",
         "trade_date": "2026-09-03",
+        "signal_date": "2026-09-02",
         "execution_plan_seed": {"ticker": "2454", "trade_date": "2026-09-03"},
     }
     current, stale = partition_trading_candidate_rows_for_information_date(

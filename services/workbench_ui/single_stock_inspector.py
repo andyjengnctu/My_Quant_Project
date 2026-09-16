@@ -1537,7 +1537,6 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 self.after(0, self._finish_trading_analysis_prefetch, error)
             except tk.TclError as exc:
                 _warn_gui_fallback("single-stock analysis prefetch completion", exc)
-                return
 
     def _finish_trading_analysis_prefetch(self, error):
         self._trading_prefetch_thread = None
