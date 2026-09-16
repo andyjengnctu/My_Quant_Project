@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import logging
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -35,6 +36,9 @@ from services.trading.order_state import load_trading_order_state
 from services.trading.protection_planning import get_trading_protection_plan_read_model
 from services.trading.indicator_exit_planning import get_trading_indicator_exit_plan_read_model
 from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 _BUY_MUTATIONS = {
@@ -68,6 +72,28 @@ _TRADING_REPLAY_TRANSACTION_TRACES = {
     "錯失賣出",
     "強制結算",
 }
+
+
+def _assign_chart_float(
+    lines: dict[str, list[float]],
+    *,
+    key: str,
+    idx: int,
+    value: object,
+    evidence: str,
+) -> None:
+    """Assign a persisted Trading numeric value without hiding malformed evidence."""
+    try:
+        lines[key][idx] = float(value)
+    except (TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Skipping malformed Trading chart value | evidence=%s | key=%s | idx=%s | value=%r | error=%s",
+            evidence,
+            key,
+            idx,
+            value,
+            exc,
+        )
 
 
 def _date_text(value: object) -> str | None:
@@ -1105,10 +1131,13 @@ def project_trading_single_stock_chart_payload(
             ):
                 value = plan.get(field)
                 if value is not None:
-                    try:
-                        lines[key][idx] = float(value)
-                    except (TypeError, ValueError):
-                        pass
+                    _assign_chart_float(
+                        lines,
+                        key=key,
+                        idx=idx,
+                        value=value,
+                        evidence=f"shadow_plan:{field}",
+                    )
 
     # Confirmed account state has priority from the actual fill date onward.
     for idx, date_text in enumerate(date_labels):
@@ -1124,10 +1153,13 @@ def project_trading_single_stock_chart_payload(
         ):
             value = position_state.get(field)
             if value is not None:
-                try:
-                    lines[key][idx] = float(value)
-                except (TypeError, ValueError):
-                    pass
+                _assign_chart_float(
+                    lines,
+                    key=key,
+                    idx=idx,
+                    value=value,
+                    evidence=f"position_state:{field}",
+                )
 
     # On a full-exit day _account_cycle_as_of() correctly returns no open
     # position.  Persisted position_before is nevertheless valid pre-fill
@@ -1147,10 +1179,13 @@ def project_trading_single_stock_chart_payload(
         }
         for key, value in values.items():
             if value is not None:
-                try:
-                    lines[key][idx] = float(value)
-                except (TypeError, ValueError):
-                    pass
+                _assign_chart_float(
+                    lines,
+                    key=key,
+                    idx=idx,
+                    value=value,
+                    evidence=f"sell_event_position_before:{key}",
+                )
 
     for key, values in lines.items():
         payload[key] = values

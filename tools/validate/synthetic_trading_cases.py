@@ -2605,7 +2605,12 @@ def validate_trading_position_rollforward_contract_case(base_params):
     snapshot_body = service_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
     check("read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
     check("rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
-    check("workbench_exposes_explicit_position_rollforward_action", True, '"持股日終推進", "rollforward"' in panel_source and 'elif action == "rollforward"' in panel_source)
+    check(
+        "workbench_exposes_explicit_position_rollforward_action",
+        True,
+        '("2 持股日終推進", "rollforward")' in panel_source
+        and 'if action == "rollforward"' in panel_source,
+    )
     workflow_step_tokens = (
         "data_result = run_trading_market_data_update",
         "rollforward_result = run_trading_position_rollforward",
