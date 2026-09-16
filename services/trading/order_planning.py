@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
-from core.capital_policy import resolve_portfolio_sizing_equity
+from core.capital_policy import resolve_portfolio_sizing_equity, resolve_scanner_live_capital
 from core.console_report import project_relative_display_path
 from core.entry_plans import resize_candidate_plan_to_capital
 from core.exact_accounting import (
@@ -105,40 +105,55 @@ def _build_allocator_candidate(row: dict[str, Any], *, sizing_equity: float, par
     seed = row.get("execution_plan_seed")
     if not isinstance(seed, dict):
         raise RuntimeError(f"Trading Scanner 候選缺少 canonical execution_plan_seed: {row.get('ticker')}")
-    candidate_plan = dict(seed)
-    candidate_plan["sizing_capital"] = float(sizing_equity)
-    resized = resize_candidate_plan_to_capital(candidate_plan, float(sizing_equity), params)
-    if resized is None or int(resized.get("qty") or 0) <= 0:
-        return None
 
-    ticker = str(row.get("ticker") or resized.get("ticker") or "").strip()
+    ticker = str(row.get("ticker") or seed.get("ticker") or "").strip()
     if not ticker:
         raise RuntimeError("Trading Scanner 候選缺少 ticker")
-    qty = int(resized["qty"])
-    limit_price = float(resized["limit_price"])
+
+    # Scanner already owns the canonical reference sizing for this signal.
+    # The account allocator may cash-cap that frozen quantity when resources
+    # compete, but it must not create a second full-size quantity merely because
+    # current account equity differs from scanner_live_capital.
+    qty = int(row.get("proj_qty") or 0)
+    if qty <= 0:
+        # Backward-compatible snapshot fallback: reconstruct the Scanner-sized
+        # plan with Scanner capital, never with current account equity.
+        fallback_plan = resize_candidate_plan_to_capital(
+            dict(seed),
+            float(seed.get("sizing_capital") or resolve_scanner_live_capital(params)),
+            params,
+        )
+        qty = 0 if fallback_plan is None else int(fallback_plan.get("qty") or 0)
+        if qty <= 0:
+            return None
+    limit_price = seed.get("limit_price", row.get("limit_price"))
+    if limit_price is None:
+        raise RuntimeError(f"Trading Scanner 候選缺少 canonical limit_price: {ticker}")
+    limit_price = float(limit_price)
     ledger = build_buy_ledger_from_price(limit_price, qty, params)
     kind = str(row.get("kind") or "")
     candidate_type = "normal" if kind == "buy" else kind
+    scanner_sizing_capital = seed.get("sizing_capital")
     return {
         "ticker": ticker,
         "type": candidate_type,
         "kind": kind,
         "limit_px": limit_price,
-        "init_sl": resized.get("init_sl"),
-        "init_trail": resized.get("init_trail"),
-        "target_price": resized.get("target_price"),
-        "entry_atr": resized.get("entry_atr"),
-        "security_profile": resized.get("security_profile"),
-        "trade_date": resized.get("trade_date"),
+        "init_sl": seed.get("init_sl"),
+        "init_trail": seed.get("init_trail"),
+        "target_price": seed.get("target_price"),
+        "entry_atr": seed.get("entry_atr"),
+        "security_profile": deepcopy(seed.get("security_profile")),
+        "trade_date": seed.get("trade_date", row.get("trade_date")),
         "signal_date": row.get("signal_date"),
         "qty": qty,
         "proj_cost_milli": int(ledger["net_buy_total_milli"]),
         "proj_cost": milli_to_money(int(ledger["net_buy_total_milli"])),
-        "sizing_capital": float(sizing_equity),
-        "max_qty": resized.get("max_qty"),
-        "orig_limit": resized.get("orig_limit", limit_price),
-        "orig_atr": resized.get("orig_atr", resized.get("entry_atr")),
-        "entry_source": resized.get("entry_source", candidate_type),
+        "sizing_capital": (float(scanner_sizing_capital) if scanner_sizing_capital is not None else float(sizing_equity)),
+        "max_qty": seed.get("max_qty"),
+        "orig_limit": seed.get("orig_limit", limit_price),
+        "orig_atr": seed.get("orig_atr", seed.get("entry_atr")),
+        "entry_source": seed.get("entry_source", candidate_type),
         "is_orderable": True,
         "params_obj": params,
         "params_signature": str(row.get("params_signature") or ""),

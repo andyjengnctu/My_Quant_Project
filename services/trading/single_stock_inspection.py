@@ -573,6 +573,8 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
     if isinstance(position_state, Mapping):
         average_entry = position_state.get("entry_fill_price", average_entry)
 
+    lineage_planned_qty = lineage.get("planned_qty") if isinstance(lineage, Mapping) else None
+    lineage_planned_cost = lineage.get("planned_cost") if isinstance(lineage, Mapping) else None
     return {
         "state": TRADE_LIFECYCLE_POSITION,
         "display_state": "持股",
@@ -592,10 +594,11 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
             if not isinstance(position_state, Mapping) or bool(position_state.get("sold_half", False))
             else position_state.get("tp_half")
         ),
-        "reserved_capital": None,
+        "reserved_capital": lineage_planned_cost,
+        "original_reserved_capital": lineage_planned_cost,
         "buy_capital": None if net_buy_milli <= 0 else milli_to_money(net_buy_milli),
         "buy_qty": entry_qty or None,
-        "planned_qty": None,
+        "planned_qty": lineage_planned_qty,
         "remaining_qty": qty,
         "position_qty": qty,
         "remaining_order_qty": 0,
@@ -631,7 +634,13 @@ def resolve_trading_single_stock_sidebar_state(
     if position_state is not None:
         # Order evidence may still contribute the unfilled reservation for a true
         # partial fill, but it never creates POSITION by itself.
+        entry_order_id = str(position_state.get("entry_order_id") or "").strip()
         for order in reversed(list(inspection.get("entry_orders") or [])):
+            # Historical ENTRY orders can belong to an earlier position cycle
+            # that was later voided.  Only the order explicitly linked to this
+            # account cycle may contribute planned/reservation metadata.
+            if not entry_order_id or str(order.get("order_id") or "") != entry_order_id:
+                continue
             order_state = _order_state_as_of(order, date_text)
             if order_state is None:
                 continue
@@ -885,6 +894,12 @@ def _build_shadow_plans(
             effective_fill_date=effective_fill_date_by_order.get(order_id),
         )
         if plan is not None:
+            # A broker fill whose account transaction was later voided remains
+            # audit evidence, but it must not outrank the current Scanner plan
+            # for the same signal.  With no Scanner candidate it still remains
+            # available as SHADOW evidence, preserving historical visibility.
+            if list(order.get("fills") or []) and order_id not in effective_fill_date_by_order:
+                plan["priority"] = 5
             plans.append(plan)
 
     for event in list(inspection.get("account_events") or []):
@@ -1204,7 +1219,10 @@ def build_trading_single_stock_lifecycle_timeline(
         if position_state is not None:
             # Order evidence can contribute reservation metadata for a genuine
             # partial fill but never creates POSITION by itself.
+            entry_order_id = str(position_state.get("entry_order_id") or "").strip()
             for order in reversed(list(inspection.get("entry_orders") or [])):
+                if not entry_order_id or str(order.get("order_id") or "") != entry_order_id:
+                    continue
                 order_state = _order_state_as_of(order, date_text)
                 if order_state is None:
                     continue

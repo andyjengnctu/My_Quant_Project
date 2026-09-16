@@ -959,6 +959,32 @@ def validate_trading_daily_workflow_contract_case(base_params):
     profile = get_trading_strategy_profile()
     project_root = Path(__file__).resolve().parents[2]
 
+    _scanner_sized_candidate = _build_allocator_candidate(
+        {
+            "ticker": "2454",
+            "kind": "buy",
+            "proj_qty": 777,
+            "signal_date": "2026-09-04",
+            "execution_plan_seed": {
+                "ticker": "2454",
+                "trade_date": "2026-09-04",
+                "limit_price": 200.0,
+                "init_sl": 190.0,
+                "init_trail": 192.0,
+                "target_price": 210.0,
+                "entry_atr": 4.0,
+                "sizing_capital": 1_000_000.0,
+            },
+        },
+        sizing_equity=3_000_000.0,
+        params=base_params,
+    )
+    check(
+        "proposed_allocator_preserves_scanner_reference_qty_before_resource_capping",
+        777,
+        None if _scanner_sized_candidate is None else _scanner_sized_candidate.get("qty"),
+    )
+
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
@@ -1335,7 +1361,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
     from services.trading.daily_workflow import resolve_trading_candidate_snapshot_path
-    from services.trading.order_planning import build_trading_proposed_order_plan
+    from services.trading.order_planning import _build_allocator_candidate, build_trading_proposed_order_plan
 
     profile = get_trading_strategy_profile()
     project_root = Path(__file__).resolve().parents[2]
@@ -3409,6 +3435,26 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _ordered_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-16")
     _filled_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-18")
     _information_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-15")
+    _voided_fill_shadow = deepcopy(_inspection_order)
+    _voided_fill_shadow["entry_orders"] = [deepcopy(_inspection_order["entry_orders"][0])]
+    _voided_fill_shadow["entry_orders"][0]["qty"] = 333
+    _voided_fill_shadow["entry_orders"][0]["fills"] = [{
+        "fill_id": "VOIDED-FILL",
+        "qty": 333,
+        "fill_price_milli": _price_to_milli(98.0),
+        "trade_date": "2026-09-16",
+        "net_buy_total_milli": int(build_buy_ledger_from_price(98.0, 333, base_params)["net_buy_total_milli"]),
+        "confirmed_at": "2026-09-16T10:00:00+08:00",
+    }]
+    _voided_fill_shadow["account_events"] = []
+    _voided_fill_sidebar = resolve_trading_single_stock_sidebar_state(
+        _voided_fill_shadow, "2026-09-16", last_date="2026-09-16"
+    )
+    check(
+        "workbench_single_stock_voided_old_fill_does_not_override_current_scanner_reference_qty",
+        _inspection_candidate["candidate"]["proj_qty"],
+        None if _voided_fill_sidebar is None else _voided_fill_sidebar.get("planned_qty"),
+    )
     check("workbench_single_stock_persisted_normal_order_information_date_remains_signal", "SIGNAL", _information_sidebar.get("state"))
     check("workbench_single_stock_order_can_remain_shadow_across_multiple_days", ["SHADOW", None], [_ordered_sidebar.get("state"), _ordered_sidebar.get("entry_price")])
     check(
@@ -3491,6 +3537,30 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             },
         },
     }
+    _rebuy_event = deepcopy(_overlay_event)
+    _rebuy_event["details"]["entry_order_id"] = None
+    _rebuy_event["details"]["qty"] = 1000
+    _rebuy_event["details"]["strategy_lineage"]["planned_qty"] = 1000
+    _rebuy_event["details"]["strategy_lineage"]["planned_cost"] = float(
+        build_buy_ledger_from_price(_synth_limit, 1000, base_params)["net_buy_total_milli"]
+    ) / 1000.0
+    _rebuy_inspection = {
+        "ticker": "2330",
+        "candidate": {},
+        "entry_orders": [deepcopy(_overlay_order)],
+        "account_events": [_rebuy_event],
+        "current_position": None,
+        "decision_errors": [],
+        "protection": {"fresh": False, "positions": []},
+        "indicator_exit": {"fresh": False, "exits": []},
+    }
+    _rebuy_sidebar = resolve_trading_single_stock_sidebar_state(_rebuy_inspection, "2026-09-18")
+    check(
+        "workbench_single_stock_rebuy_ignores_stale_prior_cycle_entry_order_qty",
+        1000,
+        None if _rebuy_sidebar is None else _rebuy_sidebar.get("planned_qty"),
+    )
+
     _overlay_inspection = {
         "ticker": "2330",
         "candidate": {},
