@@ -18,9 +18,15 @@ from core.exact_accounting import (
 from core.fee_rebate import create_fee_rebate_state, settle_fee_rebate
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import extract_precomputed_signals as _extract_precomputed_signals, generate_signals, unpack_precomputed_signals
+from core.trade_lifecycle import (
+    TRADE_LIFECYCLE_SIGNAL,
+    build_trade_lifecycle_row,
+    record_lifecycle_row,
+)
 from services.trade_analysis.charting import (
     create_debug_chart_context,
     record_active_levels,
+    record_shadow_active_levels,
     record_signal_annotation,
     resolve_chart_price_overlay_specs,
     resolve_position_tp_half_line,
@@ -63,8 +69,8 @@ def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
     )
 
     dates = chart_context.get('dates')
-    if dates is not None and len(dates) > 0:
-        record_active_levels(
+    if has_shadow_state and dates is not None and len(dates) > 0:
+        record_shadow_active_levels(
             chart_context,
             current_date=dates[-1],
             stop_price=stop_price,
@@ -108,6 +114,24 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
         title='買訊',
         detail_lines=detail_lines,
         meta=meta,
+    )
+    lifecycle_store = chart_context.setdefault("strategy_lifecycle_by_date", {})
+    record_lifecycle_row(
+        lifecycle_store,
+        signal_date,
+        build_trade_lifecycle_row(
+            TRADE_LIFECYCLE_SIGNAL,
+            source="research_buy_signal",
+            signal_date=signal_date,
+            information_date=signal_date,
+            entry_type="normal",
+            limit_price=(None if entry_plan is None else entry_plan.get("limit_price")),
+            stop_price=(None if entry_plan is None else entry_plan.get("init_sl")),
+            tp_price=(None if entry_plan is None else entry_plan.get("target_price")),
+            reserved_capital=(None if entry_plan is None else calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)),
+            planned_qty=(None if entry_plan is None else entry_plan.get("qty")),
+            remaining_order_qty=(None if entry_plan is None else entry_plan.get("qty")),
+        ),
     )
 
 
@@ -266,6 +290,13 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     rebate_month_key = None
     trade_logs = []
     chart_context = create_debug_chart_context(df, price_overlay_specs=resolve_chart_price_overlay_specs(params=params)) if (export_chart or return_chart_payload) else None
+    if chart_context is not None:
+        chart_context["strategy_lifecycle_inputs"] = {
+            "atr": np.asarray(atr_main, dtype=np.float64).copy(),
+            "buy_signal": np.asarray(buy_condition, dtype=bool).copy(),
+            "sell_signal": np.asarray(sell_condition, dtype=bool).copy(),
+            "buy_limit": np.asarray(buy_limits, dtype=np.float64).copy(),
+        }
     for j in range(1, len(c)):
         current_rebate_month_key = (int(dates[j].year), int(dates[j].month))
         if rebate_month_key is None:

@@ -3348,6 +3348,16 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     from core.params_io import params_to_json_dict as _params_to_json_dict
     from core.exact_accounting import price_to_milli as _price_to_milli
+    from core.price_utils import (
+        calc_frozen_target_price as _calc_frozen_target_price,
+        calc_initial_stop_from_reference as _calc_initial_stop_from_reference,
+        calc_initial_trailing_stop_from_reference as _calc_initial_trailing_stop_from_reference,
+    )
+    _synth_limit = 100.0
+    _synth_atr = 5.0
+    _synth_stop = float(_calc_initial_stop_from_reference(_synth_limit, _synth_atr, base_params, ticker="2330", security_profile={}))
+    _synth_trail = float(_calc_initial_trailing_stop_from_reference(_synth_limit, _synth_atr, base_params, ticker="2330", security_profile={}))
+    _synth_tp = float(_calc_frozen_target_price(_synth_limit, _synth_stop, ticker="2330", security_profile={}))
     from services.trading.single_stock_inspection import (
         project_trading_single_stock_chart_payload,
         resolve_trading_single_stock_sidebar_state,
@@ -3362,8 +3372,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "proj_qty": 1000,
             "execution_plan_seed": {
                 "ticker": "2330", "trade_date": "2026-09-15",
-                "limit_price": 100.0, "init_sl": 95.0, "init_trail": 95.0,
-                "target_price": 105.0, "entry_atr": 5.0,
+                "limit_price": _synth_limit, "init_sl": _synth_stop, "init_trail": _synth_trail,
+                "target_price": _synth_tp, "entry_atr": _synth_atr,
             },
         },
         "entry_orders": [], "account_events": [], "current_position": None,
@@ -3384,9 +3394,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _inspection_order["entry_orders"] = [{
         "order_id": "SINGLE-STOCK-SYN-001", "ticker": "2330", "side": "BUY", "purpose": "ENTRY",
         "information_date": "2026-09-15", "ordered_at": "2026-09-15T18:00:00+08:00",
-        "qty": _fill_qty, "limit_price_milli": _price_to_milli(100.0),
-        "init_sl_milli": _price_to_milli(95.0), "init_trail_milli": _price_to_milli(95.0),
-        "target_price_milli": _price_to_milli(105.0), "entry_atr_milli": _price_to_milli(5.0),
+        "qty": _fill_qty, "limit_price_milli": _price_to_milli(_synth_limit),
+        "init_sl_milli": _price_to_milli(_synth_stop), "init_trail_milli": _price_to_milli(_synth_trail),
+        "target_price_milli": _price_to_milli(_synth_tp), "entry_atr_milli": _price_to_milli(_synth_atr),
         "reserved_cost_milli": int(build_buy_ledger_from_price(100.0, _fill_qty, base_params)["net_buy_total_milli"]),
         "frozen_params": _params_to_json_dict(base_params), "entry_type": "normal", "security_profile": {},
         "fills": [{
@@ -3416,11 +3426,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _position_state = _build_position_from_entry_fill(
         buy_price=_fill_price,
         qty=333,
-        init_sl=95.0,
-        init_trail=95.0,
-        target_price=105.0,
-        limit_price=100.0,
-        entry_atr=5.0,
+        init_sl=_synth_stop,
+        init_trail=_synth_trail,
+        target_price=_synth_tp,
+        limit_price=_synth_limit,
+        entry_atr=_synth_atr,
         params=base_params,
         ticker="2330",
         security_profile={},
@@ -3452,15 +3462,17 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "strategy_lineage": {
                 "execution_plan_seed": {
                     "trade_date": "2026-09-15",
-                    "limit_price": 100.0,
-                    "init_sl": 95.0,
-                    "init_trail": 95.0,
-                    "target_price": 105.0,
-                    "entry_atr": 5.0,
+                    "limit_price": _synth_limit,
+                    "init_sl": _synth_stop,
+                    "init_trail": _synth_trail,
+                    "target_price": _synth_tp,
+                    "entry_atr": _synth_atr,
                 },
                 "candidate_trade_date": "2026-09-15",
                 "signal_date": "2026-09-14",
                 "planned_qty": 333,
+                "planned_cost": float(build_buy_ledger_from_price(_synth_limit, 333, base_params)["net_buy_total_milli"]) / 1000.0,
+                "frozen_params": _params_to_json_dict(base_params),
             },
             "position_after": {
                 "ticker": "2330",
@@ -3500,6 +3512,16 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _nan = float("nan")
     _base_overlay_payload = {
         "date_labels": _overlay_dates,
+        "x": list(range(len(_overlay_dates))),
+        "open": [99.0, 102.0, 103.0, 104.0, 98.0],
+        "high": [101.0, 103.0, 104.0, 105.0, 100.0],
+        "low": [98.0, 101.0, 102.0, 103.0, 97.0],
+        "close": [100.0, 102.5, 103.5, 104.0, 99.0],
+        "volume": [1_000_000.0] * len(_overlay_dates),
+        "strategy_lifecycle_inputs": {
+            "atr": [_synth_atr] * len(_overlay_dates),
+            "sell_signal": [False] * len(_overlay_dates),
+        },
         # Research counterfactual strategy geometry: its simulated fill occurs on
         # 09/15, but Trading must reinterpret that evolving strategy position as
         # SHADOW until the effective account fill on 09/18.
@@ -3521,7 +3543,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         }],
         "future_preview": {"some": "research-only-preview"},
     }
-    _projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _overlay_inspection)
+    _projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _overlay_inspection, params=base_params)
     check(
         "workbench_single_stock_trading_execution_layer_never_mixes_research_simulated_transaction_geometry",
         True,
@@ -3549,14 +3571,14 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "current_position": deepcopy(_overlay_event["details"]["position_after"]),
     }
     _held_now_projected = project_trading_single_stock_chart_payload(
-        _base_overlay_payload, _held_now_inspection
+        _base_overlay_payload, _held_now_inspection, params=base_params
     )
     check(
         "workbench_single_stock_currently_held_ticker_preserves_prefill_shadow_history",
         [
             ["SIGNAL", "SHADOW", "SHADOW", "SHADOW", "POSITION"],
             [100.0, 100.0, 100.0],
-            [95.0, 96.0, 97.0],
+            [_synth_stop, _synth_stop, _synth_stop],
             [[4, 333, 98.0]],
         ],
         [
@@ -3575,7 +3597,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check(
         "workbench_single_stock_trading_overlay_keeps_frozen_shadow_plan_until_real_fill",
-        [True, [100.0, 100.0, 100.0], [95.0, 96.0, 97.0], [105.0, 105.0, 105.0]],
+        [True, [100.0, 100.0, 100.0], [_synth_stop, _synth_stop, _synth_stop], [_synth_tp, _synth_tp, _synth_tp]],
         [
             all(pd.isna(_projected[key][0]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
             _projected["shadow_limit_line"][1:4],
@@ -3644,7 +3666,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "current_position": None,
     }
     _voided_fill_projected = project_trading_single_stock_chart_payload(
-        _base_overlay_payload, _voided_fill_inspection
+        _base_overlay_payload, _voided_fill_inspection, params=base_params
     )
     check(
         "workbench_single_stock_deleted_account_fill_never_reappears_as_actual_trade",
@@ -3665,10 +3687,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "entry_orders": [],
         "account_events": [_direct_event],
     }
-    _direct_projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _direct_inspection)
+    _direct_projected = project_trading_single_stock_chart_payload(_base_overlay_payload, _direct_inspection, params=base_params)
     check(
         "workbench_single_stock_trading_overlay_reconstructs_non_oms_shadow_from_frozen_lineage",
-        [True, [100.0, 100.0, 100.0], [95.0, 96.0, 97.0], [105.0, 105.0, 105.0], 333],
+        [True, [100.0, 100.0, 100.0], [_synth_stop, _synth_stop, _synth_stop], [_synth_tp, _synth_tp, _synth_tp], 333],
         [
             all(pd.isna(_direct_projected[key][0]) for key in ("shadow_limit_line", "shadow_stop_line", "shadow_tp_line")),
             _direct_projected["shadow_limit_line"][1:4],
@@ -3679,6 +3701,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     _candidate_chart = {
         "date_labels": ["2026-09-12", "2026-09-15"],
+        "x": [0, 1],
+        "open": [99.0, 102.0], "high": [101.0, 103.0],
+        "low": [98.0, 101.0], "close": [100.0, 102.0],
+        "volume": [1_000_000.0, 1_000_000.0],
+        "strategy_lifecycle_inputs": {"atr": [_synth_atr, _synth_atr], "sell_signal": [False, False]},
         "stop_line": [_nan, _nan],
         "tp_line": [_nan, _nan],
         "limit_line": [_nan, _nan],
@@ -3696,10 +3723,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "default_view": {"start_idx": 0, "end_idx": 0},
         "gui_render_window": {"start_idx": 0, "end_idx": 0},
     }
-    _candidate_projected = project_trading_single_stock_chart_payload(_candidate_chart, _inspection_candidate)
+    _candidate_projected = project_trading_single_stock_chart_payload(_candidate_chart, _inspection_candidate, params=base_params)
     check(
         "workbench_single_stock_trading_scanner_uses_future_preview_not_signal_bar_transaction_lines",
-        [True, {"limit_price": 100.0, "stop_price": 95.0, "tp_half_price": 105.0, "entry_price": None}, 0],
+        [True, {"limit_price": _synth_limit, "stop_price": _synth_stop, "tp_half_price": _synth_tp, "entry_price": None}, 0],
         [
             all(
                 pd.isna(_candidate_projected[key][1])
@@ -3727,6 +3754,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _cross_day_candidate["candidate"]["execution_plan_seed"]["trade_date"] = "2026-09-17"
     _cross_day_chart = {
         "date_labels": ["2026-09-15", "2026-09-16", "2026-09-17"],
+        "x": [0, 1, 2],
+        "open": [99.0, 102.0, 103.0], "high": [101.0, 103.0, 104.0],
+        "low": [98.0, 101.0, 102.0], "close": [100.0, 102.0, 103.0],
+        "volume": [1_000_000.0] * 3,
+        "strategy_lifecycle_inputs": {"atr": [_synth_atr] * 3, "sell_signal": [False] * 3},
         "stop_line": [_nan] * 3, "tp_line": [_nan] * 3,
         "limit_line": [_nan] * 3, "entry_line": [_nan] * 3,
         "shadow_stop_line": [_nan] * 3, "shadow_tp_line": [_nan] * 3,
@@ -3738,13 +3770,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         }],
     }
     _cross_day_projected = project_trading_single_stock_chart_payload(
-        _cross_day_chart, _cross_day_candidate
+        _cross_day_chart, _cross_day_candidate, params=base_params
     )
     check(
         "workbench_single_stock_unheld_scanner_signal_becomes_cross_day_shadow_with_lines",
         [
             ["SIGNAL", "SHADOW", "SHADOW"],
-            [100.0, 100.0], [95.0, 95.0], [105.0, 105.0],
+            [_synth_limit, _synth_limit], [_synth_stop, _synth_stop], [_synth_tp, _synth_tp],
             [],
         ],
         [
@@ -3769,21 +3801,107 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             for idx in (1, 2)
         ],
     )
+
+    # Architecture regression: Trading SHADOW must be the same completed-bar
+    # counterfactual lifecycle that Research produces when the same signal has
+    # not filled.  This compares the real Research entry-flow producer against
+    # the Trading projection instead of comparing two hand-written fixtures.
+    import pandas as _pd
+    from core.fee_rebate import create_fee_rebate_state as _create_fee_rebate_state
+    from services.trade_analysis.charting import (
+        create_debug_chart_context as _create_debug_chart_context,
+        _render_bar_scoped_transaction_line as _render_bar_scoped_transaction_line,
+    )
+    from services.trade_analysis.entry_flow import process_debug_entry_for_day as _process_debug_entry_for_day
+    _parity_dates = _pd.to_datetime(["2026-09-15", "2026-09-16", "2026-09-17"])
+    _parity_df = _pd.DataFrame(
+        {
+            "Open": [99.0, 102.0, 103.0],
+            "High": [101.0, 103.0, 104.0],
+            "Low": [98.0, 101.0, 102.0],
+            "Close": [100.0, 102.0, 103.0],
+            "Volume": [1_000_000.0] * 3,
+        },
+        index=_parity_dates,
+    )
+    _research_ctx = _create_debug_chart_context(_parity_df)
+    _research_position = {"qty": 0}
+    _research_signal = None
+    _research_logs = []
+    _research_fee_state = _create_fee_rebate_state()
+    _sizing_capital = float(base_params.initial_capital)
+    _research_position, _research_signal, _spent = _process_debug_entry_for_day(
+        position=_research_position, pos_qty_start_of_bar=0, active_extended_signal=_research_signal,
+        buy_condition_prev=True, buy_limit_prev=_synth_limit, atr_prev=_synth_atr,
+        close_prev=100.0, high_prev=101.0, sell_condition_prev=False,
+        sizing_cap=_sizing_capital, t_open=102.0, t_high=103.0, t_low=101.0,
+        t_close=102.0, t_volume=1_000_000.0, current_date=_parity_dates[1],
+        params=base_params, trade_logs=_research_logs, chart_context=_research_ctx,
+        current_capital=_sizing_capital, ticker="2330", security_profile={},
+        trade_date=_parity_dates[1], signal_date=_parity_dates[0],
+        fee_rebate_state=_research_fee_state,
+    )
+    _research_position, _research_signal, _spent = _process_debug_entry_for_day(
+        position=_research_position, pos_qty_start_of_bar=0, active_extended_signal=_research_signal,
+        buy_condition_prev=False, buy_limit_prev=float("nan"), atr_prev=_synth_atr,
+        close_prev=102.0, high_prev=103.0, sell_condition_prev=False,
+        sizing_cap=_sizing_capital, t_open=103.0, t_high=104.0, t_low=102.0,
+        t_close=103.0, t_volume=1_000_000.0, current_date=_parity_dates[2],
+        params=base_params, trade_logs=_research_logs, chart_context=_research_ctx,
+        current_capital=_sizing_capital, ticker="2330", security_profile={},
+        trade_date=_parity_dates[2], signal_date=None, fee_rebate_state=_research_fee_state,
+    )
+    check(
+        "workbench_single_stock_trading_shadow_geometry_matches_research_entry_flow",
+        [
+            list(_research_ctx["shadow_limit_line"][1:3]),
+            list(_research_ctx["shadow_stop_line"][1:3]),
+            list(_research_ctx["shadow_tp_line"][1:3]),
+        ],
+        [
+            _cross_day_projected["shadow_limit_line"][1:3],
+            _cross_day_projected["shadow_stop_line"][1:3],
+            _cross_day_projected["shadow_tp_line"][1:3],
+        ],
+    )
+    _finite_shadow_stops = [
+        float(v) for v in _cross_day_projected["shadow_stop_line"] if not pd.isna(v)
+    ]
+    check(
+        "workbench_single_stock_shadow_stop_never_moves_backward_after_shadow_starts",
+        True,
+        all(right + 1e-9 >= left for left, right in zip(_finite_shadow_stops, _finite_shadow_stops[1:])),
+    )
+    # Rendering regression: a latest-bar SHADOW value is one finite bar between
+    # NaNs.  It must still produce a visible horizontal segment.
+    from matplotlib.figure import Figure as _Figure
+    _figure = _Figure(figsize=(2, 1))
+    _axis = _figure.add_subplot(111)
+    _artists = _render_bar_scoped_transaction_line(
+        _axis, [0.0, 1.0, 2.0], [float("nan"), float("nan"), _synth_limit],
+        color="black", linewidth=1.0,
+    )
+    _segments = [] if not _artists else list(_artists[0].get_segments())
+    check(
+        "workbench_single_stock_latest_shadow_bar_renders_visible_level_segment",
+        True,
+        bool(_segments) and abs(float(_segments[0][0][0]) - 1.5) < 1e-9 and abs(float(_segments[0][1][0]) - 2.5) < 1e-9,
+    )
     _extended_candidate_inspection = deepcopy(_inspection_candidate)
     _extended_candidate_inspection["candidate"] = deepcopy(_inspection_candidate["candidate"])
     _extended_candidate_inspection["candidate"]["kind"] = "extended"
     _extended_candidate_inspection["candidate"]["signal_date"] = "2026-09-12"
     _extended_candidate_inspection["candidate"]["execution_plan_seed"]["entry_source"] = "extended"
     _extended_state = resolve_trading_single_stock_sidebar_state(_extended_candidate_inspection, "2026-09-15")
-    _extended_projected = project_trading_single_stock_chart_payload(_candidate_chart, _extended_candidate_inspection)
+    _extended_projected = project_trading_single_stock_chart_payload(_candidate_chart, _extended_candidate_inspection, params=base_params)
     check(
         "workbench_single_stock_current_extended_candidate_is_continuing_shadow",
-        ["SHADOW", 100.0, 95.0, 105.0],
+        ["SHADOW", _synth_limit, _synth_stop, _synth_tp],
         [_extended_state.get("state"), _extended_state.get("limit_price"), _extended_state.get("stop_price"), _extended_state.get("tp_price")],
     )
     check(
         "workbench_single_stock_current_extended_candidate_keeps_shadow_lines_and_forward_preview",
-        [[100.0, 95.0, 105.0], {"limit_price": 100.0, "stop_price": 95.0, "tp_half_price": 105.0, "entry_price": None}],
+        [[_synth_limit, _synth_stop, _synth_tp], {"limit_price": _synth_limit, "stop_price": _synth_stop, "tp_half_price": _synth_tp, "entry_price": _synth_limit}],
         [[_extended_projected["shadow_limit_line"][1], _extended_projected["shadow_stop_line"][1], _extended_projected["shadow_tp_line"][1]], _extended_projected.get("future_preview")],
     )
 
@@ -3793,6 +3911,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "2026-09-18", "2026-09-21", "2026-09-22",
     ]
     _rollforward_payload["date_labels"] = _rollforward_dates
+    _rollforward_payload["x"] = list(range(len(_rollforward_dates)))
+    _rollforward_payload["open"] = [99.0, 102.0, 103.0, 104.0, 98.0, 101.0, 102.0]
+    _rollforward_payload["high"] = [101.0, 103.0, 104.0, 105.0, 100.0, 104.0, 105.0]
+    _rollforward_payload["low"] = [98.0, 101.0, 102.0, 103.0, 97.0, 100.0, 101.0]
+    _rollforward_payload["close"] = [100.0, 102.5, 103.5, 104.0, 99.0, 103.0, 104.0]
+    _rollforward_payload["volume"] = [1_000_000.0] * len(_rollforward_dates)
+    _rollforward_payload["strategy_lifecycle_inputs"] = {"atr": [_synth_atr] * len(_rollforward_dates), "sell_signal": [False] * len(_rollforward_dates)}
     for _line_key in (
         "stop_line", "tp_line", "limit_line", "entry_line",
         "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line",
@@ -3814,7 +3939,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         **_direct_inspection,
         "account_events": [_direct_event, _rollforward_event],
     }
-    _rollforward_projected = project_trading_single_stock_chart_payload(_rollforward_payload, _rollforward_inspection)
+    _rollforward_projected = project_trading_single_stock_chart_payload(_rollforward_payload, _rollforward_inspection, params=base_params)
     check(
         "workbench_single_stock_trading_actual_stop_follows_persisted_rollforward_evidence",
         [float(_position_state["sl"]), 92.0, 92.0],

@@ -84,11 +84,11 @@ def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan
         )
         return
 
-    record_active_levels(
+    record_shadow_active_levels(
         chart_context,
         current_date=current_date,
-        stop_price=np.nan,
-        tp_half_price=np.nan,
+        stop_price=entry_plan.get('init_sl', np.nan),
+        tp_half_price=entry_plan.get('target_price', np.nan),
         limit_price=entry_plan['limit_price'],
         entry_price=np.nan,
     )

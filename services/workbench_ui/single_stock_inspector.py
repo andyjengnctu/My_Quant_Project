@@ -2281,6 +2281,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             chart_payload = project_trading_single_stock_chart_payload(
                 chart_payload,
                 result.get("trading_inspection"),
+                params=result.get("params"),
             )
             # Formal backtest statistics still include data-end forced closeout.
             # Trading visualization must not present that accounting-only closeout

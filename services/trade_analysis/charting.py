@@ -6,11 +6,14 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from services.trade_analysis.lifecycle_contract import (
+from core.trade_lifecycle import (
     TRADE_LIFECYCLE_POSITION,
     TRADE_LIFECYCLE_SHADOW,
-    build_strategy_lifecycle_timeline_from_chart_payload,
+    TRADE_TRANSACTION_LINE_KEYS,
+    build_trade_lifecycle_row,
     iter_trade_lifecycle_line_values,
+    lifecycle_rows_to_index,
+    record_lifecycle_row,
 )
 
 
@@ -309,6 +312,8 @@ def create_debug_chart_context(df, *, price_overlay_specs=None):
         "summary_box": None,
         "status_box": None,
         "future_preview": {},
+        "strategy_lifecycle_by_date": {},
+        "strategy_lifecycle_inputs": {},
     }
 
 
@@ -395,6 +400,25 @@ def _record_trade_lifecycle_levels(
     pos = _resolve_optional_chart_pos(chart_context, current_date)
     if pos is None:
         return
+    lifecycle_store = chart_context.setdefault("strategy_lifecycle_by_date", {})
+    record_lifecycle_row(
+        lifecycle_store,
+        current_date,
+        build_trade_lifecycle_row(
+            lifecycle_state,
+            source="research_strategy_runtime",
+            stop_price=stop_price,
+            tp_price=tp_half_price,
+            limit_price=limit_price,
+            entry_price=entry_price,
+        ),
+    )
+    # One lifecycle state owns one transaction-line family per bar.  A same-day
+    # fill must replace the pre-market SHADOW geometry rather than leaving both.
+    for key in TRADE_TRANSACTION_LINE_KEYS:
+        line_values = chart_context.get(key)
+        if line_values is not None:
+            line_values[pos] = np.nan
     for key, value in iter_trade_lifecycle_line_values(
         lifecycle_state,
         stop_price=stop_price,
@@ -796,10 +820,15 @@ def build_debug_chart_payload(price_df, chart_context):
         "summary_box": list((chart_context or {}).get("summary_box") or []),
         "status_box": dict((chart_context or {}).get("status_box") or {}),
         "future_preview": dict((chart_context or {}).get("future_preview") or {}),
+        "strategy_lifecycle_inputs": {
+            str(key): np.asarray(values).copy()
+            for key, values in dict((chart_context or {}).get("strategy_lifecycle_inputs") or {}).items()
+        },
     }
     payload = _apply_chart_display_line_clipping(payload)
-    payload["strategy_lifecycle_by_index"] = build_strategy_lifecycle_timeline_from_chart_payload(
-        payload, buy_trace_names=CHART_BUY_TRACE_NAMES
+    payload["strategy_lifecycle_by_index"] = lifecycle_rows_to_index(
+        payload["date_labels"],
+        (chart_context or {}).get("strategy_lifecycle_by_date") or {},
     )
     payload["default_view"] = compute_default_view_window(dates, total_bars, focus_positions)
     payload["gui_render_window"] = compute_gui_render_window(payload)
@@ -860,10 +889,16 @@ def normalize_chart_payload_contract(chart_payload):
     normalized["summary_box"] = list(normalized.get("summary_box") or [])
     normalized["status_box"] = dict(normalized.get("status_box") or {})
     normalized["future_preview"] = dict(normalized.get("future_preview") or {})
+    normalized["strategy_lifecycle_inputs"] = {
+        str(key): np.asarray(values).copy()
+        for key, values in dict(normalized.get("strategy_lifecycle_inputs") or {}).items()
+    }
     normalized = _apply_chart_display_line_clipping(normalized)
-    normalized["strategy_lifecycle_by_index"] = build_strategy_lifecycle_timeline_from_chart_payload(
-        normalized, buy_trace_names=CHART_BUY_TRACE_NAMES
-    )
+    normalized["strategy_lifecycle_by_index"] = {
+        int(idx): dict(row)
+        for idx, row in dict(normalized.get("strategy_lifecycle_by_index") or {}).items()
+        if isinstance(row, dict) and 0 <= int(idx) < total_bars
+    }
 
     default_view = dict(normalized.get("default_view") or {})
     if not default_view:
@@ -1988,6 +2023,48 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annota
         rendered.append(_tag_chart_annotation_layout(artist, placement=placement, base_position=(x_offset, y_offset), kind="trade"))
     return rendered
 
+def _render_bar_scoped_transaction_line(axis_price, x_positions, values, *, color, linewidth, linestyle="solid", zorder=4.0):
+    """Render one lifecycle level as an explicit segment on every owned bar.
+
+    ``matplotlib.step`` does not render an isolated finite point between NaNs,
+    which made the newest SHADOW state look line-less.  Lifecycle levels are
+    bar-scoped state, so draw one horizontal segment per finite bar and only add
+    a vertical connector when two adjacent bars both own the same line family.
+    Research and Trading use this same renderer.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    xs = np.asarray(x_positions, dtype=np.float64)
+    if arr.size == 0 or xs.size == 0:
+        return []
+    count = min(arr.size, xs.size)
+    finite = np.isfinite(arr[:count])
+    if not finite.any():
+        return []
+    horizontal = []
+    vertical = []
+    for i in np.flatnonzero(finite):
+        x = float(xs[i])
+        y = float(arr[i])
+        horizontal.append(((x - 0.5, y), (x + 0.5, y)))
+        j = int(i) + 1
+        if j < count and finite[j]:
+            next_y = float(arr[j])
+            if abs(next_y - y) > 1e-12:
+                mid = (float(xs[i]) + float(xs[j])) / 2.0
+                vertical.append(((mid, y), (mid, next_y)))
+    from matplotlib.collections import LineCollection
+    artists = []
+    if horizontal:
+        collection = LineCollection(horizontal, colors=color, linewidths=linewidth, linestyles=linestyle, zorder=zorder)
+        axis_price.add_collection(collection)
+        artists.append(collection)
+    if vertical:
+        collection = LineCollection(vertical, colors=color, linewidths=linewidth, linestyles=linestyle, zorder=zorder)
+        axis_price.add_collection(collection)
+        artists.append(collection)
+    return artists
+
+
 def _render_future_preview_lines(axis_price, chart_payload):
     preview = dict(chart_payload.get("future_preview") or {})
     if not preview:
@@ -2179,21 +2256,14 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         chart_payload["entry_line"],
         chart_payload["limit_line"],
     )
-    if np.isfinite(chart_payload["shadow_stop_line"]).any():
-        axis_price.step(x_positions, chart_payload["shadow_stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=3.8)
-    if np.isfinite(chart_payload["shadow_tp_line"]).any():
-        axis_price.step(x_positions, chart_payload["shadow_tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=3.8)
-    if np.isfinite(shadow_entry_line_for_render).any():
-        axis_price.step(x_positions, shadow_entry_line_for_render, where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.75)
-    if np.isfinite(chart_payload["shadow_limit_line"]).any():
-        axis_price.step(x_positions, chart_payload["shadow_limit_line"], where="mid", color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=3.8)
-    axis_price.step(x_positions, chart_payload["stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=4)
-    if np.isfinite(chart_payload["tp_line"]).any():
-        axis_price.step(x_positions, chart_payload["tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=4)
-    if np.isfinite(entry_line_for_render).any():
-        axis_price.step(x_positions, entry_line_for_render, where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.95)
-    if np.isfinite(chart_payload["limit_line"]).any():
-        axis_price.step(x_positions, chart_payload["limit_line"], where="mid", color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=4)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["shadow_stop_line"], color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=3.8)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["shadow_tp_line"], color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=3.8)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, shadow_entry_line_for_render, color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.75)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["shadow_limit_line"], color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=3.8)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["stop_line"], color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=4.0)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["tp_line"], color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=4.0)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, entry_line_for_render, color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.95)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["limit_line"], color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=4.0)
     for trace_name, markers in chart_payload["marker_groups"].items():
         style = ACTION_STYLE_MAP.get(trace_name, {"mpl_marker": "o", "color": MATPLOTLIB_TEXT_COLOR})
         axis_price.scatter(

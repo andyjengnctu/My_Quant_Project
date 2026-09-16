@@ -62,6 +62,8 @@ def _normalize_execution_plan_seed(candidate_plan, *, ticker, trade_date):
     keys = (
         'limit_price', 'init_sl', 'init_trail', 'target_price', 'entry_atr',
         'security_profile', 'max_qty', 'orig_limit', 'orig_atr', 'entry_source',
+        'entry_ref_price', 'shadow_entry_price', 'continuation_invalidation_barrier',
+        'continuation_completion_barrier', 'shadow_position_state', 'sizing_capital',
     )
     seed = {key: candidate_plan.get(key) for key in keys if candidate_plan.get(key) is not None}
     seed['ticker'] = str(ticker)
