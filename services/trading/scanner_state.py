@@ -19,6 +19,7 @@ from services.trading.market_data_consumer import (
     load_trading_v2_consumer_state,
 )
 from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
+from services.trading.account_state import load_trading_account_state
 from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
 from services.trading.strategy_param_state import (
     get_trading_strategy_param_binding_sha256,
@@ -115,7 +116,7 @@ def load_trading_scanner_runtime(
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     if not selected_path.is_file():
         raise FileNotFoundError(
-            "Trading strategy params尚未產生；請先在 Workbench 執行「2 套用 Params」，並選擇重新訓練。"
+            "Trading strategy params尚未產生；請先在 Workbench 執行「3 套用 Params」，並選擇重新訓練。"
         )
 
     payload = load_json_strict(selected_path)
@@ -409,7 +410,7 @@ def load_trading_candidate_snapshot(
     root = Path(project_root).resolve()
     path = resolve_trading_candidate_snapshot_path(root)
     if not path.is_file():
-        raise FileNotFoundError("Trading Scanner candidate snapshot 尚未產生；請先執行「3 Scanner 候選」。")
+        raise FileNotFoundError("Trading Scanner candidate snapshot 尚未產生；請先執行「4 Scanner 候選」。")
     payload = load_json_strict(path)
     _validate_trading_candidate_snapshot_payload(payload)
     if not require_current:
@@ -441,6 +442,54 @@ def load_trading_candidate_snapshot(
     return payload
 
 
+def _resolve_trading_held_tickers(project_root: str | Path) -> set[str]:
+    """Return canonical currently-held tickers for account-aware Scanner views."""
+    state = load_trading_account_state(project_root, required=False)
+    if not state:
+        return set()
+    held: set[str] = set()
+    for ticker, record in (state.get("positions") or {}).items():
+        broker = (record or {}).get("broker") or {}
+        if int(broker.get("qty") or 0) > 0:
+            held.add(normalize_trading_ticker(ticker))
+    return held
+
+
+def filter_trading_candidate_rows_for_held_positions(
+    candidate_rows: list[dict[str, Any]],
+    *,
+    held_tickers: set[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Mirror Research held-position exclusion in account-aware Scanner views."""
+    normalized_held = {normalize_trading_ticker(ticker) for ticker in held_tickers if str(ticker or "").strip()}
+    visible: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for raw in list(candidate_rows or []):
+        row = dict(raw)
+        ticker = normalize_trading_ticker(row.get("ticker"))
+        if ticker in normalized_held:
+            skipped.append(ticker)
+            continue
+        visible.append(row)
+    return visible, sorted(set(skipped))
+
+
+def load_trading_candidate_snapshot_for_account(
+    project_root: str | Path,
+    *,
+    require_current: bool = False,
+) -> dict[str, Any]:
+    """Load Scanner truth projected through current canonical account holdings."""
+    payload = dict(load_trading_candidate_snapshot(project_root, require_current=require_current))
+    visible, skipped = filter_trading_candidate_rows_for_held_positions(
+        list(payload.get("candidate_rows") or []),
+        held_tickers=_resolve_trading_held_tickers(project_root),
+    )
+    payload["candidate_rows"] = visible
+    payload["held_candidate_tickers_skipped"] = skipped
+    return payload
+
+
 def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     path = resolve_trading_candidate_snapshot_path(root)
@@ -456,7 +505,7 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
             "path": project_relative_display_path(path, project_root=root),
         }
     try:
-        payload = load_trading_candidate_snapshot(root, require_current=False)
+        payload = load_trading_candidate_snapshot_for_account(root, require_current=False)
     except (OSError, TypeError, ValueError, RuntimeError) as exc:
         return {
             "exists": True,
@@ -490,6 +539,7 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
         "scanned_ticker_count": len(payload.get("scanned_tickers") or []),
         "stale_candidate_rows_skipped": list(payload.get("stale_candidate_rows_skipped") or []),
         "stale_candidate_count": len(payload.get("stale_candidate_rows_skipped") or []),
+        "held_candidate_tickers_skipped": list(payload.get("held_candidate_tickers_skipped") or []),
         "information_date": payload.get("latest_data_date"),
         "selected_params_sha256": payload.get("selected_params_sha256"),
         "market_data_consumer_state_sha256": payload.get("market_data_consumer_state_sha256"),
@@ -505,6 +555,8 @@ __all__ = [
     "build_trading_daily_workflow_snapshot",
     "get_trading_candidate_snapshot_read_model",
     "load_trading_candidate_snapshot",
+    "load_trading_candidate_snapshot_for_account",
+    "filter_trading_candidate_rows_for_held_positions",
     "load_trading_scanner_runtime",
     "partition_trading_candidate_rows_for_information_date",
     "resolve_trading_candidate_snapshot_path",

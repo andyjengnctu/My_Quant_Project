@@ -1,9 +1,12 @@
 - Trading
     - 股票中文名稱
     - 掛單試算功能
+    - 加入前日還在本日退出候侯選股
 
 
 - Trading (performance)
+    - 自動更新太干擾
+    - 1234加速
 
 
 - restreucture

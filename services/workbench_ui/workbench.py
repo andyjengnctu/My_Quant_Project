@@ -801,7 +801,7 @@ class WorkbenchInspectorSharedMixin:
             self._selected_close_var.set("收: -")
             self._selected_volume_var.set("量: -")
             grid_workbench_selected_ohlcv_labels(self._selected_ohlcv_labels, start_row=5)
-            self._selected_tp_var.set("停利: -")
+            self._selected_tp_var.set("停利線: -")
             self._selected_limit_var.set("限價: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
@@ -826,7 +826,7 @@ class WorkbenchInspectorSharedMixin:
         def _line_label(base_label, key):
             return f"Shadow{base_label}" if line_sources.get(key) == "shadow" else base_label
 
-        self._selected_tp_var.set(self._format_sidebar_line_value(_line_label("停利", "tp_price"), snapshot.get("tp_price")))
+        self._selected_tp_var.set(self._format_sidebar_line_value(_line_label("停利線", "tp_price"), snapshot.get("tp_price")))
         self._selected_limit_var.set(self._format_sidebar_line_value(_line_label("限價", "limit_price"), snapshot.get("limit_price")))
         entry_label = _line_label("買進", "entry_price") if line_sources.get("entry_price") == "shadow" else "成交"
         self._selected_entry_var.set(self._format_sidebar_line_value(entry_label, snapshot.get("entry_price")))

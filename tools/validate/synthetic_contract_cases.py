@@ -2658,7 +2658,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
 
-    check("buy_trade_label_keeps_only_non_sidebar_trade_fields", True, "股數: 1,000" in buy_label_text and "進場類型: 正常" in buy_label_text and all(token not in buy_label_text for token in ("資金:", "停利:", "限價:", "成交:", "停損:", "實支:", "預留:")))
+    check("buy_trade_label_keeps_only_non_sidebar_trade_fields", True, "股數: 1,000" in buy_label_text and "進場類型: 正常" in buy_label_text and all(token not in buy_label_text for token in ("資金:", "停利線:", "停利:", "限價:", "成交:", "停損:", "實支:", "預留:")))
     reentry_label_text = build_trade_label_text("買進(重進)", {"qty": 1000, "meta": {"entry_price": 55.2, "entry_type": "reentry", "result": "成交"}})
     check("buy_trade_label_formats_reentry_as_heavy_reentry", True, "進場類型: 重進" in reentry_label_text)
     check("trade_info_boxes_omit_result_row", False, any(line.startswith("結果:") for line in buy_label_text.split("\n")))

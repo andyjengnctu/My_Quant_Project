@@ -526,15 +526,23 @@ def derive_trading_operations_status(
         next_code = NEXT_SUBMIT_STOP_REMAINDER
         next_label = "依 Stop 退出訊號自行至券商處理"
         next_detail = "STOP 已觸發且仍有剩餘持股：" + ",".join(forced_stop_exit_tickers) + "；Workbench 不管理券商掛單，成交後回帳務中心登錄。"
+    elif not workflow.get("latest_data_date") or not trading_data_ready:
+        overall = OPERATIONS_STATUS_READY
+        next_code = NEXT_UPDATE_DATA
+        next_label = "1 更新 Trading 資料"
+        next_detail = (
+            "Trading data dependency readiness 尚未就緒；"
+            + ("；".join(trading_data_blockers) if trading_data_blockers else "先由 canonical data workflow 更新／驗證資料。")
+        )
     elif "position_rollforward" in errors:
         overall = OPERATIONS_STATUS_BLOCKED
         next_code = NEXT_ROLLFORWARD_POSITIONS
-        next_label = "修正持股日終推進狀態"
+        next_label = "修正第 2 步持股日終推進狀態"
         next_detail = errors["position_rollforward"]
     elif rollforward_due_tickers:
         overall = OPERATIONS_STATUS_ACTION_REQUIRED
         next_code = NEXT_ROLLFORWARD_POSITIONS
-        next_label = "持股日終推進"
+        next_label = "2 持股日終推進"
         next_detail = "用已完成日K與各持股 immutable strategy lineage frozen params 更新下一交易日 trailing stop: " + ",".join(rollforward_due_tickers)
     elif "indicator_exit" in errors:
         overall = OPERATIONS_STATUS_BLOCKED
@@ -551,18 +559,10 @@ def derive_trading_operations_status(
         next_code = NEXT_SUBMIT_INDICATOR_EXIT
         next_label = "依 Indicator SELL 訊號自行至券商賣出"
         next_detail = "策略 SELL decision：" + ",".join(indicator_due_tickers) + "；Workbench 不管理券商掛單，成交後回帳務中心登錄。"
-    elif not workflow.get("latest_data_date") or not trading_data_ready:
-        overall = OPERATIONS_STATUS_READY
-        next_code = NEXT_UPDATE_DATA
-        next_label = "1 更新 Trading 資料"
-        next_detail = (
-            "Trading data dependency readiness 尚未就緒；"
-            + ("；".join(trading_data_blockers) if trading_data_blockers else "先由 canonical data workflow 更新／驗證資料。")
-        )
     elif not bool(workflow.get("params_ready_for_scan")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_PARAMS
-        next_label = "2 套用 Trading Params"
+        next_label = "3 套用 Trading Params"
         if bool(workflow.get("params_reusable")):
             next_detail = "可選擇沿用既有 Params 綁定至目前 Trading data，或重新訓練 Params；兩者皆須解析為單一 runtime member。"
         else:
@@ -570,7 +570,7 @@ def derive_trading_operations_status(
     elif not bool(candidate.get("fresh")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_RUN_SCANNER
-        next_label = "3 Scanner 候選"
+        next_label = "4 Scanner 候選"
         next_detail = "建立綁定目前 Trading data／Params 的 fresh candidate snapshot。"
     elif same_session_sell_locked:
         overall = OPERATIONS_STATUS_LOCKED_TODAY
@@ -585,7 +585,7 @@ def derive_trading_operations_status(
     elif not bool(proposed.get("fresh")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_BUILD_PROPOSED
-        next_label = "4 建議掛單"
+        next_label = "5 建議掛單"
         next_detail = "以 fresh Scanner snapshot＋目前 account truth 建立盤前 account-aware allocation。"
     elif int(proposed.get("order_count") or 0) > 0:
         overall = OPERATIONS_STATUS_READY
@@ -601,7 +601,7 @@ def derive_trading_operations_status(
         overall = OPERATIONS_STATUS_IDLE
         next_code = NEXT_MONITOR
         next_label = "維持既有持股／每日決策監控"
-        next_detail = "目前沒有新的盤前動作；依持股決策表的 Stop / Target / SELL signal 自行處理券商交易。"
+        next_detail = "目前沒有新的盤前動作；依持股決策表的 Stop / 停利線 / SELL signal 自行處理券商交易。"
     else:
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_READY

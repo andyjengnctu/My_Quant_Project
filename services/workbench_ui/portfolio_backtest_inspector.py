@@ -1265,7 +1265,7 @@ class PortfolioBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame):
         self._selected_low_var = tk.StringVar(value="低: -")
         self._selected_close_var = tk.StringVar(value="收: -")
         self._selected_volume_var = tk.StringVar(value="量: -")
-        self._selected_tp_var = tk.StringVar(value="停利: -")
+        self._selected_tp_var = tk.StringVar(value="停利線: -")
         self._selected_limit_var = tk.StringVar(value="限價: -")
         self._selected_entry_var = tk.StringVar(value="成交: -")
         self._selected_stop_var = tk.StringVar(value="停損: -")

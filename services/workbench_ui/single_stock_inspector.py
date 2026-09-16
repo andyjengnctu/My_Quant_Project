@@ -29,6 +29,7 @@ import pandas as pd
 from config.execution_policy import DEFAULT_FIXED_RISK
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
+from core.params_io import build_params_from_mapping
 from core.console_report import project_relative_display_path
 from core.runtime_utils import parse_float_strict
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
@@ -59,10 +60,15 @@ from services.scanner.scan_runner import run_daily_scanner, run_history_qualifie
 from services.trading.daily_workflow import run_trading_candidate_scan
 from services.trading.scanner_state import (
     get_trading_candidate_snapshot_read_model,
-    load_trading_candidate_snapshot,
+    load_trading_candidate_snapshot_for_account,
     resolve_trading_candidate_snapshot_path,
 )
 from services.trading.account_state import get_trading_account_read_model
+from services.trading.single_stock_inspection import (
+    build_trading_single_stock_inspection,
+    load_trading_single_stock_position_binding,
+    resolve_trading_single_stock_sidebar_state,
+)
 from services.trading.market_data_consumer import (
     TRADING_V2_CONSUMER_STATE_RELATIVE_PATH,
     build_trading_v2_ohlcv_frames,
@@ -559,7 +565,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._selected_low_var = tk.StringVar(value="低: -")
         self._selected_close_var = tk.StringVar(value="收: -")
         self._selected_volume_var = tk.StringVar(value="量: -")
-        self._selected_tp_var = tk.StringVar(value="停利: -")
+        self._selected_tp_var = tk.StringVar(value="停利線: -")
         self._selected_limit_var = tk.StringVar(value="限價: -")
         self._selected_entry_var = tk.StringVar(value="成交: -")
         self._selected_stop_var = tk.StringVar(value="停損: -")
@@ -831,7 +837,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         notebook.add(scanner_tab, text="Scanner Pool")
         scanner_columns = ("rank", "ticker", "kind", "limit", "stop", "target", "ev", "win", "trades", "growth", "cost")
         self._scanner_pool_tree = ttk.Treeview(scanner_tab, columns=scanner_columns, show="headings", style="Workbench.Treeview", selectmode="browse")
-        scanner_headings = {"rank":"順位","ticker":"股票","kind":"類型","limit":"買入限價","stop":"初始Stop","target":"Target/完成線","ev":"EV","win":"歷史勝率","trades":"交易次數","growth":"資產成長","cost":"參考投入"}
+        scanner_headings = {"rank":"順位","ticker":"股票","kind":"類型","limit":"買入限價","stop":"初始Stop","target":"停利線","ev":"EV","win":"歷史勝率","trades":"交易次數","growth":"資產成長","cost":"參考投入"}
         scanner_widths = {"rank":55,"ticker":80,"kind":100,"limit":95,"stop":95,"target":110,"ev":80,"win":90,"trades":85,"growth":90,"cost":110}
         for key in scanner_columns:
             self._scanner_pool_tree.heading(key, text=scanner_headings[key])
@@ -1230,7 +1236,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 raise RuntimeError(read_model.get("error") or "Trading Scanner snapshot schema 不相容")
             if not bool(read_model.get("fresh")):
                 raise RuntimeError(read_model.get("error") or "Trading Scanner snapshot inputs 已變更")
-            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
+            payload = load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
             self.after(0, self._finish_trading_candidate_pool_error, request_token, snapshot_identity, exc)
             return
@@ -1295,7 +1301,16 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._trading_consumer_cache_key = context_key
         return state, view, context_key
 
-    def _resolve_trading_analysis_params(self, params_path, candidate_row):
+    def _resolve_trading_analysis_params(self, ticker, params_path, candidate_row):
+        # Existing holdings are managed by the immutable Params frozen at their
+        # own entry.  Never replay a held ticker with today's Scanner Params.
+        position_binding = load_trading_single_stock_position_binding(
+            WORKBENCH_PROJECT_ROOT, ticker
+        )
+        if position_binding is not None:
+            params = build_params_from_mapping(dict(position_binding["frozen_params"]))
+            signature = str(position_binding.get("params_signature") or "").strip()
+            return params, signature, "position_frozen_params"
         if candidate_row:
             params, member = resolve_trading_candidate_frozen_params(candidate_row)
             signature = str(member.get("params_signature") or "").strip()
@@ -1362,13 +1377,18 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         consumer_state, _view, context_key = self._resolve_cached_trading_consumer_context()
         context_elapsed = time.perf_counter() - started
         params, params_signature, params_source = self._resolve_trading_analysis_params(
-            params_path, candidate_row
+            ticker, params_path, candidate_row
         )
         cache_key = (context_key, str(ticker).strip().upper(), params_signature)
         with self._trading_cache_lock:
             cached_result = self._lru_get(self._trading_analysis_cache, cache_key)
         if cached_result is not None:
             result = dict(cached_result)
+            # Backtest/chart replay is cacheable; broker/account truth is not.
+            # Always re-read the canonical Trading state for the inspector.
+            result["trading_inspection"] = build_trading_single_stock_inspection(
+                WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
+            )
             result["_workbench_perf"] = {
                 "analysis_cache_hit": True,
                 "context_seconds": context_elapsed,
@@ -1421,6 +1441,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 cache_payload,
                 SINGLE_STOCK_TRADING_ANALYSIS_CACHE_SIZE,
             )
+        result["trading_inspection"] = build_trading_single_stock_inspection(
+            WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
+        )
         result["_workbench_perf"] = {
             "analysis_cache_hit": False,
             "data_cache_hit": bool(data_cache_hit),
@@ -1564,7 +1587,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         refresh above so opening the list cannot block Tk.
         """
         try:
-            payload = load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
+            payload = load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
             self._trading_candidate_rows_by_ticker = {}
             self._apply_scanner_pool_rows([])
@@ -1721,7 +1744,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                     self._scanner_info_var.set(
                         "Scanner："
                         f"{ticker} {row.get('kind') or '-'} | 限價 {row.get('limit_price') or seed.get('limit_price') or '-'} "
-                        f"| Stop {seed.get('init_sl') or '-'} | Target {seed.get('target_price') or '-'} "
+                        f"| Stop {seed.get('init_sl') or '-'} | 停利線 {seed.get('target_price') or '-'} "
                         f"| EV {row.get('expected_value', row.get('ev')) if row.get('expected_value', row.get('ev')) is not None else '-'}"
                     )
             self.after_idle(self._run_analysis)
@@ -2158,6 +2181,67 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if values is None or len(values) <= idx:
             return None
         return values[idx]
+
+    def _update_selected_value_sidebar(self, snapshot):
+        # Research keeps the formal backtest hover contract.  Trading first uses
+        # it for OHLCV, then replaces transaction fields with broker/account
+        # truth for the selected date.  Absence of canonical evidence must stay
+        # blank rather than falling back to a simulated next-day fill.
+        super()._update_selected_value_sidebar(snapshot)
+        if self._runtime_domain_key() != "trading" or not snapshot:
+            return
+        inspection = dict((self._result or {}).get("trading_inspection") or {})
+        canonical = resolve_trading_single_stock_sidebar_state(
+            inspection, snapshot.get("date_label")
+        )
+        if canonical is None:
+            self._selected_tp_var.set("停利線: -")
+            self._selected_limit_var.set("限價: -")
+            self._selected_entry_var.set("成交: -")
+            self._selected_stop_var.set("停損: -")
+            self._selected_capital_var.set("Trading狀態: 無 canonical 交易狀態")
+            return
+
+        self._selected_tp_var.set(
+            self._format_sidebar_line_value("停利線", canonical.get("tp_price"))
+        )
+        self._selected_limit_var.set(
+            self._format_sidebar_line_value("限價", canonical.get("limit_price"))
+        )
+        self._selected_entry_var.set(
+            self._format_sidebar_line_value("成交", canonical.get("entry_price"))
+        )
+        effective_stop = canonical.get("stop_price")
+        stop_text = self._format_sidebar_line_value("停損", effective_stop)
+        if canonical.get("source") == "canonical_account_position":
+            initial_stop = canonical.get("initial_stop_price")
+            trailing_stop = canonical.get("trailing_stop_price")
+            detail = []
+            if initial_stop is not None:
+                detail.append(f"初始 {float(initial_stop):.2f}")
+            if trailing_stop is not None:
+                detail.append(f"Trailing {float(trailing_stop):.2f}")
+            if detail:
+                stop_text = f"{stop_text}｜{' / '.join(detail)}"
+        self._selected_stop_var.set(stop_text)
+
+        trading_status = f"Trading狀態: {canonical.get('state') or '-'}"
+        if canonical.get("sell_signal"):
+            trading_status += f"｜SELL訊號: {canonical.get('sell_signal')}"
+        if canonical.get("decision_errors"):
+            trading_status += "｜SELL狀態: ERROR"
+        capital_lines = [trading_status]
+        reserved = canonical.get("reserved_capital")
+        if canonical.get("state") == "FILLED" and canonical.get("original_reserved_capital") is not None:
+            reserved = canonical.get("original_reserved_capital")
+        actual = canonical.get("buy_capital")
+        if reserved is not None:
+            capital_lines.append(self._format_sidebar_amount_value("預留", reserved))
+        if actual is not None:
+            capital_lines.append(self._format_sidebar_amount_value("實支", actual))
+        if reserved is None and actual is None:
+            capital_lines.append("預留: -")
+        self._selected_capital_var.set("\n".join(capital_lines))
 
     def _update_sidebar_from_result(self, result):
         chart_payload = dict(result.get("chart_payload") or {})

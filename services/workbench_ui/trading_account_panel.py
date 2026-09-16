@@ -39,7 +39,7 @@ from services.trading.proposed_order_state import (
 )
 from services.trading.scanner_state import (
     get_trading_candidate_snapshot_read_model,
-    load_trading_candidate_snapshot,
+    load_trading_candidate_snapshot_for_account,
 )
 from services.trading.position_rollforward import build_trading_position_rollforward_snapshot, run_trading_position_rollforward
 from services.trading.operations_status import build_trading_operations_status, derive_trading_operations_status_from_preloaded
@@ -123,15 +123,15 @@ PARAM_MODE_BY_LABEL = {
     PARAM_MODE_TRAIN_LABEL: TRADING_PARAM_MODE_TRAIN,
 }
 
-WORKFLOW_HINT = "更新資料後，strategy_fill 持股用 position strategy_lineage 的 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。Stop/Target/SELL 為決策資訊，券商操作由使用者自行完成。"
+WORKFLOW_HINT = "更新資料後，strategy_fill 持股用 position strategy_lineage 的 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。Stop/停利線/SELL 為決策資訊，券商操作由使用者自行完成。"
 CASH_HINT = "初始化可留空；更新現金會留下 revision event，不直接改檔。"
 MANUAL_POSITION_HINT = "修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。"
 FILL_HINT = "成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。"
-PROPOSED_ORDER_HINT = "建議掛單的 Target / 完成線是盤前策略參考：新訊號／再進場為 Target 參考；延續／延續(TBD) 為 inherited shadow completion barrier。是否真的建立券商 TP，成交後仍只由該 entry order frozen params 的 tp_percent 決定；tp_percent=0 時不會建立 TP 券商單。"
+PROPOSED_ORDER_HINT = "建議掛單的停利線是盤前策略參考：新訊號／再進場為停利線參考；延續／延續(TBD) 沿用 inherited shadow completion barrier。是否真的建立券商 TP，成交後仍只由該 entry order frozen params 的 tp_percent 決定；tp_percent=0 時不會建立 TP 券商單。"
 PROTECTION_HINT = "只由 confirmed strategy fill 的 canonical position state＋ORDERED 時 frozen params 機械派生；不讀成交後行情、不代表券商已掛出 Stop/TP。"
 OCO_HINT = "系統不預設券商支援 OCO；只有你明確輸入實際券商 OCO/互斥群組 ID 時才允許 Stop full + TP 同時超額共享同一持股。尚未送券商的 logical plan 仍不是 broker truth。"
 INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。"
-POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；Stop / Target / Trailing / SELL 訊號是持股決策資訊。"
+POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；Stop / 停利線 / Trailing / SELL 訊號是持股決策資訊。"
 SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；下單由你在券商端自行完成。"
 BUY_ENTRY_HINT = "交易中心只登錄實際買入；賣出到帳務中心登錄。價金、手續費與持有成本由系統自動計算。"
 
@@ -175,9 +175,17 @@ _STATUS_TOKEN_TONES = {
     "OFF": "info",
 }
 _STATUS_WORDS = sorted(_STATUS_TOKEN_TONES, key=len, reverse=True)
+_STATUS_TOKEN_REGEXES = [
+    (
+        rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])"
+        if re.search(r"[A-Za-z]", token)
+        else re.escape(token)
+    )
+    for token in _STATUS_WORDS
+]
 _STATUS_TOKEN_PATTERN = re.compile(
     "("
-    + "|".join(re.escape(token) for token in _STATUS_WORDS)
+    + "|".join(_STATUS_TOKEN_REGEXES)
     + r"|20\d{2}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:[.+-]\d{2}:?\d{2})?)?"
     + r"|(?<![A-Za-z0-9_])(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:/\d+(?:\.\d+)?)?(?![A-Za-z0-9_])"
     + ")",
@@ -411,7 +419,7 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
     candidate = bundle["candidate_read"]
     if candidate[0] and bool(candidate[1].get("fresh")):
         bundle["candidate_payload"] = _capture_initial_panel_value(
-            lambda: load_trading_candidate_snapshot(root, require_current=False)
+            lambda: load_trading_candidate_snapshot_for_account(root, require_current=False)
         )
     else:
         bundle["candidate_payload"] = (True, None)
@@ -843,10 +851,10 @@ class TradingAccountPanel(ttk.Frame):
         workflow_buttons.grid(row=1, column=0, sticky="w", pady=(8, 0))
         for text, action in (
             ("1 更新資料", "data"),
-            ("持股日終推進", "rollforward"),
-            ("2 套用 Params", "params"),
-            ("3 Scanner 候選", "scanner"),
-            ("每日流程 1→2→3", "all"),
+            ("2 持股日終推進", "rollforward"),
+            ("3 套用 Params", "params"),
+            ("4 Scanner 候選", "scanner"),
+            ("每日流程 1→2→3→4", "all"),
         ):
             button = ttk.Button(
                 workflow_buttons,
@@ -909,7 +917,7 @@ class TradingAccountPanel(ttk.Frame):
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
             "open": "↗", "ticker": "股票", "qty": "股數", "avg_cost": "均價", "current": "市價",
-            "stop": "目前Stop", "target": "Target", "trailing": "Trailing",
+            "stop": "目前Stop", "target": "停利線", "trailing": "Trailing",
             "sell_signal": "SELL訊號", "action": "建議動作",
         }
         widths = {"open": 36, "ticker": 80, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125, "action": 220}
@@ -1001,7 +1009,7 @@ class TradingAccountPanel(ttk.Frame):
         self._proposed_tree = ttk.Treeview(proposed_box, columns=proposed_columns, show="headings", style=WORKBENCH_TREE_STYLE, height=6)
         proposed_headings = {
             "rank": "順位", "ticker": "股票", "kind": "類型", "agree": "同意/成員",
-            "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "Target / 完成線"
+            "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "停利線"
         }
         proposed_widths = {"rank": 60, "ticker": 80, "kind": 110, "agree": 115, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 135}
         for key in proposed_columns:
@@ -1011,7 +1019,7 @@ class TradingAccountPanel(ttk.Frame):
 
         submit_row = ttk.Frame(proposed_box, style=WORKBENCH_FRAME_STYLE)
         submit_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Button(submit_row, text="4 建議掛單", command=lambda: self._start_workflow_action("orders"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(0, 12))
+        ttk.Button(submit_row, text="5 建議掛單", command=lambda: self._start_workflow_action("orders"), style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(0, 12))
         ttk.Label(submit_row, text="券商委託號（可留空）", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._broker_order_id_var = tk.StringVar()
         ttk.Entry(submit_row, textvariable=self._broker_order_id_var, width=18, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(6, 10))
@@ -1378,9 +1386,11 @@ class TradingAccountPanel(ttk.Frame):
             self._protection_snapshot = {}
             self._reload_protection_rows([])
             self._protection_status_var.set(f"保護單計畫讀取失敗：{exc}")
+            self._reload_positions()
             return
         self._protection_snapshot = snapshot
         self._reload_protection_rows(snapshot.get("positions") or [])
+        self._reload_positions()
         if not snapshot.get("exists"):
             self._protection_status_var.set(
                 "尚未建立保護單計畫"
@@ -1434,8 +1444,8 @@ class TradingAccountPanel(ttk.Frame):
                 self, "indicator", lambda: get_trading_indicator_exit_plan_read_model(WORKBENCH_PROJECT_ROOT)
             )
         except (ValueError,RuntimeError,OSError) as exc:
-            self._indicator_snapshot={}; self._reload_indicator_rows([]); self._indicator_status_var.set(f"Indicator SELL 計畫讀取失敗：{exc}"); return
-        self._indicator_snapshot=snapshot; self._reload_indicator_rows(snapshot.get("exits") or [])
+            self._indicator_snapshot={}; self._reload_indicator_rows([]); self._indicator_status_var.set(f"Indicator SELL 計畫讀取失敗：{exc}"); self._reload_positions(); return
+        self._indicator_snapshot=snapshot; self._reload_indicator_rows(snapshot.get("exits") or []); self._reload_positions()
         if not snapshot.get("exists"):
             self._indicator_status_var.set("尚未建立 Indicator SELL 計畫"); return
         self._indicator_status_var.set(f"{'FRESH' if snapshot.get('fresh') else 'STALE'} | exits {int(snapshot.get('exit_count') or 0)} | active broker Indicator SELL {int(snapshot.get('active_indicator_exit_order_count') or 0)}")
@@ -1589,15 +1599,22 @@ class TradingAccountPanel(ttk.Frame):
         param_tone = "success" if snapshot.get("params_ready_for_scan") else ("info" if snapshot.get("params_reusable") else "warning")
         self._set_overview_card("strategy_params", strategy_id, param_detail, tone=param_tone)
 
+        rollforward_due = list(snapshot.get("rollforward_due_tickers") or [])
         if not data_ready:
             next_text = "1 更新 Trading 資料"
+        elif rollforward_due:
+            next_text = "2 持股日終推進"
         elif not snapshot.get("params_ready_for_scan"):
-            next_text = "2 套用 Params"
+            next_text = "3 套用 Params"
         elif not scanner_fresh:
-            next_text = "3 Scanner 候選"
+            next_text = "4 Scanner 候選"
         else:
             next_text = "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"
-        display_status = "READY" if data_ready and bool(snapshot.get("params_ready_for_scan")) and scanner_fresh else "WAIT"
+        display_status = (
+            "READY"
+            if data_ready and not rollforward_due and bool(snapshot.get("params_ready_for_scan")) and scanner_fresh
+            else "WAIT"
+        )
         self._operations_next_var.set(f"{display_status} | 下一步：{next_text}")
         details = []
         param_error = snapshot.get("param_error")
@@ -1609,7 +1626,6 @@ class TradingAccountPanel(ttk.Frame):
         trading_blockers = [str(item) for item in list(snapshot.get("trading_data_blockers") or []) if str(item)]
         if trading_blockers:
             details.append("Data：" + "；".join(trading_blockers[:2]))
-        rollforward_due = list(snapshot.get("rollforward_due_tickers") or [])
         if rollforward_due:
             details.append("待持股日終推進: " + ",".join(rollforward_due))
         self._operations_detail_var.set(" | ".join(details))
@@ -1742,7 +1758,7 @@ class TradingAccountPanel(ttk.Frame):
             return
         try:
             payload = _load_panel_value(
-                self, "candidate_payload", lambda: load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)
+                self, "candidate_payload", lambda: load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)
             )
         except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([], candidate_payload=None)
@@ -1769,7 +1785,7 @@ class TradingAccountPanel(ttk.Frame):
             return
         if not snapshot.get("fresh"):
             self._reload_proposed_order_rows([])
-            self._proposed_status_var.set("PROPOSED STALE｜請重新執行 3 Scanner 與 4 建議掛單。")
+            self._proposed_status_var.set("PROPOSED STALE｜請重新執行 4 Scanner 與 5 建議掛單。")
             return
         try:
             payload = _load_panel_value(
@@ -1814,7 +1830,7 @@ class TradingAccountPanel(ttk.Frame):
             "params": param_label,
             "scanner": "Scanner 候選",
             "orders": "產生建議掛單",
-            "all": f"每日流程 1→2→3（{param_label}）",
+            "all": f"每日流程 1→2→3→4（{param_label}）",
         }
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
@@ -2055,8 +2071,7 @@ class TradingAccountPanel(ttk.Frame):
                     self._format_candidate_number(row.get("reserved_cost"), digits=0),
                     self._format_candidate_number(row.get("init_sl"), digits=2),
                     (
-                        ("完成 " if str(row.get("kind") or "") in {"extended", "extended_tbd"} else "Target ")
-                        + self._format_candidate_number(row.get("target_price"), digits=2)
+                        "停利線 " + self._format_candidate_number(row.get("target_price"), digits=2)
                     ),
                 ),
             )
@@ -2515,7 +2530,7 @@ class TradingAccountPanel(ttk.Frame):
                 action = "建議賣出｜自行至券商處理，成交後回帳務中心登錄"
             else:
                 sell_signal = "-"
-                action = "持有｜依目前 Stop / Target / Trailing 管理" if str(row.get("source")) == "strategy_fill" else "手動持股｜無策略接管"
+                action = "持有｜依目前 Stop / 停利線 / Trailing 管理" if str(row.get("source")) == "strategy_fill" else "手動持股｜無策略接管"
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(

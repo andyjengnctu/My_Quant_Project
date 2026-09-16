@@ -43,7 +43,7 @@ def load_current_trading_proposed_order_plan(
     root = Path(project_root).resolve()
     path = resolve_trading_proposed_orders_json_path(root)
     if not path.is_file():
-        raise FileNotFoundError("Trading 建議掛單尚未產生；請先執行「4 建議掛單」。")
+        raise FileNotFoundError("Trading 建議掛單尚未產生；請先執行「5 建議掛單」。")
     payload = load_json_strict(path)
     if not isinstance(payload, dict):
         raise RuntimeError("Trading proposed-order payload 不合法")
@@ -89,7 +89,7 @@ def load_current_trading_proposed_order_plan(
 
     runtime = load_trading_scanner_runtime(root, verify_dataset_content=True)
     if str(payload.get("information_date") or "") != str(runtime["latest_data_date"]):
-        raise RuntimeError("Trading 建議掛單資料日期已過期；請重新執行 3 Scanner 與 4 建議掛單")
+        raise RuntimeError("Trading 建議掛單資料日期已過期；請重新執行 4 Scanner 與 5 建議掛單")
     if str(payload.get("strategy_id") or "") != str(runtime["profile"].strategy_id):
         raise RuntimeError("Trading 建議掛單策略與目前設定不一致")
     if str(payload.get("param_selector") or "") != str(runtime["profile"].param_selector):

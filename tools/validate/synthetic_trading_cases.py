@@ -1095,11 +1095,12 @@ def validate_trading_daily_workflow_contract_case(base_params):
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
-    check("workbench_exposes_separate_param_button", True, '"2 套用 Params"' in panel_source)
+    check("workbench_exposes_separate_rollforward_button", True, '"2 持股日終推進"' in panel_source)
+    check("workbench_exposes_separate_param_button", True, '"3 套用 Params"' in panel_source)
     check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
     check("workbench_uses_shared_downloader_console_progress", True, "MarketDataDailyConsoleProgress" in panel_source)
-    check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
-    check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
+    check("workbench_exposes_scanner_button", True, '"4 Scanner 候選"' in panel_source)
+    check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3→4"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "今日 Scanner Pool" in panel_source and "advanced_notebook.grid(" not in panel_source)
     check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數", "策略 / Params")))
@@ -1428,7 +1429,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
         check("candidate_snapshot_is_rejected_after_param_artifact_changes", True, stale_snapshot_rejected)
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    check("workbench_exposes_proposed_order_button", True, '"4 建議掛單"' in panel_source)
+    check("workbench_exposes_proposed_order_button", True, '"5 建議掛單"' in panel_source)
     check("workbench_proposed_orders_use_background_thread", True, 'elif action == "orders"' in panel_source and "threading.Thread(" in panel_source)
     check("workbench_does_not_confirm_fill_from_proposal_action", False, "confirm_trading_strategy_buy_fill" in panel_source)
 
@@ -3095,6 +3096,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     warning_segments = build_trading_status_segments("NOT READY | STALE/EMPTY | FAIL：synthetic")
     warning_tones = {text: tone for text, tone in warning_segments if text.strip()}
     check("workbench_status_distinguishes_warning_and_error_tokens", ["warning", "warning", "error"], [warning_tones.get("NOT READY"), warning_tones.get("STALE/EMPTY"), warning_tones.get("FAIL")])
+    boundary_segments = build_trading_status_segments("canonical ON offline OFF 完成", default_tone="muted")
+    check(
+        "workbench_status_ascii_tokens_require_word_boundaries",
+        True,
+        any(text == "canonical " and tone == "muted" for text, tone in boundary_segments)
+        and any(text == "ON" and tone == "info" for text, tone in boundary_segments)
+        and any(text == "offline " and tone == "muted" for text, tone in boundary_segments)
+        and any(text == "OFF" and tone == "info" for text, tone in boundary_segments),
+    )
 
     from core.portfolio_ensemble import build_ensemble_candidate_display_metrics
     ensemble_metrics = build_ensemble_candidate_display_metrics(total_member_count=8)
@@ -3105,7 +3115,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.trading.scanner_state import (
         TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
         _validate_trading_candidate_snapshot_payload,
+        filter_trading_candidate_rows_for_held_positions,
     )
+    visible_candidate_rows, held_candidate_rows = filter_trading_candidate_rows_for_held_positions(
+        [{"ticker": "2330"}, {"ticker": "2317"}], held_tickers={"2330"}
+    )
+    check("scanner_pool_account_projection_excludes_current_holdings", ["2317"], [row.get("ticker") for row in visible_candidate_rows])
+    check("scanner_pool_account_projection_reports_hidden_holdings", ["2330"], held_candidate_rows)
     legacy_candidate_payload = {
         "schema_version": TRADING_CANDIDATE_SNAPSHOT_SCHEMA_VERSION - 1,
         "runtime_domain": "trading",
@@ -3137,10 +3153,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_trading_page_is_vertically_scrollable", True, "self._page_canvas = tk.Canvas" in panel_source and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
     check("workbench_proposed_table_exposes_agreement", True, '"agree": "同意/成員"' in panel_source)
-    check("workbench_proposed_target_heading_distinguishes_completion_barrier", True, '"target": "Target / 完成線"' in panel_source)
+    check("workbench_proposed_target_heading_uses_unified_take_profit_label", True, '"target": "停利線"' in panel_source)
     check("workbench_proposed_hint_explains_shadow_completion_vs_broker_tp", True, "inherited shadow completion barrier" in panel_source and "tp_percent=0 時不會建立 TP 券商單" in panel_source)
     check("workbench_refresh_reloads_persisted_proposed_plan", True, "def refresh_proposed_order_plan" in panel_source and "load_current_trading_proposed_order_plan" in panel_source)
-    check("workbench_refresh_reloads_persisted_scanner_snapshot", True, "def refresh_candidate_snapshot_rows" in panel_source and "load_trading_candidate_snapshot" in panel_source)
+    check("workbench_refresh_reloads_account_aware_scanner_snapshot", True, "def refresh_candidate_snapshot_rows" in panel_source and "load_trading_candidate_snapshot_for_account" in panel_source)
     check("workbench_trading_initial_state_reads_off_tk_thread", True, 'name="workbench-trading-initial-state"' in panel_source and "build_trading_account_panel_initial_bundle" in panel_source and "_initial_state_results.put" in panel_source)
     check("workbench_trading_consumer_reconcile_runs_inside_background_bundle", True, 'bundle["reconcile"] = _capture_initial_panel_value' in panel_source and 'reconcile_trading_v2_consumer_state_from_local_evidence(root)' in panel_source)
     operations_refresh_body = panel_source.split("def refresh_operations_status", 1)[1].split("def ", 1)[0]
@@ -3252,7 +3268,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_candidate_dropdown_lazy_loads_trading_pool", True, "postcommand=self._refresh_candidate_options_on_open" in inspector_source and "sync_ticker=False" in inspector_source)
     check("workbench_single_stock_candidate_dropdown_never_sync_loads_current_snapshot_on_post", False, "_load_current_trading_candidate_pool(" in candidate_post_body)
     check("workbench_single_stock_candidate_dropdown_prefetches_current_pool_in_background", True, "_request_trading_candidate_pool_refresh()" in candidate_post_body and "threading.Thread(" in inspector_source and 'name="workbench-trading-candidate-pool"' in inspector_source)
-    check("workbench_single_stock_candidate_pool_reads_shared_persisted_snapshot_without_recalculation", True, "load_trading_candidate_snapshot(WORKBENCH_PROJECT_ROOT, require_current=False)" in inspector_source and "never triggers candidate recalculation" in inspector_source)
+    check("workbench_single_stock_candidate_pool_reads_account_aware_persisted_snapshot_without_recalculation", True, "load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)" in inspector_source and "never triggers candidate recalculation" in inspector_source)
     check("workbench_single_stock_combobox_popup_geometry_is_screen_limited", True, "_configure_combobox_popup_geometry" in inspector_source and "resolve_workbench_combobox_popup_rows" in workbench_source and "_fit_posted_combobox_popdown" in workbench_source and 'ttk::combobox::PopdownWindow' in workbench_source)
     check("workbench_single_stock_controls_reflow_with_available_width", True, "_apply_single_stock_controls_layout" in inspector_source and "resolve_single_stock_controls_rows" in inspector_source and "for row_index, row_keys in enumerate(rows)" in inspector_source)
     check(
@@ -3300,7 +3316,55 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_analysis_cache_is_keyed_by_consumer_and_params_identity", True, 'cache_key = (context_key, str(ticker).strip().upper(), params_signature)' in inspector_source)
     check("workbench_single_stock_analysis_switch_emits_phase_timing_for_regression", True, "[single_stock_perf]" in inspector_source and "analysis_cache=" in inspector_source and "render=" in inspector_source)
     check("workbench_single_stock_trading_analysis_uses_finalized_consumer_view", True, "open_trading_v2_consumer_view(" in inspector_source and "TradingMarketDataV2View.open(WORKBENCH_PROJECT_ROOT)" not in inspector_source)
+    check("workbench_single_stock_trading_sidebar_reads_canonical_transaction_projection", True, "resolve_trading_single_stock_sidebar_state" in inspector_source and "build_trading_single_stock_inspection" in inspector_source)
+    check("workbench_single_stock_trading_sidebar_surfaces_canonical_sell_signal", True, "SELL訊號:" in inspector_source and "SELL狀態: ERROR" in inspector_source)
+    check("workbench_single_stock_held_ticker_replay_prefers_position_frozen_params", True, "position_frozen_params" in inspector_source and "load_trading_single_stock_position_binding" in inspector_source)
     check("workbench_single_stock_combobox_reflow_rechecks_after_autosize", True, "def _autosize_combobox" in inspector_source and "self._schedule_single_stock_controls_layout()" in inspector_source)
+
+    from core.params_io import params_to_json_dict as _params_to_json_dict
+    from core.exact_accounting import price_to_milli as _price_to_milli
+    from services.trading.single_stock_inspection import resolve_trading_single_stock_sidebar_state
+    _inspection_candidate = {
+        "ticker": "2330",
+        "candidate": {
+            "ticker": "2330",
+            "trade_date": "2026-09-15",
+            "proj_cost": 100000.0,
+            "proj_qty": 1000,
+            "execution_plan_seed": {
+                "ticker": "2330", "trade_date": "2026-09-15",
+                "limit_price": 100.0, "init_sl": 95.0, "init_trail": 95.0,
+                "target_price": 105.0, "entry_atr": 5.0,
+            },
+        },
+        "entry_orders": [], "account_events": [], "current_position": None,
+    }
+    check("workbench_single_stock_scanner_plan_exists_only_on_information_date", "SCANNER", resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-15").get("state"))
+    check("workbench_single_stock_never_infers_next_day_fill_from_scanner_plan", None, resolve_trading_single_stock_sidebar_state(_inspection_candidate, "2026-09-16"))
+
+    _fill_qty = 1000
+    _fill_price = 98.0
+    _fill_ledger = build_buy_ledger_from_price(_fill_price, _fill_qty, base_params)
+    _inspection_order = dict(_inspection_candidate)
+    _inspection_order["entry_orders"] = [{
+        "order_id": "SINGLE-STOCK-SYN-001", "ticker": "2330", "side": "BUY", "purpose": "ENTRY",
+        "information_date": "2026-09-15", "ordered_at": "2026-09-15T18:00:00+08:00",
+        "qty": _fill_qty, "limit_price_milli": _price_to_milli(100.0),
+        "init_sl_milli": _price_to_milli(95.0), "init_trail_milli": _price_to_milli(95.0),
+        "target_price_milli": _price_to_milli(105.0), "entry_atr_milli": _price_to_milli(5.0),
+        "reserved_cost_milli": int(build_buy_ledger_from_price(100.0, _fill_qty, base_params)["net_buy_total_milli"]),
+        "frozen_params": _params_to_json_dict(base_params), "entry_type": "normal", "security_profile": {},
+        "fills": [{
+            "fill_id": "SINGLE-STOCK-FILL-001", "qty": _fill_qty,
+            "fill_price_milli": _price_to_milli(_fill_price), "trade_date": "2026-09-18",
+            "net_buy_total_milli": int(_fill_ledger["net_buy_total_milli"]),
+            "confirmed_at": "2026-09-18T10:00:00+08:00",
+        }],
+    }]
+    _ordered_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-16")
+    _filled_sidebar = resolve_trading_single_stock_sidebar_state(_inspection_order, "2026-09-18")
+    check("workbench_single_stock_order_can_remain_reserved_across_multiple_days", ["ORDERED", None], [_ordered_sidebar.get("state"), _ordered_sidebar.get("entry_price")])
+    check("workbench_single_stock_actual_spend_appears_only_on_confirmed_fill_date", ["FILLED", 98.0], [_filled_sidebar.get("state"), _filled_sidebar.get("entry_price")])
     check("workbench_combobox_popdown_fit_retries_until_tcl_window_is_mapped", True, "WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES" in workbench_source and "int(attempt) + 1" in workbench_source)
 
     from services.workbench_ui import single_stock_inspector as single_stock_inspector_module
@@ -3356,7 +3420,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     cache_panel._resolve_cached_trading_consumer_context = lambda: (
         {"market_date": "2026-09-15"}, object(), ("consumer-fp", "view-fp", "2026-09-15")
     )
-    cache_panel._resolve_trading_analysis_params = lambda _path, _row: (base_params, "params-sig", "scanner_frozen_candidate")
+    cache_panel._resolve_trading_analysis_params = lambda _ticker, _path, _row: (base_params, "params-sig", "scanner_frozen_candidate")
     cache_rows = max(400, int(single_stock_inspector_module.get_required_min_rows(base_params)) + 5)
     cache_df = pd.DataFrame(
         {
@@ -3377,6 +3441,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
                 return_value={"trade_logs_df": pd.DataFrame(), "chart_payload": {"x": [0.0], "date_labels": ["2026-09-15"]}},
             ) as cached_analysis_run,
             patch.object(single_stock_inspector_module, "resolve_runtime_output_dir", return_value=cache_output_dir),
+            patch.object(
+                single_stock_inspector_module,
+                "build_trading_single_stock_inspection",
+                return_value={"ticker": "2330", "canonical": True},
+            ) as canonical_inspection_read,
         ):
             first_cached_result = SingleStockBacktestInspectorPanel._build_cached_trading_analysis_result(
                 cache_panel, "2330", "params.json", {"ticker": "2330"}
@@ -3387,6 +3456,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_trading_cache_reads_v2_once_for_repeat_switch", 1, cached_data_read.call_count)
     check("workbench_single_stock_trading_cache_runs_analysis_once_for_repeat_switch", 1, cached_analysis_run.call_count)
     check("workbench_single_stock_trading_cache_marks_second_result_as_hit", True, bool((second_cached_result.get("_workbench_perf") or {}).get("analysis_cache_hit")))
+    check("workbench_single_stock_trading_cache_never_caches_canonical_account_truth", 2, canonical_inspection_read.call_count)
 
     prefetch_panel = object.__new__(SingleStockBacktestInspectorPanel)
     prefetch_panel._trading_cache_lock = _threading.RLock()
@@ -3399,7 +3469,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     prefetch_panel._resolve_cached_trading_consumer_context = lambda: (
         {"market_date": "2026-09-15"}, object(), ("consumer-fp", "view-fp", "2026-09-15")
     )
-    prefetch_panel._resolve_trading_analysis_params = lambda _path, _row: (base_params, "params-sig", "scanner_frozen_candidate")
+    prefetch_panel._resolve_trading_analysis_params = lambda _ticker, _path, _row: (base_params, "params-sig", "scanner_frozen_candidate")
     prefetch_panel.after = lambda _delay, callback, *args: callback(*args)
     prefetch_panel._append_console_text = lambda _text: None
     raw_prefetch = cache_df.reset_index().rename(columns={"index": "Date"})
@@ -3417,6 +3487,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             ) as prefetched_analysis_run,
             patch.object(single_stock_inspector_module, "resolve_runtime_output_dir", return_value=prefetch_output_dir),
             patch.object(single_stock_inspector_module, "resolve_trading_selected_strategy_param_path", return_value=Path(prefetch_output_dir) / "params.json"),
+            patch.object(
+                single_stock_inspector_module,
+                "build_trading_single_stock_inspection",
+                side_effect=lambda _root, ticker, candidate_row=None: {"ticker": ticker},
+            ),
         ):
             SingleStockBacktestInspectorPanel._trading_analysis_prefetch_worker(
                 prefetch_panel, [{"ticker": "2330"}, {"ticker": "2317"}]
