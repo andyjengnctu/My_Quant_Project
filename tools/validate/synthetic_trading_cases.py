@@ -1,6 +1,7 @@
 from copy import deepcopy
 from decimal import Decimal
 import json
+import re
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -28,6 +29,18 @@ from core.trading_state_paths import (
     resolve_trading_order_state_path as resolve_core_trading_order_state_path,
 )
 from services.trading.accounting_policy import build_standalone_trading_accounting_params, overlay_trading_accounting_params
+
+
+def _source_references_identifier(source_text: str, identifier: str) -> bool:
+    """Return True only for a standalone Python-style identifier reference.
+
+    Guards that look for legacy variable/function names must not fire on larger
+    identifiers such as ``market_low`` merely because they contain ``t_low``.
+    """
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(str(identifier))}(?![A-Za-z0-9_])"
+    return re.search(pattern, source_text) is not None
+
+
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
@@ -1966,7 +1979,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
         True,
         all(token in panel_source for token in ("本次成交股數", "本次成交價", 'text="成交日"', "DatePickerField(")),
     )
-    check("workbench_does_not_auto_infer_fill_from_market_bar", False, "t_low" in panel_source or "t_high" in panel_source or "execute_pre_market_entry_plan" in panel_source)
+    check("workbench_does_not_auto_infer_fill_from_market_bar", False, any(_source_references_identifier(panel_source, token) for token in ("t_high", "t_low", "execute_pre_market_entry_plan")))
 
     summary["checks"] = len(results)
     return results, summary
@@ -2155,7 +2168,7 @@ def validate_trading_protection_plan_contract_case(base_params):
     check("workbench_exposes_post_fill_protection_plan", True, "成交後 Stop / TP 保護單計畫" in panel_source and "build_trading_protection_plan(" in panel_source)
     check("workbench_explicitly_marks_protection_as_not_submitted", True, "尚未送券商" in panel_source)
     check("protection_planner_does_not_own_broker_submission", False, "confirm_trading_order_submission(" in service_source or "append_ordered_trading_proposal(" in service_source)
-    check("protection_planner_does_not_use_market_bar_fill_inference", False, any(token in service_source for token in ("t_high", "t_low", "execute_pre_market_entry_plan")))
+    check("protection_planner_does_not_use_market_bar_fill_inference", False, any(_source_references_identifier(service_source, token) for token in ("t_high", "t_low", "execute_pre_market_entry_plan")))
 
     summary["checks"] = len(results)
     return results, summary
