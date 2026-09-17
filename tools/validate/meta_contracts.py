@@ -5,7 +5,12 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-from .source_index import read_source_ast, read_source_text
+from .source_index import (
+    read_source_ast,
+    read_source_import_nodes,
+    read_source_text,
+    read_source_top_level_function_names,
+)
 
 CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/run_bundle.py`"
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口"
@@ -259,9 +264,8 @@ def summarize_dependency_direction_contract(project_root: Path) -> Dict[str, Any
     scan_roots = ("apps", "filters")
     for rel_dir in scan_roots:
         for path in sorted((project_root / rel_dir).rglob("*.py")):
-            tree = _read_python_ast(path)
             rel_path = str(path.relative_to(project_root)).replace("\\", "/")
-            for node in ast.walk(tree):
+            for node in read_source_import_nodes(path):
                 modules: List[str] = []
                 if isinstance(node, ast.ImportFrom) and node.module:
                     modules = [node.module]
@@ -291,8 +295,7 @@ def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, An
     violations: List[Dict[str, Any]] = []
     for rel_dir in ("config", "core", "filters", "services", "strategies"):
         for path in sorted((project_root / rel_dir).rglob("*.py")):
-            tree = _read_python_ast(path)
-            for node in ast.walk(tree):
+            for node in read_source_import_nodes(path):
                 modules: List[str] = []
                 if isinstance(node, ast.ImportFrom) and node.module:
                     modules = [node.module]
@@ -417,10 +420,7 @@ def summarize_no_top_level_import_cycles_contract(project_root: Path) -> Dict[st
     graph: Dict[str, Set[str]] = {module_name: set() for module_name in module_index}
 
     for module_name, path in module_index.items():
-        tree = _read_python_ast(path)
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Import, ast.ImportFrom)):
-                continue
+        for node in read_source_import_nodes(path):
             for imported_module in _iter_project_import_edges(
                 current_module=module_name,
                 current_path=path,
@@ -635,6 +635,16 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
 def summarize_critical_helper_single_source_contract(project_root: Path) -> Dict[str, Any]:
     top_level_definitions: Dict[str, List[str]] = {}
     scanned_files: List[str] = []
+    tracked_helper_names = {
+        helper_name
+        for helper_names in CRITICAL_HELPER_SINGLE_SOURCE_SPECS.values()
+        for helper_name in helper_names
+    }
+    helper_definition_pattern = re.compile(
+        r"(?m)^(?:async\s+)?def\s+(?:"
+        + "|".join(sorted(map(re.escape, tracked_helper_names), key=len, reverse=True))
+        + r")\s*\("
+    )
     for rel_dir in ("apps", "config", "core", "filters", "services", "strategies", "tools"):
         base_dir = project_root / rel_dir
         if not base_dir.is_dir():
@@ -642,10 +652,12 @@ def summarize_critical_helper_single_source_contract(project_root: Path) -> Dict
         for path in sorted(base_dir.rglob("*.py")):
             rel_path = str(path.relative_to(project_root)).replace("\\", "/")
             scanned_files.append(rel_path)
-            tree = _read_python_ast(path)
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    top_level_definitions.setdefault(node.name, []).append(rel_path)
+            source_text = read_source_text(path)
+            if helper_definition_pattern.search(source_text) is None:
+                continue
+            for function_name in read_source_top_level_function_names(path):
+                if function_name in tracked_helper_names:
+                    top_level_definitions.setdefault(function_name, []).append(rel_path)
 
     missing_definitions: List[str] = []
     duplicate_definitions: List[str] = []

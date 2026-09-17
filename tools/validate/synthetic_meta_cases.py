@@ -26,7 +26,7 @@ CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 SYNTHETIC_VALIDATE_DIR = PROJECT_ROOT / "tools" / "validate"
 
-from .source_index import read_source_ast, read_source_text
+from .source_index import read_source_ast, read_source_exception_handlers, read_source_text
 from .meta_contracts import (
     extract_markdown_table_rows,
     load_defined_validate_names_from_synthetic_case_modules,
@@ -858,12 +858,12 @@ def _scan_exception_handlers(paths, *, accepted_names=None, pass_only=False, exe
             continue
         scanned.append(rel)
         try:
-            parsed = read_source_ast(path)
+            exception_handlers = read_source_exception_handlers(path)
         except SyntaxError as exc:
             syntax_errors.append(f"{rel}:{exc.lineno}: {exc.msg}")
             continue
-        for node in ast.walk(parsed):
-            if not isinstance(node, ast.ExceptHandler) or node.type is None:
+        for node in exception_handlers:
+            if node.type is None:
                 continue
             names = set(_exception_type_names(node.type))
             if not names or (accepted_names is not None and not names.intersection(accepted_names)):
