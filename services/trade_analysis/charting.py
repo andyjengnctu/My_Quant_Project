@@ -1256,6 +1256,7 @@ def restore_chart_view_state(figure, view_state, *, redraw=True):
         next_left, next_right = _clamp_chart_xlim(float(left), float(right), total_points=int(state.get("total_points", 0) or 0))
     except (TypeError, ValueError, RuntimeError):
         return False
+    state["hover_blit_background"] = None
     axis_price.set_xlim(next_left, next_right, emit=False)
     axis_volume = state.get("axis_volume")
     if axis_volume is not None:
@@ -2449,6 +2450,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "crosshair_vline": crosshair_vline,
         "crosshair_hline": crosshair_hline,
         "hover_last_index": int(chart_payload["default_view"]["end_idx"]),
+        "hover_blit_enabled": False,
+        "hover_blit_background": None,
         "summary_artist": summary_artist,
         "status_chip_artists": status_chip_artists,
         "signal_artists": rendered_signal_annotations,
@@ -2483,6 +2486,7 @@ def scroll_chart_to_latest(figure, *, redraw=True):
     target_right = float(total_points) - 0.5 + max(float(CHART_RIGHT_PADDING_BARS), window_width * float(CHART_RIGHT_PADDING_RATIO))
     target_left = target_right - window_width
     next_left, next_right = _clamp_chart_xlim(target_left, target_right, total_points=total_points)
+    state["hover_blit_background"] = None
     axis_price.set_xlim(next_left, next_right, emit=False)
     axis_volume = state.get("axis_volume")
     if axis_volume is not None:
@@ -2534,6 +2538,7 @@ def scroll_chart_to_index(figure, target_index, *, redraw=True):
     target_right = target_left + window_width
     next_left, next_right = _clamp_chart_xlim(target_left, target_right, total_points=total_points)
 
+    state["hover_blit_background"] = None
     axis_price.set_xlim(next_left, next_right, emit=False)
     axis_volume = state.get("axis_volume")
     if axis_volume is not None:
@@ -2616,11 +2621,63 @@ def bind_matplotlib_chart_navigation(figure, canvas):
     canvas_widget = canvas.get_tk_widget()
     canvas_widget.configure(cursor="", highlightthickness=0, bd=0, takefocus=1, background=MATPLOTLIB_DARK_BG)
 
+    blit_supported = all(
+        callable(getattr(canvas, method_name, None))
+        for method_name in ("copy_from_bbox", "restore_region", "blit")
+    ) and callable(getattr(axis_price, "draw_artist", None))
+    state["hover_blit_enabled"] = bool(blit_supported)
+    state["hover_blit_background"] = None
+    if blit_supported:
+        # Animated crosshair artists are excluded from expensive full redraws.
+        # The static chart background is cached after each real draw and mouse
+        # motion restores only the price-axis region before blitting two artists.
+        crosshair_vline.set_animated(True)
+        crosshair_hline.set_animated(True)
+
     def _allowed_axis(event):
         return event.inaxes in {axis_price, axis_volume}
 
+    def _invalidate_hover_blit_background():
+        state["hover_blit_background"] = None
+
+    def _capture_hover_blit_background():
+        if not blit_supported or figure.canvas is None:
+            return False
+        try:
+            state["hover_blit_background"] = canvas.copy_from_bbox(axis_price.bbox)
+            return True
+        except (AttributeError, RuntimeError, ValueError) as exc:
+            state["hover_blit_background"] = None
+            _warn_chart_runtime_fallback_once(
+                "hover_blit_background_capture_failed",
+                exc,
+                context="crosshair blit background capture skipped",
+            )
+            return False
+
+    def _draw_hover_overlay(*, fallback_redraw=True):
+        if blit_supported and state.get("hover_blit_background") is not None:
+            try:
+                canvas.restore_region(state["hover_blit_background"])
+                axis_price.draw_artist(crosshair_vline)
+                axis_price.draw_artist(crosshair_hline)
+                canvas.blit(axis_price.bbox)
+                return True
+            except (AttributeError, RuntimeError, ValueError) as exc:
+                state["hover_blit_background"] = None
+                _warn_chart_runtime_fallback_once(
+                    "hover_blit_draw_failed",
+                    exc,
+                    context="crosshair blit draw skipped",
+                )
+        if fallback_redraw and figure.canvas is not None:
+            figure.canvas.draw_idle()
+        return False
+
     def _set_hover_index(index, *, redraw=True):
         nearest_idx = int(np.clip(index, 0, total_points - 1))
+        if state.get("hover_last_index") == nearest_idx:
+            return False
         state["hover_last_index"] = nearest_idx
         hover_text_artist.set_text(_build_hover_text(chart_payload, nearest_idx))
         crosshair_vline.set_xdata([nearest_idx, nearest_idx])
@@ -2629,8 +2686,9 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         external_hover_callback = state.get("external_hover_callback")
         if callable(external_hover_callback):
             external_hover_callback(_build_hover_snapshot(chart_payload, nearest_idx))
-        if redraw and figure.canvas is not None:
-            figure.canvas.draw_idle()
+        if redraw:
+            _draw_hover_overlay(fallback_redraw=True)
+        return True
 
     def _update_hover(event):
         if not _allowed_axis(event):
@@ -2641,6 +2699,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         _set_hover_index(int(round(data_x)), redraw=True)
 
     def _pan_visible_window(delta_bars, *, relayout=False):
+        _invalidate_hover_blit_background()
         left, right = axis_price.get_xlim()
         next_left, next_right = _clamp_chart_xlim(left + float(delta_bars), right + float(delta_bars), total_points=total_points)
         axis_price.set_xlim(next_left, next_right, emit=False)
@@ -2685,6 +2744,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
             bars_per_pixel = (float(origin_right) - float(origin_left)) / axis_width_px
             delta = (float(drag_state["anchor_px"]) - float(current_px)) * bars_per_pixel
             next_left, next_right = _clamp_chart_xlim(origin_left + delta, origin_right + delta, total_points=total_points)
+            _invalidate_hover_blit_background()
             axis_price.set_xlim(next_left, next_right, emit=False)
             if axis_volume is not None:
                 axis_volume.set_xlim(next_left, next_right, emit=False)
@@ -2727,6 +2787,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         next_left = focus_x - new_width * focus_ratio
         next_right = next_left + new_width
         next_left, next_right = _clamp_chart_xlim(next_left, next_right, total_points=total_points)
+        _invalidate_hover_blit_background()
         axis_price.set_xlim(next_left, next_right, emit=False)
         if axis_volume is not None:
             axis_volume.set_xlim(next_left, next_right, emit=False)
@@ -2763,9 +2824,16 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         )
         generation_ref = layout_state.get("generation_ref") or {"value": 0}
         generation = int(generation_ref.get("value", 0))
-        if layout_state.get("running") or int(layout_state.get("laid_out_generation", -1)) == generation:
+        if layout_state.get("running"):
+            return
+        if int(layout_state.get("laid_out_generation", -1)) == generation:
+            # A stable full draw (including the one follow-up after annotation
+            # layout) is the only safe point to cache static pixels for blitting.
+            if _capture_hover_blit_background():
+                _draw_hover_overlay(fallback_redraw=False)
             return
         layout_state["running"] = True
+        changed = False
         try:
             artists = [
                 *(state.get("signal_artists") or []),
@@ -2792,12 +2860,16 @@ def bind_matplotlib_chart_navigation(figure, canvas):
             layout_state["laid_out_generation"] = generation
         finally:
             layout_state["running"] = False
-        if not changed or int(layout_state.get("redraw_generation", -1)) == generation:
+        if changed and int(layout_state.get("redraw_generation", -1)) != generation:
+            layout_state["redraw_generation"] = generation
+            _invalidate_hover_blit_background()
+            canvas_widget.after_idle(lambda: figure.canvas.draw_idle() if figure.canvas is not None else None)
             return
-        layout_state["redraw_generation"] = generation
-        canvas_widget.after_idle(lambda: figure.canvas.draw_idle() if figure.canvas is not None else None)
+        if _capture_hover_blit_background():
+            _draw_hover_overlay(fallback_redraw=False)
 
     def _on_resize(_event):
+        _invalidate_hover_blit_background()
         layout_state = state.get("annotation_layout_state") or {}
         resize_token = int(layout_state.get("resize_token", 0)) + 1
         layout_state["resize_token"] = resize_token

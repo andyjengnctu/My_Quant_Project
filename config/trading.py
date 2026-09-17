@@ -21,6 +21,13 @@ TRADING_MARKET_SESSION_CLOSE_TIME = "13:30"
 # strategy; canonical state ownership and derivation remain unchanged.
 TRADING_WORKBENCH_INITIAL_READ_WORKERS = 6
 
+# Single-stock Workbench cache warming is intentionally bounded so background
+# work never dominates the foreground ticker the user explicitly selected.
+# These knobs only change execution scheduling/cache warmth; Trading membership,
+# ordering, Params identity, and analysis semantics remain unchanged.
+TRADING_WORKBENCH_SINGLE_STOCK_OHLCV_PREFETCH_TICKERS = 16
+TRADING_WORKBENCH_SINGLE_STOCK_ANALYSIS_PREFETCH_TICKERS = 3
+
 __all__ = [
     "TRADING_ACTIVE_STRATEGY_ID",
     "TRADING_DATASET_PROFILE",
@@ -29,4 +36,6 @@ __all__ = [
     "TRADING_DL_RANKING_ENABLED",
     "TRADING_MARKET_SESSION_CLOSE_TIME",
     "TRADING_WORKBENCH_INITIAL_READ_WORKERS",
+    "TRADING_WORKBENCH_SINGLE_STOCK_OHLCV_PREFETCH_TICKERS",
+    "TRADING_WORKBENCH_SINGLE_STOCK_ANALYSIS_PREFETCH_TICKERS",
 ]

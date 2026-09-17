@@ -27,6 +27,10 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from config.execution_policy import DEFAULT_FIXED_RISK
+from config.trading import (
+    TRADING_WORKBENCH_SINGLE_STOCK_ANALYSIS_PREFETCH_TICKERS,
+    TRADING_WORKBENCH_SINGLE_STOCK_OHLCV_PREFETCH_TICKERS,
+)
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
 from core.params_io import build_params_from_mapping
@@ -139,9 +143,8 @@ SINGLE_STOCK_CONTROLS_SAFE_MARGIN = 72
 
 # UI-only execution caches.  They change neither Trading data membership nor
 # backtest semantics; cache identities include the finalized consumer fingerprint
-# and candidate Params signature.
-SINGLE_STOCK_TRADING_OHLCV_PREFETCH_MAX_TICKERS = 128
-SINGLE_STOCK_TRADING_ANALYSIS_PREFETCH_MAX_TICKERS = 24
+# and candidate Params signature. Prefetch breadth is config-owned because it is
+# an execution knob rather than scientific/trading identity.
 SINGLE_STOCK_TRADING_OHLCV_CACHE_SIZE = 160
 SINGLE_STOCK_TRADING_ANALYSIS_CACHE_SIZE = 48
 SINGLE_STOCK_TRADING_PREFETCH_WAIT_SECONDS = 3.0
@@ -1323,7 +1326,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             signature = str((members[0] if members else {}).get("params_signature") or "").strip()
         return params, signature, "trading_primary_params"
 
-    def _get_cached_trading_clean_df(self, context_key, ticker, min_rows, *, allow_prefetch_wait=True):
+    def _get_cached_trading_clean_df(self, context_key, ticker, min_rows, *, allow_prefetch_wait=False):
         cache_key = (context_key, str(ticker).strip().upper())
         with self._trading_cache_lock:
             cached = self._lru_get(self._trading_ohlcv_cache, cache_key)
@@ -1371,7 +1374,13 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         return clean_df, False
 
     def _build_cached_trading_analysis_result(
-        self, ticker, params_path, candidate_row, *, allow_prefetch_wait=True
+        self,
+        ticker,
+        params_path,
+        candidate_row,
+        *,
+        allow_prefetch_wait=False,
+        include_live_inspection=True,
     ):
         started = time.perf_counter()
         consumer_state, _view, context_key = self._resolve_cached_trading_consumer_context()
@@ -1385,10 +1394,12 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if cached_result is not None:
             result = dict(cached_result)
             # Backtest/chart replay is cacheable; broker/account truth is not.
-            # Always re-read the canonical Trading state for the inspector.
-            result["trading_inspection"] = build_trading_single_stock_inspection(
-                WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
-            )
+            # Foreground inspection always re-reads canonical Trading state, while
+            # background cache warming intentionally stops at the pure replay.
+            if include_live_inspection:
+                result["trading_inspection"] = build_trading_single_stock_inspection(
+                    WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
+                )
             result["_workbench_perf"] = {
                 "analysis_cache_hit": True,
                 "context_seconds": context_elapsed,
@@ -1441,9 +1452,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 cache_payload,
                 SINGLE_STOCK_TRADING_ANALYSIS_CACHE_SIZE,
             )
-        result["trading_inspection"] = build_trading_single_stock_inspection(
-            WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
-        )
+        if include_live_inspection:
+            result["trading_inspection"] = build_trading_single_stock_inspection(
+                WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
+            )
         result["_workbench_perf"] = {
             "analysis_cache_hit": False,
             "data_cache_hit": bool(data_cache_hit),
@@ -1463,7 +1475,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._trading_prefetch_pending_rows = normalized_rows
             return False
         self._trading_prefetch_pending_rows = None
-        data_rows = normalized_rows[:SINGLE_STOCK_TRADING_OHLCV_PREFETCH_MAX_TICKERS]
+        data_rows = normalized_rows[:TRADING_WORKBENCH_SINGLE_STOCK_OHLCV_PREFETCH_TICKERS]
         self._trading_prefetch_tickers = {str(row.get("ticker") or "").strip().upper() for row in data_rows}
         self._trading_prefetch_data_ready = threading.Event()
         prefetch_thread = threading.Thread(
@@ -1518,13 +1530,17 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 self._trading_prefetch_data_ready.set()
 
             params_path = str(resolve_trading_selected_strategy_param_path(WORKBENCH_PROJECT_ROOT))
-            for row in rows[:SINGLE_STOCK_TRADING_ANALYSIS_PREFETCH_MAX_TICKERS]:
+            for row in rows[:TRADING_WORKBENCH_SINGLE_STOCK_ANALYSIS_PREFETCH_TICKERS]:
                 ticker = str(row.get("ticker") or "").strip().upper()
                 if not ticker:
                     continue
                 try:
                     self._build_cached_trading_analysis_result(
-                        ticker, params_path, row, allow_prefetch_wait=False
+                        ticker,
+                        params_path,
+                        row,
+                        allow_prefetch_wait=False,
+                        include_live_inspection=False,
                     )
                 except (FileNotFoundError, KeyError, TypeError, ValueError, RuntimeError, OSError):
                     continue
@@ -2008,11 +2024,14 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
     def _run_analysis_worker(self, ticker, params_path, fixed_risk, request_token, runtime_domain, candidate_row):
         try:
             if runtime_domain == "trading":
+                # Foreground user intent has priority over speculative cache
+                # warming. If the bulk prefetch has not produced this ticker yet,
+                # load it directly instead of waiting behind the background batch.
                 result = self._build_cached_trading_analysis_result(
                     ticker,
                     params_path,
                     dict(candidate_row or {}),
-                    allow_prefetch_wait=True,
+                    allow_prefetch_wait=False,
                 )
             else:
                 result = run_ticker_analysis(
@@ -2152,9 +2171,13 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
     def _render_result(self, result):
         trade_logs_df = result.get("trade_logs_df")
-        self._update_sidebar_from_result(result)
+        # Trading lifecycle projection is deterministic but non-trivial. Build it
+        # once per result render and share the exact payload between sidebar and
+        # chart instead of projecting the same result twice on the Tk thread.
+        gui_chart_payload = self._build_gui_chart_payload(result)
+        self._update_sidebar_from_result(result, display_payload=gui_chart_payload)
         self._render_trade_table(trade_logs_df)
-        return self._render_embedded_chart(result)
+        return self._render_embedded_chart(result, gui_chart_payload=gui_chart_payload)
 
 
 
@@ -2255,7 +2278,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
         self._selected_capital_var.set("\n".join(capital_lines))
 
-    def _update_sidebar_from_result(self, result):
+    def _update_sidebar_from_result(self, result, *, display_payload=None):
         chart_payload = dict(result.get("chart_payload") or {})
         status_lines = list(((chart_payload.get("status_box") or {}).get("lines") or []))
         signal_active, history_active = self._resolve_sidebar_chip_states(status_lines)
@@ -2263,7 +2286,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)
         self._sidebar_summary_var.set("\n".join(str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()) or "-")
         self._apply_sidebar_chip_styles(signal_active, history_active)
-        display_payload = self._build_gui_chart_payload(result) if self._runtime_domain_key() == "trading" else chart_payload
+        if display_payload is None:
+            display_payload = self._build_gui_chart_payload(result) if self._runtime_domain_key() == "trading" else chart_payload
         dates = display_payload.get("date_labels") or []
         if dates:
             idx = int((display_payload.get("default_view") or {}).get("end_idx", len(dates) - 1))
@@ -2377,7 +2401,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             return True
         return False
 
-    def _render_embedded_chart(self, result, *, preserve_view_state=None):
+    def _render_embedded_chart(self, result, *, preserve_view_state=None, gui_chart_payload=None):
         chart_payload = result.get("chart_payload")
         ticker = result.get("ticker", "")
         if chart_payload is None:
@@ -2392,7 +2416,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 backend_error_text = f"{backend_error_text} {FIGURE_CANVAS_TKAGG_IMPORT_ERROR}"
             self._status_var.set(backend_error_text)
             return backend_error_text
-        gui_chart_payload = self._build_gui_chart_payload(result)
+        if gui_chart_payload is None:
+            gui_chart_payload = self._build_gui_chart_payload(result)
         trade_indexes = self._resolve_chart_navigation_indexes(gui_chart_payload)
         self._current_chart_trade_indexes = trade_indexes
         self._current_chart_trade_cursor_index = None
