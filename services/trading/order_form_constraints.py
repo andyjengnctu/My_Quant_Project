@@ -5,10 +5,11 @@ submission.  Service submit paths re-run the same validators, so UI state is
 never authority.
 
 Historical pending-entry backfill is intentionally bounded by the latest
-finalized Trading information date.  Because every selectable historical date
-is already finalized, the shared order form can constrain its price list to the
-exact-date raw daily price range plus the Taiwan tick ladder.  Actual fills add
-the stronger chronology rule that fill_date must be strictly after order_date.
+finalized Trading information date.  The pending *buy limit* is strategy output,
+not broker fill truth, so it is never constrained by the selected day's OHLC
+range; only its legal Taiwan tick and order-date contract are validated.  Actual
+fills use the exact-date raw daily price range plus the Taiwan tick ladder and
+add the stronger chronology rule that fill_date must be strictly after order_date.
 """
 from __future__ import annotations
 
@@ -214,32 +215,6 @@ def validate_pending_order_trade_date(
     return planned
 
 
-def resolve_pending_order_price_band(
-    project_root,
-    *,
-    ticker: object,
-    planned_trade_date: object,
-    market_view: TradingMarketDataV2View | None = None,
-) -> tuple[float, float, float | None]:
-    """Resolve exact-date possible order-price band for historical backfill."""
-
-    root = Path(project_root).resolve()
-    ticker_key = normalize_trading_ticker(ticker)
-    planned = normalize_trading_date(planned_trade_date, field_name="planned_trade_date", allow_none=False)
-    view = market_view or TradingMarketDataV2View.open(root)
-    evidence = load_trading_actual_fill_market_evidence(
-        root,
-        ticker=ticker_key,
-        trade_date=planned,
-        market_view=view,
-    )
-    low = float(evidence["market_low"])
-    high = float(evidence["market_high"])
-    if low <= 0 or high < low:
-        raise ValueError(f"{ticker_key} {planned} 無法建立合法價格區間")
-    return low, high, None
-
-
 def validate_pending_order_limit_price(
     project_root,
     *,
@@ -249,8 +224,17 @@ def validate_pending_order_limit_price(
     limit_price,
     market_view: TradingMarketDataV2View | None = None,
 ) -> float:
+    """Validate an auto-calculated pending buy limit without treating it as a fill.
+
+    A buy limit can legitimately sit outside that day's realized Low/High.  The
+    exact-date OHLC range is broker-fill evidence and belongs exclusively to the
+    actual-fill validator.  Pending orders therefore validate the selected order
+    date plus Taiwan tick legality, but never require the limit to have traded on
+    that day.
+    """
+
     ticker_key = normalize_trading_ticker(ticker)
-    planned = validate_pending_order_trade_date(
+    validate_pending_order_trade_date(
         project_root,
         ticker=ticker_key,
         latest_finalized_date=latest_finalized_date,
@@ -267,16 +251,6 @@ def validate_pending_order_limit_price(
     price_milli = int(price_to_milli(price))
     if rounded_milli != price_milli:
         raise ValueError(f"{ticker_key} 掛單限價 {limit_price} 不符合台股合法跳動單位")
-    low, high, _reference = resolve_pending_order_price_band(
-        project_root,
-        ticker=ticker_key,
-        planned_trade_date=planned,
-        market_view=market_view,
-    )
-    if price_milli < int(price_to_milli(low)) or price_milli > int(price_to_milli(high)):
-        raise ValueError(
-            f"{ticker_key} {planned} 掛單價格 {price:g} 不在該日可證實價格區間 [{low:g}, {high:g}]"
-        )
     return price
 
 
@@ -434,12 +408,9 @@ def build_trading_pending_order_form_constraints(
             price_high = min(price_high, float(pending_limit_price))
     elif chosen in set(order_dates):
         selected_kind = ORDER_FORM_DATE_KIND_PENDING
-        price_low, price_high, reference_price = resolve_pending_order_price_band(
-            root,
-            ticker=ticker_key,
-            planned_trade_date=chosen,
-            market_view=view,
-        )
+        # Pending buy-limit price is strategy output.  Do not reuse the actual
+        # fill OHLC evidence range here; doing so incorrectly rejects legitimate
+        # buy limits that never traded on the selected order date.
 
     options: tuple[str, ...] = ()
     if price_low is not None and price_high is not None and price_high >= price_low:
@@ -462,7 +433,6 @@ def build_trading_pending_order_form_constraints(
         "reference_price": reference_price,
         "price_evidence": (
             "daily_ohlcv_possible_fill" if selected_kind == ORDER_FORM_DATE_KIND_FILL
-            else "daily_ohlcv_historical_order_range" if selected_kind == ORDER_FORM_DATE_KIND_PENDING
             else None
         ),
     }
@@ -478,7 +448,6 @@ __all__ = [
     "build_trading_pending_order_form_constraints",
     "list_trading_pending_order_dates",
     "resolve_next_pending_order_date",
-    "resolve_pending_order_price_band",
     "resolve_preferred_pending_order_date",
     "validate_pending_order_limit_price",
     "validate_pending_order_trade_date",

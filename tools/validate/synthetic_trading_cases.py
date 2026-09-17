@@ -3830,10 +3830,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（Scanner／手動／既有掛單共用", "確認掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（買入限價自動計算；成交價僅在既有掛單的成交輸入中可選）", "確認掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
-    check("workbench_pending_scanner_and_manual_share_one_editable_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
+    check("workbench_pending_scanner_and_manual_share_one_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_limit_var", "_pending_fill_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
     check("workbench_pending_manual_ticker_auto_previews_after_input", True, all(token in panel_source for token in ('bind("<KeyRelease>", self._schedule_manual_pending_ticker_preview)', "_auto_preview_manual_pending_ticker", "after(350")))
     check("workbench_pending_values_auto_preview_without_recalculate_button", True, 'trace_add("write", self._schedule_pending_value_preview)' in panel_source and 'text="重新試算"' not in panel_source)
     check(
@@ -3842,9 +3842,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         all(token in panel_source for token in (
             'self._pending_draft_origin = "scanner"',
             'self._pending_order_qty_var.set("" if candidate_qty is None else str(int(candidate_qty)))',
-            'self._pending_order_price_var.set("" if candidate_price is None else str(candidate_price))',
+            'self._pending_order_limit_var.set("" if candidate_price is None else str(candidate_price))',
             'self._pending_order_date_var.set(str(candidate_date or ""))',
-            'Scanner 資料已帶入；正在驗證目前帳戶資源、日期與價格',
+            'Scanner 資料已帶入；正在驗證目前帳戶資源、掛單日期與自動買入限價',
             'self._preview_pending_draft(use_current_overrides=False, silent=True)',
         )),
     )
@@ -3875,9 +3875,35 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_pending_existing_row_uses_same_form_for_atomic_update", True, all(token in panel_source for token in ("_set_pending_edit_mode(entry_id)", 'text="更新掛單" if editing else "確認掛單"', "update_trading_pending_entry_intent(")))
     check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
     pending_ui_source = panel_source.split('pending_box = ttk.LabelFrame(content, text="掛單區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[0]
-    check("workbench_pending_order_and_fill_share_single_qty_price_date_controls", True, all(token in pending_ui_source for token in ("_pending_order_qty_var", "_pending_order_price_var", "_pending_order_date_var", "輸入成交")) and all(token not in pending_ui_source for token in ("_pending_fill_qty_var", "_pending_fill_price_var", "_pending_fill_date_var", "實際股數", "實際成交價")))
-    check("workbench_pending_shared_price_is_editable_constrained_combobox", True, 'self._pending_order_price_combo = ttk.Combobox' in panel_source and 'state="normal"' in pending_ui_source and 'build_trading_pending_order_form_constraints' in panel_source)
-    check("workbench_pending_fill_uses_shared_order_form_values_before_transfer", True, all(token in panel_source for token in ('parse_trading_qty_text(self._pending_order_qty_var.get(), "實際成交股數")', 'parse_trading_money_text(self._pending_order_price_var.get(), "實際成交價"', 'trade_date = self._pending_order_date_var.get().strip()', "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
+    check(
+        "workbench_pending_buy_limit_and_fill_price_are_separate_controls",
+        True,
+        all(token in pending_ui_source for token in (
+            'self._pending_order_limit_entry = ttk.Entry',
+            'textvariable=self._pending_order_limit_var',
+            'state="readonly"',
+            'self._pending_fill_price_combo = ttk.Combobox',
+            'textvariable=self._pending_fill_price_var',
+            'state="disabled"',
+            '("買入限價", 12)',
+            '("成交價", 12)',
+        )),
+    )
+    check(
+        "workbench_pending_buy_limit_is_auto_calculated_not_user_override",
+        True,
+        'limit_price = None' in panel_source
+        and 'limit_price=payload.get("limit_price")' in panel_source
+        and 'self._pending_order_limit_var.trace_add' not in panel_source,
+    )
+    check(
+        "workbench_pending_fill_price_only_selectable_for_active_pending_fill_mode",
+        True,
+        'self._pending_fill_price_combo.configure(state="readonly" if fill_mode else "disabled")' in panel_source
+        and 'state="readonly" if price_options else "disabled"' in panel_source
+        and 'self._pending_fill_price_combo.configure(state="disabled")' in panel_source,
+    )
+    check("workbench_pending_fill_uses_separate_fill_price_before_transfer", True, all(token in panel_source for token in ('parse_trading_qty_text(self._pending_order_qty_var.get(), "實際成交股數")', 'parse_trading_money_text(self._pending_fill_price_var.get(), "實際成交價"', 'trade_date = self._pending_order_date_var.get().strip()', "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
     check(
         "workbench_pending_edit_explicitly_separates_order_and_fill_calendar_modes",
         True,
@@ -3938,7 +3964,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_date_picker_supports_state_driven_disabled_selected_today_visuals", True, all(token in date_picker_source for token in ("def set_allowed_dates", 'state="normal" if selectable else "disabled"', "if selected:", "elif today:", "WORKBENCH_ACCENT", "WORKBENCH_INFO")))
     pending_service_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "pending_entry_service.py").read_text(encoding="utf-8")
     constraint_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "order_form_constraints.py").read_text(encoding="utf-8")
-    check("pending_order_submit_revalidates_calendar_date_and_legal_price_band_server_side", True, all(token in pending_service_source for token in ("validate_pending_order_trade_date", "validate_pending_order_limit_price")) and all(token in constraint_source for token in ("TaiwanStockTradingDate", "TaiwanStockPrice", "build_legal_tick_price_options")))
+    check(
+        "pending_order_submit_revalidates_calendar_date_and_legal_tick_without_fill_ohlc_band",
+        True,
+        all(token in pending_service_source for token in ("validate_pending_order_trade_date", "validate_pending_order_limit_price"))
+        and 'A buy limit can legitimately sit outside that day\'s realized Low/High.' in constraint_source
+        and '不符合台股合法跳動單位' in constraint_source,
+    )
     check(
         "pending_fill_submit_hard_rejects_fill_date_not_after_order_date",
         True,
@@ -3971,6 +4003,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
                     {"date": "2026-09-16", "stock_id": "2330", "close": 101.0, "min": 99.0, "max": 102.0, "Trading_Volume": 1000},
                     {"date": "2026-09-17", "stock_id": "2330", "close": 100.0, "min": 98.0, "max": 101.0, "Trading_Volume": 1000},
                     {"date": "2026-09-18", "stock_id": "2330", "close": 103.0, "min": 101.0, "max": 104.0, "Trading_Volume": 1000},
+                    {"date": "2026-09-17", "stock_id": "2836", "close": 12.50, "min": 12.25, "max": 12.60, "Trading_Volume": 1000},
                 ])
             else:
                 raise AssertionError(dataset)
@@ -3997,11 +4030,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check("pending_order_calendar_prefers_latest_finalized_eligible_date", "2026-09-17", _order_constraints["preferred_order_date"])
     check("pending_order_calendar_selected_historical_saturday_is_order_context", _ORDER_FORM_DATE_KIND_PENDING, _order_constraints["selected_date_kind"])
-    check(
-        "pending_order_price_options_follow_selected_date_ohlc_and_legal_ticks",
-        [97.0, 99.0],
-        [float(_order_constraints["price_options"][0]), float(_order_constraints["price_options"][-1])],
-    )
+    check("pending_order_does_not_build_fill_price_options_from_order_date_ohlc", [], list(_order_constraints["price_options"]))
+    check("pending_order_does_not_expose_fill_price_band", [None, None], [_order_constraints["price_min"], _order_constraints["price_max"]])
     _fill_constraints = _build_order_form_constraints(
         Path("."), ticker="2330", information_date="2026-09-17", latest_finalized_date="2026-09-17",
         selected_date="2026-09-15", include_fill_dates=True, pending_order_date="2026-09-12",
@@ -4052,15 +4082,34 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     except ValueError:
         _off_tick_rejected = True
     check("pending_order_service_rejects_off_tick_price_even_if_ui_is_bypassed", True, _off_tick_rejected)
-    _outside_band_rejected = False
+    _outside_fill_band_limit_accepted = False
     try:
-        _validate_pending_order_limit_price(
+        _accepted_limit = _validate_pending_order_limit_price(
             Path("."), ticker="2330", planned_trade_date="2026-09-12", latest_finalized_date="2026-09-17",
-            limit_price=120.0, market_view=_order_view,
+            limit_price=99.5, market_view=_order_view,
         )
+        _outside_fill_band_limit_accepted = abs(float(_accepted_limit) - 99.5) < 1e-9
     except ValueError:
-        _outside_band_rejected = True
-    check("pending_order_service_rejects_price_outside_selected_date_market_band", True, _outside_band_rejected)
+        _outside_fill_band_limit_accepted = False
+    check(
+        "pending_order_service_accepts_legal_tick_buy_limit_outside_selected_day_realized_high",
+        True,
+        _outside_fill_band_limit_accepted,
+    )
+    _reported_scanner_limit_accepted = False
+    try:
+        _accepted_scanner_limit = _validate_pending_order_limit_price(
+            Path("."), ticker="2836", planned_trade_date="2026-09-17", latest_finalized_date="2026-09-17",
+            limit_price=13.05, market_view=_order_view,
+        )
+        _reported_scanner_limit_accepted = abs(float(_accepted_scanner_limit) - 13.05) < 1e-9
+    except ValueError:
+        _reported_scanner_limit_accepted = False
+    check(
+        "pending_order_regression_scanner_buy_limit_13_05_is_not_fill_checked_against_12_25_12_60",
+        True,
+        _reported_scanner_limit_accepted,
+    )
 
     paged_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "paged_table.py").read_text(encoding="utf-8")
     check("workbench_tables_share_sort_toggle_page_and_stock_open_contract", True, all(text in paged_source for text in ("page_size", "上一頁", "下一頁", "_header_click", "_row_click", "_open_stock")) and "ttk.Scrollbar" not in paged_source)
