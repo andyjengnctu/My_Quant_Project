@@ -16,7 +16,7 @@ from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 from core.capital_policy import resolve_scanner_live_capital
 from core.data_utils import get_required_min_rows
 from core.entry_plans import build_cash_capped_entry_plan, build_normal_candidate_plan
-from core.exact_accounting import infer_security_profile, milli_to_money, price_to_milli
+from core.exact_accounting import build_buy_ledger, infer_security_profile, milli_to_money, price_to_milli
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.params_io import build_params_from_mapping
 from core.price_utils import adjust_long_buy_limit
@@ -43,6 +43,7 @@ from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_ACTIVE,
     cancel_trading_pending_entry,
     create_trading_pending_entry,
+    delete_trading_pending_entry,
     load_trading_pending_entry_state,
     mark_trading_pending_entry_filled,
     project_trading_pending_entry_state,
@@ -62,6 +63,10 @@ PENDING_ENTRY_TRANSACTION_SCHEMA_VERSION = 1
 
 def _timestamp() -> str:
     return get_taipei_now().isoformat(timespec="seconds")
+
+
+def _default_planned_trade_date() -> str:
+    return get_taipei_now().date().isoformat()
 
 
 def _account_resources(project_root, *, information_date: str) -> dict[str, Any]:
@@ -84,15 +89,25 @@ def _account_resources(project_root, *, information_date: str) -> dict[str, Any]
         normalize_trading_ticker(row.get("ticker"))
         for row in pending.get("locked_entries") or []
     }
-    occupied = len(held_tickers) + len(locked_tickers)
-    free_slots = max(0, int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - occupied)
+    held_count = len(held_tickers)
+    locked_count = len(locked_tickers)
+    slot_quota = max(0, int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - held_count)
+    occupied = held_count + locked_count
+    free_slots = max(0, slot_quota - locked_count)
     available_cash_milli = int(cash_milli) - int(pending.get("reserved_total_milli") or 0)
     return {
         "account": account,
         "pending": pending,
         "held_tickers": held_tickers,
         "locked_tickers": locked_tickers,
+        "held_count": held_count,
+        "locked_count": locked_count,
+        "slot_quota": slot_quota,
         "occupied": occupied,
+        "max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        "cash_limit_milli": int(cash_milli),
+        "cash_limit": milli_to_money(int(cash_milli)),
+        "reserved_total_milli": int(pending.get("reserved_total_milli") or 0),
         "free_slots": free_slots,
         "available_cash_milli": max(0, available_cash_milli),
         "available_cash": milli_to_money(max(0, available_cash_milli)),
@@ -118,6 +133,7 @@ def _pending_entry_payload(
     plan: Mapping[str, Any],
     lineage: Mapping[str, Any],
     signal_date: str | None,
+    planned_trade_date: str | None = None,
     candidate_reference: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     seed = deepcopy(dict(plan))
@@ -128,6 +144,11 @@ def _pending_entry_payload(
         "origin": origin,
         "ticker": ticker,
         "information_date": information_date,
+        "planned_trade_date": normalize_trading_date(
+            planned_trade_date or _default_planned_trade_date(),
+            field_name="planned_trade_date",
+            allow_none=False,
+        ),
         "signal_date": signal_date,
         "execution_plan_seed": seed,
         "planned_qty": int(seed["qty"]),
@@ -143,8 +164,103 @@ def _pending_entry_payload(
     }
 
 
-@serialized_trading_state_mutation
-def create_scanner_trading_pending_entry(project_root, *, candidate_reference: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_user_limit_price(*, ticker: str, raw_price, security_profile) -> float:
+    try:
+        price = float(raw_price)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("掛單限價必須是有效數字") from exc
+    if pd.isna(price) or price <= 0:
+        raise ValueError("掛單限價必須 > 0")
+    return float(adjust_long_buy_limit(price, ticker=ticker, security_profile=security_profile))
+
+
+def _apply_pending_draft_overrides(
+    *,
+    ticker: str,
+    base_plan: Mapping[str, Any],
+    params,
+    resources: Mapping[str, Any],
+    qty: int | None,
+    limit_price,
+) -> dict[str, Any]:
+    seed = deepcopy(dict(base_plan or {}))
+    if not seed:
+        raise ValueError(f"{ticker} 缺少可用掛單計畫")
+    security_profile = seed.get("security_profile") or infer_security_profile(ticker)
+    original_limit = float(seed.get("limit_price") or 0.0)
+    resolved_limit = original_limit if limit_price is None else _normalize_user_limit_price(
+        ticker=ticker,
+        raw_price=limit_price,
+        security_profile=security_profile,
+    )
+    if resolved_limit <= 0:
+        raise ValueError(f"{ticker} 缺少有效掛單限價")
+
+    if limit_price is not None and price_to_milli(resolved_limit) != price_to_milli(original_limit):
+        entry_atr = seed.get("entry_atr")
+        if entry_atr is None or pd.isna(entry_atr) or float(entry_atr) <= 0:
+            raise ValueError(f"{ticker} 缺少 entry ATR，不能修改掛單限價")
+        rebuilt = build_normal_candidate_plan(
+            resolved_limit,
+            float(entry_atr),
+            float(seed.get("sizing_capital") or resolve_scanner_live_capital(params)),
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=seed.get("trade_date"),
+        )
+        if rebuilt is None:
+            raise ValueError(f"{ticker} 修改限價後無法建立掛單計畫")
+        preserved = deepcopy(seed)
+        preserved.update(rebuilt)
+        seed = preserved
+        seed["limit_price"] = resolved_limit
+
+    auto_plan = build_cash_capped_entry_plan(seed, float(resources["available_cash"]), params)
+    if auto_plan is None or int(auto_plan.get("qty") or 0) <= 0:
+        raise ValueError(f"{ticker} 在目前可用現金下無可執行股數")
+    max_safe_qty = int(auto_plan["qty"])
+    resolved_qty = max_safe_qty if qty is None else int(qty)
+    if resolved_qty <= 0:
+        raise ValueError("掛單股數必須 > 0")
+    if resolved_qty > max_safe_qty:
+        raise ValueError(
+            f"掛單股數 {resolved_qty:,} 超過目前參數／資金可執行上限 {max_safe_qty:,}"
+        )
+    reserved_cost_milli = int(
+        build_buy_ledger(price_to_milli(auto_plan["limit_price"]), resolved_qty, params)["cash_buy_total_milli"]
+    )
+    if reserved_cost_milli > int(resources["available_cash_milli"]):
+        raise ValueError("掛單預留成本超過目前可用現金")
+    auto_plan["qty"] = resolved_qty
+    auto_plan["reserved_cost_milli"] = reserved_cost_milli
+    auto_plan["reserved_cost"] = milli_to_money(reserved_cost_milli)
+    auto_plan["user_qty_override"] = None if qty is None else int(qty)
+    auto_plan["user_limit_override"] = None if limit_price is None else float(resolved_limit)
+    return auto_plan
+
+
+def _resource_summary(resources: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "held_count": int(resources.get("held_count") or 0),
+        "locked_slots": int(resources.get("locked_count") or 0),
+        "slot_quota": int(resources.get("slot_quota") or 0),
+        "occupied": int(resources.get("occupied") or 0),
+        "max_positions": int(resources.get("max_positions") or DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        "reserved_total_milli": int(resources.get("reserved_total_milli") or 0),
+        "cash_limit_milli": int(resources.get("cash_limit_milli") or 0),
+        "available_cash_milli": int(resources.get("available_cash_milli") or 0),
+    }
+
+
+def _prepare_scanner_pending_entry(
+    project_root,
+    *,
+    candidate_reference: Mapping[str, Any],
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+) -> dict[str, Any]:
     reference = dict(candidate_reference or {})
     ticker = normalize_trading_ticker(reference.get("ticker"))
     candidate = resolve_current_trading_scanner_candidate(
@@ -169,19 +285,67 @@ def create_scanner_trading_pending_entry(project_root, *, candidate_reference: M
     seed["max_qty"] = planned_qty
     if seed.get("sizing_capital") is None:
         seed["sizing_capital"] = float(resolve_scanner_live_capital(params))
-    plan = build_cash_capped_entry_plan(seed, float(resources["available_cash"]), params)
-    if plan is None or int(plan.get("qty") or 0) <= 0:
-        raise ValueError(f"{ticker} 在目前可用現金下無可執行股數")
-    lineage = build_trading_candidate_strategy_lineage(candidate)
+    plan = _apply_pending_draft_overrides(
+        ticker=ticker,
+        base_plan=seed,
+        params=params,
+        resources=resources,
+        qty=qty,
+        limit_price=limit_price,
+    )
+    candidate_for_lineage = deepcopy(candidate)
+    candidate_for_lineage["execution_plan_seed"] = deepcopy(plan)
+    candidate_for_lineage["proj_qty"] = int(plan["qty"])
+    candidate_for_lineage["proj_cost"] = float(plan["reserved_cost"])
+    lineage = build_trading_candidate_strategy_lineage(candidate_for_lineage)
     entry = _pending_entry_payload(
         origin=PENDING_ENTRY_ORIGIN_SCANNER,
         ticker=ticker,
         information_date=information_date,
+        planned_trade_date=planned_trade_date,
         plan=plan,
         lineage=lineage,
         signal_date=normalize_trading_date(candidate.get("signal_date"), field_name="signal_date", allow_none=True),
         candidate_reference=candidate,
     )
+    entry["resource_summary"] = _resource_summary(resources)
+    return entry
+
+
+def preview_scanner_trading_pending_entry(
+    project_root,
+    *,
+    candidate_reference: Mapping[str, Any],
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+) -> dict[str, Any]:
+    return _prepare_scanner_pending_entry(
+        project_root,
+        candidate_reference=candidate_reference,
+        qty=qty,
+        limit_price=limit_price,
+        planned_trade_date=planned_trade_date,
+    )
+
+
+@serialized_trading_state_mutation
+def create_scanner_trading_pending_entry(
+    project_root,
+    *,
+    candidate_reference: Mapping[str, Any],
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+) -> dict[str, Any]:
+    entry = _prepare_scanner_pending_entry(
+        project_root,
+        candidate_reference=candidate_reference,
+        qty=qty,
+        limit_price=limit_price,
+        planned_trade_date=planned_trade_date,
+    )
+    entry.pop("resource_summary", None)
     return create_trading_pending_entry(project_root, entry=entry)
 
 
@@ -207,8 +371,14 @@ def _manual_market_context(project_root, *, ticker: str, params, through_date: s
     return {"frame": frame, "close": close, "atr": atr, "date": date_text}
 
 
-@serialized_trading_state_mutation
-def create_manual_trading_pending_entry(project_root, *, ticker: object) -> dict[str, Any]:
+def _prepare_manual_pending_entry(
+    project_root,
+    *,
+    ticker: object,
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+) -> dict[str, Any]:
     ticker_key = normalize_trading_ticker(ticker)
     runtime = load_trading_scanner_runtime(project_root)
     information_date = normalize_trading_date(runtime["latest_data_date"], allow_none=False)
@@ -217,13 +387,14 @@ def create_manual_trading_pending_entry(project_root, *, ticker: object) -> dict
     params = runtime["params"]
     market = _manual_market_context(project_root, ticker=ticker_key, params=params, through_date=information_date)
     security_profile = infer_security_profile(ticker_key)
-    limit_price = adjust_long_buy_limit(
+    user_limit_price = limit_price
+    default_limit_price = adjust_long_buy_limit(
         market["close"] + market["atr"] * float(params.atr_buy_tol),
         ticker=ticker_key,
         security_profile=security_profile,
     )
-    plan = build_normal_candidate_plan(
-        limit_price,
+    base_plan = build_normal_candidate_plan(
+        default_limit_price,
         market["atr"],
         float(resolve_scanner_live_capital(params)),
         params,
@@ -231,12 +402,17 @@ def create_manual_trading_pending_entry(project_root, *, ticker: object) -> dict
         security_profile=security_profile,
         trade_date=information_date,
     )
-    if plan is None:
+    if base_plan is None:
         raise ValueError(f"{ticker_key} 無法建立盤前 entry plan")
-    plan["entry_type"] = "manual"
-    plan = build_cash_capped_entry_plan(plan, float(resources["available_cash"]), params)
-    if plan is None or int(plan.get("qty") or 0) <= 0:
-        raise ValueError(f"{ticker_key} 在目前可用現金下無可執行股數")
+    base_plan["entry_type"] = "manual"
+    plan = _apply_pending_draft_overrides(
+        ticker=ticker_key,
+        base_plan=base_plan,
+        params=params,
+        resources=resources,
+        qty=qty,
+        limit_price=user_limit_price,
+    )
     lineage = build_trading_manual_management_lineage(
         params=params,
         execution_plan_seed=plan,
@@ -249,10 +425,49 @@ def create_manual_trading_pending_entry(project_root, *, ticker: object) -> dict
         origin=PENDING_ENTRY_ORIGIN_MANUAL,
         ticker=ticker_key,
         information_date=information_date,
+        planned_trade_date=planned_trade_date,
         plan=plan,
         lineage=lineage,
         signal_date=None,
     )
+    entry["resource_summary"] = _resource_summary(resources)
+    return entry
+
+
+def preview_manual_trading_pending_entry(
+    project_root,
+    *,
+    ticker: object,
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+) -> dict[str, Any]:
+    return _prepare_manual_pending_entry(
+        project_root,
+        ticker=ticker,
+        qty=qty,
+        limit_price=limit_price,
+        planned_trade_date=planned_trade_date,
+    )
+
+
+@serialized_trading_state_mutation
+def create_manual_trading_pending_entry(
+    project_root,
+    *,
+    ticker: object,
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+) -> dict[str, Any]:
+    entry = _prepare_manual_pending_entry(
+        project_root,
+        ticker=ticker,
+        qty=qty,
+        limit_price=limit_price,
+        planned_trade_date=planned_trade_date,
+    )
+    entry.pop("resource_summary", None)
     return create_trading_pending_entry(project_root, entry=entry)
 
 
@@ -268,6 +483,19 @@ def get_trading_pending_entry_read_model(project_root) -> dict[str, Any]:
         information_date = None
     state = load_trading_pending_entry_state(project_root, required=False)
     projected = project_trading_pending_entry_state(state, current_information_date=information_date)
+    account = load_trading_account_state(project_root, required=False)
+    cash_limit_milli = None if not isinstance(account, Mapping) else account.get("cash_milli")
+    held_count = 0 if not isinstance(account, Mapping) else len(account.get("positions") or {})
+    locked_slots = int(projected.get("locked_count") or 0)
+    projected["resource_usage"] = {
+        "held_count": int(held_count),
+        "locked_slots": locked_slots,
+        "slot_quota": max(0, int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - int(held_count)),
+        "occupied": int(held_count) + locked_slots,
+        "max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        "reserved_total_milli": int(projected.get("reserved_total_milli") or 0),
+        "cash_limit_milli": None if cash_limit_milli is None else int(cash_limit_milli),
+    }
     rows = []
     for row in projected["entries"]:
         item = deepcopy(row)
@@ -483,14 +711,22 @@ def cancel_pending_entry_no_fill(project_root, *, pending_entry_id: str, note: s
     return cancel_trading_pending_entry(project_root, pending_entry_id=pending_entry_id, note=note)
 
 
+def delete_pending_entry(project_root, *, pending_entry_id: str, note: str | None = None) -> dict[str, Any]:
+    recover_trading_pending_entry_transaction(project_root)
+    return delete_trading_pending_entry(project_root, pending_entry_id=pending_entry_id, note=note)
+
+
 __all__ = [
     "PENDING_ENTRY_ORIGIN_SCANNER",
     "PENDING_ENTRY_ORIGIN_MANUAL",
+    "preview_scanner_trading_pending_entry",
+    "preview_manual_trading_pending_entry",
     "create_scanner_trading_pending_entry",
     "create_manual_trading_pending_entry",
     "get_trading_pending_entry_read_model",
     "preview_trading_pending_entry_fill",
     "fill_trading_pending_entry",
     "cancel_pending_entry_no_fill",
+    "delete_pending_entry",
     "recover_trading_pending_entry_transaction",
 ]

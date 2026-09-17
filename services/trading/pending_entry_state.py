@@ -26,10 +26,12 @@ from services.trading.strategy_param_runtime import (
 TRADING_PENDING_ENTRY_SCHEMA_VERSION = 1
 PENDING_ENTRY_STATUS_ACTIVE = "ACTIVE"
 PENDING_ENTRY_STATUS_CANCELLED_NO_FILL = "CANCELLED_NO_FILL"
+PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED = "CANCELLED_USER_DELETED"
 PENDING_ENTRY_STATUS_FILLED = "FILLED"
 PENDING_ENTRY_STATUSES = (
     PENDING_ENTRY_STATUS_ACTIVE,
     PENDING_ENTRY_STATUS_CANCELLED_NO_FILL,
+    PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED,
     PENDING_ENTRY_STATUS_FILLED,
 )
 
@@ -89,6 +91,8 @@ def validate_trading_pending_entry_state(state: dict[str, Any]) -> None:
             raise ValueError(f"Trading pending entry status 不合法: {entry_id}/{status}")
         normalize_trading_ticker(raw.get("ticker"))
         normalize_trading_date(raw.get("information_date"), field_name="information_date", allow_none=False)
+        if raw.get("planned_trade_date") is not None:
+            normalize_trading_date(raw.get("planned_trade_date"), field_name="planned_trade_date", allow_none=False)
         plan = raw.get("execution_plan_seed")
         if not isinstance(plan, dict):
             raise ValueError(f"Trading pending entry 缺少 execution_plan_seed: {entry_id}")
@@ -144,11 +148,20 @@ def _locked_for_information_date(entry: dict[str, Any], current_information_date
         return True
     # D4: a no-fill cancellation cannot recycle the same session's capital/slot.
     if status == PENDING_ENTRY_STATUS_CANCELLED_NO_FILL:
+        # Legacy Workbench used one combined "無成交／刪除掛單" action, so old
+        # rows cannot distinguish a true same-session no-fill from a user delete.
+        # Only rows created by the explicit new no-fill action carry this flag;
+        # ambiguous legacy rows are released so a prior user delete cannot keep
+        # resources locked indefinitely after upgrading.
+        if entry.get("resource_lock_through_information_date") is not True:
+            return False
         if current_information_date is None:
             return True
         entry_date = normalize_trading_date(entry.get("information_date"), field_name="information_date", allow_none=False)
         current_date = normalize_trading_date(current_information_date, field_name="current_information_date", allow_none=False)
         return current_date <= entry_date
+    if status == PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED:
+        return False
     return False
 
 
@@ -226,9 +239,44 @@ def cancel_trading_pending_entry(project_root, *, pending_entry_id: str, note: s
     updated_entry["status"] = PENDING_ENTRY_STATUS_CANCELLED_NO_FILL
     updated_entry["closed_at"] = _timestamp()
     updated_entry["cancel_note"] = None if note is None else str(note)
+    updated_entry["resource_lock_through_information_date"] = True
     updated = _append_event(
         updated,
         mutation_type="cancel_pending_entry_no_fill",
+        details={"pending_entry_id": entry_id, "ticker": updated_entry["ticker"], "note": updated_entry.get("cancel_note")},
+    )
+    validate_trading_pending_entry_state(updated)
+    atomic_write_json(path, updated)
+    return deepcopy(updated_entry)
+
+
+@serialized_trading_state_mutation
+def delete_trading_pending_entry(project_root, *, pending_entry_id: str, note: str | None = None) -> dict[str, Any]:
+    """Close a user-created pre-market pending entry and release its resources now.
+
+    This is intentionally distinct from ``CANCELLED_NO_FILL``.  A no-fill means
+    the day's allocation was already committed and therefore remains locked by
+    D4 through the same information date.  User deletion means the local
+    pre-market intent is withdrawn before that execution lifecycle; its cash and
+    slot are immediately reusable while the event remains auditable.
+    """
+    path = resolve_trading_pending_entry_state_path(project_root)
+    state = load_trading_pending_entry_state(project_root, required=True)
+    entry_id = str(pending_entry_id or "").strip()
+    if entry_id not in state["entries"]:
+        raise ValueError(f"找不到 Trading pending entry: {entry_id}")
+    entry = state["entries"][entry_id]
+    if str(entry.get("status")) != PENDING_ENTRY_STATUS_ACTIVE:
+        raise ValueError(f"只有 ACTIVE 掛單可刪除: {entry_id}")
+    updated = deepcopy(state)
+    updated_entry = updated["entries"][entry_id]
+    updated_entry["status"] = PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED
+    updated_entry["closed_at"] = _timestamp()
+    updated_entry["cancel_note"] = None if note is None else str(note)
+    updated_entry["resource_lock_through_information_date"] = False
+    updated = _append_event(
+        updated,
+        mutation_type="delete_pending_entry",
         details={"pending_entry_id": entry_id, "ticker": updated_entry["ticker"], "note": updated_entry.get("cancel_note")},
     )
     validate_trading_pending_entry_state(updated)
@@ -270,11 +318,13 @@ __all__ = [
     "TRADING_PENDING_ENTRY_SCHEMA_VERSION",
     "PENDING_ENTRY_STATUS_ACTIVE",
     "PENDING_ENTRY_STATUS_CANCELLED_NO_FILL",
+    "PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED",
     "PENDING_ENTRY_STATUS_FILLED",
     "validate_trading_pending_entry_state",
     "load_trading_pending_entry_state",
     "project_trading_pending_entry_state",
     "create_trading_pending_entry",
     "cancel_trading_pending_entry",
+    "delete_trading_pending_entry",
     "mark_trading_pending_entry_filled",
 ]

@@ -883,6 +883,10 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
         end_before = _date_text((entry.get("fill") or {}).get("trade_date"))
     elif status == "CANCELLED_NO_FILL":
         end_date = information_date
+    elif status == "CANCELLED_USER_DELETED":
+        # User-deleted pre-market intent releases resources immediately and must
+        # not keep projecting the pending shadow plan into later bars.
+        end_date = _date_text(entry.get("planned_trade_date")) or information_date
     return {
         "signal_date": signal_date,
         "information_date": information_date,

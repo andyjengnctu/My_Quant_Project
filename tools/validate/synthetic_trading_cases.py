@@ -3341,10 +3341,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     from services.trading.pending_entry_state import (
         cancel_trading_pending_entry, create_trading_pending_entry,
-        load_trading_pending_entry_state, project_trading_pending_entry_state,
+        delete_trading_pending_entry, load_trading_pending_entry_state,
+        project_trading_pending_entry_state,
     )
     from services.trading.pending_entry_service import (
-        fill_trading_pending_entry, preview_trading_pending_entry_fill,
+        fill_trading_pending_entry, get_trading_pending_entry_read_model, preview_trading_pending_entry_fill,
     )
     from services.trading.single_stock_inspection import (
         _shadow_plan_from_pending_entry, _shadow_state_from_plan,
@@ -3386,6 +3387,101 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         )
         check("pending_no_fill_keeps_d4_reservation_through_same_information_date", [0, 1, money_to_milli(100_000)], [_same_day_cancelled["active_count"], _same_day_cancelled["locked_count"], _same_day_cancelled["reserved_total_milli"]])
         check("pending_no_fill_releases_reservation_on_next_information_date", [0, 0], [_next_day_cancelled["locked_count"], _next_day_cancelled["reserved_total_milli"]])
+
+        _delete_seed = {"qty": 500, "limit_price": 80.0, "trade_date": "2026-09-15"}
+        _delete_lineage = build_trading_manual_management_lineage(
+            params=base_params, execution_plan_seed=_delete_seed,
+            information_date="2026-09-15", origin="manual_pending_entry",
+            planned_qty=500, planned_cost=40_000.0,
+        )
+        _delete_pending = create_trading_pending_entry(_pending_root, entry={
+            "origin": "manual_selected", "ticker": "2317", "information_date": "2026-09-15",
+            "planned_trade_date": "2026-09-16", "execution_plan_seed": _delete_seed,
+            "planned_qty": 500, "reserved_cost_milli": money_to_milli(40_000),
+            "management_lineage": _delete_lineage,
+        })
+        delete_trading_pending_entry(
+            _pending_root, pending_entry_id=_delete_pending["pending_entry_id"], note="synthetic user delete"
+        )
+        _same_day_deleted = project_trading_pending_entry_state(
+            load_trading_pending_entry_state(_pending_root), current_information_date="2026-09-15"
+        )
+        check(
+            "pending_user_delete_releases_capital_and_slot_immediately",
+            [1, money_to_milli(100_000)],
+            [_same_day_deleted["locked_count"], _same_day_deleted["reserved_total_milli"]],
+        )
+        _deleted_entry_row = load_trading_pending_entry_state(_pending_root)["entries"][_delete_pending["pending_entry_id"]]
+        _deleted_shadow = _shadow_plan_from_pending_entry(_deleted_entry_row, last_date="2026-09-30")
+        check(
+            "pending_user_delete_stops_shadow_plan_on_planned_trade_date",
+            "2026-09-16",
+            None if _deleted_shadow is None else _deleted_shadow.get("end_date"),
+        )
+        _delete_recreated = create_trading_pending_entry(_pending_root, entry={
+            "origin": "manual_selected", "ticker": "2317", "information_date": "2026-09-15",
+            "planned_trade_date": "2026-09-16", "execution_plan_seed": _delete_seed,
+            "planned_qty": 500, "reserved_cost_milli": money_to_milli(40_000),
+            "management_lineage": _delete_lineage,
+        })
+        check("pending_user_delete_allows_same_ticker_recreate", "ACTIVE", _delete_recreated.get("status"))
+        _legacy_cancelled_projection = project_trading_pending_entry_state(
+            {
+                "schema_version": 1,
+                "runtime_domain": "trading",
+                "revision": -1,
+                "updated_at": None,
+                "entries": {
+                    "legacy": {
+                        "pending_entry_id": "legacy",
+                        "ticker": "2454",
+                        "information_date": "2026-09-15",
+                        "status": "CANCELLED_NO_FILL",
+                        "reserved_cost_milli": money_to_milli(50_000),
+                    }
+                },
+                "events": [],
+            },
+            current_information_date="2026-09-15",
+        )
+        check(
+            "pending_legacy_combined_delete_no_fill_without_explicit_d4_flag_releases_resources",
+            [0, 0],
+            [_legacy_cancelled_projection["locked_count"], _legacy_cancelled_projection["reserved_total_milli"]],
+        )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        _usage_root = Path(temp_dir)
+        initialize_trading_account_state(_usage_root, cash=1_122_800)
+        for _held_ticker in ("1101", "1102"):
+            _account_now = load_trading_account_state(_usage_root, required=True)
+            adopt_existing_trading_position(
+                _usage_root, ticker=_held_ticker, qty=100, cost_basis_total=10_000,
+                expected_revision=int(_account_now["revision"]), entry_date="2026-09-01",
+            )
+        for _pending_ticker, _reserved_cost in (("2303", 20_000), ("2317", 20_000), ("2454", 26_190)):
+            _usage_seed = {"qty": 100, "limit_price": 100.0, "trade_date": "2026-09-15"}
+            _usage_lineage = build_trading_manual_management_lineage(
+                params=base_params, execution_plan_seed=_usage_seed,
+                information_date="2026-09-15", origin="manual_pending_entry",
+                planned_qty=100, planned_cost=float(_reserved_cost),
+            )
+            create_trading_pending_entry(_usage_root, entry={
+                "origin": "manual_selected", "ticker": _pending_ticker, "information_date": "2026-09-15",
+                "planned_trade_date": "2026-09-16", "execution_plan_seed": _usage_seed,
+                "planned_qty": 100, "reserved_cost_milli": money_to_milli(_reserved_cost),
+                "management_lineage": _usage_lineage,
+            })
+        _usage_model = get_trading_pending_entry_read_model(_usage_root)
+        _resource_usage = dict(_usage_model.get("resource_usage") or {})
+        check(
+            "pending_resource_usage_denominators_are_current_slot_and_cash_quotas",
+            [3, 8, money_to_milli(66_190), money_to_milli(1_122_800)],
+            [
+                _resource_usage.get("locked_slots"), _resource_usage.get("slot_quota"),
+                _resource_usage.get("reserved_total_milli"), _resource_usage.get("cash_limit_milli"),
+            ],
+        )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         _pending_fill_root = Path(temp_dir)
@@ -3570,9 +3666,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "Scanner 選取 → 加入掛單", "加入手選股", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（Scanner 選取會自動帶入", "確認送出掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
+    check("workbench_pending_scanner_and_manual_share_one_editable_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
+    check("workbench_pending_manual_ticker_auto_previews_after_input", True, all(token in panel_source for token in ('bind("<KeyRelease>", self._schedule_manual_pending_ticker_preview)', "_auto_preview_manual_pending_ticker", "after(450")))
+    check("workbench_pending_scanner_selection_autofills_shared_order_form", True, "self._pending_draft_origin = \"scanner\"" in panel_source and "self._preview_pending_draft(use_current_overrides=False)" in panel_source)
+    check("workbench_pending_submit_revalidates_editable_qty_price_and_date_before_persist", True, all(token in panel_source for token in ("_build_pending_draft_request(use_current_overrides=True)", "create_scanner_trading_pending_entry(", "create_manual_trading_pending_entry(", "planned_trade_date=planned_date")))
+    check("workbench_pending_delete_and_no_fill_are_distinct_resource_semantics", True, all(token in panel_source for token in ('text="刪除掛單"', 'text="無成交結案"', "delete_pending_entry(", "cancel_pending_entry_no_fill(")))
+    check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
     check("workbench_pending_fill_allows_actual_qty_price_date_before_transfer", True, all(token in panel_source for token in ("_pending_fill_qty_var", "_pending_fill_price_var", "_pending_fill_date_var", "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
     check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
     check("workbench_scanner_selection_autofills_editable_taipei_fill_date", True, 'self._trade_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())' in panel_source)
