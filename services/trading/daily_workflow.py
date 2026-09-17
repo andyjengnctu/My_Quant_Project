@@ -8,6 +8,7 @@ from typing import Any
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, compute_file_sha256
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
+from core.serialization_utils import json_native_value
 from core.breakout_reentry import BREAKOUT_REENTRY_SOURCE
 from core.portfolio_ensemble import (
     annotate_ensemble_candidate,
@@ -39,29 +40,13 @@ TRADING_PARAM_MODE_REUSE = "reuse"
 TRADING_PARAM_MODE_TRAIN = "train"
 TRADING_PARAM_MODES = frozenset({TRADING_PARAM_MODE_REUSE, TRADING_PARAM_MODE_TRAIN})
 
-
-def _json_safe(value):
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    item = getattr(value, 'item', None)
-    if callable(item):
-        return _json_safe(item())
-    isoformat = getattr(value, 'isoformat', None)
-    if callable(isoformat):
-        return isoformat()
-    return str(value)
-
 def _persistable_trading_candidate_row(row: dict[str, Any]) -> dict[str, Any]:
     payload = dict(row)
     member_params = serialize_trading_candidate_member_params(payload)
     payload["ensemble_member_params_by_key"] = member_params
     payload.pop("params_obj", None)
     payload.pop("_ensemble_context", None)
-    return _json_safe(payload)
+    return json_native_value(payload)
 
 
 def _run_trading_scanner_param_runtime(

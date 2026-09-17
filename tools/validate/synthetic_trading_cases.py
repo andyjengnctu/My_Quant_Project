@@ -1023,7 +1023,20 @@ def validate_trading_daily_workflow_contract_case(base_params):
                 "text": "synthetic candidate",
                 "trade_date": "2026-09-04",
                 "signal_date": "2026-09-04",
-                "execution_plan_seed": {"ticker": "2330", "limit_price": 102.0, "init_sl": 98.0, "init_trail": 99.0, "target_price": 106.0, "entry_atr": 2.0, "trade_date": "2026-09-04"},
+                "execution_plan_seed": {
+                    "ticker": "2330",
+                    "limit_price": 102.0,
+                    "init_sl": 98.0,
+                    "init_trail": 99.0,
+                    "target_price": 106.0,
+                    "entry_atr": 2.0,
+                    "trade_date": "2026-09-04",
+                    "shadow_position_state": {
+                        "qty": 1000,
+                        "pending_exit_action": None,
+                        "pending_exit_trigger_price": float("nan"),
+                    },
+                },
             }],
             "scanner_issue_log_path": None,
         }
@@ -1037,7 +1050,19 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("trading_scanner_receives_canonical_current_universe_membership", ["2330"], scanner_args.kwargs.get("ticker_membership"))
         check("trading_scanner_reports_exact_scanned_membership", ["2330"], scan_result.get("scanned_tickers"))
         check("trading_scanner_returns_candidate_rows", 1, len(scan_result.get("candidate_rows") or []))
+        candidate_snapshot_payload = json.loads(
+            (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").read_text(encoding="utf-8")
+        )
+        persisted_candidate = dict((candidate_snapshot_payload.get("candidate_rows") or [{}])[0])
         check("trading_scanner_persists_candidate_snapshot", True, (root / "outputs" / "trading" / "scanner" / "candidate_snapshot.json").is_file())
+        persisted_shadow = dict(
+            ((persisted_candidate.get("execution_plan_seed") or {}).get("shadow_position_state") or {})
+        )
+        check(
+            "trading_scanner_serializes_idle_shadow_pending_exit_trigger_as_json_null",
+            None,
+            persisted_shadow.get("pending_exit_trigger_price"),
+        )
         check("trading_scanner_carries_matching_data_date", "2026-09-04", scan_result.get("latest_data_date"))
         check("trading_scanner_carries_market_data_consumer_state_identity", 64, len(str(scan_result.get("market_data_consumer_state_sha256") or "")))
         check("trading_scanner_carries_param_binding_identity", 64, len(str(scan_result.get("param_binding_sha256") or "")))
