@@ -81,7 +81,50 @@ def _current_close_by_ticker(project_root: Path, tickers: list[str], market_date
     view = TradingMarketDataV2View.open(project_root)
     prices: dict[str, float] = {}
     errors: dict[str, str] = {}
-    for ticker in tickers:
+    requested = tuple(dict.fromkeys(str(ticker).strip() for ticker in tickers if str(ticker).strip()))
+
+    # Healthy-path batch read: full-market daily overlay fragments are verified
+    # and read once instead of once per holding.  If any batch-level read fails,
+    # fall back to the historical per-ticker path so error granularity and
+    # fail-soft dashboard behavior stay unchanged.
+    try:
+        frame = view.read_dataset_frame_many_data_ids(
+            FINMIND_ADJUSTED_PRICE_DATASET,
+            data_ids=requested,
+            columns=("date", "stock_id", "close"),
+            end_date=market_date,
+        )
+    except (FileNotFoundError, ValueError, RuntimeError, OSError, KeyError, TypeError):
+        frame = None
+
+    if frame is not None:
+        if frame.empty:
+            return {}, {ticker: "Trading V2 無可用收盤價" for ticker in requested}
+        work = frame.copy()
+        work["stock_id"] = work["stock_id"].astype(str).str.strip()
+        work["date"] = work["date"].astype(str)
+        work = work.sort_values(["stock_id", "date"])
+        for ticker in requested:
+            ticker_rows = work.loc[work["stock_id"] == ticker]
+            if ticker_rows.empty:
+                errors[ticker] = "Trading V2 無可用收盤價"
+                continue
+            dated = ticker_rows.loc[ticker_rows["date"] <= str(market_date)]
+            if dated.empty:
+                errors[ticker] = "Trading V2 無 cutoff 內收盤價"
+                continue
+            try:
+                close = float(dated.iloc[-1]["close"])
+            except (TypeError, ValueError, KeyError, IndexError) as exc:
+                errors[ticker] = f"{type(exc).__name__}: {exc}"
+                continue
+            if close <= 0:
+                errors[ticker] = "Trading V2 收盤價不合法"
+                continue
+            prices[ticker] = close
+        return prices, errors
+
+    for ticker in requested:
         try:
             frame = view.read_dataset_frame(
                 FINMIND_ADJUSTED_PRICE_DATASET,

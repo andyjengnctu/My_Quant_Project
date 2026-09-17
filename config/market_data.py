@@ -67,6 +67,19 @@ MARKET_DATA_V2_STORAGE_POLICY = {
     "minimum_staging_headroom_bytes": 64 * 1024**2,
 }
 
+# READY Provider Snapshot archives are immutable by scientific/data identity.
+# Keep a small process-local cache of already verified archive+ledger metadata so
+# concurrent Workbench readers do not repeatedly materialize the same committed
+# artifact ledger.  File stat signatures still invalidate the entry if local
+# evidence changes unexpectedly.  This changes read execution only, never view
+# membership, row content, PIT semantics, or any persisted identity.
+MARKET_DATA_V2_PROVIDER_ARCHIVE_READ_CACHE_ENTRIES = 4
+
+# Completed Trading overlay batches are also immutable read evidence.  Share
+# verified ledger materialization across concurrent Workbench views; only DONE
+# batches are cached, and manifest/SQLite file stats invalidate stale entries.
+MARKET_DATA_V2_TRADING_OVERLAY_READ_CACHE_ENTRIES = 64
+
 # Market Data V2 terminal data-plane contract.  The neutral Provider Archive is
 # the one long-term provider-data SSOT shared by Research and Trading.
 # Domain-specific consumers may expose different views (frozen scientific vs
@@ -196,6 +209,8 @@ __all__ = [
     "MARKET_DATA_V2_PREFLIGHT_RETRY_POLICY",
     "MARKET_DATA_V2_EXECUTION_POLICY",
     "MARKET_DATA_V2_STORAGE_POLICY",
+    "MARKET_DATA_V2_PROVIDER_ARCHIVE_READ_CACHE_ENTRIES",
+    "MARKET_DATA_V2_TRADING_OVERLAY_READ_CACHE_ENTRIES",
     "MARKET_DATA_V2_LIFECYCLE",
     "MARKET_DATA_V2_TRADING_SYNC_POLICY",
     "MARKET_DATA_V2_AUTO_UPDATE_POLICY",

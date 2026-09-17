@@ -6,10 +6,13 @@ but neither domain may mutate it or silently substitute its own lifecycle state.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 from typing import Any
 
+from config.market_data import MARKET_DATA_V2_PROVIDER_ARCHIVE_READ_CACHE_ENTRIES
 from core.file_integrity import canonical_json_sha256, load_json_strict
 from core.market_data_bootstrap_requests import BootstrapRequestManifest
 from core.market_data_provider_snapshot import (
@@ -48,6 +51,31 @@ class ReadyProviderSnapshotArchive:
     @property
     def as_of_date(self) -> str:
         return str(self.payload["as_of_date"])
+
+
+_READY_ARCHIVE_CACHE_LOCK = threading.RLock()
+_READY_ARCHIVE_CACHE: OrderedDict[
+    tuple[str, str],
+    tuple[tuple[int, ...], ReadyProviderSnapshotArchive],
+] = OrderedDict()
+
+
+def _ready_archive_stat_signature(snapshot_path: Path, ledger_path: Path) -> tuple[int, ...]:
+    snapshot_stat = snapshot_path.stat()
+    ledger_stat = ledger_path.stat()
+    signature = [
+        int(snapshot_stat.st_mtime_ns),
+        int(snapshot_stat.st_size),
+        int(ledger_stat.st_mtime_ns),
+        int(ledger_stat.st_size),
+    ]
+    wal_path = Path(f"{ledger_path}-wal")
+    if wal_path.is_file():
+        wal_stat = wal_path.stat()
+        signature.extend((int(wal_stat.st_mtime_ns), int(wal_stat.st_size)))
+    else:
+        signature.extend((0, 0))
+    return tuple(signature)
 
 
 def validate_provider_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -142,6 +170,23 @@ def load_ready_provider_snapshot_archive(
     snapshot_fingerprint: str | None = None,
 ) -> ReadyProviderSnapshotArchive:
     root = Path(project_root).resolve()
+    cache_limit = max(0, int(MARKET_DATA_V2_PROVIDER_ARCHIVE_READ_CACHE_ENTRIES))
+    wanted_fingerprint = None if snapshot_fingerprint is None else str(snapshot_fingerprint or "").strip()
+    if wanted_fingerprint and cache_limit > 0:
+        cache_key = (str(root), wanted_fingerprint)
+        with _READY_ARCHIVE_CACHE_LOCK:
+            cached = _READY_ARCHIVE_CACHE.get(cache_key)
+            if cached is not None:
+                try:
+                    signature = _ready_archive_stat_signature(cached[1].path, cached[1].ledger_path)
+                except OSError:
+                    _READY_ARCHIVE_CACHE.pop(cache_key, None)
+                else:
+                    if cached[0] == signature:
+                        _READY_ARCHIVE_CACHE.move_to_end(cache_key)
+                        return cached[1]
+                    _READY_ARCHIVE_CACHE.pop(cache_key, None)
+
     if snapshot_fingerprint is None:
         found = find_latest_ready_provider_snapshot(root)
     else:
@@ -153,29 +198,49 @@ def load_ready_provider_snapshot_archive(
     ledger_path = resolve_market_data_bootstrap_ledger_path(root, manifest_fingerprint)
     if not ledger_path.is_file():
         raise FileNotFoundError("Provider Snapshot 對應 bootstrap ledger 不存在")
-    ledger = MarketDataJobLedger(ledger_path, read_only=True)
-    workload_id = f"market_data_v2_bootstrap:{manifest_fingerprint}"
-    summary = ledger.get_summary(workload_id)
-    expected_total = int(payload.get("total_requests") or 0)
-    if summary.workload_status != WORKLOAD_DONE or summary.done != expected_total or summary.total != expected_total:
-        raise ValueError(
-            "Provider Snapshot ledger completeness drift: "
-            f"status={summary.workload_status}, done={summary.done}, total={summary.total}, expected={expected_total}"
+    snapshot_fingerprint_value = str(payload.get("snapshot_fingerprint") or "")
+    cache_key = (str(root), snapshot_fingerprint_value)
+
+    # Initial Trading Center reads fan out across several read-only services.
+    # Serialize only this immutable archive verification so one thread performs
+    # the large ledger materialization while peers reuse the exact same verified
+    # archive object.  Normal parquet/frame reads remain parallel afterwards.
+    with _READY_ARCHIVE_CACHE_LOCK:
+        signature = _ready_archive_stat_signature(path, ledger_path)
+        cached = _READY_ARCHIVE_CACHE.get(cache_key)
+        if cache_limit > 0 and cached is not None and cached[0] == signature:
+            _READY_ARCHIVE_CACHE.move_to_end(cache_key)
+            return cached[1]
+
+        ledger = MarketDataJobLedger(ledger_path, read_only=True)
+        workload_id = f"market_data_v2_bootstrap:{manifest_fingerprint}"
+        summary = ledger.get_summary(workload_id)
+        expected_total = int(payload.get("total_requests") or 0)
+        if summary.workload_status != WORKLOAD_DONE or summary.done != expected_total or summary.total != expected_total:
+            raise ValueError(
+                "Provider Snapshot ledger completeness drift: "
+                f"status={summary.workload_status}, done={summary.done}, total={summary.total}, expected={expected_total}"
+            )
+        artifacts = ledger.list_committed_artifacts(workload_id)
+        if len(artifacts) != expected_total:
+            raise ValueError("Provider Snapshot ledger committed artifact count drift")
+        rebuilt = _rebuild_snapshot_identity_from_ledger(payload, artifacts)
+        expected_identity = provider_snapshot_identity_from_payload(payload)
+        if rebuilt != expected_identity:
+            raise ValueError("Provider Snapshot 與 immutable bootstrap ledger identity 不一致")
+        archive = ReadyProviderSnapshotArchive(
+            path=path,
+            payload=payload,
+            ledger_path=ledger_path,
+            workload_id=workload_id,
+            artifacts=artifacts,
         )
-    artifacts = ledger.list_committed_artifacts(workload_id)
-    if len(artifacts) != expected_total:
-        raise ValueError("Provider Snapshot ledger committed artifact count drift")
-    rebuilt = _rebuild_snapshot_identity_from_ledger(payload, artifacts)
-    expected_identity = provider_snapshot_identity_from_payload(payload)
-    if rebuilt != expected_identity:
-        raise ValueError("Provider Snapshot 與 immutable bootstrap ledger identity 不一致")
-    return ReadyProviderSnapshotArchive(
-        path=path,
-        payload=payload,
-        ledger_path=ledger_path,
-        workload_id=workload_id,
-        artifacts=artifacts,
-    )
+        if cache_limit > 0:
+            _READY_ARCHIVE_CACHE[cache_key] = (signature, archive)
+            _READY_ARCHIVE_CACHE.move_to_end(cache_key)
+            while len(_READY_ARCHIVE_CACHE) > cache_limit:
+                _READY_ARCHIVE_CACHE.popitem(last=False)
+        return archive
 
 
 __all__ = [

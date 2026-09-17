@@ -63,6 +63,25 @@ def resolve_trading_market_data_update_target_date(
     discovery_state = load_market_date_discovery_state(project_root, required=False)
     if discovery_state is not None:
         candidates.append(str(discovery_state.get("current_market_date") or "").strip())
+
+    # If current validated TradingDate evidence cannot contain a session newer
+    # than the best target already known from provider/archive/discovery state,
+    # opening the full immutable V2 archive cannot change the answer.  Avoid that
+    # expensive ledger/view materialization on the common Workbench reopen path.
+    from core.market_data_dataset_readiness import has_current_market_data_dataset_validation
+    from services.trading.market_data_dataset_state import load_market_data_dataset_state
+
+    dataset_state = load_market_data_dataset_state(project_root, required=False)
+    trading_date_row = dict(((dataset_state or {}).get("datasets") or {}).get("TaiwanStockTradingDate") or {})
+    trading_date_latest = (
+        str(trading_date_row.get("latest_data_date") or "").strip()
+        if has_current_market_data_dataset_validation(trading_date_row)
+        else ""
+    )
+    known_candidates = [value for value in candidates if value]
+    if trading_date_latest and known_candidates and max(known_candidates) >= trading_date_latest:
+        return max(known_candidates)
+
     # Local-only candidate-target advancement. TradingDate is a schedule/calendar
     # dataset and can identify the just-closed session before Price/PriceAdj are
     # published. Keep provider discovery as a fallback/cross-check owner.

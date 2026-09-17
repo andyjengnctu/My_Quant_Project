@@ -7,11 +7,15 @@ and does not define today's execution pool.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 from typing import Iterator
 
 import pandas as pd
+
+from config.market_data import MARKET_DATA_V2_TRADING_OVERLAY_READ_CACHE_ENTRIES
 
 from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.market_data_dataset_registry import get_market_dataset_spec, resolve_market_dataset_row_identity
@@ -47,6 +51,100 @@ class VerifiedTradingOverlayBatch:
     target_date: str
     completed_at: str
     artifacts: tuple
+
+
+_TRADING_OVERLAY_BATCH_CACHE_LOCK = threading.RLock()
+_TRADING_OVERLAY_BATCH_CACHE: OrderedDict[
+    tuple[str, str],
+    tuple[tuple[int, ...], VerifiedTradingOverlayBatch],
+] = OrderedDict()
+
+
+def _overlay_batch_stat_signature(manifest_path: Path, ledger_path: Path) -> tuple[int, ...]:
+    manifest_stat = manifest_path.stat()
+    ledger_stat = ledger_path.stat()
+    signature = [
+        int(manifest_stat.st_mtime_ns),
+        int(manifest_stat.st_size),
+        int(ledger_stat.st_mtime_ns),
+        int(ledger_stat.st_size),
+    ]
+    # SQLite can retain recent writes in WAL before checkpointing the main DB.
+    # Completed batches are immutable, but include WAL evidence in the cache
+    # signature so any unexpected post-publication mutation invalidates reuse.
+    wal_path = Path(f"{ledger_path}-wal")
+    if wal_path.is_file():
+        wal_stat = wal_path.stat()
+        signature.extend((int(wal_stat.st_mtime_ns), int(wal_stat.st_size)))
+    else:
+        signature.extend((0, 0))
+    return tuple(signature)
+
+
+def _load_verified_overlay_batch(
+    *,
+    project_root: Path,
+    manifest_path: Path,
+    payload: dict,
+) -> VerifiedTradingOverlayBatch | None:
+    batch_fp = str(payload["batch_fingerprint"])
+    ledger_path = resolve_trading_market_data_v2_ledger_path(project_root, batch_fp)
+    if not ledger_path.is_file():
+        raise FileNotFoundError(f"Trading V2 batch ledger 不存在: {batch_fp}")
+
+    cache_limit = max(0, int(MARKET_DATA_V2_TRADING_OVERLAY_READ_CACHE_ENTRIES))
+    cache_key = (str(project_root), batch_fp)
+
+    def _materialize() -> VerifiedTradingOverlayBatch | None:
+        ledger = MarketDataJobLedger(ledger_path, read_only=True)
+        workload_id = ledger.find_unique_workload_id_by_manifest_fingerprint(batch_fp)
+        if workload_id is None:
+            raise ValueError(f"Trading V2 batch ledger 找不到 manifest workload: {batch_fp}")
+        summary = ledger.get_summary(workload_id)
+        # Batch manifests are created before execution; unfinished batches are
+        # legitimate resumable state and must never leak into the read view.
+        if summary.workload_status != WORKLOAD_DONE:
+            return None
+        expected = int(payload.get("request_count") or 0)
+        if summary.total != expected or summary.done != expected or summary.blocked:
+            raise ValueError(
+                "Trading V2 DONE batch ledger completeness drift: "
+                f"batch={batch_fp}, done={summary.done}, total={summary.total}, expected={expected}"
+            )
+        artifacts = ledger.list_committed_artifacts(workload_id)
+        request_ids = tuple(str(value) for value in payload.get("request_ids") or ())
+        if tuple(item.request_id for item in artifacts) != request_ids:
+            raise ValueError(f"Trading V2 batch committed request identity drift: {batch_fp}")
+        completed_at = max((str(item.completed_at or "") for item in artifacts), default="")
+        return VerifiedTradingOverlayBatch(
+            batch_fingerprint=batch_fp,
+            target_date=str(payload.get("target_date") or ""),
+            completed_at=completed_at,
+            artifacts=artifacts,
+        )
+
+    if cache_limit <= 0:
+        return _materialize()
+
+    # Several initial Trading Center read models open independent views in
+    # parallel.  Serialize only completed-batch ledger verification; once one
+    # view verifies a batch, peers reuse the same immutable evidence object.
+    with _TRADING_OVERLAY_BATCH_CACHE_LOCK:
+        signature = _overlay_batch_stat_signature(manifest_path, ledger_path)
+        cached = _TRADING_OVERLAY_BATCH_CACHE.get(cache_key)
+        if cached is not None and cached[0] == signature:
+            _TRADING_OVERLAY_BATCH_CACHE.move_to_end(cache_key)
+            return cached[1]
+        batch = _materialize()
+        if batch is None:
+            # Do not cache unfinished work.  Its ledger is expected to mutate.
+            return None
+        signature = _overlay_batch_stat_signature(manifest_path, ledger_path)
+        _TRADING_OVERLAY_BATCH_CACHE[cache_key] = (signature, batch)
+        _TRADING_OVERLAY_BATCH_CACHE.move_to_end(cache_key)
+        while len(_TRADING_OVERLAY_BATCH_CACHE) > cache_limit:
+            _TRADING_OVERLAY_BATCH_CACHE.popitem(last=False)
+        return batch
 
 
 class TradingMarketDataV2View:
@@ -217,37 +315,13 @@ class TradingMarketDataV2View:
                 and batch_fp not in pinned_set
             ):
                 continue
-            ledger_path = resolve_trading_market_data_v2_ledger_path(self.project_root, batch_fp)
-            if not ledger_path.is_file():
-                raise FileNotFoundError(f"Trading V2 batch ledger 不存在: {batch_fp}")
-            ledger = MarketDataJobLedger(ledger_path, read_only=True)
-            workload_id = ledger.find_unique_workload_id_by_manifest_fingerprint(batch_fp)
-            if workload_id is None:
-                raise ValueError(f"Trading V2 batch ledger 找不到 manifest workload: {batch_fp}")
-            summary = ledger.get_summary(workload_id)
-            # Batch manifests are created before execution; unfinished batches are
-            # legitimate resumable state and must never leak into the read view.
-            if summary.workload_status != WORKLOAD_DONE:
-                continue
-            expected = int(payload.get("request_count") or 0)
-            if summary.total != expected or summary.done != expected or summary.blocked:
-                raise ValueError(
-                    "Trading V2 DONE batch ledger completeness drift: "
-                    f"batch={batch_fp}, done={summary.done}, total={summary.total}, expected={expected}"
-                )
-            artifacts = ledger.list_committed_artifacts(workload_id)
-            request_ids = tuple(str(value) for value in payload.get("request_ids") or ())
-            if tuple(item.request_id for item in artifacts) != request_ids:
-                raise ValueError(f"Trading V2 batch committed request identity drift: {batch_fp}")
-            completed_at = max((str(item.completed_at or "") for item in artifacts), default="")
-            batches.append(
-                VerifiedTradingOverlayBatch(
-                    batch_fingerprint=batch_fp,
-                    target_date=str(payload.get("target_date") or ""),
-                    completed_at=completed_at,
-                    artifacts=artifacts,
-                )
+            batch = _load_verified_overlay_batch(
+                project_root=self.project_root,
+                manifest_path=manifest_path,
+                payload=payload,
             )
+            if batch is not None:
+                batches.append(batch)
         batches.sort(key=lambda item: (item.target_date, item.completed_at, item.batch_fingerprint))
         self._overlay_batches = tuple(batches)
         return self._overlay_batches

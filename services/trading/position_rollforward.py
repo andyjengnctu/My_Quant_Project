@@ -32,6 +32,7 @@ from services.trading.account_state import (
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.position_market_context import (
     load_trading_position_market_frame,
+    load_trading_position_market_frames,
     normalize_trading_date,
     resolve_trading_strategy_position_sources,
 )
@@ -56,7 +57,8 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
             "positions": [],
         }
 
-    rows: list[dict[str, Any]] = []
+    prepared: list[dict[str, Any]] = []
+    params_by_ticker: dict[str, object] = {}
     for ticker in sorted(account.get("positions") or {}):
         record = account["positions"][ticker]
         if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
@@ -75,21 +77,63 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
             compatible_entry_order_ids=([legacy_entry_order_id] if legacy_entry_order_id else None),
         )
         if bool(stop_progress.get("triggered")):
-            rows.append(
-                {
-                    "ticker": ticker,
-                    "entry_date": normalize_trading_date(broker.get("entry_date")),
-                    "last_rollforward_date": normalize_trading_date(management.get("last_rollforward_date")),
-                    "target_rollforward_date": None,
-                    "due": False,
-                    "stop_forced_exit": True,
-                }
-            )
+            prepared.append({
+                "ticker": ticker,
+                "broker": broker,
+                "management": management,
+                "stop_forced_exit": True,
+            })
             continue
         if market_view is None:
             raise RuntimeError("Trading V2 position market view 尚未就緒")
         params = build_params_from_mapping(binding["frozen_params"])
-        df = load_trading_position_market_frame(view=market_view, ticker=ticker, params=params, allowed_date=allowed_date)
+        params_by_ticker[ticker] = params
+        prepared.append({
+            "ticker": ticker,
+            "broker": broker,
+            "management": management,
+            "stop_forced_exit": False,
+            "params": params,
+        })
+
+    market_frames: dict[str, pd.DataFrame] = {}
+    if params_by_ticker:
+        try:
+            market_frames = load_trading_position_market_frames(
+                view=market_view,
+                params_by_ticker=params_by_ticker,
+                allowed_date=allowed_date,
+            )
+        except (OSError, ValueError, KeyError, IndexError, TypeError, RuntimeError):
+            # Preserve the prior deterministic per-ticker error path when a
+            # batch fragment is unhealthy; only the healthy read strategy is
+            # optimized.
+            market_frames = {
+                ticker: load_trading_position_market_frame(
+                    view=market_view,
+                    ticker=ticker,
+                    params=params_by_ticker[ticker],
+                    allowed_date=allowed_date,
+                )
+                for ticker in params_by_ticker
+            }
+
+    rows: list[dict[str, Any]] = []
+    for item in prepared:
+        ticker = str(item["ticker"])
+        broker = dict(item["broker"])
+        management = dict(item["management"])
+        if bool(item["stop_forced_exit"]):
+            rows.append({
+                "ticker": ticker,
+                "entry_date": normalize_trading_date(broker.get("entry_date")),
+                "last_rollforward_date": normalize_trading_date(management.get("last_rollforward_date")),
+                "target_rollforward_date": None,
+                "due": False,
+                "stop_forced_exit": True,
+            })
+            continue
+        df = market_frames[ticker]
         entry_date = normalize_trading_date(broker.get("entry_date"))
         last_rollforward = normalize_trading_date(management.get("last_rollforward_date"))
         eligible = df.index
