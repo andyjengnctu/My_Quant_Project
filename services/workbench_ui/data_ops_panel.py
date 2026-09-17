@@ -23,6 +23,7 @@ from services.trading.market_data_scheduler import (
     set_market_data_scheduler_enabled,
 )
 from services.trading.market_data_update import run_trading_market_data_update
+from services.workbench_ui.selection_behavior import bind_treeview_toggle_selection, toggled_row_selection
 from services.workbench_ui.workbench import (
     WORKBENCH_ACCENT,
     WORKBENCH_BG,
@@ -175,8 +176,15 @@ class _TreeCellColorOverlay:
 
     def _select_row(self, iid: str):
         try:
-            self._tree.selection_set(iid)
-            self._tree.focus(iid)
+            current = str(self._tree.selection()[0]) if self._tree.selection() else None
+            selected = toggled_row_selection(current, iid)
+            if selected is None:
+                if current is not None:
+                    self._tree.selection_remove(current)
+                self._tree.focus("")
+            else:
+                self._tree.selection_set(selected)
+                self._tree.focus(selected)
             self._tree.event_generate("<<TreeviewSelect>>")
         except tk.TclError as exc:
             _warn_gui_fallback("TreeCellColorOverlay._select_row()", exc)
@@ -402,6 +410,11 @@ class MarketDataOpsPanel(ttk.Frame):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         tree.bind("<<TreeviewSelect>>", self._on_dataset_select)
+        bind_treeview_toggle_selection(
+            tree,
+            ignore_columns=("#4",),
+            on_clear=lambda: self._detail_var.set("選取 dataset 查看詳細狀態。"),
+        )
         tree.bind("<Button-1>", self._on_dataset_policy_click, add="+")
         self._cell_overlays[tree] = _TreeCellColorOverlay(tree, ("status", "schema", "coverage"))
         self._bind_overlay_scroll_refresh(tree, sx, sy)

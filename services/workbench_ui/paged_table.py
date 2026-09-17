@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable, Iterable
 
+from services.workbench_ui.selection_behavior import toggled_row_selection
 from services.workbench_ui.workbench import (
     WORKBENCH_ACCENT,
     WORKBENCH_BG,
@@ -215,12 +216,8 @@ class PagedTable(ttk.Frame):
         self._render()
 
     def _row_click(self, row_id: str) -> None:
-        if self._selected_id == row_id:
-            self._selected_id = None
-            selected = None
-        else:
-            self._selected_id = row_id
-            selected = self.selected_row()
+        self._selected_id = toggled_row_selection(self._selected_id, row_id)
+        selected = self.selected_row()
         self._render()
         if callable(self.on_select):
             self.on_select(selected)

@@ -3830,7 +3830,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（買入限價自動計算；成交價僅在既有掛單的成交輸入中可選）", "確認掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）", "確認掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
     check("workbench_pending_scanner_and_manual_share_one_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_limit_var", "_pending_fill_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
@@ -3887,6 +3887,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             'state="disabled"',
             '("買入限價", 12)',
             '("成交價", 12)',
+            '("掛單日", 12)',
+            '("成交日", 12)',
+            'self._pending_fill_date_field = DatePickerField',
         )),
     )
     check(
@@ -3897,33 +3900,34 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and 'self._pending_order_limit_var.trace_add' not in panel_source,
     )
     check(
-        "workbench_pending_fill_price_only_selectable_for_active_pending_fill_mode",
-        True,
-        'self._pending_fill_price_combo.configure(state="readonly" if fill_mode else "disabled")' in panel_source
-        and 'state="readonly" if price_options else "disabled"' in panel_source
-        and 'self._pending_fill_price_combo.configure(state="disabled")' in panel_source,
-    )
-    check("workbench_pending_fill_uses_separate_fill_price_before_transfer", True, all(token in panel_source for token in ('parse_trading_qty_text(self._pending_order_qty_var.get(), "實際成交股數")', 'parse_trading_money_text(self._pending_fill_price_var.get(), "實際成交價"', 'trade_date = self._pending_order_date_var.get().strip()', "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
-    check(
-        "workbench_pending_edit_explicitly_separates_order_and_fill_calendar_modes",
+        "workbench_pending_fill_price_and_date_only_activate_for_selected_active_pending",
         True,
         all(token in panel_source for token in (
-            'self._pending_form_mode = "order"',
-            'self._pending_form_mode = "fill"',
-            'text="輸入成交"',
-            'text="確認成交 → 持股"',
-            'text="返回改掛單"',
-            'earliest_exclusive_date=existing_entry.get("planned_trade_date")',
-            'auto_select_preferred=False',
-            'include_fill_dates=False',
+            'self._pending_fill_date_field = DatePickerField',
+            'self._pending_fill_price_combo.configure(',
+            'state="readonly" if editing and price_options else "disabled"',
+            'self._pending_fill_date_field.set_allowed_dates(allowed_dates if editing else ())',
+            'editing = self._pending_edit_entry_id is not None',
         )),
     )
+    check("workbench_pending_fill_uses_separate_fill_price_and_fill_date_before_transfer", True, all(token in panel_source for token in ('parse_trading_qty_text(self._pending_order_qty_var.get(), "實際成交股數")', 'parse_trading_money_text(self._pending_fill_price_var.get(), "實際成交價"', 'trade_date = self._pending_fill_date_var.get().strip()', "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
     check(
-        "workbench_pending_fill_mode_disables_order_or_earlier_dates_in_calendar",
+        "workbench_selected_pending_exposes_fill_controls_without_intermediate_fill_mode",
+        True,
+        'text="確認成交 → 持股"' in panel_source
+        and 'text="輸入成交"' not in panel_source
+        and 'text="返回改掛單"' not in panel_source
+        and '_pending_form_mode' not in panel_source
+        and 'self._pending_fill_date_var' in panel_source
+        and 'self._pending_fill_price_var' in panel_source,
+    )
+    check(
+        "workbench_pending_fill_calendar_is_separate_and_strictly_after_order_date",
         True,
         'build_trading_actual_fill_form_constraints(' in panel_source
-        and 'self._pending_order_date_field.set_allowed_dates(allowed_dates)' in panel_source
-        and '成交日必須嚴格晚於掛單日' in panel_source,
+        and 'self._pending_fill_date_field.set_allowed_dates(allowed_dates if editing else ())' in panel_source
+        and 'earliest_exclusive_date=row.get("planned_trade_date")' in panel_source
+        and '成交日必須晚於掛單日' in panel_source,
     )
     check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
     check(
@@ -4112,7 +4116,38 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
 
     paged_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "paged_table.py").read_text(encoding="utf-8")
+    selection_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "selection_behavior.py").read_text(encoding="utf-8")
+    data_ops_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "data_ops_panel.py").read_text(encoding="utf-8")
     check("workbench_tables_share_sort_toggle_page_and_stock_open_contract", True, all(text in paged_source for text in ("page_size", "上一頁", "下一頁", "_header_click", "_row_click", "_open_stock")) and "ttk.Scrollbar" not in paged_source)
+    check(
+        "workbench_row_selection_toggle_has_single_shared_semantic_owner",
+        True,
+        "def toggled_row_selection" in selection_source
+        and "toggled_row_selection(self._selected_id, row_id)" in paged_source
+        and "handle_treeview_toggle_click" in panel_source,
+    )
+    check(
+        "workbench_selection_driven_forms_support_second_click_deselect",
+        True,
+        all(token in panel_source for token in (
+            "handle_treeview_toggle_click(",
+            "on_clear=self._clear_position_form",
+            "已取消掛單選取；目前為新增掛單模式。",
+            "bind_treeview_toggle_selection(self._order_tree)",
+            "bind_treeview_toggle_selection(self._protection_tree)",
+            "bind_treeview_toggle_selection(self._indicator_tree)",
+        ))
+        and "bind_treeview_toggle_selection(" in data_ops_source,
+    )
+    check(
+        "workbench_shared_pending_form_selection_sources_are_mutually_exclusive",
+        True,
+        "clear_treeview_selection(self._pending_tree)" in panel_source
+        and "self._candidate_tree.clear_selection(notify=False)" in panel_source,
+    )
+    from services.workbench_ui.selection_behavior import toggled_row_selection as _toggled_row_selection
+    check("workbench_selection_toggle_second_click_clears", None, _toggled_row_selection("row-1", "row-1"))
+    check("workbench_selection_toggle_different_click_selects_new_row", "row-2", _toggled_row_selection("row-1", "row-2"))
     check("workbench_paged_table_supports_runtime_dynamic_columns", True, "def set_columns(" in paged_source)
     check("workbench_scanner_dynamic_columns_are_descriptor_driven_not_selector_named", True, "candidate_display_metrics" in panel_source and "_candidate_metric_formatter" in panel_source and "if selector ==" not in panel_source)
     scanner_columns_block = panel_source.split("def _candidate_static_columns_after_dynamic", 1)[1].split("@staticmethod", 1)[0]
