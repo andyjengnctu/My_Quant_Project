@@ -185,11 +185,13 @@ def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
     return should_count_miss_buy(order_qty, is_worse_than_initial_stop=is_worse_than_initial_stop)
 
 
-def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, target_price, limit_price, params, ticker=None, security_profile=None):
+def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, target_price, limit_price, params, ticker=None, security_profile=None, target_reference_price=None):
     if entry_atr is not None and not pd.isna(entry_atr):
         actual_init_sl = calc_initial_stop_from_reference(buy_price, entry_atr, params, ticker=ticker, security_profile=security_profile)
         actual_init_trail = calc_initial_trailing_stop_from_reference(buy_price, entry_atr, params, ticker=ticker, security_profile=security_profile)
-        actual_target_price = calc_frozen_target_price(buy_price, actual_init_sl, ticker=ticker, security_profile=security_profile)
+        resolved_target_reference = buy_price if target_reference_price is None or pd.isna(target_reference_price) else target_reference_price
+        target_reference_stop = calc_initial_stop_from_reference(resolved_target_reference, entry_atr, params, ticker=ticker, security_profile=security_profile)
+        actual_target_price = calc_frozen_target_price(resolved_target_reference, target_reference_stop, ticker=ticker, security_profile=security_profile)
         return actual_init_sl, actual_init_trail, actual_target_price
 
     resolved_init_sl = init_sl
@@ -381,6 +383,7 @@ def build_position_from_entry_fill(
     ticker=None,
     security_profile=None,
     trade_date=None,
+    target_reference_price=None,
 ):
     if params is None:
         raise ValueError("build_position_from_entry_fill 需要 params")
@@ -397,6 +400,7 @@ def build_position_from_entry_fill(
         params=params,
         ticker=ticker,
         security_profile=security_profile,
+        target_reference_price=target_reference_price,
     )
     if pd.isna(resolved_init_sl) or pd.isna(resolved_init_trail) or pd.isna(resolved_target_price):
         raise ValueError("build_position_from_entry_fill 無法建立有效的 stop / trail / target")

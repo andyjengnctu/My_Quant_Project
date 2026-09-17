@@ -19,7 +19,7 @@ from core.params_io import build_params_from_mapping
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.runtime_utils import get_taipei_now
 from core.signal_utils import generate_signals, unpack_precomputed_signals
-from core.trading_account_state import MANAGEMENT_STATUS_ACTIVE, POSITION_SOURCE_STRATEGY_FILL
+from core.trading_account_state import MANAGEMENT_STATUS_ACTIVE, MANAGED_POSITION_SOURCES
 from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.trading_order_state import (
     TRADING_INDICATOR_ORDER_TYPE_MARKET,
@@ -30,7 +30,7 @@ from core.trading_order_state import (
 from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.market_data_consumer import get_trading_v2_consumer_state_sha256
-from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
+from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
 from services.trading.position_market_context import (
     load_trading_position_market_frame,
     normalize_trading_date,
@@ -71,13 +71,13 @@ def _source_binding(*, ticker: str, record: dict[str, Any], orders: dict[str, An
     management = record.get("strategy_management") or {}
     position = management.get("position_state")
     if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position, dict):
-        raise RuntimeError(f"Trading strategy position 缺少 active canonical position state: {ticker}")
+        raise RuntimeError(f"Trading managed position 缺少 active canonical position state: {ticker}")
     broker = record.get("broker") or {}
-    binding = resolve_trading_position_strategy_binding(record, orders=orders)
+    binding = resolve_trading_position_management_binding(record, orders=orders)
     broker_qty = int(broker.get("qty") or 0)
     position_qty = int(position.get("qty") or 0)
     if broker_qty <= 0 or broker_qty != position_qty:
-        raise RuntimeError(f"Trading broker/strategy position qty 不一致: {ticker}")
+        raise RuntimeError(f"Trading broker/managed position qty 不一致: {ticker}")
     return {
         "ticker": str(ticker),
         "entry_order_id": str(binding["lineage_key"]),
@@ -101,7 +101,7 @@ def _collect_current_bindings(root: Path):
     market_data_sha256 = get_trading_v2_consumer_state_sha256(root)
     for ticker in sorted(account.get("positions") or {}):
         record = account["positions"][ticker]
-        if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
             manual.append(str(ticker)); continue
         bindings.append(
             _source_binding(

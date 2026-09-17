@@ -18,7 +18,9 @@ from core.entry_plans import build_position_from_entry_fill
 from core.exact_accounting import calc_entry_total_cost, milli_to_money, milli_to_price
 from core.params_io import build_params_from_mapping
 from core.trading_account_state import (
+    MANAGED_POSITION_SOURCES,
     POSITION_SOURCE_STRATEGY_FILL,
+    TRADE_MUTATION_MANUAL_MANAGED_BUY,
     TRADE_MUTATION_BUY,
     TRADE_MUTATION_SELL,
     TRADE_MUTATION_STRATEGY_BUY,
@@ -31,11 +33,12 @@ from core.trading_order_state import (
     TRADING_ORDER_SIDE_BUY,
 )
 from services.trading.account_state import load_trading_account_state
+from services.trading.pending_entry_state import load_trading_pending_entry_state
 from services.trading.accounting_policy import overlay_trading_accounting_params
 from services.trading.order_state import load_trading_order_state
 from services.trading.protection_planning import get_trading_protection_plan_read_model
 from services.trading.indicator_exit_planning import get_trading_indicator_exit_plan_read_model
-from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
+from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
 from core.trade_lifecycle import (
     TRADE_LIFECYCLE_POSITION,
     TRADE_LIFECYCLE_SHADOW,
@@ -51,6 +54,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _BUY_MUTATIONS = {
     TRADE_MUTATION_BUY,
+    TRADE_MUTATION_MANUAL_MANAGED_BUY,
     TRADE_MUTATION_STRATEGY_BUY,
     TRADE_MUTATION_STRATEGY_BUY_INCREMENT,
 }
@@ -129,10 +133,10 @@ def load_trading_single_stock_position_binding(project_root: str | Path, ticker:
     if not account:
         return None
     record = (account.get("positions") or {}).get(ticker_key)
-    if not isinstance(record, Mapping) or str(record.get("source") or "") != POSITION_SOURCE_STRATEGY_FILL:
+    if not isinstance(record, Mapping) or str(record.get("source") or "") not in MANAGED_POSITION_SOURCES:
         return None
     orders = load_trading_order_state(root, required=False) or {"orders": {}}
-    return resolve_trading_position_strategy_binding(record, orders=orders)
+    return resolve_trading_position_management_binding(record, orders=orders)
 
 
 def build_trading_single_stock_inspection(
@@ -146,6 +150,12 @@ def build_trading_single_stock_inspection(
     ticker_key = normalize_trading_ticker(ticker)
     account = load_trading_account_state(root, required=False)
     orders = load_trading_order_state(root, required=False)
+    pending_state = load_trading_pending_entry_state(root, required=False)
+    pending_entries = [
+        deepcopy(dict(row))
+        for row in ((pending_state or {}).get("entries") or {}).values()
+        if _ticker_matches(row, ticker_key)
+    ]
 
     candidate = dict(candidate_row or {})
     if candidate and not _ticker_matches(candidate, ticker_key):
@@ -165,8 +175,8 @@ def build_trading_single_stock_inspection(
             )
         ]
         current_position = deepcopy((account.get("positions") or {}).get(ticker_key))
-        if isinstance(current_position, Mapping) and str(current_position.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL:
-            position_binding = resolve_trading_position_strategy_binding(
+        if isinstance(current_position, Mapping) and str(current_position.get("source") or "") in MANAGED_POSITION_SOURCES:
+            position_binding = resolve_trading_position_management_binding(
                 current_position,
                 orders=(orders or {"orders": {}}),
             )
@@ -210,6 +220,7 @@ def build_trading_single_stock_inspection(
         "order_revision": None if not orders else int(orders.get("revision") or 0),
         "account_events": account_events,
         "entry_orders": entry_orders,
+        "pending_entries": pending_entries,
         "current_position": deepcopy(current_position),
         "position_binding": deepcopy(position_binding),
         "protection": {
@@ -375,6 +386,7 @@ def _current_position_effective_date(
     *,
     ticker: str,
     entry_date: str,
+    management_start_date: str | None = None,
 ) -> str:
     """Return the first date on which today's persisted open-position state is valid.
 
@@ -383,7 +395,7 @@ def _current_position_effective_date(
     event that contributed to this still-open position cycle so current state never
     leaks backward into an earlier point-in-time view.
     """
-    effective_dates = [entry_date]
+    effective_dates = [max(entry_date, management_start_date) if management_start_date is not None else entry_date]
     for event in list(inspection.get("account_events") or []):
         mutation = str(event.get("mutation_type") or "")
         details = dict(event.get("details") or {})
@@ -492,15 +504,20 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
             entry_qty += add_qty
             gross_buy_milli += int(details.get("gross_buy_milli") or 0)
             net_buy_milli += int(details.get("net_buy_total_milli") or 0)
-            if mutation == TRADE_MUTATION_STRATEGY_BUY:
+            if mutation in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY}:
                 position_after = details.get("position_after")
                 if isinstance(position_after, Mapping):
                     management = position_after.get("strategy_management") or {}
+                    management_start = _date_text(management.get("management_start_date"))
                     candidate_position = management.get("position_state")
-                    if isinstance(candidate_position, Mapping):
+                    if (
+                        isinstance(candidate_position, Mapping)
+                        and (management_start is None or date_text >= management_start)
+                    ):
                         position_state = deepcopy(dict(candidate_position))
-                if isinstance(details.get("strategy_lineage"), Mapping):
-                    lineage = deepcopy(dict(details.get("strategy_lineage") or {}))
+                lineage_key = "strategy_lineage" if mutation == TRADE_MUTATION_STRATEGY_BUY else "management_lineage"
+                if isinstance(details.get(lineage_key), Mapping):
+                    lineage = deepcopy(dict(details.get(lineage_key) or {}))
                 entry_order_id = str(details.get("entry_order_id") or "") or None
             continue
 
@@ -550,9 +567,15 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         management = current_position.get("strategy_management") or {}
         current_entry_date = _date_text(broker.get("entry_date"))
         current_last_roll = _date_text(management.get("last_rollforward_date"))
+        current_management_start = _date_text(management.get("management_start_date"))
         current_state = management.get("position_state")
         current_effective_date = (
-            _current_position_effective_date(inspection, ticker=ticker, entry_date=entry_date)
+            _current_position_effective_date(
+                inspection,
+                ticker=ticker,
+                entry_date=entry_date,
+                management_start_date=current_management_start,
+            )
             if current_entry_date == entry_date
             else None
         )
@@ -604,6 +627,7 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         "remaining_order_qty": 0,
         "last_rollforward_date": last_rollforward_date,
         "strategy_lineage": lineage,
+        "management_lineage": lineage,
         "sell_signal": _sell_signal_as_of(inspection, date_text),
         "decision_errors": list(inspection.get("decision_errors") or []),
     }
@@ -766,16 +790,18 @@ def _shadow_plan_from_strategy_buy_event(
     order_by_id: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any] | None:
     """Recover the pre-fill plan of an *effective* strategy buy from lineage."""
-    if str(event.get("mutation_type") or "") != TRADE_MUTATION_STRATEGY_BUY:
+    mutation = str(event.get("mutation_type") or "")
+    if mutation not in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY}:
         return None
     details = dict(event.get("details") or {})
     entry_date = _date_text(details.get("trade_date"))
     if entry_date is None:
         return None
-    lineage = details.get("strategy_lineage")
+    lineage_field = "management_lineage" if mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY else "strategy_lineage"
+    lineage = details.get(lineage_field)
     if not isinstance(lineage, Mapping):
         position_after = details.get("position_after") or {}
-        lineage = position_after.get("strategy_lineage") if isinstance(position_after, Mapping) else None
+        lineage = position_after.get(lineage_field) if isinstance(position_after, Mapping) else None
     lineage = dict(lineage or {})
     seed = dict(lineage.get("execution_plan_seed") or {})
     if not seed:
@@ -834,9 +860,51 @@ def _shadow_plan_from_strategy_buy_event(
         "security_profile": deepcopy(seed.get("security_profile")),
         "frozen_params": deepcopy(lineage.get("frozen_params")),
         "entry_type": str(seed.get("entry_type") or seed.get("entry_source") or lineage.get("candidate_kind") or "normal"),
-        "source": "position_strategy_lineage",
+        "source": "position_manual_management_lineage" if mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY else "position_strategy_lineage",
         "order_id": order_id or None,
         "priority": 30,
+    }
+
+
+def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str | None) -> dict[str, Any] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    information_date = _date_text(entry.get("information_date"))
+    if information_date is None:
+        return None
+    origin = str(entry.get("origin") or "")
+    manual_pending = origin == "manual_selected"
+    signal_date = information_date if manual_pending else (_date_text(entry.get("signal_date")) or information_date)
+    seed = dict(entry.get("execution_plan_seed") or {})
+    status = str(entry.get("status") or "")
+    end_before = None
+    end_date = last_date
+    if status == "FILLED":
+        end_before = _date_text((entry.get("fill") or {}).get("trade_date"))
+    elif status == "CANCELLED_NO_FILL":
+        end_date = information_date
+    return {
+        "signal_date": signal_date,
+        "information_date": information_date,
+        "end_date": end_date,
+        "end_before_date": end_before,
+        "limit_price": seed.get("limit_price", entry.get("limit_price")),
+        "stop_price": seed.get("init_sl", entry.get("init_sl")),
+        "init_trail": seed.get("init_trail", entry.get("init_trail")),
+        "tp_price": seed.get("target_price", entry.get("target_price")),
+        "entry_atr": seed.get("entry_atr", entry.get("entry_atr")),
+        "entry_price": seed.get("shadow_entry_price", seed.get("entry_ref_price")),
+        "shadow_position_state": deepcopy(seed.get("shadow_position_state")),
+        "planned_qty": int(entry.get("planned_qty") or 0) or None,
+        "reserved_capital": entry.get("reserved_cost"),
+        "sizing_capital": seed.get("sizing_capital"),
+        "ticker": str(entry.get("ticker") or ""),
+        "security_profile": deepcopy(seed.get("security_profile")),
+        "frozen_params": deepcopy((entry.get("management_lineage") or {}).get("frozen_params")),
+        "entry_type": str(seed.get("entry_type") or "manual"),
+        "source": "manual_pending_entry" if manual_pending else "scanner_pending_entry",
+        "pending_entry_id": str(entry.get("pending_entry_id") or ""),
+        "priority": 40,
     }
 
 
@@ -885,6 +953,11 @@ def _build_shadow_plans(
         if last_date is not None:
             candidate_plan["end_date"] = last_date
         plans.append(candidate_plan)
+
+    for pending in list(inspection.get("pending_entries") or []):
+        pending_plan = _shadow_plan_from_pending_entry(pending, last_date=last_date)
+        if pending_plan is not None:
+            plans.append(pending_plan)
 
     for order in list(inspection.get("entry_orders") or []):
         order_id = str(order.get("order_id") or "")
@@ -938,7 +1011,10 @@ def _shadow_state_from_plan(
         reserved_capital = strategy.get("reserved_capital")
     return {
         "state": lifecycle_state,
-        "display_state": "買訊" if lifecycle_state == TRADE_LIFECYCLE_SIGNAL else "SHADOW",
+        "display_state": (
+            "掛單" if lifecycle_state == TRADE_LIFECYCLE_SIGNAL and str(plan.get("source")) == "manual_pending_entry"
+            else ("買訊" if lifecycle_state == TRADE_LIFECYCLE_SIGNAL else "SHADOW")
+        ),
         "source": str(plan.get("source") or "shadow_plan"),
         "entry_type": str(plan.get("entry_type") or "normal"),
         "signal_date": _date_text(plan.get("signal_date")),
@@ -1488,6 +1564,49 @@ def project_trading_single_stock_chart_payload(
             item["meta"] = meta
             item["detail_text"] = ""
         signal_annotations.append(item)
+
+    # A manually selected pending entry is a user order intent, not a strategy BUY
+    # signal.  Re-label an existing buy anchor on that date or add one so the
+    # chart exposes the persisted Trading decision as 「掛單」.
+    for pending in list(inspection.get("pending_entries") or []):
+        if str(pending.get("origin") or "") != "manual_selected":
+            continue
+        pending_date = _date_text(pending.get("information_date"))
+        if pending_date is None or pending_date not in date_to_x:
+            continue
+        x = int(date_to_x[pending_date])
+        match = next((
+            item for item in signal_annotations
+            if int(item.get("x", -1)) == x and str(item.get("signal_type") or "").lower() == "buy"
+        ), None)
+        meta = {
+            "qty": int(pending.get("planned_qty") or 0),
+            "reserved_capital": pending.get("reserved_cost"),
+            "pending_entry_id": pending.get("pending_entry_id"),
+            "status": pending.get("status"),
+        }
+        if match is not None:
+            match["title"] = "掛單"
+            match["detail_text"] = ""
+            match["meta"] = meta
+        else:
+            highs = payload.get("high")
+            anchor = None
+            try:
+                anchor = float(highs[x])
+            except (TypeError, ValueError, IndexError):
+                anchor = float(pending.get("limit_price") or 0.0)
+            signal_annotations.append({
+                "date": pending_date,
+                "x": x,
+                "anchor_price": anchor,
+                "signal_type": "buy",
+                "title": "掛單",
+                "detail_text": "",
+                "note": "Trading 手動掛單",
+                "meta": meta,
+            })
+    signal_annotations.sort(key=lambda item: (int(item.get("x", -1)), str(item.get("title") or "")))
     payload["signal_annotations"] = signal_annotations
 
     # Navigation/focus must follow the visible Trading execution layer, not stale

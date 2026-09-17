@@ -42,6 +42,15 @@ from services.trading.scanner_state import (
     load_trading_candidate_snapshot_for_account,
 )
 from services.trading.position_rollforward import build_trading_position_rollforward_snapshot, run_trading_position_rollforward
+from services.trading.pending_entry_service import (
+    cancel_pending_entry_no_fill,
+    create_manual_trading_pending_entry,
+    create_scanner_trading_pending_entry,
+    fill_trading_pending_entry,
+    get_trading_pending_entry_read_model,
+    preview_trading_pending_entry_fill,
+    recover_trading_pending_entry_transaction,
+)
 from services.trading.operations_status import build_trading_operations_status, derive_trading_operations_status_from_preloaded
 from services.trading.market_data_consumer_promotion import reconcile_trading_v2_consumer_state_from_local_evidence
 from services.trading.operational_audit import run_trading_operational_audit
@@ -123,17 +132,18 @@ PARAM_MODE_BY_LABEL = {
     PARAM_MODE_TRAIN_LABEL: TRADING_PARAM_MODE_TRAIN,
 }
 
-WORKFLOW_HINT = "更新資料後，strategy_fill 持股用 position strategy_lineage 的 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。Stop/停利線/SELL 為決策資訊，券商操作由使用者自行完成。"
+WORKFLOW_HINT = "更新資料後，strategy_fill／manual_managed 持股都用各自 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。Stop/停利線/SELL 為決策資訊，券商操作由使用者自行完成。"
 CASH_HINT = "初始化可留空；更新現金會留下 revision event，不直接改檔。"
 MANUAL_POSITION_HINT = "修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。"
 FILL_HINT = "成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。"
 PROPOSED_ORDER_HINT = "建議掛單的停利線是盤前策略參考：新訊號／再進場為停利線參考；延續／延續(TBD) 沿用 inherited shadow completion barrier。是否真的建立券商 TP，成交後仍只由該 entry order frozen params 的 tp_percent 決定；tp_percent=0 時不會建立 TP 券商單。"
-PROTECTION_HINT = "只由 confirmed strategy fill 的 canonical position state＋ORDERED 時 frozen params 機械派生；不讀成交後行情、不代表券商已掛出 Stop/TP。"
+PROTECTION_HINT = "只由 confirmed managed fill 的 canonical position state＋frozen params 機械派生；不讀成交後行情、不代表券商已掛出 Stop/TP。"
 OCO_HINT = "系統不預設券商支援 OCO；只有你明確輸入實際券商 OCO/互斥群組 ID 時才允許 Stop full + TP 同時超額共享同一持股。尚未送券商的 logical plan 仍不是 broker truth。"
 INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。"
 POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；Stop / 停利線 / Trailing / SELL 訊號是持股決策資訊。"
-SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；下單由你在券商端自行完成。"
-BUY_ENTRY_HINT = "交易中心只登錄實際買入；成交日／成交價會先用 raw 市場證據檢查。賣出到帳務中心登錄。價金、手續費與持有成本由系統自動計算。"
+SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；選取候選後可加入掛單區，凍結盤前限價／風險與資金預留。"
+BUY_ENTRY_HINT = "直接補登買入不需經掛單區；成交日／成交價會先用 raw 市場證據檢查，手動股會凍結目前 Primary Params 並從 finalized information date 開始管理。"
+PENDING_ENTRY_HINT = "掛單是使用者已確認的盤前決策：Scanner／手選股都會凍結 Params、限價、Stop/停利/Trailing 與預留資金；實際成交前可修成交價與股數。"
 
 _STATUS_TOKEN_TONES = {
     "READY": "success",
@@ -402,6 +412,7 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
         "orders": lambda: get_trading_order_read_model(root),
         "proposed": lambda: get_trading_proposed_order_plan_read_model(root),
         "position_rollforward": lambda: build_trading_position_rollforward_snapshot(root),
+        "pending": lambda: get_trading_pending_entry_read_model(root),
     }
     worker_count = max(1, min(int(TRADING_WORKBENCH_INITIAL_READ_WORKERS), len(loaders)))
     parallel_results: dict[str, tuple[bool, object]] = {}
@@ -413,7 +424,7 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
         for key, future in futures.items():
             parallel_results[key] = future.result()
 
-    for key in ("dashboard", "candidate_read", "protection", "indicator", "workflow"):
+    for key in ("dashboard", "candidate_read", "protection", "indicator", "workflow", "pending"):
         bundle[key] = parallel_results[key]
 
     candidate = bundle["candidate_read"]
@@ -511,6 +522,8 @@ class TradingAccountPanel(ttk.Frame):
         self._position_rows: dict[str, dict[str, object]] = {}
         self._candidate_rows: list[dict[str, object]] = []
         self._candidate_payload: dict[str, object] = {}
+        self._pending_snapshot: dict[str, object] = {}
+        self._pending_rows: dict[str, dict[str, object]] = {}
         self._proposed_order_rows: list[dict[str, object]] = []
         self._order_snapshot: dict[str, object] = {}
         self._order_rows: dict[str, dict[str, object]] = {}
@@ -595,6 +608,7 @@ class TradingAccountPanel(ttk.Frame):
             self.refresh_account()
             self.refresh_account_dashboard()
             self.refresh_candidate_snapshot_rows()
+            self.refresh_pending_entries()
             self.refresh_protection_plan()
             self.refresh_indicator_exit_plan()
             self.refresh_daily_workflow()
@@ -970,8 +984,68 @@ class TradingAccountPanel(ttk.Frame):
             on_pointer_leave=lambda _event: self._schedule_footer_hint_clear(),
         )
         self._candidate_tree.grid(row=0, column=0, sticky="ew")
-        trade_box = ttk.LabelFrame(content, text="買入成交登錄", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        trade_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        pending_box = ttk.LabelFrame(content, text="掛單區", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        pending_box.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
+        pending_box.columnconfigure(0, weight=1)
+        self._pending_status_var = tk.StringVar(value="尚無掛單。")
+        _TradingStatusLine(pending_box, textvariable=self._pending_status_var, default_tone="muted", max_lines=2).grid(
+            row=0, column=0, sticky="ew", pady=(0, 6)
+        )
+        pending_columns = ("open", "source", "ticker", "date", "limit", "qty", "reserved", "stop", "target", "trailing", "status")
+        self._pending_tree = ttk.Treeview(
+            pending_box, columns=pending_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=5
+        )
+        pending_headings = {
+            "open": "↗", "source": "來源", "ticker": "股票", "date": "資訊日", "limit": "買入限價",
+            "qty": "規劃股數", "reserved": "預留成本", "stop": "Stop", "target": "停利線",
+            "trailing": "Trailing", "status": "狀態",
+        }
+        pending_widths = {
+            "open": 36, "source": 86, "ticker": 75, "date": 96, "limit": 90, "qty": 88,
+            "reserved": 110, "stop": 86, "target": 86, "trailing": 86, "status": 100,
+        }
+        for key in pending_columns:
+            self._pending_tree.heading(key, text=pending_headings[key])
+            self._pending_tree.column(key, width=pending_widths[key], anchor="center", stretch=(key != "open"))
+        self._pending_tree.grid(row=1, column=0, sticky="ew")
+        self._pending_tree.bind("<<TreeviewSelect>>", self._on_pending_selected)
+        self._pending_tree.bind("<Button-1>", self._on_pending_tree_click, add="+")
+        self._pending_tree.bind("<Double-1>", self._open_selected_pending_in_inspector, add="+")
+
+        pending_actions = ttk.Frame(pending_box, style=WORKBENCH_FRAME_STYLE)
+        pending_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(
+            pending_actions, text="Scanner 選取 → 加入掛單", command=self._add_selected_scanner_pending, style=WORKBENCH_BUTTON_STYLE
+        ).pack(side="left")
+        ttk.Label(pending_actions, text="手選股", style=WORKBENCH_LABEL_STYLE).pack(side="left", padx=(12, 4))
+        self._pending_manual_ticker_var = tk.StringVar()
+        ttk.Entry(
+            pending_actions, textvariable=self._pending_manual_ticker_var, width=10, style=WORKBENCH_ENTRY_STYLE
+        ).pack(side="left")
+        ttk.Button(
+            pending_actions, text="加入手選股", command=self._add_manual_pending, style=WORKBENCH_BUTTON_STYLE
+        ).pack(side="left", padx=(6, 0))
+
+        fill_row = ttk.Frame(pending_box, style=WORKBENCH_FRAME_STYLE)
+        fill_row.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        self._pending_fill_qty_var = tk.StringVar()
+        self._pending_fill_price_var = tk.StringVar()
+        self._pending_fill_date_var = tk.StringVar()
+        ttk.Label(fill_row, text="實際股數", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        ttk.Entry(fill_row, textvariable=self._pending_fill_qty_var, width=10, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(4, 8))
+        ttk.Label(fill_row, text="實際成交價", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        ttk.Entry(fill_row, textvariable=self._pending_fill_price_var, width=12, style=WORKBENCH_ENTRY_STYLE).pack(side="left", padx=(4, 8))
+        ttk.Label(fill_row, text="成交日", style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        DatePickerField(fill_row, textvariable=self._pending_fill_date_var, width=12).pack(side="left", padx=(4, 8))
+        ttk.Button(
+            fill_row, text="確認成交 → 持股", command=self._confirm_pending_fill, style=WORKBENCH_BUTTON_STYLE
+        ).pack(side="left")
+        ttk.Button(
+            fill_row, text="無成交／刪除掛單", command=self._cancel_selected_pending, style=WORKBENCH_BUTTON_STYLE
+        ).pack(side="left", padx=(8, 0))
+
+        trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        trade_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
         trade_labels = ("股票", "數量", "成交價", "成交日")
         self._trade_ticker_var = tk.StringVar()
         self._trade_qty_var = tk.StringVar()
@@ -1230,6 +1304,7 @@ class TradingAccountPanel(ttk.Frame):
         self._bind_footer_hint(workflow_box, WORKFLOW_HINT)
         self._bind_footer_hint(table_box, POSITION_DECISION_HINT)
         self._bind_footer_hint(candidate_box, SCANNER_HINT)
+        self._bind_footer_hint(pending_box, PENDING_ENTRY_HINT)
         self._bind_footer_hint(trade_box, BUY_ENTRY_HINT)
         self._bind_page_mousewheel(content)
 
@@ -1790,6 +1865,60 @@ class TradingAccountPanel(ttk.Frame):
             return
         self._reload_candidate_rows(payload.get("candidate_rows") or [], candidate_payload=payload)
 
+    def refresh_pending_entries(self):
+        try:
+            snapshot = _load_panel_value(
+                self, "pending", lambda: get_trading_pending_entry_read_model(WORKBENCH_PROJECT_ROOT)
+            )
+        except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
+            self._pending_snapshot = {}
+            self._pending_rows = {}
+            if hasattr(self, "_pending_tree"):
+                for item in self._pending_tree.get_children():
+                    self._pending_tree.delete(item)
+            self._pending_status_var.set(f"掛單讀取失敗：{exc}")
+            return
+        self._pending_snapshot = dict(snapshot or {})
+        selected = self._selected_pending_entry_id()
+        for item in self._pending_tree.get_children():
+            self._pending_tree.delete(item)
+        self._pending_rows = {}
+        active_rows = [
+            dict(row) for row in list(snapshot.get("entries") or [])
+            if str(row.get("status") or "") == "ACTIVE"
+        ]
+        for row in active_rows:
+            entry_id = str(row.get("pending_entry_id") or "")
+            if not entry_id:
+                continue
+            self._pending_rows[entry_id] = row
+            source = "Scanner" if str(row.get("origin") or "") == "scanner_strategy" else "手選"
+            status = "STALE" if bool(row.get("stale")) else "ACTIVE"
+            self._pending_tree.insert(
+                "", "end", iid=entry_id,
+                values=(
+                    "▣", source, row.get("ticker") or "-", row.get("information_date") or "-",
+                    self._format_candidate_number(row.get("limit_price"), digits=2),
+                    f"{int(row.get('planned_qty') or 0):,}",
+                    self._format_candidate_number(row.get("reserved_cost"), digits=0),
+                    self._format_candidate_number(row.get("init_sl"), digits=2),
+                    self._format_candidate_number(row.get("target_price"), digits=2),
+                    self._format_candidate_number(row.get("init_trail"), digits=2),
+                    status,
+                ),
+            )
+        self._fit_tree_rows(self._pending_tree, len(active_rows))
+        if selected and selected in self._pending_rows:
+            self._pending_tree.selection_set(selected)
+            self._pending_tree.focus(selected)
+        reserved = float(snapshot.get("reserved_total_milli") or 0) / 1000.0
+        stale_count = int(snapshot.get("stale_active_count") or 0)
+        locked_count = int(snapshot.get("locked_count") or 0)
+        self._pending_status_var.set(
+            f"ACTIVE {len(active_rows)}｜資源鎖定 {locked_count}｜預留 {reserved:,.0f}"
+            + (f"｜STALE {stale_count}：請先確認成交或無成交" if stale_count else "")
+        )
+
     def refresh_proposed_order_plan(self):
         try:
             snapshot = _load_panel_value(
@@ -1828,6 +1957,7 @@ class TradingAccountPanel(ttk.Frame):
     def _refresh_workflow_views(self):
         self.refresh_daily_workflow()
         self.refresh_candidate_snapshot_rows()
+        self.refresh_pending_entries()
         self.refresh_proposed_order_plan()
 
     def refresh_daily_workflow(self):
@@ -2040,6 +2170,165 @@ class TradingAccountPanel(ttk.Frame):
         self._trade_ticker_var.set(ticker)
         if ticker and not self._trade_date_var.get().strip():
             self._trade_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
+
+    def _selected_pending_entry_id(self):
+        if not hasattr(self, "_pending_tree"):
+            return None
+        selected = self._pending_tree.selection()
+        return str(selected[0]) if selected else None
+
+    def _selected_pending_row(self):
+        entry_id = self._selected_pending_entry_id()
+        return None if not entry_id else self._pending_rows.get(entry_id)
+
+    def _on_pending_selected(self, _event=None):
+        row = self._selected_pending_row()
+        if not row:
+            return
+        self._pending_fill_qty_var.set(str(int(row.get("planned_qty") or 0)))
+        self._pending_fill_price_var.set(str(row.get("limit_price") or ""))
+        if not self._pending_fill_date_var.get().strip():
+            self._pending_fill_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
+
+    def _on_pending_tree_click(self, event):
+        region = self._pending_tree.identify_region(event.x, event.y)
+        if region != "cell" or self._pending_tree.identify_column(event.x) != "#1":
+            return None
+        entry_id = str(self._pending_tree.identify_row(event.y) or "")
+        row = self._pending_rows.get(entry_id)
+        if row:
+            self._open_ticker_in_inspector(str(row.get("ticker") or ""))
+        return "break"
+
+    def _open_selected_pending_in_inspector(self, _event=None):
+        row = self._selected_pending_row()
+        if row:
+            self._open_ticker_in_inspector(str(row.get("ticker") or ""))
+
+    def _add_selected_scanner_pending(self):
+        candidate = self._selected_candidate_row()
+        if not candidate:
+            messagebox.showerror("加入掛單", "請先在 Scanner Pool 選取股票。", parent=self)
+            return
+        ticker = str(candidate.get("ticker") or "").strip().upper()
+
+        def on_success(result):
+            row = dict(result or {})
+            messagebox.showinfo(
+                "加入掛單",
+                f"{ticker} 已加入掛單區。\n規劃股數 {int(row.get('planned_qty') or 0):,}｜限價 {row.get('limit_price')}｜預留 {float(row.get('reserved_cost') or 0):,.0f}",
+                parent=self,
+            )
+
+        self._submit_trading_command(
+            f"{ticker} Scanner 加入掛單",
+            lambda: create_scanner_trading_pending_entry(WORKBENCH_PROJECT_ROOT, candidate_reference=candidate),
+            on_success=on_success,
+            error_title="加入掛單失敗",
+            refresh_state=True,
+        )
+
+    def _add_manual_pending(self):
+        ticker = self._pending_manual_ticker_var.get().strip().upper()
+        if not ticker:
+            messagebox.showerror("加入手選股", "股票代號必填。", parent=self)
+            return
+
+        def on_success(result):
+            row = dict(result or {})
+            self._pending_manual_ticker_var.set("")
+            messagebox.showinfo(
+                "加入手選股",
+                f"{ticker} 已套用目前 Primary Params 並加入掛單區。\n規劃股數 {int(row.get('planned_qty') or 0):,}｜限價 {row.get('limit_price')}｜預留 {float(row.get('reserved_cost') or 0):,.0f}",
+                parent=self,
+            )
+
+        self._submit_trading_command(
+            f"{ticker} 手選股加入掛單",
+            lambda: create_manual_trading_pending_entry(WORKBENCH_PROJECT_ROOT, ticker=ticker),
+            on_success=on_success,
+            error_title="加入手選股失敗",
+            refresh_state=True,
+        )
+
+    def _pending_fill_values(self):
+        row = self._selected_pending_row()
+        if not row:
+            raise ValueError("請先選取掛單")
+        qty = parse_trading_qty_text(self._pending_fill_qty_var.get(), "實際成交股數")
+        price = parse_trading_money_text(self._pending_fill_price_var.get(), "實際成交價", allow_zero=False)
+        trade_date = self._pending_fill_date_var.get().strip()
+        if not trade_date:
+            raise ValueError("成交日必填")
+        return row, qty, price, trade_date
+
+    def _confirm_pending_fill(self):
+        try:
+            row, qty, price, trade_date = self._pending_fill_values()
+            preview = preview_trading_pending_entry_fill(
+                WORKBENCH_PROJECT_ROOT,
+                pending_entry_id=str(row.get("pending_entry_id") or ""),
+                qty=qty,
+                price=price,
+                trade_date=trade_date,
+            )
+        except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+            messagebox.showerror("掛單成交確認失敗", str(exc), parent=self)
+            return
+        evidence = dict(preview.get("market_evidence") or {})
+        warning_rows = [str(item) for item in list(preview.get("warnings") or []) if str(item).strip()]
+        warning_text = "" if not warning_rows else "\n\n注意：\n- " + "\n- ".join(warning_rows)
+        if not messagebox.askyesno(
+            "確認掛單成交",
+            f"{row.get('ticker')}｜{qty:,} 股 @ {price}｜{trade_date}\n"
+            f"掛單限價 {row.get('limit_price')}｜規劃 {int(row.get('planned_qty') or 0):,} 股\n"
+            f"市場證據 Low {evidence.get('market_low')} / High {evidence.get('market_high')}"
+            f"{warning_text}\n\n確認後將轉入持股決策。",
+            parent=self,
+        ):
+            return
+        entry_id = str(row.get("pending_entry_id") or "")
+        ticker = str(row.get("ticker") or "")
+
+        def on_success(_result):
+            self._pending_fill_qty_var.set("")
+            self._pending_fill_price_var.set("")
+            self._pending_fill_date_var.set("")
+            messagebox.showinfo("掛單成交", f"{ticker} 已轉入持股決策。", parent=self)
+
+        self._submit_trading_command(
+            f"{ticker} 掛單成交轉持股",
+            lambda: fill_trading_pending_entry(
+                WORKBENCH_PROJECT_ROOT, pending_entry_id=entry_id, qty=qty, price=price, trade_date=trade_date,
+                expected_account_revision=None,
+            ),
+            on_success=on_success,
+            error_title="掛單成交失敗",
+            refresh_state=True,
+        )
+
+    def _cancel_selected_pending(self):
+        row = self._selected_pending_row()
+        if not row:
+            messagebox.showerror("刪除掛單", "請先選取掛單。", parent=self)
+            return
+        ticker = str(row.get("ticker") or "")
+        if not messagebox.askyesno(
+            "確認無成交",
+            f"將 {ticker} 掛單標記為無成交並自掛單區移除。\n同一資訊日的預留資金／slot 仍會鎖定到下一資訊日，避免盤中重配。",
+            parent=self,
+        ):
+            return
+        entry_id = str(row.get("pending_entry_id") or "")
+        self._submit_trading_command(
+            f"{ticker} 掛單無成交結案",
+            lambda: cancel_pending_entry_no_fill(
+                WORKBENCH_PROJECT_ROOT, pending_entry_id=entry_id, note="Workbench no fill"
+            ),
+            on_success=lambda _result: messagebox.showinfo("掛單結案", f"{ticker} 已標記無成交。", parent=self),
+            error_title="掛單結案失敗",
+            refresh_state=True,
+        )
 
     def _open_ticker_in_inspector(self, ticker, *, candidate_row=None):
         ticker = str(ticker or "").strip().upper()
@@ -2529,8 +2818,8 @@ class TradingAccountPanel(ttk.Frame):
         for item in self._tree.get_children():
             self._tree.delete(item)
         self._position_rows = {}
-        source_labels = {"manual_adopted": "手動既有", "strategy_fill": "策略成交"}
-        management_labels = {"unmanaged": "未接管", "active": "策略管理"}
+        source_labels = {"manual_adopted": "手動既有", "manual_managed": "手動管理", "strategy_fill": "策略成交"}
+        management_labels = {"unmanaged": "未接管", "active": "規則管理"}
         dashboard_positions = {
             str(row.get("ticker") or ""): dict(row)
             for row in list(self._account_dashboard_snapshot.get("positions") or [])
@@ -2556,7 +2845,7 @@ class TradingAccountPanel(ttk.Frame):
                 action = "建議賣出｜自行至券商處理，成交後回帳務中心登錄"
             else:
                 sell_signal = "-"
-                action = "持有｜依目前 Stop / 停利線 / Trailing 管理" if str(row.get("source")) == "strategy_fill" else "手動持股｜無策略接管"
+                action = "持有｜依目前 Stop / 停利線 / Trailing 管理" if str(row.get("source")) in {"strategy_fill", "manual_managed"} else "手動持股｜無策略接管"
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
@@ -2719,12 +3008,9 @@ class TradingAccountPanel(ttk.Frame):
             self._trade_qty_var.set("")
             self._trade_price_var.set("")
             self._trade_date_var.set("")
-            callback = getattr(self.winfo_toplevel(), "_open_accounting_center", None)
-            if callable(callback):
-                callback(refresh=True)
             messagebox.showinfo(
                 "成交登錄",
-                f"{ticker} 買入成交已寫入帳戶 SSOT；已切換至帳務中心並重新整理。",
+                f"{ticker} 買入成交已寫入帳戶 SSOT；持股決策已同步重新整理。",
                 parent=self.winfo_toplevel(),
             )
 
@@ -2734,7 +3020,7 @@ class TradingAccountPanel(ttk.Frame):
             on_success=on_success,
             error_title="成交登錄失敗",
             # The buy mutates account truth used throughout Trading Center; refresh
-            # the canonical bundle before navigating to Accounting Center.
+            # the canonical bundle before reporting success.
             refresh_state=True,
         )
 

@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
-from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
+from core.trading_account_state import MANAGED_POSITION_SOURCES
 from core.trading_identity import normalize_trading_date
 from services.trading.account_state import load_trading_account_state
 from services.trading.market_data_consumer import (
@@ -78,7 +78,7 @@ def resolve_trading_strategy_position_sources(
     if orders is None:
         orders = {"orders": {}}
     has_strategy_positions = any(
-        isinstance(record, dict) and record.get("source") == POSITION_SOURCE_STRATEGY_FILL
+        isinstance(record, dict) and record.get("source") in MANAGED_POSITION_SOURCES
         for record in (account.get("positions") or {}).values()
     )
     if not has_strategy_positions:

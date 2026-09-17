@@ -14,7 +14,7 @@ from typing import Any
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
-from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
+from core.trading_account_state import MANAGED_POSITION_SOURCES
 from core.trading_order_state import (
     TRADING_ACTIVE_ORDER_STATUSES,
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
@@ -232,7 +232,7 @@ def derive_trading_operations_status(
     strategy_lineage_by_ticker = {
         str(row.get("ticker") or ""): str(row.get("strategy_lineage_key") or row.get("entry_order_id") or "")
         for row in positions
-        if str(row.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL
+        if str(row.get("source") or "") in MANAGED_POSITION_SOURCES
         and int(row.get("qty") or 0) > 0
         and str(row.get("ticker") or "")
         and str(row.get("strategy_lineage_key") or row.get("entry_order_id") or "")
@@ -240,7 +240,7 @@ def derive_trading_operations_status(
     legacy_oms_lineage_by_ticker = {
         str(row.get("ticker") or ""): str(row.get("entry_order_id") or "")
         for row in positions
-        if str(row.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL
+        if str(row.get("source") or "") in MANAGED_POSITION_SOURCES
         and int(row.get("qty") or 0) > 0
         and str(row.get("ticker") or "")
         and str(row.get("entry_order_id") or "")
@@ -250,7 +250,7 @@ def derive_trading_operations_status(
     manual_tickers = sorted(
         str(row.get("ticker") or "")
         for row in positions
-        if str(row.get("source") or "") != POSITION_SOURCE_STRATEGY_FILL and int(row.get("qty") or 0) > 0
+        if str(row.get("source") or "") not in MANAGED_POSITION_SOURCES and int(row.get("qty") or 0) > 0
     )
 
     order_rows = [dict(row) for row in list(orders.get("orders") or [])]

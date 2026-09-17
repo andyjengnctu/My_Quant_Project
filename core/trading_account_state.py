@@ -33,14 +33,17 @@ TRADING_ACCOUNT_SCHEMA_VERSION = 1
 TRADING_ACCOUNT_STATE_FILENAME = "account.json"
 TRADING_RUNTIME_DOMAIN = RUNTIME_DOMAIN_TRADING
 POSITION_SOURCE_MANUAL_ADOPTED = "manual_adopted"
+POSITION_SOURCE_MANUAL_MANAGED = "manual_managed"
 POSITION_SOURCE_STRATEGY_FILL = "strategy_fill"
-POSITION_SOURCES = (POSITION_SOURCE_MANUAL_ADOPTED, POSITION_SOURCE_STRATEGY_FILL)
+MANAGED_POSITION_SOURCES = (POSITION_SOURCE_STRATEGY_FILL, POSITION_SOURCE_MANUAL_MANAGED)
+POSITION_SOURCES = (POSITION_SOURCE_MANUAL_ADOPTED, *MANAGED_POSITION_SOURCES)
 MANAGEMENT_STATUS_UNMANAGED = "unmanaged"
 MANAGEMENT_STATUS_ACTIVE = "active"
 MANAGEMENT_STATUSES = (MANAGEMENT_STATUS_UNMANAGED, MANAGEMENT_STATUS_ACTIVE)
 
 
 TRADE_MUTATION_BUY = "manual_buy_fill"
+TRADE_MUTATION_MANUAL_MANAGED_BUY = "manual_managed_buy_fill"
 TRADE_MUTATION_STRATEGY_BUY = "confirm_strategy_buy_fill"
 TRADE_MUTATION_STRATEGY_BUY_INCREMENT = "confirm_strategy_buy_fill_increment"
 TRADE_MUTATION_SELL = "confirm_sell_fill"
@@ -48,6 +51,7 @@ TRADE_MUTATION_VOID = "void_manual_trade"
 ACCOUNT_MUTATION_HISTORICAL_INVENTORY = "historical_inventory_reconciliation"
 TRADE_MUTATIONS = (
     TRADE_MUTATION_BUY,
+    TRADE_MUTATION_MANUAL_MANAGED_BUY,
     TRADE_MUTATION_STRATEGY_BUY,
     TRADE_MUTATION_STRATEGY_BUY_INCREMENT,
     TRADE_MUTATION_SELL,
@@ -123,14 +127,14 @@ def _strategy_template_by_ticker(state: dict[str, Any]) -> dict[str, dict[str, A
     """
     templates: dict[str, tuple[int, dict[str, Any]]] = {}
     for ticker, record in dict(state.get("positions") or {}).items():
-        if str(record.get("source") or "") == POSITION_SOURCE_STRATEGY_FILL:
+        if str(record.get("source") or "") in MANAGED_POSITION_SOURCES:
             templates[_normalize_ticker(ticker)] = (10**12, deepcopy(record))
     for event in state.get("events", []):
         revision = int(event.get("revision") or 0)
         details = dict(event.get("details") or {})
         for key in ("position_before", "position_after", "position", "previous_position", "removed_position"):
             candidate = details.get(key)
-            if not isinstance(candidate, dict) or candidate.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+            if not isinstance(candidate, dict) or candidate.get("source") not in MANAGED_POSITION_SOURCES:
                 continue
             ticker = candidate.get("ticker") or details.get("ticker")
             if not ticker:
@@ -163,7 +167,7 @@ def _record_from_replayed_broker(
     strategy_templates: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """Attach safe management state to a replayed broker inventory."""
-    if source != POSITION_SOURCE_STRATEGY_FILL:
+    if source not in MANAGED_POSITION_SOURCES:
         return _manual_record_from_broker(ticker, broker)
     template = strategy_templates.get(ticker)
     if not isinstance(template, dict):
@@ -173,7 +177,7 @@ def _record_from_replayed_broker(
         return _manual_record_from_broker(ticker, broker)
     record = deepcopy(template)
     record["ticker"] = ticker
-    record["source"] = POSITION_SOURCE_STRATEGY_FILL
+    record["source"] = source
     replay_broker = deepcopy(broker)
     template_broker = dict(template.get("broker") or {})
     if not replay_broker.get("entry_order_id") and template_broker.get("entry_order_id"):
@@ -401,7 +405,7 @@ def _project_trading_account_economics(
             raise ValueError(f"{ticker} 交易缺少 trade_date")
         economic_revision = int(event.get("revision") or actual_revision)
 
-        if mutation in {TRADE_MUTATION_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}:
+        if mutation in {TRADE_MUTATION_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}:
             if trade_date in sell_dates.get(ticker, set()):
                 raise ValueError(f"{ticker} 修正後同一交易日同時存在買入與賣出成交")
             buy_dates.setdefault(ticker, set()).add(trade_date)
@@ -425,7 +429,11 @@ def _project_trading_account_economics(
                 raise ValueError("Trading cash 尚未設定，無法重建交易帳務")
             cash_milli = int(cash_milli) - net
             ensure_nonnegative_cash(f"{ticker} {trade_date} 買入")
-            source = POSITION_SOURCE_MANUAL_ADOPTED if mutation == TRADE_MUTATION_BUY else POSITION_SOURCE_STRATEGY_FILL
+            source = (
+                POSITION_SOURCE_MANUAL_ADOPTED if mutation == TRADE_MUTATION_BUY
+                else POSITION_SOURCE_MANUAL_MANAGED if mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY
+                else POSITION_SOURCE_STRATEGY_FILL
+            )
             existing = positions.get(ticker)
             if existing is None:
                 broker = {
@@ -627,7 +635,7 @@ def _project_trading_account_economics(
             "remaining_qty": max(remaining_qty, 0),
             "cash_milli_after": int(cash_milli),
             "position_source": source_before,
-            "strategy_managed": source_before == POSITION_SOURCE_STRATEGY_FILL,
+            "strategy_managed": source_before in MANAGED_POSITION_SOURCES,
         })
         projected_trades.append({"revision": economic_revision, "mutation_type": mutation, "details": projected})
         if remaining_qty <= 0:
@@ -688,6 +696,8 @@ def _effective_position_source_before_revision(
             continue
         if mutation in {"adopt_manual_position", TRADE_MUTATION_BUY}:
             source = POSITION_SOURCE_MANUAL_ADOPTED
+        elif mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY:
+            source = POSITION_SOURCE_MANUAL_MANAGED
         elif mutation in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}:
             source = POSITION_SOURCE_STRATEGY_FILL
         elif mutation == "remove_manual_position":
@@ -889,7 +899,7 @@ def adopt_manual_trading_position(
 
 def _has_buy_fill_on_date(state: dict[str, Any], ticker: str, trade_date: str) -> bool:
     ticker_key = _normalize_ticker(ticker)
-    buy_mutations = {TRADE_MUTATION_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}
+    buy_mutations = {TRADE_MUTATION_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}
     for event in _effective_trade_events(state):
         if str(event.get("mutation_type") or "") not in buy_mutations:
             continue
@@ -1086,7 +1096,7 @@ def correct_trading_position_broker_truth(
 
     management = record.get("strategy_management") or {}
     position_state = management.get("position_state")
-    if record.get("source") == POSITION_SOURCE_STRATEGY_FILL and isinstance(position_state, dict):
+    if record.get("source") in MANAGED_POSITION_SOURCES and isinstance(position_state, dict):
         position_state = deepcopy(position_state)
         gross = int(broker.get("remaining_gross_buy_milli", new_cost) or new_cost)
         fee = int(broker.get("remaining_buy_fee_milli", new_cost - gross) or 0)
@@ -1106,7 +1116,15 @@ def correct_trading_position_broker_truth(
         position_state["initial_risk_total_milli"] = int(round(old_risk * new_qty / old_initial_qty)) if old_risk else 0
         if corrected_entry_date is not None:
             position_state["entry_trade_date"] = corrected_entry_date
-            management["management_start_date"] = corrected_entry_date
+            if record.get("source") == POSITION_SOURCE_STRATEGY_FILL:
+                management["management_start_date"] = corrected_entry_date
+            else:
+                prior_management_start = _normalize_iso_date(
+                    management.get("management_start_date"), field_name="management_start_date"
+                )
+                management["management_start_date"] = max(
+                    [value for value in (prior_management_start, corrected_entry_date) if value is not None]
+                )
         management["position_state"] = _json_safe(sync_position_display_fields(position_state))
         record["strategy_management"] = management
 
@@ -1404,7 +1422,7 @@ def apply_manual_trading_buy_fill(
     )
 
 
-def apply_confirmed_strategy_buy_fill(
+def _apply_confirmed_managed_buy_fill(
     state: dict[str, Any],
     *,
     ticker: object,
@@ -1419,13 +1437,20 @@ def apply_confirmed_strategy_buy_fill(
     target_price=None,
     limit_price=None,
     entry_atr=None,
+    target_reference_price=None,
     security_profile=None,
     entry_type: str = "normal",
     entry_order_id: str | None = None,
-    strategy_lineage: dict[str, Any] | None = None,
+    position_source: str,
+    lineage_field: str,
+    lineage_payload: dict[str, Any] | None,
+    mutation_type: str,
+    management_start_date: object | None = None,
 ) -> dict[str, Any]:
     validate_trading_account_state(state)
     ticker_key = _normalize_ticker(ticker)
+    if position_source not in MANAGED_POSITION_SOURCES:
+        raise ValueError(f"Trading managed position source 不合法: {position_source}")
     if ticker_key in state["positions"]:
         raise ValueError(f"Trading 已存在 open position，不支援同ticker加碼: {ticker_key}")
     cash_milli = state.get("cash_milli")
@@ -1434,22 +1459,20 @@ def apply_confirmed_strategy_buy_fill(
     trade_date_text = _normalize_iso_date(trade_date, field_name="trade_date")
     if trade_date_text is None:
         raise ValueError("trade_date 必填")
+    resolved_management_start = _normalize_iso_date(management_start_date, field_name="management_start_date")
+    if resolved_management_start is None:
+        resolved_management_start = trade_date_text
+    if resolved_management_start < trade_date_text:
+        raise ValueError("management_start_date 不得早於實際買入日")
     if _has_sell_fill_on_date(state, ticker_key, trade_date_text):
         raise ValueError(f"{ticker_key} 同一交易日已有賣出成交；Trading 禁止同日買賣")
 
     position_state = build_position_from_entry_fill(
-        buy_price=buy_price,
-        qty=int(qty),
-        init_sl=init_sl,
-        init_trail=init_trail,
-        params=params,
-        entry_type=entry_type,
-        target_price=target_price,
-        limit_price=limit_price,
-        entry_atr=entry_atr,
-        ticker=ticker_key,
-        security_profile=security_profile,
-        trade_date=trade_date_text,
+        buy_price=buy_price, qty=int(qty), init_sl=init_sl, init_trail=init_trail,
+        params=params, entry_type=entry_type, target_price=target_price,
+        limit_price=limit_price, entry_atr=entry_atr, ticker=ticker_key,
+        security_profile=security_profile, trade_date=trade_date_text,
+        target_reference_price=target_reference_price,
     )
     position_state = _json_safe(position_state)
     net_buy_total_milli = int(position_state["net_buy_total_milli"])
@@ -1459,21 +1482,22 @@ def apply_confirmed_strategy_buy_fill(
             f"可用 {milli_to_money(int(cash_milli)):.2f}"
         )
 
+    checked_lineage = None if lineage_payload is None else deepcopy(lineage_payload)
+    if checked_lineage is None:
+        raise ValueError(f"Trading {lineage_field} 必填")
+    frozen_params = checked_lineage.get("frozen_params")
+    expected_sha = str(checked_lineage.get("frozen_params_sha256") or "")
+    if not isinstance(frozen_params, dict) or not expected_sha or canonical_json_sha256(frozen_params) != expected_sha:
+        raise ValueError(f"Trading {lineage_field} frozen_params/hash 不合法")
+    if not str(checked_lineage.get("lineage_id") or "").strip():
+        raise ValueError(f"Trading {lineage_field} 缺少 lineage_id")
+
     updated = deepcopy(state)
     updated["cash_milli"] = int(cash_milli) - net_buy_total_milli
-    lineage_payload = None if strategy_lineage is None else deepcopy(strategy_lineage)
-    if lineage_payload is not None:
-        frozen_params = lineage_payload.get("frozen_params")
-        expected_sha = str(lineage_payload.get("frozen_params_sha256") or "")
-        if not isinstance(frozen_params, dict) or not expected_sha or canonical_json_sha256(frozen_params) != expected_sha:
-            raise ValueError("Trading strategy_lineage frozen_params/hash 不合法")
-        if not str(lineage_payload.get("lineage_id") or "").strip():
-            raise ValueError("Trading strategy_lineage 缺少 lineage_id")
-
-    updated["positions"][ticker_key] = {
+    record = {
         "ticker": ticker_key,
-        "source": POSITION_SOURCE_STRATEGY_FILL,
-        "strategy_lineage": lineage_payload,
+        "source": position_source,
+        lineage_field: checked_lineage,
         "broker": {
             "qty": int(position_state["qty"]),
             "initial_qty": int(position_state["initial_qty"]),
@@ -1489,30 +1513,66 @@ def apply_confirmed_strategy_buy_fill(
         },
         "strategy_management": {
             "status": MANAGEMENT_STATUS_ACTIVE,
-            "management_start_date": trade_date_text,
+            "management_start_date": resolved_management_start,
             "position_state": position_state,
         },
     }
+    updated["positions"][ticker_key] = record
+    details = {
+        "ticker": ticker_key,
+        "qty": int(position_state["qty"]),
+        "trade_date": trade_date_text,
+        "entry_fill_price_milli": int(position_state["entry_fill_price_milli"]),
+        "gross_buy_milli": int(position_state.get("gross_buy_milli", 0) or 0),
+        "buy_fee_milli": int(position_state.get("buy_fee_milli", 0) or 0),
+        "net_buy_total_milli": net_buy_total_milli,
+        "cash_milli_after": int(updated["cash_milli"]),
+        "entry_order_id": None if entry_order_id is None else str(entry_order_id),
+        lineage_field: deepcopy(checked_lineage),
+        "position_after": deepcopy(record),
+    }
     return _append_mutation(
-        updated,
-        mutation_id=mutation_id,
-        mutation_type="confirm_strategy_buy_fill",
-        timestamp=timestamp,
-        details={
-            "ticker": ticker_key,
-            "qty": int(position_state["qty"]),
-            "trade_date": trade_date_text,
-            "entry_fill_price_milli": int(position_state["entry_fill_price_milli"]),
-            "gross_buy_milli": int(position_state.get("gross_buy_milli", 0) or 0),
-            "buy_fee_milli": int(position_state.get("buy_fee_milli", 0) or 0),
-            "net_buy_total_milli": net_buy_total_milli,
-            "cash_milli_after": int(updated["cash_milli"]),
-            "entry_order_id": None if entry_order_id is None else str(entry_order_id),
-            "strategy_lineage": deepcopy(lineage_payload),
-            "position_after": deepcopy(updated["positions"][ticker_key]),
-        },
+        updated, mutation_id=mutation_id, mutation_type=mutation_type,
+        timestamp=timestamp, details=details,
     )
 
+
+def apply_confirmed_strategy_buy_fill(
+    state: dict[str, Any], *, ticker: object, qty: int, buy_price: object, params,
+    timestamp: str, mutation_id: str, trade_date: object, init_sl=None, init_trail=None,
+    target_price=None, limit_price=None, entry_atr=None, target_reference_price=None, security_profile=None,
+    entry_type: str = "normal", entry_order_id: str | None = None,
+    strategy_lineage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _apply_confirmed_managed_buy_fill(
+        state, ticker=ticker, qty=qty, buy_price=buy_price, params=params,
+        timestamp=timestamp, mutation_id=mutation_id, trade_date=trade_date,
+        init_sl=init_sl, init_trail=init_trail, target_price=target_price,
+        limit_price=limit_price, entry_atr=entry_atr, target_reference_price=target_reference_price, security_profile=security_profile,
+        entry_type=entry_type, entry_order_id=entry_order_id,
+        position_source=POSITION_SOURCE_STRATEGY_FILL, lineage_field="strategy_lineage",
+        lineage_payload=strategy_lineage, mutation_type=TRADE_MUTATION_STRATEGY_BUY,
+    )
+
+
+def apply_confirmed_manual_managed_buy_fill(
+    state: dict[str, Any], *, ticker: object, qty: int, buy_price: object, params,
+    timestamp: str, mutation_id: str, trade_date: object, init_sl=None, init_trail=None,
+    target_price=None, limit_price=None, entry_atr=None, target_reference_price=None, security_profile=None,
+    entry_type: str = "manual", management_lineage: dict[str, Any] | None = None,
+    management_start_date: object | None = None,
+) -> dict[str, Any]:
+    updated = _apply_confirmed_managed_buy_fill(
+        state, ticker=ticker, qty=qty, buy_price=buy_price, params=params,
+        timestamp=timestamp, mutation_id=mutation_id, trade_date=trade_date,
+        init_sl=init_sl, init_trail=init_trail, target_price=target_price,
+        limit_price=limit_price, entry_atr=entry_atr, target_reference_price=target_reference_price, security_profile=security_profile,
+        entry_type=entry_type, entry_order_id=None,
+        position_source=POSITION_SOURCE_MANUAL_MANAGED, lineage_field="management_lineage",
+        lineage_payload=management_lineage, mutation_type=TRADE_MUTATION_MANUAL_MANAGED_BUY,
+        management_start_date=management_start_date,
+    )
+    return updated
 
 def apply_confirmed_strategy_buy_fill_increment(
     state: dict[str, Any],
@@ -1693,8 +1753,8 @@ def apply_trading_strategy_management_rollforward(
         if ticker not in updated["positions"]:
             raise ValueError(f"Trading rollforward position 不存在: {ticker}")
         record = updated["positions"][ticker]
-        if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
-            raise ValueError(f"Trading rollforward 只允許 strategy_fill position: {ticker}")
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
+            raise ValueError(f"Trading rollforward 只允許 managed position: {ticker}")
         management = record.get("strategy_management") or {}
         if management.get("status") != MANAGEMENT_STATUS_ACTIVE:
             raise ValueError(f"Trading rollforward position 尚未由策略 active 管理: {ticker}")
@@ -1969,7 +2029,7 @@ def replace_trading_transaction(
         "replaces_event_revision": int(target_revision),
         "account_origin": "ACCOUNT_CORRECTION",
     }
-    if mutation in {TRADE_MUTATION_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}:
+    if mutation in {TRADE_MUTATION_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}:
         ledger = build_buy_ledger_from_price(price, qty, params)
         details.update({
             "qty": qty if mutation != TRADE_MUTATION_STRATEGY_BUY_INCREMENT else None,
@@ -2112,20 +2172,20 @@ def validate_trading_account_state(state: dict[str, Any]) -> None:
         if record.get("source") == POSITION_SOURCE_MANUAL_ADOPTED:
             if management.get("status") != MANAGEMENT_STATUS_UNMANAGED or management.get("position_state") is not None:
                 raise ValueError(f"manual adopted position 不得偽造 strategy state: {ticker}")
-        if record.get("source") == POSITION_SOURCE_STRATEGY_FILL:
-            lineage = record.get("strategy_lineage")
-            if lineage is not None:
-                if not isinstance(lineage, dict):
-                    raise ValueError(f"Trading strategy_lineage 必須是 object: {ticker}")
-                frozen_params = lineage.get("frozen_params")
-                frozen_sha = str(lineage.get("frozen_params_sha256") or "")
-                if not isinstance(frozen_params, dict) or not frozen_sha or canonical_json_sha256(frozen_params) != frozen_sha:
-                    raise ValueError(f"Trading strategy_lineage frozen params/hash 不合法: {ticker}")
-                if not str(lineage.get("lineage_id") or "").strip():
-                    raise ValueError(f"Trading strategy_lineage 缺少 lineage_id: {ticker}")
+        if record.get("source") in MANAGED_POSITION_SOURCES:
+            lineage_field = "strategy_lineage" if record.get("source") == POSITION_SOURCE_STRATEGY_FILL else "management_lineage"
+            lineage = record.get(lineage_field)
+            if not isinstance(lineage, dict):
+                raise ValueError(f"Trading {lineage_field} 必須是 object: {ticker}")
+            frozen_params = lineage.get("frozen_params")
+            frozen_sha = str(lineage.get("frozen_params_sha256") or "")
+            if not isinstance(frozen_params, dict) or not frozen_sha or canonical_json_sha256(frozen_params) != frozen_sha:
+                raise ValueError(f"Trading {lineage_field} frozen params/hash 不合法: {ticker}")
+            if not str(lineage.get("lineage_id") or "").strip():
+                raise ValueError(f"Trading {lineage_field} 缺少 lineage_id: {ticker}")
             position_state = management.get("position_state")
             if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position_state, dict):
-                raise ValueError(f"strategy fill 必須持有 active strategy position: {ticker}")
+                raise ValueError(f"managed fill 必須持有 active position state: {ticker}")
             if int(position_state.get("qty", -1)) != qty:
                 raise ValueError(f"strategy/broker qty 不一致: {ticker}")
             if int(position_state.get("remaining_cost_basis_milli", -1)) != remaining_cost:
@@ -2170,7 +2230,7 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
         str((event.get("details") or {}).get("trade_date") or "")
         for event in effective_trade_events
         if str(event.get("mutation_type") or "") in {
-            TRADE_MUTATION_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT
+            TRADE_MUTATION_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT
         }
         and str((event.get("details") or {}).get("trade_date") or "")
     })
@@ -2200,10 +2260,11 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 "entry_date": broker.get("entry_date"),
                 "entry_order_id": broker.get("entry_order_id"),
                 "strategy_lineage_id": (record.get("strategy_lineage") or {}).get("lineage_id"),
+                "management_lineage_id": (record.get("management_lineage") or record.get("strategy_lineage") or {}).get("lineage_id"),
                 "strategy_lineage_key": (
                     (
-                        "POSITION:" + str((record.get("strategy_lineage") or {}).get("lineage_id") or "")
-                        if str((record.get("strategy_lineage") or {}).get("lineage_id") or "") else None
+                        "POSITION:" + str((record.get("management_lineage") or record.get("strategy_lineage") or {}).get("lineage_id") or "")
+                        if str((record.get("management_lineage") or record.get("strategy_lineage") or {}).get("lineage_id") or "") else None
                     )
                     or str(broker.get("entry_order_id") or "")
                     or None
@@ -2236,7 +2297,9 @@ __all__ = [
     "TRADING_ACCOUNT_SCHEMA_VERSION",
     "TRADING_ACCOUNT_STATE_FILENAME",
     "POSITION_SOURCE_MANUAL_ADOPTED",
+    "POSITION_SOURCE_MANUAL_MANAGED",
     "POSITION_SOURCE_STRATEGY_FILL",
+    "MANAGED_POSITION_SOURCES",
     "MANAGEMENT_STATUS_UNMANAGED",
     "MANAGEMENT_STATUS_ACTIVE",
     "build_empty_trading_account_state",
@@ -2245,6 +2308,7 @@ __all__ = [
     "correct_manual_trading_position",
     "remove_manual_trading_position",
     "apply_manual_trading_buy_fill",
+    "apply_confirmed_manual_managed_buy_fill",
     "apply_confirmed_strategy_buy_fill",
     "apply_confirmed_strategy_buy_fill_increment",
     "apply_trading_strategy_management_rollforward",

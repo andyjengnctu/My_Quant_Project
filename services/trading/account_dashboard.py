@@ -224,12 +224,12 @@ def _build_closed_round_trips(state: dict[str, Any], *, accounting_params=None) 
             active[ticker]["cost_basis_milli"] += int(details.get("net_buy_total_milli") or 0)
             if active[ticker].get("entry_date") is None:
                 active[ticker]["entry_date"] = details.get("trade_date")
-        elif mutation == "confirm_strategy_buy_fill":
+        elif mutation in {"confirm_strategy_buy_fill", "manual_managed_buy_fill"}:
             position_after = dict(details.get("position_after") or {})
             position_state = dict((position_after.get("strategy_management") or {}).get("position_state") or {})
             active[ticker] = {
                 "ticker": ticker,
-                "source": "strategy_fill",
+                "source": "manual_managed" if mutation == "manual_managed_buy_fill" else "strategy_fill",
                 "entry_date": details.get("trade_date"),
                 "cost_basis_milli": int(details.get("net_buy_total_milli") or 0),
                 "initial_risk_total_milli": int(position_state.get("initial_risk_total_milli") or 0),
@@ -287,7 +287,7 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
     buys: list[dict[str, Any]] = []
     sells: list[dict[str, Any]] = []
     events = project_trading_account_transactions(state, accounting_params=accounting_params)
-    trade_mutations = {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment", "confirm_sell_fill"}
+    trade_mutations = {"manual_buy_fill", "manual_managed_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment", "confirm_sell_fill"}
     latest_trade_revision_by_ticker: dict[str, int] = {}
     for event in events:
         if str(event.get("mutation_type") or "") not in trade_mutations:
@@ -318,7 +318,7 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
         if mutation == "remove_manual_position":
             active_source.pop(ticker, None)
             continue
-        if mutation in {"manual_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment"}:
+        if mutation in {"manual_buy_fill", "manual_managed_buy_fill", "confirm_strategy_buy_fill", "confirm_strategy_buy_fill_increment"}:
             qty = int(details.get("qty") or details.get("fill_qty") or 0)
             price_milli = details.get("entry_fill_price_milli")
             if price_milli is None:
@@ -330,9 +330,10 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
             fee_milli = details.get("buy_fee_milli")
             if fee_milli is None and gross_milli is not None and net_milli > 0:
                 fee_milli = net_milli - int(gross_milli)
-            manual = mutation == "manual_buy_fill"
-            source = "手動成交" if manual else "策略成交"
-            active_source[ticker] = "manual_adopted" if manual else "strategy_fill"
+            manual_unmanaged = mutation == "manual_buy_fill"
+            manual_managed = mutation == "manual_managed_buy_fill"
+            source = "手動成交" if manual_unmanaged else ("手動管理" if manual_managed else "策略成交")
+            active_source[ticker] = "manual_adopted" if manual_unmanaged else ("manual_managed" if manual_managed else "strategy_fill")
             active_buy_revisions.setdefault(ticker, set()).add(revision)
             buys.append({
                 "ticker": ticker,
@@ -357,7 +358,7 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
             cost_milli = int(details.get("allocated_cost_milli") or 0)
             pnl_milli = int(details.get("realized_pnl_milli") or 0)
             source_before = str(details.get("position_source") or active_source.get(ticker) or "")
-            strategy_managed = bool(details.get("strategy_managed")) or source_before == "strategy_fill"
+            strategy_managed = bool(details.get("strategy_managed")) or source_before in {"strategy_fill", "manual_managed"}
             manual_sell = (
                 str(details.get("event") or "") == "MANUAL_ACCOUNT_SELL"
                 or (source_before == "manual_adopted" and not strategy_managed)
@@ -377,7 +378,7 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
                 "return_pct": _safe_pct(pnl_milli, cost_milli),
                 "remaining_qty": int(details.get("remaining_qty") or 0),
                 "revision": revision,
-                "source": "手動成交" if manual_sell else "策略成交",
+                "source": "手動成交" if manual_sell else ("手動管理" if source_before == "manual_managed" else "策略成交"),
                 "editable": True,
                 "is_latest_ticker_trade": revision == latest_trade_revision_by_ticker.get(ticker),
             })

@@ -24,6 +24,7 @@ from core.trading_account_state import (
     adopt_manual_trading_position,
     apply_trading_strategy_management_rollforward,
     apply_manual_trading_buy_fill,
+    apply_confirmed_manual_managed_buy_fill,
     apply_confirmed_strategy_buy_fill,
     apply_confirmed_sell_fill,
     apply_strategy_account_buy_correction_fill,
@@ -295,6 +296,49 @@ def record_manual_trading_buy(
             timestamp=timestamp,
             mutation_id=mutation_id,
             trade_date=trade_date,
+        ),
+    )
+
+
+def record_managed_manual_trading_buy(
+    project_root,
+    *,
+    ticker,
+    qty: int,
+    price,
+    trade_date,
+    expected_revision: int | None,
+    params,
+    execution_plan_seed: dict[str, Any],
+    management_lineage: dict[str, Any],
+    management_start_date=None,
+):
+    accounting_params = overlay_trading_accounting_params(params)
+    seed = dict(execution_plan_seed or {})
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        guard_orders=False,
+        accounting_params=accounting_params,
+        mutator=lambda state, timestamp, mutation_id: apply_confirmed_manual_managed_buy_fill(
+            state,
+            ticker=ticker,
+            qty=qty,
+            buy_price=price,
+            params=accounting_params,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+            trade_date=trade_date,
+            init_sl=seed.get("init_sl"),
+            init_trail=seed.get("init_trail"),
+            target_price=seed.get("target_price"),
+            limit_price=seed.get("limit_price"),
+            entry_atr=seed.get("entry_atr"),
+            target_reference_price=seed.get("target_reference_price"),
+            security_profile=seed.get("security_profile"),
+            entry_type=str(seed.get("entry_type") or "manual"),
+            management_lineage=management_lineage,
+            management_start_date=management_start_date,
         ),
     )
 

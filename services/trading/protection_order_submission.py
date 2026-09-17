@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from core.file_integrity import compute_file_sha256
 from core.trading_identity import normalize_trading_ticker
-from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
+from core.trading_account_state import MANAGED_POSITION_SOURCES
 from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_PROTECTION_STOP,
     TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER,
@@ -59,8 +59,8 @@ def _load_position_truth(root: Path, position_plan: dict[str, Any]) -> tuple[dic
     account = load_trading_account_state(root, required=True)
     ticker = _normalize_ticker(position_plan.get("ticker"))
     record = (account.get("positions") or {}).get(ticker)
-    if not isinstance(record, dict) or record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
-        raise RuntimeError(f"Trading protection SELL 只允許 strategy_fill 持股: {ticker}")
+    if not isinstance(record, dict) or record.get("source") not in MANAGED_POSITION_SOURCES:
+        raise RuntimeError(f"Trading protection SELL 只允許 managed 持股: {ticker}")
     broker = record.get("broker") or {}
     qty = int(broker.get("qty") or 0)
     if qty <= 0 or qty != int(position_plan.get("position_qty") or 0):
@@ -70,7 +70,7 @@ def _load_position_truth(root: Path, position_plan: dict[str, Any]) -> tuple[dic
         if str(broker.get("entry_order_id") or "") != legacy_entry_order_id:
             raise RuntimeError(f"Trading protection plan legacy entry order binding 已變更: {ticker}")
     else:
-        lineage = record.get("strategy_lineage") or {}
+        lineage = record.get("strategy_lineage") or record.get("management_lineage") or {}
         lineage_id = str(lineage.get("lineage_id") or "").strip() if isinstance(lineage, dict) else ""
         expected_key = f"POSITION:{lineage_id}" if lineage_id else ""
         if expected_key and str(position_plan.get("entry_order_id") or "") != expected_key:

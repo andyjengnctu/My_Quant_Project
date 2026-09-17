@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from core.file_integrity import compute_file_sha256
 from core.trading_identity import normalize_trading_ticker
-from core.trading_account_state import POSITION_SOURCE_STRATEGY_FILL
+from core.trading_account_state import MANAGED_POSITION_SOURCES
 from core.trading_order_state import (
     TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
     TRADING_ORDER_STATUS_CANCELLED,
@@ -33,7 +33,7 @@ def _find_exit_plan(plan: dict[str, Any], signal_key: str) -> dict[str, Any]:
 def _load_position_truth(root: Path, exit_plan: dict[str, Any]) -> tuple[dict[str, Any], int]:
     account=load_trading_account_state(root, required=True)
     ticker=_normalize_ticker(exit_plan.get("ticker")); record=(account.get("positions") or {}).get(ticker)
-    if not isinstance(record,dict) or record.get("source")!=POSITION_SOURCE_STRATEGY_FILL: raise RuntimeError("Indicator SELL 只允許 strategy_fill 持股")
+    if not isinstance(record,dict) or record.get("source") not in MANAGED_POSITION_SOURCES: raise RuntimeError("Indicator SELL 只允許 managed 持股")
     broker=record.get("broker") or {}; management=record.get("strategy_management") or {}; position=management.get("position_state") or {}
     broker_qty=int(broker.get("qty") or 0); strategy_qty=int(position.get("qty") or 0)
     if broker_qty<=0 or broker_qty!=strategy_qty or broker_qty!=int(exit_plan.get("qty") or 0): raise RuntimeError("Indicator SELL plan qty 已與目前持股不一致")

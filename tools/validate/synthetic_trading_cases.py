@@ -17,6 +17,7 @@ from core.exact_accounting import (
     money_to_milli,
 )
 from core.trading_account_state import (
+    apply_confirmed_manual_managed_buy_fill,
     apply_confirmed_sell_fill,
     apply_confirmed_strategy_buy_fill,
     rebuild_trading_account_economics,
@@ -476,18 +477,69 @@ def validate_trading_account_state_contract_case(base_params):
 
         cash_before_buy = state["cash_milli"]
         expected_buy = build_buy_ledger_from_price(100, 1000, base_params)
+        from core.file_integrity import canonical_json_sha256 as _canonical_json_sha256
+        from core.params_io import params_to_json_dict as _params_to_json_dict
+        _strategy_frozen = _params_to_json_dict(base_params)
+        _strategy_lineage = {
+            "lineage_id": "SYNTHETIC-STRATEGY-2317",
+            "frozen_params": _strategy_frozen,
+            "frozen_params_sha256": _canonical_json_sha256(_strategy_frozen),
+            "information_date": "2026-09-04",
+        }
         state = apply_confirmed_strategy_buy_fill(
             state,
             ticker="2317", qty=1000, buy_price=100, params=base_params,
             trade_date="2026-09-04", timestamp="2026-09-04T09:01:00+08:00",
             mutation_id="synthetic-account-buy", init_sl=90, init_trail=90,
             target_price=120, limit_price=105, entry_order_id="SYNTHETIC-ENTRY-2317",
+            strategy_lineage=_strategy_lineage,
         )
         atomic_write_json(resolve_trading_account_state_path(root), state)
         strategy_record = state["positions"]["2317"]
         check("strategy_buy_uses_exact_accounting_cash", cash_before_buy - expected_buy["net_buy_total_milli"], state["cash_milli"])
         check("strategy_buy_broker_cost_matches_canonical_position", strategy_record["broker"]["remaining_cost_basis_milli"], strategy_record["strategy_management"]["position_state"]["remaining_cost_basis_milli"])
         check("strategy_buy_management_is_active", "active", strategy_record["strategy_management"]["status"])
+
+        from core.price_utils import (
+            calc_frozen_target_price as _calc_frozen_target_price_account,
+            calc_initial_stop_from_reference as _calc_initial_stop_account,
+        )
+        from services.trading.strategy_param_runtime import build_trading_manual_management_lineage
+        _manual_seed = {
+            "entry_type": "manual_direct_backfill",
+            "entry_atr": 5.0,
+            "init_sl": 85.0,
+            "init_trail": 82.0,
+            "target_price": 110.0,
+            "target_reference_price": 95.0,
+            "limit_price": None,
+            "security_profile": {},
+            "trade_date": "2026-09-06",
+        }
+        _manual_lineage = build_trading_manual_management_lineage(
+            params=base_params,
+            execution_plan_seed=_manual_seed,
+            information_date="2026-09-10",
+            origin="manual_direct_backfill",
+            target_reference_close=95.0,
+        )
+        state = apply_confirmed_manual_managed_buy_fill(
+            state, ticker="2603", qty=100, buy_price=100.0, params=base_params,
+            trade_date="2026-09-06", timestamp="2026-09-10T18:00:00+08:00",
+            mutation_id="synthetic-manual-managed-buy", entry_atr=5.0,
+            target_reference_price=95.0, security_profile={},
+            management_lineage=_manual_lineage, management_start_date="2026-09-10",
+        )
+        atomic_write_json(resolve_trading_account_state_path(root), state)
+        manual_managed = state["positions"]["2603"]
+        _expected_manual_stop = _calc_initial_stop_account(100.0, 5.0, base_params, ticker="2603", security_profile={})
+        _expected_reference_stop = _calc_initial_stop_account(95.0, 5.0, base_params, ticker="2603", security_profile={})
+        _expected_manual_target = _calc_frozen_target_price_account(95.0, _expected_reference_stop, ticker="2603", security_profile={})
+        check("manual_managed_source_is_explicit", "manual_managed", manual_managed["source"])
+        check("manual_managed_freezes_separate_management_lineage", _manual_lineage["lineage_id"], manual_managed["management_lineage"]["lineage_id"])
+        check("manual_managed_historical_backfill_starts_management_on_current_information_date", "2026-09-10", manual_managed["strategy_management"]["management_start_date"])
+        check("manual_managed_stop_uses_actual_fill_plus_prior_atr", float(_expected_manual_stop), float(manual_managed["strategy_management"]["position_state"]["initial_stop"]))
+        check("manual_managed_target_uses_prior_close_reference", float(_expected_manual_target), float(manual_managed["strategy_management"]["position_state"]["tp_half"]))
 
         pre_same_day = deepcopy(state)
         try:
@@ -3174,14 +3226,67 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             strategy_limit_rejected = False
         check("scanner_strategy_fill_above_premarket_limit_is_rejected", True, strategy_limit_rejected)
 
+    from services.trading.account_trade_entry import _build_direct_manual_managed_entry_context
+    from core.data_utils import get_required_min_rows as _get_required_min_rows
+    _required_rows = int(_get_required_min_rows(base_params))
+    _direct_dates = pd.date_range(end="2026-09-11", periods=_required_rows + 1, freq="D")
+    _direct_frame = pd.DataFrame({
+        "Open": [100.0] * len(_direct_dates), "High": [101.0] * len(_direct_dates),
+        "Low": [99.0] * len(_direct_dates), "Close": [100.0] * len(_direct_dates),
+        "Volume": [1000] * len(_direct_dates),
+    }, index=_direct_dates)
+    _signal_input_max_date = {"value": None}
+    def _capture_direct_signal_input(frame, params, ticker=None):
+        _signal_input_max_date["value"] = pd.Timestamp(frame.index[-1]).strftime("%Y-%m-%d")
+        return object()
+    with patch("services.trading.account_trade_entry.load_trading_scanner_runtime", return_value={"params": base_params, "latest_data_date": "2026-09-12"}), \
+         patch("services.trading.account_trade_entry.open_trading_v2_consumer_view", return_value=object()), \
+         patch("services.trading.account_trade_entry.load_trading_v2_sanitized_ohlcv_frame", return_value=_direct_frame), \
+         patch("services.trading.account_trade_entry.generate_signals", side_effect=_capture_direct_signal_input), \
+         patch("services.trading.account_trade_entry.unpack_precomputed_signals", return_value=([5.0] * _required_rows, None, None, None)):
+        _direct_context = _build_direct_manual_managed_entry_context(Path("."), ticker="2330", trade_date="2026-09-11")
+    check("manual_direct_backfill_indicator_geometry_uses_pre_entry_bars_only", "2026-09-10", _signal_input_max_date["value"])
+    check("manual_direct_backfill_reference_date_is_previous_actual_data_row", "2026-09-10", _direct_context["reference_market_date"])
+
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         account = initialize_trading_account_state(root, cash=1_000_000)
-        with patch("services.trading.account_trade_entry.validate_trading_actual_fill", return_value=synthetic_evidence):
+        from services.trading.strategy_param_runtime import build_trading_manual_management_lineage
+        _manual_seed = {
+            "entry_type": "manual_direct_backfill", "entry_atr": 5.0,
+            "init_sl": 980.0, "init_trail": 975.0, "target_price": 1020.0,
+            "target_reference_price": 995.0, "limit_price": None,
+            "security_profile": {}, "trade_date": "2026-09-11",
+        }
+        _manual_lineage = build_trading_manual_management_lineage(
+            params=base_params, execution_plan_seed=_manual_seed,
+            information_date="2026-09-12", origin="manual_direct_backfill",
+            target_reference_close=995.0,
+        )
+        _manual_context = {
+            "params": base_params, "information_date": "2026-09-12",
+            "management_start_date": "2026-09-12",
+            "execution_plan_seed": _manual_seed, "management_lineage": _manual_lineage,
+            "reference_market_date": "2026-09-10", "reference_close": 995.0, "reference_atr": 5.0,
+        }
+        with patch("services.trading.account_trade_entry.validate_trading_actual_fill", return_value=synthetic_evidence), \
+             patch("services.trading.account_trade_entry._build_direct_manual_managed_entry_context", return_value=_manual_context):
             result = record_trading_account_buy(
                 root, ticker="2330", qty=100, price=999.0, trade_date="2026-09-11", candidate=None,
             )
-        check("manual_buy_entry_runs_market_evidence_preflight_before_account_mutation", "manual_account_buy", result.get("route"))
+        check("manual_buy_entry_runs_market_evidence_preflight_before_account_mutation", "manual_managed_buy", result.get("route"))
+        check("manual_buy_entry_creates_managed_manual_position", "manual_managed", result["account"]["positions"]["2330"]["source"])
+        _managed_lineage_id = result["account"]["positions"]["2330"]["management_lineage"]["lineage_id"]
+        from services.trading.single_stock_inspection import (
+            _account_cycle_as_of as _inspection_account_cycle_as_of,
+            build_trading_single_stock_inspection as _build_single_stock_inspection,
+        )
+        _managed_inspection = _build_single_stock_inspection(root, "2330")
+        _pre_management = _inspection_account_cycle_as_of(_managed_inspection, "2026-09-11")
+        _managed_day = _inspection_account_cycle_as_of(_managed_inspection, "2026-09-12")
+        check("manual_historical_backfill_preserves_broker_position_before_management_start", "持股", (_pre_management or {}).get("display_state"))
+        check("manual_historical_backfill_does_not_leak_today_stop_before_management_start", None, (_pre_management or {}).get("stop_price"))
+        check_true("manual_historical_backfill_exposes_managed_stop_from_management_start", (_managed_day or {}).get("stop_price") is not None)
         buy_revision = int(result["account"]["revision"] )
         before_correction = load_trading_account_state(root)
         with patch("services.trading.account_trade_entry.validate_trading_actual_fill", side_effect=ValueError("synthetic invalid fill")):
@@ -3195,6 +3300,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
                 corrected_buy_invalid_market_rejected = False
         check("accounting_center_buy_edit_cannot_bypass_market_fill_validation", True, corrected_buy_invalid_market_rejected)
         check("rejected_buy_edit_does_not_mutate_account_revision", before_correction["revision"], load_trading_account_state(root)["revision"])
+        with patch("services.trading.account_trade_entry.validate_trading_actual_fill", return_value=synthetic_evidence):
+            corrected_managed = correct_trading_account_transaction(
+                root, transaction_revision=buy_revision, qty=80, price=998.0, trade_date="2026-09-11",
+            )
+        corrected_position = corrected_managed["positions"]["2330"]
+        check("manual_managed_buy_edit_preserves_managed_source", "manual_managed", corrected_position.get("source"))
+        check("manual_managed_buy_edit_preserves_frozen_management_lineage", _managed_lineage_id, (corrected_position.get("management_lineage") or {}).get("lineage_id"))
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -3223,9 +3335,119 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.workbench_ui.trading_account_panel import build_trading_account_panel_initial_bundle
     with tempfile.TemporaryDirectory() as temp_dir:
         initial_bundle = build_trading_account_panel_initial_bundle(Path(temp_dir))
-    expected_initial_keys = {"reconcile", "account", "dashboard", "candidate_read", "candidate_payload", "protection", "indicator", "workflow", "operations"}
+    expected_initial_keys = {"reconcile", "account", "dashboard", "candidate_read", "candidate_payload", "protection", "indicator", "workflow", "pending", "operations"}
     check("workbench_trading_initial_bundle_has_all_canonical_read_models", expected_initial_keys, set(initial_bundle))
     check_true("workbench_trading_initial_bundle_reads_empty_state_without_exception", all(bool(value[0]) for value in initial_bundle.values()))
+
+    from services.trading.pending_entry_state import (
+        cancel_trading_pending_entry, create_trading_pending_entry,
+        load_trading_pending_entry_state, project_trading_pending_entry_state,
+    )
+    from services.trading.pending_entry_service import (
+        fill_trading_pending_entry, preview_trading_pending_entry_fill,
+    )
+    from services.trading.single_stock_inspection import (
+        _shadow_plan_from_pending_entry, _shadow_state_from_plan,
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        _pending_root = Path(temp_dir)
+        _d4_seed = {"qty": 1000, "limit_price": 100.0, "trade_date": "2026-09-15"}
+        _d4_lineage = build_trading_manual_management_lineage(
+            params=base_params, execution_plan_seed=_d4_seed,
+            information_date="2026-09-15", origin="manual_pending_entry",
+            planned_qty=1000, planned_cost=100_000.0,
+        )
+        _pending = create_trading_pending_entry(_pending_root, entry={
+            "origin": "manual_selected", "ticker": "2330", "information_date": "2026-09-15",
+            "execution_plan_seed": _d4_seed,
+            "planned_qty": 1000, "reserved_cost_milli": money_to_milli(100_000),
+            "management_lineage": _d4_lineage,
+        })
+        _same_day_active = project_trading_pending_entry_state(
+            load_trading_pending_entry_state(_pending_root), current_information_date="2026-09-15"
+        )
+        check("pending_entry_active_reserves_capital_and_slot", [1, 1, money_to_milli(100_000)], [_same_day_active["active_count"], _same_day_active["locked_count"], _same_day_active["reserved_total_milli"]])
+        from services.trading.pending_entry_state import validate_trading_pending_entry_state as _validate_pending_state
+        _tampered_pending = deepcopy(load_trading_pending_entry_state(_pending_root))
+        _tampered_pending["entries"][_pending["pending_entry_id"]]["management_lineage"]["frozen_params"]["atr_times_init"] = 999.0
+        try:
+            _validate_pending_state(_tampered_pending)
+        except ValueError:
+            _pending_lineage_tamper_rejected = True
+        else:
+            _pending_lineage_tamper_rejected = False
+        check("pending_entry_state_rejects_tampered_frozen_params_lineage", True, _pending_lineage_tamper_rejected)
+        cancel_trading_pending_entry(_pending_root, pending_entry_id=_pending["pending_entry_id"], note="synthetic no fill")
+        _same_day_cancelled = project_trading_pending_entry_state(
+            load_trading_pending_entry_state(_pending_root), current_information_date="2026-09-15"
+        )
+        _next_day_cancelled = project_trading_pending_entry_state(
+            load_trading_pending_entry_state(_pending_root), current_information_date="2026-09-16"
+        )
+        check("pending_no_fill_keeps_d4_reservation_through_same_information_date", [0, 1, money_to_milli(100_000)], [_same_day_cancelled["active_count"], _same_day_cancelled["locked_count"], _same_day_cancelled["reserved_total_milli"]])
+        check("pending_no_fill_releases_reservation_on_next_information_date", [0, 0], [_next_day_cancelled["locked_count"], _next_day_cancelled["reserved_total_milli"]])
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        _pending_fill_root = Path(temp_dir)
+        initialize_trading_account_state(_pending_fill_root, cash=1_000_000)
+        _pending_seed = {
+            "entry_type": "manual", "qty": 100, "limit_price": 100.0,
+            "init_sl": 90.0, "init_trail": 92.0, "target_price": 120.0,
+            "entry_atr": 5.0, "reserved_cost": 10_000.0,
+            "reserved_cost_milli": money_to_milli(10_000), "security_profile": {},
+            "trade_date": "2026-09-15",
+        }
+        _pending_lineage = build_trading_manual_management_lineage(
+            params=base_params, execution_plan_seed=_pending_seed,
+            information_date="2026-09-15", origin="manual_pending_entry",
+            planned_qty=100, planned_cost=10_000.0,
+        )
+        _pending_entry = create_trading_pending_entry(_pending_fill_root, entry={
+            "origin": "manual_selected", "ticker": "2330", "information_date": "2026-09-15",
+            "execution_plan_seed": _pending_seed, "planned_qty": 100,
+            "reserved_cost_milli": money_to_milli(10_000), "reserved_cost": 10_000.0,
+            "limit_price": 100.0, "init_sl": 90.0, "init_trail": 92.0,
+            "target_price": 120.0, "entry_atr": 5.0, "management_lineage": _pending_lineage,
+        })
+        _manual_plan = _shadow_plan_from_pending_entry(_pending_entry, last_date="2026-09-15")
+        _manual_signal = _shadow_state_from_plan(_manual_plan, lifecycle_state="SIGNAL")
+        check("manual_pending_single_stock_signal_is_relabeled_as_order", "掛單", _manual_signal.get("display_state"))
+        with patch("services.trading.pending_entry_service.validate_trading_actual_fill", return_value=synthetic_evidence):
+            _pending_preview = preview_trading_pending_entry_fill(
+                _pending_fill_root, pending_entry_id=_pending_entry["pending_entry_id"],
+                qty=80, price=99.0, trade_date="2026-09-14",
+            )
+            check("manual_pending_historical_fill_on_or_before_information_date_warns_not_blocks", True, bool(_pending_preview.get("warnings")))
+            _pending_fill_result = fill_trading_pending_entry(
+                _pending_fill_root, pending_entry_id=_pending_entry["pending_entry_id"],
+                qty=80, price=99.0, trade_date="2026-09-14",
+            )
+        _pending_fill_position = _pending_fill_result["account"]["positions"]["2330"]
+        check("manual_pending_fill_transfers_to_managed_manual_position", "manual_managed", _pending_fill_position.get("source"))
+        check("manual_pending_fill_closes_pending_entry_as_filled", "FILLED", _pending_fill_result["pending_entry"].get("status"))
+        check("manual_pending_historical_fill_starts_management_on_frozen_information_date", "2026-09-15", (_pending_fill_position.get("strategy_management") or {}).get("management_start_date"))
+        from services.trading.position_rollforward import build_trading_position_rollforward_snapshot as _build_rollforward_snapshot
+        _rollforward_account = _pending_fill_result["account"]
+        _pre_management_frame = pd.DataFrame(
+            {"Open": [98.0], "High": [100.0], "Low": [97.0], "Close": [99.0], "Volume": [1000]},
+            index=pd.to_datetime(["2026-09-14"]),
+        )
+        _management_frame = pd.DataFrame(
+            {"Open": [98.0, 99.0], "High": [100.0, 101.0], "Low": [97.0, 98.0], "Close": [99.0, 100.0], "Volume": [1000, 1200]},
+            index=pd.to_datetime(["2026-09-14", "2026-09-15"]),
+        )
+        with patch("services.trading.position_rollforward.resolve_trading_strategy_position_sources", return_value=(_rollforward_account, {"orders": {}}, object())), \
+             patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-15"), \
+             patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
+             patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _pre_management_frame}):
+            _before_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
+        check("manual_managed_rollforward_ignores_bars_before_management_start", False, _before_management_snapshot["positions"][0]["due"])
+        with patch("services.trading.position_rollforward.resolve_trading_strategy_position_sources", return_value=(_rollforward_account, {"orders": {}}, object())), \
+             patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-15"), \
+             patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
+             patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _management_frame}):
+            _at_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
+        check("manual_managed_rollforward_starts_on_management_start_date", "2026-09-15", _at_management_snapshot["positions"][0]["target_rollforward_date"])
 
     import services.trading.operations_status as operations_status_module
     preloaded_operations = {
@@ -3348,14 +3570,18 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_and_buy_entry", True, all(text in panel_source for text in ("今日 Scanner Pool", "買入成交登錄", "登錄買入成交", "BUY_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "Scanner 選取 → 加入掛單", "加入手選股", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
+    check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
+    check("workbench_pending_fill_allows_actual_qty_price_date_before_transfer", True, all(token in panel_source for token in ("_pending_fill_qty_var", "_pending_fill_price_var", "_pending_fill_date_var", "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
     check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
     check("workbench_scanner_selection_autofills_editable_taipei_fill_date", True, 'self._trade_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())' in panel_source)
     check("workbench_buy_entry_previews_market_evidence_before_confirmation", True, "preview_trading_account_buy(" in panel_source and "market_evidence" in panel_source)
     check("workbench_daily_workflow_labels_params_as_new_entry_without_reordering", True, '("2 持股日終推進", "rollforward")' in panel_source and '("3 套用新進場 Params", "params")' in panel_source)
     check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
-    check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
-    check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in panel_source.split('trade_box = ttk.LabelFrame(content, text="買入成交登錄', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0])
+    check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
+    _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]
+    check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in _direct_buy_section)
     check("workbench_trading_center_keeps_position_decisions_without_duplicate_account_dashboard", True, "text=\"持股決策\"" in panel_source and "for accounting_section in (header, cash_box, form, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box = ttk.LabelFrame' not in panel_source)
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
@@ -3401,7 +3627,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_scanner_pool_hides_median_sort_evidence_column", False, any(row.get("key") == "ensemble_median_sort_value" for row in ensemble_metrics))
     check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'self._page_scrollbar = ttk.Scrollbar' in accounting_source)
     check("workbench_trading_scanner_pages_at_twelve_without_inner_scrollbar", True, "page_size=12" in panel_source and panel_source.count("ttk.Scrollbar(") == 1 and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
-    check("workbench_buy_success_navigates_to_refreshed_accounting_center", True, '_open_accounting_center' in panel_source and 'callback(refresh=True)' in panel_source and "已切換至帳務中心並重新整理" in panel_source)
+    check("workbench_buy_success_stays_in_trading_center_with_refreshed_holdings", True, "持股決策已同步重新整理" in panel_source and '_open_accounting_center' not in panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0])
     buy_entry_body = panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0]
     check("workbench_buy_success_refreshes_trading_center_before_navigation", True, 'refresh_state=True' in buy_entry_body and 'refresh_state=False' not in buy_entry_body)
     cross_panel_notify_body = workbench_source.split("def notify_trading_account_changed", 1)[1].split("def open_single_stock_inspector", 1)[0]

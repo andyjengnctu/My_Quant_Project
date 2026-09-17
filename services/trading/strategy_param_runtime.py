@@ -282,6 +282,107 @@ def resolve_trading_position_strategy_binding(
             }
     raise RuntimeError("Trading strategy position 缺少 immutable strategy_lineage / legacy frozen params")
 
+
+TRADING_POSITION_MANAGEMENT_LINEAGE_SCHEMA_VERSION = 1
+
+def build_trading_manual_management_lineage(
+    *,
+    params,
+    execution_plan_seed: Mapping[str, Any],
+    information_date: str,
+    origin: str,
+    planned_qty: int | None = None,
+    planned_cost: float | None = None,
+    target_reference_close: float | None = None,
+) -> dict[str, Any]:
+    """Freeze current canonical primary Params for a user-selected managed position.
+
+    Manual selection is not a Scanner vote.  It therefore freezes the current
+    artifact's primary Params while keeping an explicit manual origin.
+    """
+    frozen_params = params_to_json_dict(params)
+    frozen_params_sha256 = canonical_json_sha256(frozen_params)
+    params_signature = build_portfolio_params_signature(params)
+    seed = deepcopy(dict(execution_plan_seed or {}))
+    identity_payload = {
+        "params_signature": params_signature,
+        "frozen_params_sha256": frozen_params_sha256,
+        "execution_plan_seed": seed,
+        "information_date": str(information_date),
+        "origin": str(origin),
+        "target_reference_close": target_reference_close,
+    }
+    return {
+        "schema_version": TRADING_POSITION_MANAGEMENT_LINEAGE_SCHEMA_VERSION,
+        "lineage_id": canonical_json_sha256(identity_payload),
+        "params_signature": params_signature,
+        "ensemble_member_key": "PRIMARY",
+        "frozen_params": frozen_params,
+        "frozen_params_sha256": frozen_params_sha256,
+        "execution_plan_seed": seed,
+        "candidate_trade_date": str(information_date),
+        "signal_date": None,
+        "planned_qty": planned_qty,
+        "planned_cost": planned_cost,
+        "candidate_kind": "manual",
+        "origin": str(origin),
+        "target_reference_close": target_reference_close,
+    }
+
+
+def validate_trading_position_management_lineage(lineage: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(lineage or {})
+    if int(payload.get("schema_version") or -1) != TRADING_POSITION_MANAGEMENT_LINEAGE_SCHEMA_VERSION:
+        raise RuntimeError("Trading position management_lineage schema 不相容")
+    frozen_params = payload.get("frozen_params")
+    if not isinstance(frozen_params, Mapping):
+        raise RuntimeError("Trading position management_lineage 缺少 frozen_params")
+    frozen_params = dict(frozen_params)
+    actual_sha = canonical_json_sha256(frozen_params)
+    expected_sha = str(payload.get("frozen_params_sha256") or "")
+    if actual_sha != expected_sha:
+        raise RuntimeError("Trading position management_lineage frozen_params hash 不一致")
+    params_obj = build_params_from_mapping(frozen_params)
+    actual_signature = build_portfolio_params_signature(params_obj)
+    expected_signature = str(payload.get("params_signature") or "")
+    if expected_signature and actual_signature != expected_signature:
+        raise RuntimeError("Trading position management_lineage params_signature 不一致")
+    lineage_id = str(payload.get("lineage_id") or "").strip()
+    if not lineage_id:
+        raise RuntimeError("Trading position management_lineage 缺少 lineage_id")
+    return {
+        **payload,
+        "frozen_params": frozen_params,
+        "frozen_params_sha256": actual_sha,
+        "params_signature": actual_signature,
+        "lineage_id": lineage_id,
+    }
+
+
+def resolve_trading_position_management_binding(
+    record: Mapping[str, Any],
+    *,
+    orders: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve frozen management Params for strategy or manual-managed positions."""
+    lineage = record.get("management_lineage") if isinstance(record, Mapping) else None
+    if isinstance(lineage, Mapping):
+        checked = validate_trading_position_management_lineage(lineage)
+        return {
+            "lineage_id": checked["lineage_id"],
+            "lineage_key": f"POSITION:{checked['lineage_id']}",
+            "entry_order_id": None,
+            "frozen_params": deepcopy(checked["frozen_params"]),
+            "frozen_params_sha256": checked["frozen_params_sha256"],
+            "params_signature": checked["params_signature"],
+            "ensemble_member_key": str(checked.get("ensemble_member_key") or "PRIMARY"),
+            "execution_plan_seed": deepcopy(dict(checked.get("execution_plan_seed") or {})),
+            "origin": str(checked.get("origin") or "manual_managed"),
+            "source": "position_management_lineage",
+        }
+    return resolve_trading_position_strategy_binding(record, orders=orders)
+
+
 def resolve_trading_candidate_params(param_runtime: Mapping[str, Any], candidate: Mapping[str, Any]):
     """Resolve the exact representative member frozen by canonical ensemble aggregation.
 
@@ -326,5 +427,9 @@ __all__ = [
     "build_trading_order_strategy_lineage",
     "validate_trading_position_strategy_lineage",
     "resolve_trading_position_strategy_binding",
+    "TRADING_POSITION_MANAGEMENT_LINEAGE_SCHEMA_VERSION",
+    "build_trading_manual_management_lineage",
+    "validate_trading_position_management_lineage",
+    "resolve_trading_position_management_binding",
     "resolve_trading_candidate_params",
 ]

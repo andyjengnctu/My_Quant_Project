@@ -24,7 +24,7 @@ from core.params_io import build_params_from_mapping
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.trading_account_state import (
     MANAGEMENT_STATUS_ACTIVE,
-    POSITION_SOURCE_STRATEGY_FILL,
+    MANAGED_POSITION_SOURCES,
     validate_trading_account_state,
 )
 from core.trading_order_state import (
@@ -47,7 +47,7 @@ from core.runtime_utils import get_taipei_now
 from services.trading.account_state import resolve_trading_account_state_path
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.order_state import resolve_trading_order_state_path
-from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
+from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
 
 PROTECTION_PLAN_SCHEMA_VERSION = 1
 PROTECTION_PLAN_STATUS = "PROPOSED_PROTECTION"
@@ -92,20 +92,20 @@ def _collect_strategy_sources(
 
     for ticker in sorted(account.get("positions") or {}):
         record = account["positions"][ticker]
-        if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
             manual_skipped.append(str(ticker))
             continue
         management = record.get("strategy_management") or {}
         position_state = management.get("position_state")
         if management.get("status") != MANAGEMENT_STATUS_ACTIVE or not isinstance(position_state, dict):
-            raise RuntimeError(f"Trading strategy position 缺少 active canonical position state: {ticker}")
+            raise RuntimeError(f"Trading managed position 缺少 active canonical position state: {ticker}")
         broker = record.get("broker") or {}
         broker_qty = int(broker.get("qty") or 0)
         position_qty = int(position_state.get("qty") or 0)
         if broker_qty <= 0 or position_qty != broker_qty:
-            raise RuntimeError(f"Trading broker/strategy position qty 不一致: {ticker}")
+            raise RuntimeError(f"Trading broker/managed position qty 不一致: {ticker}")
 
-        binding = resolve_trading_position_strategy_binding(record, orders=orders)
+        binding = resolve_trading_position_management_binding(record, orders=orders)
         lineage_key = str(binding["lineage_key"])
         legacy_order_id = str(binding.get("entry_order_id") or "")
         legacy_order = dict((orders.get("orders") or {}).get(legacy_order_id) or {}) if legacy_order_id else {}
@@ -390,7 +390,7 @@ def _render_protection_plan_text(plan: dict[str, Any]) -> str:
         "",
     ]
     if not plan["positions"]:
-        lines.append("目前沒有可由策略機械派生保護單的 strategy_fill 持股。")
+        lines.append("目前沒有可由策略機械派生保護單的 managed 持股。")
     for row in plan["positions"]:
         lines.extend(
             [

@@ -10,11 +10,12 @@ from uuid import uuid4
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from services.trading.state_lock import serialized_trading_state_mutation
 from services.trading.accounting_policy import overlay_trading_accounting_params
-from services.trading.strategy_param_runtime import build_trading_order_strategy_lineage, resolve_trading_position_strategy_binding
+from services.trading.strategy_param_runtime import build_trading_order_strategy_lineage, resolve_trading_position_management_binding
 from core.exact_accounting import milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping
 from core.runtime_utils import get_taipei_now
 from core.trading_account_state import (
+    MANAGED_POSITION_SOURCES,
     apply_confirmed_strategy_buy_fill,
     apply_confirmed_strategy_buy_fill_increment,
     apply_confirmed_sell_fill,
@@ -343,10 +344,10 @@ def _confirm_trading_sell_order_fill(
         raise ValueError(f"Trading SELL 目前不可確認成交: {record.get('status')}")
     ticker = str(record.get("ticker") or "")
     position = (account.get("positions") or {}).get(ticker)
-    if not isinstance(position, dict) or str(position.get("source") or "") != "strategy_fill":
-        raise RuntimeError(f"Trading SELL 找不到 strategy_fill position: {ticker}")
+    if not isinstance(position, dict) or str(position.get("source") or "") not in MANAGED_POSITION_SOURCES:
+        raise RuntimeError(f"Trading SELL 找不到 managed position: {ticker}")
     entry_order_id = str(record.get("entry_order_id") or "")
-    binding = resolve_trading_position_strategy_binding(position, orders=orders)
+    binding = resolve_trading_position_management_binding(position, orders=orders)
     allowed_lineage_keys = {str(binding.get("lineage_key") or "")}
     legacy_entry_order_id = str(binding.get("entry_order_id") or "").strip()
     if legacy_entry_order_id:

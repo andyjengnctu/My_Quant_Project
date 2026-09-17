@@ -20,7 +20,7 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import (
     MANAGEMENT_STATUS_ACTIVE,
-    POSITION_SOURCE_STRATEGY_FILL,
+    MANAGED_POSITION_SOURCES,
 )
 from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.trading_order_state import active_trading_entry_orders
@@ -37,7 +37,7 @@ from services.trading.position_market_context import (
     resolve_trading_strategy_position_sources,
 )
 from services.trading.protection_planning import build_trading_protection_plan
-from services.trading.strategy_param_runtime import resolve_trading_position_strategy_binding
+from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
 
 TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
 
@@ -52,6 +52,7 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
             "runtime_domain": RUNTIME_DOMAIN_TRADING,
             "allowed_completed_date": allowed_date,
             "strategy_position_count": 0,
+            "managed_position_count": 0,
             "due_count": 0,
             "due_tickers": [],
             "positions": [],
@@ -61,13 +62,13 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
     params_by_ticker: dict[str, object] = {}
     for ticker in sorted(account.get("positions") or {}):
         record = account["positions"][ticker]
-        if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
             continue
         management = record.get("strategy_management") or {}
         if management.get("status") != MANAGEMENT_STATUS_ACTIVE:
-            raise RuntimeError(f"Trading strategy position management 非 active: {ticker}")
+            raise RuntimeError(f"Trading managed position management 非 active: {ticker}")
         broker = record.get("broker") or {}
-        binding = resolve_trading_position_strategy_binding(record, orders=orders)
+        binding = resolve_trading_position_management_binding(record, orders=orders)
         lineage_key = str(binding.get("lineage_key") or "").strip()
         legacy_entry_order_id = str(binding.get("entry_order_id") or "").strip()
         stop_progress = build_trading_stop_exit_progress(
@@ -135,10 +136,15 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
             continue
         df = market_frames[ticker]
         entry_date = normalize_trading_date(broker.get("entry_date"))
+        management_start_date = normalize_trading_date(management.get("management_start_date"))
         last_rollforward = normalize_trading_date(management.get("last_rollforward_date"))
         eligible = df.index
-        if entry_date is not None:
-            eligible = eligible[eligible >= pd.Timestamp(entry_date)]
+        effective_start = max(
+            [value for value in (entry_date, management_start_date) if value is not None],
+            default=None,
+        )
+        if effective_start is not None:
+            eligible = eligible[eligible >= pd.Timestamp(effective_start)]
         if last_rollforward is not None:
             eligible = eligible[eligible > pd.Timestamp(last_rollforward)]
         target_date = None if len(eligible) == 0 else pd.Timestamp(eligible[-1]).strftime("%Y-%m-%d")
@@ -158,6 +164,7 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "allowed_completed_date": allowed_date,
         "strategy_position_count": len(rows),
+        "managed_position_count": len(rows),
         "due_count": len(due_tickers),
         "due_tickers": due_tickers,
         "positions": rows,
@@ -184,16 +191,16 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
     result_rows: list[dict[str, Any]] = []
     for ticker in sorted(account.get("positions") or {}):
         record = account["positions"][ticker]
-        if record.get("source") != POSITION_SOURCE_STRATEGY_FILL:
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
             continue
         management = record.get("strategy_management") or {}
         if management.get("status") != MANAGEMENT_STATUS_ACTIVE:
-            raise RuntimeError(f"Trading strategy position management 非 active: {ticker}")
+            raise RuntimeError(f"Trading managed position management 非 active: {ticker}")
         position = deepcopy(management.get("position_state"))
         if not isinstance(position, dict):
-            raise RuntimeError(f"Trading strategy position state 缺失: {ticker}")
+            raise RuntimeError(f"Trading managed position state 缺失: {ticker}")
         broker = record.get("broker") or {}
-        binding = resolve_trading_position_strategy_binding(record, orders=orders)
+        binding = resolve_trading_position_management_binding(record, orders=orders)
         lineage_key = str(binding.get("lineage_key") or "").strip()
         legacy_entry_order_id = str(binding.get("entry_order_id") or "").strip()
         stop_progress = build_trading_stop_exit_progress(
@@ -212,13 +219,18 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
         atr_values, _buy_values, _sell_values, _limits = unpack_precomputed_signals(precomputed)
 
         entry_date = normalize_trading_date(broker.get("entry_date"))
+        management_start_date = normalize_trading_date(management.get("management_start_date"))
+        effective_start = max(
+            [value for value in (entry_date, management_start_date) if value is not None],
+            default=None,
+        )
         last_rollforward = normalize_trading_date(management.get("last_rollforward_date"))
         processed_dates: list[str] = []
         previous_stop_milli = int(position.get("sl_milli") or 0)
         previous_high_milli = int(position.get("highest_high_since_entry_milli") or 0)
         for idx, date_value in enumerate(df.index):
             date_text = pd.Timestamp(date_value).strftime("%Y-%m-%d")
-            if entry_date is not None and date_text < entry_date:
+            if effective_start is not None and date_text < effective_start:
                 continue
             if last_rollforward is not None and date_text <= last_rollforward:
                 continue
