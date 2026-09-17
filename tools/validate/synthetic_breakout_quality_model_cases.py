@@ -81,7 +81,7 @@ from .synthetic_breakout_quality_support import (
     tempfile,
 )
 
-from .source_index import read_source_ast, read_source_text
+from .source_index import read_source_ast, read_source_import_nodes, read_source_text
 
 
 def _start_case(case_id: str):
@@ -753,8 +753,13 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     project_root = Path(__file__).resolve().parents[2]
     for source_root_name in ("filters", "services"):
         for source_path in sorted((project_root / source_root_name).rglob("*.py")):
-            source_tree = ast.parse(source_path.read_text(encoding="utf-8"))
-            for node in ast.walk(source_tree):
+            # Most runtime files do not import this config facade.  A text
+            # prefilter is false-positive-safe and avoids parsing unrelated
+            # modules; matching candidates still use the canonical AST import
+            # index, so the contract semantics are unchanged.
+            if "config.breakout_quality" not in read_source_text(source_path):
+                continue
+            for node in read_source_import_nodes(source_path):
                 if not isinstance(node, ast.ImportFrom) or node.module != "config.breakout_quality":
                     continue
                 imported_runtime_names = sorted(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Tuple
@@ -90,11 +91,27 @@ def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8") -> 
     tree = read_source_ast(normalized, encoding=encoding)
     import_nodes = []
     exception_handlers = []
-    for node in ast.walk(tree):
+
+    # Imports and exception handlers can only occur in statement-bearing AST
+    # containers.  ast.walk() also traverses every expression, constant,
+    # argument and operator node; that work dominates project-wide source
+    # contracts under coverage.  Keep the same breadth-first ordering as
+    # ast.walk(), but do not enqueue branches that cannot contain statements.
+    queue = deque([tree])
+    statement_container_types = (ast.stmt, ast.ExceptHandler)
+    match_case_type = getattr(ast, "match_case", None)
+    while queue:
+        node = queue.popleft()
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             import_nodes.append(node)
         if isinstance(node, ast.ExceptHandler):
             exception_handlers.append(node)
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, statement_container_types) or (
+                match_case_type is not None and isinstance(child, match_case_type)
+            ):
+                queue.append(child)
+
     function_names = tuple(
         node.name
         for node in tree.body

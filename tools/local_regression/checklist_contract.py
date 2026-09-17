@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -154,7 +154,10 @@ def validate_checklist_contract(contract: Mapping[str, Any]) -> Dict[str, str]:
     ids = [str(row.get("id", "")).strip() for row in definitions]
     if any(not item_id for item_id in ids):
         raise ValueError("checklist definitions require non-empty IDs")
-    duplicates = sorted({item_id for item_id in ids if ids.count(item_id) > 1}, key=_tracking_id_sort_key)
+    duplicates = sorted(
+        (item_id for item_id, count in Counter(ids).items() if count > 1),
+        key=_tracking_id_sort_key,
+    )
     if duplicates:
         raise ValueError(f"duplicate checklist definition IDs: {duplicates}")
 
@@ -485,7 +488,9 @@ def _write_text_atomic(path: Path, text: str) -> None:
 
 def write_checklist_contract(checklist_path: Path, contract: Mapping[str, Any], *, sync_markdown: bool = True) -> None:
     checklist_path = Path(checklist_path)
-    payload = deepcopy(dict(contract))
+    # Validation/rendering are read-only, so a shallow top-level copy is
+    # sufficient here; callers retain ownership of their nested structures.
+    payload = dict(contract)
     validate_checklist_contract(payload)
     contract_path = _contract_path_for(checklist_path)
     contract_text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -521,7 +526,9 @@ def apply_checklist_transaction(
     tables independently.
     """
 
-    contract = deepcopy(load_checklist_contract(checklist_path))
+    # load_checklist_contract returns a fresh parsed/built payload.  Copying the
+    # entire checklist again is redundant and expensive for transaction tests.
+    contract = load_checklist_contract(checklist_path)
     existing_ids = set(_definition_index(contract))
     next_main_order = max((int(row.get("order", -1)) for row in contract.get("main_items", [])), default=-1) + 1
     next_test_order = max((int(row.get("order", -1)) for row in contract.get("tests", [])), default=-1) + 1
@@ -584,7 +591,8 @@ def apply_checklist_transaction(
         previous_date = date
         contract.setdefault("transitions", []).append(event)
 
-    validate_checklist_contract(contract)
+    # write_checklist_contract validates before either persisted view is
+    # replaced, so a second full validation here would be redundant.
     write_checklist_contract(checklist_path, contract, sync_markdown=True)
     return contract
 
