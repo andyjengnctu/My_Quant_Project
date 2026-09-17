@@ -16,7 +16,13 @@ from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 from core.capital_policy import resolve_scanner_live_capital
 from core.data_utils import get_required_min_rows
 from core.entry_plans import build_cash_capped_entry_plan, build_normal_candidate_plan
-from core.exact_accounting import build_buy_ledger, infer_security_profile, milli_to_money, price_to_milli
+from core.exact_accounting import (
+    build_buy_ledger,
+    infer_security_profile,
+    milli_to_money,
+    price_to_milli,
+    round_price_to_tick_milli,
+)
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.params_io import build_params_from_mapping
 from core.price_utils import adjust_long_buy_limit
@@ -38,6 +44,11 @@ from services.trading.actual_fill_validation import validate_trading_actual_fill
 from services.trading.market_data_consumer import (
     load_trading_v2_sanitized_ohlcv_frame,
     open_trading_v2_consumer_view,
+)
+from services.trading.order_form_constraints import (
+    resolve_next_pending_order_date,
+    validate_pending_order_limit_price,
+    validate_pending_order_trade_date,
 )
 from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_ACTIVE,
@@ -184,7 +195,13 @@ def _normalize_user_limit_price(*, ticker: str, raw_price, security_profile) -> 
         raise ValueError("掛單限價必須是有效數字") from exc
     if pd.isna(price) or price <= 0:
         raise ValueError("掛單限價必須 > 0")
-    return float(adjust_long_buy_limit(price, ticker=ticker, security_profile=security_profile))
+    price_milli = int(price_to_milli(price))
+    rounded_milli = int(
+        round_price_to_tick_milli(price, direction="nearest", ticker=ticker, security_profile=security_profile)
+    )
+    if price_milli != rounded_milli:
+        raise ValueError(f"{ticker} 掛單限價 {raw_price} 不符合台股合法跳動單位")
+    return price
 
 
 def _apply_pending_draft_overrides(
@@ -313,16 +330,26 @@ def _prepare_scanner_pending_entry(
         qty=qty,
         limit_price=limit_price,
     )
+    validate_pending_order_limit_price(
+        project_root, ticker=ticker, information_date=information_date, limit_price=plan["limit_price"]
+    )
     candidate_for_lineage = deepcopy(candidate)
     candidate_for_lineage["execution_plan_seed"] = deepcopy(plan)
     candidate_for_lineage["proj_qty"] = int(plan["qty"])
     candidate_for_lineage["proj_cost"] = float(plan["reserved_cost"])
     lineage = build_trading_candidate_strategy_lineage(candidate_for_lineage)
+    resolved_planned_date = (
+        resolve_next_pending_order_date(project_root, information_date=information_date)
+        if planned_trade_date is None
+        else validate_pending_order_trade_date(
+            project_root, information_date=information_date, planned_trade_date=planned_trade_date
+        )
+    )
     entry = _pending_entry_payload(
         origin=PENDING_ENTRY_ORIGIN_SCANNER,
         ticker=ticker,
         information_date=information_date,
-        planned_trade_date=planned_trade_date,
+        planned_trade_date=resolved_planned_date,
         plan=plan,
         lineage=lineage,
         signal_date=normalize_trading_date(candidate.get("signal_date"), field_name="signal_date", allow_none=True),
@@ -438,6 +465,9 @@ def _prepare_manual_pending_entry(
         qty=qty,
         limit_price=user_limit_price,
     )
+    validate_pending_order_limit_price(
+        project_root, ticker=ticker_key, information_date=information_date, limit_price=plan["limit_price"]
+    )
     lineage = build_trading_manual_management_lineage(
         params=params,
         execution_plan_seed=plan,
@@ -446,11 +476,18 @@ def _prepare_manual_pending_entry(
         planned_qty=int(plan["qty"]),
         planned_cost=float(plan["reserved_cost"]),
     )
+    resolved_planned_date = (
+        resolve_next_pending_order_date(project_root, information_date=information_date)
+        if planned_trade_date is None
+        else validate_pending_order_trade_date(
+            project_root, information_date=information_date, planned_trade_date=planned_trade_date
+        )
+    )
     entry = _pending_entry_payload(
         origin=PENDING_ENTRY_ORIGIN_MANUAL,
         ticker=ticker_key,
         information_date=information_date,
-        planned_trade_date=planned_trade_date,
+        planned_trade_date=resolved_planned_date,
         plan=plan,
         lineage=lineage,
         signal_date=None,
@@ -557,12 +594,19 @@ def _prepare_existing_pending_entry_update(
         qty=qty,
         limit_price=limit_price,
     )
+    validate_pending_order_limit_price(
+        project_root, ticker=ticker, information_date=information_date, limit_price=plan["limit_price"]
+    )
     lineage = _rebuild_existing_pending_lineage(current, plan)
+    requested_planned_date = planned_trade_date or current.get("planned_trade_date")
+    resolved_planned_date = validate_pending_order_trade_date(
+        project_root, information_date=information_date, planned_trade_date=requested_planned_date
+    )
     replacement = _pending_entry_payload(
         origin=str(current.get("origin") or ""),
         ticker=ticker,
         information_date=information_date,
-        planned_trade_date=planned_trade_date or current.get("planned_trade_date"),
+        planned_trade_date=resolved_planned_date,
         plan=plan,
         lineage=lineage,
         signal_date=normalize_trading_date(current.get("signal_date"), field_name="signal_date", allow_none=True),

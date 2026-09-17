@@ -43,38 +43,22 @@ def _market_number(row: pd.Series, field: str, *, ticker: str, trade_date: str) 
     return float(value)
 
 
-def validate_trading_actual_fill(
+def load_trading_actual_fill_market_evidence(
     project_root,
     *,
     ticker: object,
-    price,
     trade_date: object,
     market_view: TradingMarketDataV2View | None = None,
-    today: date | str | None = None,
 ) -> dict[str, object]:
-    """Validate one actual broker fill against exact-date raw market evidence.
+    """Load exact-date raw OHLCV evidence used by all manual fill validation.
 
-    Daily OHLCV proves that the entered price was *possible* on that date; it
-    does not claim tick-by-tick proof that an exact trade print existed.
+    Keeping the row lookup here prevents the Workbench option builders from
+    re-implementing a second definition of a valid market-evidence day.
     """
 
     root = Path(project_root).resolve()
     ticker_key = normalize_trading_ticker(ticker)
     date_text = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
-    if today is None:
-        today_date = _current_taipei_date()
-    elif isinstance(today, date):
-        today_date = today
-    else:
-        today_date = date.fromisoformat(str(today))
-    if date.fromisoformat(date_text) > today_date:
-        raise ValueError(f"成交日 {date_text} 尚未到來；不可登錄未來成交")
-
-    fill_price_milli = _positive_price_milli(price, field_name="成交價")
-    rounded_milli = int(round_price_to_tick_milli(price, direction="nearest", ticker=ticker_key))
-    if fill_price_milli != rounded_milli:
-        raise ValueError(f"{ticker_key} 成交價 {price} 不符合台股合法跳動單位")
-
     view = market_view or TradingMarketDataV2View.open(root)
     frame = view.read_dataset_frame(
         TRADING_FILL_EVIDENCE_DATASET,
@@ -104,19 +88,9 @@ def validate_trading_actual_fill(
         raise ValueError(f"{ticker_key} {date_text} raw 高低價資料不合法")
     if volume <= 0:
         raise ValueError(f"{ticker_key} {date_text} 沒有有效成交量，不接受成交登錄")
-
-    low_milli = int(price_to_milli(low))
-    high_milli = int(price_to_milli(high))
-    if fill_price_milli < low_milli or fill_price_milli > high_milli:
-        raise ValueError(
-            f"{ticker_key} {date_text} 成交價 {price} 超出當日價格範圍 "
-            f"[{low:g}, {high:g}]"
-        )
-
     return {
         "ticker": ticker_key,
         "trade_date": date_text,
-        "price_milli": fill_price_milli,
         "market_low": low,
         "market_high": high,
         "trading_volume": volume,
@@ -125,7 +99,100 @@ def validate_trading_actual_fill(
     }
 
 
+def list_trading_actual_fill_dates(
+    project_root,
+    *,
+    ticker: object,
+    market_view: TradingMarketDataV2View | None = None,
+    today: date | str | None = None,
+) -> tuple[str, ...]:
+    """Return all locally evidenced positive-volume dates eligible for a fill."""
+
+    root = Path(project_root).resolve()
+    ticker_key = normalize_trading_ticker(ticker)
+    if today is None:
+        today_date = _current_taipei_date()
+    elif isinstance(today, date):
+        today_date = today
+    else:
+        today_date = date.fromisoformat(str(today))
+    view = market_view or TradingMarketDataV2View.open(root)
+    frame = view.read_dataset_frame(
+        TRADING_FILL_EVIDENCE_DATASET,
+        columns=("date", "stock_id", "Trading_Volume"),
+        data_id=ticker_key,
+    )
+    if frame.empty:
+        return ()
+    dates = pd.to_datetime(frame.get("date"), errors="coerce")
+    volumes = pd.to_numeric(frame.get("Trading_Volume"), errors="coerce")
+    stock_ids = frame.get("stock_id")
+    if stock_ids is None:
+        return ()
+    normalized_tickers = stock_ids.astype(str).str.strip().str.upper()
+    mask = dates.notna() & volumes.notna() & (volumes > 0) & (normalized_tickers == ticker_key)
+    if not mask.any():
+        return ()
+    eligible = dates.loc[mask].dt.date
+    values = sorted({value.isoformat() for value in eligible if value <= today_date})
+    return tuple(values)
+
+
+def validate_trading_actual_fill(
+    project_root,
+    *,
+    ticker: object,
+    price,
+    trade_date: object,
+    market_view: TradingMarketDataV2View | None = None,
+    today: date | str | None = None,
+) -> dict[str, object]:
+    """Validate one actual broker fill against exact-date raw market evidence.
+
+    Daily OHLCV proves that the entered price was *possible* on that date; it
+    does not claim tick-by-tick proof that an exact trade print existed.
+    """
+
+    ticker_key = normalize_trading_ticker(ticker)
+    date_text = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
+    if today is None:
+        today_date = _current_taipei_date()
+    elif isinstance(today, date):
+        today_date = today
+    else:
+        today_date = date.fromisoformat(str(today))
+    if date.fromisoformat(date_text) > today_date:
+        raise ValueError(f"成交日 {date_text} 尚未到來；不可登錄未來成交")
+
+    fill_price_milli = _positive_price_milli(price, field_name="成交價")
+    rounded_milli = int(round_price_to_tick_milli(price, direction="nearest", ticker=ticker_key))
+    if fill_price_milli != rounded_milli:
+        raise ValueError(f"{ticker_key} 成交價 {price} 不符合台股合法跳動單位")
+
+    evidence = load_trading_actual_fill_market_evidence(
+        project_root,
+        ticker=ticker_key,
+        trade_date=date_text,
+        market_view=market_view,
+    )
+    low = float(evidence["market_low"])
+    high = float(evidence["market_high"])
+    low_milli = int(price_to_milli(low))
+    high_milli = int(price_to_milli(high))
+    if fill_price_milli < low_milli or fill_price_milli > high_milli:
+        raise ValueError(
+            f"{ticker_key} {date_text} 成交價 {price} 超出當日價格範圍 "
+            f"[{low:g}, {high:g}]"
+        )
+
+    result = dict(evidence)
+    result["price_milli"] = fill_price_milli
+    return result
+
+
 __all__ = [
     "TRADING_FILL_EVIDENCE_DATASET",
+    "list_trading_actual_fill_dates",
+    "load_trading_actual_fill_market_evidence",
     "validate_trading_actual_fill",
 ]

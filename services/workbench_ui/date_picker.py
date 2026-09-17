@@ -7,14 +7,19 @@ from tkinter import ttk
 
 from core.runtime_utils import get_taipei_now
 from services.workbench_ui.workbench import (
+    WORKBENCH_ACCENT,
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
     WORKBENCH_ENTRY_STYLE,
     WORKBENCH_FRAME_STYLE,
+    WORKBENCH_INFO,
     WORKBENCH_LABEL_STYLE,
     WORKBENCH_LABELLF_STYLE,
     WORKBENCH_MUTED,
+    WORKBENCH_SURFACE,
+    WORKBENCH_SURFACE_ALT,
     WORKBENCH_TEXT,
+    WORKBENCH_UI_FONT,
     _warn_gui_fallback,
 )
 
@@ -22,9 +27,11 @@ from services.workbench_ui.workbench import (
 class DatePickerField(ttk.Frame):
     """YYYY-MM-DD entry with a dependency-free calendar picker."""
 
-    def __init__(self, master, *, textvariable: tk.StringVar, width: int = 14):
+    def __init__(self, master, *, textvariable: tk.StringVar, width: int = 14, allowed_dates=None):
         super().__init__(master, style=WORKBENCH_FRAME_STYLE)
         self.variable = textvariable
+        self._allowed_dates: frozenset[str] | None = None
+        self.set_allowed_dates(allowed_dates)
         self.entry = ttk.Entry(self, textvariable=self.variable, width=width, style=WORKBENCH_ENTRY_STYLE)
         self.entry.pack(side="left", fill="x", expand=True)
         # The date field itself is the picker trigger; keep the textvariable editable
@@ -34,10 +41,36 @@ class DatePickerField(ttk.Frame):
         self._calendar_year = None
         self._calendar_month = None
 
+
+    def set_allowed_dates(self, values) -> None:
+        """Restrict selectable calendar days; ``None`` keeps legacy unrestricted mode."""
+
+        if values is None:
+            self._allowed_dates = None
+        else:
+            normalized = set()
+            for value in values:
+                if isinstance(value, date):
+                    normalized.add(value.isoformat())
+                    continue
+                text = str(value or "").strip()
+                if not text:
+                    continue
+                try:
+                    normalized.add(date.fromisoformat(text).isoformat())
+                except ValueError:
+                    continue
+            self._allowed_dates = frozenset(normalized)
+        if getattr(self, "_popup", None) is not None and self._popup.winfo_exists():
+            self._render_calendar()
+
+    def _is_selectable(self, value: date) -> bool:
+        return self._allowed_dates is None or value.isoformat() in self._allowed_dates
+
     def _on_entry_click(self, _event=None):
         self.after_idle(self._open_calendar)
 
-    def _initial_date(self) -> date:
+    def _selected_date(self) -> date | None:
         raw = self.variable.get().strip()
         if raw:
             parts = raw.split("-")
@@ -47,7 +80,10 @@ class DatePickerField(ttk.Frame):
                     last_day = calendar.monthrange(year, month)[1]
                     if 1 <= day <= last_day:
                         return date(year, month, day)
-        return get_taipei_now().date()
+        return None
+
+    def _initial_date(self) -> date:
+        return self._selected_date() or get_taipei_now().date()
 
     def _open_calendar(self) -> None:
         if self._popup is not None and self._popup.winfo_exists():
@@ -97,6 +133,8 @@ class DatePickerField(ttk.Frame):
 
     def _select_day(self, day: int) -> None:
         chosen = date(int(self._calendar_year), int(self._calendar_month), int(day))
+        if not self._is_selectable(chosen):
+            return
         self.variable.set(chosen.isoformat())
         self._close_calendar()
 
@@ -125,13 +163,42 @@ class DatePickerField(ttk.Frame):
                 if not day:
                     ttk.Label(body, text="", width=4, style=WORKBENCH_LABEL_STYLE).grid(row=row_idx, column=col_idx, padx=1, pady=1)
                     continue
-                ttk.Button(
+                current = date(int(self._calendar_year), int(self._calendar_month), int(day))
+                selectable = self._is_selectable(current)
+                selected = current == self._selected_date()
+                today = current == get_taipei_now().date()
+                if selected:
+                    background = WORKBENCH_ACCENT
+                    foreground = WORKBENCH_TEXT
+                elif today:
+                    background = WORKBENCH_SURFACE_ALT
+                    foreground = WORKBENCH_INFO
+                elif selectable:
+                    background = WORKBENCH_SURFACE
+                    foreground = WORKBENCH_TEXT
+                else:
+                    background = WORKBENCH_BG
+                    foreground = WORKBENCH_MUTED
+                button = tk.Button(
                     body,
                     text=str(day),
                     width=4,
                     command=lambda value=day: self._select_day(value),
-                    style=WORKBENCH_BUTTON_STYLE,
-                ).grid(row=row_idx, column=col_idx, padx=1, pady=1)
+                    state="normal" if selectable else "disabled",
+                    bg=background,
+                    fg=foreground,
+                    disabledforeground=WORKBENCH_MUTED,
+                    activebackground=WORKBENCH_ACCENT,
+                    activeforeground=WORKBENCH_TEXT,
+                    highlightbackground=WORKBENCH_INFO if today and not selected else background,
+                    highlightcolor=WORKBENCH_INFO,
+                    highlightthickness=1 if today and not selected else 0,
+                    relief="flat",
+                    bd=0,
+                    font=WORKBENCH_UI_FONT,
+                    cursor="hand2" if selectable else "arrow",
+                )
+                button.grid(row=row_idx, column=col_idx, padx=1, pady=1)
 
 
 __all__ = ["DatePickerField"]
