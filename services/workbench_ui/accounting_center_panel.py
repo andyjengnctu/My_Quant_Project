@@ -14,14 +14,13 @@ from services.trading.account_dashboard import (
 from services.trading.account_state import (
     adopt_existing_trading_position,
     correct_existing_trading_position,
-    correct_trading_transaction,
     delete_trading_transaction,
     get_trading_account_read_model,
     initialize_trading_account_state,
     remove_existing_trading_position,
     set_trading_cash_balance,
 )
-from services.trading.account_trade_entry import record_trading_account_inventory_sell
+from services.trading.account_trade_entry import correct_trading_account_transaction, record_trading_account_inventory_sell
 from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.paged_table import PagedTable, TableColumn
 from services.workbench_ui.workbench import (
@@ -762,13 +761,13 @@ class AccountingCenterPanel(ttk.Frame):
                 trade_date = date_var.get().strip()
                 if not trade_date:
                     raise ValueError("成交日必填")
-                correct_trading_transaction(
+                correct_trading_account_transaction(
                     WORKBENCH_PROJECT_ROOT,
                     transaction_revision=int(row.get("revision") or 0),
                     qty=qty,
                     price=price,
                     trade_date=trade_date,
-                    expected_revision=None,
+                    expected_account_revision=None,
                 )
             except Exception as exc:
                 messagebox.showerror("修改明細失敗", str(exc), parent=top)

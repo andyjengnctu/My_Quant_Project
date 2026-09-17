@@ -1132,7 +1132,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
     check("workbench_exposes_separate_rollforward_button", True, '"2 持股日終推進"' in panel_source)
-    check("workbench_exposes_separate_param_button", True, '"3 套用 Params"' in panel_source)
+    check("workbench_exposes_separate_param_button", True, '"3 套用新進場 Params"' in panel_source)
     check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
     check("workbench_uses_shared_downloader_console_progress", True, "MarketDataDailyConsoleProgress" in panel_source)
     check("workbench_exposes_scanner_button", True, '"4 Scanner 候選"' in panel_source)
@@ -3080,6 +3080,109 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         fractional_qty_rejected = False
     check("fractional_share_qty_is_rejected", True, fractional_qty_rejected)
 
+    from services.trading.actual_fill_validation import validate_trading_actual_fill
+    from services.trading.account_trade_entry import (
+        correct_trading_account_transaction,
+        preview_trading_account_buy,
+        record_trading_account_buy,
+    )
+
+    class _SyntheticFillMarketView:
+        def __init__(self, rows):
+            self._rows = list(rows)
+
+        def read_dataset_frame(self, dataset, **kwargs):
+            check("actual_fill_validation_uses_raw_taiwan_stock_price_evidence", "TaiwanStockPrice", dataset)
+            ticker = str(kwargs.get("data_id") or "")
+            start = str(kwargs.get("start_date") or "")
+            rows = [
+                dict(row) for row in self._rows
+                if str(row.get("stock_id") or "") == ticker and str(row.get("date") or "") == start
+            ]
+            return pd.DataFrame(rows, columns=["date", "stock_id", "max", "min", "Trading_Volume"])
+
+    saturday_view = _SyntheticFillMarketView([{
+        "date": "2026-09-12", "stock_id": "2330", "min": 990.0, "max": 1010.0, "Trading_Volume": 123456,
+    }])
+    saturday_evidence = validate_trading_actual_fill(
+        Path("."), ticker="2330", price=1000.0, trade_date="2026-09-12",
+        market_view=saturday_view, today="2026-09-17",
+    )
+    check("actual_fill_validation_allows_saturday_when_exact_market_row_exists", "2026-09-12", saturday_evidence.get("trade_date"))
+
+    validation_rejections = {}
+    cases = {
+        "future": dict(view=saturday_view, price=1000.0, trade_date="2026-09-18", today="2026-09-17"),
+        "missing": dict(view=_SyntheticFillMarketView([]), price=1000.0, trade_date="2026-09-11", today="2026-09-17"),
+        "zero_volume": dict(view=_SyntheticFillMarketView([{
+            "date": "2026-09-11", "stock_id": "2330", "min": 990.0, "max": 1010.0, "Trading_Volume": 0,
+        }]), price=1000.0, trade_date="2026-09-11", today="2026-09-17"),
+        "off_tick": dict(view=saturday_view, price=1000.3, trade_date="2026-09-12", today="2026-09-17"),
+        "outside_range": dict(view=saturday_view, price=1020.0, trade_date="2026-09-12", today="2026-09-17"),
+    }
+    for key, case in cases.items():
+        try:
+            validate_trading_actual_fill(
+                Path("."), ticker="2330", price=case["price"], trade_date=case["trade_date"],
+                market_view=case["view"], today=case["today"],
+            )
+        except ValueError:
+            validation_rejections[key] = True
+        else:
+            validation_rejections[key] = False
+    check("actual_fill_validation_rejects_future_missing_zero_volume_off_tick_and_out_of_range",
+          {"future": True, "missing": True, "zero_volume": True, "off_tick": True, "outside_range": True},
+          validation_rejections)
+
+    candidate = {
+        "ticker": "2330",
+        "trade_date": "2026-09-11",
+        "limit_price": 1000.0,
+        "proj_qty": 1000,
+        "execution_plan_seed": {"ticker": "2330", "trade_date": "2026-09-11", "limit_price": 1000.0},
+    }
+    synthetic_evidence = {
+        "ticker": "2330", "trade_date": "2026-09-11", "market_low": 990.0, "market_high": 1010.0,
+        "trading_volume": 123456, "evidence_dataset": "TaiwanStockPrice",
+    }
+    with patch("services.trading.account_trade_entry.load_trading_candidate_snapshot_for_account", return_value={"candidate_rows": [candidate]}), \
+         patch("services.trading.account_trade_entry.validate_trading_actual_fill", return_value=synthetic_evidence):
+        preview = preview_trading_account_buy(
+            Path("."), ticker="2330", qty=100, price=999.0, trade_date="2026-09-11", candidate=candidate,
+        )
+        check("scanner_backfill_on_or_before_information_date_is_warning_not_block", True, bool(preview.get("warnings")))
+        try:
+            preview_trading_account_buy(
+                Path("."), ticker="2330", qty=100, price=1001.0, trade_date="2026-09-12", candidate=candidate,
+            )
+        except ValueError:
+            strategy_limit_rejected = True
+        else:
+            strategy_limit_rejected = False
+        check("scanner_strategy_fill_above_premarket_limit_is_rejected", True, strategy_limit_rejected)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        account = initialize_trading_account_state(root, cash=1_000_000)
+        with patch("services.trading.account_trade_entry.validate_trading_actual_fill", return_value=synthetic_evidence):
+            result = record_trading_account_buy(
+                root, ticker="2330", qty=100, price=999.0, trade_date="2026-09-11", candidate=None,
+            )
+        check("manual_buy_entry_runs_market_evidence_preflight_before_account_mutation", "manual_account_buy", result.get("route"))
+        buy_revision = int(result["account"]["revision"] )
+        before_correction = load_trading_account_state(root)
+        with patch("services.trading.account_trade_entry.validate_trading_actual_fill", side_effect=ValueError("synthetic invalid fill")):
+            try:
+                correct_trading_account_transaction(
+                    root, transaction_revision=buy_revision, qty=100, price=1200.0, trade_date="2026-09-11",
+                )
+            except ValueError:
+                corrected_buy_invalid_market_rejected = True
+            else:
+                corrected_buy_invalid_market_rejected = False
+        check("accounting_center_buy_edit_cannot_bypass_market_fill_validation", True, corrected_buy_invalid_market_rejected)
+        check("rejected_buy_edit_does_not_mutate_account_revision", before_correction["revision"], load_trading_account_state(root)["revision"])
+
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         empty_snapshot = build_trading_account_panel_snapshot(root)
@@ -3233,6 +3336,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
     check("workbench_trading_center_exposes_scanner_and_buy_entry", True, all(text in panel_source for text in ("今日 Scanner Pool", "買入成交登錄", "登錄買入成交", "BUY_ENTRY_HINT")))
+    check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
+    check("workbench_scanner_selection_autofills_editable_taipei_fill_date", True, 'self._trade_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())' in panel_source)
+    check("workbench_buy_entry_previews_market_evidence_before_confirmation", True, "preview_trading_account_buy(" in panel_source and "market_evidence" in panel_source)
+    check("workbench_daily_workflow_labels_params_as_new_entry_without_reordering", True, '("2 持股日終推進", "rollforward")' in panel_source and '("3 套用新進場 Params", "params")' in panel_source)
     check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in panel_source.split('trade_box = ttk.LabelFrame(content, text="買入成交登錄', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0])
@@ -3240,7 +3347,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_clean_inventory_trade_detail_titles_and_performance", True, all(text in accounting_source for text in ('text="庫存股"', 'text="買入明細"', 'text="賣出明細"', 'text="沖抵明細"', 'text="績效統計"', "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
     check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ('text="賣出成交登錄"', "record_trading_account_inventory_sell", "先在券商完成賣出")) and "對應券商 SELL 單" not in accounting_source)
-    check("workbench_accounting_center_supports_transaction_edit_delete_without_primary_existing_inventory_entry", True, all(text in accounting_source for text in ("修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_transaction", "delete_trading_transaction")) and "inv_actions.grid_remove()" in accounting_source)
+    check("workbench_accounting_center_supports_transaction_edit_delete_without_primary_existing_inventory_entry", True, all(text in accounting_source for text in ("修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_account_transaction", "delete_trading_transaction")) and "inv_actions.grid_remove()" in accounting_source)
     date_picker_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "date_picker.py").read_text(encoding="utf-8")
     check("workbench_date_inputs_open_calendar_from_date_field", True, "DatePickerField" in panel_source and "DatePickerField" in accounting_source and 'self.entry.bind("<Button-1>", self._on_entry_click' in date_picker_source and 'text="日曆"' not in date_picker_source)
     paged_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "paged_table.py").read_text(encoding="utf-8")

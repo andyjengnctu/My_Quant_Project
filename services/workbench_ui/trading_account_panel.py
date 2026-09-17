@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import queue
@@ -91,7 +91,7 @@ from services.trading.account_state import (
 )
 from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.paged_table import PagedTable, TableColumn
-from services.trading.account_trade_entry import record_trading_account_buy
+from services.trading.account_trade_entry import preview_trading_account_buy, record_trading_account_buy
 from services.workbench_ui.workbench import (
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
@@ -133,7 +133,7 @@ OCO_HINT = "系統不預設券商支援 OCO；只有你明確輸入實際券商 
 INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。"
 POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；Stop / 停利線 / Trailing / SELL 訊號是持股決策資訊。"
 SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；下單由你在券商端自行完成。"
-BUY_ENTRY_HINT = "交易中心只登錄實際買入；賣出到帳務中心登錄。價金、手續費與持有成本由系統自動計算。"
+BUY_ENTRY_HINT = "交易中心只登錄實際買入；成交日／成交價會先用 raw 市場證據檢查。賣出到帳務中心登錄。價金、手續費與持有成本由系統自動計算。"
 
 _STATUS_TOKEN_TONES = {
     "READY": "success",
@@ -852,7 +852,7 @@ class TradingAccountPanel(ttk.Frame):
         for text, action in (
             ("1 更新資料", "data"),
             ("2 持股日終推進", "rollforward"),
-            ("3 套用 Params", "params"),
+            ("3 套用新進場 Params", "params"),
             ("4 Scanner 候選", "scanner"),
             ("每日流程 1→2→3→4", "all"),
         ):
@@ -913,14 +913,14 @@ class TradingAccountPanel(ttk.Frame):
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("open", "ticker", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal", "action")
+        columns = ("open", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal", "action")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
-            "open": "↗", "ticker": "股票", "qty": "股數", "avg_cost": "均價", "current": "市價",
+            "open": "↗", "ticker": "股票", "entry_date": "買入日", "qty": "股數", "avg_cost": "均價", "current": "市價",
             "stop": "目前Stop", "target": "停利線", "trailing": "Trailing",
             "sell_signal": "SELL訊號", "action": "建議動作",
         }
-        widths = {"open": 36, "ticker": 80, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125, "action": 220}
+        widths = {"open": 36, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125, "action": 220}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
@@ -2014,6 +2014,8 @@ class TradingAccountPanel(ttk.Frame):
     def _on_candidate_selected(self, row):
         ticker = str((row or {}).get("ticker") or "").strip().upper()
         self._trade_ticker_var.set(ticker)
+        if ticker and not self._trade_date_var.get().strip():
+            self._trade_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
 
     def _open_ticker_in_inspector(self, ticker, *, candidate_row=None):
         ticker = str(ticker or "").strip().upper()
@@ -2534,7 +2536,7 @@ class TradingAccountPanel(ttk.Frame):
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
-                    "▣", ticker, f"{int(row.get('qty') or 0):,}",
+                    "▣", ticker, row.get("entry_date") or "-", f"{int(row.get('qty') or 0):,}",
                     format_trading_money(row.get("average_cost")),
                     format_trading_money(row.get("current_price")),
                     format_trading_money(row.get("effective_stop")),
@@ -2650,10 +2652,30 @@ class TradingAccountPanel(ttk.Frame):
         candidate = self._selected_candidate_row()
         if candidate and str(candidate.get("ticker") or "").strip().upper() != ticker:
             candidate = None
-        source_text = "Scanner 策略買入" if candidate else "自行買入"
+        try:
+            preview = preview_trading_account_buy(
+                WORKBENCH_PROJECT_ROOT,
+                ticker=ticker,
+                qty=qty,
+                price=price,
+                trade_date=trade_date,
+                candidate=candidate,
+            )
+        except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
+            messagebox.showerror("成交登錄失敗", str(exc), parent=self)
+            return
+        source_text = "Scanner 策略買入" if preview.get("route") == "scanner_strategy_buy" else "自行買入"
+        evidence = dict(preview.get("market_evidence") or {})
+        evidence_text = (
+            f"市場證據：{evidence.get('trade_date') or trade_date} "
+            f"Low {evidence.get('market_low')} / High {evidence.get('market_high')}"
+        )
+        warning_rows = [str(item) for item in list(preview.get("warnings") or []) if str(item).strip()]
+        warning_text = "" if not warning_rows else "\n\n注意：\n- " + "\n- ".join(warning_rows)
         if not messagebox.askyesno(
             "確認買入成交",
-            f"{ticker}｜{qty:,} 股 @ {price}｜{trade_date}\n\n來源：{source_text}\n價金、買入手續費與持有成本由帳務 SSOT 自動計算。",
+            f"{ticker}｜{qty:,} 股 @ {price}｜{trade_date}\n\n來源：{source_text}\n{evidence_text}"
+            f"{warning_text}\n\n價金、買入手續費與持有成本由帳務 SSOT 自動計算。",
             parent=self,
         ):
             return

@@ -1,0 +1,131 @@
+"""Canonical market-evidence validation for manually recorded broker fills.
+
+The account journal remains broker truth, but an explicitly entered fill must be
+compatible with verified raw market evidence before it is accepted.  This module
+uses ``TaiwanStockPrice`` only as raw execution evidence; strategy/model price
+semantics continue to use the canonical adjusted-price source.
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+import math
+from pathlib import Path
+import pandas as pd
+
+from core.exact_accounting import price_to_milli, round_price_to_tick_milli
+from core.trading_identity import normalize_trading_date, normalize_trading_ticker
+from services.trading.market_data_v2_view import TradingMarketDataV2View
+
+
+TRADING_FILL_EVIDENCE_DATASET = "TaiwanStockPrice"
+_TAIPEI = timezone(timedelta(hours=8))
+
+
+def _current_taipei_date() -> date:
+    return datetime.now(_TAIPEI).date()
+
+
+def _positive_price_milli(value, *, field_name: str) -> int:
+    try:
+        decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{field_name}必須是數字") from exc
+    if not decimal_value.is_finite() or decimal_value <= 0:
+        raise ValueError(f"{field_name}必須是大於 0 的有限數值")
+    return int(price_to_milli(decimal_value))
+
+
+def _market_number(row: pd.Series, field: str, *, ticker: str, trade_date: str) -> float:
+    value = pd.to_numeric(pd.Series([row.get(field)]), errors="coerce").iloc[0]
+    if pd.isna(value) or not math.isfinite(float(value)):
+        raise ValueError(f"{ticker} {trade_date} raw 市場資料的 {field} 不合法")
+    return float(value)
+
+
+def validate_trading_actual_fill(
+    project_root,
+    *,
+    ticker: object,
+    price,
+    trade_date: object,
+    market_view: TradingMarketDataV2View | None = None,
+    today: date | str | None = None,
+) -> dict[str, object]:
+    """Validate one actual broker fill against exact-date raw market evidence.
+
+    Daily OHLCV proves that the entered price was *possible* on that date; it
+    does not claim tick-by-tick proof that an exact trade print existed.
+    """
+
+    root = Path(project_root).resolve()
+    ticker_key = normalize_trading_ticker(ticker)
+    date_text = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
+    if today is None:
+        today_date = _current_taipei_date()
+    elif isinstance(today, date):
+        today_date = today
+    else:
+        today_date = date.fromisoformat(str(today))
+    if date.fromisoformat(date_text) > today_date:
+        raise ValueError(f"成交日 {date_text} 尚未到來；不可登錄未來成交")
+
+    fill_price_milli = _positive_price_milli(price, field_name="成交價")
+    rounded_milli = int(round_price_to_tick_milli(price, direction="nearest", ticker=ticker_key))
+    if fill_price_milli != rounded_milli:
+        raise ValueError(f"{ticker_key} 成交價 {price} 不符合台股合法跳動單位")
+
+    view = market_view or TradingMarketDataV2View.open(root)
+    frame = view.read_dataset_frame(
+        TRADING_FILL_EVIDENCE_DATASET,
+        columns=("date", "stock_id", "max", "min", "Trading_Volume"),
+        data_id=ticker_key,
+        start_date=date_text,
+        end_date=date_text,
+    )
+    if frame.empty:
+        raise ValueError(
+            f"{ticker_key} {date_text} 沒有正式 TaiwanStockPrice 交易資料；"
+            "請先更新 Trading 資料或確認成交日"
+        )
+    if len(frame.index) != 1:
+        raise RuntimeError(f"{ticker_key} {date_text} raw 市場證據不是唯一 row")
+
+    row = frame.iloc[0]
+    row_date = normalize_trading_date(row.get("date"), field_name="market.date", allow_none=False)
+    row_ticker = normalize_trading_ticker(row.get("stock_id"))
+    if row_date != date_text or row_ticker != ticker_key:
+        raise RuntimeError(f"{ticker_key} {date_text} raw 市場證據 identity 不一致")
+
+    low = _market_number(row, "min", ticker=ticker_key, trade_date=date_text)
+    high = _market_number(row, "max", ticker=ticker_key, trade_date=date_text)
+    volume = _market_number(row, "Trading_Volume", ticker=ticker_key, trade_date=date_text)
+    if low <= 0 or high <= 0 or high < low:
+        raise ValueError(f"{ticker_key} {date_text} raw 高低價資料不合法")
+    if volume <= 0:
+        raise ValueError(f"{ticker_key} {date_text} 沒有有效成交量，不接受成交登錄")
+
+    low_milli = int(price_to_milli(low))
+    high_milli = int(price_to_milli(high))
+    if fill_price_milli < low_milli or fill_price_milli > high_milli:
+        raise ValueError(
+            f"{ticker_key} {date_text} 成交價 {price} 超出當日價格範圍 "
+            f"[{low:g}, {high:g}]"
+        )
+
+    return {
+        "ticker": ticker_key,
+        "trade_date": date_text,
+        "price_milli": fill_price_milli,
+        "market_low": low,
+        "market_high": high,
+        "trading_volume": volume,
+        "evidence_dataset": TRADING_FILL_EVIDENCE_DATASET,
+        "evidence_semantics": "daily_ohlcv_possible_fill",
+    }
+
+
+__all__ = [
+    "TRADING_FILL_EVIDENCE_DATASET",
+    "validate_trading_actual_fill",
+]
