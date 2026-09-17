@@ -865,6 +865,7 @@ class StockToolsWorkbench:
         # inspector implementation into the Trading panel.
         self.root._open_single_stock_inspector = self.open_single_stock_inspector
         self.root._open_accounting_center = self.open_accounting_center
+        self.root._notify_trading_account_changed = self.notify_trading_account_changed
         self._build_ui()
         self.root.update_idletasks()
         self.root.deiconify()
@@ -1040,6 +1041,18 @@ class StockToolsWorkbench:
                 refresher()
         else:
             self._request_panel_load(panel_id)
+
+    def notify_trading_account_changed(self):
+        """Refresh an already-mounted Trading Center after account truth mutates elsewhere."""
+
+        panel = self._panel_instances.get("trading_account")
+        if panel is None:
+            # A not-yet-mounted Trading Center will read current canonical state in its
+            # initial bundle, so there is no stale in-memory view to refresh here.
+            return
+        refresher = getattr(panel, "refresh_external_account_state", None)
+        if callable(refresher):
+            refresher()
 
     def open_single_stock_inspector(
         self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None,

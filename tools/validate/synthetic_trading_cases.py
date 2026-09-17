@@ -3345,6 +3345,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in panel_source.split('trade_box = ttk.LabelFrame(content, text="買入成交登錄', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0])
     check("workbench_trading_center_keeps_position_decisions_without_duplicate_account_dashboard", True, "text=\"持股決策\"" in panel_source and "for accounting_section in (header, cash_box, form, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box = ttk.LabelFrame' not in panel_source)
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
+    workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_clean_inventory_trade_detail_titles_and_performance", True, all(text in accounting_source for text in ('text="庫存股"', 'text="買入明細"', 'text="賣出明細"', 'text="沖抵明細"', 'text="績效統計"', "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
     check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ('text="賣出成交登錄"', "record_trading_account_inventory_sell", "先在券商完成賣出")) and "對應券商 SELL 單" not in accounting_source)
     check("workbench_accounting_center_supports_transaction_edit_delete_without_primary_existing_inventory_entry", True, all(text in accounting_source for text in ("修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_account_transaction", "delete_trading_transaction")) and "inv_actions.grid_remove()" in accounting_source)
@@ -3388,6 +3389,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'self._page_scrollbar = ttk.Scrollbar' in accounting_source)
     check("workbench_trading_scanner_pages_at_twelve_without_inner_scrollbar", True, "page_size=12" in panel_source and panel_source.count("ttk.Scrollbar(") == 1 and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
     check("workbench_buy_success_navigates_to_refreshed_accounting_center", True, '_open_accounting_center' in panel_source and 'callback(refresh=True)' in panel_source and "已切換至帳務中心並重新整理" in panel_source)
+    buy_entry_body = panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0]
+    check("workbench_buy_success_refreshes_trading_center_before_navigation", True, 'refresh_state=True' in buy_entry_body and 'refresh_state=False' not in buy_entry_body)
+    cross_panel_notify_body = workbench_source.split("def notify_trading_account_changed", 1)[1].split("def open_single_stock_inspector", 1)[0]
+    check("workbench_root_exposes_account_truth_change_notification_to_trading_center", True, '_notify_trading_account_changed = self.notify_trading_account_changed' in workbench_source and 'refresh_external_account_state' in cross_panel_notify_body)
+    check("workbench_accounting_mutations_share_trading_center_sync_hook", True, "def _refresh_after_account_mutation" in accounting_source and accounting_source.count("self._refresh_after_account_mutation()") >= 7 and '_notify_trading_account_changed' in accounting_source)
     check("workbench_primary_ui_does_not_mount_broker_oms_notebook", False, "advanced_notebook.grid(" in panel_source or "advanced_notebook.pack(" in panel_source)
     check("workbench_performance_colour_is_cell_scoped", True, "performance=True" in accounting_source and "column.performance" in paged_source and 'tag_configure("gain"' not in accounting_source)
     check("workbench_account_dashboard_uses_revision_market_date_cards_and_fixed_bottom_refresh", True, 'text="帳戶儀表板"' in accounting_source and 'cards = (("revision", "revision"), ("市價日", "market_date")' in accounting_source and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新"' in accounting_source and 'pack(side="right"' in accounting_source and 'WORKBENCH_INFO if key in {"market_date", "cash", "equity"}' in accounting_source)
@@ -3415,6 +3421,41 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     AccountingCenterPanel.refresh(accounting_refresh_panel)
     check("workbench_accounting_refresh_marks_followup_pending_when_worker_is_alive", True, accounting_refresh_panel._refresh_pending)
     check("workbench_accounting_refresh_coalesces_mutation_followup_instead_of_dropping_it", True, "self._refresh_pending = True" in accounting_source and "if self._refresh_pending:" in accounting_source and "self.after_idle(self.refresh)" in accounting_source)
+
+    mutation_refresh_events = []
+    AccountingCenterPanel._refresh_after_account_mutation(SimpleNamespace(
+        refresh=lambda: mutation_refresh_events.append("accounting"),
+        _notify_trading_account_changed=lambda: mutation_refresh_events.append("trading"),
+    ))
+    check("workbench_account_mutation_refreshes_both_accounting_and_trading_centers", ["accounting", "trading"], mutation_refresh_events)
+
+    root_notify_events = []
+    StockToolsWorkbench.notify_trading_account_changed(SimpleNamespace(
+        _panel_instances={
+            "trading_account": SimpleNamespace(
+                refresh_external_account_state=lambda: root_notify_events.append("trading")
+            )
+        }
+    ))
+    check("workbench_account_truth_notification_dispatches_to_mounted_trading_center", ["trading"], root_notify_events)
+
+    busy_external_refresh_panel = SimpleNamespace(
+        _initial_state_thread=SimpleNamespace(is_alive=lambda: True),
+        _command_thread=None,
+        _external_account_refresh_pending=False,
+    )
+    busy_refresh_started = TradingAccountPanel.refresh_external_account_state(busy_external_refresh_panel)
+    check("workbench_external_account_refresh_coalesces_while_trading_center_busy", [False, True], [busy_refresh_started, busy_external_refresh_panel._external_account_refresh_pending])
+
+    external_refresh_calls = []
+    idle_external_refresh_panel = SimpleNamespace(
+        _initial_state_thread=None,
+        _command_thread=None,
+        _external_account_refresh_pending=True,
+        _submit_trading_command=lambda label, worker, refresh_state: external_refresh_calls.append((label, refresh_state)) or True,
+    )
+    idle_refresh_started = TradingAccountPanel.refresh_external_account_state(idle_external_refresh_panel)
+    check("workbench_external_account_refresh_reloads_canonical_trading_bundle", [True, False, [("同步帳務變更", True)]], [idle_refresh_started, idle_external_refresh_panel._external_account_refresh_pending, external_refresh_calls])
     check("workbench_account_mutations_resolve_latest_revision_inside_lock", True, "expected_account_revision=None" in panel_source and "expected_revision=None" in accounting_source)
     check("workbench_centers_use_fixed_contextual_footer_status_bars", True, "self._footer_bar.grid(row=1" in accounting_source and "操作提示｜" in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source and "self._footer_bar.grid(row=1" in panel_source and "操作提示｜" in panel_source)
     check("workbench_primary_ui_has_single_fixed_bottom_right_refresh_per_center", True, panel_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in panel_source and 'text="全狀態刷新", command=self._refresh_all_trading_state' in panel_source and 'pack(side="right"' in panel_source and accounting_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新", command=self.refresh' in accounting_source)
@@ -3430,7 +3471,6 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_scanner_pool_uses_take_profit_reference_qty_cost_without_summary", True, 'TableColumn("target_price", "停利線"' in candidate_static_schema and 'TableColumn("proj_qty", "參考股數"' in candidate_static_schema and 'TableColumn("proj_cost", "參考投入"' in candidate_static_schema and 'Scanner 摘要' not in scanner_schema and candidate_static_schema.index('"停利線"') < candidate_static_schema.index('"參考股數"') < candidate_static_schema.index('"參考投入"'))
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
-    workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
     gui_payload_body = inspector_source.split("def _build_gui_chart_payload", 1)[1].split("def ", 1)[0]
     check("workbench_single_stock_trading_hides_backtest_forced_close_visual_only", True, 'self._runtime_domain_key() == "trading"' in gui_payload_body and 'hidden.add("強制結算")' in gui_payload_body and 'chart_payload["hidden_trace_names"]' in gui_payload_body)

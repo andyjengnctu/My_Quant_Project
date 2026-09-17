@@ -536,6 +536,7 @@ class TradingAccountPanel(ttk.Frame):
         self._initial_state_poll_after_id = None
         self._initial_preloaded: dict[str, object] = {}
         self._suspend_operations_refresh = False
+        self._external_account_refresh_pending = False
         self._build_ui()
         self._set_initial_loading_state()
         # AI: Paint the complete Trading page first.  Canonical state reads may validate
@@ -607,6 +608,7 @@ class TradingAccountPanel(ttk.Frame):
             return
         self._initial_state_thread = None
         self._apply_state_bundle(bundle)
+        self._schedule_pending_external_account_refresh()
 
     def _iter_action_buttons(self):
         stack = [self]
@@ -723,6 +725,7 @@ class TradingAccountPanel(ttk.Frame):
                 on_error(command_error)
             else:
                 messagebox.showerror(str(context.get("error_title") or "Trading 操作失敗"), str(command_error), parent=self)
+            self._schedule_pending_external_account_refresh()
             return
         if bundle_error is not None:
             messagebox.showwarning(
@@ -732,9 +735,30 @@ class TradingAccountPanel(ttk.Frame):
             )
         if callable(on_success):
             on_success(result)
+        self._schedule_pending_external_account_refresh()
 
     def _request_state_refresh(self, label: str = "Trading 狀態刷新") -> None:
         self._submit_trading_command(label, lambda: None, refresh_state=True)
+
+    def refresh_external_account_state(self) -> bool:
+        """Synchronize Trading Center after Accounting Center mutates account truth."""
+
+        initial_busy = self._initial_state_thread is not None and self._initial_state_thread.is_alive()
+        command_busy = self._command_thread is not None and self._command_thread.is_alive()
+        if initial_busy or command_busy:
+            self._external_account_refresh_pending = True
+            return False
+        self._external_account_refresh_pending = False
+        return self._submit_trading_command(
+            "同步帳務變更",
+            lambda: None,
+            refresh_state=True,
+        )
+
+    def _schedule_pending_external_account_refresh(self) -> None:
+        if not self._external_account_refresh_pending:
+            return
+        self.after_idle(self.refresh_external_account_state)
 
     def destroy(self):
         for attr_name, label in (("_initial_state_poll_after_id", "initial-state"), ("_command_poll_after_id", "command")):
@@ -2709,9 +2733,9 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             error_title="成交登錄失敗",
-            # Buying only changes account truth.  Do not rebuild the historical
-            # Trading/OMS bundle before switching to Accounting Center.
-            refresh_state=False,
+            # The buy mutates account truth used throughout Trading Center; refresh
+            # the canonical bundle before navigating to Accounting Center.
+            refresh_state=True,
         )
 
     def _position_form_values(self):

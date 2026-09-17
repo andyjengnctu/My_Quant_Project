@@ -531,6 +531,15 @@ class AccountingCenterPanel(ttk.Frame):
             rows = list(self._all_buy_rows)
         self._buys.set_rows(rows, preserve_selection=False)
 
+    def _notify_trading_account_changed(self) -> None:
+        callback = getattr(self.winfo_toplevel(), "_notify_trading_account_changed", None)
+        if callable(callback):
+            callback()
+
+    def _refresh_after_account_mutation(self) -> None:
+        self.refresh()
+        self._notify_trading_account_changed()
+
     def _parse_cash(self):
         text = self._cash_var.get().replace(",", "").strip()
         if not text:
@@ -546,7 +555,7 @@ class AccountingCenterPanel(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("帳務中心", str(exc), parent=self)
             return
-        self.refresh()
+        self._refresh_after_account_mutation()
 
     def _set_cash(self):
         try:
@@ -562,7 +571,7 @@ class AccountingCenterPanel(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("帳務中心", str(exc), parent=self)
             return
-        self.refresh()
+        self._refresh_after_account_mutation()
 
     def _selected_inventory(self):
         return self._inventory.selected_row()
@@ -618,7 +627,7 @@ class AccountingCenterPanel(ttk.Frame):
         self._sell_price_var.set("")
         self._sell_date_var.set("")
         messagebox.showinfo("賣出登錄", f"{ticker} 實際賣出成交已寫入帳戶 SSOT。", parent=self)
-        self.refresh()
+        self._refresh_after_account_mutation()
 
     def _inventory_dialog(self, *, mode: str, row=None):
         top = tk.Toplevel(self)
@@ -674,7 +683,7 @@ class AccountingCenterPanel(ttk.Frame):
                 messagebox.showerror("庫存操作失敗", str(exc), parent=top)
                 return
             top.destroy()
-            self.refresh()
+            self._refresh_after_account_mutation()
 
         ttk.Button(body, text="儲存", command=save, style=WORKBENCH_BUTTON_STYLE).grid(row=5, column=0, columnspan=2, sticky="e")
 
@@ -707,7 +716,7 @@ class AccountingCenterPanel(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("刪除庫存失敗", str(exc), parent=self)
             return
-        self.refresh()
+        self._refresh_after_account_mutation()
 
     def _selected_transaction(self, side: str):
         return self._buys.selected_row() if side == "BUY" else self._sells.selected_row()
@@ -773,7 +782,7 @@ class AccountingCenterPanel(ttk.Frame):
                 messagebox.showerror("修改明細失敗", str(exc), parent=top)
                 return
             top.destroy()
-            self.refresh()
+            self._refresh_after_account_mutation()
 
         ttk.Button(body, text="儲存修改", command=save, style=WORKBENCH_BUTTON_STYLE).grid(row=5, column=0, columnspan=2, sticky="e")
 
@@ -799,7 +808,7 @@ class AccountingCenterPanel(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("刪除明細失敗", str(exc), parent=self)
             return
-        self.refresh()
+        self._refresh_after_account_mutation()
 
     def _open_stock(self, ticker):
         callback = getattr(self.winfo_toplevel(), "_open_single_stock_inspector", None)
