@@ -46,7 +46,7 @@ from services.trading.market_data_consumer import (
     open_trading_v2_consumer_view,
 )
 from services.trading.order_form_constraints import (
-    resolve_next_pending_order_date,
+    resolve_preferred_pending_order_date,
     validate_pending_order_limit_price,
     validate_pending_order_trade_date,
 )
@@ -304,6 +304,10 @@ def _prepare_scanner_pending_entry(
         field_name="candidate.trade_date",
         allow_none=False,
     )
+    runtime = load_trading_scanner_runtime(project_root)
+    latest_finalized_date = normalize_trading_date(
+        runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
+    )
     resources = _account_resources(
         project_root,
         information_date=information_date,
@@ -330,21 +334,30 @@ def _prepare_scanner_pending_entry(
         qty=qty,
         limit_price=limit_price,
     )
+    resolved_planned_date = (
+        resolve_preferred_pending_order_date(
+            project_root, ticker=ticker, latest_finalized_date=latest_finalized_date
+        )
+        if planned_trade_date is None
+        else validate_pending_order_trade_date(
+            project_root,
+            ticker=ticker,
+            latest_finalized_date=latest_finalized_date,
+            planned_trade_date=planned_trade_date,
+        )
+    )
     validate_pending_order_limit_price(
-        project_root, ticker=ticker, information_date=information_date, limit_price=plan["limit_price"]
+        project_root,
+        ticker=ticker,
+        planned_trade_date=resolved_planned_date,
+        latest_finalized_date=latest_finalized_date,
+        limit_price=plan["limit_price"],
     )
     candidate_for_lineage = deepcopy(candidate)
     candidate_for_lineage["execution_plan_seed"] = deepcopy(plan)
     candidate_for_lineage["proj_qty"] = int(plan["qty"])
     candidate_for_lineage["proj_cost"] = float(plan["reserved_cost"])
     lineage = build_trading_candidate_strategy_lineage(candidate_for_lineage)
-    resolved_planned_date = (
-        resolve_next_pending_order_date(project_root, information_date=information_date)
-        if planned_trade_date is None
-        else validate_pending_order_trade_date(
-            project_root, information_date=information_date, planned_trade_date=planned_trade_date
-        )
-    )
     entry = _pending_entry_payload(
         origin=PENDING_ENTRY_ORIGIN_SCANNER,
         ticker=ticker,
@@ -465,8 +478,24 @@ def _prepare_manual_pending_entry(
         qty=qty,
         limit_price=user_limit_price,
     )
+    resolved_planned_date = (
+        resolve_preferred_pending_order_date(
+            project_root, ticker=ticker_key, latest_finalized_date=information_date
+        )
+        if planned_trade_date is None
+        else validate_pending_order_trade_date(
+            project_root,
+            ticker=ticker_key,
+            latest_finalized_date=information_date,
+            planned_trade_date=planned_trade_date,
+        )
+    )
     validate_pending_order_limit_price(
-        project_root, ticker=ticker_key, information_date=information_date, limit_price=plan["limit_price"]
+        project_root,
+        ticker=ticker_key,
+        planned_trade_date=resolved_planned_date,
+        latest_finalized_date=information_date,
+        limit_price=plan["limit_price"],
     )
     lineage = build_trading_manual_management_lineage(
         params=params,
@@ -475,13 +504,6 @@ def _prepare_manual_pending_entry(
         origin="manual_pending_entry",
         planned_qty=int(plan["qty"]),
         planned_cost=float(plan["reserved_cost"]),
-    )
-    resolved_planned_date = (
-        resolve_next_pending_order_date(project_root, information_date=information_date)
-        if planned_trade_date is None
-        else validate_pending_order_trade_date(
-            project_root, information_date=information_date, planned_trade_date=planned_trade_date
-        )
     )
     entry = _pending_entry_payload(
         origin=PENDING_ENTRY_ORIGIN_MANUAL,
@@ -577,6 +599,10 @@ def _prepare_existing_pending_entry_update(
     information_date = normalize_trading_date(
         current.get("information_date"), field_name="information_date", allow_none=False
     )
+    runtime = load_trading_scanner_runtime(project_root)
+    latest_finalized_date = normalize_trading_date(
+        runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
+    )
     resources = _account_resources(
         project_root, information_date=information_date, exclude_pending_entry_id=pending_entry_id
     )
@@ -594,13 +620,20 @@ def _prepare_existing_pending_entry_update(
         qty=qty,
         limit_price=limit_price,
     )
-    validate_pending_order_limit_price(
-        project_root, ticker=ticker, information_date=information_date, limit_price=plan["limit_price"]
-    )
     lineage = _rebuild_existing_pending_lineage(current, plan)
     requested_planned_date = planned_trade_date or current.get("planned_trade_date")
     resolved_planned_date = validate_pending_order_trade_date(
-        project_root, information_date=information_date, planned_trade_date=requested_planned_date
+        project_root,
+        ticker=ticker,
+        latest_finalized_date=latest_finalized_date,
+        planned_trade_date=requested_planned_date,
+    )
+    validate_pending_order_limit_price(
+        project_root,
+        ticker=ticker,
+        planned_trade_date=resolved_planned_date,
+        latest_finalized_date=latest_finalized_date,
+        limit_price=plan["limit_price"],
     )
     replacement = _pending_entry_payload(
         origin=str(current.get("origin") or ""),
@@ -760,13 +793,23 @@ def preview_trading_pending_entry_fill(
     limit_price = entry.get("limit_price")
     if limit_price is not None and price_to_milli(price) > price_to_milli(limit_price):
         raise ValueError(f"成交價 {price} 高於掛單買入限價 {limit_price}")
+    fill_date = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
+    order_date = normalize_trading_date(
+        entry.get("planned_trade_date"), field_name="pending_entry.planned_trade_date", allow_none=False
+    )
+    if fill_date <= order_date:
+        raise ValueError(f"成交日 {fill_date} 必須嚴格晚於掛單日 {order_date}")
+    runtime = load_trading_scanner_runtime(project_root)
+    latest_finalized_date = normalize_trading_date(
+        runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
+    )
     evidence = validate_trading_actual_fill(
         project_root,
         ticker=entry["ticker"],
         price=price,
-        trade_date=trade_date,
+        trade_date=fill_date,
+        latest_date=latest_finalized_date,
     )
-    fill_date = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
     info_date = normalize_trading_date(entry["information_date"], field_name="information_date", allow_none=False)
     warnings = []
     if fill_date <= info_date:

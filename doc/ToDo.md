@@ -21,6 +21,7 @@
 
 
 - imrove DL learnability
+    - 0050 only DL
     - 還是應該廣義成圖形辦識的多層結構，而不是人為克意去分層
     - input with 還原/非還原價
     - input with 漲/跌家數

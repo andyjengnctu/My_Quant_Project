@@ -21,12 +21,15 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 from services.trading.account_trade_entry import correct_trading_account_transaction, record_trading_account_inventory_sell
+from services.trading.order_form_constraints import build_trading_actual_fill_form_constraints
+from services.trading.scanner_state import load_trading_scanner_runtime
 from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.paged_table import PagedTable, TableColumn
 from services.workbench_ui.state_sync import ACCOUNT_MUTATION_DOMAINS
 from services.workbench_ui.workbench import (
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
+    WORKBENCH_COMBO_STYLE,
     WORKBENCH_ENTRY_STYLE,
     WORKBENCH_ERROR,
     WORKBENCH_FRAME_STYLE,
@@ -771,8 +774,41 @@ class AccountingCenterPanel(ttk.Frame):
             ttk.Label(body, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=r, column=0, sticky="w", pady=4)
         ttk.Label(body, textvariable=ticker_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT).grid(row=0, column=1, sticky="w", padx=(8, 0), pady=4)
         ttk.Entry(body, textvariable=qty_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=4)
-        ttk.Entry(body, textvariable=price_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=4)
-        DatePickerField(body, textvariable=date_var, width=14).grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=4)
+        price_widget = None
+        date_field = None
+        buy_constraint_state = {"allowed_dates": (), "price_options": ()}
+        if side == "BUY":
+            price_widget = ttk.Combobox(
+                body, textvariable=price_var, values=(), width=18, state="normal", style=WORKBENCH_COMBO_STYLE
+            )
+            price_widget.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=4)
+            date_field = DatePickerField(body, textvariable=date_var, width=14, allowed_dates=())
+            date_field.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=4)
+
+            def refresh_buy_constraints(*_args):
+                try:
+                    runtime = load_trading_scanner_runtime(WORKBENCH_PROJECT_ROOT)
+                    constraints = build_trading_actual_fill_form_constraints(
+                        WORKBENCH_PROJECT_ROOT,
+                        ticker=ticker_var.get(),
+                        selected_date=date_var.get().strip() or None,
+                        latest_finalized_date=str(runtime.get("latest_data_date") or "").strip() or None,
+                    )
+                except Exception:
+                    constraints = {"allowed_dates": (), "price_options": ()}
+                buy_constraint_state.clear()
+                buy_constraint_state.update(constraints)
+                allowed = tuple(constraints.get("allowed_dates") or ())
+                prices = tuple(str(value) for value in (constraints.get("price_options") or ()))
+                date_field.set_allowed_dates(allowed)
+                price_widget.configure(values=prices)
+
+            date_var.trace_add("write", refresh_buy_constraints)
+            refresh_buy_constraints()
+        else:
+            ttk.Entry(body, textvariable=price_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=4)
+            date_field = DatePickerField(body, textvariable=date_var, width=14)
+            date_field.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=4)
 
         def save():
             try:
@@ -781,6 +817,13 @@ class AccountingCenterPanel(ttk.Frame):
                 trade_date = date_var.get().strip()
                 if not trade_date:
                     raise ValueError("成交日必填")
+                if side == "BUY":
+                    allowed_dates = set(buy_constraint_state.get("allowed_dates") or ())
+                    if trade_date not in allowed_dates:
+                        raise ValueError("成交日不是目前最新 finalized 範圍內、且有正式市場證據的可選日期")
+                    legal_prices = {float(value) for value in (buy_constraint_state.get("price_options") or ())}
+                    if float(price) not in legal_prices:
+                        raise ValueError("成交價不在所選成交日的合法市場價格 ticks 內")
                 correct_trading_account_transaction(
                     WORKBENCH_PROJECT_ROOT,
                     transaction_revision=int(row.get("revision") or 0),

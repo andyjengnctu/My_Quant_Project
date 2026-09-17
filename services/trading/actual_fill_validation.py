@@ -105,8 +105,15 @@ def list_trading_actual_fill_dates(
     ticker: object,
     market_view: TradingMarketDataV2View | None = None,
     today: date | str | None = None,
+    latest_date: date | str | None = None,
+    after_date: date | str | None = None,
 ) -> tuple[str, ...]:
-    """Return all locally evidenced positive-volume dates eligible for a fill."""
+    """Return locally evidenced positive-volume dates eligible for a fill.
+
+    ``latest_date`` clamps the list to the currently finalized Trading horizon.
+    ``after_date`` is an exclusive lower bound used by pending-order fills so
+    the UI and service share the same ``fill_date > order_date`` contract.
+    """
 
     root = Path(project_root).resolve()
     ticker_key = normalize_trading_ticker(ticker)
@@ -116,6 +123,10 @@ def list_trading_actual_fill_dates(
         today_date = today
     else:
         today_date = date.fromisoformat(str(today))
+    latest_bound = today_date
+    if latest_date is not None:
+        latest_bound = min(latest_bound, latest_date if isinstance(latest_date, date) else date.fromisoformat(str(latest_date)))
+    exclusive_lower = None if after_date is None else (after_date if isinstance(after_date, date) else date.fromisoformat(str(after_date)))
     view = market_view or TradingMarketDataV2View.open(root)
     frame = view.read_dataset_frame(
         TRADING_FILL_EVIDENCE_DATASET,
@@ -134,7 +145,11 @@ def list_trading_actual_fill_dates(
     if not mask.any():
         return ()
     eligible = dates.loc[mask].dt.date
-    values = sorted({value.isoformat() for value in eligible if value <= today_date})
+    values = sorted({
+        value.isoformat()
+        for value in eligible
+        if value <= latest_bound and (exclusive_lower is None or value > exclusive_lower)
+    })
     return tuple(values)
 
 
@@ -146,6 +161,7 @@ def validate_trading_actual_fill(
     trade_date: object,
     market_view: TradingMarketDataV2View | None = None,
     today: date | str | None = None,
+    latest_date: date | str | None = None,
 ) -> dict[str, object]:
     """Validate one actual broker fill against exact-date raw market evidence.
 
@@ -161,8 +177,13 @@ def validate_trading_actual_fill(
         today_date = today
     else:
         today_date = date.fromisoformat(str(today))
-    if date.fromisoformat(date_text) > today_date:
+    trade_day = date.fromisoformat(date_text)
+    if trade_day > today_date:
         raise ValueError(f"成交日 {date_text} 尚未到來；不可登錄未來成交")
+    if latest_date is not None:
+        latest_bound = latest_date if isinstance(latest_date, date) else date.fromisoformat(str(latest_date))
+        if trade_day > latest_bound:
+            raise ValueError(f"成交日 {date_text} 超過目前最新 finalized 日期 {latest_bound.isoformat()}")
 
     fill_price_milli = _positive_price_milli(price, field_name="成交價")
     rounded_milli = int(round_price_to_tick_milli(price, direction="nearest", ticker=ticker_key))

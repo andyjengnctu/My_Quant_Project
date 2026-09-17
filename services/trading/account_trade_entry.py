@@ -217,11 +217,16 @@ def preview_trading_account_buy(
     if qty_int <= 0:
         raise ValueError("成交股數必須 > 0")
 
+    runtime = load_trading_scanner_runtime(project_root)
+    latest_finalized_date = normalize_trading_date(
+        runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
+    )
     market_evidence = validate_trading_actual_fill(
         project_root,
         ticker=ticker_key,
         price=price,
         trade_date=trade_date,
+        latest_date=latest_finalized_date,
     )
     current_candidate = None
     manual_management = None
@@ -346,11 +351,16 @@ def correct_trading_account_transaction(
     mutation = str(event.get("mutation_type") or "")
     details = dict(event.get("details") or {})
     if mutation in _BUY_MUTATIONS:
+        runtime = load_trading_scanner_runtime(project_root)
+        latest_finalized_date = normalize_trading_date(
+            runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
+        )
         validate_trading_actual_fill(
             project_root,
             ticker=details.get("ticker"),
             price=price,
             trade_date=trade_date,
+            latest_date=latest_finalized_date,
         )
     return correct_trading_transaction(
         project_root,

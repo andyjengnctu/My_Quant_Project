@@ -40,11 +40,13 @@ from services.trading.proposed_order_state import (
 from services.trading.scanner_state import (
     get_trading_candidate_snapshot_read_model,
     load_trading_candidate_snapshot_for_account,
+    load_trading_scanner_runtime,
 )
 from services.trading.position_rollforward import build_trading_position_rollforward_snapshot, run_trading_position_rollforward
 from services.trading.order_form_constraints import (
     ORDER_FORM_DATE_KIND_FILL,
     ORDER_FORM_DATE_KIND_PENDING,
+    build_trading_actual_fill_form_constraints,
     build_trading_pending_order_form_constraints,
 )
 from services.trading.pending_entry_service import (
@@ -551,14 +553,24 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_draft_origin: str | None = None
         self._pending_draft_candidate: dict[str, object] | None = None
         self._pending_edit_entry_id: str | None = None
+        self._pending_form_mode = "order"
         self._pending_draft_programmatic_update = False
         self._pending_manual_preview_after_id = None
         self._pending_preview_thread = None
         self._pending_preview_token = 0
+        self._pending_preview_inflight = 0
         self._pending_preview_results: queue.Queue = queue.Queue()
         self._pending_preview_poll_after_id = None
         self._pending_order_form_constraints: dict[str, object] = {}
         self._pending_price_option_set: frozenset[str] = frozenset()
+        self._trade_fill_constraints: dict[str, object] = {}
+        self._trade_price_option_set: frozenset[str] = frozenset()
+        self._trade_constraint_after_id = None
+        self._trade_constraint_programmatic_update = False
+        self._trade_constraint_token = 0
+        self._trade_constraint_inflight = 0
+        self._trade_constraint_results: queue.Queue = queue.Queue()
+        self._trade_constraint_poll_after_id = None
         self._proposed_order_rows: list[dict[str, object]] = []
         self._order_snapshot: dict[str, object] = {}
         self._order_rows: dict[str, dict[str, object]] = {}
@@ -830,10 +842,17 @@ class TradingAccountPanel(ttk.Frame):
             except tk.TclError as exc:
                 _warn_gui_fallback("Trading pending manual preview after_cancel", exc)
             self._pending_manual_preview_after_id = None
+        if self._trade_constraint_after_id is not None:
+            try:
+                self.after_cancel(self._trade_constraint_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Trading direct-fill constraint after_cancel", exc)
+            self._trade_constraint_after_id = None
         for attr_name, label in (
             ("_initial_state_poll_after_id", "initial-state"),
             ("_command_poll_after_id", "command"),
             ("_pending_preview_poll_after_id", "pending-preview"),
+            ("_trade_constraint_poll_after_id", "direct-fill-constraint"),
         ):
             after_id = getattr(self, attr_name, None)
             if after_id is not None:
@@ -1127,8 +1146,8 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_submit_button.pack(side="left")
         self._pending_fill_button = ttk.Button(
             pending_draft_buttons,
-            text="確認成交 → 持股",
-            command=self._confirm_pending_fill,
+            text="輸入成交",
+            command=self._pending_fill_action,
             style=WORKBENCH_BUTTON_STYLE,
             state="disabled",
         )
@@ -1162,10 +1181,17 @@ class TradingAccountPanel(ttk.Frame):
         self._trade_date_var = tk.StringVar()
         for col, label in enumerate(trade_labels):
             ttk.Label(trade_box, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
-        ttk.Entry(trade_box, textvariable=self._trade_ticker_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._trade_ticker_entry = ttk.Entry(trade_box, textvariable=self._trade_ticker_var, width=12, style=WORKBENCH_ENTRY_STYLE)
+        self._trade_ticker_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         ttk.Entry(trade_box, textvariable=self._trade_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
-        ttk.Entry(trade_box, textvariable=self._trade_price_var, width=14, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
-        DatePickerField(trade_box, textvariable=self._trade_date_var, width=12).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._trade_price_combo = ttk.Combobox(
+            trade_box, textvariable=self._trade_price_var, values=(), width=14, state="normal", style=WORKBENCH_COMBO_STYLE
+        )
+        self._trade_price_combo.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._trade_date_field = DatePickerField(trade_box, textvariable=self._trade_date_var, width=12, allowed_dates=())
+        self._trade_date_field.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._trade_ticker_var.trace_add("write", self._schedule_direct_fill_constraints)
+        self._trade_date_var.trace_add("write", self._schedule_direct_fill_constraints)
         trade_buttons = ttk.Frame(trade_box, style=WORKBENCH_FRAME_STYLE)
         trade_buttons.grid(row=1, column=4, sticky="w", padx=(12, 0), pady=(4, 0))
         ttk.Button(trade_buttons, text="登錄買入成交", command=lambda: self._record_simple_trade("BUY"), style=WORKBENCH_BUTTON_STYLE).pack(side="left")
@@ -2304,19 +2330,34 @@ class TradingAccountPanel(ttk.Frame):
         ticker = self._selected_candidate_ticker()
         return dict(getattr(self, "_candidate_by_ticker", {}).get(ticker) or {}) if ticker else None
 
-    def _set_pending_edit_mode(self, pending_entry_id: str | None) -> None:
-        self._pending_edit_entry_id = None if not pending_entry_id else str(pending_entry_id)
+    def _configure_pending_mode_buttons(self) -> None:
         editing = self._pending_edit_entry_id is not None
+        fill_mode = self._pending_form_mode == "fill" and editing
         if hasattr(self, "_pending_submit_button"):
-            self._pending_submit_button.configure(text="更新掛單" if editing else "確認掛單", state="normal")
+            if fill_mode:
+                self._pending_submit_button.configure(text="返回改掛單", state="normal")
+            else:
+                self._pending_submit_button.configure(
+                    text="更新掛單" if editing else "確認掛單",
+                    state="normal",
+                )
         if hasattr(self, "_pending_fill_button"):
-            self._pending_fill_button.configure(state="disabled")
+            self._pending_fill_button.configure(
+                text="確認成交 → 持股" if fill_mode else "輸入成交",
+                state="normal" if editing and not fill_mode else "disabled",
+            )
         if hasattr(self, "_pending_delete_button"):
             self._pending_delete_button.configure(state="normal" if editing else "disabled")
         if hasattr(self, "_pending_cancel_edit_button"):
             self._pending_cancel_edit_button.configure(state="normal" if editing else "disabled")
 
+    def _set_pending_edit_mode(self, pending_entry_id: str | None) -> None:
+        self._pending_edit_entry_id = None if not pending_entry_id else str(pending_entry_id)
+        self._pending_form_mode = "order"
+        self._configure_pending_mode_buttons()
+
     def _reset_pending_draft_form(self, *, message: str | None = None) -> None:
+        self._invalidate_pending_preview()
         if self._pending_manual_preview_after_id is not None:
             try:
                 self.after_cancel(self._pending_manual_preview_after_id)
@@ -2351,23 +2392,38 @@ class TradingAccountPanel(ttk.Frame):
     def _on_candidate_selected(self, row):
         ticker = str((row or {}).get("ticker") or "").strip().upper()
         self._trade_ticker_var.set(ticker)
-        if ticker and not self._trade_date_var.get().strip():
-            self._trade_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
         candidate = self._selected_candidate_row()
         if not candidate:
             return
+        self._invalidate_pending_preview()
         self._set_pending_edit_mode(None)
         self._pending_draft_origin = "scanner"
         self._pending_draft_candidate = dict(candidate)
+        seed = dict(candidate.get("execution_plan_seed") or {})
+        candidate_qty = candidate.get("proj_qty")
+        if candidate_qty is None:
+            candidate_qty = seed.get("qty")
+        candidate_price = candidate.get("limit_price")
+        if candidate_price is None:
+            candidate_price = seed.get("limit_price")
+        candidate_date = (
+            candidate.get("trade_date")
+            or candidate.get("candidate_date")
+            or self._candidate_payload.get("latest_data_date")
+            or ""
+        )
         self._pending_draft_programmatic_update = True
         try:
             self._pending_order_source_var.set("Scanner")
             self._pending_order_ticker_var.set(ticker)
-            self._pending_order_qty_var.set("")
-            self._pending_order_price_var.set("")
-            self._pending_order_date_var.set("")
+            self._pending_order_qty_var.set("" if candidate_qty is None else str(int(candidate_qty)))
+            self._pending_order_price_var.set("" if candidate_price is None else str(candidate_price))
+            self._pending_order_date_var.set(str(candidate_date or ""))
         finally:
             self._pending_draft_programmatic_update = False
+        self._pending_draft_preview_var.set(
+            f"{ticker}｜Scanner 資料已帶入；正在驗證目前帳戶資源、日期與價格…"
+        )
         self._preview_pending_draft(use_current_overrides=False, silent=True)
 
     def _selected_pending_entry_id(self):
@@ -2424,6 +2480,7 @@ class TradingAccountPanel(ttk.Frame):
     def _schedule_manual_pending_ticker_preview(self, _event=None):
         if self._pending_draft_programmatic_update:
             return None
+        self._invalidate_pending_preview()
         if hasattr(self, "_pending_submit_button"):
             self._pending_submit_button.configure(state="disabled")
         if hasattr(self, "_pending_fill_button"):
@@ -2443,6 +2500,7 @@ class TradingAccountPanel(ttk.Frame):
     def _schedule_pending_value_preview(self, *_args):
         if self._pending_draft_programmatic_update:
             return None
+        self._invalidate_pending_preview()
         if hasattr(self, "_pending_submit_button"):
             self._pending_submit_button.configure(state="disabled")
         if hasattr(self, "_pending_fill_button"):
@@ -2524,6 +2582,7 @@ class TradingAccountPanel(ttk.Frame):
         existing_entry = dict(self._pending_rows.get(str(self._pending_edit_entry_id or "")) or {})
         return {
             "pending_entry_id": self._pending_edit_entry_id,
+            "form_mode": str(self._pending_form_mode or "order"),
             "origin": origin,
             "candidate": candidate,
             "existing_entry": existing_entry,
@@ -2531,6 +2590,11 @@ class TradingAccountPanel(ttk.Frame):
             "qty": qty,
             "price": price,
             "planned_date": planned_date,
+            "latest_finalized_date": str(
+                self._candidate_payload.get("latest_data_date")
+                or self._snapshot.get("latest_data_date")
+                or ""
+            ).strip() or None,
         }
 
     @staticmethod
@@ -2538,26 +2602,40 @@ class TradingAccountPanel(ttk.Frame):
         payload = dict(request or {})
         pending_entry_id = str(payload.get("pending_entry_id") or "").strip()
         existing_entry = dict(payload.get("existing_entry") or {})
+        form_mode = str(payload.get("form_mode") or "order")
 
-        if pending_entry_id and existing_entry:
-            information_date = str(existing_entry.get("information_date") or "").strip()
-            original_limit = existing_entry.get("limit_price")
-            constraints = build_trading_pending_order_form_constraints(
+        if pending_entry_id and existing_entry and form_mode == "fill":
+            entry_ticker = str(existing_entry.get("ticker") or "").strip().upper()
+            form_ticker = str(payload.get("ticker") or entry_ticker).strip().upper()
+            if form_ticker != entry_ticker:
+                raise ValueError("成交輸入不能修改股票；請先返回改掛單模式更新股票")
+            planned_qty = int(existing_entry.get("planned_qty") or 0)
+            form_qty = payload.get("qty")
+            if form_qty is None:
+                form_qty = planned_qty
+            form_qty = int(form_qty)
+            if form_qty <= 0 or form_qty > planned_qty:
+                raise ValueError(f"成交股數必須介於 1 與掛單股數 {planned_qty:,} 之間")
+            runtime = load_trading_scanner_runtime(WORKBENCH_PROJECT_ROOT)
+            latest_finalized_date = str(runtime.get("latest_data_date") or "").strip()
+            if not latest_finalized_date:
+                raise RuntimeError("Trading 最新 finalized 日期不可用")
+            constraints = build_trading_actual_fill_form_constraints(
                 WORKBENCH_PROJECT_ROOT,
-                ticker=payload.get("ticker") or existing_entry.get("ticker"),
-                information_date=information_date,
-                selected_date=payload.get("planned_date") or existing_entry.get("planned_trade_date"),
-                include_fill_dates=True,
-                pending_limit_price=original_limit,
+                ticker=entry_ticker,
+                selected_date=payload.get("planned_date"),
+                latest_finalized_date=latest_finalized_date,
+                earliest_exclusive_date=existing_entry.get("planned_trade_date"),
+                max_price=existing_entry.get("limit_price"),
+                auto_select_preferred=False,
             )
-            if constraints.get("selected_date_kind") == ORDER_FORM_DATE_KIND_FILL:
-                row = dict(existing_entry)
-                row["_order_form_context"] = ORDER_FORM_DATE_KIND_FILL
-                row["_order_form_constraints"] = constraints
-                row["_form_qty"] = payload.get("qty")
-                row["_form_price"] = payload.get("price")
-                row["_form_date"] = payload.get("planned_date")
-                return row
+            row = dict(existing_entry)
+            row["_order_form_context"] = ORDER_FORM_DATE_KIND_FILL
+            row["_order_form_constraints"] = constraints
+            row["_form_qty"] = form_qty
+            row["_form_price"] = payload.get("price")
+            row["_form_date"] = payload.get("planned_date")
+            return row
 
         if pending_entry_id:
             row = preview_trading_pending_entry_update(
@@ -2587,13 +2665,17 @@ class TradingAccountPanel(ttk.Frame):
                 planned_trade_date=payload.get("planned_date"),
             )
         row = dict(row or {})
+        runtime = load_trading_scanner_runtime(WORKBENCH_PROJECT_ROOT)
+        latest_finalized_date = str(runtime.get("latest_data_date") or "").strip() or str(row.get("information_date") or "")
         constraints = build_trading_pending_order_form_constraints(
             WORKBENCH_PROJECT_ROOT,
             ticker=row.get("ticker"),
             information_date=row.get("information_date"),
             selected_date=row.get("planned_trade_date"),
-            include_fill_dates=bool(pending_entry_id),
+            include_fill_dates=False,
             pending_limit_price=(existing_entry.get("limit_price") if existing_entry else row.get("limit_price")),
+            pending_order_date=None,
+            latest_finalized_date=latest_finalized_date,
         )
         row["_order_form_context"] = ORDER_FORM_DATE_KIND_PENDING
         row["_order_form_constraints"] = constraints
@@ -2625,16 +2707,16 @@ class TradingAccountPanel(ttk.Frame):
                 f"價格 {self._pending_order_price_var.get().strip()} 不在目前日期的合法 tick 範圍；請由下拉選單重新選擇。"
             )
 
-        if hasattr(self, "_pending_delete_button"):
-            self._pending_delete_button.configure(state="normal" if editing else "disabled")
-        if hasattr(self, "_pending_cancel_edit_button"):
-            self._pending_cancel_edit_button.configure(state="normal" if editing else "disabled")
-        if kind == ORDER_FORM_DATE_KIND_FILL and editing:
-            self._pending_submit_button.configure(state="disabled")
-            self._pending_fill_button.configure(state="normal" if price_valid else "disabled")
+        self._configure_pending_mode_buttons()
+        if self._pending_form_mode == "fill" and editing:
+            self._pending_submit_button.configure(text="返回改掛單", state="normal")
+            self._pending_fill_button.configure(
+                text="確認成交 → 持股",
+                state="normal" if kind == ORDER_FORM_DATE_KIND_FILL and price_valid else "disabled",
+            )
         elif kind == ORDER_FORM_DATE_KIND_PENDING:
             self._pending_submit_button.configure(state="normal" if price_valid else "disabled")
-            self._pending_fill_button.configure(state="disabled")
+            self._pending_fill_button.configure(text="輸入成交", state="normal" if editing else "disabled")
         else:
             self._pending_submit_button.configure(state="disabled")
             self._pending_fill_button.configure(state="disabled")
@@ -2678,14 +2760,99 @@ class TradingAccountPanel(ttk.Frame):
                 f"合法價格 {constraints.get('price_min')}～{constraints.get('price_max')}｜資訊日 {row.get('information_date') or '-'}"
             )
 
+    def _invalidate_pending_preview(self) -> None:
+        # Invalidate already-running background work immediately.  This is called
+        # on selection/field changes, not only when the next worker eventually starts.
+        self._pending_preview_token += 1
+
+    def _clear_pending_constraint_options(self) -> None:
+        self._pending_order_form_constraints = {}
+        self._pending_price_option_set = frozenset()
+        if hasattr(self, "_pending_order_price_combo"):
+            self._pending_order_price_combo.configure(values=())
+        if hasattr(self, "_pending_order_date_field"):
+            self._pending_order_date_field.set_allowed_dates(())
+
+    @staticmethod
+    def _pending_constraint_worker(request: dict) -> dict:
+        """Resolve calendar/price options independently from account sizing preview.
+
+        A Scanner selection must stay useful even when the account-level preview
+        cannot build an executable quantity (for example, insufficient cash).
+        Date/price constraints therefore have their own fallback path rather than
+        disappearing together with the sizing preview.
+        """
+
+        payload = dict(request or {})
+        existing_entry = dict(payload.get("existing_entry") or {})
+        form_mode = str(payload.get("form_mode") or "order")
+        ticker = str(payload.get("ticker") or existing_entry.get("ticker") or "").strip().upper()
+        if not ticker:
+            raise ValueError("股票代號必填")
+
+        latest_finalized_date = str(payload.get("latest_finalized_date") or "").strip()
+        if not latest_finalized_date:
+            runtime = load_trading_scanner_runtime(WORKBENCH_PROJECT_ROOT)
+            latest_finalized_date = str(runtime.get("latest_data_date") or "").strip()
+        if not latest_finalized_date:
+            raise RuntimeError("Trading 最新 finalized 日期不可用")
+
+        if form_mode == "fill" and existing_entry:
+            return build_trading_actual_fill_form_constraints(
+                WORKBENCH_PROJECT_ROOT,
+                ticker=ticker,
+                selected_date=payload.get("planned_date"),
+                latest_finalized_date=latest_finalized_date,
+                earliest_exclusive_date=existing_entry.get("planned_trade_date"),
+                max_price=existing_entry.get("limit_price"),
+                auto_select_preferred=False,
+            )
+
+        candidate = dict(payload.get("candidate") or {})
+        information_date = str(
+            existing_entry.get("information_date")
+            or candidate.get("trade_date")
+            or candidate.get("candidate_date")
+            or latest_finalized_date
+        ).strip()
+        return build_trading_pending_order_form_constraints(
+            WORKBENCH_PROJECT_ROOT,
+            ticker=ticker,
+            information_date=information_date,
+            selected_date=payload.get("planned_date"),
+            include_fill_dates=False,
+            pending_limit_price=(existing_entry.get("limit_price") if existing_entry else payload.get("price")),
+            pending_order_date=None,
+            latest_finalized_date=latest_finalized_date,
+        )
+
+    @staticmethod
+    def _pending_preview_error_message(error: Exception) -> str:
+        text = str(error or "").strip() or "未知錯誤"
+        lowered = text.casefold()
+        if any(token in text for token in ("可用現金", "股數", "資金", "slot", "超過")):
+            prefix = "需調整"
+        elif any(token in lowered for token in ("stale", "candidate")) and any(token in text for token in ("過期", "不一致", "來源已改變", "snapshot")):
+            prefix = "資料已過期"
+        elif any(token in text for token in ("市場資料", "交易資料", "OHLC", "價格區間", "Trading adjusted", "TaiwanStockPrice")):
+            prefix = "缺少市場資料"
+        else:
+            prefix = "無法試算"
+        return f"{prefix}：{text}"
+
     def _pending_preview_worker(self, token: int, request: dict, silent: bool) -> None:
         result = None
         error = None
+        fallback_constraints = None
         try:
             result = self._pending_draft_worker(request)
         except Exception as exc:
             error = exc
-        self._pending_preview_results.put((token, result, error, bool(silent)))
+            try:
+                fallback_constraints = self._pending_constraint_worker(request)
+            except Exception:
+                fallback_constraints = None
+        self._pending_preview_results.put((token, result, error, bool(silent), fallback_constraints))
 
     def _schedule_pending_preview_poll(self) -> None:
         if self._pending_preview_poll_after_id is None:
@@ -2693,25 +2860,29 @@ class TradingAccountPanel(ttk.Frame):
 
     def _drain_pending_preview_results(self) -> None:
         self._pending_preview_poll_after_id = None
-        handled = False
         while True:
             try:
-                token, result, error, silent = self._pending_preview_results.get_nowait()
+                token, result, error, silent, fallback_constraints = self._pending_preview_results.get_nowait()
             except queue.Empty:
                 break
-            handled = True
+            self._pending_preview_inflight = max(0, int(self._pending_preview_inflight) - 1)
             if int(token) != int(self._pending_preview_token):
                 continue
             if error is not None:
+                if fallback_constraints:
+                    self._apply_pending_order_form_constraints(
+                        fallback_constraints,
+                        editing=self._pending_edit_entry_id is not None,
+                    )
+                message = self._pending_preview_error_message(error)
                 if silent:
-                    self._pending_draft_preview_var.set(f"試算未更新：{error}")
+                    # Selection stays visible even when account-level preview fails.
+                    self._pending_draft_preview_var.set(message)
                 else:
                     messagebox.showerror("掛單試算失敗", str(error), parent=self)
             else:
                 self._apply_pending_draft_preview(result)
-        if handled and self._pending_preview_thread is not None and not self._pending_preview_thread.is_alive():
-            self._pending_preview_thread = None
-        if self._pending_preview_thread is not None and self._pending_preview_thread.is_alive():
+        if self._pending_preview_inflight > 0:
             self._schedule_pending_preview_poll()
 
     def _preview_pending_draft(self, *, use_current_overrides: bool, silent: bool = False):
@@ -2721,34 +2892,27 @@ class TradingAccountPanel(ttk.Frame):
         try:
             request = self._build_pending_draft_request(use_current_overrides=use_current_overrides)
         except (ValueError, RuntimeError) as exc:
+            message = self._pending_preview_error_message(exc)
             if silent:
-                self._pending_draft_preview_var.set(f"試算未更新：{exc}")
+                self._pending_draft_preview_var.set(message)
             else:
                 messagebox.showerror("掛單試算失敗", str(exc), parent=self)
             return False
-        if self._pending_preview_thread is not None and self._pending_preview_thread.is_alive():
-            if self._pending_manual_preview_after_id is not None:
-                try:
-                    self.after_cancel(self._pending_manual_preview_after_id)
-                except tk.TclError as exc:
-                    _warn_gui_fallback("Trading pending preview retry", exc)
-            self._pending_manual_preview_after_id = self.after(
-                150,
-                lambda: self._preview_pending_draft(
-                    use_current_overrides=use_current_overrides, silent=silent
-                ),
-            )
-            return False
         self._pending_preview_token += 1
         token = int(self._pending_preview_token)
-        self._pending_draft_preview_var.set(f"{ticker}｜自動更新盤前資訊中…")
-        self._pending_preview_thread = threading.Thread(
+        self._pending_preview_inflight += 1
+        self._clear_pending_constraint_options()
+        self._pending_submit_button.configure(state="disabled")
+        self._pending_fill_button.configure(state="disabled")
+        self._pending_draft_preview_var.set(f"{ticker}｜載入中…")
+        thread = threading.Thread(
             target=self._pending_preview_worker,
             args=(token, request, bool(silent)),
             name=f"workbench-pending-preview-{token}",
             daemon=True,
         )
-        self._pending_preview_thread.start()
+        self._pending_preview_thread = thread
+        thread.start()
         self._schedule_pending_preview_poll()
         return True
 
@@ -2756,6 +2920,9 @@ class TradingAccountPanel(ttk.Frame):
         return self._preview_pending_draft(use_current_overrides=True, silent=False)
 
     def _confirm_submit_pending_draft(self):
+        if self._pending_form_mode == "fill":
+            self._return_pending_order_mode()
+            return
         ticker = self._pending_order_ticker_var.get().strip().upper()
         if not ticker:
             messagebox.showerror("掛單", "股票代號必填。", parent=self)
@@ -2837,6 +3004,55 @@ class TradingAccountPanel(ttk.Frame):
             error_title="掛單確認失敗",
             refresh_state=False,
         )
+
+    def _enter_pending_fill_mode(self) -> None:
+        row = self._selected_pending_row()
+        if not row or not self._pending_edit_entry_id:
+            raise ValueError("請先選取掛單")
+        self._invalidate_pending_preview()
+        self._pending_form_mode = "fill"
+        self._pending_draft_programmatic_update = True
+        try:
+            self._pending_order_qty_var.set(str(int(row.get("planned_qty") or 0)))
+            self._pending_order_price_var.set("")
+            self._pending_order_date_var.set("")
+        finally:
+            self._pending_draft_programmatic_update = False
+        self._pending_order_form_constraints = {}
+        self._pending_price_option_set = frozenset()
+        self._pending_order_price_combo.configure(values=())
+        self._pending_order_date_field.set_allowed_dates(())
+        self._configure_pending_mode_buttons()
+        self._pending_draft_preview_var.set(
+            f"{row.get('ticker')}｜成交輸入：成交日必須嚴格晚於掛單日 {row.get('planned_trade_date')}；正在載入合法日期…"
+        )
+        self._preview_pending_draft(use_current_overrides=True, silent=True)
+
+    def _return_pending_order_mode(self) -> None:
+        row = self._selected_pending_row()
+        if not row or not self._pending_edit_entry_id:
+            return
+        self._invalidate_pending_preview()
+        self._pending_form_mode = "order"
+        self._pending_draft_programmatic_update = True
+        try:
+            self._pending_order_qty_var.set(str(int(row.get("planned_qty") or 0)))
+            self._pending_order_price_var.set(str(row.get("limit_price") or ""))
+            self._pending_order_date_var.set(str(row.get("planned_trade_date") or ""))
+        finally:
+            self._pending_draft_programmatic_update = False
+        self._configure_pending_mode_buttons()
+        self._pending_draft_preview_var.set(f"編輯 {row.get('ticker')}｜載入合法掛單日期／價格中…")
+        self._preview_pending_draft(use_current_overrides=True, silent=True)
+
+    def _pending_fill_action(self):
+        if self._pending_form_mode != "fill":
+            try:
+                self._enter_pending_fill_mode()
+            except (ValueError, RuntimeError) as exc:
+                messagebox.showerror("成交輸入", str(exc), parent=self)
+            return
+        self._confirm_pending_fill()
 
     def _pending_fill_values(self):
         row = self._selected_pending_row()
@@ -3539,6 +3755,95 @@ class TradingAccountPanel(ttk.Frame):
             success_message="現金餘額已更新。",
         )
 
+    def _schedule_direct_fill_constraints(self, *_args):
+        if self._trade_constraint_programmatic_update:
+            return None
+        self._trade_constraint_token += 1
+        if self._trade_constraint_after_id is not None:
+            try:
+                self.after_cancel(self._trade_constraint_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Trading direct-fill constraint debounce", exc)
+        self._trade_constraint_after_id = self.after(220, self._start_direct_fill_constraints)
+        return None
+
+    @staticmethod
+    def _direct_fill_constraint_worker(token: int, ticker: str, selected_date: str | None):
+        result = None
+        error = None
+        try:
+            runtime = load_trading_scanner_runtime(WORKBENCH_PROJECT_ROOT)
+            latest = str(runtime.get("latest_data_date") or "").strip()
+            result = build_trading_actual_fill_form_constraints(
+                WORKBENCH_PROJECT_ROOT,
+                ticker=ticker,
+                selected_date=selected_date or None,
+                latest_finalized_date=latest or None,
+            )
+        except Exception as exc:
+            error = exc
+        return token, result, error
+
+    def _start_direct_fill_constraints(self):
+        self._trade_constraint_after_id = None
+        ticker = self._trade_ticker_var.get().strip().upper()
+        if len(ticker) < 4:
+            self._trade_fill_constraints = {}
+            self._trade_price_option_set = frozenset()
+            self._trade_price_combo.configure(values=())
+            self._trade_date_field.set_allowed_dates(())
+            return
+        selected_date = self._trade_date_var.get().strip() or None
+        self._trade_constraint_token += 1
+        token = int(self._trade_constraint_token)
+        self._trade_constraint_inflight += 1
+
+        def worker():
+            self._trade_constraint_results.put(
+                self._direct_fill_constraint_worker(token, ticker, selected_date)
+            )
+
+        threading.Thread(
+            target=worker,
+            name=f"workbench-direct-fill-constraint-{token}",
+            daemon=True,
+        ).start()
+        if self._trade_constraint_poll_after_id is None:
+            self._trade_constraint_poll_after_id = self.after(30, self._drain_direct_fill_constraints)
+
+    def _drain_direct_fill_constraints(self):
+        self._trade_constraint_poll_after_id = None
+        while True:
+            try:
+                token, result, error = self._trade_constraint_results.get_nowait()
+            except queue.Empty:
+                break
+            self._trade_constraint_inflight = max(0, int(self._trade_constraint_inflight) - 1)
+            if int(token) != int(self._trade_constraint_token):
+                continue
+            if error is not None:
+                self._trade_fill_constraints = {}
+                self._trade_price_option_set = frozenset()
+                self._trade_price_combo.configure(values=())
+                self._trade_date_field.set_allowed_dates(())
+                continue
+            payload = dict(result or {})
+            self._trade_fill_constraints = payload
+            allowed = tuple(payload.get("allowed_dates") or ())
+            prices = tuple(str(value) for value in (payload.get("price_options") or ()))
+            self._trade_price_option_set = frozenset(prices)
+            self._trade_date_field.set_allowed_dates(allowed)
+            self._trade_price_combo.configure(values=prices)
+            if not self._trade_date_var.get().strip() and payload.get("preferred_fill_date"):
+                self._trade_constraint_programmatic_update = True
+                try:
+                    self._trade_date_var.set(str(payload.get("preferred_fill_date")))
+                finally:
+                    self._trade_constraint_programmatic_update = False
+                self._schedule_direct_fill_constraints()
+        if self._trade_constraint_inflight > 0:
+            self._trade_constraint_poll_after_id = self.after(30, self._drain_direct_fill_constraints)
+
     def _simple_trade_values(self):
         ticker = self._trade_ticker_var.get().strip().upper()
         if not ticker:
@@ -3550,6 +3855,13 @@ class TradingAccountPanel(ttk.Frame):
         trade_date = self._trade_date_var.get().strip()
         if not trade_date:
             raise ValueError("成交日必填")
+        constraints = dict(self._trade_fill_constraints or {})
+        allowed_dates = set(constraints.get("allowed_dates") or ())
+        if allowed_dates and trade_date not in allowed_dates:
+            raise ValueError("成交日不是目前最新 finalized 範圍內、且有正式市場證據的可選日期")
+        normalized_price = self._normalize_price_option_text(price)
+        if self._trade_price_option_set and normalized_price not in self._trade_price_option_set:
+            raise ValueError("成交價不在所選成交日的合法市場價格 ticks 內")
         return ticker, qty, price, trade_date
 
     def _record_simple_trade(self, side: str):
@@ -3608,6 +3920,10 @@ class TradingAccountPanel(ttk.Frame):
             self._trade_qty_var.set("")
             self._trade_price_var.set("")
             self._trade_date_var.set("")
+            self._trade_fill_constraints = {}
+            self._trade_price_option_set = frozenset()
+            self._trade_price_combo.configure(values=())
+            self._trade_date_field.set_allowed_dates(())
             messagebox.showinfo(
                 "成交登錄",
                 f"{ticker} 買入成交已寫入帳戶 SSOT；持股決策已同步重新整理。",
