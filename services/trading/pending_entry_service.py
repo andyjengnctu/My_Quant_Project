@@ -47,6 +47,7 @@ from services.trading.pending_entry_state import (
     load_trading_pending_entry_state,
     mark_trading_pending_entry_filled,
     project_trading_pending_entry_state,
+    update_trading_pending_entry,
 )
 from services.trading.scanner_state import load_trading_scanner_runtime
 from services.trading.state_lock import serialized_trading_state_mutation
@@ -69,7 +70,12 @@ def _default_planned_trade_date() -> str:
     return get_taipei_now().date().isoformat()
 
 
-def _account_resources(project_root, *, information_date: str) -> dict[str, Any]:
+def _account_resources(
+    project_root,
+    *,
+    information_date: str,
+    exclude_pending_entry_id: str | None = None,
+) -> dict[str, Any]:
     account = load_trading_account_state(project_root, required=True)
     cash_milli = account.get("cash_milli")
     if cash_milli is None:
@@ -79,22 +85,29 @@ def _account_resources(project_root, *, information_date: str) -> dict[str, Any]
         pending_state,
         current_information_date=information_date,
     )
-    if int(pending.get("stale_active_count") or 0) > 0:
-        tickers = [str(row.get("ticker")) for row in pending.get("stale_active_entries") or []]
+    excluded_id = str(exclude_pending_entry_id or "").strip() or None
+    stale_rows = [
+        row for row in list(pending.get("stale_active_entries") or [])
+        if str(row.get("pending_entry_id") or "") != excluded_id
+    ]
+    if stale_rows:
+        tickers = [str(row.get("ticker")) for row in stale_rows]
         raise RuntimeError(
-            "尚有前一資訊日未結案掛單；請先確認成交或標記無成交：" + ", ".join(tickers)
+            "尚有前一資訊日未結案掛單；請先確認成交或刪除掛單：" + ", ".join(tickers)
         )
     held_tickers = {normalize_trading_ticker(t) for t in (account.get("positions") or {})}
-    locked_tickers = {
-        normalize_trading_ticker(row.get("ticker"))
-        for row in pending.get("locked_entries") or []
-    }
+    locked_rows = [
+        row for row in list(pending.get("locked_entries") or [])
+        if str(row.get("pending_entry_id") or "") != excluded_id
+    ]
+    locked_tickers = {normalize_trading_ticker(row.get("ticker")) for row in locked_rows}
     held_count = len(held_tickers)
     locked_count = len(locked_tickers)
     slot_quota = max(0, int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - held_count)
     occupied = held_count + locked_count
     free_slots = max(0, slot_quota - locked_count)
-    available_cash_milli = int(cash_milli) - int(pending.get("reserved_total_milli") or 0)
+    reserved_total_milli = sum(int(row.get("reserved_cost_milli") or 0) for row in locked_rows)
+    available_cash_milli = int(cash_milli) - reserved_total_milli
     return {
         "account": account,
         "pending": pending,
@@ -107,7 +120,7 @@ def _account_resources(project_root, *, information_date: str) -> dict[str, Any]
         "max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
         "cash_limit_milli": int(cash_milli),
         "cash_limit": milli_to_money(int(cash_milli)),
-        "reserved_total_milli": int(pending.get("reserved_total_milli") or 0),
+        "reserved_total_milli": int(reserved_total_milli),
         "free_slots": free_slots,
         "available_cash_milli": max(0, available_cash_milli),
         "available_cash": milli_to_money(max(0, available_cash_milli)),
@@ -260,6 +273,7 @@ def _prepare_scanner_pending_entry(
     qty: int | None = None,
     limit_price=None,
     planned_trade_date: str | None = None,
+    exclude_pending_entry_id: str | None = None,
 ) -> dict[str, Any]:
     reference = dict(candidate_reference or {})
     ticker = normalize_trading_ticker(reference.get("ticker"))
@@ -273,7 +287,11 @@ def _prepare_scanner_pending_entry(
         field_name="candidate.trade_date",
         allow_none=False,
     )
-    resources = _account_resources(project_root, information_date=information_date)
+    resources = _account_resources(
+        project_root,
+        information_date=information_date,
+        exclude_pending_entry_id=exclude_pending_entry_id,
+    )
     _assert_can_add_ticker(resources, ticker=ticker)
     params, _member = resolve_trading_candidate_frozen_params(candidate)
     seed = deepcopy(dict(candidate.get("execution_plan_seed") or {}))
@@ -283,8 +301,10 @@ def _prepare_scanner_pending_entry(
     if planned_qty <= 0:
         raise ValueError(f"{ticker} Scanner 規劃股數為 0，不能加入掛單")
     seed["max_qty"] = planned_qty
-    if seed.get("sizing_capital") is None:
-        seed["sizing_capital"] = float(resolve_scanner_live_capital(params))
+    # Scanner Pool and pending-order preview must share one sizing-capital SSOT.
+    # Extended/TBD seeds can originate from a single-stock backtest capital; never
+    # let that advisory backtest capital override the Scanner live-capital contract.
+    seed["sizing_capital"] = float(resolve_scanner_live_capital(params))
     plan = _apply_pending_draft_overrides(
         ticker=ticker,
         base_plan=seed,
@@ -378,11 +398,16 @@ def _prepare_manual_pending_entry(
     qty: int | None = None,
     limit_price=None,
     planned_trade_date: str | None = None,
+    exclude_pending_entry_id: str | None = None,
 ) -> dict[str, Any]:
     ticker_key = normalize_trading_ticker(ticker)
     runtime = load_trading_scanner_runtime(project_root)
     information_date = normalize_trading_date(runtime["latest_data_date"], allow_none=False)
-    resources = _account_resources(project_root, information_date=information_date)
+    resources = _account_resources(
+        project_root,
+        information_date=information_date,
+        exclude_pending_entry_id=exclude_pending_entry_id,
+    )
     _assert_can_add_ticker(resources, ticker=ticker_key)
     params = runtime["params"]
     market = _manual_market_context(project_root, ticker=ticker_key, params=params, through_date=information_date)
@@ -469,6 +494,158 @@ def create_manual_trading_pending_entry(
     )
     entry.pop("resource_summary", None)
     return create_trading_pending_entry(project_root, entry=entry)
+
+
+def _rebuild_existing_pending_lineage(entry: Mapping[str, Any], plan: Mapping[str, Any]) -> dict[str, Any]:
+    lineage = deepcopy(dict(entry.get("management_lineage") or {}))
+    if not lineage:
+        raise RuntimeError("既有掛單缺少 frozen management lineage")
+    seed = deepcopy(dict(plan or {}))
+    lineage["execution_plan_seed"] = seed
+    lineage["planned_qty"] = int(seed.get("qty") or 0)
+    lineage["planned_cost"] = float(seed.get("reserved_cost") or 0.0)
+    origin = str(entry.get("origin") or "")
+    if origin == PENDING_ENTRY_ORIGIN_SCANNER:
+        identity_payload = {
+            "params_signature": str(lineage.get("params_signature") or ""),
+            "ensemble_member_key": str(lineage.get("ensemble_member_key") or ""),
+            "frozen_params_sha256": str(lineage.get("frozen_params_sha256") or ""),
+            "execution_plan_seed": seed,
+        }
+    elif origin == PENDING_ENTRY_ORIGIN_MANUAL:
+        identity_payload = {
+            "params_signature": str(lineage.get("params_signature") or ""),
+            "frozen_params_sha256": str(lineage.get("frozen_params_sha256") or ""),
+            "execution_plan_seed": seed,
+            "information_date": str(entry.get("information_date") or lineage.get("candidate_trade_date") or ""),
+            "origin": str(lineage.get("origin") or "manual_pending_entry"),
+            "target_reference_close": lineage.get("target_reference_close"),
+        }
+    else:
+        raise RuntimeError(f"未知掛單來源: {origin or '-'}")
+    lineage["lineage_id"] = canonical_json_sha256(identity_payload)
+    return lineage
+
+
+def _prepare_existing_pending_entry_update(
+    project_root,
+    *,
+    pending_entry_id: str,
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+) -> dict[str, Any]:
+    current = _load_active_pending(project_root, pending_entry_id)
+    ticker = normalize_trading_ticker(current.get("ticker"))
+    information_date = normalize_trading_date(
+        current.get("information_date"), field_name="information_date", allow_none=False
+    )
+    resources = _account_resources(
+        project_root, information_date=information_date, exclude_pending_entry_id=pending_entry_id
+    )
+    _assert_can_add_ticker(resources, ticker=ticker)
+    lineage = deepcopy(dict(current.get("management_lineage") or {}))
+    frozen_params = lineage.get("frozen_params")
+    if not isinstance(frozen_params, Mapping):
+        raise RuntimeError(f"{ticker} 掛單缺少 frozen params")
+    params = build_params_from_mapping(dict(frozen_params))
+    plan = _apply_pending_draft_overrides(
+        ticker=ticker,
+        base_plan=dict(current.get("execution_plan_seed") or {}),
+        params=params,
+        resources=resources,
+        qty=qty,
+        limit_price=limit_price,
+    )
+    lineage = _rebuild_existing_pending_lineage(current, plan)
+    replacement = _pending_entry_payload(
+        origin=str(current.get("origin") or ""),
+        ticker=ticker,
+        information_date=information_date,
+        planned_trade_date=planned_trade_date or current.get("planned_trade_date"),
+        plan=plan,
+        lineage=lineage,
+        signal_date=normalize_trading_date(current.get("signal_date"), field_name="signal_date", allow_none=True),
+    )
+    replacement["candidate_reference_sha256"] = current.get("candidate_reference_sha256")
+    replacement["resource_summary"] = _resource_summary(resources)
+    return replacement
+
+
+def preview_trading_pending_entry_update(
+    project_root,
+    *,
+    pending_entry_id: str,
+    origin: str,
+    ticker: object,
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+    candidate_reference: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    current = _load_active_pending(project_root, pending_entry_id)
+    ticker_key = normalize_trading_ticker(ticker)
+    current_ticker = normalize_trading_ticker(current.get("ticker"))
+    current_origin = str(current.get("origin") or "")
+    requested_origin = str(origin or "manual")
+    normalized_origin = PENDING_ENTRY_ORIGIN_SCANNER if requested_origin in {"scanner", PENDING_ENTRY_ORIGIN_SCANNER} else PENDING_ENTRY_ORIGIN_MANUAL
+
+    if ticker_key == current_ticker and normalized_origin == current_origin:
+        return _prepare_existing_pending_entry_update(
+            project_root,
+            pending_entry_id=pending_entry_id,
+            qty=qty,
+            limit_price=limit_price,
+            planned_trade_date=planned_trade_date,
+        )
+    if normalized_origin == PENDING_ENTRY_ORIGIN_SCANNER:
+        if not candidate_reference:
+            raise ValueError("Scanner 掛單修改缺少目前 candidate reference")
+        return _prepare_scanner_pending_entry(
+            project_root,
+            candidate_reference=candidate_reference,
+            qty=qty,
+            limit_price=limit_price,
+            planned_trade_date=planned_trade_date,
+            exclude_pending_entry_id=pending_entry_id,
+        )
+    return _prepare_manual_pending_entry(
+        project_root,
+        ticker=ticker_key,
+        qty=qty,
+        limit_price=limit_price,
+        planned_trade_date=planned_trade_date,
+        exclude_pending_entry_id=pending_entry_id,
+    )
+
+
+@serialized_trading_state_mutation
+def update_trading_pending_entry_intent(
+    project_root,
+    *,
+    pending_entry_id: str,
+    origin: str,
+    ticker: object,
+    qty: int | None = None,
+    limit_price=None,
+    planned_trade_date: str | None = None,
+    candidate_reference: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    recover_trading_pending_entry_transaction(project_root)
+    replacement = preview_trading_pending_entry_update(
+        project_root,
+        pending_entry_id=pending_entry_id,
+        origin=origin,
+        ticker=ticker,
+        qty=qty,
+        limit_price=limit_price,
+        planned_trade_date=planned_trade_date,
+        candidate_reference=candidate_reference,
+    )
+    replacement.pop("resource_summary", None)
+    return update_trading_pending_entry(
+        project_root, pending_entry_id=pending_entry_id, replacement=replacement
+    )
 
 
 def get_trading_pending_entry_read_model(project_root) -> dict[str, Any]:
@@ -723,6 +900,8 @@ __all__ = [
     "preview_manual_trading_pending_entry",
     "create_scanner_trading_pending_entry",
     "create_manual_trading_pending_entry",
+    "preview_trading_pending_entry_update",
+    "update_trading_pending_entry_intent",
     "get_trading_pending_entry_read_model",
     "preview_trading_pending_entry_fill",
     "fill_trading_pending_entry",

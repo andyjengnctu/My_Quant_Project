@@ -12,6 +12,11 @@ from tkinter import ttk
 import pandas as pd
 
 from services.workbench_ui.param_sources import build_workbench_param_source_options
+from services.workbench_ui.state_sync import (
+    ACCOUNT_MUTATION_DOMAINS,
+    normalize_state_domains,
+    panel_depends_on_state_domains,
+)
 
 
 WORKBENCH_TITLE = "股票工具工作台"
@@ -865,6 +870,8 @@ class StockToolsWorkbench:
         # inspector implementation into the Trading panel.
         self.root._open_single_stock_inspector = self.open_single_stock_inspector
         self.root._open_accounting_center = self.open_accounting_center
+        self.root._notify_workbench_state_changed = self.notify_workbench_state_changed
+        # Compatibility seam for older panels; all new mutations publish domains.
         self.root._notify_trading_account_changed = self.notify_trading_account_changed
         self._build_ui()
         self.root.update_idletasks()
@@ -1042,17 +1049,30 @@ class StockToolsWorkbench:
         else:
             self._request_panel_load(panel_id)
 
-    def notify_trading_account_changed(self):
-        """Refresh an already-mounted Trading Center after account truth mutates elsewhere."""
+    def notify_workbench_state_changed(self, domains, source_panel_id=None):
+        """Fan one committed state transition out to every other mounted dependent view."""
 
-        panel = self._panel_instances.get("trading_account")
-        if panel is None:
-            # A not-yet-mounted Trading Center will read current canonical state in its
-            # initial bundle, so there is no stale in-memory view to refresh here.
+        normalized = normalize_state_domains(domains)
+        if not normalized:
             return
-        refresher = getattr(panel, "refresh_external_account_state", None)
-        if callable(refresher):
-            refresher()
+        source_id = None if source_panel_id is None else str(source_panel_id)
+        for panel_id, panel in list(self._panel_instances.items()):
+            if source_id is not None and str(panel_id) == source_id:
+                continue
+            if not panel_depends_on_state_domains(panel_id, normalized):
+                continue
+            refresher = getattr(panel, "refresh_for_state_domains", None)
+            if callable(refresher):
+                refresher(normalized)
+                continue
+            fallback = getattr(panel, "refresh", None)
+            if callable(fallback):
+                fallback()
+
+    def notify_trading_account_changed(self):
+        """Backward-compatible account mutation notification through the domain bus."""
+
+        self.notify_workbench_state_changed(ACCOUNT_MUTATION_DOMAINS)
 
     def open_single_stock_inspector(
         self, ticker, *, runtime_domain="trading", auto_run=True, candidate_row=None,

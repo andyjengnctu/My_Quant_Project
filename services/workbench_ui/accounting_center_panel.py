@@ -23,6 +23,7 @@ from services.trading.account_state import (
 from services.trading.account_trade_entry import correct_trading_account_transaction, record_trading_account_inventory_sell
 from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.paged_table import PagedTable, TableColumn
+from services.workbench_ui.state_sync import ACCOUNT_MUTATION_DOMAINS
 from services.workbench_ui.workbench import (
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
@@ -531,14 +532,24 @@ class AccountingCenterPanel(ttk.Frame):
             rows = list(self._all_buy_rows)
         self._buys.set_rows(rows, preserve_selection=False)
 
-    def _notify_trading_account_changed(self) -> None:
-        callback = getattr(self.winfo_toplevel(), "_notify_trading_account_changed", None)
+    def refresh_for_state_domains(self, _domains) -> None:
+        self.refresh()
+
+    def _notify_workbench_state_changed(self) -> bool:
+        callback = getattr(self.winfo_toplevel(), "_notify_workbench_state_changed", None)
         if callable(callback):
-            callback()
+            callback(ACCOUNT_MUTATION_DOMAINS, source_panel_id="accounting_center")
+            return True
+        legacy = getattr(self.winfo_toplevel(), "_notify_trading_account_changed", None)
+        if callable(legacy):
+            legacy()
+        return False
 
     def _refresh_after_account_mutation(self) -> None:
+        # The source view rereads canonical truth itself; the shell only fans the same
+        # committed mutation out to other mounted dependent views.
         self.refresh()
-        self._notify_trading_account_changed()
+        self._notify_workbench_state_changed()
 
     def _parse_cash(self):
         text = self._cash_var.get().replace(",", "").strip()

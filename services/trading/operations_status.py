@@ -38,6 +38,10 @@ from services.trading.proposed_order_state import get_trading_proposed_order_pla
 from services.trading.indicator_exit_planning import get_trading_indicator_exit_plan_read_model
 from services.trading.order_state import get_trading_order_read_model
 from services.trading.position_rollforward import build_trading_position_rollforward_snapshot
+from services.trading.pending_entry_state import (
+    load_trading_pending_entry_state,
+    project_trading_pending_entry_state,
+)
 from services.trading.protection_planning import get_trading_protection_plan_read_model
 
 TRADING_OPERATIONS_STATUS_SCHEMA_VERSION = 1
@@ -168,6 +172,16 @@ def _empty_position_rollforward() -> dict[str, Any]:
     }
 
 
+def _empty_pending_entries() -> dict[str, Any]:
+    return {
+        "active_count": 0,
+        "locked_count": 0,
+        "reserved_total_milli": 0,
+        "active_entries": [],
+        "locked_entries": [],
+    }
+
+
 def _workflow_action_availability(
     *,
     fill_transaction_pending: bool,
@@ -220,6 +234,7 @@ def derive_trading_operations_status(
     protection: dict[str, Any],
     indicator_exit: dict[str, Any] | None = None,
     position_rollforward: dict[str, Any] | None = None,
+    pending_entries: dict[str, Any] | None = None,
     fill_transaction_pending: bool = False,
     component_errors: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -228,6 +243,7 @@ def derive_trading_operations_status(
     errors = {str(k): str(v) for k, v in dict(component_errors or {}).items() if str(v).strip()}
     position_rollforward = dict(position_rollforward or _empty_position_rollforward())
     indicator_exit = dict(indicator_exit or _empty_indicator_exit())
+    pending_entries = dict(pending_entries or _empty_pending_entries())
     positions = [dict(row) for row in list(account.get("positions") or [])]
     strategy_lineage_by_ticker = {
         str(row.get("ticker") or ""): str(row.get("strategy_lineage_key") or row.get("entry_order_id") or "")
@@ -385,7 +401,11 @@ def derive_trading_operations_status(
         if str(ticker or "").strip()
     }
     unheld_candidate_tickers = candidate_tickers - open_position_tickers
-    portfolio_free_slot_count = max(0, int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - len(open_position_tickers))
+    pending_locked_slot_count = max(0, int(pending_entries.get("locked_count") or 0))
+    portfolio_free_slot_count = max(
+        0,
+        int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - len(open_position_tickers) - pending_locked_slot_count,
+    )
     scanner_buyable_ticker_count = None
     if (
         candidate_snapshot_available
@@ -635,6 +655,8 @@ def derive_trading_operations_status(
         "scanner_buyable_ticker_count": scanner_buyable_ticker_count,
         "scanner_unheld_candidate_ticker_count": (len(unheld_candidate_tickers) if candidate_snapshot_available else None),
         "portfolio_free_slot_count": (portfolio_free_slot_count if bool(account.get("initialized")) else None),
+        "pending_locked_slot_count": pending_locked_slot_count,
+        "pending_reserved_total_milli": int(pending_entries.get("reserved_total_milli") or 0),
         "portfolio_max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
         "scanner_information_date": candidate.get("information_date"),
         "strategy_id": workflow.get("strategy_id"),
@@ -702,6 +724,7 @@ def derive_trading_operations_status(
             "protection": protection,
             "indicator_exit": indicator_exit,
             "position_rollforward": position_rollforward,
+            "pending_entries": pending_entries,
         },
     }
 
@@ -739,6 +762,7 @@ def derive_trading_operations_status_from_preloaded(
     protection: dict[str, Any] | None,
     indicator_exit: dict[str, Any] | None,
     position_rollforward: dict[str, Any] | None,
+    pending_entries: dict[str, Any] | None = None,
     fill_transaction_pending: bool = False,
     component_errors: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -767,6 +791,7 @@ def derive_trading_operations_status_from_preloaded(
         protection=dict(protection or _empty_protection()),
         indicator_exit=dict(indicator_exit or _empty_indicator_exit()),
         position_rollforward=dict(position_rollforward or _empty_position_rollforward()),
+        pending_entries=dict(pending_entries or _empty_pending_entries()),
         fill_transaction_pending=bool(fill_transaction_pending),
         component_errors=component_errors,
     )
@@ -799,6 +824,16 @@ def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
     except (OSError, TypeError, ValueError, RuntimeError) as exc:
         errors["candidate"] = f"{type(exc).__name__}: {exc}"
         candidate = _empty_candidate()
+
+    try:
+        pending_state = load_trading_pending_entry_state(root, required=False)
+        pending_entries = project_trading_pending_entry_state(
+            pending_state,
+            current_information_date=workflow.get("latest_data_date"),
+        )
+    except (OSError, TypeError, ValueError, RuntimeError) as exc:
+        errors["pending_entries"] = f"{type(exc).__name__}: {exc}"
+        pending_entries = _empty_pending_entries()
 
     if fill_transaction_pending:
         account = _empty_account()
@@ -857,6 +892,7 @@ def build_trading_operations_status(project_root: str | Path) -> dict[str, Any]:
         protection=protection,
         indicator_exit=indicator_exit,
         position_rollforward=position_rollforward,
+        pending_entries=pending_entries,
         fill_transaction_pending=fill_transaction_pending,
         component_errors=errors,
     )

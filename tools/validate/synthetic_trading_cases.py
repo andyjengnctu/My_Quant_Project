@@ -2856,6 +2856,7 @@ def validate_trading_operations_status_contract_case(base_params):
             "proposed": deepcopy(proposed),
             "protection": deepcopy(protection),
             "indicator_exit": deepcopy(indicator_clear),
+            "pending_entries": {"locked_count": 0, "reserved_total_milli": 0},
             "fill_transaction_pending": False,
             "component_errors": {},
         }
@@ -2868,6 +2869,14 @@ def validate_trading_operations_status_contract_case(base_params):
     check("operations_status_exposes_scanner_candidate_count", 3, overview_counts["scanner_candidate_ticker_count"])
     check("operations_status_exposes_scanner_buyable_count", 3, overview_counts["scanner_buyable_ticker_count"])
     check("operations_status_exposes_portfolio_free_slots", 10, overview_counts["portfolio_free_slot_count"])
+    pending_slot_counts = derive(
+        pending_entries={"locked_count": 8, "reserved_total_milli": money_to_milli(80_000)}
+    )
+    check("operations_status_free_slots_include_active_pending_reservations", 2, pending_slot_counts["portfolio_free_slot_count"])
+    check("operations_status_buyable_is_bounded_by_pending_reserved_slots", 2, pending_slot_counts["scanner_buyable_ticker_count"])
+    check("operations_status_exposes_pending_resource_reservation",
+          [8, money_to_milli(80_000)],
+          [pending_slot_counts["pending_locked_slot_count"], pending_slot_counts["pending_reserved_total_milli"]])
     held_candidate_account = {
         "initialized": True, "revision": 8, "cash": 400_000.0,
         "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "entry_order_id": "ENTRY-2317", "management_status": "active"}],
@@ -3342,7 +3351,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.trading.pending_entry_state import (
         cancel_trading_pending_entry, create_trading_pending_entry,
         delete_trading_pending_entry, load_trading_pending_entry_state,
-        project_trading_pending_entry_state,
+        project_trading_pending_entry_state, update_trading_pending_entry,
     )
     from services.trading.pending_entry_service import (
         fill_trading_pending_entry, get_trading_pending_entry_read_model, preview_trading_pending_entry_fill,
@@ -3385,8 +3394,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _next_day_cancelled = project_trading_pending_entry_state(
             load_trading_pending_entry_state(_pending_root), current_information_date="2026-09-16"
         )
-        check("pending_no_fill_keeps_d4_reservation_through_same_information_date", [0, 1, money_to_milli(100_000)], [_same_day_cancelled["active_count"], _same_day_cancelled["locked_count"], _same_day_cancelled["reserved_total_milli"]])
-        check("pending_no_fill_releases_reservation_on_next_information_date", [0, 0], [_next_day_cancelled["locked_count"], _next_day_cancelled["reserved_total_milli"]])
+        check("pending_no_fill_releases_reservation_immediately", [0, 0, 0], [_same_day_cancelled["active_count"], _same_day_cancelled["locked_count"], _same_day_cancelled["reserved_total_milli"]])
+        check("pending_no_fill_stays_released_on_next_information_date", [0, 0], [_next_day_cancelled["locked_count"], _next_day_cancelled["reserved_total_milli"]])
 
         _delete_seed = {"qty": 500, "limit_price": 80.0, "trade_date": "2026-09-15"}
         _delete_lineage = build_trading_manual_management_lineage(
@@ -3408,7 +3417,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         )
         check(
             "pending_user_delete_releases_capital_and_slot_immediately",
-            [1, money_to_milli(100_000)],
+            [0, 0],
             [_same_day_deleted["locked_count"], _same_day_deleted["reserved_total_milli"]],
         )
         _deleted_entry_row = load_trading_pending_entry_state(_pending_root)["entries"][_delete_pending["pending_entry_id"]]
@@ -3425,6 +3434,88 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "management_lineage": _delete_lineage,
         })
         check("pending_user_delete_allows_same_ticker_recreate", "ACTIVE", _delete_recreated.get("status"))
+        _replacement = deepcopy(_delete_recreated)
+        _replacement["planned_qty"] = 300
+        _replacement["reserved_cost_milli"] = money_to_milli(30_000)
+        _replacement["execution_plan_seed"] = dict(_replacement.get("execution_plan_seed") or {})
+        _replacement["execution_plan_seed"]["qty"] = 300
+        _replacement["execution_plan_seed"]["reserved_cost_milli"] = money_to_milli(30_000)
+        _replacement["execution_plan_seed"]["reserved_cost"] = 30_000.0
+        _updated_pending = update_trading_pending_entry(
+            _pending_root, pending_entry_id=_delete_recreated["pending_entry_id"], replacement=_replacement,
+        )
+        _updated_projection = project_trading_pending_entry_state(
+            load_trading_pending_entry_state(_pending_root), current_information_date="2026-09-15"
+        )
+        check("pending_update_preserves_same_identity_without_double_reservation",
+              [_delete_recreated["pending_entry_id"], 1, money_to_milli(30_000)],
+              [_updated_pending["pending_entry_id"], _updated_projection["locked_count"], _updated_projection["reserved_total_milli"]])
+
+        from services.trading.entry_candidate_projection import project_trading_entry_candidate_payload
+        _candidate_fixture = {"candidate_rows": [{"ticker": "2330"}, {"ticker": "2317"}, {"ticker": "2454"}]}
+        _projected_candidates = project_trading_entry_candidate_payload(
+            _candidate_fixture,
+            account_snapshot={"positions": {"2330": {"ticker": "2330"}}},
+            pending_snapshot=_updated_projection,
+        )
+        check("scanner_projection_removes_held_and_active_pending_tickers", ["2454"], [row["ticker"] for row in _projected_candidates["candidate_rows"]])
+        delete_trading_pending_entry(
+            _pending_root, pending_entry_id=_updated_pending["pending_entry_id"], note="synthetic close after update"
+        )
+        _released_candidates = project_trading_entry_candidate_payload(
+            _candidate_fixture,
+            account_snapshot={"positions": {"2330": {"ticker": "2330"}}},
+            pending_snapshot=project_trading_pending_entry_state(
+                load_trading_pending_entry_state(_pending_root), current_information_date="2026-09-15"
+            ),
+        )
+        check("scanner_projection_restores_closed_pending_ticker_when_candidate_is_still_valid", ["2317", "2454"], [row["ticker"] for row in _released_candidates["candidate_rows"]])
+
+        # The canonical account-aware Scanner read path must apply the same pending
+        # projection, otherwise Trading Center could remove a row while Operations
+        # status still reports it as actionable.
+        from services.trading import scanner_state as _scanner_state
+        _scanner_payload = {
+            "latest_data_date": "2026-09-15",
+            "candidate_rows": [{"ticker": "2330"}, {"ticker": "2317"}, {"ticker": "2454"}],
+        }
+        _active_pending_state = {
+            "revision": 0,
+            "updated_at": None,
+            "entries": {
+                "p1": {
+                    "pending_entry_id": "p1", "ticker": "2317", "status": "ACTIVE",
+                    "information_date": "2026-09-15", "created_at": "2026-09-15T00:00:00Z",
+                }
+            },
+        }
+        with patch.object(_scanner_state, "load_trading_candidate_snapshot", return_value=_scanner_payload), \
+             patch.object(_scanner_state, "_resolve_trading_held_tickers", return_value={"2330"}), \
+             patch.object(_scanner_state, "load_trading_pending_entry_state", return_value=_active_pending_state):
+            _canonical_actionable = _scanner_state.load_trading_candidate_snapshot_for_account(
+                _pending_root, require_current=False
+            )
+        check(
+            "scanner_account_read_path_removes_active_pending_candidate_consistently",
+            [["2454"], ["2317"]],
+            [
+                [row["ticker"] for row in _canonical_actionable["candidate_rows"]],
+                _canonical_actionable.get("active_pending_candidate_tickers_skipped"),
+            ],
+        )
+        _closed_pending_state = deepcopy(_active_pending_state)
+        _closed_pending_state["entries"]["p1"]["status"] = "CANCELLED"
+        with patch.object(_scanner_state, "load_trading_candidate_snapshot", return_value=_scanner_payload), \
+             patch.object(_scanner_state, "_resolve_trading_held_tickers", return_value={"2330"}), \
+             patch.object(_scanner_state, "load_trading_pending_entry_state", return_value=_closed_pending_state):
+            _canonical_released = _scanner_state.load_trading_candidate_snapshot_for_account(
+                _pending_root, require_current=False
+            )
+        check(
+            "scanner_account_read_path_restores_candidate_after_pending_close",
+            ["2317", "2454"],
+            [row["ticker"] for row in _canonical_released["candidate_rows"]],
+        )
         _legacy_cancelled_projection = project_trading_pending_entry_state(
             {
                 "schema_version": 1,
@@ -3482,6 +3573,61 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
                 _resource_usage.get("reserved_total_milli"), _resource_usage.get("cash_limit_milli"),
             ],
         )
+
+    from core.capital_policy import resolve_scanner_live_capital
+    from core.entry_plans import build_normal_candidate_plan
+    from services.trading import pending_entry_service as _pending_service
+    _scanner_live_capital = resolve_scanner_live_capital(base_params)
+    _canonical_scanner_plan = build_normal_candidate_plan(
+        100.0, 2.0, _scanner_live_capital, base_params, ticker="2330", trade_date="2026-09-15"
+    )
+    from core.entry_plans import build_cash_capped_entry_plan as _build_cash_capped_entry_plan
+    _canonical_scanner_plan = _build_cash_capped_entry_plan(
+        _canonical_scanner_plan, float(_scanner_live_capital), base_params
+    )
+    _drifted_seed = deepcopy(_canonical_scanner_plan)
+    _drifted_seed["sizing_capital"] = max(1.0, float(_scanner_live_capital) / 10.0)
+    _drifted_seed["qty"] = max(1, int(_canonical_scanner_plan["qty"]) // 4)
+    _scanner_candidate = {
+        "ticker": "2330", "trade_date": "2026-09-15", "signal_date": "2026-09-12",
+        "proj_qty": int(_canonical_scanner_plan["qty"]), "execution_plan_seed": _drifted_seed,
+    }
+    _scanner_resources = {
+        "available_cash": float(_scanner_live_capital),
+        "available_cash_milli": money_to_milli(_scanner_live_capital),
+        "cash_limit_milli": money_to_milli(_scanner_live_capital),
+        "held_tickers": set(), "locked_tickers": set(), "held_count": 0, "locked_count": 0,
+        "slot_quota": 10, "occupied": 0, "free_slots": 10, "max_positions": 10, "reserved_total_milli": 0,
+        "stale_active_entries": [],
+    }
+    with patch.object(_pending_service, "resolve_current_trading_scanner_candidate", return_value=_scanner_candidate), \
+         patch.object(_pending_service, "_account_resources", return_value=_scanner_resources), \
+         patch.object(_pending_service, "resolve_trading_candidate_frozen_params", return_value=(base_params, None)), \
+         patch.object(_pending_service, "build_trading_candidate_strategy_lineage", return_value={"lineage_id": "synthetic"}):
+        _scanner_pending_preview = _pending_service._prepare_scanner_pending_entry(
+            Path("."), candidate_reference={"ticker": "2330"}
+        )
+    check(
+        "scanner_pending_preview_overrides_extended_backtest_capital_with_scanner_live_capital",
+        [
+            int(_canonical_scanner_plan["qty"]),
+            int(_canonical_scanner_plan["reserved_cost_milli"]),
+            _canonical_scanner_plan.get("limit_price"),
+            _canonical_scanner_plan.get("init_sl"),
+            _canonical_scanner_plan.get("target_price"),
+            _canonical_scanner_plan.get("init_trail"),
+            float(_scanner_live_capital),
+        ],
+        [
+            int(_scanner_pending_preview["planned_qty"]),
+            int(_scanner_pending_preview["reserved_cost_milli"]),
+            _scanner_pending_preview.get("limit_price"),
+            _scanner_pending_preview.get("init_sl"),
+            _scanner_pending_preview.get("target_price"),
+            _scanner_pending_preview.get("init_trail"),
+            float(_scanner_pending_preview["execution_plan_seed"]["sizing_capital"]),
+        ],
+    )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         _pending_fill_root = Path(temp_dir)
@@ -3666,14 +3812,16 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（Scanner 選取會自動帶入", "確認送出掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（Scanner／手動／既有掛單共用", "確認掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
     check("workbench_pending_scanner_and_manual_share_one_editable_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
-    check("workbench_pending_manual_ticker_auto_previews_after_input", True, all(token in panel_source for token in ('bind("<KeyRelease>", self._schedule_manual_pending_ticker_preview)', "_auto_preview_manual_pending_ticker", "after(450")))
-    check("workbench_pending_scanner_selection_autofills_shared_order_form", True, "self._pending_draft_origin = \"scanner\"" in panel_source and "self._preview_pending_draft(use_current_overrides=False)" in panel_source)
+    check("workbench_pending_manual_ticker_auto_previews_after_input", True, all(token in panel_source for token in ('bind("<KeyRelease>", self._schedule_manual_pending_ticker_preview)', "_auto_preview_manual_pending_ticker", "after(350")))
+    check("workbench_pending_values_auto_preview_without_recalculate_button", True, 'trace_add("write", self._schedule_pending_value_preview)' in panel_source and 'text="重新試算"' not in panel_source)
+    check("workbench_pending_scanner_selection_autofills_shared_order_form", True, "self._pending_draft_origin = \"scanner\"" in panel_source and "self._preview_pending_draft(use_current_overrides=False, silent=True)" in panel_source)
     check("workbench_pending_submit_revalidates_editable_qty_price_and_date_before_persist", True, all(token in panel_source for token in ("_build_pending_draft_request(use_current_overrides=True)", "create_scanner_trading_pending_entry(", "create_manual_trading_pending_entry(", "planned_trade_date=planned_date")))
-    check("workbench_pending_delete_and_no_fill_are_distinct_resource_semantics", True, all(token in panel_source for token in ('text="刪除掛單"', 'text="無成交結案"', "delete_pending_entry(", "cancel_pending_entry_no_fill(")))
+    check("workbench_pending_primary_ui_has_single_close_action_and_only_active_entries_lock", True, 'text="刪除掛單"' in panel_source and 'text="無成交結案"' not in panel_source and "delete_pending_entry(" in panel_source)
+    check("workbench_pending_existing_row_uses_same_form_for_atomic_update", True, all(token in panel_source for token in ("_set_pending_edit_mode(entry_id)", 'configure(text="更新掛單" if editing else "確認掛單")', "update_trading_pending_entry_intent(")))
     check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
     check("workbench_pending_fill_allows_actual_qty_price_date_before_transfer", True, all(token in panel_source for token in ("_pending_fill_qty_var", "_pending_fill_price_var", "_pending_fill_date_var", "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
     check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
@@ -3732,9 +3880,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_buy_success_stays_in_trading_center_with_refreshed_holdings", True, "持股決策已同步重新整理" in panel_source and '_open_accounting_center' not in panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0])
     buy_entry_body = panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0]
     check("workbench_buy_success_refreshes_trading_center_before_navigation", True, 'refresh_state=True' in buy_entry_body and 'refresh_state=False' not in buy_entry_body)
-    cross_panel_notify_body = workbench_source.split("def notify_trading_account_changed", 1)[1].split("def open_single_stock_inspector", 1)[0]
-    check("workbench_root_exposes_account_truth_change_notification_to_trading_center", True, '_notify_trading_account_changed = self.notify_trading_account_changed' in workbench_source and 'refresh_external_account_state' in cross_panel_notify_body)
-    check("workbench_accounting_mutations_share_trading_center_sync_hook", True, "def _refresh_after_account_mutation" in accounting_source and accounting_source.count("self._refresh_after_account_mutation()") >= 7 and '_notify_trading_account_changed' in accounting_source)
+    state_sync_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "state_sync.py").read_text(encoding="utf-8")
+    check("workbench_root_exposes_semantic_state_change_bus", True, '_notify_workbench_state_changed = self.notify_workbench_state_changed' in workbench_source and 'def notify_workbench_state_changed' in workbench_source and 'panel_depends_on_state_domains' in workbench_source)
+    check("workbench_accounting_mutations_publish_account_domains_through_shared_bus", True, "def _refresh_after_account_mutation" in accounting_source and accounting_source.count("self._refresh_after_account_mutation()") >= 7 and '_notify_workbench_state_changed' in accounting_source and 'ACCOUNT_MUTATION_DOMAINS' in accounting_source)
+    check("workbench_state_sync_contract_declares_pending_account_scanner_domains", True, all(token in state_sync_source for token in ("STATE_PENDING_ENTRIES", "STATE_RESOURCE_RESERVATION", "STATE_SCANNER_ELIGIBILITY", "PENDING_FILL_MUTATION_DOMAINS")))
     check("workbench_primary_ui_does_not_mount_broker_oms_notebook", False, "advanced_notebook.grid(" in panel_source or "advanced_notebook.pack(" in panel_source)
     check("workbench_performance_colour_is_cell_scoped", True, "performance=True" in accounting_source and "column.performance" in paged_source and 'tag_configure("gain"' not in accounting_source)
     check("workbench_account_dashboard_uses_revision_market_date_cards_and_fixed_bottom_refresh", True, 'text="帳戶儀表板"' in accounting_source and 'cards = (("revision", "revision"), ("市價日", "market_date")' in accounting_source and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新"' in accounting_source and 'pack(side="right"' in accounting_source and 'WORKBENCH_INFO if key in {"market_date", "cash", "equity"}' in accounting_source)
@@ -3763,40 +3912,42 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_accounting_refresh_marks_followup_pending_when_worker_is_alive", True, accounting_refresh_panel._refresh_pending)
     check("workbench_accounting_refresh_coalesces_mutation_followup_instead_of_dropping_it", True, "self._refresh_pending = True" in accounting_source and "if self._refresh_pending:" in accounting_source and "self.after_idle(self.refresh)" in accounting_source)
 
+    from services.workbench_ui.state_sync import ACCOUNT_MUTATION_DOMAINS, PENDING_MUTATION_DOMAINS
     mutation_refresh_events = []
     AccountingCenterPanel._refresh_after_account_mutation(SimpleNamespace(
         refresh=lambda: mutation_refresh_events.append("accounting"),
-        _notify_trading_account_changed=lambda: mutation_refresh_events.append("trading"),
+        _notify_workbench_state_changed=lambda: mutation_refresh_events.append("fanout") or True,
     ))
-    check("workbench_account_mutation_refreshes_both_accounting_and_trading_centers", ["accounting", "trading"], mutation_refresh_events)
+    check("workbench_account_mutation_refreshes_source_then_fans_out_semantic_event", ["accounting", "fanout"], mutation_refresh_events)
 
     root_notify_events = []
-    StockToolsWorkbench.notify_trading_account_changed(SimpleNamespace(
+    StockToolsWorkbench.notify_workbench_state_changed(SimpleNamespace(
         _panel_instances={
-            "trading_account": SimpleNamespace(
-                refresh_external_account_state=lambda: root_notify_events.append("trading")
-            )
+            "trading_account": SimpleNamespace(refresh_for_state_domains=lambda domains: root_notify_events.append(("trading", frozenset(domains)))),
+            "accounting_center": SimpleNamespace(refresh_for_state_domains=lambda domains: root_notify_events.append(("accounting", frozenset(domains)))),
+            "single_stock_backtest_inspector": SimpleNamespace(refresh_for_state_domains=lambda domains: root_notify_events.append(("inspector", frozenset(domains)))),
         }
-    ))
-    check("workbench_account_truth_notification_dispatches_to_mounted_trading_center", ["trading"], root_notify_events)
+    ), ACCOUNT_MUTATION_DOMAINS, source_panel_id="accounting_center")
+    check("workbench_semantic_state_bus_refreshes_all_other_dependent_mounted_views", ["trading", "inspector"], [row[0] for row in root_notify_events])
+    check("workbench_semantic_state_bus_carries_account_domains", True, all(row[1] == ACCOUNT_MUTATION_DOMAINS for row in root_notify_events))
 
     busy_external_refresh_panel = SimpleNamespace(
         _initial_state_thread=SimpleNamespace(is_alive=lambda: True),
         _command_thread=None,
-        _external_account_refresh_pending=False,
+        _external_state_refresh_pending_domains=set(),
     )
-    busy_refresh_started = TradingAccountPanel.refresh_external_account_state(busy_external_refresh_panel)
-    check("workbench_external_account_refresh_coalesces_while_trading_center_busy", [False, True], [busy_refresh_started, busy_external_refresh_panel._external_account_refresh_pending])
+    busy_refresh_started = TradingAccountPanel.refresh_for_state_domains(busy_external_refresh_panel, PENDING_MUTATION_DOMAINS)
+    check("workbench_external_state_refresh_coalesces_domains_while_trading_center_busy", [False, PENDING_MUTATION_DOMAINS], [busy_refresh_started, frozenset(busy_external_refresh_panel._external_state_refresh_pending_domains)])
 
     external_refresh_calls = []
     idle_external_refresh_panel = SimpleNamespace(
         _initial_state_thread=None,
         _command_thread=None,
-        _external_account_refresh_pending=True,
+        _external_state_refresh_pending_domains=set(PENDING_MUTATION_DOMAINS),
         _submit_trading_command=lambda label, worker, refresh_state: external_refresh_calls.append((label, refresh_state)) or True,
     )
-    idle_refresh_started = TradingAccountPanel.refresh_external_account_state(idle_external_refresh_panel)
-    check("workbench_external_account_refresh_reloads_canonical_trading_bundle", [True, False, [("同步帳務變更", True)]], [idle_refresh_started, idle_external_refresh_panel._external_account_refresh_pending, external_refresh_calls])
+    idle_refresh_started = TradingAccountPanel.refresh_for_state_domains(idle_external_refresh_panel, PENDING_MUTATION_DOMAINS)
+    check("workbench_external_state_refresh_reloads_one_canonical_trading_bundle", [True, 0, [("同步狀態變更", True)]], [idle_refresh_started, len(idle_external_refresh_panel._external_state_refresh_pending_domains), external_refresh_calls])
     check("workbench_account_mutations_resolve_latest_revision_inside_lock", True, "expected_account_revision=None" in panel_source and "expected_revision=None" in accounting_source)
     check("workbench_centers_use_fixed_contextual_footer_status_bars", True, "self._footer_bar.grid(row=1" in accounting_source and "操作提示｜" in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source and "self._footer_bar.grid(row=1" in panel_source and "操作提示｜" in panel_source)
     check("workbench_primary_ui_has_single_fixed_bottom_right_refresh_per_center", True, panel_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in panel_source and 'text="全狀態刷新", command=self._refresh_all_trading_state' in panel_source and 'pack(side="right"' in panel_source and accounting_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新", command=self.refresh' in accounting_source)
@@ -3822,7 +3973,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_candidate_dropdown_lazy_loads_trading_pool", True, "postcommand=self._refresh_candidate_options_on_open" in inspector_source and "sync_ticker=False" in inspector_source)
     check("workbench_single_stock_candidate_dropdown_never_sync_loads_current_snapshot_on_post", False, "_load_current_trading_candidate_pool(" in candidate_post_body)
     check("workbench_single_stock_candidate_dropdown_prefetches_current_pool_in_background", True, "_request_trading_candidate_pool_refresh()" in candidate_post_body and "threading.Thread(" in inspector_source and 'name="workbench-trading-candidate-pool"' in inspector_source)
-    check("workbench_single_stock_candidate_pool_reads_account_aware_persisted_snapshot_without_recalculation", True, "load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)" in inspector_source and "never triggers candidate recalculation" in inspector_source)
+    check(
+        "workbench_single_stock_candidate_pool_reads_account_aware_persisted_snapshot_without_recalculation",
+        True,
+        "load_trading_candidate_snapshot_for_account(" in inspector_source
+        and "require_current=False" in inspector_source
+        and "never triggers candidate recalculation" in inspector_source,
+    )
     check("workbench_single_stock_combobox_popup_geometry_is_screen_limited", True, "_configure_combobox_popup_geometry" in inspector_source and "resolve_workbench_combobox_popup_rows" in workbench_source and "_fit_posted_combobox_popdown" in workbench_source and 'ttk::combobox::PopdownWindow' in workbench_source)
     check("workbench_single_stock_controls_reflow_with_available_width", True, "_apply_single_stock_controls_layout" in inspector_source and "resolve_single_stock_controls_rows" in inspector_source and "for row_index, row_keys in enumerate(rows)" in inspector_source)
     check(
@@ -4762,12 +4919,22 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
                 "resolve_trading_strategy_param_binding_path",
                 return_value=binding_path,
             ),
+            patch.object(
+                single_stock_inspector_module,
+                "resolve_trading_account_state_path",
+                return_value=candidate_path,
+            ),
+            patch.object(
+                single_stock_inspector_module,
+                "resolve_trading_pending_entry_state_path",
+                return_value=candidate_path,
+            ),
         ):
             first_use_identity = SingleStockBacktestInspectorPanel._candidate_snapshot_identity()
     check(
         "workbench_single_stock_first_use_candidate_identity_executes_without_nameerror",
         True,
-        len(first_use_identity) == 3 and all(value is not None for value in first_use_identity),
+        len(first_use_identity) == 5 and all(value is not None for value in first_use_identity),
     )
 
     # Execute the Trading analysis cache path, not just source-string checks.

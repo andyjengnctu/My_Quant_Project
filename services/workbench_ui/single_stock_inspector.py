@@ -39,6 +39,7 @@ from core.runtime_utils import parse_float_strict
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.trading_policy import resolve_trading_selected_strategy_param_path
+from core.trading_state_paths import resolve_trading_account_state_path, resolve_trading_pending_entry_state_path
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method, sort_candidate_rows
 from core.scanner_display import build_scanner_sort_probe_text
 from services.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
@@ -68,6 +69,16 @@ from services.trading.scanner_state import (
     resolve_trading_candidate_snapshot_path,
 )
 from services.trading.account_state import get_trading_account_read_model
+from services.workbench_ui.state_sync import (
+    STATE_ACCOUNT,
+    STATE_MARKET_DATA,
+    STATE_PARAMS,
+    STATE_PENDING_ENTRIES,
+    STATE_POSITIONS,
+    STATE_SCANNER,
+    STATE_SCANNER_ELIGIBILITY,
+    normalize_state_domains,
+)
 from services.trading.single_stock_inspection import (
     build_trading_single_stock_inspection,
     load_trading_single_stock_position_binding,
@@ -587,6 +598,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._scanner_thread = None
         self._scanner_active_token = 0
         self._candidate_pool_refresh_thread = None
+        self._candidate_pool_refresh_pending = False
         self._candidate_pool_refresh_token = 0
         self._candidate_pool_checked_identity = ("__uninitialized__",)
         self._candidate_pool_last_error = None
@@ -1148,6 +1160,20 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if ticker:
             self.after_idle(self._run_analysis)
 
+    def refresh_for_state_domains(self, domains) -> bool:
+        """Refresh Trading projections after any committed Workbench state transition."""
+        normalized = normalize_state_domains(domains)
+        if not normalized:
+            return False
+        if normalized & {STATE_ACCOUNT, STATE_POSITIONS}:
+            self._refresh_holdings_options()
+        if normalized & {STATE_PENDING_ENTRIES, STATE_SCANNER_ELIGIBILITY, STATE_SCANNER, STATE_MARKET_DATA, STATE_PARAMS}:
+            self._candidate_pool_checked_identity = ("__state_changed__",)
+            self._request_trading_candidate_pool_refresh(force=True, allow_inactive=True)
+        if self._runtime_domain_key() == "trading" and self._ticker_var.get().strip():
+            self.after_idle(self._run_analysis)
+        return True
+
     def _refresh_holdings_options(self):
         self._holdings_map = {}
         try:
@@ -1204,6 +1230,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             file_identity(resolve_trading_candidate_snapshot_path(root)),
             file_identity(root / TRADING_V2_CONSUMER_STATE_RELATIVE_PATH),
             file_identity(resolve_trading_strategy_param_binding_path(root)),
+            file_identity(resolve_trading_account_state_path(root)),
+            file_identity(resolve_trading_pending_entry_state_path(root)),
         )
 
     def _request_trading_candidate_pool_refresh(self, *, force=False, allow_inactive=False):
@@ -1214,6 +1242,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             return False
         thread = self._candidate_pool_refresh_thread
         if thread is not None and thread.is_alive():
+            if force:
+                self._candidate_pool_refresh_pending = True
             return False
         self._candidate_pool_refresh_token += 1
         request_token = self._candidate_pool_refresh_token
@@ -1239,7 +1269,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 raise RuntimeError(read_model.get("error") or "Trading Scanner snapshot schema 不相容")
             if not bool(read_model.get("fresh")):
                 raise RuntimeError(read_model.get("error") or "Trading Scanner snapshot inputs 已變更")
-            payload = load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)
+            payload = load_trading_candidate_snapshot_for_account(
+                WORKBENCH_PROJECT_ROOT, require_current=False
+            )
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
             self.after(0, self._finish_trading_candidate_pool_error, request_token, snapshot_identity, exc)
             return
@@ -1582,6 +1614,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 sync_ticker=False,
             )
             self._configure_combobox_popup_geometry(self._candidate_combo)
+        if bool(getattr(self, "_candidate_pool_refresh_pending", False)):
+            self._candidate_pool_refresh_pending = False
+            self.after_idle(lambda: self._request_trading_candidate_pool_refresh(force=True, allow_inactive=True))
 
     def _finish_trading_candidate_pool_error(self, request_token, snapshot_identity, exc):
         if request_token != self._candidate_pool_refresh_token:
@@ -1594,6 +1629,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         # frozen Params context of the ticker the user is currently inspecting.
         if self._runtime_domain_key() == "trading":
             self._scanner_info_var.set(f"Scanner：尚無最新 Trading pool（{exc}）")
+        if bool(getattr(self, "_candidate_pool_refresh_pending", False)):
+            self._candidate_pool_refresh_pending = False
+            self.after_idle(lambda: self._request_trading_candidate_pool_refresh(force=True, allow_inactive=True))
 
     def _load_current_trading_candidate_pool(self, *, sync_ticker=False):
         """Compatibility helper for explicit synchronous callers/tests.
@@ -1602,7 +1640,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         refresh above so opening the list cannot block Tk.
         """
         try:
-            payload = load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)
+            payload = load_trading_candidate_snapshot_for_account(
+                WORKBENCH_PROJECT_ROOT, require_current=False
+            )
         except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
             self._trading_candidate_rows_by_ticker = {}
             self._apply_scanner_pool_rows([])

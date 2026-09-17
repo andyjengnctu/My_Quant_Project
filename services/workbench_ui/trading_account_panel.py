@@ -43,7 +43,6 @@ from services.trading.scanner_state import (
 )
 from services.trading.position_rollforward import build_trading_position_rollforward_snapshot, run_trading_position_rollforward
 from services.trading.pending_entry_service import (
-    cancel_pending_entry_no_fill,
     create_manual_trading_pending_entry,
     create_scanner_trading_pending_entry,
     delete_pending_entry,
@@ -52,7 +51,9 @@ from services.trading.pending_entry_service import (
     preview_manual_trading_pending_entry,
     preview_scanner_trading_pending_entry,
     preview_trading_pending_entry_fill,
+    preview_trading_pending_entry_update,
     recover_trading_pending_entry_transaction,
+    update_trading_pending_entry_intent,
 )
 from services.trading.operations_status import build_trading_operations_status, derive_trading_operations_status_from_preloaded
 from services.trading.market_data_consumer_promotion import reconcile_trading_v2_consumer_state_from_local_evidence
@@ -102,6 +103,19 @@ from services.trading.account_state import (
     set_trading_cash_balance,
 )
 from services.workbench_ui.date_picker import DatePickerField
+from services.workbench_ui.state_sync import (
+    ACCOUNT_MUTATION_DOMAINS,
+    PENDING_FILL_MUTATION_DOMAINS,
+    PENDING_MUTATION_DOMAINS,
+    STATE_INDICATOR_EXIT,
+    STATE_MARKET_DATA,
+    STATE_ORDERS,
+    STATE_PARAMS,
+    STATE_PROTECTION,
+    STATE_SCANNER,
+    STATE_SCANNER_ELIGIBILITY,
+    normalize_state_domains,
+)
 from services.workbench_ui.paged_table import PagedTable, TableColumn
 from services.trading.account_trade_entry import preview_trading_account_buy, record_trading_account_buy
 from services.workbench_ui.workbench import (
@@ -146,7 +160,7 @@ INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產�
 POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；Stop / 停利線 / Trailing / SELL 訊號是持股決策資訊。"
 SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；選取候選後會帶入掛單輸入框，可在正式送出前修改股數／限價／掛單日。"
 BUY_ENTRY_HINT = "直接補登買入不需經掛單區；成交日／成交價會先用 raw 市場證據檢查，手動股會凍結目前 Primary Params 並從 finalized information date 開始管理。"
-PENDING_ENTRY_HINT = "Scanner／手選股共用同一掛單輸入介面；正式送出後才鎖定 Params、資金與 slot。資源顯示＝掛單鎖定/目前掛單額度、預留/目前現金額度；刪除尚未執行掛單會立即釋放，無成交結案才依 D4 保留同資訊日鎖定。"
+PENDING_ENTRY_HINT = "Scanner／手選股／既有掛單共用同一輸入介面；修改股票、股數、限價或日期會自動更新預覽。只有 ACTIVE 掛單占用 Params、資金與 slot；掛單結案即釋放。"
 
 _STATUS_TOKEN_TONES = {
     "READY": "success",
@@ -472,6 +486,7 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
             protection=preloaded_operations["protection"],
             indicator_exit=preloaded_operations["indicator_exit"],
             position_rollforward=preloaded_operations["position_rollforward"],
+            pending_entries=_preloaded_value("pending", "pending_entries"),
             fill_transaction_pending=bool(preloaded_operations["fill_transaction_pending"]),
             component_errors=component_errors,
         )
@@ -529,8 +544,13 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_rows: dict[str, dict[str, object]] = {}
         self._pending_draft_origin: str | None = None
         self._pending_draft_candidate: dict[str, object] | None = None
+        self._pending_edit_entry_id: str | None = None
         self._pending_draft_programmatic_update = False
         self._pending_manual_preview_after_id = None
+        self._pending_preview_thread = None
+        self._pending_preview_token = 0
+        self._pending_preview_results: queue.Queue = queue.Queue()
+        self._pending_preview_poll_after_id = None
         self._proposed_order_rows: list[dict[str, object]] = []
         self._order_snapshot: dict[str, object] = {}
         self._order_rows: dict[str, dict[str, object]] = {}
@@ -556,7 +576,7 @@ class TradingAccountPanel(ttk.Frame):
         self._initial_state_poll_after_id = None
         self._initial_preloaded: dict[str, object] = {}
         self._suspend_operations_refresh = False
-        self._external_account_refresh_pending = False
+        self._external_state_refresh_pending_domains: set[str] = set()
         self._build_ui()
         self._set_initial_loading_state()
         # AI: Paint the complete Trading page first.  Canonical state reads may validate
@@ -671,6 +691,7 @@ class TradingAccountPanel(ttk.Frame):
         on_error=None,
         error_title: str = "Trading 操作失敗",
         refresh_state: bool = True,
+        state_domains=None,
     ) -> bool:
         if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
             self._operations_next_var.set("WAIT | Trading 初始狀態仍在載入中…")
@@ -685,6 +706,7 @@ class TradingAccountPanel(ttk.Frame):
             "on_success": on_success,
             "on_error": on_error,
             "error_title": str(error_title),
+            "state_domains": normalize_state_domains(state_domains),
         }
         self._set_command_busy(True, label=str(label))
         thread = threading.Thread(
@@ -756,30 +778,42 @@ class TradingAccountPanel(ttk.Frame):
             )
         if callable(on_success):
             on_success(result)
+        domains = normalize_state_domains(context.get("state_domains"))
+        if domains:
+            callback = getattr(self.winfo_toplevel(), "_notify_workbench_state_changed", None)
+            if callable(callback):
+                callback(domains, source_panel_id="trading_account")
         self._schedule_pending_external_account_refresh()
 
     def _request_state_refresh(self, label: str = "Trading 狀態刷新") -> None:
         self._submit_trading_command(label, lambda: None, refresh_state=True)
 
-    def refresh_external_account_state(self) -> bool:
-        """Synchronize Trading Center after Accounting Center mutates account truth."""
-
+    def refresh_for_state_domains(self, domains) -> bool:
+        """Coalesce external mutations into one canonical Trading bundle reload."""
+        normalized = normalize_state_domains(domains)
+        if not normalized:
+            return False
         initial_busy = self._initial_state_thread is not None and self._initial_state_thread.is_alive()
         command_busy = self._command_thread is not None and self._command_thread.is_alive()
         if initial_busy or command_busy:
-            self._external_account_refresh_pending = True
+            self._external_state_refresh_pending_domains.update(normalized)
             return False
-        self._external_account_refresh_pending = False
+        self._external_state_refresh_pending_domains.clear()
         return self._submit_trading_command(
-            "同步帳務變更",
+            "同步狀態變更",
             lambda: None,
             refresh_state=True,
         )
 
+    def refresh_external_account_state(self) -> bool:
+        """Backward-compatible account refresh through the state-domain coordinator."""
+        return self.refresh_for_state_domains(ACCOUNT_MUTATION_DOMAINS)
+
     def _schedule_pending_external_account_refresh(self) -> None:
-        if not self._external_account_refresh_pending:
+        if not self._external_state_refresh_pending_domains:
             return
-        self.after_idle(self.refresh_external_account_state)
+        domains = frozenset(self._external_state_refresh_pending_domains)
+        self.after_idle(lambda domains=domains: self.refresh_for_state_domains(domains))
 
     def destroy(self):
         if self._pending_manual_preview_after_id is not None:
@@ -788,7 +822,11 @@ class TradingAccountPanel(ttk.Frame):
             except tk.TclError as exc:
                 _warn_gui_fallback("Trading pending manual preview after_cancel", exc)
             self._pending_manual_preview_after_id = None
-        for attr_name, label in (("_initial_state_poll_after_id", "initial-state"), ("_command_poll_after_id", "command")):
+        for attr_name, label in (
+            ("_initial_state_poll_after_id", "initial-state"),
+            ("_command_poll_after_id", "command"),
+            ("_pending_preview_poll_after_id", "pending-preview"),
+        ):
             after_id = getattr(self, attr_name, None)
             if after_id is not None:
                 try:
@@ -1027,7 +1065,7 @@ class TradingAccountPanel(ttk.Frame):
 
         pending_actions = ttk.LabelFrame(
             pending_box,
-            text="掛單輸入（Scanner 選取會自動帶入；手動輸入股票後會自動試算，也可按 Enter）",
+            text="掛單輸入（Scanner／手動／既有掛單共用；修改欄位後自動更新試算）",
             padding=8,
             style=WORKBENCH_LABELLF_STYLE,
         )
@@ -1066,14 +1104,18 @@ class TradingAccountPanel(ttk.Frame):
         DatePickerField(pending_actions, textvariable=self._pending_order_date_var, width=12).grid(
             row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0)
         )
+        for draft_var in (self._pending_order_qty_var, self._pending_order_price_var, self._pending_order_date_var):
+            draft_var.trace_add("write", self._schedule_pending_value_preview)
         pending_draft_buttons = ttk.Frame(pending_actions, style=WORKBENCH_FRAME_STYLE)
         pending_draft_buttons.grid(row=1, column=5, sticky="w", padx=(12, 0), pady=(4, 0))
-        ttk.Button(
-            pending_draft_buttons, text="重新試算", command=self._preview_current_pending_draft, style=WORKBENCH_BUTTON_STYLE
-        ).pack(side="left")
-        ttk.Button(
-            pending_draft_buttons, text="確認送出掛單", command=self._confirm_submit_pending_draft, style=WORKBENCH_BUTTON_STYLE
-        ).pack(side="left", padx=(8, 0))
+        self._pending_submit_button = ttk.Button(
+            pending_draft_buttons, text="確認掛單", command=self._confirm_submit_pending_draft, style=WORKBENCH_BUTTON_STYLE
+        )
+        self._pending_submit_button.pack(side="left")
+        self._pending_cancel_edit_button = ttk.Button(
+            pending_draft_buttons, text="取消編輯", command=self._cancel_pending_edit, style=WORKBENCH_BUTTON_STYLE, state="disabled"
+        )
+        self._pending_cancel_edit_button.pack(side="left", padx=(8, 0))
         self._pending_draft_preview_var = tk.StringVar(value="輸入手動股票或從 Scanner Pool 選取股票後，系統會帶入建議數量／限價與盤前管理資訊。")
         _TradingStatusLine(
             pending_actions,
@@ -1098,9 +1140,6 @@ class TradingAccountPanel(ttk.Frame):
         ).pack(side="left")
         ttk.Button(
             fill_row, text="刪除掛單", command=self._delete_selected_pending, style=WORKBENCH_BUTTON_STYLE
-        ).pack(side="left", padx=(8, 0))
-        ttk.Button(
-            fill_row, text="無成交結案", command=self._cancel_selected_pending, style=WORKBENCH_BUTTON_STYLE
         ).pack(side="left", padx=(8, 0))
 
         trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）", padding=10, style=WORKBENCH_LABELLF_STYLE)
@@ -1489,6 +1528,7 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             error_title="Trading 保護 SELL 送單失敗",
+            state_domains={STATE_ORDERS, STATE_PROTECTION},
         )
 
     def _confirm_protection_oco_submitted(self):
@@ -1533,6 +1573,7 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             error_title="Trading 保護 OCO 送單失敗",
+            state_domains={STATE_ORDERS, STATE_PROTECTION},
         )
 
     def refresh_protection_plan(self):
@@ -1576,6 +1617,7 @@ class TradingAccountPanel(ttk.Frame):
             lambda: build_trading_protection_plan(WORKBENCH_PROJECT_ROOT),
             on_success=on_success,
             error_title="Trading 保護單計畫",
+            state_domains={STATE_PROTECTION},
         )
 
     def _reload_indicator_rows(self, rows):
@@ -1613,6 +1655,7 @@ class TradingAccountPanel(ttk.Frame):
             "建立／刷新 Indicator SELL 計畫",
             lambda: build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT),
             error_title="Trading Indicator SELL 計畫",
+            state_domains={STATE_INDICATOR_EXIT},
         )
 
     def _confirm_indicator_exit_submitted(self):
@@ -1649,6 +1692,7 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             error_title="Trading Indicator SELL 送單失敗",
+            state_domains={STATE_ORDERS, STATE_INDICATOR_EXIT},
         )
 
     def _set_overview_card(self, key: str, primary: object, detail: object = "", *, tone: str = "text") -> None:
@@ -1916,7 +1960,11 @@ class TradingAccountPanel(ttk.Frame):
             return
         try:
             payload = _load_panel_value(
-                self, "candidate_payload", lambda: load_trading_candidate_snapshot_for_account(WORKBENCH_PROJECT_ROOT, require_current=False)
+                self,
+                "candidate_payload",
+                lambda: load_trading_candidate_snapshot_for_account(
+                    WORKBENCH_PROJECT_ROOT, require_current=False
+                ),
             )
         except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([], candidate_payload=None)
@@ -1979,7 +2027,7 @@ class TradingAccountPanel(ttk.Frame):
         cash_limit_text = "-" if cash_limit_milli is None else f"{float(cash_limit_milli) / 1000.0:,.0f}"
         self._pending_status_var.set(
             f"ACTIVE {len(active_rows)}｜資源鎖定 {locked_slots}/{slot_quota}｜預留 {reserved:,.0f}/{cash_limit_text}"
-            + (f"｜STALE {stale_count}：請先確認成交或無成交" if stale_count else "")
+            + (f"｜STALE {stale_count}：請先確認成交或刪除掛單" if stale_count else "")
         )
 
     def refresh_proposed_order_plan(self):
@@ -2038,6 +2086,22 @@ class TradingAccountPanel(ttk.Frame):
             self._param_mode_var.set(PARAM_MODE_REUSE_LABEL if reusable else PARAM_MODE_TRAIN_LABEL)
         self.refresh_operations_status()
 
+    @staticmethod
+    def _workflow_state_domains(action: str):
+        mapping = {
+            "data": {STATE_MARKET_DATA},
+            "rollforward": set(ACCOUNT_MUTATION_DOMAINS) | {STATE_PROTECTION, STATE_INDICATOR_EXIT},
+            "params": {STATE_PARAMS, STATE_SCANNER_ELIGIBILITY},
+            "scanner": {STATE_SCANNER, STATE_SCANNER_ELIGIBILITY},
+            "orders": {STATE_ORDERS},
+        }
+        if action == "all":
+            domains = set()
+            for key in ("data", "rollforward", "params", "scanner"):
+                domains.update(mapping[key])
+            return domains
+        return mapping.get(str(action), set())
+
     def _start_workflow_action(self, action: str):
         param_mode = self._selected_param_mode()
         param_label = "沿用既有 Trading Params" if param_mode == TRADING_PARAM_MODE_REUSE else "重新訓練 Trading Params"
@@ -2067,6 +2131,7 @@ class TradingAccountPanel(ttk.Frame):
             on_success=on_success,
             on_error=on_error,
             refresh_state=True,
+            state_domains=self._workflow_state_domains(action),
         )
 
     @staticmethod
@@ -2228,6 +2293,40 @@ class TradingAccountPanel(ttk.Frame):
         ticker = self._selected_candidate_ticker()
         return dict(getattr(self, "_candidate_by_ticker", {}).get(ticker) or {}) if ticker else None
 
+    def _set_pending_edit_mode(self, pending_entry_id: str | None) -> None:
+        self._pending_edit_entry_id = None if not pending_entry_id else str(pending_entry_id)
+        editing = self._pending_edit_entry_id is not None
+        if hasattr(self, "_pending_submit_button"):
+            self._pending_submit_button.configure(text="更新掛單" if editing else "確認掛單")
+        if hasattr(self, "_pending_cancel_edit_button"):
+            self._pending_cancel_edit_button.configure(state="normal" if editing else "disabled")
+
+    def _reset_pending_draft_form(self, *, message: str | None = None) -> None:
+        if self._pending_manual_preview_after_id is not None:
+            try:
+                self.after_cancel(self._pending_manual_preview_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Trading pending preview debounce", exc)
+            self._pending_manual_preview_after_id = None
+        self._pending_draft_origin = "manual"
+        self._pending_draft_candidate = None
+        self._set_pending_edit_mode(None)
+        self._pending_draft_programmatic_update = True
+        try:
+            self._pending_order_source_var.set("手動")
+            self._pending_order_ticker_var.set("")
+            self._pending_order_qty_var.set("")
+            self._pending_order_price_var.set("")
+            self._pending_order_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
+        finally:
+            self._pending_draft_programmatic_update = False
+        self._pending_draft_preview_var.set(
+            message or "輸入股票或從 Scanner Pool 選取股票；修改數量／限價／日期後會自動更新盤前資訊。"
+        )
+
+    def _cancel_pending_edit(self):
+        self._reset_pending_draft_form(message="已取消編輯；目前為新增掛單模式。")
+
     def _on_candidate_selected(self, row):
         ticker = str((row or {}).get("ticker") or "").strip().upper()
         self._trade_ticker_var.set(ticker)
@@ -2236,12 +2335,19 @@ class TradingAccountPanel(ttk.Frame):
         candidate = self._selected_candidate_row()
         if not candidate:
             return
+        self._set_pending_edit_mode(None)
         self._pending_draft_origin = "scanner"
         self._pending_draft_candidate = dict(candidate)
-        self._pending_order_source_var.set("Scanner")
-        self._pending_order_ticker_var.set(ticker)
-        self._pending_order_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
-        self._preview_pending_draft(use_current_overrides=False)
+        self._pending_draft_programmatic_update = True
+        try:
+            self._pending_order_source_var.set("Scanner")
+            self._pending_order_ticker_var.set(ticker)
+            self._pending_order_qty_var.set("")
+            self._pending_order_price_var.set("")
+            self._pending_order_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
+        finally:
+            self._pending_draft_programmatic_update = False
+        self._preview_pending_draft(use_current_overrides=False, silent=True)
 
     def _selected_pending_entry_id(self):
         if not hasattr(self, "_pending_tree"):
@@ -2257,9 +2363,29 @@ class TradingAccountPanel(ttk.Frame):
         row = self._selected_pending_row()
         if not row:
             return
+        entry_id = str(row.get("pending_entry_id") or "")
+        origin = "scanner" if str(row.get("origin") or "") == "scanner_strategy" else "manual"
+        self._pending_draft_origin = origin
+        self._pending_draft_candidate = None
+        self._set_pending_edit_mode(entry_id)
+        planned_date = str(row.get("planned_trade_date") or "").strip()
+        self._pending_draft_programmatic_update = True
+        try:
+            self._pending_order_source_var.set("Scanner" if origin == "scanner" else "手動")
+            self._pending_order_ticker_var.set(str(row.get("ticker") or ""))
+            self._pending_order_qty_var.set(str(int(row.get("planned_qty") or 0)))
+            self._pending_order_price_var.set(str(row.get("limit_price") or ""))
+            self._pending_order_date_var.set(
+                planned_date or datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            )
+        finally:
+            self._pending_draft_programmatic_update = False
+        self._pending_draft_preview_var.set(
+            f"編輯 {row.get('ticker')}｜預留 {float(row.get('reserved_cost') or 0):,.0f}｜"
+            f"Stop {row.get('init_sl')}｜停利 {row.get('target_price')}｜Trailing {row.get('init_trail')}"
+        )
         self._pending_fill_qty_var.set(str(int(row.get("planned_qty") or 0)))
         self._pending_fill_price_var.set(str(row.get("limit_price") or ""))
-        planned_date = str(row.get("planned_trade_date") or "").strip()
         self._pending_fill_date_var.set(
             planned_date or datetime.now(timezone(timedelta(hours=8))).date().isoformat()
         )
@@ -2286,13 +2412,31 @@ class TradingAccountPanel(ttk.Frame):
             try:
                 self.after_cancel(self._pending_manual_preview_after_id)
             except tk.TclError as exc:
-                _warn_gui_fallback("Trading pending manual preview debounce", exc)
+                _warn_gui_fallback("Trading pending ticker preview debounce", exc)
         ticker = self._pending_order_ticker_var.get().strip().upper()
         if len(ticker) < 4:
             self._pending_manual_preview_after_id = None
             return None
-        self._pending_manual_preview_after_id = self.after(450, self._auto_preview_manual_pending_ticker)
+        self._pending_manual_preview_after_id = self.after(350, self._auto_preview_manual_pending_ticker)
         return None
+
+    def _schedule_pending_value_preview(self, *_args):
+        if self._pending_draft_programmatic_update:
+            return None
+        ticker = self._pending_order_ticker_var.get().strip().upper()
+        if len(ticker) < 4:
+            return None
+        if self._pending_manual_preview_after_id is not None:
+            try:
+                self.after_cancel(self._pending_manual_preview_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Trading pending value preview debounce", exc)
+        self._pending_manual_preview_after_id = self.after(250, self._auto_preview_pending_values)
+        return None
+
+    def _auto_preview_pending_values(self):
+        self._pending_manual_preview_after_id = None
+        self._preview_pending_draft(use_current_overrides=True, silent=True)
 
     def _auto_preview_manual_pending_ticker(self):
         self._pending_manual_preview_after_id = None
@@ -2305,20 +2449,31 @@ class TradingAccountPanel(ttk.Frame):
             try:
                 self.after_cancel(self._pending_manual_preview_after_id)
             except tk.TclError as exc:
-                _warn_gui_fallback("Trading pending manual preview commit", exc)
+                _warn_gui_fallback("Trading pending ticker preview commit", exc)
             self._pending_manual_preview_after_id = None
         ticker = self._pending_order_ticker_var.get().strip().upper()
         if not ticker:
             return None
         scanner_ticker = str((self._pending_draft_candidate or {}).get("ticker") or "").strip().upper()
+        edit_row = self._pending_rows.get(str(self._pending_edit_entry_id or "")) or {}
+        edit_ticker = str(edit_row.get("ticker") or "").strip().upper()
         if self._pending_draft_origin == "scanner" and ticker == scanner_ticker:
-            return None
+            return self._preview_pending_draft(use_current_overrides=True, silent=True)
+        if self._pending_edit_entry_id and ticker == edit_ticker:
+            return self._preview_pending_draft(use_current_overrides=True, silent=True)
         self._pending_draft_origin = "manual"
         self._pending_draft_candidate = None
-        self._pending_order_source_var.set("手動")
-        self._pending_order_ticker_var.set(ticker)
-        self._pending_order_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
-        self._preview_pending_draft(use_current_overrides=False)
+        self._pending_draft_programmatic_update = True
+        try:
+            self._pending_order_source_var.set("手動")
+            self._pending_order_ticker_var.set(ticker)
+            self._pending_order_qty_var.set("")
+            self._pending_order_price_var.set("")
+            if not self._pending_order_date_var.get().strip():
+                self._pending_order_date_var.set(datetime.now(timezone(timedelta(hours=8))).date().isoformat())
+        finally:
+            self._pending_draft_programmatic_update = False
+        self._preview_pending_draft(use_current_overrides=False, silent=True)
         return None
 
     def _pending_draft_override_values(self, *, use_current_overrides: bool):
@@ -2340,10 +2495,11 @@ class TradingAccountPanel(ttk.Frame):
         )
         origin = str(self._pending_draft_origin or "manual")
         candidate = dict(self._pending_draft_candidate or {}) if origin == "scanner" else None
-        if origin == "scanner":
+        if origin == "scanner" and self._pending_edit_entry_id is None:
             if not candidate or str(candidate.get("ticker") or "").strip().upper() != ticker:
-                raise ValueError("Scanner 掛單來源已改變；請重新選取 Scanner 股票或改用手動試算")
+                raise ValueError("Scanner 掛單來源已改變；請重新選取 Scanner 股票或改用手動輸入")
         return {
+            "pending_entry_id": self._pending_edit_entry_id,
             "origin": origin,
             "candidate": candidate,
             "ticker": ticker,
@@ -2355,6 +2511,18 @@ class TradingAccountPanel(ttk.Frame):
     @staticmethod
     def _pending_draft_worker(request):
         payload = dict(request or {})
+        pending_entry_id = str(payload.get("pending_entry_id") or "").strip()
+        if pending_entry_id:
+            return preview_trading_pending_entry_update(
+                WORKBENCH_PROJECT_ROOT,
+                pending_entry_id=pending_entry_id,
+                origin=str(payload.get("origin") or "manual"),
+                ticker=payload.get("ticker"),
+                qty=payload.get("qty"),
+                limit_price=payload.get("price"),
+                planned_trade_date=payload.get("planned_date"),
+                candidate_reference=dict(payload.get("candidate") or {}) or None,
+            )
         if str(payload.get("origin") or "manual") == "scanner":
             return preview_scanner_trading_pending_entry(
                 WORKBENCH_PROJECT_ROOT,
@@ -2390,48 +2558,105 @@ class TradingAccountPanel(ttk.Frame):
             f"停利 {row.get('target_price')}｜Trailing {row.get('init_trail')}｜資訊日 {row.get('information_date') or '-'}"
         )
 
-    def _preview_pending_draft(self, *, use_current_overrides: bool):
+    def _pending_preview_worker(self, token: int, request: dict, silent: bool) -> None:
+        result = None
+        error = None
+        try:
+            result = self._pending_draft_worker(request)
+        except Exception as exc:
+            error = exc
+        self._pending_preview_results.put((token, result, error, bool(silent)))
+
+    def _schedule_pending_preview_poll(self) -> None:
+        if self._pending_preview_poll_after_id is None:
+            self._pending_preview_poll_after_id = self.after(30, self._drain_pending_preview_results)
+
+    def _drain_pending_preview_results(self) -> None:
+        self._pending_preview_poll_after_id = None
+        handled = False
+        while True:
+            try:
+                token, result, error, silent = self._pending_preview_results.get_nowait()
+            except queue.Empty:
+                break
+            handled = True
+            if int(token) != int(self._pending_preview_token):
+                continue
+            if error is not None:
+                if silent:
+                    self._pending_draft_preview_var.set(f"試算未更新：{error}")
+                else:
+                    messagebox.showerror("掛單試算失敗", str(error), parent=self)
+            else:
+                self._apply_pending_draft_preview(result)
+        if handled and self._pending_preview_thread is not None and not self._pending_preview_thread.is_alive():
+            self._pending_preview_thread = None
+        if self._pending_preview_thread is not None and self._pending_preview_thread.is_alive():
+            self._schedule_pending_preview_poll()
+
+    def _preview_pending_draft(self, *, use_current_overrides: bool, silent: bool = False):
         ticker = self._pending_order_ticker_var.get().strip().upper()
         if not ticker:
             return False
         try:
             request = self._build_pending_draft_request(use_current_overrides=use_current_overrides)
         except (ValueError, RuntimeError) as exc:
-            messagebox.showerror("掛單試算失敗", str(exc), parent=self)
+            if silent:
+                self._pending_draft_preview_var.set(f"試算未更新：{exc}")
+            else:
+                messagebox.showerror("掛單試算失敗", str(exc), parent=self)
             return False
-        return self._submit_trading_command(
-            f"{ticker} 掛單試算",
-            lambda request=request: self._pending_draft_worker(request),
-            on_success=self._apply_pending_draft_preview,
-            error_title="掛單試算失敗",
-            refresh_state=False,
+        if self._pending_preview_thread is not None and self._pending_preview_thread.is_alive():
+            if self._pending_manual_preview_after_id is not None:
+                try:
+                    self.after_cancel(self._pending_manual_preview_after_id)
+                except tk.TclError as exc:
+                    _warn_gui_fallback("Trading pending preview retry", exc)
+            self._pending_manual_preview_after_id = self.after(
+                150,
+                lambda: self._preview_pending_draft(
+                    use_current_overrides=use_current_overrides, silent=silent
+                ),
+            )
+            return False
+        self._pending_preview_token += 1
+        token = int(self._pending_preview_token)
+        self._pending_draft_preview_var.set(f"{ticker}｜自動更新盤前資訊中…")
+        self._pending_preview_thread = threading.Thread(
+            target=self._pending_preview_worker,
+            args=(token, request, bool(silent)),
+            name=f"workbench-pending-preview-{token}",
+            daemon=True,
         )
+        self._pending_preview_thread.start()
+        self._schedule_pending_preview_poll()
+        return True
 
     def _preview_current_pending_draft(self):
-        try:
-            if self._pending_draft_origin != "scanner":
-                self._pending_draft_origin = "manual"
-                self._pending_draft_candidate = None
-                self._pending_order_source_var.set("手動")
-            return self._preview_pending_draft(use_current_overrides=True)
-        except (ValueError, RuntimeError) as exc:
-            messagebox.showerror("掛單試算失敗", str(exc), parent=self)
-            return False
+        return self._preview_pending_draft(use_current_overrides=True, silent=False)
 
     def _confirm_submit_pending_draft(self):
         ticker = self._pending_order_ticker_var.get().strip().upper()
         if not ticker:
-            messagebox.showerror("送出掛單", "股票代號必填。", parent=self)
+            messagebox.showerror("掛單", "股票代號必填。", parent=self)
             return
+        try:
+            request = self._build_pending_draft_request(use_current_overrides=True)
+        except (ValueError, RuntimeError) as exc:
+            messagebox.showerror("掛單確認失敗", str(exc), parent=self)
+            return
+
+        editing = bool(request.get("pending_entry_id"))
 
         def preview_success(result):
             row = dict(result or {})
             self._apply_pending_draft_preview(row)
+            action_text = "更新掛單" if editing else "確認掛單"
             if not messagebox.askyesno(
-                "確認送出掛單",
+                action_text,
                 f"{row.get('ticker')}｜{int(row.get('planned_qty') or 0):,} 股｜限價 {row.get('limit_price')}｜{row.get('planned_trade_date')}\n"
                 f"預留 {float(row.get('reserved_cost') or 0):,.0f}｜Stop {row.get('init_sl')}｜停利 {row.get('target_price')}｜Trailing {row.get('init_trail')}\n\n"
-                "確認後才會建立正式掛單並鎖定資金／持股 slot。",
+                + ("確認後會原子取代原掛單，不會重複計算 reservation。" if editing else "確認後才會建立正式掛單並鎖定資金／持股 slot。"),
                 parent=self,
             ):
                 return
@@ -2439,7 +2664,18 @@ class TradingAccountPanel(ttk.Frame):
             price = float(row.get("limit_price") or 0)
             planned_date = str(row.get("planned_trade_date") or "")
             request_origin = str(request.get("origin") or "manual")
-            if request_origin == "scanner":
+            if editing:
+                worker = lambda: update_trading_pending_entry_intent(
+                    WORKBENCH_PROJECT_ROOT,
+                    pending_entry_id=str(request.get("pending_entry_id") or ""),
+                    origin=request_origin,
+                    ticker=str(row.get("ticker") or request.get("ticker") or ticker),
+                    qty=qty,
+                    limit_price=price,
+                    planned_trade_date=planned_date,
+                    candidate_reference=dict(request.get("candidate") or {}) or None,
+                )
+            elif request_origin == "scanner":
                 candidate = dict(request.get("candidate") or {})
                 worker = lambda: create_scanner_trading_pending_entry(
                     WORKBENCH_PROJECT_ROOT,
@@ -2457,28 +2693,23 @@ class TradingAccountPanel(ttk.Frame):
                     planned_trade_date=planned_date,
                 )
 
-            def create_success(created):
-                created_row = dict(created or {})
-                self._pending_order_qty_var.set("")
-                self._pending_order_price_var.set("")
-                self._pending_draft_preview_var.set(
-                    f"{created_row.get('ticker')} 已送入掛單區；資金與持股 slot 已依正式掛單鎖定。"
+            def save_success(saved):
+                saved_row = dict(saved or {})
+                verb = "已更新" if editing else "已加入掛單區"
+                self._reset_pending_draft_form(
+                    message=f"{saved_row.get('ticker')} {verb}；資源與 Scanner Pool 已同步。"
                 )
-                messagebox.showinfo("送出掛單", f"{created_row.get('ticker')} 已加入掛單區。", parent=self)
+                messagebox.showinfo(action_text, f"{saved_row.get('ticker')} {verb}。", parent=self)
 
             self._submit_trading_command(
-                f"{row.get('ticker')} 送出掛單",
+                f"{row.get('ticker')} {action_text}",
                 worker,
-                on_success=create_success,
-                error_title="送出掛單失敗",
+                on_success=save_success,
+                error_title=f"{action_text}失敗",
                 refresh_state=True,
+                state_domains=PENDING_MUTATION_DOMAINS,
             )
 
-        try:
-            request = self._build_pending_draft_request(use_current_overrides=True)
-        except (ValueError, RuntimeError) as exc:
-            messagebox.showerror("掛單確認失敗", str(exc), parent=self)
-            return
         self._submit_trading_command(
             f"{ticker} 掛單送出前確認",
             lambda request=request: self._pending_draft_worker(request),
@@ -2541,6 +2772,7 @@ class TradingAccountPanel(ttk.Frame):
             on_success=on_success,
             error_title="掛單成交失敗",
             refresh_state=True,
+            state_domains=PENDING_FILL_MUTATION_DOMAINS,
         )
 
     def _delete_selected_pending(self):
@@ -2561,34 +2793,13 @@ class TradingAccountPanel(ttk.Frame):
             lambda: delete_pending_entry(
                 WORKBENCH_PROJECT_ROOT, pending_entry_id=entry_id, note="Workbench user delete"
             ),
-            on_success=lambda _result: messagebox.showinfo(
-                "刪除掛單", f"{ticker} 掛單已刪除，預留資源已釋放。", parent=self
+            on_success=lambda _result: (
+                self._reset_pending_draft_form(message=f"{ticker} 掛單已刪除；預留資源與 Scanner Pool 已同步。"),
+                messagebox.showinfo("刪除掛單", f"{ticker} 掛單已刪除，預留資源已釋放。", parent=self),
             ),
             error_title="刪除掛單失敗",
             refresh_state=True,
-        )
-
-    def _cancel_selected_pending(self):
-        row = self._selected_pending_row()
-        if not row:
-            messagebox.showerror("無成交結案", "請先選取掛單。", parent=self)
-            return
-        ticker = str(row.get("ticker") or "")
-        if not messagebox.askyesno(
-            "確認無成交",
-            f"將 {ticker} 掛單標記為無成交並自掛單區移除。\n同一資訊日的預留資金／slot 仍會鎖定到下一資訊日，避免盤中重配。",
-            parent=self,
-        ):
-            return
-        entry_id = str(row.get("pending_entry_id") or "")
-        self._submit_trading_command(
-            f"{ticker} 掛單無成交結案",
-            lambda: cancel_pending_entry_no_fill(
-                WORKBENCH_PROJECT_ROOT, pending_entry_id=entry_id, note="Workbench no fill"
-            ),
-            on_success=lambda _result: messagebox.showinfo("掛單結案", f"{ticker} 已標記無成交。", parent=self),
-            error_title="掛單結案失敗",
-            refresh_state=True,
+            state_domains=PENDING_MUTATION_DOMAINS,
         )
 
     def _open_ticker_in_inspector(self, ticker, *, candidate_row=None):
@@ -2771,6 +2982,7 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             on_error=on_error,
+            state_domains={STATE_ORDERS},
         )
 
     def _confirm_selected_fill(self):
@@ -2868,6 +3080,7 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             on_error=on_error,
+            state_domains=set(ACCOUNT_MUTATION_DOMAINS) | {STATE_ORDERS, STATE_PROTECTION, STATE_INDICATOR_EXIT},
         )
 
     def _cancel_selected_order(self):
@@ -2924,6 +3137,7 @@ class TradingAccountPanel(ttk.Frame):
             worker,
             on_success=on_success,
             on_error=on_error,
+            state_domains={STATE_ORDERS, STATE_PROTECTION},
         )
 
     def _finish_workflow_success(self, action: str, result):
@@ -2987,6 +3201,7 @@ class TradingAccountPanel(ttk.Frame):
             on_success=on_success,
             on_error=on_error,
             refresh_state=True,
+            state_domains=ACCOUNT_MUTATION_DOMAINS,
         )
 
     def refresh_account_dashboard(self):
@@ -3283,6 +3498,7 @@ class TradingAccountPanel(ttk.Frame):
             # The buy mutates account truth used throughout Trading Center; refresh
             # the canonical bundle before reporting success.
             refresh_state=True,
+            state_domains=ACCOUNT_MUTATION_DOMAINS,
         )
 
     def _position_form_values(self):

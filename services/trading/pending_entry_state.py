@@ -141,28 +141,11 @@ def load_trading_pending_entry_state(project_root, *, required: bool = False) ->
 
 
 def _locked_for_information_date(entry: dict[str, Any], current_information_date: str | None) -> bool:
-    status = str(entry.get("status") or "")
-    if status == PENDING_ENTRY_STATUS_FILLED:
-        return False
-    if status == PENDING_ENTRY_STATUS_ACTIVE:
-        return True
-    # D4: a no-fill cancellation cannot recycle the same session's capital/slot.
-    if status == PENDING_ENTRY_STATUS_CANCELLED_NO_FILL:
-        # Legacy Workbench used one combined "無成交／刪除掛單" action, so old
-        # rows cannot distinguish a true same-session no-fill from a user delete.
-        # Only rows created by the explicit new no-fill action carry this flag;
-        # ambiguous legacy rows are released so a prior user delete cannot keep
-        # resources locked indefinitely after upgrading.
-        if entry.get("resource_lock_through_information_date") is not True:
-            return False
-        if current_information_date is None:
-            return True
-        entry_date = normalize_trading_date(entry.get("information_date"), field_name="information_date", allow_none=False)
-        current_date = normalize_trading_date(current_information_date, field_name="current_information_date", allow_none=False)
-        return current_date <= entry_date
-    if status == PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED:
-        return False
-    return False
+    # Workbench is a pre/post-market planning tool.  D4 is enforced while an entry
+    # remains ACTIVE; once the user closes the intent (delete/no-fill/cancel), the
+    # planning reservation is no longer reusable within the same active workflow and
+    # can be released immediately for the next pre-market allocation pass.
+    return str(entry.get("status") or "") == PENDING_ENTRY_STATUS_ACTIVE
 
 
 def project_trading_pending_entry_state(
@@ -225,6 +208,56 @@ def create_trading_pending_entry(project_root, *, entry: dict[str, Any]) -> dict
 
 
 @serialized_trading_state_mutation
+def update_trading_pending_entry(
+    project_root,
+    *,
+    pending_entry_id: str,
+    replacement: dict[str, Any],
+) -> dict[str, Any]:
+    """Atomically replace one ACTIVE pre-market intent without double-reserving resources."""
+    path = resolve_trading_pending_entry_state_path(project_root)
+    state = load_trading_pending_entry_state(project_root, required=True)
+    entry_id = str(pending_entry_id or "").strip()
+    if entry_id not in state["entries"]:
+        raise ValueError(f"找不到 Trading pending entry: {entry_id}")
+    current = state["entries"][entry_id]
+    if str(current.get("status")) != PENDING_ENTRY_STATUS_ACTIVE:
+        raise ValueError(f"只有 ACTIVE 掛單可修改: {entry_id}")
+
+    payload = deepcopy(dict(replacement or {}))
+    ticker = normalize_trading_ticker(payload.get("ticker"))
+    for other_id, row in state["entries"].items():
+        if str(other_id) == entry_id:
+            continue
+        if str(row.get("status")) == PENDING_ENTRY_STATUS_ACTIVE and normalize_trading_ticker(row.get("ticker")) == ticker:
+            raise ValueError(f"{ticker} 已有另一筆 active 掛單")
+
+    payload["pending_entry_id"] = entry_id
+    payload["ticker"] = ticker
+    payload["status"] = PENDING_ENTRY_STATUS_ACTIVE
+    payload["created_at"] = str(current.get("created_at") or payload.get("created_at") or _timestamp())
+    payload["updated_at"] = _timestamp()
+    payload["closed_at"] = None
+    payload["fill"] = None
+
+    updated = deepcopy(state)
+    updated["entries"][entry_id] = payload
+    updated = _append_event(
+        updated,
+        mutation_type="update_pending_entry",
+        details={
+            "pending_entry_id": entry_id,
+            "ticker": ticker,
+            "previous_ticker": current.get("ticker"),
+            "entry": payload,
+        },
+    )
+    validate_trading_pending_entry_state(updated)
+    atomic_write_json(path, updated)
+    return deepcopy(updated["entries"][entry_id])
+
+
+@serialized_trading_state_mutation
 def cancel_trading_pending_entry(project_root, *, pending_entry_id: str, note: str | None = None) -> dict[str, Any]:
     path = resolve_trading_pending_entry_state_path(project_root)
     state = load_trading_pending_entry_state(project_root, required=True)
@@ -239,7 +272,7 @@ def cancel_trading_pending_entry(project_root, *, pending_entry_id: str, note: s
     updated_entry["status"] = PENDING_ENTRY_STATUS_CANCELLED_NO_FILL
     updated_entry["closed_at"] = _timestamp()
     updated_entry["cancel_note"] = None if note is None else str(note)
-    updated_entry["resource_lock_through_information_date"] = True
+    updated_entry["resource_lock_through_information_date"] = False
     updated = _append_event(
         updated,
         mutation_type="cancel_pending_entry_no_fill",
@@ -254,11 +287,8 @@ def cancel_trading_pending_entry(project_root, *, pending_entry_id: str, note: s
 def delete_trading_pending_entry(project_root, *, pending_entry_id: str, note: str | None = None) -> dict[str, Any]:
     """Close a user-created pre-market pending entry and release its resources now.
 
-    This is intentionally distinct from ``CANCELLED_NO_FILL``.  A no-fill means
-    the day's allocation was already committed and therefore remains locked by
-    D4 through the same information date.  User deletion means the local
-    pre-market intent is withdrawn before that execution lifecycle; its cash and
-    slot are immediately reusable while the event remains auditable.
+    The close reason remains auditable, but resource semantics are intentionally
+    identical to no-fill/cancel: only ACTIVE pending entries reserve cash/slots.
     """
     path = resolve_trading_pending_entry_state_path(project_root)
     state = load_trading_pending_entry_state(project_root, required=True)
@@ -324,6 +354,7 @@ __all__ = [
     "load_trading_pending_entry_state",
     "project_trading_pending_entry_state",
     "create_trading_pending_entry",
+    "update_trading_pending_entry",
     "cancel_trading_pending_entry",
     "delete_trading_pending_entry",
     "mark_trading_pending_entry_filled",

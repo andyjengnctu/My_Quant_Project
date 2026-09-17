@@ -20,6 +20,11 @@ from services.trading.market_data_consumer import (
 )
 from services.trading.market_data_v2_state import build_trading_market_data_v2_read_model
 from services.trading.account_state import load_trading_account_state
+from services.trading.entry_candidate_projection import project_trading_entry_candidate_payload
+from services.trading.pending_entry_state import (
+    load_trading_pending_entry_state,
+    project_trading_pending_entry_state,
+)
 from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
 from services.trading.strategy_param_state import (
     get_trading_strategy_param_binding_sha256,
@@ -479,15 +484,46 @@ def load_trading_candidate_snapshot_for_account(
     *,
     require_current: bool = False,
 ) -> dict[str, Any]:
-    """Load Scanner truth projected through current canonical account holdings."""
-    payload = dict(load_trading_candidate_snapshot(project_root, require_current=require_current))
+    """Load Scanner truth projected through current account/pending entry state.
+
+    The persisted Scanner snapshot stays immutable.  This function is the canonical
+    actionable-candidate read path used by Workbench views: a ticker already held or
+    already represented by an ACTIVE pending entry must not remain simultaneously
+    actionable in Scanner Pool.  Closing/deleting that pending entry automatically
+    makes the still-current Scanner candidate visible again.
+    """
+    root = Path(project_root).resolve()
+    payload = dict(load_trading_candidate_snapshot(root, require_current=require_current))
+    original_rows = [dict(row) for row in list(payload.get("candidate_rows") or [])]
     visible, skipped = filter_trading_candidate_rows_for_held_positions(
-        list(payload.get("candidate_rows") or []),
-        held_tickers=_resolve_trading_held_tickers(project_root),
+        original_rows,
+        held_tickers=_resolve_trading_held_tickers(root),
     )
     payload["candidate_rows"] = visible
     payload["held_candidate_tickers_skipped"] = skipped
-    return payload
+
+    pending_state = load_trading_pending_entry_state(root, required=False)
+    pending_snapshot = project_trading_pending_entry_state(
+        pending_state,
+        current_information_date=payload.get("latest_data_date"),
+    )
+    projected = project_trading_entry_candidate_payload(
+        payload,
+        account_snapshot=None,  # held-position projection was applied above for legacy evidence.
+        pending_snapshot=pending_snapshot,
+    )
+    before_pending = {
+        normalize_trading_ticker(row.get("ticker"))
+        for row in visible
+        if str(row.get("ticker") or "").strip()
+    }
+    after_pending = {
+        normalize_trading_ticker(row.get("ticker"))
+        for row in list(projected.get("candidate_rows") or [])
+        if str(row.get("ticker") or "").strip()
+    }
+    projected["active_pending_candidate_tickers_skipped"] = sorted(before_pending - after_pending)
+    return projected
 
 
 def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[str, Any]:
@@ -540,6 +576,7 @@ def get_trading_candidate_snapshot_read_model(project_root: str | Path) -> dict[
         "stale_candidate_rows_skipped": list(payload.get("stale_candidate_rows_skipped") or []),
         "stale_candidate_count": len(payload.get("stale_candidate_rows_skipped") or []),
         "held_candidate_tickers_skipped": list(payload.get("held_candidate_tickers_skipped") or []),
+        "active_pending_candidate_tickers_skipped": list(payload.get("active_pending_candidate_tickers_skipped") or []),
         "information_date": payload.get("latest_data_date"),
         "selected_params_sha256": payload.get("selected_params_sha256"),
         "market_data_consumer_state_sha256": payload.get("market_data_consumer_state_sha256"),
