@@ -155,6 +155,8 @@ from services.workbench_ui.workbench import (
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MANUAL_SOURCE = "manual_adopted"
 UNMANAGED_STATUS = "unmanaged"
+TRADING_SOURCE_SCANNER_LABEL = "Scanner"
+TRADING_SOURCE_MANUAL_LABEL = "手選"
 PARAM_MODE_REUSE_LABEL = "沿用既有 Params"
 PARAM_MODE_TRAIN_LABEL = "重新訓練 Params"
 PARAM_MODE_BY_LABEL = {
@@ -174,6 +176,25 @@ POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；停損�
 SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；選取候選後會帶入掛單輸入框，可在正式送出前修改規劃股數／掛單日；買入限價由系統自動計算。"
 BUY_ENTRY_HINT = "直接補登買入不需經掛單區；成交日／成交價會先用 raw 市場證據檢查，手動股會凍結目前 Primary Params 並從 finalized information date 開始管理。"
 PENDING_ENTRY_HINT = "Scanner／手選股／既有掛單共用同一輸入介面；修改股票、規劃股數或掛單日會自動更新預覽。買入限價、預留成本、停損、停利由系統自動計算；只有 ACTIVE 掛單占用 Params、資金與 slot。"
+
+
+def trading_source_display_label(*, origin: object = None, source: object = None) -> str:
+    """Return one canonical user-facing source label for Trading tables/forms."""
+
+    values = {
+        str(value or "").strip()
+        for value in (origin, source)
+        if str(value or "").strip()
+    }
+    if values.intersection({"scanner", "scanner_strategy", "strategy_fill"}):
+        return TRADING_SOURCE_SCANNER_LABEL
+    if values.intersection({"manual", "manual_selected", "manual_adopted", "manual_managed"}):
+        return TRADING_SOURCE_MANUAL_LABEL
+    for value in (source, origin):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "-"
 
 _STATUS_TOKEN_TONES = {
     "READY": "success",
@@ -568,6 +589,10 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_order_form_constraints: dict[str, object] = {}
         self._pending_fill_form_constraints: dict[str, object] = {}
         self._pending_price_option_set: frozenset[str] = frozenset()
+        self._table_sort_titles: dict[ttk.Treeview, dict[str, str]] = {}
+        self._table_sort_kinds: dict[ttk.Treeview, dict[str, str]] = {}
+        self._table_sort_state: dict[ttk.Treeview, tuple[str, bool]] = {}
+        self._table_sort_values: dict[ttk.Treeview, dict[str, dict[str, object]]] = {}
         self._trade_fill_constraints: dict[str, object] = {}
         self._trade_price_option_set: frozenset[str] = frozenset()
         self._trade_constraint_after_id = None
@@ -868,6 +893,94 @@ class TradingAccountPanel(ttk.Frame):
                 setattr(self, attr_name, None)
         super().destroy()
 
+    def _register_sortable_table(
+        self,
+        tree: ttk.Treeview,
+        *,
+        headings: dict[str, str],
+        sort_kinds: dict[str, str],
+        default_column: str = "source",
+        default_ascending: bool = True,
+        excluded_columns: tuple[str, ...] = ("open",),
+    ) -> None:
+        self._table_sort_titles[tree] = dict(headings)
+        self._table_sort_kinds[tree] = dict(sort_kinds)
+        self._table_sort_values[tree] = {}
+        self._table_sort_state[tree] = (str(default_column), bool(default_ascending))
+        excluded = {str(value) for value in excluded_columns}
+        for column in headings:
+            command = None
+            if column not in excluded:
+                command = lambda selected_column=column, selected_tree=tree: self._sort_table_by_column(
+                    selected_tree, selected_column
+                )
+            tree.heading(column, command=command)
+        self._refresh_sortable_table_headings(tree)
+
+    def _refresh_sortable_table_headings(self, tree: ttk.Treeview) -> None:
+        titles = self._table_sort_titles.get(tree, {})
+        active_column, ascending = self._table_sort_state.get(tree, ("", True))
+        for column, title in titles.items():
+            suffix = " ▲" if column == active_column and ascending else " ▼" if column == active_column else ""
+            tree.heading(column, text=f"{title}{suffix}")
+
+    @staticmethod
+    def _normalize_table_sort_value(value: object, *, sort_kind: str) -> object | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text == "-":
+            return None
+        if sort_kind == "numeric":
+            try:
+                return float(text.replace(",", ""))
+            except ValueError:
+                return None
+        if sort_kind == "date":
+            parsed = _parse_candidate_date(text)
+            return None if parsed is None else parsed.isoformat()
+        return text.casefold()
+
+    def _set_table_sort_values(self, tree: ttk.Treeview, iid: str, values: dict[str, object]) -> None:
+        kinds = self._table_sort_kinds.get(tree, {})
+        self._table_sort_values.setdefault(tree, {})[str(iid)] = {
+            str(column): self._normalize_table_sort_value(
+                value,
+                sort_kind=str(kinds.get(str(column)) or "text"),
+            )
+            for column, value in values.items()
+        }
+
+    def _clear_table_sort_values(self, tree: ttk.Treeview) -> None:
+        self._table_sort_values.setdefault(tree, {}).clear()
+
+    def _apply_table_sort(self, tree: ttk.Treeview, column: str, ascending: bool) -> None:
+        row_values = self._table_sort_values.get(tree, {})
+        present: list[tuple[str, object]] = []
+        missing: list[str] = []
+        for iid in tree.get_children(""):
+            value = row_values.get(str(iid), {}).get(str(column))
+            if value is None:
+                missing.append(str(iid))
+            else:
+                present.append((str(iid), value))
+        present.sort(key=lambda item: item[1], reverse=not bool(ascending))
+        ordered = [iid for iid, _value in present] + missing
+        for index, iid in enumerate(ordered):
+            tree.move(iid, "", index)
+        self._table_sort_state[tree] = (str(column), bool(ascending))
+        self._refresh_sortable_table_headings(tree)
+
+    def _apply_current_table_sort(self, tree: ttk.Treeview) -> None:
+        column, ascending = self._table_sort_state.get(tree, ("", True))
+        if column:
+            self._apply_table_sort(tree, column, ascending)
+
+    def _sort_table_by_column(self, tree: ttk.Treeview, column: str) -> None:
+        active_column, active_ascending = self._table_sort_state.get(tree, ("", True))
+        ascending = not active_ascending if active_column == str(column) else True
+        self._apply_table_sort(tree, str(column), ascending)
+
     def _build_ui(self):
         # AI: The Trading page contains several independent detail tables.  A fixed-height
         # notebook tab used to squeeze the middle rows to ~0px on common 1080p screens,
@@ -1044,6 +1157,23 @@ class TradingAccountPanel(ttk.Frame):
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
+        self._register_sortable_table(
+            self._tree,
+            headings=headings,
+            sort_kinds={
+                "source": "text",
+                "ticker": "text",
+                "entry_date": "date",
+                "qty": "numeric",
+                "avg_cost": "numeric",
+                "current": "numeric",
+                "stop": "numeric",
+                "target": "numeric",
+                "sell_signal": "text",
+            },
+            default_column="source",
+            default_ascending=True,
+        )
         self._tree.grid(row=0, column=0, sticky="nsew")
         self._tree.bind("<<TreeviewSelect>>", self._on_position_selected)
         self._tree.bind("<Button-1>", self._on_position_tree_click, add="+")
@@ -1088,6 +1218,23 @@ class TradingAccountPanel(ttk.Frame):
         for key in pending_columns:
             self._pending_tree.heading(key, text=pending_headings[key])
             self._pending_tree.column(key, width=pending_widths[key], anchor="center", stretch=(key != "open"))
+        self._register_sortable_table(
+            self._pending_tree,
+            headings=pending_headings,
+            sort_kinds={
+                "source": "text",
+                "ticker": "text",
+                "date": "date",
+                "qty": "numeric",
+                "reserved": "numeric",
+                "limit": "numeric",
+                "stop": "numeric",
+                "target": "numeric",
+                "status": "text",
+            },
+            default_column="source",
+            default_ascending=True,
+        )
         self._pending_tree.grid(row=1, column=0, sticky="ew")
         self._pending_tree.bind("<<TreeviewSelect>>", self._on_pending_selected)
         self._pending_tree.bind("<Button-1>", self._on_pending_tree_click, add="+")
@@ -1100,7 +1247,7 @@ class TradingAccountPanel(ttk.Frame):
             style=WORKBENCH_LABELLF_STYLE,
         )
         pending_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        self._pending_order_source_var = tk.StringVar(value="手動")
+        self._pending_order_source_var = tk.StringVar(value=TRADING_SOURCE_MANUAL_LABEL)
         self._pending_order_ticker_var = tk.StringVar()
         self._pending_order_qty_var = tk.StringVar()
         self._pending_order_limit_var = tk.StringVar()
@@ -2037,6 +2184,7 @@ class TradingAccountPanel(ttk.Frame):
             self._pending_snapshot = {}
             self._pending_rows = {}
             if hasattr(self, "_pending_tree"):
+                self._clear_table_sort_values(self._pending_tree)
                 for item in self._pending_tree.get_children():
                     self._pending_tree.delete(item)
             self._pending_status_var.set(f"掛單讀取失敗：{exc}")
@@ -2045,6 +2193,7 @@ class TradingAccountPanel(ttk.Frame):
         selected = self._selected_pending_entry_id()
         for item in self._pending_tree.get_children():
             self._pending_tree.delete(item)
+        self._clear_table_sort_values(self._pending_tree)
         self._pending_rows = {}
         active_rows = [
             dict(row) for row in list(snapshot.get("entries") or [])
@@ -2055,20 +2204,42 @@ class TradingAccountPanel(ttk.Frame):
             if not entry_id:
                 continue
             self._pending_rows[entry_id] = row
-            source = "Scanner" if str(row.get("origin") or "") == "scanner_strategy" else "手選"
+            source = trading_source_display_label(origin=row.get("origin"))
             status = "STALE" if bool(row.get("stale")) else "ACTIVE"
+            planned_date = row.get("planned_trade_date") or row.get("information_date") or "-"
+            qty = int(row.get("planned_qty") or 0)
+            reserved_cost = row.get("reserved_cost")
+            limit_price = row.get("limit_price")
+            init_sl = row.get("init_sl")
+            target_price = row.get("target_price")
             self._pending_tree.insert(
                 "", "end", iid=entry_id,
                 values=(
-                    "▣", source, row.get("ticker") or "-", row.get("planned_trade_date") or row.get("information_date") or "-",
-                    f"{int(row.get('planned_qty') or 0):,}",
-                    self._format_candidate_number(row.get("reserved_cost"), digits=0),
-                    self._format_candidate_number(row.get("limit_price"), digits=2),
-                    self._format_candidate_number(row.get("init_sl"), digits=2),
-                    self._format_candidate_number(row.get("target_price"), digits=2),
+                    "▣", source, row.get("ticker") or "-", planned_date,
+                    f"{qty:,}",
+                    self._format_candidate_number(reserved_cost, digits=0),
+                    self._format_candidate_number(limit_price, digits=2),
+                    self._format_candidate_number(init_sl, digits=2),
+                    self._format_candidate_number(target_price, digits=2),
                     status,
                 ),
             )
+            self._set_table_sort_values(
+                self._pending_tree,
+                entry_id,
+                {
+                    "source": source,
+                    "ticker": row.get("ticker"),
+                    "date": planned_date,
+                    "qty": qty,
+                    "reserved": reserved_cost,
+                    "limit": limit_price,
+                    "stop": init_sl,
+                    "target": target_price,
+                    "status": status,
+                },
+            )
+        self._apply_current_table_sort(self._pending_tree)
         self._fit_tree_rows(self._pending_tree, len(active_rows))
         if selected and selected in self._pending_rows:
             self._pending_tree.selection_set(selected)
@@ -2383,7 +2554,7 @@ class TradingAccountPanel(ttk.Frame):
         self._set_pending_edit_mode(None)
         self._pending_draft_programmatic_update = True
         try:
-            self._pending_order_source_var.set("手動")
+            self._pending_order_source_var.set(TRADING_SOURCE_MANUAL_LABEL)
             self._pending_order_ticker_var.set("")
             self._pending_order_qty_var.set("")
             self._pending_order_limit_var.set("")
@@ -2432,7 +2603,7 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._pending_draft_programmatic_update = True
         try:
-            self._pending_order_source_var.set("Scanner")
+            self._pending_order_source_var.set(TRADING_SOURCE_SCANNER_LABEL)
             self._pending_order_ticker_var.set(ticker)
             self._pending_order_qty_var.set("" if candidate_qty is None else str(int(candidate_qty)))
             self._pending_order_limit_var.set("" if candidate_price is None else str(candidate_price))
@@ -2469,7 +2640,7 @@ class TradingAccountPanel(ttk.Frame):
         planned_date = str(row.get("planned_trade_date") or "").strip()
         self._pending_draft_programmatic_update = True
         try:
-            self._pending_order_source_var.set("Scanner" if origin == "scanner" else "手動")
+            self._pending_order_source_var.set(trading_source_display_label(origin=origin))
             self._pending_order_ticker_var.set(str(row.get("ticker") or ""))
             self._pending_order_qty_var.set(str(int(row.get("planned_qty") or 0)))
             self._pending_order_limit_var.set(str(row.get("limit_price") or ""))
@@ -2578,7 +2749,7 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_draft_candidate = None
         self._pending_draft_programmatic_update = True
         try:
-            self._pending_order_source_var.set("手動")
+            self._pending_order_source_var.set(TRADING_SOURCE_MANUAL_LABEL)
             self._pending_order_ticker_var.set(ticker)
             self._pending_order_qty_var.set("")
             self._pending_order_limit_var.set("")
@@ -2763,7 +2934,7 @@ class TradingAccountPanel(ttk.Frame):
         editing = self._pending_edit_entry_id is not None
         self._pending_draft_programmatic_update = True
         try:
-            source = "Scanner" if str(row.get("origin") or "") == "scanner_strategy" else "手動"
+            source = trading_source_display_label(origin=row.get("origin"))
             self._pending_order_source_var.set(source)
             self._pending_order_ticker_var.set(str(row.get("ticker") or ""))
             self._pending_order_limit_var.set(str(row.get("limit_price") or ""))
@@ -3605,8 +3776,8 @@ class TradingAccountPanel(ttk.Frame):
         selected = self._selected_ticker()
         for item in self._tree.get_children():
             self._tree.delete(item)
+        self._clear_table_sort_values(self._tree)
         self._position_rows = {}
-        source_labels = {"manual_adopted": "手動既有", "manual_managed": "手動管理", "strategy_fill": "策略成交"}
         dashboard_positions = {
             str(row.get("ticker") or ""): dict(row)
             for row in list(self._account_dashboard_snapshot.get("positions") or [])
@@ -3630,19 +3801,40 @@ class TradingAccountPanel(ttk.Frame):
                 sell_signal = "INDICATOR SELL"
             else:
                 sell_signal = "-"
-            source_key = str(row.get("source") or "")
-            source_text = source_labels.get(source_key, source_key or "-")
+            source_text = trading_source_display_label(source=row.get("source"))
+            entry_date = row.get("entry_date") or "-"
+            qty = int(row.get("qty") or 0)
+            average_cost = row.get("average_cost")
+            current_price = row.get("current_price")
+            effective_stop = row.get("effective_stop")
+            target_price = row.get("target_price")
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
-                    "▣", source_text, ticker, row.get("entry_date") or "-", f"{int(row.get('qty') or 0):,}",
-                    format_trading_money(row.get("average_cost")),
-                    format_trading_money(row.get("current_price")),
-                    format_trading_money(row.get("effective_stop")),
-                    format_trading_money(row.get("target_price")),
+                    "▣", source_text, ticker, entry_date, f"{qty:,}",
+                    format_trading_money(average_cost),
+                    format_trading_money(current_price),
+                    format_trading_money(effective_stop),
+                    format_trading_money(target_price),
                     sell_signal,
                 ),
             )
+            self._set_table_sort_values(
+                self._tree,
+                ticker,
+                {
+                    "source": source_text,
+                    "ticker": ticker,
+                    "entry_date": entry_date,
+                    "qty": qty,
+                    "avg_cost": average_cost,
+                    "current": current_price,
+                    "stop": effective_stop,
+                    "target": target_price,
+                    "sell_signal": sell_signal,
+                },
+            )
+        self._apply_current_table_sort(self._tree)
         self._fit_tree_rows(self._tree, len(self._position_rows))
         if selected and selected in self._position_rows:
             self._tree.selection_set(selected)

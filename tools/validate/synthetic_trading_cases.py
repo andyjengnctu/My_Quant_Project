@@ -3073,6 +3073,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         build_trading_status_segments,
         parse_trading_money_text,
         parse_trading_qty_text,
+        trading_source_display_label,
     )
     from services.workbench_ui.workbench import (
         PANEL_SPECS,
@@ -3886,6 +3887,16 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and '"trailing": "Trailing"' not in pending_ui_source,
     )
     check(
+        "workbench_pending_and_holding_source_labels_share_one_user_facing_vocabulary",
+        ["Scanner", "手選", "手選", "手選"],
+        [
+            trading_source_display_label(origin="scanner_strategy"),
+            trading_source_display_label(origin="manual_selected"),
+            trading_source_display_label(source="manual_managed"),
+            trading_source_display_label(source="manual_adopted"),
+        ],
+    )
+    check(
         "workbench_pending_auto_status_line_uses_reserved_limit_stop_target_order",
         True,
         "f\"預留成本 {float(row.get('reserved_cost') or 0):,.0f}｜\"" in panel_source
@@ -3979,10 +3990,56 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and '"stop": "停損"' in panel_source
         and '"target": "停利"' in panel_source
         and '"sell_signal": "賣出訊號"' in panel_source
-        and 'source_text = source_labels.get(source_key, source_key or "-")' in panel_source
+        and 'source_text = trading_source_display_label(source=row.get("source"))' in panel_source
         and '"trailing": "Trailing"' not in panel_source.split('table_box = ttk.LabelFrame(content, text="持股區"', 1)[1].split('candidate_box = ttk.LabelFrame', 1)[0]
         and '"action": "建議動作"' not in panel_source,
     )
+    check(
+        "workbench_pending_and_holding_tables_are_sortable_with_source_ascending_default",
+        True,
+        panel_source.count('default_column="source"') >= 2
+        and panel_source.count('default_ascending=True') >= 2
+        and 'def _sort_table_by_column' in panel_source
+        and 'def _apply_current_table_sort' in panel_source
+        and 'suffix = " ▲"' in panel_source
+        and '"source": "text"' in panel_source
+        and '"date": "date"' in panel_source
+        and '"entry_date": "date"' in panel_source
+        and '"qty": "numeric"' in panel_source,
+    )
+
+    class _SyntheticSortableTree:
+        def __init__(self):
+            self.children = ["manual", "scanner"]
+            self.headings = {}
+
+        def get_children(self, _parent=""):
+            return tuple(self.children)
+
+        def move(self, iid, _parent, index):
+            self.children.remove(str(iid))
+            self.children.insert(int(index), str(iid))
+
+        def heading(self, column, **kwargs):
+            self.headings.setdefault(str(column), {}).update(kwargs)
+
+    _sort_tree = _SyntheticSortableTree()
+    _sort_panel = object.__new__(TradingAccountPanel)
+    _sort_panel._table_sort_titles = {_sort_tree: {"source": "來源", "ticker": "股票"}}
+    _sort_panel._table_sort_kinds = {_sort_tree: {"source": "text", "ticker": "text"}}
+    _sort_panel._table_sort_state = {_sort_tree: ("source", True)}
+    _sort_panel._table_sort_values = {
+        _sort_tree: {
+            "manual": {"source": "手選", "ticker": "2330"},
+            "scanner": {"source": "scanner", "ticker": "2317"},
+        }
+    }
+    TradingAccountPanel._apply_current_table_sort(_sort_panel, _sort_tree)
+    check("workbench_source_sort_defaults_to_ascending", ["scanner", "manual"], list(_sort_tree.children))
+    TradingAccountPanel._sort_table_by_column(_sort_panel, _sort_tree, "source")
+    check("workbench_reclicking_same_sort_column_toggles_descending", ["manual", "scanner"], list(_sort_tree.children))
+    TradingAccountPanel._sort_table_by_column(_sort_panel, _sort_tree, "ticker")
+    check("workbench_clicking_another_column_restarts_ascending", ["scanner", "manual"], list(_sort_tree.children))
     check("workbench_holding_area_exposes_existing_entry_date_as_fill_date", True, 'row.get("entry_date") or "-"' in panel_source and '"entry_date": "成交日"' in panel_source)
     check(
         "workbench_direct_backfill_fill_date_and_price_use_canonical_constraints",
