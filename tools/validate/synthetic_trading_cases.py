@@ -3583,6 +3583,44 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
               [_delete_recreated["pending_entry_id"], 1, money_to_milli(30_000)],
               [_updated_pending["pending_entry_id"], _updated_projection["locked_count"], _updated_projection["reserved_total_milli"]])
 
+        # Dedicated service-level regression: an existing ACTIVE pending entry
+        # must not block its own edit preview or consume its own reservation twice.
+        with tempfile.TemporaryDirectory() as _edit_temp_dir:
+            _edit_root = Path(_edit_temp_dir)
+            _edit_account = initialize_trading_account_state(_edit_root, cash=200_000)
+            _edit_seed = {
+                "qty": 100, "limit_price": 100.0, "reserved_cost": 10_000.0,
+                "reserved_cost_milli": money_to_milli(10_000), "trade_date": "2026-09-15",
+                "init_sl": 90.0, "init_trail": 92.0, "target_price": 120.0, "entry_atr": 5.0,
+            }
+            _edit_lineage = build_trading_manual_management_lineage(
+                params=base_params, execution_plan_seed=_edit_seed, information_date="2026-09-15",
+                origin="manual_pending_entry", planned_qty=100, planned_cost=10_000.0,
+            )
+            _edit_pending = create_trading_pending_entry(_edit_root, entry={
+                "origin": "manual_selected", "ticker": "2002", "information_date": "2026-09-15",
+                "planned_trade_date": "2026-09-15", "execution_plan_seed": _edit_seed,
+                "planned_qty": 100, "reserved_cost_milli": money_to_milli(10_000),
+                "management_lineage": _edit_lineage,
+            })
+            from services.trading.pending_entry_service import _account_resources as _edit_account_resources, _assert_can_add_ticker as _edit_assert_can_add_ticker
+            _resources_without_self = _edit_account_resources(
+                _edit_root, information_date="2026-09-15",
+                exclude_pending_entry_id=_edit_pending["pending_entry_id"],
+            )
+            try:
+                _edit_assert_can_add_ticker(_resources_without_self, ticker="2002")
+            except ValueError:
+                _edit_self_allowed = False
+            else:
+                _edit_self_allowed = True
+            check("pending_edit_resource_check_excludes_its_own_reservation", True, _edit_self_allowed)
+            check("pending_edit_resource_check_releases_own_cash_and_slot_for_preview", [0, 200_000, 10], [
+                int(_resources_without_self.get("reserved_total_milli") or 0),
+                int(round(float(_resources_without_self.get("available_cash") or 0))),
+                int(_resources_without_self.get("free_slots") or 0),
+            ])
+
         from services.trading.entry_candidate_projection import project_trading_entry_candidate_payload
         _candidate_fixture = {"candidate_rows": [{"ticker": "2330"}, {"ticker": "2317"}, {"ticker": "2454"}]}
         _projected_candidates = project_trading_entry_candidate_payload(
@@ -4088,7 +4126,26 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check("workbench_pending_submit_revalidates_editable_qty_price_and_date_before_persist", True, all(token in panel_source for token in ("_build_pending_draft_request(use_current_overrides=True)", "create_scanner_trading_pending_entry(", "create_manual_trading_pending_entry(", "planned_trade_date=planned_date")))
     check("workbench_pending_primary_ui_has_single_close_action_and_only_active_entries_lock", True, 'text="刪除掛單"' in panel_source and 'text="無成交結案"' not in panel_source and "delete_pending_entry(" in panel_source)
-    check("workbench_pending_existing_row_uses_same_form_for_atomic_update", True, all(token in panel_source for token in ("_set_pending_edit_mode(entry_id)", 'text="更新掛單" if editing else "確認掛單"', "update_trading_pending_entry_intent(")))
+    check("workbench_pending_existing_row_uses_same_form_for_atomic_update", True, all(token in panel_source for token in ("_set_pending_edit_mode(entry_id, row=dict(row))", 'text="更新掛單" if editing else "確認掛單"', "update_trading_pending_entry_intent(")))
+    check(
+        "workbench_pending_edit_identity_stays_bound_to_current_active_row",
+        True,
+        all(token in panel_source for token in (
+            "self._pending_edit_snapshot",
+            'existing_entry = dict(self._pending_rows.get(edit_id) or self._pending_edit_snapshot or {})',
+            'raise RuntimeError("目前選取的掛單已不存在或已更新；請重新選取掛單。")',
+            'self._pending_order_ticker_entry.configure(state="disabled" if editing else "normal")',
+        )),
+    )
+    check(
+        "workbench_pending_refresh_clears_stale_edit_mode_instead_of_leaving_update_button_orphaned",
+        True,
+        all(token in panel_source for token in (
+            'restore_id = edit_id or selected',
+            'elif edit_id:',
+            '原選取掛單已不存在或已結案；目前已回到新增掛單模式。',
+        )),
+    )
     check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
     pending_ui_source = panel_source.split('pending_box = ttk.LabelFrame(content, text="掛單區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[0]
     check(

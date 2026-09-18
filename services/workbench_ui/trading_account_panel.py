@@ -586,6 +586,7 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_draft_origin: str | None = None
         self._pending_draft_candidate: dict[str, object] | None = None
         self._pending_edit_entry_id: str | None = None
+        self._pending_edit_snapshot: dict[str, object] = {}
         self._pending_draft_programmatic_update = False
         self._pending_manual_preview_after_id = None
         self._pending_preview_thread = None
@@ -2248,9 +2249,17 @@ class TradingAccountPanel(ttk.Frame):
             )
         self._apply_current_table_sort(self._pending_tree)
         self._fit_tree_rows(self._pending_tree, len(active_rows))
-        if selected and selected in self._pending_rows:
-            self._pending_tree.selection_set(selected)
-            self._pending_tree.focus(selected)
+        edit_id = str(self._pending_edit_entry_id or "").strip()
+        restore_id = edit_id or selected
+        if restore_id and restore_id in self._pending_rows:
+            self._pending_tree.selection_set(restore_id)
+            self._pending_tree.focus(restore_id)
+            if edit_id:
+                self._pending_edit_snapshot = dict(self._pending_rows[restore_id])
+        elif edit_id:
+            self._reset_pending_draft_form(
+                message="原選取掛單已不存在或已結案；目前已回到新增掛單模式。"
+            )
         usage = dict(snapshot.get("resource_usage") or {})
         reserved = float(usage.get("reserved_total_milli") or snapshot.get("reserved_total_milli") or 0) / 1000.0
         stale_count = int(snapshot.get("stale_active_count") or 0)
@@ -2528,6 +2537,8 @@ class TradingAccountPanel(ttk.Frame):
 
     def _configure_pending_mode_buttons(self) -> None:
         editing = self._pending_edit_entry_id is not None
+        if hasattr(self, "_pending_order_ticker_entry"):
+            self._pending_order_ticker_entry.configure(state="disabled" if editing else "normal")
         if hasattr(self, "_pending_fill_price_combo"):
             self._pending_fill_price_combo.configure(state="disabled")
         if hasattr(self, "_pending_submit_button"):
@@ -2544,8 +2555,11 @@ class TradingAccountPanel(ttk.Frame):
             self._pending_delete_button.configure(state="normal" if editing else "disabled")
 
 
-    def _set_pending_edit_mode(self, pending_entry_id: str | None) -> None:
+    def _set_pending_edit_mode(
+        self, pending_entry_id: str | None, *, row: dict[str, object] | None = None
+    ) -> None:
         self._pending_edit_entry_id = None if not pending_entry_id else str(pending_entry_id)
+        self._pending_edit_snapshot = {} if self._pending_edit_entry_id is None else dict(row or {})
         self._configure_pending_mode_buttons()
 
     def _reset_pending_draft_form(self, *, message: str | None = None) -> None:
@@ -2638,12 +2652,19 @@ class TradingAccountPanel(ttk.Frame):
         row = self._selected_pending_row()
         if not row:
             return
+        if self._pending_manual_preview_after_id is not None:
+            try:
+                self.after_cancel(self._pending_manual_preview_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Trading pending selection preview debounce", exc)
+            self._pending_manual_preview_after_id = None
+        self._invalidate_pending_preview()
         self._candidate_tree.clear_selection(notify=False)
         entry_id = str(row.get("pending_entry_id") or "")
         origin = "scanner" if str(row.get("origin") or "") == "scanner_strategy" else "manual"
         self._pending_draft_origin = origin
         self._pending_draft_candidate = None
-        self._set_pending_edit_mode(entry_id)
+        self._set_pending_edit_mode(entry_id, row=dict(row))
         planned_date = str(row.get("planned_trade_date") or "").strip()
         self._pending_draft_programmatic_update = True
         try:
@@ -2789,9 +2810,18 @@ class TradingAccountPanel(ttk.Frame):
         if origin == "scanner" and self._pending_edit_entry_id is None:
             if not candidate or str(candidate.get("ticker") or "").strip().upper() != ticker:
                 raise ValueError("Scanner 掛單來源已改變；請重新選取 Scanner 股票或改用手動輸入")
-        existing_entry = dict(self._pending_rows.get(str(self._pending_edit_entry_id or "")) or {})
+        edit_id = str(self._pending_edit_entry_id or "").strip()
+        existing_entry = dict(self._pending_rows.get(edit_id) or self._pending_edit_snapshot or {})
+        if edit_id:
+            if not existing_entry or str(existing_entry.get("pending_entry_id") or "") != edit_id:
+                raise RuntimeError("目前選取的掛單已不存在或已更新；請重新選取掛單。")
+            existing_ticker = str(existing_entry.get("ticker") or "").strip().upper()
+            if ticker != existing_ticker:
+                raise ValueError("更新掛單不可變更股票；請先取消選取，再以新增掛單建立另一支股票。")
+            origin = "scanner" if str(existing_entry.get("origin") or "") == "scanner_strategy" else "manual"
+            candidate = None
         return {
-            "pending_entry_id": self._pending_edit_entry_id,
+            "pending_entry_id": edit_id or None,
             "origin": origin,
             "candidate": candidate,
             "existing_entry": existing_entry,
