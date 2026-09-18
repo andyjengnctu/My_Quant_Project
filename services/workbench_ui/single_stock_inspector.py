@@ -69,6 +69,7 @@ from services.trading.scanner_state import (
     resolve_trading_candidate_snapshot_path,
 )
 from services.trading.account_state import get_trading_account_read_model
+from services.trading.pending_entry_service import get_trading_pending_entry_read_model
 from services.workbench_ui.state_sync import (
     STATE_ACCOUNT,
     STATE_MARKET_DATA,
@@ -144,6 +145,7 @@ FIXED_RISK_LABELS = (f"{DEFAULT_FIXED_RISK:.2f}", "0.02", "自訂")
 COMBOBOX_WIDTH_RULES = {
     "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
     "candidate": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
+    "pending": {"min_chars": 16, "max_chars": 34, "extra_px": 24},
     "history": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
     "param_source": {"min_chars": 18, "max_chars": 36, "extra_px": 32},
     "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
@@ -555,6 +557,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._reduced_stock_company_name_map = {}
         self._show_volume_var = tk.BooleanVar(value=False)
         self._runtime_domain_var = tk.StringVar(value="Trading")
+        self._pending_display_var = tk.StringVar()
+        self._pending_map = {}
         self._holdings_display_var = tk.StringVar()
         self._holdings_map = {}
         self._scanner_info_var = tk.StringVar(value="Scanner：尚未載入")
@@ -712,6 +716,18 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._runtime_domain_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._runtime_domain_combo.bind("<<ComboboxSelected>>", self._on_runtime_domain_selected)
 
+        pending_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
+        ttk.Label(pending_group, text="掛單股", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
+        self._pending_combo = ttk.Combobox(
+            pending_group, state="readonly", width=20, textvariable=self._pending_display_var,
+            style="Workbench.TCombobox", values=(), postcommand=self._refresh_pending_options_on_open,
+        )
+        self._autosize_combobox(
+            self._pending_combo, values=[], current_text=self._pending_display_var.get(), rule_key="pending"
+        )
+        self._pending_combo.pack(side="left", padx=(0, 6), pady=uniform_pady)
+        self._pending_combo.bind("<<ComboboxSelected>>", self._on_pending_selected)
+
         holdings_group = ttk.Frame(controls_bar, style="Workbench.TFrame")
         ttk.Label(holdings_group, text="持有股", style="Workbench.TLabel").pack(side="left", padx=(0, 6), pady=uniform_pady)
         self._holdings_combo = ttk.Combobox(
@@ -741,6 +757,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             "candidate": candidate_group,
             "history": history_group,
             "params": params_group,
+            "pending": pending_group,
             "holdings": holdings_group,
             "volume": volume_group,
         }
@@ -1064,7 +1081,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             gap = SINGLE_STOCK_CONTROLS_LAYOUT_GAP
             trading = self._runtime_domain_key() == "trading"
             visible_keys = (
-                ("runtime", "identity", "candidate", "holdings", "volume")
+                ("runtime", "identity", "candidate", "pending", "holdings", "volume")
                 if trading
                 else ("runtime", "identity", "candidate", "history", "params", "holdings", "volume")
             )
@@ -1148,6 +1165,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
     def _on_runtime_domain_selected(self, _event=None):
         self._apply_runtime_domain_controls()
         self._refresh_holdings_options()
+        self._refresh_pending_options()
         if self._runtime_domain_key() == "trading":
             if self._prefetched_trading_candidate_rows:
                 self._apply_trading_candidate_rows(
@@ -1167,12 +1185,67 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             return False
         if normalized & {STATE_ACCOUNT, STATE_POSITIONS}:
             self._refresh_holdings_options()
+        if normalized & {STATE_PENDING_ENTRIES}:
+            self._refresh_pending_options()
         if normalized & {STATE_PENDING_ENTRIES, STATE_SCANNER_ELIGIBILITY, STATE_SCANNER, STATE_MARKET_DATA, STATE_PARAMS}:
             self._candidate_pool_checked_identity = ("__state_changed__",)
             self._request_trading_candidate_pool_refresh(force=True, allow_inactive=True)
         if self._runtime_domain_key() == "trading" and self._ticker_var.get().strip():
             self.after_idle(self._run_analysis)
         return True
+
+    def _refresh_pending_options(self):
+        self._pending_map = {}
+        if self._runtime_domain_key() != "trading":
+            self._pending_combo.configure(values=())
+            self._pending_display_var.set("")
+            return
+        try:
+            read_model = get_trading_pending_entry_read_model(WORKBENCH_PROJECT_ROOT)
+        except (FileNotFoundError, ValueError, RuntimeError, OSError):
+            read_model = {"entries": []}
+        labels = []
+        active_rows = [
+            dict(row)
+            for row in list(read_model.get("entries") or [])
+            if str((row or {}).get("status") or "").strip().upper() == "ACTIVE"
+        ]
+        active_rows.sort(
+            key=lambda row: (
+                str(row.get("ticker") or "").strip().upper(),
+                str(row.get("planned_trade_date") or row.get("information_date") or ""),
+            )
+        )
+        for row in active_rows:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            planned_date = str(row.get("planned_trade_date") or row.get("information_date") or "-")
+            label = f"{ticker} | {planned_date}"
+            labels.append(label)
+            self._pending_map[label] = ticker
+        self._pending_combo.configure(values=labels)
+        self._autosize_combobox(
+            self._pending_combo,
+            values=labels,
+            current_text=self._pending_display_var.get(),
+            rule_key="pending",
+        )
+        current = self._pending_display_var.get().strip()
+        if current not in self._pending_map:
+            self._pending_display_var.set("")
+
+    def _on_pending_selected(self, _event=None):
+        ticker = self._pending_map.get(self._pending_display_var.get().strip())
+        if ticker:
+            self._runtime_domain_var.set("Trading")
+            self._apply_runtime_domain_controls()
+            self._ticker_var.set(ticker)
+            self.after_idle(self._run_analysis)
+
+    def _refresh_pending_options_on_open(self):
+        self._refresh_pending_options()
+        self._configure_combobox_popup_geometry(self._pending_combo)
 
     def _refresh_holdings_options(self):
         self._holdings_map = {}
@@ -2261,7 +2334,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._selected_limit_var.set("限價: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
-            self._selected_capital_var.set("Trading狀態: 無交易\n預留: -\n實支: -")
+            self._selected_capital_var.set("預留: -\n實支: -\nTrading狀態: 無交易")
             return
 
         lifecycle_state = str(canonical.get("state") or "")
@@ -2290,7 +2363,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             trading_status += f"｜SELL訊號: {canonical.get('sell_signal')}"
         if canonical.get("decision_errors"):
             trading_status += "｜SELL狀態: ERROR"
-        capital_lines = [trading_status]
+        capital_lines = []
 
         reserved = canonical.get("reserved_capital")
         actual = canonical.get("buy_capital")
@@ -2316,6 +2389,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if lifecycle_state == "POSITION" and remaining_order_qty not in (None, 0):
             capital_lines.append(self._format_sidebar_qty_value("未成交股數", remaining_order_qty))
 
+        # Trading state is intentionally the final transaction-info line so the
+        # numeric reservation/spend/quantity values remain grouped together.
+        capital_lines.append(trading_status)
         self._selected_capital_var.set("\n".join(capital_lines))
 
     def _update_sidebar_from_result(self, result, *, display_payload=None):

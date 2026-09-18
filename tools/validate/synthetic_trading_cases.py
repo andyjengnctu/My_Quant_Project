@@ -4304,6 +4304,84 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check("workbench_pending_fill_uses_separate_fill_price_and_fill_date_before_transfer", True, all(token in panel_source for token in ('parse_trading_qty_text(self._pending_order_qty_var.get(), "實際成交股數")', 'parse_trading_money_text(self._pending_fill_price_var.get(), "實際成交價"', 'trade_date = self._pending_fill_date_var.get().strip()', "preview_trading_pending_entry_fill(", "fill_trading_pending_entry(")))
     check(
+        "workbench_pending_selected_fill_date_locks_order_side_actions",
+        True,
+        all(token in panel_source for token in (
+            'def _pending_fill_mode_active',
+            'self._pending_order_qty_entry.configure(state="disabled" if fill_mode else "normal")',
+            'self._pending_order_date_field.entry.configure(state="disabled" if fill_mode else "normal")',
+            'state="normal" if editing and not fill_mode else "disabled"',
+            'not fill_mode\n                and selected_kind == ORDER_FORM_DATE_KIND_PENDING',
+            '已選擇成交日；請先清除成交日，才能修改或更新掛單。',
+            '已選擇成交日；請先清除成交日，才能刪除掛單。',
+        )),
+    )
+
+    class _PendingControlProbe:
+        def __init__(self):
+            self.options = {}
+
+        def configure(self, **kwargs):
+            self.options.update(kwargs)
+
+    class _PendingDateProbe:
+        def __init__(self):
+            self.entry = _PendingControlProbe()
+            self.allowed_dates = None
+
+        def set_allowed_dates(self, values):
+            self.allowed_dates = tuple(values or ())
+
+    class _PendingVarProbe:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    _fill_lock_panel = object.__new__(TradingAccountPanel)
+    _fill_lock_panel._pending_edit_entry_id = "pending-1"
+    _fill_lock_panel._pending_fill_date_var = _PendingVarProbe("2026-09-17")
+    _fill_lock_panel._pending_order_limit_var = _PendingVarProbe("100")
+    _fill_lock_panel._pending_order_form_constraints = {
+        "allowed_dates": ("2026-09-16", "2026-09-17"),
+        "selected_date_kind": "pending_order",
+    }
+    _fill_lock_panel._pending_order_ticker_entry = _PendingControlProbe()
+    _fill_lock_panel._pending_order_qty_entry = _PendingControlProbe()
+    _fill_lock_panel._pending_order_date_field = _PendingDateProbe()
+    _fill_lock_panel._pending_submit_button = _PendingControlProbe()
+    _fill_lock_panel._pending_fill_button = _PendingControlProbe()
+    _fill_lock_panel._pending_delete_button = _PendingControlProbe()
+    TradingAccountPanel._configure_pending_mode_buttons(_fill_lock_panel)
+    check(
+        "workbench_pending_fill_mode_disables_order_date_qty_update_delete",
+        ("disabled", "disabled", (), "disabled", "disabled"),
+        (
+            _fill_lock_panel._pending_order_qty_entry.options.get("state"),
+            _fill_lock_panel._pending_order_date_field.entry.options.get("state"),
+            _fill_lock_panel._pending_order_date_field.allowed_dates,
+            _fill_lock_panel._pending_submit_button.options.get("state"),
+            _fill_lock_panel._pending_delete_button.options.get("state"),
+        ),
+    )
+    _fill_lock_panel._pending_fill_date_var.set("")
+    TradingAccountPanel._configure_pending_mode_buttons(_fill_lock_panel)
+    check(
+        "workbench_pending_clearing_fill_date_restores_order_controls",
+        ("normal", "normal", ("2026-09-16", "2026-09-17"), "normal", "normal"),
+        (
+            _fill_lock_panel._pending_order_qty_entry.options.get("state"),
+            _fill_lock_panel._pending_order_date_field.entry.options.get("state"),
+            _fill_lock_panel._pending_order_date_field.allowed_dates,
+            _fill_lock_panel._pending_submit_button.options.get("state"),
+            _fill_lock_panel._pending_delete_button.options.get("state"),
+        ),
+    )
+    check(
         "workbench_selected_pending_exposes_fill_controls_without_intermediate_fill_mode",
         True,
         'text="確認成交"' in panel_source
@@ -4744,7 +4822,27 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
     gui_payload_body = inspector_source.split("def _build_gui_chart_payload", 1)[1].split("def ", 1)[0]
     check("workbench_single_stock_trading_hides_backtest_forced_close_visual_only", True, 'self._runtime_domain_key() == "trading"' in gui_payload_body and 'hidden.add("強制結算")' in gui_payload_body and 'chart_payload["hidden_trace_names"]' in gui_payload_body)
-    check("workbench_single_stock_exposes_trading_holdings_and_scanner_pool", True, all(text in inspector_source for text in ("持有股", "Scanner Pool", "get_trading_account_read_model")))
+    check(
+        "workbench_single_stock_exposes_candidate_pending_holding_dropdowns",
+        True,
+        all(text in inspector_source for text in (
+            "候選股",
+            "掛單股",
+            "持有股",
+            "Scanner Pool",
+            "get_trading_pending_entry_read_model",
+            "get_trading_account_read_model",
+            '("runtime", "identity", "candidate", "pending", "holdings", "volume")',
+        )),
+    )
+    selected_sidebar_body = inspector_source.split("def _update_selected_value_sidebar", 1)[1].split("def ", 1)[0]
+    check(
+        "workbench_single_stock_trading_status_is_last_transaction_info_line",
+        True,
+        'capital_lines.append(trading_status)' in selected_sidebar_body
+        and selected_sidebar_body.index('capital_lines.append(trading_status)')
+        > selected_sidebar_body.index('self._format_sidebar_qty_value("持有股數", held_qty)'),
+    )
     open_ticker_body = inspector_source.split("def open_ticker", 1)[1].split("def ", 1)[0]
     check("workbench_single_stock_cross_panel_navigation_does_not_sync_refresh_auxiliary_lists", False, "_refresh_holdings_options()" in open_ticker_body or "_load_current_trading_candidate_pool()" in open_ticker_body)
     candidate_post_body = inspector_source.split("def _refresh_candidate_options_on_open", 1)[1].split("def ", 1)[0]
@@ -4791,10 +4889,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_primes_single_stock_factory_before_first_cross_panel_navigation", True, "def _prime_initial_panel_factories" in workbench_source and 'self._request_panel_load("single_stock_backtest_inspector")' in workbench_source)
     check("workbench_pending_single_stock_navigation_wins_lazy_import_selection_race", True, 'panel_id == "single_stock_backtest_inspector" and self._pending_single_stock_request' in workbench_source and 'self._notebook.select(host)' in workbench_source)
     check("workbench_single_stock_defaults_to_trading_mode", True, 'self._runtime_domain_var = tk.StringVar(value="Trading")' in inspector_source)
-    check("workbench_single_stock_trading_hides_research_only_param_and_risk_controls", True, '("runtime", "identity", "candidate", "holdings", "volume")' in inspector_source and '"params"' not in inspector_source.split('if trading\n                else', 1)[0].split('visible_keys =', 1)[1])
-    check("workbench_single_stock_trading_layout_omits_history_controls", True, '("runtime", "identity", "candidate", "holdings", "volume")' in inspector_source)
+    check("workbench_single_stock_trading_hides_research_only_param_and_risk_controls", True, '("runtime", "identity", "candidate", "pending", "holdings", "volume")' in inspector_source and '"params"' not in inspector_source.split('if trading\n                else', 1)[0].split('visible_keys =', 1)[1])
+    check("workbench_single_stock_trading_layout_omits_history_controls", True, '("runtime", "identity", "candidate", "pending", "holdings", "volume")' in inspector_source)
     check("workbench_single_stock_trading_uses_shared_candidate_label_instead_of_recompute_button", True, 'self._candidate_label = ttk.Label(candidate_group, text="候選股"' in inspector_source and 'self._candidate_label.pack(side="left", before=self._candidate_combo' in inspector_source and 'self._candidate_scan_button.pack(side="left", before=self._candidate_combo' in inspector_source)
-    check("workbench_single_stock_controls_order_mode_first_volume_last", True, '("runtime", "identity", "candidate", "holdings", "volume")' in inspector_source and '("runtime", "identity", "candidate", "history", "params", "holdings", "volume")' in inspector_source)
+    check("workbench_single_stock_controls_order_mode_first_volume_last", True, '("runtime", "identity", "candidate", "pending", "holdings", "volume")' in inspector_source and '("runtime", "identity", "candidate", "history", "params", "holdings", "volume")' in inspector_source)
     volume_group_source = inspector_source.split('volume_group = ttk.Frame(controls_bar', 1)[1].split('self._history_group = history_group', 1)[0]
     check("workbench_single_stock_chart_toggles_are_adjacent_and_compact", True, 'text="均線"' in volume_group_source and 'text="成交量"' in volume_group_source and '顯示均線' not in volume_group_source and '顯示成交量' not in volume_group_source)
     check("workbench_single_stock_ma_toggle_is_toolbar_control_not_chart_overlay", False, 'build_workbench_chart_overlay_checkbutton(' in inspector_source)
@@ -5902,6 +6000,67 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         resolve_single_stock_controls_layout_mode,
         resolve_single_stock_controls_rows,
     )
+    class _SingleStockVarProbe:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    class _SingleStockComboProbe:
+        def __init__(self):
+            self.options = {}
+
+        def configure(self, **kwargs):
+            self.options.update(kwargs)
+
+    _pending_dropdown_panel = object.__new__(SingleStockBacktestInspectorPanel)
+    _pending_dropdown_panel._runtime_domain_var = _SingleStockVarProbe("Trading")
+    _pending_dropdown_panel._pending_display_var = _SingleStockVarProbe("")
+    _pending_dropdown_panel._pending_map = {}
+    _pending_dropdown_panel._pending_combo = _SingleStockComboProbe()
+    _pending_dropdown_panel._autosize_combobox = lambda *args, **kwargs: None
+    with patch.object(
+        single_stock_inspector_module,
+        "get_trading_pending_entry_read_model",
+        return_value={
+            "entries": [
+                {"status": "FILLED", "ticker": "1101", "planned_trade_date": "2026-09-15"},
+                {"status": "ACTIVE", "ticker": "2330", "planned_trade_date": "2026-09-16"},
+                {"status": "ACTIVE", "ticker": "2317", "planned_trade_date": "2026-09-17"},
+            ]
+        },
+    ):
+        SingleStockBacktestInspectorPanel._refresh_pending_options(_pending_dropdown_panel)
+    check(
+        "workbench_single_stock_pending_dropdown_lists_active_orders_only_sorted_by_ticker",
+        ("2317 | 2026-09-17", "2330 | 2026-09-16"),
+        tuple(_pending_dropdown_panel._pending_combo.options.get("values") or ()),
+    )
+    check(
+        "workbench_single_stock_pending_dropdown_maps_labels_to_tickers",
+        {"2317 | 2026-09-17": "2317", "2330 | 2026-09-16": "2330"},
+        dict(_pending_dropdown_panel._pending_map),
+    )
+    _pending_selected_runs = []
+    _pending_dropdown_panel._pending_display_var.set("2330 | 2026-09-16")
+    _pending_dropdown_panel._ticker_var = _SingleStockVarProbe("")
+    _pending_dropdown_panel._apply_runtime_domain_controls = lambda: None
+    _pending_dropdown_panel._run_analysis = lambda: _pending_selected_runs.append(_pending_dropdown_panel._ticker_var.get())
+    _pending_dropdown_panel.after_idle = lambda callback: callback()
+    SingleStockBacktestInspectorPanel._on_pending_selected(_pending_dropdown_panel)
+    check(
+        "workbench_single_stock_pending_dropdown_navigates_trading_ticker",
+        ("Trading", "2330", ["2330"]),
+        (
+            _pending_dropdown_panel._runtime_domain_var.get(),
+            _pending_dropdown_panel._ticker_var.get(),
+            _pending_selected_runs,
+        ),
+    )
     with tempfile.TemporaryDirectory() as identity_temp_dir:
         identity_root = Path(identity_temp_dir)
         candidate_path = identity_root / "candidate.json"
@@ -6046,13 +6205,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             self.value = value
         def get(self):
             return self.value
-    trading_layout_widths = [("runtime", 150), ("identity", 420), ("candidate", 330), ("holdings", 280), ("volume", 120)]
+    trading_layout_widths = [("runtime", 150), ("identity", 420), ("candidate", 330), ("pending", 220), ("holdings", 280), ("volume", 120)]
     trading_rows_1680 = resolve_single_stock_controls_rows(
         available_width=1680, ordered_widths=trading_layout_widths
     )
     check(
         "workbench_single_stock_trading_controls_stay_one_row_when_they_fit",
-        (("runtime", "identity", "candidate", "holdings", "volume"),),
+        (("runtime", "identity", "candidate", "pending", "holdings", "volume"),),
         trading_rows_1680,
     )
     check(
@@ -6062,7 +6221,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             available_width=1680, required_widths=dict(trading_layout_widths)
         ),
     )
-    research_layout_widths = trading_layout_widths[:3] + [("history", 420), ("params", 500)] + trading_layout_widths[3:]
+    research_layout_widths = [
+        ("runtime", 150),
+        ("identity", 420),
+        ("candidate", 330),
+        ("history", 420),
+        ("params", 500),
+        ("holdings", 280),
+        ("volume", 120),
+    ]
     check(
         "workbench_single_stock_research_controls_wrap_only_when_required",
         True,

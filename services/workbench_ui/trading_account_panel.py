@@ -2539,16 +2539,37 @@ class TradingAccountPanel(ttk.Frame):
         ticker = self._selected_candidate_ticker()
         return dict(getattr(self, "_candidate_by_ticker", {}).get(ticker) or {}) if ticker else None
 
+    def _pending_fill_mode_active(self) -> bool:
+        return bool(
+            self._pending_edit_entry_id is not None
+            and self._pending_fill_date_var.get().strip()
+        )
+
     def _configure_pending_mode_buttons(self) -> None:
         editing = self._pending_edit_entry_id is not None
+        fill_mode = self._pending_fill_mode_active()
         if hasattr(self, "_pending_order_ticker_entry"):
             self._pending_order_ticker_entry.configure(state="disabled" if editing else "normal")
-        if hasattr(self, "_pending_fill_price_combo"):
-            self._pending_fill_price_combo.configure(state="disabled")
+        if hasattr(self, "_pending_order_qty_entry"):
+            self._pending_order_qty_entry.configure(state="disabled" if fill_mode else "normal")
+        if hasattr(self, "_pending_order_date_field"):
+            allowed_dates = (
+                ()
+                if fill_mode
+                else tuple((self._pending_order_form_constraints or {}).get("allowed_dates") or ())
+            )
+            self._pending_order_date_field.set_allowed_dates(allowed_dates)
+            self._pending_order_date_field.entry.configure(state="disabled" if fill_mode else "normal")
         if hasattr(self, "_pending_submit_button"):
+            selected_kind = str((self._pending_order_form_constraints or {}).get("selected_date_kind") or "")
+            order_ready = bool(
+                not fill_mode
+                and selected_kind == ORDER_FORM_DATE_KIND_PENDING
+                and self._pending_order_limit_var.get().strip()
+            )
             self._pending_submit_button.configure(
                 text="更新掛單" if editing else "確認掛單",
-                state="normal",
+                state="normal" if order_ready else "disabled",
             )
         if hasattr(self, "_pending_fill_button"):
             self._pending_fill_button.configure(
@@ -2556,7 +2577,9 @@ class TradingAccountPanel(ttk.Frame):
                 state="disabled",
             )
         if hasattr(self, "_pending_delete_button"):
-            self._pending_delete_button.configure(state="normal" if editing else "disabled")
+            self._pending_delete_button.configure(
+                state="normal" if editing and not fill_mode else "disabled"
+            )
 
 
     def _set_pending_edit_mode(
@@ -2992,14 +3015,7 @@ class TradingAccountPanel(ttk.Frame):
     def _apply_pending_order_form_constraints(self, constraints, *, editing: bool) -> None:
         payload = dict(constraints or {})
         self._pending_order_form_constraints = payload
-        allowed_dates = tuple(payload.get("allowed_dates") or ())
-        if hasattr(self, "_pending_order_date_field"):
-            self._pending_order_date_field.set_allowed_dates(allowed_dates)
-        kind = str(payload.get("selected_date_kind") or "")
         self._configure_pending_mode_buttons()
-        self._pending_submit_button.configure(
-            state="normal" if kind == ORDER_FORM_DATE_KIND_PENDING and self._pending_order_limit_var.get().strip() else "disabled"
-        )
 
     def _apply_pending_fill_constraints(self, constraints, *, editing: bool) -> None:
         payload = dict(constraints or {})
@@ -3023,6 +3039,7 @@ class TradingAccountPanel(ttk.Frame):
         fill_price_text = self._normalize_price_option_text(self._pending_fill_price_var.get())
         valid_date = bool(editing and fill_date and fill_date in set(constraints.get("allowed_dates") or ()))
         valid_price = bool(fill_price_text and fill_price_text in self._pending_price_option_set)
+        self._configure_pending_mode_buttons()
         self._pending_fill_button.configure(
             text="確認成交",
             state="normal" if valid_date and valid_price else "disabled",
@@ -3035,6 +3052,10 @@ class TradingAccountPanel(ttk.Frame):
     def _schedule_pending_fill_preview(self, *_args):
         if self._pending_draft_programmatic_update or self._pending_edit_entry_id is None:
             return None
+        # Selecting a fill date switches the shared form into fill mode
+        # immediately. Order-intent fields/actions stay locked until the fill
+        # date is cleared, even while the market-evidence preview is loading.
+        self._configure_pending_mode_buttons()
         self._invalidate_pending_preview()
         return self._preview_pending_draft(use_current_overrides=True, silent=True)
 
@@ -3236,6 +3257,13 @@ class TradingAccountPanel(ttk.Frame):
         return self._preview_pending_draft(use_current_overrides=True, silent=False)
 
     def _confirm_submit_pending_draft(self):
+        if self._pending_fill_mode_active():
+            messagebox.showerror(
+                "掛單",
+                "已選擇成交日；請先清除成交日，才能修改或更新掛單。",
+                parent=self,
+            )
+            return
         ticker = self._pending_order_ticker_var.get().strip().upper()
         if not ticker:
             messagebox.showerror("掛單", "股票代號必填。", parent=self)
@@ -3379,6 +3407,13 @@ class TradingAccountPanel(ttk.Frame):
         )
 
     def _delete_selected_pending(self):
+        if self._pending_fill_mode_active():
+            messagebox.showerror(
+                "刪除掛單",
+                "已選擇成交日；請先清除成交日，才能刪除掛單。",
+                parent=self,
+            )
+            return
         row = self._selected_pending_row()
         if not row:
             messagebox.showerror("刪除掛單", "請先選取掛單。", parent=self)
