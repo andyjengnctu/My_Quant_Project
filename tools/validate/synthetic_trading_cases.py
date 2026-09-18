@@ -4857,6 +4857,85 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         [None, None],
         [_candidate_projected.get("default_view"), _candidate_projected.get("gui_render_window")],
     )
+    _active_pending_overlay_row = {
+        "pending_entry_id": "SINGLE-STOCK-PENDING-ACTIVE",
+        "origin": "scanner_strategy",
+        "ticker": "2330",
+        "status": "ACTIVE",
+        "information_date": "2026-09-15",
+        "planned_trade_date": "2026-09-15",
+        "signal_date": "2026-09-15",
+        "planned_qty": 1000,
+        "reserved_cost": 100000.0,
+        "limit_price": _synth_limit,
+        "init_sl": _synth_stop,
+        "init_trail": _synth_trail,
+        "target_price": _synth_tp,
+        "entry_atr": _synth_atr,
+        "execution_plan_seed": deepcopy(_inspection_candidate["candidate"]["execution_plan_seed"]),
+        "management_lineage": {"lineage_id": "SINGLE-STOCK-PENDING-LINEAGE"},
+    }
+    _active_pending_inspection = deepcopy(_inspection_candidate)
+    _active_pending_inspection["pending_entries"] = [deepcopy(_active_pending_overlay_row)]
+    _active_pending_projected = project_trading_single_stock_chart_payload(
+        _candidate_chart, _active_pending_inspection, params=base_params
+    )
+    check(
+        "workbench_single_stock_active_pending_adds_distinct_order_annotation",
+        ["掛單"],
+        [
+            str(item.get("title") or "")
+            for item in _active_pending_projected.get("signal_annotations", [])
+            if str(item.get("title") or "") == "掛單"
+        ],
+    )
+
+    _orphan_filled_pending = deepcopy(_active_pending_overlay_row)
+    _orphan_filled_pending["pending_entry_id"] = "SINGLE-STOCK-PENDING-ORPHAN-FILLED"
+    _orphan_filled_pending["status"] = "FILLED"
+    _orphan_filled_pending["fill"] = {
+        "ticker": "2330", "qty": 1000, "price": 99.0, "trade_date": "2026-09-16"
+    }
+    _orphan_filled_inspection = deepcopy(_inspection_candidate)
+    _orphan_filled_inspection["pending_entries"] = [_orphan_filled_pending]
+    _orphan_filled_projected = project_trading_single_stock_chart_payload(
+        _candidate_chart, _orphan_filled_inspection, params=base_params
+    )
+    check(
+        "workbench_single_stock_filled_pending_without_effective_account_buy_does_not_create_phantom_order",
+        [[], "scanner_candidate"],
+        [
+            [
+                str(item.get("title") or "")
+                for item in _orphan_filled_projected.get("signal_annotations", [])
+                if str(item.get("title") or "") == "掛單"
+            ],
+            (_orphan_filled_projected.get("trading_lifecycle_by_index", {}).get(1) or {}).get("source"),
+        ],
+    )
+    _effective_filled_inspection = deepcopy(_orphan_filled_inspection)
+    _effective_filled_inspection["account_events"] = [{
+        "mutation_type": "confirm_strategy_buy_fill",
+        "timestamp": "2026-09-16T10:00:00+08:00",
+        "details": {
+            "ticker": "2330",
+            "qty": 1000,
+            "trade_date": "2026-09-16",
+            "strategy_lineage": {"lineage_id": "SINGLE-STOCK-PENDING-LINEAGE"},
+        },
+    }]
+    _effective_filled_projected = project_trading_single_stock_chart_payload(
+        _candidate_chart, _effective_filled_inspection, params=base_params
+    )
+    check(
+        "workbench_single_stock_filled_pending_with_matching_effective_account_lineage_keeps_historical_order",
+        ["掛單"],
+        [
+            str(item.get("title") or "")
+            for item in _effective_filled_projected.get("signal_annotations", [])
+            if str(item.get("title") or "") == "掛單"
+        ],
+    )
     # Regression: an unheld ticker that remains in the current Scanner pool may
     # have an older signal date.  Every bar after that signal must be SHADOW with
     # the same L/S/TP contract; the latest bar is not a special line-less state.

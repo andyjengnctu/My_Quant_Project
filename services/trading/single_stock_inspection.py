@@ -915,6 +915,65 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
     }
 
 
+def _pending_entry_is_effective_execution_evidence(
+    entry: Mapping[str, Any],
+    inspection: Mapping[str, Any],
+) -> bool:
+    """Return whether a pending-entry audit row may enter the live chart overlay.
+
+    ACTIVE rows are current user-confirmed order intent.  FILLED rows remain
+    visible only when the effective account journal still contains the managed
+    BUY produced from the same frozen lineage.  A deleted/voided account BUY
+    must not be resurrected merely because the immutable pending audit row is
+    still marked FILLED.
+    """
+
+    if not isinstance(entry, Mapping):
+        return False
+    status = str(entry.get("status") or "")
+    if status == PENDING_ENTRY_STATUS_ACTIVE:
+        return True
+    if status != PENDING_ENTRY_STATUS_FILLED:
+        return False
+
+    pending_lineage = entry.get("management_lineage")
+    pending_lineage_id = (
+        str((pending_lineage or {}).get("lineage_id") or "").strip()
+        if isinstance(pending_lineage, Mapping)
+        else ""
+    )
+    if not pending_lineage_id:
+        # Current pending-entry schema always carries a frozen lineage.  Fail
+        # closed for legacy/malformed FILLED rows rather than inventing a match
+        # from ticker/date/price coincidence.
+        return False
+
+    for event in list(inspection.get("account_events") or []):
+        if not isinstance(event, Mapping):
+            continue
+        mutation = str(event.get("mutation_type") or "")
+        if mutation == TRADE_MUTATION_STRATEGY_BUY:
+            lineage_field = "strategy_lineage"
+        elif mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY:
+            lineage_field = "management_lineage"
+        else:
+            continue
+        details = dict(event.get("details") or {})
+        lineage = details.get(lineage_field)
+        if not isinstance(lineage, Mapping):
+            position_after = details.get("position_after")
+            lineage = (
+                position_after.get(lineage_field)
+                if isinstance(position_after, Mapping)
+                else None
+            )
+        if not isinstance(lineage, Mapping):
+            continue
+        if str(lineage.get("lineage_id") or "").strip() == pending_lineage_id:
+            return True
+    return False
+
+
 def _plan_covers_date(plan: Mapping[str, Any], date_text: str) -> bool:
     signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
     if signal_date is None or date_text < signal_date:
@@ -962,6 +1021,8 @@ def _build_shadow_plans(
         plans.append(candidate_plan)
 
     for pending in list(inspection.get("pending_entries") or []):
+        if not _pending_entry_is_effective_execution_evidence(pending, inspection):
+            continue
         pending_plan = _shadow_plan_from_pending_entry(pending, last_date=last_date)
         if pending_plan is not None:
             plans.append(pending_plan)
@@ -1578,9 +1639,9 @@ def project_trading_single_stock_chart_payload(
     # remain auditable in pending-entry state but are intentionally absent from
     # the current execution overlay.
     for pending in list(inspection.get("pending_entries") or []):
-        status = str(pending.get("status") or "")
-        if status not in {PENDING_ENTRY_STATUS_ACTIVE, PENDING_ENTRY_STATUS_FILLED}:
+        if not _pending_entry_is_effective_execution_evidence(pending, inspection):
             continue
+        status = str(pending.get("status") or "")
         pending_date = _date_text(pending.get("planned_trade_date")) or _date_text(pending.get("information_date"))
         if pending_date is None or pending_date not in date_to_x:
             continue
