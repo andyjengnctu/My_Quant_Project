@@ -31,6 +31,7 @@ from core.trading_account_state import (
     apply_strategy_account_buy_correction_fill,
     build_empty_trading_account_state,
     build_trading_account_read_model,
+    effective_trading_account_events,
     correct_manual_trading_position,
     correct_trading_position_broker_truth,
     remove_manual_trading_position,
@@ -43,6 +44,8 @@ from core.trading_account_state import (
 )
 
 from services.trading.accounting_policy import build_standalone_trading_accounting_params, overlay_trading_accounting_params
+from services.trading.pending_entry_links import resolve_pending_entry_for_buy_event
+from services.trading.pending_entry_state import load_trading_pending_entry_state
 
 ACCOUNT_STATE_FILENAME = TRADING_ACCOUNT_STATE_FILENAME
 
@@ -535,7 +538,24 @@ def get_trading_account_read_model(project_root) -> dict[str, Any]:
     projected = rebuild_trading_account_economics(
         state, accounting_params=build_standalone_trading_accounting_params()
     )
-    return build_trading_account_read_model(projected)
+    result = build_trading_account_read_model(projected)
+    # AI: An edited fill date must not erase its original order date. Build the
+    # join once in the canonical account read service, not independently in UI.
+    pending = load_trading_pending_entry_state(project_root, required=False) or {}
+    order_dates = {}
+    for event in effective_trading_account_events(state):
+        matched = resolve_pending_entry_for_buy_event(
+            event, (pending.get("entries") or {}).values(), account_events=state.get("events") or (),
+        )
+        if matched is None:
+            continue
+        details = dict(event.get("details") or {})
+        lineage_id = str((matched.get("management_lineage") or {}).get("lineage_id") or "")
+        order_dates[(str(details.get("ticker") or ""), lineage_id, str(details.get("trade_date") or ""))] = matched.get("planned_trade_date")
+    for row in result.get("positions") or ():
+        key = (str(row.get("ticker") or ""), str(row.get("management_lineage_id") or row.get("strategy_lineage_id") or ""), str(row.get("entry_date") or ""))
+        row["order_date"] = order_dates.get(key)
+    return result
 
 
 __all__ = [

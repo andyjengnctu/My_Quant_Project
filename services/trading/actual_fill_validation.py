@@ -13,7 +13,7 @@ import math
 from pathlib import Path
 import pandas as pd
 
-from core.exact_accounting import price_to_milli, round_price_to_tick_milli
+from core.exact_accounting import MILLI_SCALE, price_to_milli, round_price_to_tick_milli
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 
@@ -33,7 +33,39 @@ def _positive_price_milli(value, *, field_name: str) -> int:
         raise ValueError(f"{field_name}必須是數字") from exc
     if not decimal_value.is_finite() or decimal_value <= 0:
         raise ValueError(f"{field_name}必須是大於 0 的有限數值")
-    return int(price_to_milli(decimal_value))
+    # AI: Validate the entered broker fact before fixed-point conversion. A
+    # sub-milli off-tick value must not silently round into an admissible price.
+    milli_value = int(price_to_milli(decimal_value))
+    if decimal_value != Decimal(milli_value) / Decimal(MILLI_SCALE):
+        raise ValueError(f"{field_name} {value} 不符合台股合法跳動單位")
+    return milli_value
+
+
+
+def validate_trading_fill_quantity(value) -> int:
+    """AI: Reject fractional/nonfinite quantities before any int coercion."""
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("成交股數必須是正整數") from exc
+    if not number.is_finite() or number <= 0 or number != number.to_integral_value():
+        raise ValueError("成交股數必須是正整數")
+    return int(number)
+
+
+def validate_pending_fill_terms(entry, *, qty, price, trade_date) -> None:
+    """AI: Shared original-intent boundaries for a fill and later corrections."""
+    count = validate_trading_fill_quantity(qty)
+    if count > int(entry.get("planned_qty") or 0):
+        raise ValueError("成交股數不得超過原掛單規劃股數")
+    fill_date = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
+    order_date = normalize_trading_date(entry.get("planned_trade_date"), field_name="planned_trade_date", allow_none=False)
+    if fill_date <= order_date:
+        raise ValueError(f"成交日 {fill_date} 必須嚴格晚於掛單日 {order_date}")
+    price_milli = _positive_price_milli(price, field_name="成交價")
+    limit = entry.get("limit_price")
+    if limit is not None and price_milli > price_to_milli(limit):
+        raise ValueError("成交價不得高於原掛單買入限價")
 
 
 def _market_number(row: pd.Series, field: str, *, ticker: str, trade_date: str) -> float:
@@ -216,4 +248,6 @@ __all__ = [
     "list_trading_actual_fill_dates",
     "load_trading_actual_fill_market_evidence",
     "validate_trading_actual_fill",
+    "validate_trading_fill_quantity",
+    "validate_pending_fill_terms",
 ]

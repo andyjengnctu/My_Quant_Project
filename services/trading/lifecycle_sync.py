@@ -18,10 +18,13 @@ from core.data_utils import get_required_min_rows
 from core.entry_plans import build_cash_capped_entry_plan
 from core.exact_accounting import build_buy_ledger, milli_to_money, price_to_milli
 from core.params_io import build_params_from_mapping
+from core.serialization_utils import json_native_value
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trade_lifecycle import build_prefill_lifecycle_timeline
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.account_state import load_trading_account_state
+from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.pending_entry_service import recover_trading_pending_entry_transaction
 from services.trading.market_data_consumer import (
     load_trading_v2_consumer_state,
     load_trading_v2_sanitized_ohlcv_frame,
@@ -37,10 +40,11 @@ from services.trading.position_rollforward import (
     run_trading_position_rollforward,
 )
 
+from services.trading.lifecycle_sync_status import (
+    SYNC_STATUS_LATEST, SYNC_STATUS_PENDING, SYNC_STATUS_FAILED,
+)
+
 TRADING_LIFECYCLE_SYNC_SCHEMA_VERSION = 1
-SYNC_STATUS_LATEST = "最新"
-SYNC_STATUS_PENDING = "待同步"
-SYNC_STATUS_FAILED = "同步失敗"
 
 
 def _available_cash_for_pending(
@@ -61,21 +65,30 @@ def _available_cash_for_pending(
 
 
 def _build_pending_lifecycle_plan(entry: Mapping[str, Any]) -> dict[str, Any]:
-    seed = dict(entry.get("execution_plan_seed") or {})
+    # AI: Replay always starts from the immutable confirmed plan, not yesterday's
+    # derived stop/target. Otherwise repeated daily reads rewrite the past and
+    # differ from a single replay to the same finalized date.
+    lineage = dict(entry.get("management_lineage") or {})
+    seed = dict(lineage.get("execution_plan_seed") or entry.get("execution_plan_seed") or {})
+    manual = str(entry.get("origin") or "") == "manual_selected"
+    signal_date = (
+        entry.get("planned_trade_date") or entry.get("information_date")
+        if manual else entry.get("signal_date") or entry.get("information_date")
+    )
     return {
         "source": "trading_pending_frozen_lineage",
-        "signal_date": entry.get("signal_date") or entry.get("information_date"),
+        "signal_date": signal_date,
         "information_date": entry.get("information_date"),
         "entry_type": seed.get("entry_type") or "normal",
-        "limit_price": entry.get("limit_price"),
-        "stop_price": entry.get("init_sl"),
-        "init_trail": entry.get("init_trail"),
-        "tp_price": entry.get("target_price"),
-        "entry_atr": entry.get("entry_atr"),
+        "limit_price": seed.get("limit_price", entry.get("limit_price")),
+        "stop_price": seed.get("init_sl", entry.get("init_sl")),
+        "init_trail": seed.get("init_trail", entry.get("init_trail")),
+        "tp_price": seed.get("target_price", entry.get("target_price")),
+        "entry_atr": seed.get("entry_atr", entry.get("entry_atr")),
         "ticker": entry.get("ticker"),
         "security_profile": deepcopy(seed.get("security_profile")),
-        "planned_qty": entry.get("planned_qty"),
-        "reserved_capital": entry.get("reserved_cost"),
+        "planned_qty": seed.get("qty", entry.get("planned_qty")),
+        "reserved_capital": seed.get("reserved_cost", entry.get("reserved_cost")),
     }
 
 
@@ -153,7 +166,7 @@ def _sync_one_pending(
     seed = deepcopy(dict(replacement.get("execution_plan_seed") or {}))
     if shadow_row is not None:
         shadow_state = dict(shadow_row.get("shadow_position_state") or {})
-        if shadow_state.get("pending_exit_action") in {"STOP", "TP_HALF"}:
+        if shadow_row.get("prefill_terminated") or shadow_state.get("pending_exit_action") in {"STOP", "TP_HALF"}:
             raise RuntimeError(
                 f"{ticker} frozen lineage 已於 {shadow_date or '-'} 觸發 shadow exit；ACTIVE 掛單需確認後結案"
             )
@@ -164,7 +177,7 @@ def _sync_one_pending(
         if shadow_row.get("tp_price") is not None:
             seed["target_price"] = float(shadow_row["tp_price"])
         if shadow_state:
-            seed["shadow_position_state"] = deepcopy(shadow_state)
+            seed["shadow_position_state"] = json_native_value(shadow_state)
             if shadow_state.get("trailing_stop") is not None:
                 seed["init_trail"] = float(shadow_state["trailing_stop"])
 
@@ -218,10 +231,14 @@ def _sync_one_pending(
     }
 
 
+@serialized_trading_state_mutation
 def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
     """Idempotently advance pending + position lifecycle state before reads."""
 
     root = Path(project_root).resolve()
+    # AI: Finish a durable account-commit/pending-close transaction before sizing
+    # any active intent. Otherwise the same filled order can reserve cash twice.
+    recover_trading_pending_entry_transaction(root)
     consumer_state = load_trading_v2_consumer_state(root, required=False)
     if consumer_state is None:
         return {
@@ -295,18 +312,27 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
     due_tickers = {str(value) for value in list(post_rollforward.get("due_tickers") or [])}
     account_after = load_trading_account_state(root, required=False) or {}
     position_status_by_ticker: dict[str, str] = {}
-    position_errors: dict[str, str] = {}
+    # AI: A returned partial failure is as real as a raised exception. Never
+    # advertise a failed manual activation or protection refresh as up-to-date.
+    reconcile = dict(position_result.get("manual_management_reconcile") or {})
+    position_errors = {
+        str(ticker): str(error)
+        for ticker, error in dict(reconcile.get("errors") or {}).items()
+    }
+    protection_error = position_result.get("protection_plan_refresh_error")
+    if protection_error and position_error is None:
+        position_error = str(protection_error)
     for ticker in sorted((account_after.get("positions") or {}).keys()):
-        if position_error is not None:
+        if position_error is not None or ticker in position_errors:
             position_status_by_ticker[ticker] = SYNC_STATUS_FAILED
-            position_errors[ticker] = position_error
+            position_errors[ticker] = position_error or position_errors[ticker]
         elif ticker in due_tickers:
             position_status_by_ticker[ticker] = SYNC_STATUS_PENDING
         else:
             position_status_by_ticker[ticker] = SYNC_STATUS_LATEST
 
     overall = SYNC_STATUS_LATEST
-    if pending_errors or position_error:
+    if pending_errors or position_error or position_errors:
         overall = SYNC_STATUS_FAILED
     elif due_tickers:
         overall = SYNC_STATUS_PENDING

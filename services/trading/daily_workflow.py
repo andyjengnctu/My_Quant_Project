@@ -271,8 +271,11 @@ def run_trading_daily_workflow(
         environ=environ,
     )
     scan_result = run_trading_candidate_scan(project_root=project_root)
+    # AI: Completed substeps are retained, but a failed/outdated lifecycle is
+    # not an entirely READY daily workflow. This does not change scan policy.
+    from services.trading.lifecycle_sync_status import SYNC_STATUS_LATEST
     return {
-        "status": "READY",
+        "status": "READY" if lifecycle_sync_result.get("status") == SYNC_STATUS_LATEST else "PARTIAL",
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "data": data_result,
         "lifecycle_sync": lifecycle_sync_result,

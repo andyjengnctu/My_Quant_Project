@@ -40,12 +40,12 @@ from services.trading.account_state import (
     record_strategy_trading_buy,
 )
 from services.trading.account_trade_entry import resolve_current_trading_scanner_candidate
-from services.trading.actual_fill_validation import validate_trading_actual_fill
+from services.trading.actual_fill_validation import validate_trading_actual_fill, validate_trading_fill_quantity, validate_pending_fill_terms
 from services.trading.market_data_consumer import (
     load_trading_v2_sanitized_ohlcv_frame,
     open_trading_v2_consumer_view,
 )
-from services.trading.lifecycle_sync import SYNC_STATUS_LATEST, SYNC_STATUS_PENDING
+from services.trading.lifecycle_sync_status import SYNC_STATUS_LATEST, SYNC_STATUS_PENDING
 from services.trading.order_form_constraints import (
     resolve_preferred_pending_order_date,
     validate_pending_order_limit_price,
@@ -794,19 +794,10 @@ def preview_trading_pending_entry_fill(
     trade_date,
 ) -> dict[str, Any]:
     entry = _load_active_pending(project_root, pending_entry_id)
-    qty_int = int(qty)
-    planned_qty = int(entry.get("planned_qty") or 0)
-    if qty_int <= 0 or qty_int > planned_qty:
-        raise ValueError(f"成交股數必須介於 1 與掛單股數 {planned_qty:,} 之間")
-    limit_price = entry.get("limit_price")
-    if limit_price is not None and price_to_milli(price) > price_to_milli(limit_price):
-        raise ValueError(f"成交價 {price} 高於掛單買入限價 {limit_price}")
+    qty_int = validate_trading_fill_quantity(qty)
+    # AI: Original pending terms are shared by first fill and account corrections.
+    validate_pending_fill_terms(entry, qty=qty_int, price=price, trade_date=trade_date)
     fill_date = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
-    order_date = normalize_trading_date(
-        entry.get("planned_trade_date"), field_name="pending_entry.planned_trade_date", allow_none=False
-    )
-    if fill_date <= order_date:
-        raise ValueError(f"成交日 {fill_date} 必須嚴格晚於掛單日 {order_date}")
     runtime = load_trading_scanner_runtime(project_root)
     latest_finalized_date = normalize_trading_date(
         runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False

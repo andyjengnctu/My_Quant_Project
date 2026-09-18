@@ -39,8 +39,13 @@ from core.trading_order_state import (
     TRADING_ORDER_SIDE_BUY,
 )
 from services.trading.account_state import load_trading_account_state
+from services.trading.pending_entry_links import (
+    original_buy_event, pending_entry_matches_buy, resolve_pending_entry_for_buy_event,
+)
 from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_ACTIVE,
+    PENDING_ENTRY_STATUS_CANCELLED_NO_FILL,
+    PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED,
     PENDING_ENTRY_STATUS_FILLED,
     load_trading_pending_entry_state,
 )
@@ -230,6 +235,10 @@ def build_trading_single_stock_inspection(
         "account_revision": None if not account else int(account.get("revision") or 0),
         "order_revision": None if not orders else int(orders.get("revision") or 0),
         "account_events": account_events,
+        "account_audit_events": [] if not account else [
+            deepcopy(event) for event in account.get("events", [])
+            if _ticker_matches(event.get("details") or {}, ticker_key)
+        ],
         "entry_orders": entry_orders,
         "pending_entries": pending_entries,
         "current_position": deepcopy(current_position),
@@ -947,10 +956,13 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
     if not isinstance(entry, Mapping):
         return None
     status = str(entry.get("status") or "")
-    if status not in {PENDING_ENTRY_STATUS_ACTIVE, PENDING_ENTRY_STATUS_FILLED}:
-        # Cancelled/deleted intent remains in the pending-entry audit log, but it
-        # is no longer effective execution evidence and must not leak into the
-        # current Trading chart/sidebar lifecycle.
+    supported_statuses = {
+        PENDING_ENTRY_STATUS_ACTIVE,
+        PENDING_ENTRY_STATUS_CANCELLED_NO_FILL,
+        PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED,
+        PENDING_ENTRY_STATUS_FILLED,
+    }
+    if status not in supported_statuses:
         return None
     information_date = _date_text(entry.get("information_date"))
     if information_date is None:
@@ -969,11 +981,18 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
         if manual_pending
         else (_date_text(entry.get("signal_date")) or information_date)
     )
-    seed = dict(entry.get("execution_plan_seed") or {})
+    # AI: Never project a later synchronized stop/target back onto the order day.
+    lineage = dict(entry.get("management_lineage") or {})
+    seed = dict(lineage.get("execution_plan_seed") or entry.get("execution_plan_seed") or {})
     end_before = None
     end_date = last_date
     if status == PENDING_ENTRY_STATUS_FILLED:
-        end_before = _date_text((entry.get("fill") or {}).get("trade_date"))
+        end_before = _date_text(entry.get("effective_fill_date")) or _date_text((entry.get("fill") or {}).get("trade_date"))
+    elif status in {PENDING_ENTRY_STATUS_CANCELLED_NO_FILL, PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED}:
+        # Closed pending rows remain immutable audit evidence.  Preserve their
+        # historical pre-fill plan only through the persisted order date; live
+        # overlays still exclude them via _effective_pending_entries().
+        end_date = planned_trade_date or information_date
     return {
         "signal_date": signal_date,
         "information_date": information_date,
@@ -1049,60 +1068,13 @@ def _matching_account_buy_event_for_pending(
     cannot be resurrected as a second chart annotation for the current position.
     """
 
-    if not isinstance(entry, Mapping) or str(entry.get("status") or "") != PENDING_ENTRY_STATUS_FILLED:
-        return None
-    pending_lineage = entry.get("management_lineage")
-    pending_lineage_id = (
-        str((pending_lineage or {}).get("lineage_id") or "").strip()
-        if isinstance(pending_lineage, Mapping)
-        else ""
-    )
-    if not pending_lineage_id:
-        return None
-    fill = dict(entry.get("fill") or {})
-    fill_date = _date_text(fill.get("trade_date"))
-    fill_qty = int(fill.get("qty") or 0)
-    fill_price_milli = None
-    if fill.get("price") is not None:
-        try:
-            fill_price_milli = int(price_to_milli(fill.get("price")))
-        except (TypeError, ValueError):
-            return None
-
-    for event in list(inspection.get("account_events") or []):
+    audit_events = inspection.get("account_audit_events") or inspection.get("account_events") or ()
+    for event in inspection.get("account_events") or ():
         if not isinstance(event, Mapping):
             continue
-        mutation = str(event.get("mutation_type") or "")
-        if mutation == TRADE_MUTATION_STRATEGY_BUY:
-            lineage_field = "strategy_lineage"
-        elif mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY:
-            lineage_field = "management_lineage"
-        else:
-            continue
-        details = dict(event.get("details") or {})
-        lineage = details.get(lineage_field)
-        if not isinstance(lineage, Mapping):
-            position_after = details.get("position_after")
-            lineage = (
-                position_after.get(lineage_field)
-                if isinstance(position_after, Mapping)
-                else None
-            )
-        if not isinstance(lineage, Mapping):
-            continue
-        if str(lineage.get("lineage_id") or "").strip() != pending_lineage_id:
-            continue
-        if fill_date is not None and _trade_event_date(event) != fill_date:
-            continue
-        event_qty = int(details.get("qty") or details.get("fill_qty") or 0)
-        if fill_qty > 0 and event_qty != fill_qty:
-            continue
-        event_price_milli = details.get("entry_fill_price_milli")
-        if event_price_milli is None:
-            event_price_milli = details.get("fill_price_milli")
-        if fill_price_milli is not None and event_price_milli is not None and int(event_price_milli) != fill_price_milli:
-            continue
-        return event
+        original = original_buy_event(event, audit_events)
+        if pending_entry_matches_buy(entry, original):
+            return event
     return None
 
 
@@ -1116,43 +1088,25 @@ def _effective_pending_entries(inspection: Mapping[str, Any]) -> list[dict[str, 
     planned order date in lineage identity and naturally remain unique.
     """
 
-    active: list[dict[str, Any]] = []
-    filled_by_event: dict[tuple[object, ...], tuple[float, dict[str, Any]]] = {}
-    for raw in list(inspection.get("pending_entries") or []):
-        if not isinstance(raw, Mapping):
+    # AI: Use the same original-event identity owner as correction validation.
+    # An effective correction changes the fill end date, not its order origin.
+    pending = [row for row in inspection.get("pending_entries") or () if isinstance(row, Mapping)]
+    rows = [deepcopy(dict(row)) for row in pending if str(row.get("status") or "") == PENDING_ENTRY_STATUS_ACTIVE]
+    audit = inspection.get("account_audit_events") or inspection.get("account_events") or ()
+    seen = set()
+    for event in inspection.get("account_events") or ():
+        if not isinstance(event, Mapping) or str(event.get("mutation_type") or "") not in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY}:
             continue
-        entry = deepcopy(dict(raw))
-        status = str(entry.get("status") or "")
-        if status == PENDING_ENTRY_STATUS_ACTIVE:
-            active.append(entry)
+        matched = resolve_pending_entry_for_buy_event(event, pending, account_events=audit)
+        if matched is None:
             continue
-        if status != PENDING_ENTRY_STATUS_FILLED:
+        entry_id = str(matched.get("pending_entry_id") or "")
+        if entry_id in seen:
             continue
-        event = _matching_account_buy_event_for_pending(entry, inspection)
-        if not isinstance(event, Mapping):
-            continue
-        key = (
-            event.get("revision"),
-            event.get("mutation_id"),
-            event.get("event_hash"),
-            event.get("timestamp"),
-            _trade_event_date(event),
-        )
-        event_ts = str(event.get("timestamp") or "")
-        fill_ts = str((entry.get("fill") or {}).get("confirmed_at") or entry.get("closed_at") or "")
-        distance = float("inf")
-        try:
-            event_dt = datetime.fromisoformat(event_ts)
-            fill_dt = datetime.fromisoformat(fill_ts)
-            distance = abs((event_dt - fill_dt).total_seconds())
-        except (TypeError, ValueError):
-            pass
-        prior = filled_by_event.get(key)
-        if prior is None or (distance, str(entry.get("pending_entry_id") or "")) < (
-            prior[0], str(prior[1].get("pending_entry_id") or "")
-        ):
-            filled_by_event[key] = (distance, entry)
-    rows = active + [pair[1] for pair in filled_by_event.values()]
+        seen.add(entry_id)
+        entry = deepcopy(matched)
+        entry["effective_fill_date"] = _trade_event_date(event)
+        rows.append(entry)
     rows.sort(key=lambda row: (
         str(row.get("planned_trade_date") or row.get("information_date") or ""),
         str(row.get("pending_entry_id") or ""),

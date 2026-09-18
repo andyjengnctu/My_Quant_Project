@@ -1299,7 +1299,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
-    check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "今日 Scanner Pool" in panel_source and "advanced_notebook.grid(" not in panel_source)
+    check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "侯選區" in panel_source and "advanced_notebook.grid(" not in panel_source)
     check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數", "策略 / Params")))
     check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=1", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
     # AI: This contract is about preserving and rendering the original parameter
@@ -3153,7 +3153,7 @@ def validate_trading_operations_status_contract_case(base_params):
     rollforward_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
     rollforward_snapshot_body = rollforward_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
     check("operations_rollforward_snapshot_has_no_hidden_fill_recovery", False, "recover_trading_fill_transaction(" in rollforward_snapshot_body)
-    check("workbench_has_operations_overview", True, "Trading 操作總覽" in panel_source)
+    check("workbench_has_operations_overview", True, "Trading 儀表板" in panel_source)
     check("workbench_consumes_operations_status_owner", True, "build_trading_operations_status" in panel_source)
     check("workbench_exposes_full_state_refresh", True, "全狀態刷新" in panel_source)
 
@@ -3171,6 +3171,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         build_trading_status_segments,
         parse_trading_money_text,
         parse_trading_qty_text,
+        holding_order_date_by_lineage,
         trading_source_display_label,
     )
     from services.workbench_ui.workbench import (
@@ -4129,7 +4130,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）", "確認掛單", "確認成交", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("侯選區", "掛單區", "掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）", "確認掛單", "確認成交", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
     check("workbench_pending_scanner_and_manual_share_one_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_limit_var", "_pending_fill_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
@@ -4421,8 +4422,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "workbench_holding_area_uses_requested_source_first_schema_without_trailing_or_suggested_action",
         True,
         'text="持股區"' in panel_source
-        and 'columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")' in panel_source
+        and 'columns = ("open", "source", "ticker", "order_date", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")' in panel_source
         and '"source": "來源"' in panel_source
+        and '"order_date": "掛單日"' in panel_source
         and '"entry_date": "成交日"' in panel_source
         and '"stop": "停損"' in panel_source
         and '"target": "停利"' in panel_source
@@ -4442,6 +4444,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and 'suffix = " ▲"' in panel_source
         and '"source": "text"' in panel_source
         and '"date": "date"' in panel_source
+        and '"order_date": "date"' in panel_source
         and '"entry_date": "date"' in panel_source
         and '"qty": "numeric"' in panel_source,
     )
@@ -4479,6 +4482,45 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     TradingAccountPanel._sort_table_by_column(_sort_panel, _sort_tree, "ticker")
     check("workbench_clicking_another_column_restarts_ascending", ["scanner", "manual"], list(_sort_tree.children))
     check("workbench_holding_area_exposes_existing_entry_date_as_fill_date", True, 'row.get("entry_date") or "-"' in panel_source and '"entry_date": "成交日"' in panel_source)
+    check(
+        "workbench_holding_area_exposes_pending_order_date_before_fill_date_with_dash_fallback",
+        True,
+        '"order_date": "掛單日"' in panel_source
+        and panel_source.index('"order_date": "掛單日"') < panel_source.index('"entry_date": "成交日"')
+        and '(row.get("order_date") or "-") if "order_date" in row' in panel_source,
+    )
+    _order_date_map = holding_order_date_by_lineage([
+        {
+            "status": "FILLED",
+            "planned_trade_date": "2026-09-15",
+            "fill": {"trade_date": "2026-09-16"},
+            "management_lineage": {"lineage_id": "L-FILLED"},
+        },
+        {
+            "status": "FILLED",
+            "planned_trade_date": "2026-09-17",
+            "fill": {"trade_date": "2026-09-18"},
+            "management_lineage": {"lineage_id": "L-FILLED"},
+        },
+        {
+            "status": "ACTIVE",
+            "planned_trade_date": "2026-09-16",
+            "management_lineage": {"lineage_id": "L-ACTIVE"},
+        },
+        {
+            "status": "FILLED",
+            "planned_trade_date": None,
+            "management_lineage": {"lineage_id": "L-NO-DATE"},
+        },
+    ])
+    check(
+        "workbench_holding_order_date_matches_filled_pending_lineage_and_fill_date",
+        {
+            ("L-FILLED", "2026-09-16"): "2026-09-15",
+            ("L-FILLED", "2026-09-18"): "2026-09-17",
+        },
+        _order_date_map,
+    )
     check(
         "workbench_direct_backfill_fill_date_and_price_use_canonical_constraints",
         True,
@@ -4520,6 +4562,187 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             'run_trading_position_rollforward(root)',
         )),
     )
+    # AI: Behavioral regression for actual execution, not source-token presence.
+    from services.trading import lifecycle_sync as _sync
+    from services.trading.actual_fill_validation import (
+        validate_trading_fill_quantity as _fill_qty,
+        validate_pending_fill_terms as _fill_terms,
+    )
+    from services.trading.pending_entry_links import resolve_pending_entry_for_buy_event as _pending_link
+    from core.entry_plans import build_normal_candidate_plan as _audit_plan
+    from core.exact_accounting import build_buy_ledger as _audit_buy, price_to_milli as _audit_milli, milli_to_money as _audit_money
+    from contextlib import ExitStack as _AuditStack
+    from concurrent.futures import ThreadPoolExecutor as _AuditExecutor
+    from services.trading.state_lock import TradingStateBusyError as _Busy
+
+    for _invalid_qty in (True, 1.5, float("nan"), float("inf"), 0, -1):
+        try:
+            _fill_qty(_invalid_qty)
+        except ValueError:
+            _rejected = True
+        else:
+            _rejected = False
+        check(f"audit_non_integer_or_nonfinite_fill_qty_rejected_{_invalid_qty}", True, _rejected)
+    _terms = {"planned_qty": 100, "limit_price": 100, "planned_trade_date": "2026-09-10"}
+    for _tag, _date, _price in (("same_day", "2026-09-10", 99), ("above_limit", "2026-09-11", 101)):
+        try:
+            _fill_terms(_terms, qty=100, price=_price, trade_date=_date)
+        except ValueError:
+            _rejected = True
+        else:
+            _rejected = False
+        check("audit_pending_correction_keeps_original_order_terms_" + _tag, True, _rejected)
+
+    _audit_params = deepcopy(base_params)
+    _audit_params.min_entry_notional = 0  # Isolated small-quantity fixture, never live config.
+    _audit_seed = _audit_plan(100., 5., 1_000_000., _audit_params, ticker="2330", trade_date="2026-09-10")
+    _audit_seed.update(qty=100, max_qty=100, entry_type="manual")
+    _audit_cost = _audit_buy(_audit_milli(100), 100, _audit_params)["cash_buy_total_milli"]
+    _audit_seed.update(reserved_cost_milli=_audit_cost, reserved_cost=_audit_money(_audit_cost))
+    _audit_lineage = build_trading_manual_management_lineage(
+        params=_audit_params, execution_plan_seed=_audit_seed, information_date="2026-09-10",
+        origin="manual_pending_entry", planned_qty=100, planned_cost=_audit_seed["reserved_cost"],
+    )
+    _audit_entry = {
+        "origin": "manual_selected", "ticker": "2330", "information_date": "2026-09-10",
+        "planned_trade_date": "2026-09-10", "signal_date": None, "planned_qty": 100,
+        "limit_price": 100., "init_sl": _audit_seed["init_sl"], "init_trail": _audit_seed["init_trail"],
+        "target_price": _audit_seed["target_price"], "entry_atr": 5.,
+        "execution_plan_seed": _audit_seed, "management_lineage": _audit_lineage,
+        "reserved_cost_milli": _audit_cost, "reserved_cost": _audit_seed["reserved_cost"],
+    }
+    _audit_frame = pd.DataFrame({
+        "Open": [100.,100.,102.,103.], "High": [101.,104.,104.5,105.],
+        "Low": [99.,99.,101.,102.], "Close": [100.,103.,103.,104.], "Volume": [1000]*4,
+    }, index=pd.to_datetime(["2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15"]))
+
+    def _run_audit_sync(dates):
+        with tempfile.TemporaryDirectory() as td, _AuditStack() as stack:
+            root = Path(td)
+            initialize_trading_account_state(root, cash=1_000_000)
+            entry = create_trading_pending_entry(root, entry=_audit_entry)
+            stack.enter_context(patch.object(_sync, "open_trading_v2_consumer_view", return_value=object()))
+            stack.enter_context(patch.object(_sync, "load_trading_v2_sanitized_ohlcv_frame", side_effect=lambda _view, **kw: _audit_frame.loc[:kw["through_date"]].copy()))
+            stack.enter_context(patch.object(_sync, "generate_signals", side_effect=lambda frame, *_a, **_kw: frame))
+            stack.enter_context(patch.object(_sync, "unpack_precomputed_signals", side_effect=lambda frame: ([5.]*len(frame), [False]*len(frame), [False]*len(frame), [100.]*len(frame))))
+            for _day in dates:
+                entry = load_trading_pending_entry_state(root, required=True)["entries"][entry["pending_entry_id"]]
+                _sync._sync_one_pending(root, entry=entry, active_entries=[entry], account=load_trading_account_state(root, required=True), latest_finalized_date=_day)
+            state = load_trading_pending_entry_state(root, required=True)
+            entry = state["entries"][entry["pending_entry_id"]]
+            before = deepcopy(state)
+            repeat = _sync._sync_one_pending(root, entry=entry, active_entries=[entry], account=load_trading_account_state(root, required=True), latest_finalized_date=dates[-1])
+            check("audit_sync_same_day_repeat_does_not_write_" + str(len(dates)), [False, before], [repeat["changed"], load_trading_pending_entry_state(root, required=True)])
+            check("audit_sync_keeps_frozen_lineage_" + str(len(dates)), _audit_lineage, entry["management_lineage"])
+            json.dumps(state, allow_nan=False)
+            check("audit_shadow_state_persists_strict_json_" + str(len(dates)), True, True)
+            return {key:entry[key] for key in ("planned_qty", "limit_price", "init_sl", "init_trail", "target_price", "evaluated_through_date")}
+
+    _daily_sync = _run_audit_sync(["2026-09-11", "2026-09-14", "2026-09-15"])
+    _jump_sync = _run_audit_sync(["2026-09-15"])
+    check("audit_sync_daily_and_catchup_geometry_equal", _jump_sync, _daily_sync)
+    _mutated_entry = deepcopy(_audit_entry)
+    _mutated_entry["init_sl"] = 500
+    _mutated_entry["execution_plan_seed"] = {**_audit_seed, "init_sl":500}
+    check("audit_sync_replay_uses_frozen_not_latest_geometry", _audit_seed["init_sl"], _sync._build_pending_lifecycle_plan(_mutated_entry)["stop_price"])
+    _backfill_entry = {**_audit_entry, "information_date":"2026-09-17"}
+    check("audit_manual_sync_uses_order_day_not_current_info_day", "2026-09-10", _sync._build_pending_lifecycle_plan(_backfill_entry)["signal_date"])
+
+    with tempfile.TemporaryDirectory() as td, _AuditStack() as stack:
+        root = Path(td)
+        stack.enter_context(patch.object(_sync, "load_trading_v2_consumer_state", return_value={"market_date":"2026-09-17"}))
+        stack.enter_context(patch.object(_sync, "load_trading_pending_entry_state", return_value=None))
+        stack.enter_context(patch.object(_sync, "load_trading_account_state", return_value={"positions":{"2330":{}}}))
+        stack.enter_context(patch.object(_sync, "run_trading_position_rollforward", return_value={"status":"NO_CHANGE", "manual_management_reconcile":{"errors":{"2330":"market evidence missing"}}}))
+        stack.enter_context(patch.object(_sync, "build_trading_position_rollforward_snapshot", return_value={"due_tickers":[]}))
+        _bad_sync = _sync.run_trading_lifecycle_sync(root)
+        check("audit_reconcile_failure_not_reported_latest", "同步失敗", _bad_sync["position_status_by_ticker"]["2330"])
+        check("audit_reconcile_failure_propagates_to_overall_status", "同步失敗", _bad_sync["status"])
+
+    _original_buy = {"revision":2, "mutation_type":"manual_managed_buy_fill", "timestamp":"2026-09-11T18:00:00+08:00", "details":{
+        "ticker":"2330", "trade_date":"2026-09-11", "qty":100, "entry_fill_price_milli":99_000,
+        "management_lineage":{"lineage_id":"audit-original"},
+    }}
+    _replacement_buy = {"revision":4, "mutation_type":"manual_managed_buy_fill", "details":{
+        "ticker":"2330", "trade_date":"2026-09-12", "qty":90, "entry_fill_price_milli":98_000, "replaces_event_revision":2,
+    }}
+    _linked_pending = {"pending_entry_id":"audit-order", "ticker":"2330", "status":"FILLED", "planned_trade_date":"2026-09-10",
+        "management_lineage":{"lineage_id":"audit-original"}, "fill":{"trade_date":"2026-09-11", "qty":100, "price":99}}
+    _link = _pending_link(_replacement_buy, [_linked_pending], account_events=[_original_buy, _replacement_buy])
+    check("audit_correction_keeps_link_to_original_order", "audit-order", _link["pending_entry_id"] if _link else None)
+
+    # AI: Exact external broker facts must not be rounded into validity.
+    from decimal import Decimal as _AuditDecimal
+    from services.trading.actual_fill_validation import _positive_price_milli as _exact_fill_price
+    for _price in ("99.0001", "99.00001", "NaN", "Infinity", "0", "-1"):
+        try:
+            _exact_fill_price(_AuditDecimal(_price), field_name="fill price")
+        except ValueError:
+            _rejected = True
+        else:
+            _rejected = False
+        check("audit_external_fill_price_preserves_exactness_" + _price, True, _rejected)
+
+    from services.trading.single_stock_inspection import _shadow_plan_from_pending_entry as _audit_shadow_plan
+    _historical_entry = {**_mutated_entry, "status":"ACTIVE"}
+    check("audit_chart_never_replays_latest_stop_into_order_history", _audit_seed["init_sl"],
+          _audit_shadow_plan(_historical_entry, last_date="2026-09-15")["stop_price"])
+
+    # AI: A terminated pre-fill shadow must be visible to the synchronizer even
+    # though the terminal chart row deliberately preserves pre-exit geometry.
+    _terminal_frame = _audit_frame.copy()
+    _terminal_frame.loc[pd.Timestamp("2026-09-14"), ["Open","High","Low","Close"]] = [20.,25.,19.,22.]
+    with tempfile.TemporaryDirectory() as td, _AuditStack() as stack:
+        root = Path(td)
+        stack.enter_context(patch.object(_sync, "open_trading_v2_consumer_view", return_value=object()))
+        stack.enter_context(patch.object(_sync, "load_trading_v2_sanitized_ohlcv_frame", return_value=_terminal_frame))
+        stack.enter_context(patch.object(_sync, "generate_signals", side_effect=lambda frame, *_a, **_k: frame))
+        stack.enter_context(patch.object(_sync, "unpack_precomputed_signals", side_effect=lambda frame: ([5.]*len(frame), [False]*len(frame), [False]*len(frame), [100.]*len(frame))))
+        _terminal_row, _terminal_date = _sync._latest_shadow_state(root, entry=_audit_entry, latest_finalized_date="2026-09-15", params=_audit_params)
+        check("audit_core_prefill_termination_is_explicit", True, bool(_terminal_row.get("prefill_terminated")))
+        check("audit_core_prefill_termination_date_is_not_latest_bar", "2026-09-14", _terminal_date)
+        try:
+            _sync._sync_one_pending(root, entry=_audit_entry, active_entries=[_audit_entry], account={"cash_milli":1_000_000_000}, latest_finalized_date="2026-09-15")
+        except RuntimeError as exc:
+            _terminal_rejected = "shadow exit" in str(exc)
+        else:
+            _terminal_rejected = False
+        check("audit_sync_does_not_mark_terminated_shadow_as_latest", True, _terminal_rejected)
+
+    # AI: Read-plan-write and recovery are protected by the shared mutation lock.
+    from threading import Event as _AuditEvent
+    _entered, _release = _AuditEvent(), _AuditEvent()
+    def _held_recovery(_root):
+        _entered.set()
+        if not _release.wait(3):
+            raise RuntimeError("synthetic sync lock was not released")
+    with tempfile.TemporaryDirectory() as td, _AuditStack() as stack, _AuditExecutor(max_workers=1) as executor:
+        root = Path(td)
+        stack.enter_context(patch.object(_sync, "recover_trading_pending_entry_transaction", side_effect=_held_recovery))
+        stack.enter_context(patch.object(_sync, "load_trading_v2_consumer_state", return_value=None))
+        future = executor.submit(_sync.run_trading_lifecycle_sync, root)
+        try:
+            check("audit_sync_enters_recovery_inside_lock", True, _entered.wait(3))
+            try:
+                _sync.run_trading_lifecycle_sync(root)
+            except _Busy:
+                _second_rejected = True
+            else:
+                _second_rejected = False
+            check("audit_parallel_sync_cannot_enter_same_allocation_window", True, _second_rejected)
+        finally:
+            _release.set()
+        check("audit_sync_releases_lock_after_no_data", "NO_DATA", future.result(timeout=3)["position_result"]["status"])
+
+    from services.trading import daily_workflow as _audit_workflow
+    with tempfile.TemporaryDirectory() as td, _AuditStack() as stack:
+        stack.enter_context(patch.object(_audit_workflow, "run_trading_market_data_update", return_value={"status":"UPDATED"}))
+        stack.enter_context(patch.object(_audit_workflow, "run_trading_param_step", return_value={"status":"READY"}))
+        stack.enter_context(patch.object(_audit_workflow, "run_trading_candidate_scan", return_value={"status":"READY"}))
+        stack.enter_context(patch.object(_sync, "run_trading_lifecycle_sync", return_value={"status":_sync.SYNC_STATUS_FAILED,"position_result":{"status":"NO_ACCOUNT"}}))
+        result = _audit_workflow.run_trading_daily_workflow(project_root=Path(td))
+        check("audit_daily_workflow_does_not_mask_sync_failure_as_ready", "PARTIAL", result["status"])
+
     _sync_projection_state = {
         "revision": 1,
         "updated_at": None,
@@ -4589,10 +4812,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check(
         "pending_fill_submit_hard_rejects_fill_date_not_after_order_date",
         True,
-        "成交日" in pending_service_source
-        and "必須嚴格晚於掛單日" in pending_service_source
-        and "if fill_date <= order_date:" in pending_service_source,
+        "validate_pending_fill_terms(entry" in pending_service_source,
     )
+
     from services.trading.order_form_constraints import (
         ORDER_FORM_DATE_KIND_FILL as _ORDER_FORM_DATE_KIND_FILL,
         ORDER_FORM_DATE_KIND_PENDING as _ORDER_FORM_DATE_KIND_PENDING,
@@ -4868,14 +5090,14 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_account_mutations_resolve_latest_revision_inside_lock", True, "expected_account_revision=None" in panel_source and "expected_revision=None" in accounting_source)
     check("workbench_centers_use_fixed_contextual_footer_status_bars", True, "self._footer_bar.grid(row=1" in accounting_source and "操作提示｜" in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source and "self._footer_bar.grid(row=1" in panel_source and "操作提示｜" in panel_source)
     check("workbench_primary_ui_has_single_fixed_bottom_right_refresh_per_center", True, panel_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in panel_source and 'text="全狀態刷新", command=self._refresh_all_trading_state' in panel_source and 'pack(side="right"' in panel_source and accounting_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新", command=self.refresh' in accounting_source)
-    overview_schema = panel_source.split('operations_box = ttk.LabelFrame(content, text="Trading 操作總覽"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
+    overview_schema = panel_source.split('operations_box = ttk.LabelFrame(content, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
     workflow_schema = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
     check("workbench_overview_removes_account_card_and_consolidates_strategy_params", True, '帳戶"' not in overview_schema and '策略 / Params' in overview_schema and 'member' not in overview_schema.lower() and 'agree' not in overview_schema.lower())
     check("workbench_overview_exposes_requested_funnel_cards", True, all(label in overview_schema for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數")))
     check("workbench_overview_limits_dynamic_status_to_two_single_line_rows", True, '_operations_next_label.grid(' in overview_schema and '_operations_detail_label.grid(' in overview_schema and overview_schema.count('max_lines=1') >= 2 and '_live_audit_label' not in overview_schema)
     check("workbench_daily_workflow_does_not_repeat_status_rows", True, '_workflow_status_label' not in workflow_schema and '_param_mode_detail_label' not in workflow_schema)
     check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_detail_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
-    scanner_schema = panel_source.split('candidate_box = ttk.LabelFrame(content, text="今日 Scanner Pool"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="買入成交登錄"', 1)[0]
+    scanner_schema = panel_source.split('candidate_box = ttk.LabelFrame(content, text="侯選區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="買入成交登錄"', 1)[0]
     candidate_static_schema = panel_source.split('def _candidate_static_columns_after_dynamic', 1)[1].split('def _candidate_metric_formatter', 1)[0]
     check("workbench_scanner_pool_uses_take_profit_reference_qty_cost_without_summary", True, 'TableColumn("target_price", "停利線"' in candidate_static_schema and 'TableColumn("proj_qty", "參考股數"' in candidate_static_schema and 'TableColumn("proj_cost", "參考投入"' in candidate_static_schema and 'Scanner 摘要' not in scanner_schema and candidate_static_schema.index('"停利線"') < candidate_static_schema.index('"參考股數"') < candidate_static_schema.index('"參考投入"'))
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)

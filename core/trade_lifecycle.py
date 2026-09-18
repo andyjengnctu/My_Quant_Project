@@ -428,6 +428,11 @@ def build_prefill_lifecycle_timeline(
             # on the terminal day, then stop the lifecycle.
             if updated is None or int(updated.get("qty", 0) or 0) <= 0:
                 timeline[idx] = _shadow_row_from_position(plan, pre_update, source=source)
+                # AI: Preserve chart geometry while exposing the terminal event
+                # to live lifecycle consumers. The pre-update position by itself
+                # cannot tell a synchronizer that this shadow has already exited.
+                timeline[idx]["prefill_terminated"] = True
+                timeline[idx]["prefill_terminated_date"] = date_text
                 break
             shadow_position = updated
 

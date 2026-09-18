@@ -205,6 +205,25 @@ def trading_source_display_label(*, origin: object = None, source: object = None
             return text
     return "-"
 
+
+def holding_order_date_by_lineage(pending_entries) -> dict[tuple[str, str], str]:
+    """Map FILLED pending lineage + fill date to the persisted order date."""
+
+    result: dict[tuple[str, str], str] = {}
+    for raw in pending_entries or ():
+        row = dict(raw or {})
+        if str(row.get("status") or "") != "FILLED":
+            continue
+        lineage = row.get("management_lineage")
+        if not isinstance(lineage, dict):
+            continue
+        lineage_id = str(lineage.get("lineage_id") or "").strip()
+        planned_trade_date = str(row.get("planned_trade_date") or "").strip()
+        fill_date = str((row.get("fill") or {}).get("trade_date") or "").strip()
+        if lineage_id and fill_date and planned_trade_date:
+            result[(lineage_id, fill_date)] = planned_trade_date
+    return result
+
 _STATUS_TOKEN_TONES = {
     "READY": "success",
     "IDLE": "success",
@@ -1037,7 +1056,7 @@ class TradingAccountPanel(ttk.Frame):
 
         self._footer_hint_var = tk.StringVar(value="")
 
-        operations_box = ttk.LabelFrame(content, text="Trading 操作總覽", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        operations_box = ttk.LabelFrame(content, text="Trading 儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
         operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         operations_box.columnconfigure(0, weight=1)
         self._overview_vars = {
@@ -1111,7 +1130,7 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._param_mode_combo.pack(side="left", padx=(8, 0))
         self._param_mode_combo.bind("<<ComboboxSelected>>", self._on_param_mode_selected)
-        # Params status/lineage is rendered once in Trading 操作總覽.
+        # Params status/lineage is rendered once in Trading 儀表板.
 
         workflow_buttons = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
         workflow_buttons.grid(row=1, column=0, sticky="w", pady=(8, 0))
@@ -1130,7 +1149,7 @@ class TradingAccountPanel(ttk.Frame):
             button.pack(side="left", padx=(0 if not self._workflow_buttons else 8, 0))
             self._workflow_buttons.append(button)
             self._workflow_action_buttons[action] = button
-        # Daily workflow dynamic status is centralized in Trading 操作總覽.
+        # Daily workflow dynamic status is centralized in Trading 儀表板.
 
         header = ttk.LabelFrame(content, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
         header.grid(row=4, column=0, sticky="ew", pady=(0, 8))
@@ -1178,13 +1197,13 @@ class TradingAccountPanel(ttk.Frame):
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")
+        columns = ("open", "source", "ticker", "order_date", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
-            "open": "↗", "source": "來源", "ticker": "股票", "entry_date": "成交日", "qty": "股數", "avg_cost": "均價", "current": "市價",
+            "open": "↗", "source": "來源", "ticker": "股票", "order_date": "掛單日", "entry_date": "成交日", "qty": "股數", "avg_cost": "均價", "current": "市價",
             "stop": "停損", "target": "停利", "sell_signal": "賣出訊號", "status": "狀態",
         }
-        widths = {"open": 36, "source": 90, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "sell_signal": 125, "status": 88}
+        widths = {"open": 36, "source": 90, "ticker": 80, "order_date": 100, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "sell_signal": 125, "status": 88}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
@@ -1194,6 +1213,7 @@ class TradingAccountPanel(ttk.Frame):
             sort_kinds={
                 "source": "text",
                 "ticker": "text",
+                "order_date": "date",
                 "entry_date": "date",
                 "qty": "numeric",
                 "avg_cost": "numeric",
@@ -1211,7 +1231,7 @@ class TradingAccountPanel(ttk.Frame):
         self._tree.bind("<Button-1>", self._on_position_tree_click, add="+")
         self._tree.bind("<Double-1>", self._open_selected_position_in_inspector, add="+")
 
-        candidate_box = ttk.LabelFrame(content, text="今日 Scanner Pool", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        candidate_box = ttk.LabelFrame(content, text="侯選區", padding=8, style=WORKBENCH_LABELLF_STYLE)
         candidate_box.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
         candidate_box.rowconfigure(0, weight=1)
         candidate_box.columnconfigure(0, weight=1)
@@ -3957,6 +3977,9 @@ class TradingAccountPanel(ttk.Frame):
             str(row.get("ticker") or ""): dict(row)
             for row in list(self._account_dashboard_snapshot.get("positions") or [])
         }
+        order_dates_by_lineage = holding_order_date_by_lineage(
+            list(self._pending_snapshot.get("entries") or [])
+        )
         position_status_by_ticker = {
             str(key): str(value)
             for key, value in dict(self._lifecycle_sync_snapshot.get("position_status_by_ticker") or {}).items()
@@ -3985,7 +4008,10 @@ class TradingAccountPanel(ttk.Frame):
             else:
                 sell_signal = "-"
             source_text = trading_source_display_label(source=row.get("source"))
+            lineage_id = str(row.get("management_lineage_id") or row.get("strategy_lineage_id") or "").strip()
             entry_date = row.get("entry_date") or "-"
+            # AI: Prefer the effective-account join, which survives BUY corrections.
+            order_date = (row.get("order_date") or "-") if "order_date" in row else order_dates_by_lineage.get((lineage_id, str(entry_date)), "-")
             qty = int(row.get("qty") or 0)
             average_cost = row.get("average_cost")
             current_price = row.get("current_price")
@@ -3998,7 +4024,7 @@ class TradingAccountPanel(ttk.Frame):
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
-                    "▣", source_text, ticker, entry_date, f"{qty:,}",
+                    "▣", source_text, ticker, order_date, entry_date, f"{qty:,}",
                     format_trading_money(average_cost),
                     format_trading_money(current_price),
                     format_trading_money(effective_stop),
@@ -4013,6 +4039,7 @@ class TradingAccountPanel(ttk.Frame):
                 {
                     "source": source_text,
                     "ticker": ticker,
+                    "order_date": order_date,
                     "entry_date": entry_date,
                     "qty": qty,
                     "avg_cost": average_cost,

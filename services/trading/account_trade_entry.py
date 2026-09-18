@@ -19,6 +19,7 @@ from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.file_integrity import canonical_json_sha256
 from core.trading_account_state import (
     TRADE_MUTATION_BUY,
+    TRADE_MUTATION_SELL,
     TRADE_MUTATION_MANUAL_MANAGED_BUY,
     TRADE_MUTATION_STRATEGY_BUY,
     TRADE_MUTATION_STRATEGY_BUY_INCREMENT,
@@ -33,7 +34,12 @@ from services.trading.account_state import (
     record_manual_trading_sell,
     record_strategy_trading_buy,
 )
-from services.trading.actual_fill_validation import validate_trading_actual_fill
+from services.trading.actual_fill_validation import (
+    validate_trading_actual_fill, validate_trading_fill_quantity, validate_pending_fill_terms,
+)
+from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.pending_entry_state import load_trading_pending_entry_state
+from services.trading.pending_entry_links import resolve_pending_entry_for_buy_event
 from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame, open_trading_v2_consumer_view
 from services.trading.order_state import get_trading_order_read_model
 from services.trading.scanner_state import load_trading_candidate_snapshot_for_account, load_trading_scanner_runtime
@@ -363,7 +369,7 @@ def preview_trading_account_buy(
     ticker_key = str(ticker or "").strip().upper()
     if not ticker_key:
         raise ValueError("股票代號必填")
-    qty_int = int(qty)
+    qty_int = validate_trading_fill_quantity(qty)
     if qty_int <= 0:
         raise ValueError("成交股數必須 > 0")
 
@@ -408,6 +414,7 @@ def preview_trading_account_buy(
     }
 
 
+@serialized_trading_state_mutation
 def record_trading_account_buy(
     project_root,
     *,
@@ -487,6 +494,7 @@ def _effective_transaction_event(project_root, transaction_revision: int) -> dic
     raise ValueError(f"找不到可修改的有效交易明細 revision={target}")
 
 
+@serialized_trading_state_mutation
 def correct_trading_account_transaction(
     project_root,
     *,
@@ -496,11 +504,12 @@ def correct_trading_account_transaction(
     trade_date,
     expected_account_revision: int | None = None,
 ):
-    """Correct an existing trade while preventing BUY edits from bypassing fill evidence checks."""
+    """Correct a trade with the same evidence and original-intent guards as entry."""
     event = _effective_transaction_event(project_root, int(transaction_revision))
     mutation = str(event.get("mutation_type") or "")
     details = dict(event.get("details") or {})
-    if mutation in _BUY_MUTATIONS:
+    qty = validate_trading_fill_quantity(qty)
+    if mutation in _BUY_MUTATIONS or mutation == TRADE_MUTATION_SELL:
         runtime = load_trading_scanner_runtime(project_root)
         latest_finalized_date = normalize_trading_date(
             runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
@@ -512,6 +521,14 @@ def correct_trading_account_transaction(
             trade_date=trade_date,
             latest_date=latest_finalized_date,
         )
+    if mutation in _BUY_MUTATIONS:
+        account = load_trading_account_state(project_root, required=True)
+        pending = load_trading_pending_entry_state(project_root, required=False) or {}
+        original_pending = resolve_pending_entry_for_buy_event(
+            event, (pending.get("entries") or {}).values(), account_events=account.get("events") or (),
+        )
+        if original_pending is not None:
+            validate_pending_fill_terms(original_pending, qty=qty, price=price, trade_date=trade_date)
     return correct_trading_transaction(
         project_root,
         transaction_revision=int(transaction_revision),
@@ -522,6 +539,7 @@ def correct_trading_account_transaction(
     )
 
 
+@serialized_trading_state_mutation
 def record_trading_account_inventory_sell(
     project_root,
     *,
@@ -534,6 +552,12 @@ def record_trading_account_inventory_sell(
 ):
     """Record actual broker SELL directly; broker-order lifecycle is not required."""
     ticker_key = str(ticker or "").strip().upper()
+    qty = validate_trading_fill_quantity(qty)
+    runtime = load_trading_scanner_runtime(project_root)
+    validate_trading_actual_fill(
+        project_root, ticker=ticker_key, price=price, trade_date=trade_date,
+        latest_date=runtime["latest_data_date"],
+    )
     account = record_manual_trading_sell(
         project_root,
         ticker=ticker_key,
