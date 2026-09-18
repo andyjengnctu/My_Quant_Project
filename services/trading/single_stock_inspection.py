@@ -752,10 +752,24 @@ def resolve_trading_single_stock_sidebar_state(
     )
 
 def _chart_date_labels(chart_payload: Mapping[str, Any]) -> list[str | None]:
-    labels = list(chart_payload.get("date_labels") or [])
+    raw_labels = chart_payload.get("date_labels")
+    labels = [] if raw_labels is None else list(raw_labels)
     if labels:
         return [_date_text(value) for value in labels]
-    return [_date_text(value) for value in list(chart_payload.get("dates") or [])]
+    raw_dates = chart_payload.get("dates")
+    return [_date_text(value) for value in ([] if raw_dates is None else list(raw_dates))]
+
+
+def _chart_series_values(chart_payload: Mapping[str, Any], key: str) -> list[Any]:
+    """Return one chart vector without evaluating array-like truthiness.
+
+    GUI chart payloads can carry NumPy arrays.  ``array or []`` attempts a
+    boolean conversion and raises for multi-element arrays, which previously
+    prevented manual-managed historical lifecycle replay from rendering at all.
+    """
+
+    raw = chart_payload.get(key)
+    return [] if raw is None else list(raw)
 
 
 
@@ -1606,15 +1620,16 @@ def _build_manual_managed_position_replay_timeline(
     date_labels = _chart_date_labels(chart_payload)
     total = len(date_labels)
     required = ("open", "high", "low", "close", "volume")
-    if total <= 0 or any(len(list(chart_payload.get(key) or [])) < total for key in required):
+    chart_values = {key: _chart_series_values(chart_payload, key) for key in required}
+    if total <= 0 or any(len(chart_values[key]) < total for key in required):
         return {}
     frame = pd.DataFrame(
         {
-            "Open": list(chart_payload.get("open") or [])[:total],
-            "High": list(chart_payload.get("high") or [])[:total],
-            "Low": list(chart_payload.get("low") or [])[:total],
-            "Close": list(chart_payload.get("close") or [])[:total],
-            "Volume": list(chart_payload.get("volume") or [])[:total],
+            "Open": chart_values["open"][:total],
+            "High": chart_values["high"][:total],
+            "Low": chart_values["low"][:total],
+            "Close": chart_values["close"][:total],
+            "Volume": chart_values["volume"][:total],
         },
         index=pd.to_datetime([value if value is not None else "NaT" for value in date_labels]),
     )

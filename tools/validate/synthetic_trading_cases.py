@@ -4880,6 +4880,29 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "sell_signal" in _manual_history_row0 and "sell_signal" in _manual_history_row1,
         ],
     )
+    _manual_activation_numpy_chart = deepcopy(_manual_activation_chart)
+    for _array_key in ("open", "high", "low", "close", "volume"):
+        _manual_activation_numpy_chart[_array_key] = pd.Series(
+            _manual_activation_numpy_chart[_array_key]
+        ).to_numpy()
+    _manual_activation_numpy_chart["date_labels"] = pd.Series(
+        _manual_activation_numpy_chart["date_labels"]
+    ).to_numpy()
+    _manual_activation_numpy_projected = project_trading_single_stock_chart_payload(
+        _manual_activation_numpy_chart, _manual_activation_inspection, params=base_params
+    )
+    check(
+        "workbench_single_stock_manual_managed_history_accepts_numpy_chart_vectors",
+        ["POSITION", "POSITION", True, True],
+        [
+            (_manual_activation_numpy_projected.get("trading_lifecycle_by_index", {}).get(0) or {}).get("state"),
+            (_manual_activation_numpy_projected.get("trading_lifecycle_by_index", {}).get(1) or {}).get("state"),
+            _manual_activation_numpy_projected["stop_line"][0]
+            == _manual_activation_numpy_projected["stop_line"][0],
+            _manual_activation_numpy_projected["tp_line"][1]
+            == _manual_activation_numpy_projected["tp_line"][1],
+        ],
+    )
     _overlay_order = deepcopy(_inspection_order["entry_orders"][0])
     _overlay_order["qty"] = 333
     _overlay_order["signal_date"] = "2026-09-14"
