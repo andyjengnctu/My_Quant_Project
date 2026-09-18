@@ -1034,14 +1034,14 @@ class TradingAccountPanel(ttk.Frame):
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("open", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal", "action")
+        columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
-            "open": "↗", "ticker": "股票", "entry_date": "買入日", "qty": "股數", "avg_cost": "均價", "current": "市價",
+            "open": "↗", "source": "來源", "ticker": "股票", "entry_date": "買入日", "qty": "股數", "avg_cost": "均價", "current": "市價",
             "stop": "目前Stop", "target": "停利線", "trailing": "Trailing",
-            "sell_signal": "SELL訊號", "action": "建議動作",
+            "sell_signal": "SELL訊號",
         }
-        widths = {"open": 36, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125, "action": 220}
+        widths = {"open": 36, "source": 90, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
@@ -3623,7 +3623,6 @@ class TradingAccountPanel(ttk.Frame):
             self._tree.delete(item)
         self._position_rows = {}
         source_labels = {"manual_adopted": "手動既有", "manual_managed": "手動管理", "strategy_fill": "策略成交"}
-        management_labels = {"unmanaged": "未接管", "active": "規則管理"}
         dashboard_positions = {
             str(row.get("ticker") or ""): dict(row)
             for row in list(self._account_dashboard_snapshot.get("positions") or [])
@@ -3643,23 +3642,22 @@ class TradingAccountPanel(ttk.Frame):
             }
             if ticker in forced_stop:
                 sell_signal = "STOP EXIT"
-                action = "建議賣出｜依 Stop 規則自行至券商處理"
             elif ticker in indicator_due:
                 sell_signal = "INDICATOR SELL"
-                action = "建議賣出｜自行至券商處理，成交後回帳務中心登錄"
             else:
                 sell_signal = "-"
-                action = "持有｜依目前 Stop / 停利線 / Trailing 管理" if str(row.get("source")) in {"strategy_fill", "manual_managed"} else "手動持股｜無策略接管"
+            source_key = str(row.get("source") or "")
+            source_text = source_labels.get(source_key, source_key or "-")
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
-                    "▣", ticker, row.get("entry_date") or "-", f"{int(row.get('qty') or 0):,}",
+                    "▣", source_text, ticker, row.get("entry_date") or "-", f"{int(row.get('qty') or 0):,}",
                     format_trading_money(row.get("average_cost")),
                     format_trading_money(row.get("current_price")),
                     format_trading_money(row.get("effective_stop")),
                     format_trading_money(row.get("target_price")),
                     format_trading_money(row.get("trailing_stop")),
-                    sell_signal, action,
+                    sell_signal,
                 ),
             )
         self._fit_tree_rows(self._tree, len(self._position_rows))

@@ -3943,7 +3943,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and 'earliest_exclusive_date=row.get("planned_trade_date")' in panel_source
         and '成交日必須晚於掛單日' in panel_source,
     )
-    check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
+    check(
+        "workbench_position_decisions_show_source_before_ticker_and_remove_suggested_action",
+        True,
+        'columns = ("open", "source", "ticker", "entry_date"' in panel_source
+        and '"source": "來源"' in panel_source
+        and 'source_text = source_labels.get(source_key, source_key or "-")' in panel_source
+        and '"action": "建議動作"' not in panel_source,
+    )
+    check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "source", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
     check(
         "workbench_direct_backfill_fill_date_and_price_use_canonical_constraints",
         True,
@@ -3956,7 +3964,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check("workbench_buy_entry_previews_market_evidence_before_confirmation", True, "preview_trading_account_buy(" in panel_source and "market_evidence" in panel_source)
     check("workbench_daily_workflow_labels_params_as_new_entry_without_reordering", True, '("2 持股日終推進", "rollforward")' in panel_source and '("3 套用新進場 Params", "params")' in panel_source)
-    check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
+    check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", source_text, ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
     _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in _direct_buy_section)
