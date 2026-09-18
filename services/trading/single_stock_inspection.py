@@ -33,7 +33,11 @@ from core.trading_order_state import (
     TRADING_ORDER_SIDE_BUY,
 )
 from services.trading.account_state import load_trading_account_state
-from services.trading.pending_entry_state import load_trading_pending_entry_state
+from services.trading.pending_entry_state import (
+    PENDING_ENTRY_STATUS_ACTIVE,
+    PENDING_ENTRY_STATUS_FILLED,
+    load_trading_pending_entry_state,
+)
 from services.trading.accounting_policy import overlay_trading_accounting_params
 from services.trading.order_state import load_trading_order_state
 from services.trading.protection_planning import get_trading_protection_plan_read_model
@@ -869,6 +873,12 @@ def _shadow_plan_from_strategy_buy_event(
 def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str | None) -> dict[str, Any] | None:
     if not isinstance(entry, Mapping):
         return None
+    status = str(entry.get("status") or "")
+    if status not in {PENDING_ENTRY_STATUS_ACTIVE, PENDING_ENTRY_STATUS_FILLED}:
+        # Cancelled/deleted intent remains in the pending-entry audit log, but it
+        # is no longer effective execution evidence and must not leak into the
+        # current Trading chart/sidebar lifecycle.
+        return None
     information_date = _date_text(entry.get("information_date"))
     if information_date is None:
         return None
@@ -876,17 +886,10 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
     manual_pending = origin == "manual_selected"
     signal_date = information_date if manual_pending else (_date_text(entry.get("signal_date")) or information_date)
     seed = dict(entry.get("execution_plan_seed") or {})
-    status = str(entry.get("status") or "")
     end_before = None
     end_date = last_date
-    if status == "FILLED":
+    if status == PENDING_ENTRY_STATUS_FILLED:
         end_before = _date_text((entry.get("fill") or {}).get("trade_date"))
-    elif status == "CANCELLED_NO_FILL":
-        end_date = information_date
-    elif status == "CANCELLED_USER_DELETED":
-        # User-deleted pre-market intent releases resources immediately and must
-        # not keep projecting the pending shadow plan into later bars.
-        end_date = _date_text(entry.get("planned_trade_date")) or information_date
     return {
         "signal_date": signal_date,
         "information_date": information_date,
@@ -1569,47 +1572,46 @@ def project_trading_single_stock_chart_payload(
             item["detail_text"] = ""
         signal_annotations.append(item)
 
-    # A manually selected pending entry is a user order intent, not a strategy BUY
-    # signal.  Re-label an existing buy anchor on that date or add one so the
-    # chart exposes the persisted Trading decision as 「掛單」.
+    # Pending-entry intent is a distinct Trading order layer, not a Research BUY
+    # signal.  Keep Research signal anchors intact and add a dedicated order
+    # annotation on the persisted planned_trade_date.  Cancelled/deleted rows
+    # remain auditable in pending-entry state but are intentionally absent from
+    # the current execution overlay.
     for pending in list(inspection.get("pending_entries") or []):
-        if str(pending.get("origin") or "") != "manual_selected":
+        status = str(pending.get("status") or "")
+        if status not in {PENDING_ENTRY_STATUS_ACTIVE, PENDING_ENTRY_STATUS_FILLED}:
             continue
-        pending_date = _date_text(pending.get("information_date"))
+        pending_date = _date_text(pending.get("planned_trade_date")) or _date_text(pending.get("information_date"))
         if pending_date is None or pending_date not in date_to_x:
             continue
         x = int(date_to_x[pending_date])
-        match = next((
-            item for item in signal_annotations
-            if int(item.get("x", -1)) == x and str(item.get("signal_type") or "").lower() == "buy"
-        ), None)
         meta = {
             "qty": int(pending.get("planned_qty") or 0),
             "reserved_capital": pending.get("reserved_cost"),
             "pending_entry_id": pending.get("pending_entry_id"),
-            "status": pending.get("status"),
+            "status": status,
+            "planned_trade_date": pending_date,
+            "information_date": _date_text(pending.get("information_date")),
+            "origin": pending.get("origin"),
+            "limit_price": pending.get("limit_price"),
+            "canonical_trading_pending": True,
         }
-        if match is not None:
-            match["title"] = "掛單"
-            match["detail_text"] = ""
-            match["meta"] = meta
-        else:
-            highs = payload.get("high")
-            anchor = None
-            try:
-                anchor = float(highs[x])
-            except (TypeError, ValueError, IndexError):
-                anchor = float(pending.get("limit_price") or 0.0)
-            signal_annotations.append({
-                "date": pending_date,
-                "x": x,
-                "anchor_price": anchor,
-                "signal_type": "buy",
-                "title": "掛單",
-                "detail_text": "",
-                "note": "Trading 手動掛單",
-                "meta": meta,
-            })
+        highs = payload.get("high")
+        anchor = None
+        try:
+            anchor = float(highs[x])
+        except (TypeError, ValueError, IndexError):
+            anchor = float(pending.get("limit_price") or 0.0)
+        signal_annotations.append({
+            "date": pending_date,
+            "x": x,
+            "anchor_price": anchor,
+            "signal_type": "buy",
+            "title": "掛單",
+            "detail_text": "",
+            "note": "Trading 掛單",
+            "meta": meta,
+        })
     signal_annotations.sort(key=lambda item: (int(item.get("x", -1)), str(item.get("title") or "")))
     payload["signal_annotations"] = signal_annotations
 

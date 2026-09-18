@@ -7,21 +7,37 @@ from tkinter import ttk
 
 from core.runtime_utils import get_taipei_now
 from services.workbench_ui.workbench import (
-    WORKBENCH_ACCENT,
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
     WORKBENCH_ENTRY_STYLE,
+    WORKBENCH_ERROR,
     WORKBENCH_FRAME_STYLE,
     WORKBENCH_INFO,
     WORKBENCH_LABEL_STYLE,
     WORKBENCH_LABELLF_STYLE,
     WORKBENCH_MUTED,
-    WORKBENCH_SURFACE,
-    WORKBENCH_SURFACE_ALT,
+    WORKBENCH_SUCCESS,
     WORKBENCH_TEXT,
     WORKBENCH_UI_FONT,
+    WORKBENCH_WARNING,
     _warn_gui_fallback,
 )
+
+
+# Calendar states deliberately use different hue families instead of subtle
+# shades of the Workbench blue.  On the dark Workbench surface this makes
+# selectable (green), selected (amber), today (cyan), and disabled (gray)
+# distinguishable at a glance.
+CALENDAR_SELECTABLE_BG = "#10261d"
+CALENDAR_SELECTABLE_FG = WORKBENCH_SUCCESS
+CALENDAR_SELECTED_BG = WORKBENCH_WARNING
+CALENDAR_SELECTED_FG = WORKBENCH_BG
+CALENDAR_SELECTED_BORDER = "#fff3c4"
+CALENDAR_INVALID_SELECTED_BG = "#4a1717"
+CALENDAR_INVALID_SELECTED_FG = "#ffd5d5"
+CALENDAR_DISABLED_FG = "#596574"
+CALENDAR_TODAY_BG = "#10283a"
+CALENDAR_SELECTED_FONT = (WORKBENCH_UI_FONT[0], WORKBENCH_UI_FONT[1], "bold")
 
 
 class DatePickerField(ttk.Frame):
@@ -167,18 +183,36 @@ class DatePickerField(ttk.Frame):
                 selectable = self._is_selectable(current)
                 selected = current == self._selected_date()
                 today = current == get_taipei_now().date()
-                if selected:
-                    background = WORKBENCH_ACCENT
-                    foreground = WORKBENCH_TEXT
+                if selected and selectable:
+                    background = CALENDAR_SELECTED_BG
+                    foreground = CALENDAR_SELECTED_FG
+                    border = CALENDAR_SELECTED_BORDER
+                    border_width = 3
+                    button_font = CALENDAR_SELECTED_FONT
+                elif selected:
+                    background = CALENDAR_INVALID_SELECTED_BG
+                    foreground = CALENDAR_INVALID_SELECTED_FG
+                    border = WORKBENCH_ERROR
+                    border_width = 2
+                    button_font = CALENDAR_SELECTED_FONT
                 elif today:
-                    background = WORKBENCH_SURFACE_ALT
+                    background = CALENDAR_TODAY_BG
                     foreground = WORKBENCH_INFO
+                    border = WORKBENCH_INFO
+                    border_width = 2
+                    button_font = WORKBENCH_UI_FONT
                 elif selectable:
-                    background = WORKBENCH_SURFACE
-                    foreground = WORKBENCH_TEXT
+                    background = CALENDAR_SELECTABLE_BG
+                    foreground = CALENDAR_SELECTABLE_FG
+                    border = WORKBENCH_SUCCESS
+                    border_width = 1
+                    button_font = WORKBENCH_UI_FONT
                 else:
                     background = WORKBENCH_BG
-                    foreground = WORKBENCH_MUTED
+                    foreground = CALENDAR_DISABLED_FG
+                    border = WORKBENCH_BG
+                    border_width = 0
+                    button_font = WORKBENCH_UI_FONT
                 button = tk.Button(
                     body,
                     text=str(day),
@@ -187,15 +221,15 @@ class DatePickerField(ttk.Frame):
                     state="normal" if selectable else "disabled",
                     bg=background,
                     fg=foreground,
-                    disabledforeground=WORKBENCH_MUTED,
-                    activebackground=WORKBENCH_ACCENT,
-                    activeforeground=WORKBENCH_TEXT,
-                    highlightbackground=WORKBENCH_INFO if today and not selected else background,
-                    highlightcolor=WORKBENCH_INFO,
-                    highlightthickness=1 if today and not selected else 0,
+                    disabledforeground=foreground,
+                    activebackground=CALENDAR_SELECTED_BG if selectable else background,
+                    activeforeground=CALENDAR_SELECTED_FG if selectable else foreground,
+                    highlightbackground=border,
+                    highlightcolor=border,
+                    highlightthickness=border_width,
                     relief="flat",
                     bd=0,
-                    font=WORKBENCH_UI_FONT,
+                    font=button_font,
                     cursor="hand2" if selectable else "arrow",
                 )
                 button.grid(row=row_idx, column=col_idx, padx=1, pady=1)

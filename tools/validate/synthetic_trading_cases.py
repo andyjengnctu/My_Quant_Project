@@ -3830,7 +3830,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）", "確認掛單", "確認成交 → 持股", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("今日 Scanner Pool", "掛單區", "掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）", "確認掛單", "確認成交", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
     check("workbench_pending_scanner_and_manual_share_one_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_limit_var", "_pending_fill_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
@@ -3886,11 +3886,18 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             'textvariable=self._pending_fill_price_var',
             'state="disabled"',
             '("買入限價", 12)',
-            '("成交價", 12)',
             '("掛單日", 12)',
             '("成交日", 12)',
+            '("成交價", 12)',
             'self._pending_fill_date_field = DatePickerField',
         )),
+    )
+    check(
+        "workbench_pending_fill_date_precedes_fill_price_in_form",
+        True,
+        pending_ui_source.find('("成交日", 12)') < pending_ui_source.find('("成交價", 12)')
+        and 'self._pending_fill_date_field.grid(row=1, column=5' in pending_ui_source
+        and 'self._pending_fill_price_combo.grid(row=1, column=6' in pending_ui_source,
     )
     check(
         "workbench_pending_buy_limit_is_auto_calculated_not_user_override",
@@ -3914,12 +3921,19 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check(
         "workbench_selected_pending_exposes_fill_controls_without_intermediate_fill_mode",
         True,
-        'text="確認成交 → 持股"' in panel_source
+        'text="確認成交"' in panel_source
+        and '確認成交 → 持股' not in panel_source
         and 'text="輸入成交"' not in panel_source
         and 'text="返回改掛單"' not in panel_source
         and '_pending_form_mode' not in panel_source
         and 'self._pending_fill_date_var' in panel_source
         and 'self._pending_fill_price_var' in panel_source,
+    )
+    check(
+        "workbench_pending_form_has_no_redundant_cancel_selection_button",
+        True,
+        'text="取消選取"' not in pending_ui_source
+        and '_pending_cancel_edit_button' not in pending_ui_source,
     )
     check(
         "workbench_pending_fill_calendar_is_separate_and_strictly_after_order_date",
@@ -3965,7 +3979,20 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     date_picker_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "date_picker.py").read_text(encoding="utf-8")
     check("workbench_date_inputs_open_calendar_from_date_field", True, "DatePickerField" in panel_source and "DatePickerField" in accounting_source and 'self.entry.bind("<Button-1>", self._on_entry_click' in date_picker_source and 'text="日曆"' not in date_picker_source)
-    check("workbench_date_picker_supports_state_driven_disabled_selected_today_visuals", True, all(token in date_picker_source for token in ("def set_allowed_dates", 'state="normal" if selectable else "disabled"', "if selected:", "elif today:", "WORKBENCH_ACCENT", "WORKBENCH_INFO")))
+    check(
+        "workbench_date_picker_supports_high_contrast_state_palette",
+        True,
+        all(token in date_picker_source for token in (
+            "def set_allowed_dates",
+            'state="normal" if selectable else "disabled"',
+            "if selected and selectable:",
+            "CALENDAR_SELECTABLE_FG = WORKBENCH_SUCCESS",
+            "CALENDAR_SELECTED_BG = WORKBENCH_WARNING",
+            "CALENDAR_DISABLED_FG = \"#596574\"",
+            "CALENDAR_TODAY_BG = \"#10283a\"",
+            "highlightthickness=border_width",
+        )),
+    )
     pending_service_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "pending_entry_service.py").read_text(encoding="utf-8")
     constraint_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "order_form_constraints.py").read_text(encoding="utf-8")
     check(

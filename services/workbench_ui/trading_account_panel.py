@@ -1115,8 +1115,8 @@ class TradingAccountPanel(ttk.Frame):
             ("數量", 10),
             ("買入限價", 12),
             ("掛單日", 12),
-            ("成交價", 12),
             ("成交日", 12),
+            ("成交價", 12),
         )
         for col, (label, _width) in enumerate(draft_labels):
             ttk.Label(pending_actions, text=label, style=WORKBENCH_LABEL_STYLE).grid(
@@ -1150,6 +1150,10 @@ class TradingAccountPanel(ttk.Frame):
             pending_actions, textvariable=self._pending_order_date_var, width=12, allowed_dates=()
         )
         self._pending_order_date_field.grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_fill_date_field = DatePickerField(
+            pending_actions, textvariable=self._pending_fill_date_var, width=12, allowed_dates=()
+        )
+        self._pending_fill_date_field.grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_fill_price_combo = ttk.Combobox(
             pending_actions,
             textvariable=self._pending_fill_price_var,
@@ -1158,11 +1162,7 @@ class TradingAccountPanel(ttk.Frame):
             state="disabled",
             style=WORKBENCH_COMBO_STYLE,
         )
-        self._pending_fill_price_combo.grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
-        self._pending_fill_date_field = DatePickerField(
-            pending_actions, textvariable=self._pending_fill_date_var, width=12, allowed_dates=()
-        )
-        self._pending_fill_date_field.grid(row=1, column=6, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_fill_price_combo.grid(row=1, column=6, sticky="ew", padx=(8, 0), pady=(4, 0))
         for draft_var in (self._pending_order_qty_var, self._pending_order_date_var):
             draft_var.trace_add("write", self._schedule_pending_value_preview)
         self._pending_fill_date_var.trace_add("write", self._schedule_pending_fill_preview)
@@ -1175,7 +1175,7 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_submit_button.pack(side="left")
         self._pending_fill_button = ttk.Button(
             pending_draft_buttons,
-            text="確認成交 → 持股",
+            text="確認成交",
             command=self._confirm_pending_fill,
             style=WORKBENCH_BUTTON_STYLE,
             state="disabled",
@@ -1189,10 +1189,6 @@ class TradingAccountPanel(ttk.Frame):
             state="disabled",
         )
         self._pending_delete_button.pack(side="left", padx=(8, 0))
-        self._pending_cancel_edit_button = ttk.Button(
-            pending_draft_buttons, text="取消選取", command=self._cancel_pending_edit, style=WORKBENCH_BUTTON_STYLE, state="disabled"
-        )
-        self._pending_cancel_edit_button.pack(side="left", padx=(8, 0))
         self._pending_draft_preview_var = tk.StringVar(value="輸入手動股票或從 Scanner Pool 選取股票後，系統會自動帶入買入限價、數量、日期與盤前管理資訊。")
         _TradingStatusLine(
             pending_actions,
@@ -2375,13 +2371,11 @@ class TradingAccountPanel(ttk.Frame):
             )
         if hasattr(self, "_pending_fill_button"):
             self._pending_fill_button.configure(
-                text="確認成交 → 持股",
+                text="確認成交",
                 state="disabled",
             )
         if hasattr(self, "_pending_delete_button"):
             self._pending_delete_button.configure(state="normal" if editing else "disabled")
-        if hasattr(self, "_pending_cancel_edit_button"):
-            self._pending_cancel_edit_button.configure(state="normal" if editing else "disabled")
 
 
     def _set_pending_edit_mode(self, pending_entry_id: str | None) -> None:
@@ -2422,10 +2416,6 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_draft_preview_var.set(
             message or "輸入股票或從 Scanner Pool 選取股票；買入限價自動計算，修改數量／日期後會自動更新盤前資訊。"
         )
-
-    def _cancel_pending_edit(self):
-        clear_treeview_selection(self._pending_tree)
-        self._reset_pending_draft_form(message="已取消選取；目前為新增掛單模式。")
 
     def _on_candidate_selected(self, row):
         ticker = str((row or {}).get("ticker") or "").strip().upper()
@@ -2762,7 +2752,7 @@ class TradingAccountPanel(ttk.Frame):
         valid_date = bool(editing and fill_date and fill_date in set(constraints.get("allowed_dates") or ()))
         valid_price = bool(fill_price_text and fill_price_text in self._pending_price_option_set)
         self._pending_fill_button.configure(
-            text="確認成交 → 持股",
+            text="確認成交",
             state="normal" if valid_date and valid_price else "disabled",
         )
         if fill_date and self._pending_fill_price_var.get().strip() and not valid_price:
