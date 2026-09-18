@@ -3702,20 +3702,6 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("scheduler_spec_uses_windowless_python_launcher", "pythonw.exe", Path(str(scheduler_spec["execute"])).name.lower())
     check("scheduler_spec_avoids_powershell_runtime_launcher", False, "powershell" in str(scheduler_spec["execute"]).lower())
     check("scheduler_spec_runs_worker_quietly", True, "--quiet" in str(scheduler_spec["arguments"]).split())
-    from contextlib import redirect_stdout
-    import io
-    from apps.market_data_auto_update import main as run_market_data_auto_update_app
-    quiet_output = io.StringIO()
-    with patch(
-        "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
-        return_value={"status": "READY"},
-    ):
-        with redirect_stdout(quiet_output):
-            quiet_exit_code = run_market_data_auto_update_app(
-                ["market_data_auto_update.py", "--project-root", str(Path.cwd()), "--quiet"]
-            )
-    check("scheduler_worker_quiet_mode_suppresses_console_output", "", quiet_output.getvalue())
-    check("scheduler_worker_quiet_mode_preserves_success_exit_code", 0, quiet_exit_code)
     unsupported_scheduler = get_market_data_scheduler_status(Path.cwd(), platform_name="posix")
     check("scheduler_non_windows_status_is_local_unsupported", SCHEDULER_STATUS_UNSUPPORTED, unsupported_scheduler["status"])
 

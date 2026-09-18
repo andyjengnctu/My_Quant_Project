@@ -896,6 +896,7 @@ def validate_extended_tool_cli_contract_case(_base_params):
     case_id = "CLI_EXTENDED_TOOL_CONTRACT"
     results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
+    app_market_data_auto_update = importlib.import_module("apps.market_data_auto_update")
     app_test_suite = importlib.import_module("apps.test_suite")
     app_workbench = importlib.import_module("apps.workbench")
     optimizer_main = importlib.import_module("tools.optimizer.main")
@@ -926,6 +927,22 @@ def validate_extended_tool_cli_contract_case(_base_params):
         ("apps/test_suite.py", app_test_suite.main, {}),
         ("apps/workbench.py", app_workbench.main, {}),
     ]
+
+    with patch(
+        "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
+        return_value={"status": "READY"},
+    ):
+        quiet_rc, quiet_stdout = _capture_stdout(
+            app_market_data_auto_update.main,
+            [
+                "apps/market_data_auto_update.py",
+                "--project-root",
+                str(Path.cwd()),
+                "--quiet",
+            ],
+        )
+    check("market_data_auto_update_quiet_exit_code", 0, quiet_rc)
+    check("market_data_auto_update_quiet_suppresses_stdout", "", quiet_stdout)
 
     workbench_entry_source = Path(app_workbench.__file__).read_text(encoding="utf-8")
     check_true(

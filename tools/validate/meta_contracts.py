@@ -32,6 +32,7 @@ SYNTHETIC_INTERACTIVE_IMPORT_EXEMPTIONS: Dict[str, Tuple[str, ...]] = {
     "tools/validate/synthetic_breakout_quality_audit_cases.py": ("apps.research",),
     "tools/validate/synthetic_breakout_quality_strategy_plan_cases.py": ("apps.research",),
     "tools/validate/synthetic_cli_cases.py": (
+        "apps.market_data_auto_update",
         "apps.package_zip",
         "apps.smart_downloader",
         "apps.test_suite",
