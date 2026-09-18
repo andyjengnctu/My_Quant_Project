@@ -56,6 +56,7 @@ NEXT_RECOVER_FILL = "RECOVER_FILL_TRANSACTION"
 NEXT_INITIALIZE_ACCOUNT = "INITIALIZE_ACCOUNT"
 NEXT_SET_CASH = "SET_CASH"
 NEXT_ROLLFORWARD_POSITIONS = "ROLLFORWARD_POSITIONS"
+NEXT_SYNC_LIFECYCLE = "SYNC_LIFECYCLE"
 NEXT_REPLACE_PROTECTION = "REPLACE_STALE_PROTECTION"
 NEXT_REFRESH_PROTECTION = "REFRESH_PROTECTION_PLAN"
 NEXT_SUBMIT_PROTECTION_STOP = "SUBMIT_PROTECTION_STOP"
@@ -206,7 +207,9 @@ def _workflow_action_availability(
     account_ready = bool(account.get("initialized")) and account.get("cash") is not None
     return {
         "data": True,
-        "rollforward": bool(account_ready and latest_data_date and rollforward_due_count > 0),
+        # Lifecycle synchronization is automatic.  A due position is an
+        # operational sync failure/pending state, never a user workflow step.
+        "rollforward": False,
         "params": bool(latest_data_date and trading_data_ready),
         "scanner": bool(trading_data_ready and workflow.get("params_ready_for_scan")),
         # Primary Trading is not a broker OMS.  Legacy active/stale order state
@@ -556,14 +559,14 @@ def derive_trading_operations_status(
         )
     elif "position_rollforward" in errors:
         overall = OPERATIONS_STATUS_BLOCKED
-        next_code = NEXT_ROLLFORWARD_POSITIONS
-        next_label = "修正第 2 步持股日終推進狀態"
+        next_code = NEXT_SYNC_LIFECYCLE
+        next_label = "修正 Trading lifecycle 自動同步"
         next_detail = errors["position_rollforward"]
     elif rollforward_due_tickers:
-        overall = OPERATIONS_STATUS_ACTION_REQUIRED
-        next_code = NEXT_ROLLFORWARD_POSITIONS
-        next_label = "2 持股日終推進"
-        next_detail = "用已完成日K與各持股 immutable strategy lineage frozen params 更新下一交易日 trailing stop: " + ",".join(rollforward_due_tickers)
+        overall = OPERATIONS_STATUS_BLOCKED
+        next_code = NEXT_SYNC_LIFECYCLE
+        next_label = "等待／修正 Trading lifecycle 自動同步"
+        next_detail = "持股尚未自動同步到 latest finalized state；不得改由人工 rollforward 規避：" + ",".join(rollforward_due_tickers)
     elif "indicator_exit" in errors:
         overall = OPERATIONS_STATUS_BLOCKED
         next_code = NEXT_REFRESH_INDICATOR_EXIT
@@ -582,7 +585,7 @@ def derive_trading_operations_status(
     elif not bool(workflow.get("params_ready_for_scan")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_UPDATE_PARAMS
-        next_label = "3 套用 Trading Params"
+        next_label = "2 套用 Trading Params"
         if bool(workflow.get("params_reusable")):
             next_detail = "可選擇沿用既有 Params 綁定至目前 Trading data，或重新訓練 Params；兩者皆須解析為單一 runtime member。"
         else:
@@ -590,7 +593,7 @@ def derive_trading_operations_status(
     elif not bool(candidate.get("fresh")):
         overall = OPERATIONS_STATUS_READY
         next_code = NEXT_RUN_SCANNER
-        next_label = "4 Scanner 候選"
+        next_label = "3 Scanner 候選"
         next_detail = "建立綁定目前 Trading data／Params 的 fresh candidate snapshot。"
     elif same_session_sell_locked:
         overall = OPERATIONS_STATUS_LOCKED_TODAY

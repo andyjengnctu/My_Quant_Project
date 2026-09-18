@@ -1269,34 +1269,35 @@ def validate_trading_daily_workflow_contract_case(base_params):
 
     call_order = []
     with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: call_order.append("data") or {"status": "READY"}), \
-         patch("services.trading.position_rollforward.run_trading_position_rollforward", side_effect=lambda **_kwargs: call_order.append("rollforward") or {"status": "UP_TO_DATE"}), \
+         patch("services.trading.lifecycle_sync.run_trading_lifecycle_sync", side_effect=lambda **_kwargs: call_order.append("lifecycle_sync") or {"status": "最新", "position_result": {"status": "UP_TO_DATE"}}), \
          patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", side_effect=lambda **_kwargs: call_order.append("indicator") or {"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}), \
          patch.object(daily_workflow, "run_trading_strategy_param_training", side_effect=lambda **_kwargs: call_order.append("params") or {"status": "READY"}), \
          patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
         workflow_result = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
-    check("daily_workflow_executes_data_rollforward_indicator_params_scanner_in_order", ["data", "rollforward", "indicator", "params", "scanner"], call_order)
+    check("daily_workflow_executes_data_lifecycle_sync_indicator_params_scanner_in_order", ["data", "lifecycle_sync", "indicator", "params", "scanner"], call_order)
+    check("daily_workflow_returns_lifecycle_sync_snapshot", "最新", (workflow_result.get("lifecycle_sync") or {}).get("status"))
     check("daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
 
     reuse_call_order = []
     with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: reuse_call_order.append("data") or {"status": "READY"}), \
-         patch("services.trading.position_rollforward.run_trading_position_rollforward", side_effect=lambda **_kwargs: reuse_call_order.append("rollforward") or {"status": "UP_TO_DATE"}), \
+         patch("services.trading.lifecycle_sync.run_trading_lifecycle_sync", side_effect=lambda **_kwargs: reuse_call_order.append("lifecycle_sync") or {"status": "最新", "position_result": {"status": "UP_TO_DATE"}}), \
          patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", side_effect=lambda **_kwargs: reuse_call_order.append("indicator") or {"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}), \
          patch.object(daily_workflow, "reuse_trading_strategy_params", side_effect=lambda **_kwargs: reuse_call_order.append("reuse") or {"status": "READY"}), \
          patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: reuse_call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
         reuse_workflow_result = daily_workflow.run_trading_daily_workflow(
             project_root=project_root, environ={}, param_mode=daily_workflow.TRADING_PARAM_MODE_REUSE
         )
-    check("daily_workflow_reuse_mode_skips_param_retraining", ["data", "rollforward", "indicator", "reuse", "scanner"], reuse_call_order)
+    check("daily_workflow_reuse_mode_skips_param_retraining", ["data", "lifecycle_sync", "indicator", "reuse", "scanner"], reuse_call_order)
     check("daily_workflow_reuse_mode_returns_ready", "READY", reuse_workflow_result.get("status"))
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
-    check("workbench_exposes_separate_rollforward_button", True, '"2 持股日終推進"' in panel_source)
-    check("workbench_exposes_separate_param_button", True, '"3 套用新進場 Params"' in panel_source)
+    check("workbench_removes_manual_position_rollforward_button", True, '持股日終推進' not in panel_source)
+    check("workbench_exposes_separate_param_button", True, '"2 套用新進場 Params"' in panel_source)
     check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
     check("workbench_uses_shared_downloader_console_progress", True, "MarketDataDailyConsoleProgress" in panel_source)
-    check("workbench_exposes_scanner_button", True, '"4 Scanner 候選"' in panel_source)
-    check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3→4"' in panel_source)
+    check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
+    check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "今日 Scanner Pool" in panel_source and "advanced_notebook.grid(" not in panel_source)
     check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數", "策略 / Params")))
@@ -2828,20 +2829,21 @@ def validate_trading_position_rollforward_contract_case(base_params):
     check("read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
     check("rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
     check(
-        "workbench_exposes_explicit_position_rollforward_action",
+        "workbench_removes_explicit_position_rollforward_action",
         True,
-        '("2 持股日終推進", "rollforward")' in panel_source
-        and 'if action == "rollforward"' in panel_source,
+        '("2 持股日終推進", "rollforward")' not in panel_source
+        and 'if action == "rollforward"' not in panel_source
+        and 'run_trading_lifecycle_sync' in panel_source,
     )
     workflow_step_tokens = (
         "data_result = run_trading_market_data_update",
-        "rollforward_result = run_trading_position_rollforward",
+        "lifecycle_sync_result = run_trading_lifecycle_sync",
         "indicator_result = build_trading_indicator_exit_plan",
         "param_result = run_trading_param_step",
     )
     workflow_step_positions = [daily_source.find(token) for token in workflow_step_tokens]
     check(
-        "daily_workflow_orders_rollforward_and_indicator_after_data_before_param_step",
+        "daily_workflow_orders_lifecycle_sync_and_indicator_after_data_before_param_step",
         True,
         all(position >= 0 for position in workflow_step_positions) and workflow_step_positions == sorted(workflow_step_positions),
     )
@@ -2911,6 +2913,7 @@ def validate_trading_operations_status_contract_case(base_params):
         NEXT_REFRESH_PROTECTION,
         NEXT_REPLACE_PROTECTION,
         NEXT_ROLLFORWARD_POSITIONS,
+        NEXT_SYNC_LIFECYCLE,
         NEXT_RUN_SCANNER,
         NEXT_SET_CASH,
         NEXT_SUBMIT_PROPOSED,
@@ -3011,8 +3014,8 @@ def validate_trading_operations_status_contract_case(base_params):
         "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "entry_order_id": "ENTRY-2317", "management_status": "active"}],
     }
     rollforward_due = derive(account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
-    check("due_strategy_position_requires_rollforward_before_protection_or_allocation", NEXT_ROLLFORWARD_POSITIONS, rollforward_due["next_action_code"])
-    check("due_strategy_position_enables_explicit_rollforward_action", True, rollforward_due["workflow_action_availability"]["rollforward"])
+    check("due_strategy_position_requires_automatic_lifecycle_sync_before_allocation", NEXT_SYNC_LIFECYCLE, rollforward_due["next_action_code"])
+    check("due_strategy_position_does_not_expose_manual_rollforward_action", False, rollforward_due["workflow_action_availability"]["rollforward"])
     check("due_strategy_position_blocks_new_allocation_until_advanced", False, rollforward_due["workflow_action_availability"]["orders"])
 
     missing_stop = derive(account=strategy_account)
@@ -3076,8 +3079,8 @@ def validate_trading_operations_status_contract_case(base_params):
     check("active_legacy_entry_buy_does_not_override_primary_trading_next_action", NEXT_BUILD_PROPOSED, active_entry["next_action_code"])
     check("active_legacy_entry_buy_does_not_block_new_allocation", True, active_entry["workflow_action_availability"]["orders"])
     active_entry_with_due = derive(orders=active_entry_orders, account=strategy_account, position_rollforward={"due_tickers": ["2317"]})
-    check("position_rollforward_precedes_hidden_legacy_entry_reconciliation", NEXT_ROLLFORWARD_POSITIONS, active_entry_with_due["next_action_code"])
-    check("active_legacy_entry_does_not_disable_rollforward", True, active_entry_with_due["workflow_action_availability"]["rollforward"])
+    check("position_sync_precedes_hidden_legacy_entry_reconciliation", NEXT_SYNC_LIFECYCLE, active_entry_with_due["next_action_code"])
+    check("active_legacy_entry_does_not_expose_manual_rollforward", False, active_entry_with_due["workflow_action_availability"]["rollforward"])
 
     stale_params = derive(workflow={"latest_data_date": "2026-09-04", "params_ready_for_scan": False})
     check("stale_params_require_update_params", NEXT_UPDATE_PARAMS, stale_params["next_action_code"])
@@ -3474,7 +3477,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.workbench_ui.trading_account_panel import build_trading_account_panel_initial_bundle
     with tempfile.TemporaryDirectory() as temp_dir:
         initial_bundle = build_trading_account_panel_initial_bundle(Path(temp_dir))
-    expected_initial_keys = {"reconcile", "account", "dashboard", "candidate_read", "candidate_payload", "protection", "indicator", "workflow", "pending", "operations"}
+    expected_initial_keys = {"reconcile", "lifecycle_sync", "account", "dashboard", "candidate_read", "candidate_payload", "protection", "indicator", "workflow", "pending", "operations"}
     check("workbench_trading_initial_bundle_has_all_canonical_read_models", expected_initial_keys, set(initial_bundle))
     check_true("workbench_trading_initial_bundle_reads_empty_state_without_exception", all(bool(value[0]) for value in initial_bundle.values()))
 
@@ -4223,6 +4226,14 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         )),
     )
     check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
+    check(
+        "workbench_pending_status_summary_does_not_duplicate_per_row_sync_status",
+        True,
+        'f"掛單 {len(active_rows)}｜最新 {latest_count}｜待同步 {pending_count}｜同步失敗 {failed_count}｜"' not in panel_source
+        and 'latest_count = sum(' not in panel_source
+        and 'pending_count = sum(' not in panel_source
+        and 'failed_count = sum(' not in panel_source,
+    )
     pending_ui_source = panel_source.split('pending_box = ttk.LabelFrame(content, text="掛單區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[0]
     check(
         "workbench_pending_table_uses_requested_schema_without_trailing",
@@ -4410,12 +4421,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "workbench_holding_area_uses_requested_source_first_schema_without_trailing_or_suggested_action",
         True,
         'text="持股區"' in panel_source
-        and 'columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal")' in panel_source
+        and 'columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")' in panel_source
         and '"source": "來源"' in panel_source
         and '"entry_date": "成交日"' in panel_source
         and '"stop": "停損"' in panel_source
         and '"target": "停利"' in panel_source
         and '"sell_signal": "賣出訊號"' in panel_source
+        and '"status": "狀態"' in panel_source
         and 'source_text = trading_source_display_label(source=row.get("source"))' in panel_source
         and '"trailing": "Trailing"' not in panel_source.split('table_box = ttk.LabelFrame(content, text="持股區"', 1)[1].split('candidate_box = ttk.LabelFrame', 1)[0]
         and '"action": "建議動作"' not in panel_source,
@@ -4478,7 +4490,56 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         )),
     )
     check("workbench_buy_entry_previews_market_evidence_before_confirmation", True, "preview_trading_account_buy(" in panel_source and "market_evidence" in panel_source)
-    check("workbench_daily_workflow_labels_params_as_new_entry_without_reordering", True, '("2 持股日終推進", "rollforward")' in panel_source and '("3 套用新進場 Params", "params")' in panel_source)
+    check(
+        "workbench_daily_workflow_auto_syncs_lifecycle_without_manual_rollforward_button",
+        True,
+        '("2 持股日終推進", "rollforward")' not in panel_source
+        and '("2 套用新進場 Params", "params")' in panel_source
+        and '("3 Scanner 候選", "scanner")' in panel_source
+        and 'run_trading_lifecycle_sync' in panel_source
+        and 'bundle["lifecycle_sync"]' in panel_source,
+    )
+    check(
+        "workbench_pending_and_holding_share_latest_pending_failed_sync_status_vocabulary",
+        True,
+        all(token in panel_source for token in (
+            'SYNC_STATUS_LATEST', 'SYNC_STATUS_PENDING', 'SYNC_STATUS_FAILED',
+            'status = str(row.get("sync_status")',
+            'sync_status = position_status_by_ticker.get(ticker, SYNC_STATUS_LATEST)',
+        )),
+    )
+    lifecycle_sync_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "lifecycle_sync.py").read_text(encoding="utf-8")
+    check(
+        "trading_lifecycle_sync_advances_pending_and_positions_with_frozen_lineage",
+        True,
+        all(token in lifecycle_sync_source for token in (
+            'lineage = dict(entry.get("management_lineage") or {})',
+            'frozen_params = lineage.get("frozen_params")',
+            'build_prefill_lifecycle_timeline(',
+            'replacement["evaluated_through_date"] = latest_finalized_date',
+            'run_trading_position_rollforward(root)',
+        )),
+    )
+    _sync_projection_state = {
+        "revision": 1,
+        "updated_at": None,
+        "entries": {
+            "PENDING-SYNC": {
+                "pending_entry_id": "PENDING-SYNC",
+                "status": "ACTIVE",
+                "ticker": "2330",
+                "information_date": "2026-09-15",
+                "evaluated_through_date": "2026-09-18",
+                "created_at": "2026-09-15T00:00:00+08:00",
+                "reserved_cost_milli": 1000,
+            }
+        },
+    }
+    _synced_projection = project_trading_pending_entry_state(
+        _sync_projection_state,
+        current_information_date="2026-09-18",
+    )
+    check("pending_sync_freshness_uses_evaluated_through_date_not_original_information_date", 0, _synced_projection["stale_active_count"])
     check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", source_text, ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
     _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]

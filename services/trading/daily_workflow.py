@@ -252,14 +252,15 @@ def run_trading_daily_workflow(
     data_quota_wait_fn=None,
 ) -> dict[str, Any]:
     from services.trading.indicator_exit_planning import build_trading_indicator_exit_plan
-    from services.trading.position_rollforward import run_trading_position_rollforward
+    from services.trading.lifecycle_sync import run_trading_lifecycle_sync
 
     data_result = run_trading_market_data_update(
         project_root=project_root,
         progress_fn=data_progress_fn,
         quota_wait_fn=data_quota_wait_fn,
     )
-    rollforward_result = run_trading_position_rollforward(project_root=project_root)
+    lifecycle_sync_result = run_trading_lifecycle_sync(project_root=project_root)
+    rollforward_result = dict(lifecycle_sync_result.get("position_result") or {})
     if str(rollforward_result.get("status") or "") == "NO_ACCOUNT":
         indicator_result = {"status": "NO_ACCOUNT", "exit_count": 0, "exits": []}
     else:
@@ -274,6 +275,7 @@ def run_trading_daily_workflow(
         "status": "READY",
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "data": data_result,
+        "lifecycle_sync": lifecycle_sync_result,
         "position_rollforward": rollforward_result,
         "indicator_exit": indicator_result,
         "params": param_result,

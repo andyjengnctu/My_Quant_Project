@@ -91,6 +91,12 @@ def validate_trading_pending_entry_state(state: dict[str, Any]) -> None:
             raise ValueError(f"Trading pending entry status 不合法: {entry_id}/{status}")
         normalize_trading_ticker(raw.get("ticker"))
         normalize_trading_date(raw.get("information_date"), field_name="information_date", allow_none=False)
+        if raw.get("evaluated_through_date") is not None:
+            normalize_trading_date(
+                raw.get("evaluated_through_date"),
+                field_name="evaluated_through_date",
+                allow_none=False,
+            )
         if raw.get("planned_trade_date") is not None:
             normalize_trading_date(raw.get("planned_trade_date"), field_name="planned_trade_date", allow_none=False)
         plan = raw.get("execution_plan_seed")
@@ -161,10 +167,15 @@ def project_trading_pending_entry_state(
     stale_active = []
     if current_information_date is not None:
         current_date = normalize_trading_date(current_information_date, field_name="current_information_date", allow_none=False)
-        stale_active = [
-            row for row in active_rows
-            if normalize_trading_date(row.get("information_date"), field_name="information_date", allow_none=False) < current_date
-        ]
+        stale_active = []
+        for row in active_rows:
+            evaluated = normalize_trading_date(
+                row.get("evaluated_through_date") or row.get("information_date"),
+                field_name="evaluated_through_date",
+                allow_none=False,
+            )
+            if evaluated < current_date:
+                stale_active.append(row)
     return {
         "schema_version": TRADING_PENDING_ENTRY_SCHEMA_VERSION,
         "revision": int(source.get("revision") if source.get("revision") is not None else -1),

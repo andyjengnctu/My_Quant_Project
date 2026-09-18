@@ -45,7 +45,12 @@ from services.trading.scanner_state import (
 from services.trading.position_rollforward import (
     build_trading_position_rollforward_snapshot,
     reconcile_trading_manual_position_management,
-    run_trading_position_rollforward,
+)
+from services.trading.lifecycle_sync import (
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_LATEST,
+    SYNC_STATUS_PENDING,
+    run_trading_lifecycle_sync,
 )
 from services.trading.order_form_constraints import (
     ORDER_FORM_DATE_KIND_FILL,
@@ -168,7 +173,7 @@ PARAM_MODE_BY_LABEL = {
     PARAM_MODE_TRAIN_LABEL: TRADING_PARAM_MODE_TRAIN,
 }
 
-WORKFLOW_HINT = "更新資料後，strategy_fill／manual_managed 持股都用各自 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。停損／停利／賣出訊號為持股資訊，券商操作由使用者自行完成。"
+WORKFLOW_HINT = "更新資料與每次 Trading state refresh 都會先自動同步掛單／持股 lifecycle 到 latest finalized date；既有 lifecycle 一律沿用 frozen params。停損／停利／賣出訊號為決策資訊，券商操作由使用者自行完成。"
 CASH_HINT = "初始化可留空；更新現金會留下 revision event，不直接改檔。"
 MANUAL_POSITION_HINT = "修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。"
 FILL_HINT = "成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。"
@@ -452,6 +457,13 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
         return {"market_data": market_data, "manual_management": manual_management}
 
     bundle["reconcile"] = _capture_initial_panel_value(_reconcile_initial_state)
+    # Lifecycle state must be synchronized before any Trading read model is
+    # rendered.  This is the canonical automatic replacement for the old
+    # user-driven position rollforward step and also advances ACTIVE pending
+    # plans with their own frozen lineage.
+    bundle["lifecycle_sync"] = _capture_initial_panel_value(
+        lambda: run_trading_lifecycle_sync(root)
+    )
     # Account recovery historically ran before protection/indicator readers. Keep
     # that ordering, then parallelize independent canonical read models.
     bundle["account"] = _capture_initial_panel_value(lambda: build_trading_account_panel_snapshot(root))
@@ -626,6 +638,7 @@ class TradingAccountPanel(ttk.Frame):
         self._workflow_buttons = []
         self._workflow_action_buttons: dict[str, object] = {}
         self._operations_snapshot: dict[str, object] = {}
+        self._lifecycle_sync_snapshot: dict[str, object] = {}
         self._latest_workflow_snapshot: dict[str, object] = {}
         self._footer_hint_after_id = None
         self._initial_state_thread = None
@@ -687,6 +700,17 @@ class TradingAccountPanel(ttk.Frame):
 
     def _apply_state_bundle(self, bundle: dict[str, object]) -> None:
         """Apply an already-read canonical Trading state bundle on the Tk thread only."""
+        lifecycle_ok, lifecycle_value = dict(bundle or {}).get("lifecycle_sync", (True, {}))
+        if lifecycle_ok:
+            self._lifecycle_sync_snapshot = dict(lifecycle_value or {})
+        else:
+            self._lifecycle_sync_snapshot = {
+                "status": SYNC_STATUS_FAILED,
+                "error": f"{type(lifecycle_value).__name__}: {lifecycle_value}",
+                "pending_errors": {},
+                "position_errors": {},
+                "position_status_by_ticker": {},
+            }
         self._initial_preloaded = dict(bundle or {})
         self._suspend_operations_refresh = True
         try:
@@ -1093,10 +1117,9 @@ class TradingAccountPanel(ttk.Frame):
         workflow_buttons.grid(row=1, column=0, sticky="w", pady=(8, 0))
         for text, action in (
             ("1 更新資料", "data"),
-            ("2 持股日終推進", "rollforward"),
-            ("3 套用新進場 Params", "params"),
-            ("4 Scanner 候選", "scanner"),
-            ("每日流程 1→2→3→4", "all"),
+            ("2 套用新進場 Params", "params"),
+            ("3 Scanner 候選", "scanner"),
+            ("每日流程 1→2→3", "all"),
         ):
             button = ttk.Button(
                 workflow_buttons,
@@ -1155,13 +1178,13 @@ class TradingAccountPanel(ttk.Frame):
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal")
+        columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
             "open": "↗", "source": "來源", "ticker": "股票", "entry_date": "成交日", "qty": "股數", "avg_cost": "均價", "current": "市價",
-            "stop": "停損", "target": "停利", "sell_signal": "賣出訊號",
+            "stop": "停損", "target": "停利", "sell_signal": "賣出訊號", "status": "狀態",
         }
-        widths = {"open": 36, "source": 90, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "sell_signal": 125}
+        widths = {"open": 36, "source": 90, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "sell_signal": 125, "status": 88}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
@@ -1178,6 +1201,7 @@ class TradingAccountPanel(ttk.Frame):
                 "stop": "numeric",
                 "target": "numeric",
                 "sell_signal": "text",
+                "status": "text",
             },
             default_column="source",
             default_ascending=True,
@@ -2016,11 +2040,11 @@ class TradingAccountPanel(ttk.Frame):
         if not data_ready:
             next_text = "1 更新 Trading 資料"
         elif rollforward_due:
-            next_text = "2 持股日終推進"
+            next_text = "等待 lifecycle 自動同步／修正同步失敗"
         elif not snapshot.get("params_ready_for_scan"):
-            next_text = "3 套用 Params"
+            next_text = "2 套用 Params"
         elif not scanner_fresh:
-            next_text = "4 Scanner 候選"
+            next_text = "3 Scanner 候選"
         else:
             next_text = "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"
         display_status = (
@@ -2040,7 +2064,7 @@ class TradingAccountPanel(ttk.Frame):
         if trading_blockers:
             details.append("Data：" + "；".join(trading_blockers[:2]))
         if rollforward_due:
-            details.append("待持股日終推進: " + ",".join(rollforward_due))
+            details.append("Lifecycle 待自動同步: " + ",".join(rollforward_due))
         self._operations_detail_var.set(" | ".join(details))
         self._apply_workflow_action_availability()
 
@@ -2203,6 +2227,10 @@ class TradingAccountPanel(ttk.Frame):
             self._pending_tree.delete(item)
         self._clear_table_sort_values(self._pending_tree)
         self._pending_rows = {}
+        pending_sync_errors = {
+            str(key): str(value)
+            for key, value in dict(self._lifecycle_sync_snapshot.get("pending_errors") or {}).items()
+        }
         active_rows = [
             dict(row) for row in list(snapshot.get("entries") or [])
             if str(row.get("status") or "") == "ACTIVE"
@@ -2213,7 +2241,10 @@ class TradingAccountPanel(ttk.Frame):
                 continue
             self._pending_rows[entry_id] = row
             source = trading_source_display_label(origin=row.get("origin"))
-            status = "STALE" if bool(row.get("stale")) else "ACTIVE"
+            if entry_id in pending_sync_errors:
+                status = SYNC_STATUS_FAILED
+            else:
+                status = str(row.get("sync_status") or (SYNC_STATUS_PENDING if bool(row.get("stale")) else SYNC_STATUS_LATEST))
             planned_date = row.get("planned_trade_date") or row.get("information_date") or "-"
             qty = int(row.get("planned_qty") or 0)
             reserved_cost = row.get("reserved_cost")
@@ -2266,14 +2297,12 @@ class TradingAccountPanel(ttk.Frame):
             clear_treeview_selection(self._pending_tree)
         usage = dict(snapshot.get("resource_usage") or {})
         reserved = float(usage.get("reserved_total_milli") or snapshot.get("reserved_total_milli") or 0) / 1000.0
-        stale_count = int(snapshot.get("stale_active_count") or 0)
         locked_slots = int(usage.get("locked_slots") or snapshot.get("locked_count") or 0)
         slot_quota = int(usage.get("slot_quota") or 0)
         cash_limit_milli = usage.get("cash_limit_milli")
         cash_limit_text = "-" if cash_limit_milli is None else f"{float(cash_limit_milli) / 1000.0:,.0f}"
         self._pending_status_var.set(
-            f"ACTIVE {len(active_rows)}｜資源鎖定 {locked_slots}/{slot_quota}｜預留 {reserved:,.0f}/{cash_limit_text}"
-            + (f"｜STALE {stale_count}：請先確認成交或刪除掛單" if stale_count else "")
+            f"資源鎖定 {locked_slots}/{slot_quota}｜預留 {reserved:,.0f}/{cash_limit_text}"
         )
 
     def refresh_proposed_order_plan(self):
@@ -2295,7 +2324,7 @@ class TradingAccountPanel(ttk.Frame):
             return
         if not snapshot.get("fresh"):
             self._reload_proposed_order_rows([])
-            self._proposed_status_var.set("PROPOSED STALE｜請重新執行 4 Scanner 與 5 建議掛單。")
+            self._proposed_status_var.set("PROPOSED STALE｜請重新執行 3 Scanner 與 5 建議掛單。")
             return
         try:
             payload = _load_panel_value(
@@ -2336,15 +2365,16 @@ class TradingAccountPanel(ttk.Frame):
     def _workflow_state_domains(action: str):
         mapping = {
             "data": {STATE_MARKET_DATA},
-            "rollforward": set(ACCOUNT_MUTATION_DOMAINS) | {STATE_PROTECTION, STATE_INDICATOR_EXIT},
             "params": {STATE_PARAMS, STATE_SCANNER_ELIGIBILITY},
             "scanner": {STATE_SCANNER, STATE_SCANNER_ELIGIBILITY},
             "orders": {STATE_ORDERS},
         }
         if action == "all":
             domains = set()
-            for key in ("data", "rollforward", "params", "scanner"):
+            for key in ("data", "params", "scanner"):
                 domains.update(mapping[key])
+            domains.update(ACCOUNT_MUTATION_DOMAINS)
+            domains.update(PENDING_MUTATION_DOMAINS)
             return domains
         return mapping.get(str(action), set())
 
@@ -2353,11 +2383,10 @@ class TradingAccountPanel(ttk.Frame):
         param_label = "沿用既有 Trading Params" if param_mode == TRADING_PARAM_MODE_REUSE else "重新訓練 Trading Params"
         labels = {
             "data": "更新 Trading 資料",
-            "rollforward": "持股日終推進",
             "params": param_label,
             "scanner": "Scanner 候選",
             "orders": "產生建議掛單",
-            "all": f"每日流程 1→2→3→4（{param_label}）",
+            "all": f"每日流程 1→2→3（{param_label}）",
         }
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
@@ -2390,11 +2419,6 @@ class TradingAccountPanel(ttk.Frame):
                     progress_fn=console_progress.progress,
                     quota_wait_fn=console_progress.quota_wait,
                 )
-            if action == "rollforward":
-                result = run_trading_position_rollforward(project_root=WORKBENCH_PROJECT_ROOT)
-                if str(result.get("status") or "") != "NO_ACCOUNT":
-                    build_trading_indicator_exit_plan(WORKBENCH_PROJECT_ROOT)
-                return result
             if action == "params":
                 return run_trading_param_step(project_root=WORKBENCH_PROJECT_ROOT, mode=param_mode)
             if action == "scanner":
@@ -3790,10 +3814,6 @@ class TradingAccountPanel(ttk.Frame):
                 f"V2 {v2.get('status') or '-'} | "
                 f"data/usage requests {v2.get('data_requests', 0)}/{v2.get('usage_requests', 0)}"
             )
-        elif action == "rollforward":
-            self._operations_detail_var.set(
-                f"持股日終推進完成：持股 {result.get('processed_position_count', 0)} 檔 | completed bars {result.get('processed_bar_count', 0)} | account rev {result.get('account_revision', '-')}"
-            )
         elif action == "params":
             usage_mode = str(result.get("param_usage_mode") or "-")
             usage_label = "沿用既有" if usage_mode == TRADING_PARAM_USAGE_REUSE_EXISTING else "重新訓練"
@@ -3937,6 +3957,14 @@ class TradingAccountPanel(ttk.Frame):
             str(row.get("ticker") or ""): dict(row)
             for row in list(self._account_dashboard_snapshot.get("positions") or [])
         }
+        position_status_by_ticker = {
+            str(key): str(value)
+            for key, value in dict(self._lifecycle_sync_snapshot.get("position_status_by_ticker") or {}).items()
+        }
+        position_errors = {
+            str(key): str(value)
+            for key, value in dict(self._lifecycle_sync_snapshot.get("position_errors") or {}).items()
+        }
         for base_row in list(self._snapshot.get("positions") or []):
             ticker = str(base_row.get("ticker") or "")
             row = dict(base_row)
@@ -3963,6 +3991,10 @@ class TradingAccountPanel(ttk.Frame):
             current_price = row.get("current_price")
             effective_stop = row.get("effective_stop")
             target_price = row.get("target_price")
+            if ticker in position_errors:
+                sync_status = SYNC_STATUS_FAILED
+            else:
+                sync_status = position_status_by_ticker.get(ticker, SYNC_STATUS_LATEST)
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
@@ -3972,6 +4004,7 @@ class TradingAccountPanel(ttk.Frame):
                     format_trading_money(effective_stop),
                     format_trading_money(target_price),
                     sell_signal,
+                    sync_status,
                 ),
             )
             self._set_table_sort_values(
@@ -3987,6 +4020,7 @@ class TradingAccountPanel(ttk.Frame):
                     "stop": effective_stop,
                     "target": target_price,
                     "sell_signal": sell_signal,
+                    "status": sync_status,
                 },
             )
         self._apply_current_table_sort(self._tree)

@@ -45,6 +45,7 @@ from services.trading.market_data_consumer import (
     load_trading_v2_sanitized_ohlcv_frame,
     open_trading_v2_consumer_view,
 )
+from services.trading.lifecycle_sync import SYNC_STATUS_LATEST, SYNC_STATUS_PENDING
 from services.trading.order_form_constraints import (
     resolve_preferred_pending_order_date,
     validate_pending_order_limit_price,
@@ -764,6 +765,10 @@ def get_trading_pending_entry_read_model(project_root) -> dict[str, Any]:
             str(stale.get("pending_entry_id")) == str(item.get("pending_entry_id"))
             for stale in projected["stale_active_entries"]
         )
+        if str(item.get("status") or "") == PENDING_ENTRY_STATUS_ACTIVE:
+            item["sync_status"] = SYNC_STATUS_PENDING if bool(item["stale"]) else SYNC_STATUS_LATEST
+        else:
+            item["sync_status"] = None
         rows.append(item)
     projected["entries"] = rows
     return projected
