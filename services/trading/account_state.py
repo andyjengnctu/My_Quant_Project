@@ -24,6 +24,7 @@ from core.trading_account_state import (
     activate_manual_trading_position_management,
     adopt_manual_trading_position,
     apply_trading_strategy_management_rollforward,
+    apply_trading_strategy_management_sell_signals,
     apply_manual_trading_buy_fill,
     apply_confirmed_manual_managed_buy_fill,
     apply_confirmed_strategy_buy_fill,
@@ -533,6 +534,26 @@ def rollforward_trading_strategy_management(
         ),
     )
 
+
+def record_trading_strategy_management_sell_signals(
+    project_root,
+    *,
+    signals: dict[str, dict[str, Any]],
+    expected_revision: int,
+):
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        guard_orders=False,
+        accounting_params=build_standalone_trading_accounting_params(),
+        mutator=lambda state, timestamp, mutation_id: apply_trading_strategy_management_sell_signals(
+            state,
+            signals=signals,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+        ),
+    )
+
 def get_trading_account_read_model(project_root) -> dict[str, Any]:
     state = load_trading_account_state(project_root)
     projected = rebuild_trading_account_economics(
@@ -576,5 +597,6 @@ __all__ = [
     "delete_manual_trading_transaction",
     "correct_manual_trading_transaction",
     "rollforward_trading_strategy_management",
+    "record_trading_strategy_management_sell_signals",
     "get_trading_account_read_model",
 ]

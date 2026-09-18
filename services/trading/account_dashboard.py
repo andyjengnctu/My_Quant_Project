@@ -632,6 +632,8 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
                 "total_pnl": total_pnl,
                 "return_pct": None if total_pnl is None else _safe_pct(total_pnl, milli_to_money(initial_cost_milli)),
                 "management_status": management.get("status"),
+                "sell_signal": management.get("sell_signal"),
+                "sell_signal_date": management.get("sell_signal_date"),
                 "effective_stop": effective_stop,
                 "trailing_stop": (
                     None if position_state is None or int(position_state.get("trailing_stop_milli") or 0) <= 0

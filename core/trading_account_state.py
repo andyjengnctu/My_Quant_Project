@@ -40,6 +40,10 @@ POSITION_SOURCES = (POSITION_SOURCE_MANUAL_ADOPTED, *MANAGED_POSITION_SOURCES)
 MANAGEMENT_STATUS_UNMANAGED = "unmanaged"
 MANAGEMENT_STATUS_ACTIVE = "active"
 MANAGEMENT_STATUSES = (MANAGEMENT_STATUS_UNMANAGED, MANAGEMENT_STATUS_ACTIVE)
+MANAGEMENT_SELL_SIGNAL_STOP = "STOP EXIT"
+MANAGEMENT_SELL_SIGNAL_INDICATOR = "INDICATOR SELL"
+MANAGEMENT_SELL_SIGNALS = (MANAGEMENT_SELL_SIGNAL_STOP, MANAGEMENT_SELL_SIGNAL_INDICATOR)
+ACCOUNT_MUTATION_RECORD_MANAGEMENT_SELL_SIGNAL = "record_strategy_management_sell_signal"
 
 
 TRADE_MUTATION_BUY = "manual_buy_fill"
@@ -1919,6 +1923,97 @@ def apply_trading_strategy_management_rollforward(
     )
 
 
+def apply_trading_strategy_management_sell_signals(
+    state: dict[str, Any],
+    *,
+    signals: dict[str, dict[str, Any]],
+    timestamp: str,
+    mutation_id: str,
+) -> dict[str, Any]:
+    """Persist one immutable strategy SELL obligation per open managed cycle.
+
+    This records decision truth only.  Broker quantity, cash, fills and position
+    economics are never inferred or changed by this mutation.
+    """
+    validate_trading_account_state(state)
+    if not isinstance(signals, dict) or not signals:
+        raise ValueError("Trading sell signals 不可為空")
+
+    updated = deepcopy(state)
+    details_rows: list[dict[str, Any]] = []
+    for ticker_raw in sorted(signals):
+        ticker = _normalize_ticker(ticker_raw)
+        payload = signals[ticker_raw]
+        if not isinstance(payload, dict):
+            raise ValueError(f"Trading sell signal payload 不合法: {ticker}")
+        if ticker not in updated["positions"]:
+            raise ValueError(f"Trading sell signal position 不存在: {ticker}")
+        record = updated["positions"][ticker]
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
+            raise ValueError(f"Trading sell signal 只允許 managed position: {ticker}")
+        management = record.get("strategy_management") or {}
+        if management.get("status") != MANAGEMENT_STATUS_ACTIVE:
+            raise ValueError(f"Trading sell signal position 尚未 active 管理: {ticker}")
+
+        signal = str(payload.get("sell_signal") or "").strip()
+        if signal not in MANAGEMENT_SELL_SIGNALS:
+            raise ValueError(f"Trading sell_signal 不合法: {ticker} {signal!r}")
+        signal_date = _normalize_iso_date(
+            payload.get("sell_signal_date"), field_name="sell_signal_date"
+        )
+        if signal_date is None:
+            raise ValueError(f"Trading sell signal 缺少日期: {ticker}")
+        entry_date = _normalize_iso_date(
+            (record.get("broker") or {}).get("entry_date"), field_name="entry_date"
+        )
+        if entry_date is not None and signal_date < entry_date:
+            raise ValueError(f"Trading sell signal 不得早於成交日: {ticker}")
+
+        existing = str(management.get("sell_signal") or "").strip()
+        existing_date = _normalize_iso_date(
+            management.get("sell_signal_date"), field_name="sell_signal_date"
+        )
+        if existing:
+            if existing != signal or existing_date != signal_date:
+                raise ValueError(
+                    f"Trading 已存在不同 sell obligation: {ticker} "
+                    f"{existing}@{existing_date} != {signal}@{signal_date}"
+                )
+            continue
+
+        trigger_milli = payload.get("sell_signal_trigger_price_milli")
+        if trigger_milli is not None:
+            trigger_milli = int(trigger_milli)
+            if trigger_milli <= 0:
+                raise ValueError(f"Trading sell trigger price 不合法: {ticker}")
+        if signal == MANAGEMENT_SELL_SIGNAL_STOP and trigger_milli is None:
+            raise ValueError(f"Trading STOP EXIT 缺少 trigger price: {ticker}")
+
+        management["sell_signal"] = signal
+        management["sell_signal_date"] = signal_date
+        management["sell_signal_trigger_price_milli"] = trigger_milli
+        record["strategy_management"] = management
+        lineage = record.get("management_lineage") or record.get("strategy_lineage") or {}
+        details_rows.append({
+            "ticker": ticker,
+            "lineage_id": str(lineage.get("lineage_id") or "") or None,
+            "sell_signal": signal,
+            "sell_signal_date": signal_date,
+            "sell_signal_trigger_price_milli": trigger_milli,
+            "broker_accounting_changed": False,
+        })
+
+    if not details_rows:
+        raise ValueError("Trading sell signals 沒有新的 obligation 可寫入")
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type=ACCOUNT_MUTATION_RECORD_MANAGEMENT_SELL_SIGNAL,
+        timestamp=timestamp,
+        details={"positions": details_rows},
+    )
+
+
 def apply_confirmed_sell_fill(
     state: dict[str, Any],
     *,
@@ -2313,6 +2408,25 @@ def validate_trading_account_state(state: dict[str, Any]) -> None:
                 and last_rollforward_date < management_start_date
             ):
                 raise ValueError(f"Trading last_rollforward_date 不得早於 management_start_date: {ticker}")
+            sell_signal = str(management.get("sell_signal") or "").strip()
+            sell_signal_date = _normalize_iso_date(
+                management.get("sell_signal_date"), field_name="sell_signal_date"
+            )
+            trigger_milli = management.get("sell_signal_trigger_price_milli")
+            if sell_signal:
+                if sell_signal not in MANAGEMENT_SELL_SIGNALS:
+                    raise ValueError(f"Trading sell_signal 不合法: {ticker} {sell_signal!r}")
+                if sell_signal_date is None:
+                    raise ValueError(f"Trading sell_signal 缺少 sell_signal_date: {ticker}")
+                if sell_signal_date < str(broker.get("entry_date") or ""):
+                    raise ValueError(f"Trading sell_signal_date 不得早於 entry_date: {ticker}")
+                if sell_signal == MANAGEMENT_SELL_SIGNAL_STOP:
+                    if trigger_milli is None or int(trigger_milli) <= 0:
+                        raise ValueError(f"Trading STOP EXIT 缺少合法 trigger price: {ticker}")
+                elif trigger_milli is not None and int(trigger_milli) <= 0:
+                    raise ValueError(f"Trading sell trigger price 不合法: {ticker}")
+            elif sell_signal_date is not None or trigger_milli is not None:
+                raise ValueError(f"Trading sell obligation metadata 不完整: {ticker}")
 
     events = state.get("events")
     if not isinstance(events, list) or len(events) != revision + 1:
@@ -2382,6 +2496,13 @@ def build_trading_account_read_model(state: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "management_status": record["strategy_management"]["status"],
                 "last_rollforward_date": record["strategy_management"].get("last_rollforward_date"),
+                "sell_signal": record["strategy_management"].get("sell_signal"),
+                "sell_signal_date": record["strategy_management"].get("sell_signal_date"),
+                "sell_signal_trigger_price": (
+                    None
+                    if record["strategy_management"].get("sell_signal_trigger_price_milli") is None
+                    else milli_to_price(int(record["strategy_management"]["sell_signal_trigger_price_milli"]))
+                ),
                 "effective_stop": (
                     None
                     if not isinstance(record["strategy_management"].get("position_state"), dict)
@@ -2413,6 +2534,10 @@ __all__ = [
     "MANAGED_POSITION_SOURCES",
     "MANAGEMENT_STATUS_UNMANAGED",
     "MANAGEMENT_STATUS_ACTIVE",
+    "MANAGEMENT_SELL_SIGNAL_STOP",
+    "MANAGEMENT_SELL_SIGNAL_INDICATOR",
+    "MANAGEMENT_SELL_SIGNALS",
+    "ACCOUNT_MUTATION_RECORD_MANAGEMENT_SELL_SIGNAL",
     "ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT",
     "build_empty_trading_account_state",
     "set_trading_account_cash",
@@ -2425,6 +2550,7 @@ __all__ = [
     "apply_confirmed_strategy_buy_fill",
     "apply_confirmed_strategy_buy_fill_increment",
     "apply_trading_strategy_management_rollforward",
+    "apply_trading_strategy_management_sell_signals",
     "apply_confirmed_sell_fill",
     "void_manual_trading_transaction",
     "effective_trading_account_events",

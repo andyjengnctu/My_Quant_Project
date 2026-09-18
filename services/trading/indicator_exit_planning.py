@@ -11,14 +11,10 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, atomic_write_text, canonical_json_sha256, load_json_strict
-from core.params_io import build_params_from_mapping
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.runtime_utils import get_taipei_now
-from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import MANAGEMENT_STATUS_ACTIVE, MANAGED_POSITION_SOURCES
 from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.trading_order_state import (
@@ -31,11 +27,7 @@ from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.market_data_consumer import get_trading_v2_consumer_state_sha256
 from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
-from services.trading.position_market_context import (
-    load_trading_position_market_frame,
-    normalize_trading_date,
-    resolve_trading_strategy_position_sources,
-)
+from services.trading.position_market_context import normalize_trading_date, resolve_trading_strategy_position_sources
 
 INDICATOR_EXIT_PLAN_SCHEMA_VERSION = 1
 INDICATOR_EXIT_PLAN_STATUS = "PROPOSED_INDICATOR_EXIT"
@@ -86,6 +78,8 @@ def _source_binding(*, ticker: str, record: dict[str, Any], orders: dict[str, An
         "position_qty": position_qty,
         "position_state_sha256": canonical_json_sha256(position),
         "last_rollforward_date": normalize_trading_date(management.get("last_rollforward_date")),
+        "sell_signal": str(management.get("sell_signal") or "").strip() or None,
+        "sell_signal_date": normalize_trading_date(management.get("sell_signal_date")),
         "frozen_params_sha256": str(binding["frozen_params_sha256"]),
         "frozen_params": deepcopy(binding["frozen_params"]),
         "market_data_sha256": str(market_data_sha256),
@@ -206,7 +200,7 @@ def _render_indicator_exit_plan_text(plan: dict[str, Any]) -> str:
 
 def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any]:
     root=Path(project_root).resolve(); recover_trading_fill_transaction(root)
-    account, orders, market_view, bindings, manual=_collect_current_bindings(root)
+    account, orders, _market_view, bindings, manual=_collect_current_bindings(root)
     allowed_date=latest_allowed_completed_daily_date()
     prior=load_trading_indicator_exit_plan(root, required=False)
     exits=[]
@@ -222,22 +216,25 @@ def build_trading_indicator_exit_plan(project_root: str | Path) -> dict[str, Any
         if bool(stop_progress.get("triggered")):
             stop_forced_exit_skipped.append(binding["ticker"])
             continue
-        carried=_prior_unresolved_row(prior, binding=binding, orders=orders)
-        if carried is not None:
-            exits.append(_build_exit_row(binding=binding, signal_information_date=str(carried["signal_information_date"]), carried_forward=True, signal_origin_market_data_sha256=str(carried.get("signal_origin_market_data_sha256") or carried.get("market_data_sha256") or binding["market_data_sha256"])))
+        # AI: Strategy-management account state is the canonical SELL producer.
+        # Indicator planning only materializes the broker-side obligation from
+        # that persisted decision; it must never independently regenerate the
+        # signal from market data and create a second truth source.
+        if str(binding.get("sell_signal") or "") != "INDICATOR SELL":
             continue
-        params=build_params_from_mapping(binding["frozen_params"])
-        df=load_trading_position_market_frame(view=market_view, ticker=binding["ticker"], params=params, allowed_date=allowed_date)
-        entry_date=binding["entry_trade_date"]
-        eligible=df if entry_date is None else df.loc[df.index >= pd.Timestamp(entry_date)]
-        if eligible.empty: continue
-        latest_date=pd.Timestamp(eligible.index[-1]).strftime("%Y-%m-%d")
-        if binding["last_rollforward_date"] is None or binding["last_rollforward_date"] < latest_date:
-            raise RuntimeError(f"Trading position 尚未 roll-forward 至最新 completed bar: {binding['ticker']}")
-        precomputed=generate_signals(df, params, ticker=binding["ticker"])
-        _atr,_buy,sell,_limits=unpack_precomputed_signals(precomputed)
-        if bool(sell[len(df)-1]):
-            exits.append(_build_exit_row(binding=binding, signal_information_date=latest_date, carried_forward=False, signal_origin_market_data_sha256=binding["market_data_sha256"]))
+        signal_date = normalize_trading_date(binding.get("sell_signal_date"))
+        if signal_date is None:
+            raise RuntimeError(f"Trading Indicator SELL 缺少 canonical signal date: {binding['ticker']}")
+        carried=_prior_unresolved_row(prior, binding=binding, orders=orders)
+        exits.append(_build_exit_row(
+            binding=binding,
+            signal_information_date=signal_date,
+            carried_forward=carried is not None,
+            signal_origin_market_data_sha256=(
+                str(carried.get("signal_origin_market_data_sha256") or carried.get("market_data_sha256") or binding["market_data_sha256"])
+                if carried is not None else binding["market_data_sha256"]
+            ),
+        ))
     identity={
         "schema_version": INDICATOR_EXIT_PLAN_SCHEMA_VERSION, "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "status": INDICATOR_EXIT_PLAN_STATUS, "broker_status": INDICATOR_EXIT_BROKER_STATUS,

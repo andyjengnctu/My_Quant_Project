@@ -24,6 +24,7 @@ from core.position_step import rollforward_position_management_from_completed_ba
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import (
     ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT,
+    ACCOUNT_MUTATION_RECORD_MANAGEMENT_SELL_SIGNAL,
     MANAGED_POSITION_SOURCES,
     POSITION_SOURCE_MANUAL_MANAGED,
     POSITION_SOURCE_STRATEGY_FILL,
@@ -439,7 +440,18 @@ def _current_position_effective_date(
 
 
 def _sell_signal_as_of(inspection: Mapping[str, Any], date_text: str) -> str | None:
-    """Project the same current canonical SELL obligations shown by Trading Center."""
+    """Project the same canonical account SELL obligation shown by Trading Center."""
+    current_position = inspection.get("current_position")
+    if isinstance(current_position, Mapping):
+        management = dict(current_position.get("strategy_management") or {})
+        signal = str(management.get("sell_signal") or "").strip()
+        signal_date = _date_text(management.get("sell_signal_date"))
+        if signal and signal_date is not None and signal_date <= date_text:
+            return signal
+
+    # AI: Compatibility fallback for runtime state created before account-level
+    # SELL obligations existed. Lifecycle sync migrates current holdings, so new
+    # state no longer depends on planner-specific SELL detection as a second SSOT.
     protection = inspection.get("protection") or {}
     if bool(protection.get("fresh")):
         for row in list(protection.get("positions") or []):
@@ -471,6 +483,8 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
     last_rollforward_date = None
     trailing_stop_exact = True
     closed_date = None
+    management_sell_signal = None
+    management_sell_signal_date = None
 
     for event in list(inspection.get("account_events") or []):
         mutation = str(event.get("mutation_type") or "")
@@ -499,6 +513,21 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
                             # reconstructed exactly from persisted evidence.
                             trailing_stop_exact = False
                 last_rollforward_date = processed
+            continue
+
+        if mutation == ACCOUNT_MUTATION_RECORD_MANAGEMENT_SELL_SIGNAL:
+            for row in list(details.get("positions") or []):
+                if not _ticker_matches(row, ticker):
+                    continue
+                signal_date = _date_text(row.get("sell_signal_date"))
+                if signal_date is None or signal_date > date_text or qty <= 0:
+                    continue
+                row_lineage_id = str(row.get("lineage_id") or "").strip()
+                current_lineage_id = str((lineage or {}).get("lineage_id") or "").strip()
+                if row_lineage_id and current_lineage_id and row_lineage_id != current_lineage_id:
+                    continue
+                management_sell_signal = str(row.get("sell_signal") or "").strip() or None
+                management_sell_signal_date = signal_date
             continue
 
         if not _ticker_matches(details, ticker):
@@ -552,6 +581,8 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
                 last_rollforward_date = None
                 trailing_stop_exact = True
                 closed_date = None
+                management_sell_signal = None
+                management_sell_signal_date = None
             qty += add_qty
             entry_qty += add_qty
             gross_buy_milli += int(details.get("gross_buy_milli") or 0)
@@ -701,7 +732,8 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         "strategy_lineage": lineage,
         "management_lineage": lineage,
         "sold_half": bool(position_state.get("sold_half", False)) if isinstance(position_state, Mapping) else False,
-        "sell_signal": _sell_signal_as_of(inspection, date_text),
+        "sell_signal": management_sell_signal or _sell_signal_as_of(inspection, date_text),
+        "sell_signal_date": management_sell_signal_date,
         "decision_errors": list(inspection.get("decision_errors") or []),
     }
 
@@ -1652,7 +1684,8 @@ def build_trading_single_stock_lifecycle_timeline(
                 position_state["stop_price"] = replay_state.get("stop_price")
                 if not bool(position_state.get("sold_half", False)):
                     position_state["tp_price"] = replay_state.get("tp_price")
-                position_state["sell_signal"] = replay_state.get("sell_signal")
+                if not position_state.get("sell_signal"):
+                    position_state["sell_signal"] = replay_state.get("sell_signal")
             # Order evidence can contribute reservation metadata for a genuine
             # partial fill but never creates POSITION by itself.
             entry_order_id = str(position_state.get("entry_order_id") or "").strip()

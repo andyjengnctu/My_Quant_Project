@@ -640,6 +640,69 @@ def validate_trading_account_state_contract_case(base_params):
         check("persisted_state_is_single_account_file", True, state_path.is_file())
         check("separate_positions_truth_file_is_not_created", False, (state_path.parent / "positions.json").exists())
 
+    # AI: Canonical strategy SELL obligations live on account position
+    # management, not independently in the chart, protection planner, or
+    # Indicator planner.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        from core.params_io import params_to_json_dict as _sell_params_to_json_dict
+        from core.file_integrity import canonical_json_sha256 as _sell_json_sha256
+        from core.trading_account_state import (
+            MANAGEMENT_SELL_SIGNAL_STOP,
+            apply_trading_strategy_management_sell_signals,
+            build_trading_account_read_model as _build_account_read_model,
+        )
+
+        root = Path(temp_dir)
+        sell_state = initialize_trading_account_state(root, cash=1_000_000)
+        _frozen = _sell_params_to_json_dict(base_params)
+        _lineage = {
+            "lineage_id": "SYNTHETIC-SELL-SSOT-5443",
+            "frozen_params": _frozen,
+            "frozen_params_sha256": _sell_json_sha256(_frozen),
+            "information_date": "2026-09-09",
+        }
+        sell_state = apply_confirmed_strategy_buy_fill(
+            sell_state,
+            ticker="5443", qty=5000, buy_price=112.0, params=base_params,
+            trade_date="2026-09-09", timestamp="2026-09-09T13:31:00+08:00",
+            mutation_id="synthetic-sell-ssot-buy", init_sl=102.0, init_trail=102.0,
+            target_price=127.0, limit_price=112.0, entry_order_id="SYNTHETIC-SELL-ENTRY",
+            strategy_lineage=_lineage,
+        )
+        cash_before_signal = int(sell_state["cash_milli"])
+        qty_before_signal = int(sell_state["positions"]["5443"]["broker"]["qty"])
+        sell_state = apply_trading_strategy_management_sell_signals(
+            sell_state,
+            signals={
+                "5443": {
+                    "sell_signal": MANAGEMENT_SELL_SIGNAL_STOP,
+                    "sell_signal_date": "2026-09-14",
+                    "sell_signal_trigger_price_milli": 102_000,
+                }
+            },
+            timestamp="2026-09-14T13:31:00+08:00",
+            mutation_id="synthetic-sell-ssot-stop",
+        )
+        validate_trading_account_state(sell_state)
+        sell_management = sell_state["positions"]["5443"]["strategy_management"]
+        check("account_position_management_persists_stop_sell_obligation", "STOP EXIT", sell_management.get("sell_signal"))
+        check("account_position_management_persists_stop_sell_signal_date", "2026-09-14", sell_management.get("sell_signal_date"))
+        check("account_position_management_persists_exact_stop_trigger_price", 102_000, sell_management.get("sell_signal_trigger_price_milli"))
+        check("strategy_sell_obligation_does_not_infer_broker_qty_change", qty_before_signal, int(sell_state["positions"]["5443"]["broker"]["qty"]))
+        check("strategy_sell_obligation_does_not_infer_cash_change", cash_before_signal, int(sell_state["cash_milli"]))
+        sell_read = _build_account_read_model(sell_state)["positions"][0]
+        check("account_read_model_exposes_canonical_stop_sell_signal", "STOP EXIT", sell_read.get("sell_signal"))
+        check("account_read_model_exposes_canonical_stop_trigger_price", 102.0, sell_read.get("sell_signal_trigger_price"))
+        rebuilt_sell_state = rebuild_trading_account_economics(
+            sell_state,
+            accounting_params=build_standalone_trading_accounting_params(),
+        )
+        check(
+            "economic_rebuild_preserves_strategy_sell_obligation",
+            "STOP EXIT",
+            rebuilt_sell_state["positions"]["5443"]["strategy_management"].get("sell_signal"),
+        )
+
     # AI: User-facing broker ledger uses actual 0.001425 (no strategy discount).
     with tempfile.TemporaryDirectory() as temp_dir:
         from services.trading.account_dashboard import build_trading_account_dashboard_read_model
@@ -2827,7 +2890,18 @@ def validate_trading_position_rollforward_contract_case(base_params):
     daily_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
     snapshot_body = service_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
     check("read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
-    check("rollforward_service_does_not_execute_or_infer_broker_sell", False, any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(", "t_low", "t_open")))
+    check(
+        "rollforward_service_does_not_execute_or_infer_broker_sell",
+        False,
+        any(token in service_source for token in ("confirm_trading_sell_fill(", "confirm_trading_protection_sell_order_fill(")),
+    )
+    check(
+        "rollforward_service_detects_strategy_stop_touch_into_account_sell_obligation",
+        True,
+        "resolve_position_intraday_exit_hits(" in service_source
+        and '"sell_signal": MANAGEMENT_SELL_SIGNAL_STOP' in service_source
+        and "record_trading_strategy_management_sell_signals(" in service_source,
+    )
     check(
         "workbench_removes_explicit_position_rollforward_action",
         True,
@@ -2891,6 +2965,14 @@ def validate_trading_indicator_sell_execution_contract_case(base_params):
     protection=(project_root/"services/trading/protection_order_submission.py").read_text(encoding="utf-8")
     panel=(project_root/"services/workbench_ui/trading_account_panel.py").read_text(encoding="utf-8")
     check("planning_does_not_infer_broker_fill",False,"confirm_trading_indicator_sell_order_fill(" in planning )
+    check(
+        "indicator_planning_consumes_account_management_sell_ssot_instead_of_regenerating_signal",
+        True,
+        'binding.get("sell_signal")' in planning
+        and 'binding.get("sell_signal_date")' in planning
+        and "generate_signals(" not in planning
+        and "load_trading_position_market_frame(" not in planning,
+    )
     check("submission_requires_protection_cancellation",True,"active Stop/TP protection SELL" in submit )
     check("fill_reconciliation_uses_canonical_ind_sell_event",True,'event = "IND_SELL"' in fill )
     check("protection_submission_blocks_active_indicator_sell",True,"active Indicator MARKET SELL" in protection )
@@ -4434,6 +4516,14 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and '"trailing": "Trailing"' not in panel_source.split('table_box = ttk.LabelFrame(content, text="持股區"', 1)[1].split('candidate_box = ttk.LabelFrame', 1)[0]
         and '"action": "建議動作"' not in panel_source,
     )
+    _holding_reload_body = panel_source.split("def _reload_positions", 1)[1].split("def _on_position_tree_click", 1)[0]
+    check(
+        "workbench_holding_sell_signal_reads_account_management_ssot_not_planner_snapshots",
+        True,
+        'sell_signal = str(row.get("sell_signal") or "-")' in _holding_reload_body
+        and "_indicator_snapshot" not in _holding_reload_body
+        and "_protection_snapshot" not in _holding_reload_body,
+    )
     check(
         "workbench_pending_and_holding_tables_are_sortable_with_source_ascending_default",
         True,
@@ -5739,6 +5829,110 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "workbench_single_stock_carried_sell_obligation_draws_one_signal_annotation_not_one_per_bar",
         1,
         len(_lifecycle_only_sell_annotations),
+    )
+    from core.entry_plans import build_position_from_entry_fill as _build_sell_replay_position
+    from core.position_step import resolve_position_intraday_exit_hits as _resolve_sell_exit_hits
+    from services.trading.position_rollforward import _replay_position_sell_obligation as _replay_sell_obligation
+
+    _stop_position = _build_sell_replay_position(
+        buy_price=112.0,
+        qty=5000,
+        init_sl=102.0,
+        init_trail=102.0,
+        target_price=127.0,
+        entry_atr=5.0,
+        params=base_params,
+        ticker="5443",
+        security_profile={},
+        trade_date="2026-09-09",
+    )
+    _touch_hit, _touch_tp = _resolve_sell_exit_hits(
+        _stop_position,
+        t_high=105.0,
+        t_low=102.0,
+        params=base_params,
+    )
+    _above_hit, _above_tp = _resolve_sell_exit_hits(
+        _stop_position,
+        t_high=105.0,
+        t_low=102.01,
+        params=base_params,
+    )
+    check("position_stop_touch_at_exact_stop_price_is_a_sell_trigger", [True, False], [_touch_hit, _touch_tp])
+    check("position_low_above_stop_price_does_not_trigger_stop", [False, False], [_above_hit, _above_tp])
+
+    _stop_replay_record = {
+        "ticker": "5443",
+        "broker": {
+            "qty": 5000,
+            "initial_qty": 5000,
+            "entry_date": "2026-09-09",
+        },
+        "strategy_management": {
+            "status": "active",
+            "management_start_date": "2026-09-09",
+            "position_state": deepcopy(_stop_position),
+        },
+    }
+    _stop_replay_binding = {
+        "execution_plan_seed": {
+            "entry_type": "normal",
+            "entry_atr": 5.0,
+            "init_sl": 102.0,
+            "init_trail": 102.0,
+            "target_price": 127.0,
+            "limit_price": 112.0,
+            "security_profile": {},
+        }
+    }
+    _stop_replay_frame = pd.DataFrame(
+        {
+            "Open": [112.0, 103.0],
+            "High": [112.0, 105.0],
+            "Low": [109.0, 102.0],
+            "Close": [110.0, 102.5],
+            "Volume": [1_000_000, 1_000_000],
+        },
+        index=pd.to_datetime(["2026-09-09", "2026-09-14"]),
+    )
+    with patch(
+        "services.trading.position_rollforward.generate_signals",
+        return_value=([5.0, 5.0], [False, False], [False, False], [None, None]),
+    ):
+        _stop_obligation = _replay_sell_obligation(
+            _stop_replay_record,
+            binding=_stop_replay_binding,
+            frame=_stop_replay_frame,
+            params=base_params,
+        )
+    check(
+        "position_frozen_replay_persists_stop_exit_when_completed_low_touches_effective_stop",
+        ["STOP EXIT", "2026-09-14", 102_000],
+        [
+            None if _stop_obligation is None else _stop_obligation.get("sell_signal"),
+            None if _stop_obligation is None else _stop_obligation.get("sell_signal_date"),
+            None if _stop_obligation is None else _stop_obligation.get("sell_signal_trigger_price_milli"),
+        ],
+    )
+    _stop_lifecycle_annotations = _canonical_trading_sell_signal_annotations(
+        lifecycle_by_index={
+            0: {
+                "state": "POSITION", "entry_date": "2026-09-09", "entry_order_id": "POSITION:STOP-5443",
+                "sell_signal": None, "entry_price": 112.0, "stop_price": 102.0,
+            },
+            1: {
+                "state": "POSITION", "entry_date": "2026-09-09", "entry_order_id": "POSITION:STOP-5443",
+                "sell_signal": "STOP EXIT", "entry_price": 112.0, "stop_price": 102.0,
+            },
+        },
+        date_labels=["2026-09-09", "2026-09-14"],
+        chart_payload={"high": [112.0, 105.0], "close": [110.0, 102.5]},
+        indicator_exit={"fresh": False, "exits": []},
+    )
+    check(
+        "workbench_single_stock_stop_exit_uses_same_account_lifecycle_signal_as_holding_table",
+        [["2026-09-14", "STOP EXIT"]],
+        [[row.get("date"), (row.get("meta") or {}).get("sell_signal")] for row in _stop_lifecycle_annotations],
     )
     check(
         "workbench_single_stock_trading_overlay_does_not_keep_simulated_fill_on_live_cycle",

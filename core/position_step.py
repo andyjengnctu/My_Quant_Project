@@ -198,6 +198,24 @@ def rollforward_position_management_from_completed_bar(
     return position
 
 
+def resolve_position_intraday_exit_hits(position, *, t_high, t_low, params):
+    """Resolve canonical STOP/TP touches against the stop active for this bar.
+
+    The caller owns timing.  In particular, live completed-bar replay must call
+    this *before* advancing trailing state with the same bar, because Research's
+    ``execute_bar_step`` evaluates today's Low/High against geometry prepared
+    from prior completed information.
+    """
+    is_stop_hit = price_to_milli(t_low) <= int(position['sl_milli'])
+    half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
+    is_tp_hit = (
+        price_to_milli(t_high) >= int(position['tp_half_milli'])
+        and not position['sold_half']
+        and half_sell_qty > 0
+    )
+    return resolve_stop_tp_hits(stop_hit=is_stop_hit, tp_hit=is_tp_hit)
+
+
 def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True, sync_display_fields=True, fee_rebate_state=None, settlement_basis=None):
     pending_action = position.get('pending_exit_action')
     if pending_action is None or position.get('qty', 0) <= 0:
@@ -317,11 +335,13 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             events.extend(['MISSED_SELL', sell_block_reason])
         return _finish()
 
-    is_stop_hit = price_to_milli(t_low) <= position['sl_milli']
+    is_stop_hit, is_tp_hit = resolve_position_intraday_exit_hits(
+        position,
+        t_high=t_high,
+        t_low=t_low,
+        params=params,
+    )
     half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
-    is_tp_hit = price_to_milli(t_high) >= position['tp_half_milli'] and not position['sold_half'] and half_sell_qty > 0
-
-    is_stop_hit, is_tp_hit = resolve_stop_tp_hits(stop_hit=is_stop_hit, tp_hit=is_tp_hit)
 
     if is_tp_hit and not (pd.isna(t_volume) or t_volume <= 0):
         exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open), ticker=position.get('ticker'))

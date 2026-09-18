@@ -3995,18 +3995,7 @@ class TradingAccountPanel(ttk.Frame):
             # Editing eligibility belongs to the canonical account read model.
             row["has_sell_history"] = bool(base_row.get("has_sell_history"))
             self._position_rows[ticker] = row
-            indicator_due = {str(item.get("ticker") or "") for item in list(self._indicator_snapshot.get("exits") or [])}
-            forced_stop = {
-                str(item.get("ticker") or "")
-                for item in list(self._protection_snapshot.get("positions") or [])
-                if bool(item.get("stop_forced_exit"))
-            }
-            if ticker in forced_stop:
-                sell_signal = "STOP EXIT"
-            elif ticker in indicator_due:
-                sell_signal = "INDICATOR SELL"
-            else:
-                sell_signal = "-"
+            sell_signal = str(row.get("sell_signal") or "-")
             source_text = trading_source_display_label(source=row.get("source"))
             lineage_id = str(row.get("management_lineage_id") or row.get("strategy_lineage_id") or "").strip()
             entry_date = row.get("entry_date") or "-"
