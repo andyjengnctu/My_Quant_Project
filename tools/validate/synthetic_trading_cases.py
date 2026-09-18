@@ -3843,19 +3843,61 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             params=base_params,
         )
         _manual_order_row = _manual_shadow_timeline.get(0) or {}
-        _manual_static_shadow_row = _manual_shadow_timeline.get(1) or {}
+        _manual_first_shadow_row = _manual_shadow_timeline.get(1) or {}
         _manual_information_row = _manual_shadow_timeline.get(2) or {}
-        _manual_engine_shadow_row = _manual_shadow_timeline.get(3) or {}
+        _manual_later_shadow_row = _manual_shadow_timeline.get(3) or {}
         check(
-            "manual_pending_historical_order_draws_static_plan_until_information_then_advances_shadow_without_future_leak",
-            ["SHADOW", "掛單", 100.0, 90.0, 120.0, None, "SHADOW", 90.0, "SHADOW", 90.0, "SHADOW"],
+            "manual_pending_order_bar_is_signal_then_next_completed_bar_starts_canonical_shadow",
+            ["SIGNAL", "掛單", 100.0, 90.0, 120.0, None, "SHADOW", "SHADOW", "SHADOW", "SHADOW"],
             [
                 _manual_order_row.get("state"), _manual_order_row.get("display_state"),
                 _manual_order_row.get("limit_price"), _manual_order_row.get("stop_price"),
                 _manual_order_row.get("tp_price"), _manual_order_row.get("entry_price"),
-                _manual_static_shadow_row.get("state"), _manual_static_shadow_row.get("stop_price"),
-                _manual_information_row.get("state"), _manual_information_row.get("stop_price"),
-                _manual_engine_shadow_row.get("state"),
+                _manual_first_shadow_row.get("state"), _manual_first_shadow_row.get("display_state"),
+                _manual_information_row.get("state"), _manual_information_row.get("display_state"),
+            ],
+        )
+        from services.trading.single_stock_inspection import (
+            project_trading_single_stock_chart_payload as _project_manual_pending_timing_chart,
+        )
+        _manual_pending_projection_chart = deepcopy(_manual_shadow_chart)
+        _manual_pending_projection_chart.update({
+            "x": [0, 1, 2, 3],
+            "marker_groups": {},
+            "signal_annotations": [],
+            "strategy_prefill_lifecycle_by_index": {},
+        })
+        for _line_key in (
+            "stop_line", "tp_line", "limit_line", "entry_line",
+            "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line",
+        ):
+            _manual_pending_projection_chart[_line_key] = [float("nan")] * 4
+        _manual_pending_projected_timing = _project_manual_pending_timing_chart(
+            _manual_pending_projection_chart,
+            {
+                "ticker": "2330", "candidate": {}, "entry_orders": [], "account_events": [],
+                "pending_entries": [_pending_entry], "current_position": None,
+                "decision_errors": [],
+                "protection": {"fresh": False, "positions": []},
+                "indicator_exit": {"fresh": False, "exits": []},
+            },
+            params=base_params,
+        )
+        check(
+            "manual_pending_order_bar_draws_no_transaction_lines_but_next_completed_bar_draws_shadow_lines",
+            [True, True],
+            [
+                all(
+                    pd.isna(_manual_pending_projected_timing[key][0])
+                    for key in (
+                        "stop_line", "tp_line", "limit_line", "entry_line",
+                        "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line",
+                    )
+                ),
+                all(
+                    not pd.isna(_manual_pending_projected_timing[key][1])
+                    for key in ("shadow_stop_line", "shadow_tp_line", "shadow_limit_line")
+                ),
             ],
         )
         try:
@@ -3947,7 +3989,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         ]
         check(
             "single_stock_manual_pending_fill_transitions_shadow_to_position_with_lines_and_one_order_marker",
-            ["SHADOW", "POSITION", True, True, 1],
+            ["SIGNAL", "POSITION", True, True, 1],
             [
                 (_pending_manual_projected.get("trading_lifecycle_by_index", {}).get(0) or {}).get("state"),
                 (_pending_manual_projected.get("trading_lifecycle_by_index", {}).get(1) or {}).get("state"),
@@ -5338,7 +5380,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _candidate_projected = project_trading_single_stock_chart_payload(_candidate_chart, _inspection_candidate, params=base_params)
     check(
         "workbench_single_stock_trading_scanner_uses_future_preview_not_signal_bar_transaction_lines",
-        [True, {"limit_price": _synth_limit, "stop_price": _synth_stop, "tp_half_price": _synth_tp, "entry_price": None}, 0],
+        [True, {"limit_price": _synth_limit, "stop_price": None, "tp_half_price": None, "entry_price": None}, 0],
         [
             all(
                 pd.isna(_candidate_projected[key][1])
@@ -5386,6 +5428,20 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             str(item.get("title") or "")
             for item in _active_pending_projected.get("signal_annotations", [])
             if str(item.get("title") or "") == "掛單"
+        ],
+    )
+    check(
+        "workbench_single_stock_active_pending_signal_bar_has_no_stop_tp_entry_lines_and_limit_only_future_preview",
+        [True, {"limit_price": _synth_limit, "stop_price": None, "tp_half_price": None, "entry_price": None}],
+        [
+            all(
+                pd.isna(_active_pending_projected[key][1])
+                for key in (
+                    "stop_line", "tp_line", "limit_line", "entry_line",
+                    "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line",
+                )
+            ),
+            _active_pending_projected.get("future_preview"),
         ],
     )
 

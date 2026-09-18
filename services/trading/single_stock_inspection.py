@@ -958,11 +958,17 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
     origin = str(entry.get("origin") or "")
     manual_pending = origin == "manual_selected"
     planned_trade_date = _date_text(entry.get("planned_trade_date"))
-    # A manual pending row is explicit user-confirmed order intent.  Its chart
-    # lifecycle therefore begins on the persisted planned order date, not on the
-    # later Workbench bookkeeping/information date.  The frozen plan itself is
-    # the audit evidence being replayed; no Research simulated fill is inferred.
-    signal_date = information_date if manual_pending else (_date_text(entry.get("signal_date")) or information_date)
+    # Manual pending has no Research signal of its own.  Treat its persisted
+    # planned order date as the lifecycle information bar so it follows the
+    # exact same completed-bar timing as Research: the order bar is SIGNAL
+    # (planned values are visible in the sidebar but own no transaction lines),
+    # and only the next completed trading bar may become SHADOW.  Scanner rows
+    # preserve their canonical strategy signal date.
+    signal_date = (
+        planned_trade_date or information_date
+        if manual_pending
+        else (_date_text(entry.get("signal_date")) or information_date)
+    )
     seed = dict(entry.get("execution_plan_seed") or {})
     end_before = None
     end_date = last_date
@@ -989,7 +995,7 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
         "entry_type": str(seed.get("entry_type") or "manual"),
         "source": "manual_pending_entry" if manual_pending else "scanner_pending_entry",
         "planned_trade_date": planned_trade_date,
-        "confirmed_pending_order": bool(manual_pending),
+        "confirmed_pending_order": True,
         "pending_entry_id": str(entry.get("pending_entry_id") or ""),
         "priority": 40,
     }
@@ -1255,12 +1261,13 @@ def _shadow_state_from_plan(
     reserved_capital = plan.get("reserved_capital")
     if reserved_capital is None:
         reserved_capital = strategy.get("reserved_capital")
+    if lifecycle_state == TRADE_LIFECYCLE_SIGNAL:
+        display_state = "掛單" if bool(plan.get("confirmed_pending_order")) else "買訊"
+    else:
+        display_state = "SHADOW"
     return {
         "state": lifecycle_state,
-        "display_state": (
-            "掛單" if str(plan.get("source")) == "manual_pending_entry"
-            else ("買訊" if lifecycle_state == TRADE_LIFECYCLE_SIGNAL else "SHADOW")
-        ),
+        "display_state": display_state,
         "source": str(plan.get("source") or "shadow_plan"),
         "entry_type": str(plan.get("entry_type") or "normal"),
         "signal_date": _date_text(plan.get("signal_date")),
@@ -1306,11 +1313,7 @@ def _prefill_state_as_of(
         ),
     )
     signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
-    lifecycle_state = (
-        TRADE_LIFECYCLE_SHADOW
-        if signal_date == date_text and bool(plan.get("confirmed_pending_order"))
-        else (TRADE_LIFECYCLE_SIGNAL if signal_date == date_text else TRADE_LIFECYCLE_SHADOW)
-    )
+    lifecycle_state = TRADE_LIFECYCLE_SIGNAL if signal_date == date_text else TRADE_LIFECYCLE_SHADOW
     return _shadow_state_from_plan(
         plan,
         strategy_state=strategy_state,
@@ -1508,35 +1511,13 @@ def _build_trading_prefill_lifecycle_timeline(
         )
         if bool(plan.get("confirmed_pending_order")):
             signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
-            planned_trade_date = _date_text(plan.get("planned_trade_date")) or signal_date
-            for static_idx, static_date in enumerate(date_labels):
-                if static_date is None or planned_trade_date is None or signal_date is None:
-                    continue
-                if static_date < planned_trade_date or static_date > signal_date:
-                    continue
-                # A confirmed manual pending order already owns immutable
-                # planned L/S/TP geometry.  For a historical backfill, show that
-                # persisted plan from its planned order date through the later
-                # information date, but do not run today's frozen Params backward
-                # over those historical bars.  The canonical shadow engine above
-                # starts advancing only after the information bar.
-                static_row = build_trade_lifecycle_row(
-                    TRADE_LIFECYCLE_SHADOW,
-                    source=str(plan.get("source") or "manual_pending_entry"),
-                    signal_date=signal_date,
-                    information_date=plan.get("information_date"),
-                    entry_type=plan.get("entry_type"),
-                    limit_price=plan.get("limit_price"),
-                    entry_price=None,
-                    stop_price=plan.get("stop_price"),
-                    tp_price=plan.get("tp_price"),
-                    reserved_capital=plan.get("reserved_capital"),
-                    planned_qty=plan.get("planned_qty"),
-                    remaining_order_qty=plan.get("planned_qty"),
-                    confirmed_pending_order=True,
-                )
-                static_row["display_state"] = "掛單" if static_date == planned_trade_date else "SHADOW"
-                timeline[int(static_idx)] = static_row
+            for signal_idx, row in timeline.items():
+                if (
+                    _date_text(date_labels[int(signal_idx)]) == signal_date
+                    and str(row.get("state") or "") == TRADE_LIFECYCLE_SIGNAL
+                ):
+                    row["display_state"] = "掛單"
+                    row["confirmed_pending_order"] = True
         signal_key = str(_date_text(plan.get("signal_date")) or _date_text(plan.get("information_date")) or "")
         priority = int(plan.get("priority") or 0)
         for idx, row in timeline.items():
@@ -1954,15 +1935,26 @@ def project_trading_single_stock_chart_payload(
     if last_date is not None:
         last_idx = date_to_x.get(last_date)
         last_state = None if last_idx is None else lifecycle_by_index.get(last_idx)
-        if isinstance(last_state, Mapping) and str(last_state.get("state") or "") in {
-            TRADE_LIFECYCLE_SIGNAL, TRADE_LIFECYCLE_SHADOW,
-        }:
-            payload["future_preview"] = {
-                "limit_price": last_state.get("limit_price"),
-                "stop_price": last_state.get("stop_price"),
-                "tp_half_price": last_state.get("tp_price"),
-                "entry_price": last_state.get("entry_price"),
-            }
+        if isinstance(last_state, Mapping):
+            last_lifecycle = str(last_state.get("state") or "")
+            if last_lifecycle == TRADE_LIFECYCLE_SIGNAL:
+                # Match Research fresh-signal semantics exactly: after today's
+                # completed signal/order bar, only the next-session buy limit is
+                # previewable.  Stop/TP/entry are planned sidebar values but are
+                # not active or shadow geometry until a later completed bar.
+                payload["future_preview"] = {
+                    "limit_price": last_state.get("limit_price"),
+                    "stop_price": None,
+                    "tp_half_price": None,
+                    "entry_price": None,
+                }
+            elif last_lifecycle == TRADE_LIFECYCLE_SHADOW:
+                payload["future_preview"] = {
+                    "limit_price": last_state.get("limit_price"),
+                    "stop_price": last_state.get("stop_price"),
+                    "tp_half_price": last_state.get("tp_price"),
+                    "entry_price": last_state.get("entry_price"),
+                }
 
     # Strategy signals remain useful context.  Research simulated orders/fills
     # do not: Trading buy/sell icons are created only from confirmed account
