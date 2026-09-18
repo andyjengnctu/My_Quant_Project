@@ -1077,6 +1077,29 @@ def validate_trading_account_state_contract_case(base_params):
         ["manual_managed", _activation_cash],
         [_activation_rebuilt["positions"]["2330"].get("source"), _activation_rebuilt.get("cash_milli")],
     )
+    _normalized_initial = deepcopy(_activation_position)
+    _activation_state = _activate_manual_management(
+        _activation_state,
+        ticker="2330",
+        management_lineage=_activation_lineage,
+        position_state=deepcopy(_activation_position),
+        initial_position_state=_normalized_initial,
+        management_start_date="2026-08-01",
+        last_rollforward_date="2026-09-17",
+        timestamp="2026-09-17T08:03:00+08:00",
+        mutation_id="activation-normalize",
+    )
+    _normalized_record = _activation_state["positions"]["2330"]
+    check(
+        "manual_managed_legacy_takeover_can_normalize_to_original_entry_without_broker_or_cash_change",
+        [_activation_cash, _activation_broker, "2026-08-01", "2026-09-17"],
+        [
+            _activation_state["cash_milli"],
+            _normalized_record["broker"],
+            (_normalized_record.get("strategy_management") or {}).get("management_start_date"),
+            (_normalized_record.get("strategy_management") or {}).get("last_rollforward_date"),
+        ],
+    )
 
     summary["checks"] = len(results)
     return results, summary
@@ -3330,6 +3353,36 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _direct_context = _build_direct_manual_managed_entry_context(Path("."), ticker="2330", trade_date="2026-09-11")
     check("manual_direct_backfill_indicator_geometry_uses_pre_entry_bars_only", "2026-09-10", _signal_input_max_date["value"])
     check("manual_direct_backfill_reference_date_is_previous_actual_data_row", "2026-09-10", _direct_context["reference_market_date"])
+    check("manual_direct_backfill_management_starts_on_fill_date", "2026-09-11", _direct_context["management_start_date"])
+
+    from services.trading.account_trade_entry import build_manual_adopted_management_context as _build_manual_adopted_context
+    _adopt_dates = pd.date_range(end="2026-09-12", periods=_required_rows + 3, freq="D")
+    _adopt_frame = pd.DataFrame({
+        "Open": [100.0] * len(_adopt_dates), "High": [101.0] * len(_adopt_dates),
+        "Low": [99.0] * len(_adopt_dates), "Close": [100.0] * len(_adopt_dates),
+        "Volume": [1000] * len(_adopt_dates),
+    }, index=_adopt_dates)
+    _adopt_broker = {
+        "qty": 1000, "initial_qty": 1000,
+        "initial_cost_basis_milli": 100_000_000, "remaining_cost_basis_milli": 100_000_000,
+        "realized_pnl_milli": 0, "entry_date": "2026-09-11",
+    }
+    with patch("services.trading.account_trade_entry.load_trading_scanner_runtime", return_value={"params": base_params, "latest_data_date": "2026-09-12"}), \
+         patch("services.trading.account_trade_entry.open_trading_v2_consumer_view", return_value=object()), \
+         patch("services.trading.account_trade_entry.load_trading_v2_sanitized_ohlcv_frame", return_value=_adopt_frame), \
+         patch("services.trading.account_trade_entry.generate_signals", return_value=object()), \
+         patch("services.trading.account_trade_entry.unpack_precomputed_signals", return_value=([5.0] * len(_adopt_frame), None, None, None)):
+        _adopt_context = _build_manual_adopted_context(Path("."), ticker="2330", broker=_adopt_broker)
+    check(
+        "manual_legacy_inventory_normalizes_to_original_entry_date_and_current_rollforward",
+        ["2026-09-11", "2026-09-12", "2026-09-10", "manual_managed"],
+        [
+            _adopt_context["management_start_date"],
+            _adopt_context["last_rollforward_date"],
+            _adopt_context["reference_market_date"],
+            (_adopt_context.get("management_lineage") or {}).get("origin"),
+        ],
+    )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -3348,7 +3401,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         )
         _manual_context = {
             "params": base_params, "information_date": "2026-09-12",
-            "management_start_date": "2026-09-12",
+            "management_start_date": "2026-09-11",
             "execution_plan_seed": _manual_seed, "management_lineage": _manual_lineage,
             "reference_market_date": "2026-09-10", "reference_close": 995.0, "reference_atr": 5.0,
         }
@@ -3368,9 +3421,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _managed_inspection = _build_single_stock_inspection(root, "2330")
         _pre_management = _inspection_account_cycle_as_of(_managed_inspection, "2026-09-11")
         _managed_day = _inspection_account_cycle_as_of(_managed_inspection, "2026-09-12")
-        check("manual_historical_backfill_preserves_broker_position_before_management_start", "持股", (_pre_management or {}).get("display_state"))
-        check("manual_historical_backfill_does_not_leak_today_stop_before_management_start", None, (_pre_management or {}).get("stop_price"))
-        check_true("manual_historical_backfill_exposes_managed_stop_from_management_start", (_managed_day or {}).get("stop_price") is not None)
+        check("manual_historical_backfill_is_managed_from_fill_date", "持股", (_pre_management or {}).get("display_state"))
+        check_true("manual_historical_backfill_exposes_stop_from_fill_date", (_pre_management or {}).get("stop_price") is not None)
+        check_true("manual_historical_backfill_keeps_managed_stop_on_later_dates", (_managed_day or {}).get("stop_price") is not None)
         buy_revision = int(result["account"]["revision"] )
         before_correction = load_trading_account_state(root)
         with patch("services.trading.account_trade_entry.load_trading_scanner_runtime", return_value={"latest_data_date": "2026-09-12"}), \
@@ -3791,7 +3844,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _pending_fill_position = _pending_fill_result["account"]["positions"]["2330"]
         check("manual_pending_fill_transfers_to_managed_manual_position", "manual_managed", _pending_fill_position.get("source"))
         check("manual_pending_fill_closes_pending_entry_as_filled", "FILLED", _pending_fill_result["pending_entry"].get("status"))
-        check("manual_pending_historical_fill_keeps_no_future_management_start", "2026-09-15", (_pending_fill_position.get("strategy_management") or {}).get("management_start_date"))
+        check("manual_pending_historical_fill_uses_fill_date_as_management_start", "2026-09-14", (_pending_fill_position.get("strategy_management") or {}).get("management_start_date"))
         from services.trading.position_rollforward import build_trading_position_rollforward_snapshot as _build_rollforward_snapshot
         _rollforward_account = _pending_fill_result["account"]
         _pre_management_frame = pd.DataFrame(
@@ -3807,13 +3860,13 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
              patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
              patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _pre_management_frame}):
             _before_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
-        check("manual_pending_managed_rollforward_ignores_bars_before_management_start", False, _before_management_snapshot["positions"][0]["due"])
+        check("manual_pending_managed_rollforward_includes_fill_date_bar", True, _before_management_snapshot["positions"][0]["due"])
         with patch("services.trading.position_rollforward.resolve_trading_strategy_position_sources", return_value=(_rollforward_account, {"orders": {}}, object())), \
              patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-15"), \
              patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
              patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _management_frame}):
             _at_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
-        check("manual_pending_managed_rollforward_starts_on_management_start_date", "2026-09-15", _at_management_snapshot["positions"][0]["target_rollforward_date"])
+        check("manual_pending_managed_rollforward_advances_through_latest_available_bar", "2026-09-15", _at_management_snapshot["positions"][0]["target_rollforward_date"])
 
         _pending_account = load_trading_account_state(_pending_fill_root, required=True)
         _filled_entry = deepcopy(_pending_fill_result["pending_entry"])
@@ -4761,6 +4814,16 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "planned_qty": 333,
             "planned_cost": None,
             "frozen_params": _params_to_json_dict(base_params),
+            "execution_plan_seed": {
+                "entry_type": "manual",
+                "trade_date": "2026-09-03",
+                "entry_atr": _synth_atr,
+                "init_sl": _synth_stop,
+                "init_trail": _synth_trail,
+                "target_price": _synth_tp,
+                "limit_price": None,
+                "security_profile": {},
+            },
         },
         "strategy_management": {
             "status": "active",
@@ -4790,6 +4853,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "ticker": "2330", "candidate": {}, "entry_orders": [], "pending_entries": [],
         "account_events": [_manual_activation_event],
         "current_position": deepcopy(_manual_activation_record),
+        "position_binding": {
+            "lineage_id": "MANUAL-ACTIVATED-LINEAGE",
+            "frozen_params": _params_to_json_dict(base_params),
+            "execution_plan_seed": deepcopy(_manual_activation_record["management_lineage"]["execution_plan_seed"]),
+        },
         "decision_errors": [],
         "protection": {"fresh": False, "positions": []},
         "indicator_exit": {"fresh": False, "exits": []},
@@ -4797,14 +4865,19 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _manual_activation_projected = project_trading_single_stock_chart_payload(
         _manual_activation_chart, _manual_activation_inspection, params=base_params
     )
+    _manual_history_row0 = _manual_activation_projected.get("trading_lifecycle_by_index", {}).get(0) or {}
+    _manual_history_row1 = _manual_activation_projected.get("trading_lifecycle_by_index", {}).get(1) or {}
     check(
-        "workbench_single_stock_manual_adopted_management_starts_graph_only_at_management_start",
-        [None, "POSITION", float(_manual_activation_position["sl"]), float(_manual_activation_position["tp_half"])],
+        "workbench_single_stock_manual_managed_history_is_visible_before_legacy_takeover_date",
+        ["POSITION", "POSITION", True, True, True, True, True],
         [
-            (_manual_activation_projected.get("trading_lifecycle_by_index", {}).get(0) or {}).get("state"),
-            (_manual_activation_projected.get("trading_lifecycle_by_index", {}).get(1) or {}).get("state"),
-            _manual_activation_projected["stop_line"][1],
-            _manual_activation_projected["tp_line"][1],
+            _manual_history_row0.get("state"),
+            _manual_history_row1.get("state"),
+            _manual_activation_projected["entry_line"][0] == _manual_activation_projected["entry_line"][0],
+            _manual_activation_projected["stop_line"][0] == _manual_activation_projected["stop_line"][0],
+            _manual_activation_projected["tp_line"][0] == _manual_activation_projected["tp_line"][0],
+            _manual_activation_projected["stop_line"][1] == _manual_activation_projected["stop_line"][1],
+            "sell_signal" in _manual_history_row0 and "sell_signal" in _manual_history_row1,
         ],
     )
     _overlay_order = deepcopy(_inspection_order["entry_orders"][0])

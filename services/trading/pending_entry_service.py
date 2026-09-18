@@ -944,10 +944,7 @@ def fill_trading_pending_entry(
                 params=params,
                 execution_plan_seed=seed,
                 management_lineage=lineage,
-                management_start_date=max(
-                    fill_date,
-                    normalize_trading_date(entry.get("information_date"), field_name="pending_entry.information_date", allow_none=False),
-                ),
+                management_start_date=fill_date,
             )
             route = "manual_pending_fill"
         else:

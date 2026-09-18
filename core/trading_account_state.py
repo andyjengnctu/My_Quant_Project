@@ -920,26 +920,32 @@ def activate_manual_trading_position_management(
     management_lineage: dict[str, Any],
     position_state: dict[str, Any],
     management_start_date: object,
+    last_rollforward_date: object | None = None,
+    initial_position_state: dict[str, Any] | None = None,
     timestamp: str,
     mutation_id: str,
 ) -> dict[str, Any]:
-    """Promote broker-truth-only inventory into canonical frozen-Params management.
+    """Normalize one manual holding into canonical frozen-Params management.
 
-    This is a management-only mutation: cash and broker inventory are immutable.
-    Historical broker truth remains untouched; strategy management starts only at
-    ``management_start_date`` and therefore never fabricates retrospective stops,
-    targets, signals, or performance.
+    Cash and broker inventory are immutable.  The same mutation is also used to
+    normalize an earlier development-era ``manual_managed`` record whose
+    management start was detached from its broker entry date; this keeps the
+    product contract single-valued without rewriting broker truth.
     """
     validate_trading_account_state(state)
     ticker_key = _normalize_ticker(ticker)
     current = (state.get("positions") or {}).get(ticker_key)
     if not isinstance(current, dict):
         raise ValueError(f"Trading 沒有 open position: {ticker_key}")
-    if str(current.get("source") or "") != POSITION_SOURCE_MANUAL_ADOPTED:
-        raise ValueError(f"只有 manual_adopted position 可啟用手選策略管理: {ticker_key}")
+    current_source = str(current.get("source") or "")
+    if current_source not in {POSITION_SOURCE_MANUAL_ADOPTED, POSITION_SOURCE_MANUAL_MANAGED}:
+        raise ValueError(f"只有 manual position 可正規化策略管理: {ticker_key}")
     management = dict(current.get("strategy_management") or {})
-    if management.get("status") != MANAGEMENT_STATUS_UNMANAGED or management.get("position_state") is not None:
-        raise ValueError(f"Trading position 已有 strategy management: {ticker_key}")
+    if current_source == POSITION_SOURCE_MANUAL_ADOPTED:
+        if management.get("status") != MANAGEMENT_STATUS_UNMANAGED or management.get("position_state") is not None:
+            raise ValueError(f"Trading position 已有 strategy management: {ticker_key}")
+    elif management.get("status") != MANAGEMENT_STATUS_ACTIVE:
+        raise ValueError(f"Trading manual_managed position management 非 active: {ticker_key}")
 
     checked_lineage = deepcopy(dict(management_lineage or {}))
     frozen_params = checked_lineage.get("frozen_params")
@@ -960,6 +966,16 @@ def activate_manual_trading_position_management(
     start_date = _normalize_iso_date(management_start_date, field_name="management_start_date")
     if start_date is None:
         raise ValueError("management_start_date 必填")
+    rollforward_date = _normalize_iso_date(last_rollforward_date, field_name="last_rollforward_date")
+    if rollforward_date is not None and rollforward_date < start_date:
+        raise ValueError("last_rollforward_date 不得早於 management_start_date")
+    initial_state = None
+    if initial_position_state is not None:
+        initial_state = _json_safe(deepcopy(dict(initial_position_state)))
+        if int(initial_state.get("qty") or 0) != broker_qty:
+            raise ValueError(f"Trading 初始管理 position/broker qty 不一致: {ticker_key}")
+        if int(initial_state.get("remaining_cost_basis_milli") or 0) != broker_cost:
+            raise ValueError(f"Trading 初始管理 position/broker cost basis 不一致: {ticker_key}")
 
     updated = deepcopy(state)
     updated_record = updated["positions"][ticker_key]
@@ -969,7 +985,7 @@ def activate_manual_trading_position_management(
     updated_record["strategy_management"] = {
         "status": MANAGEMENT_STATUS_ACTIVE,
         "management_start_date": start_date,
-        "last_rollforward_date": None,
+        "last_rollforward_date": rollforward_date,
         "position_state": managed_state,
     }
     position_after = deepcopy(updated_record)
@@ -981,7 +997,9 @@ def activate_manual_trading_position_management(
         details={
             "ticker": ticker_key,
             "management_start_date": start_date,
+            "last_rollforward_date": rollforward_date,
             "management_lineage": deepcopy(checked_lineage),
+            "initial_position_state": deepcopy(initial_state),
             "position_before": position_before,
             "position_after": position_after,
             "cash_changed": False,

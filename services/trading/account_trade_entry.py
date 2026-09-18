@@ -13,6 +13,7 @@ from core.data_utils import get_required_min_rows
 from core.exact_accounting import infer_security_profile, milli_to_price, price_to_milli, sync_position_display_fields
 from core.entry_plans import build_position_from_entry_fill
 from core.params_io import build_params_from_mapping
+from core.position_step import rollforward_position_management_from_completed_bar
 from core.price_utils import calc_frozen_target_price, calc_initial_stop_from_reference, calc_initial_trailing_stop_from_reference
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.file_integrity import canonical_json_sha256
@@ -192,7 +193,7 @@ def _build_direct_manual_managed_entry_context(project_root, *, ticker: str, tra
     return {
         "params": params,
         "information_date": information_date,
-        "management_start_date": information_date,
+        "management_start_date": fill_date,
         "execution_plan_seed": seed,
         "management_lineage": lineage,
         "reference_market_date": seed["reference_market_date"],
@@ -207,13 +208,13 @@ def build_manual_adopted_management_context(
     ticker: str,
     broker: dict,
 ) -> dict:
-    """Freeze current canonical Params when an existing manual holding is managed.
+    """Normalize an existing manual holding to the canonical managed contract.
 
-    This is a current-time takeover, not a historical strategy backfill.  The
-    broker position/cost basis stays authoritative, while stop/target geometry is
-    initialized once from the current finalized ATR and the broker's average
-    entry basis.  Management begins at the current finalized information date so
-    no historical bar is retroactively presented as if this management existed.
+    Broker truth remains authoritative.  The management geometry is rebuilt from
+    the original broker entry date with the same canonical entry/roll-forward
+    primitives used by ordinary managed manual positions, then advanced through
+    the current finalized information date.  This is a compatibility migration
+    for development-era account state, not a second product lifecycle.
     """
     ticker_key = str(ticker or "").strip().upper()
     if not ticker_key:
@@ -223,6 +224,9 @@ def build_manual_adopted_management_context(
     remaining_cost_milli = int(broker_state.get("remaining_cost_basis_milli") or 0)
     if qty <= 0 or remaining_cost_milli <= 0:
         raise ValueError(f"{ticker_key} broker position qty/cost 不合法")
+    entry_date = normalize_trading_date(
+        broker_state.get("entry_date"), field_name="broker.entry_date", allow_none=False
+    )
 
     runtime = load_trading_scanner_runtime(project_root)
     params = runtime["params"]
@@ -243,12 +247,19 @@ def build_manual_adopted_management_context(
         raise RuntimeError(
             f"{ticker_key} 最新可用交易日 {latest_market_date} 與目前資訊日 {information_date} 不一致"
         )
+    prior = frame.loc[frame.index < pd.Timestamp(entry_date)].copy()
+    required_rows = int(get_required_min_rows(params))
+    if len(prior) < required_rows:
+        raise RuntimeError(
+            f"{ticker_key} 原成交日前歷史資料不足；需要至少 {required_rows} 筆，實際 {len(prior)} 筆"
+        )
     signals = generate_signals(frame, params, ticker=ticker_key)
     atr_values, _buy, _sell, _limits = unpack_precomputed_signals(signals)
-    current_atr = float(atr_values[-1])
-    current_close = float(frame["Close"].iloc[-1])
-    if current_atr <= 0 or current_close <= 0:
-        raise RuntimeError(f"{ticker_key} 最新 completed bar 無有效 Close/ATR")
+    prior_index = int(frame.index.get_loc(prior.index[-1]))
+    entry_atr = float(atr_values[prior_index])
+    prior_close = float(prior["Close"].iloc[-1])
+    if entry_atr <= 0 or prior_close <= 0:
+        raise RuntimeError(f"{ticker_key} 原成交日前一交易日 Close/ATR 不合法")
 
     initial_qty = int(broker_state.get("initial_qty") or qty)
     price_basis_milli = broker_state.get("initial_gross_buy_milli")
@@ -260,63 +271,81 @@ def build_manual_adopted_management_context(
     average_entry_milli = max(1, (price_basis_milli + initial_qty // 2) // initial_qty)
     average_entry_price = milli_to_price(average_entry_milli)
     security_profile = infer_security_profile(ticker_key)
-    position_state = build_position_from_entry_fill(
+    initial_position_state = build_position_from_entry_fill(
         buy_price=average_entry_price,
         qty=qty,
         params=params,
-        entry_type="manual_adopted_management",
-        entry_atr=current_atr,
+        entry_type="manual",
+        entry_atr=entry_atr,
         ticker=ticker_key,
         security_profile=security_profile,
-        trade_date=information_date,
-        target_reference_price=average_entry_price,
+        trade_date=entry_date,
+        target_reference_price=prior_close,
     )
 
     # Broker/account truth is never rewritten by management activation.
-    position_state["qty"] = qty
-    position_state["initial_qty"] = qty
-    position_state["net_buy_total_milli"] = int(broker_state.get("initial_cost_basis_milli") or remaining_cost_milli)
-    position_state["remaining_cost_basis_milli"] = remaining_cost_milli
-    position_state["realized_pnl_milli"] = int(broker_state.get("realized_pnl_milli") or 0)
+    initial_position_state["qty"] = qty
+    initial_position_state["initial_qty"] = qty
+    initial_position_state["net_buy_total_milli"] = int(broker_state.get("initial_cost_basis_milli") or remaining_cost_milli)
+    initial_position_state["remaining_cost_basis_milli"] = remaining_cost_milli
+    initial_position_state["realized_pnl_milli"] = int(broker_state.get("realized_pnl_milli") or 0)
     if broker_state.get("initial_gross_buy_milli") is not None:
-        position_state["gross_buy_milli"] = int(broker_state.get("initial_gross_buy_milli") or 0)
+        initial_position_state["gross_buy_milli"] = int(broker_state.get("initial_gross_buy_milli") or 0)
     if broker_state.get("initial_buy_fee_milli") is not None:
-        position_state["buy_fee_milli"] = int(broker_state.get("initial_buy_fee_milli") or 0)
-    position_state = sync_position_display_fields(position_state)
+        initial_position_state["buy_fee_milli"] = int(broker_state.get("initial_buy_fee_milli") or 0)
+    initial_position_state = sync_position_display_fields(initial_position_state)
+
+    position_state = dict(initial_position_state)
+    processed_dates: list[str] = []
+    for idx, date_value in enumerate(frame.index):
+        date_text = pd.Timestamp(date_value).strftime("%Y-%m-%d")
+        if date_text < entry_date:
+            continue
+        rollforward_position_management_from_completed_bar(
+            position_state,
+            completed_high=float(frame["High"].iloc[idx]),
+            completed_atr=float(atr_values[idx]),
+            params=params,
+            sync_display_fields=True,
+        )
+        processed_dates.append(date_text)
+    last_rollforward_date = processed_dates[-1] if processed_dates else None
 
     seed = {
-        "entry_type": "manual_adopted_management",
-        "entry_atr": current_atr,
-        "init_sl": position_state.get("initial_stop"),
-        "init_trail": position_state.get("trailing_stop"),
-        "target_price": position_state.get("tp_half"),
-        "target_reference_price": average_entry_price,
+        "entry_type": "manual",
+        "entry_atr": entry_atr,
+        "init_sl": initial_position_state.get("initial_stop"),
+        "init_trail": initial_position_state.get("trailing_stop"),
+        "target_price": initial_position_state.get("tp_half"),
+        "target_reference_price": prior_close,
         "limit_price": None,
         "security_profile": security_profile,
-        "trade_date": information_date,
-        "reference_market_date": information_date,
-        "reference_close": current_close,
+        "trade_date": entry_date,
+        "reference_market_date": pd.Timestamp(prior.index[-1]).strftime("%Y-%m-%d"),
+        "reference_close": prior_close,
         "broker_average_entry_price": average_entry_price,
     }
     lineage = build_trading_manual_management_lineage(
         params=params,
         execution_plan_seed=seed,
         information_date=information_date,
-        origin="manual_adopted_management",
+        origin="manual_managed",
         planned_qty=qty,
         planned_cost=None,
-        target_reference_close=average_entry_price,
+        target_reference_close=prior_close,
     )
     return {
         "params": params,
         "information_date": information_date,
-        "management_start_date": information_date,
+        "management_start_date": entry_date,
+        "last_rollforward_date": last_rollforward_date,
         "execution_plan_seed": seed,
         "management_lineage": lineage,
+        "initial_position_state": initial_position_state,
         "position_state": position_state,
-        "reference_market_date": information_date,
-        "reference_close": current_close,
-        "reference_atr": current_atr,
+        "reference_market_date": seed["reference_market_date"],
+        "reference_close": prior_close,
+        "reference_atr": entry_atr,
         "average_entry_price": average_entry_price,
     }
 

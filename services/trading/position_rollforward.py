@@ -22,6 +22,7 @@ from core.trading_account_state import (
     MANAGEMENT_STATUS_ACTIVE,
     MANAGED_POSITION_SOURCES,
     POSITION_SOURCE_MANUAL_ADOPTED,
+    POSITION_SOURCE_MANUAL_MANAGED,
 )
 from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.trading_order_state import active_trading_entry_orders
@@ -46,12 +47,12 @@ TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
 
 
 def reconcile_trading_manual_position_management(project_root: str | Path) -> dict[str, Any]:
-    """Promote legacy/manual-adopted holdings into frozen-Params management once.
+    """Normalize development-era manual holdings to one managed product contract.
 
-    Broker quantity/cost/cash are never changed.  Each successfully promoted
-    holding freezes the current canonical primary Params and starts management at
-    the current finalized information date.  Per-ticker failures are reported and
-    left unmanaged rather than blocking unrelated holdings.
+    Broker quantity/cost/cash are never changed.  ``manual_adopted`` positions,
+    plus prior compatibility activations whose management started later than the
+    broker entry date, are rebuilt from the original entry date and advanced to
+    the current finalized date with the same canonical management primitives.
     """
     root = Path(project_root).resolve()
     recover_trading_fill_transaction(root)
@@ -64,16 +65,30 @@ def reconcile_trading_manual_position_management(project_root: str | Path) -> di
     state = account
     for ticker in sorted(state.get("positions") or {}):
         record = (state.get("positions") or {}).get(ticker)
-        if not isinstance(record, dict) or str(record.get("source") or "") != POSITION_SOURCE_MANUAL_ADOPTED:
+        if not isinstance(record, dict):
             continue
+        source = str(record.get("source") or "")
+        broker = dict(record.get("broker") or {})
+        entry_date = normalize_trading_date(broker.get("entry_date"))
         management = dict(record.get("strategy_management") or {})
-        if management.get("status") == MANAGEMENT_STATUS_ACTIVE:
+        lineage = dict(record.get("management_lineage") or {})
+        management_start = normalize_trading_date(management.get("management_start_date"))
+        needs_normalization = source == POSITION_SOURCE_MANUAL_ADOPTED
+        if source == POSITION_SOURCE_MANUAL_MANAGED:
+            lineage_origin = str(lineage.get("origin") or "")
+            legacy_origin = lineage_origin in {"manual_adopted_management", "manual_managed"}
+            needs_normalization = bool(
+                legacy_origin
+                and entry_date is not None
+                and management_start != entry_date
+            )
+        if not needs_normalization:
             continue
         try:
             context = build_manual_adopted_management_context(
                 root,
                 ticker=str(ticker),
-                broker=dict(record.get("broker") or {}),
+                broker=broker,
             )
             state = activate_existing_manual_trading_position_management(
                 root,
@@ -81,6 +96,8 @@ def reconcile_trading_manual_position_management(project_root: str | Path) -> di
                 management_lineage=dict(context["management_lineage"]),
                 position_state=dict(context["position_state"]),
                 management_start_date=context["management_start_date"],
+                last_rollforward_date=context.get("last_rollforward_date"),
+                initial_position_state=dict(context["initial_position_state"]),
                 expected_revision=int(state["revision"]),
             )
             promoted.append(str(ticker))

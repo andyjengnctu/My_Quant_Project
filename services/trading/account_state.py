@@ -279,6 +279,8 @@ def activate_existing_manual_trading_position_management(
     management_lineage: dict[str, Any],
     position_state: dict[str, Any],
     management_start_date,
+    last_rollforward_date=None,
+    initial_position_state: dict[str, Any] | None = None,
     expected_revision: int,
 ):
     """Attach frozen strategy management to existing broker truth without cash changes."""
@@ -293,6 +295,8 @@ def activate_existing_manual_trading_position_management(
             management_lineage=management_lineage,
             position_state=position_state,
             management_start_date=management_start_date,
+            last_rollforward_date=last_rollforward_date,
+            initial_position_state=initial_position_state,
             timestamp=timestamp,
             mutation_id=mutation_id,
         ),

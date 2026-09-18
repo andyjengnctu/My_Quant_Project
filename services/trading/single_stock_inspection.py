@@ -14,12 +14,17 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping
 
+import pandas as pd
+
 from core.entry_plans import build_position_from_entry_fill
 from core.exact_accounting import calc_entry_total_cost, milli_to_money, milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping
+from core.position_step import rollforward_position_management_from_completed_bar
+from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import (
     ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT,
     MANAGED_POSITION_SOURCES,
+    POSITION_SOURCE_MANUAL_MANAGED,
     POSITION_SOURCE_STRATEGY_FILL,
     TRADE_MUTATION_MANUAL_MANAGED_BUY,
     TRADE_MUTATION_BUY,
@@ -685,6 +690,7 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         "last_rollforward_date": last_rollforward_date,
         "strategy_lineage": lineage,
         "management_lineage": lineage,
+        "sold_half": bool(position_state.get("sold_half", False)) if isinstance(position_state, Mapping) else False,
         "sell_signal": _sell_signal_as_of(inspection, date_text),
         "decision_errors": list(inspection.get("decision_errors") or []),
     }
@@ -1527,6 +1533,137 @@ def _build_trading_prefill_lifecycle_timeline(
     return merged
 
 
+def _build_manual_managed_position_replay_timeline(
+    inspection: Mapping[str, Any],
+    chart_payload: Mapping[str, Any],
+) -> dict[int, dict[str, Any]]:
+    """Rebuild date-aware manual-managed geometry from frozen Params.
+
+    Account truth remains the owner of inventory/cash/actual fills.  This helper
+    only replays deterministic management geometry (stop/target/indicator SELL)
+    so a manual holding has the same historical chart semantics as a strategy
+    holding instead of exposing a development-era takeover-date gap.
+    """
+
+    record = inspection.get("current_position")
+    if not isinstance(record, Mapping) or str(record.get("source") or "") != POSITION_SOURCE_MANUAL_MANAGED:
+        return {}
+    broker = dict(record.get("broker") or {})
+    management = dict(record.get("strategy_management") or {})
+    current_state = management.get("position_state")
+    binding = inspection.get("position_binding")
+    if not isinstance(binding, Mapping) or not isinstance(current_state, Mapping):
+        return {}
+    entry_date = _date_text(broker.get("entry_date"))
+    if entry_date is None:
+        return {}
+
+    try:
+        params = build_params_from_mapping(dict(binding.get("frozen_params") or {}))
+    except (TypeError, ValueError, KeyError):
+        return {}
+    seed = dict(binding.get("execution_plan_seed") or {})
+    ticker = str(inspection.get("ticker") or "")
+    initial_qty = int(broker.get("initial_qty") or broker.get("qty") or 0)
+    if initial_qty <= 0:
+        return {}
+
+    entry_price = current_state.get("entry_fill_price")
+    if entry_price is None:
+        gross_milli = broker.get("initial_gross_buy_milli")
+        if gross_milli is None:
+            gross_milli = broker.get("initial_cost_basis_milli")
+        gross_milli = int(gross_milli or 0)
+        if gross_milli <= 0:
+            return {}
+        entry_price = milli_to_price((gross_milli + initial_qty // 2) // initial_qty)
+
+    try:
+        position = build_position_from_entry_fill(
+            buy_price=float(entry_price),
+            qty=initial_qty,
+            params=params,
+            entry_type=str(seed.get("entry_type") or "manual"),
+            init_sl=seed.get("init_sl"),
+            init_trail=seed.get("init_trail"),
+            target_price=seed.get("target_price"),
+            limit_price=seed.get("limit_price"),
+            entry_atr=seed.get("entry_atr"),
+            ticker=ticker,
+            security_profile=seed.get("security_profile"),
+            trade_date=entry_date,
+            target_reference_price=seed.get("target_reference_price"),
+        )
+    except (TypeError, ValueError, KeyError):
+        return {}
+
+    # Keep broker economics exact while replaying only strategy-management fields.
+    position["qty"] = initial_qty
+    position["initial_qty"] = initial_qty
+    position["net_buy_total_milli"] = int(broker.get("initial_cost_basis_milli") or 0)
+    position["remaining_cost_basis_milli"] = int(broker.get("initial_cost_basis_milli") or 0)
+
+    date_labels = _chart_date_labels(chart_payload)
+    total = len(date_labels)
+    required = ("open", "high", "low", "close", "volume")
+    if total <= 0 or any(len(list(chart_payload.get(key) or [])) < total for key in required):
+        return {}
+    frame = pd.DataFrame(
+        {
+            "Open": list(chart_payload.get("open") or [])[:total],
+            "High": list(chart_payload.get("high") or [])[:total],
+            "Low": list(chart_payload.get("low") or [])[:total],
+            "Close": list(chart_payload.get("close") or [])[:total],
+            "Volume": list(chart_payload.get("volume") or [])[:total],
+        },
+        index=pd.to_datetime([value if value is not None else "NaT" for value in date_labels]),
+    )
+    valid_mask = ~frame.index.isna()
+    if not bool(valid_mask.any()):
+        return {}
+    valid_frame = frame.loc[valid_mask].copy()
+    valid_positions = [idx for idx, valid in enumerate(valid_mask.tolist()) if valid]
+    try:
+        atr_values, _buy_values, sell_values, _limits = unpack_precomputed_signals(
+            generate_signals(valid_frame, params, ticker=ticker)
+        )
+    except (TypeError, ValueError, KeyError, IndexError):
+        return {}
+
+    replay: dict[int, dict[str, Any]] = {}
+    for local_idx, chart_idx in enumerate(valid_positions):
+        date_text = date_labels[chart_idx]
+        if date_text is None or date_text < entry_date:
+            continue
+        rollforward_position_management_from_completed_bar(
+            position,
+            completed_high=float(valid_frame["High"].iloc[local_idx]),
+            completed_atr=float(atr_values[local_idx]),
+            params=params,
+            sync_display_fields=True,
+        )
+        indicator_sell = bool(sell_values[local_idx]) and date_text > entry_date
+        replay[int(chart_idx)] = build_trade_lifecycle_row(
+            TRADE_LIFECYCLE_POSITION,
+            source="manual_managed_frozen_replay",
+            information_date=date_text,
+            entry_type=str(position.get("entry_type") or seed.get("entry_type") or "manual"),
+            limit_price=position.get("limit_price"),
+            entry_price=position.get("entry_fill_price"),
+            stop_price=position.get("sl"),
+            tp_price=(None if bool(position.get("sold_half", False)) else position.get("tp_half")),
+            buy_qty=initial_qty,
+            position_qty=initial_qty,
+            remaining_order_qty=0,
+            entry_date=entry_date,
+            initial_stop_price=position.get("initial_stop"),
+            trailing_stop_price=position.get("trailing_stop"),
+            sell_signal=("INDICATOR SELL" if indicator_sell else None),
+            management_lineage=deepcopy(record.get("management_lineage")),
+        )
+    return replay
+
+
 def build_trading_single_stock_lifecycle_timeline(
     inspection: Mapping[str, Any] | None,
     chart_payload: Mapping[str, Any] | None,
@@ -1546,12 +1683,25 @@ def build_trading_single_stock_lifecycle_timeline(
     prefill = _build_trading_prefill_lifecycle_timeline(
         inspection, chart_payload, params=params
     )
+    manual_replay = _build_manual_managed_position_replay_timeline(inspection, chart_payload)
     timeline: dict[int, dict[str, Any]] = {}
     for idx, date_text in enumerate(date_labels):
         if date_text is None:
             continue
         position_state = _account_cycle_as_of(inspection, date_text)
         if position_state is not None:
+            replay_state = manual_replay.get(int(idx))
+            if isinstance(replay_state, Mapping):
+                # Broker/event history remains authoritative for lifecycle and
+                # quantity.  The frozen-Params replay owns date-aware management
+                # geometry for manual-managed positions.
+                position_state["entry_price"] = replay_state.get("entry_price")
+                position_state["initial_stop_price"] = replay_state.get("initial_stop_price")
+                position_state["trailing_stop_price"] = replay_state.get("trailing_stop_price")
+                position_state["stop_price"] = replay_state.get("stop_price")
+                if not bool(position_state.get("sold_half", False)):
+                    position_state["tp_price"] = replay_state.get("tp_price")
+                position_state["sell_signal"] = replay_state.get("sell_signal")
             # Order evidence can contribute reservation metadata for a genuine
             # partial fill but never creates POSITION by itself.
             entry_order_id = str(position_state.get("entry_order_id") or "").strip()
@@ -1573,6 +1723,10 @@ def build_trading_single_stock_lifecycle_timeline(
                 break
             position_state["state"] = TRADE_LIFECYCLE_POSITION
             timeline[int(idx)] = deepcopy(dict(position_state))
+            continue
+        replay_state = manual_replay.get(int(idx))
+        if isinstance(replay_state, Mapping):
+            timeline[int(idx)] = deepcopy(dict(replay_state))
             continue
         state = prefill.get(int(idx))
         if isinstance(state, Mapping):
