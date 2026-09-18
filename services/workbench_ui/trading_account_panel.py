@@ -2250,16 +2250,20 @@ class TradingAccountPanel(ttk.Frame):
         self._apply_current_table_sort(self._pending_tree)
         self._fit_tree_rows(self._pending_tree, len(active_rows))
         edit_id = str(self._pending_edit_entry_id or "").strip()
-        restore_id = edit_id or selected
-        if restore_id and restore_id in self._pending_rows:
-            self._pending_tree.selection_set(restore_id)
-            self._pending_tree.focus(restore_id)
-            if edit_id:
-                self._pending_edit_snapshot = dict(self._pending_rows[restore_id])
+        if edit_id and edit_id in self._pending_rows:
+            # A pending-row selection is meaningful only while the form is bound
+            # to that exact ACTIVE pending_entry_id.  Never restore a visual
+            # selection without edit identity; that creates a row which looks
+            # selected but whose form still runs the create-new path.
+            self._pending_tree.selection_set(edit_id)
+            self._pending_tree.focus(edit_id)
+            self._pending_edit_snapshot = dict(self._pending_rows[edit_id])
         elif edit_id:
             self._reset_pending_draft_form(
                 message="原選取掛單已不存在或已結案；目前已回到新增掛單模式。"
             )
+        else:
+            clear_treeview_selection(self._pending_tree)
         usage = dict(snapshot.get("resource_usage") or {})
         reserved = float(usage.get("reserved_total_milli") or snapshot.get("reserved_total_milli") or 0) / 1000.0
         stale_count = int(snapshot.get("stale_active_count") or 0)
@@ -2648,6 +2652,52 @@ class TradingAccountPanel(ttk.Frame):
         entry_id = self._selected_pending_entry_id()
         return None if not entry_id else self._pending_rows.get(entry_id)
 
+    def _bind_existing_pending_for_ticker(self, ticker: str, *, preserve_overrides: bool) -> bool:
+        """Bind the form to the unique ACTIVE pending row for ``ticker``.
+
+        Duplicate ACTIVE intent for one ticker is not a valid create-new state.
+        This guard runs before *every* preview path, so changing the date/qty
+        immediately after typing a ticker cannot cancel a delayed ticker-commit
+        callback and accidentally fall back to the create-new resource check.
+        """
+
+        ticker_key = str(ticker or "").strip().upper()
+        if not ticker_key or self._pending_edit_entry_id is not None:
+            return False
+        matches = [
+            (entry_id, dict(row))
+            for entry_id, row in self._pending_rows.items()
+            if str(row.get("ticker") or "").strip().upper() == ticker_key
+        ]
+        if len(matches) != 1:
+            return False
+        entry_id, row = matches[0]
+        current_qty = self._pending_order_qty_var.get().strip() if preserve_overrides else ""
+        current_date = self._pending_order_date_var.get().strip() if preserve_overrides else ""
+        current_fill_date = self._pending_fill_date_var.get().strip() if preserve_overrides else ""
+        current_fill_price = self._pending_fill_price_var.get().strip() if preserve_overrides else ""
+        origin = "scanner" if str(row.get("origin") or "") == "scanner_strategy" else "manual"
+        self._pending_tree.selection_set(entry_id)
+        self._pending_tree.focus(entry_id)
+        self._candidate_tree.clear_selection(notify=False)
+        self._pending_draft_origin = origin
+        self._pending_draft_candidate = None
+        self._set_pending_edit_mode(entry_id, row=row)
+        self._pending_draft_programmatic_update = True
+        try:
+            self._pending_order_source_var.set(trading_source_display_label(origin=origin))
+            self._pending_order_ticker_var.set(ticker_key)
+            self._pending_order_qty_var.set(current_qty or str(int(row.get("planned_qty") or 0)))
+            self._pending_order_limit_var.set(str(row.get("limit_price") or ""))
+            self._pending_order_date_var.set(
+                current_date or str(row.get("planned_trade_date") or row.get("information_date") or "")
+            )
+            self._pending_fill_date_var.set(current_fill_date)
+            self._pending_fill_price_var.set(current_fill_price)
+        finally:
+            self._pending_draft_programmatic_update = False
+        return True
+
     def _on_pending_selected(self, _event=None):
         row = self._selected_pending_row()
         if not row:
@@ -2685,7 +2735,9 @@ class TradingAccountPanel(ttk.Frame):
         self._preview_pending_draft(use_current_overrides=True, silent=True)
 
     def _on_pending_tree_click(self, event):
-        region = self._pending_tree.identify_region(event.x, event.y)
+        region = str(self._pending_tree.identify_region(event.x, event.y) or "")
+        if region == "heading":
+            return None
         entry_id = str(self._pending_tree.identify_row(event.y) or "")
         column = self._pending_tree.identify_column(event.x)
         if region == "cell" and column == "#1":
@@ -2693,14 +2745,30 @@ class TradingAccountPanel(ttk.Frame):
             if row:
                 self._open_ticker_in_inspector(str(row.get("ticker") or ""))
             return "break"
-        return handle_treeview_toggle_click(
-            self._pending_tree,
-            event,
-            ignore_columns=("#1",),
-            on_clear=lambda: self._reset_pending_draft_form(
+        if not entry_id:
+            if self._pending_tree.selection() or self._pending_edit_entry_id is not None:
+                clear_treeview_selection(self._pending_tree)
+                self._reset_pending_draft_form(
+                    message="已取消掛單選取；目前為新增掛單模式。"
+                )
+                return "break"
+            return None
+
+        # Drive the pending form from the canonical edit identity rather than
+        # Treeview's transient visual selection.  A row can be visually selected
+        # by a refresh without a <<TreeviewSelect>> callback; treating that as a
+        # second-click deselect was the cause of a create-new preview against its
+        # own ACTIVE reservation.
+        if str(self._pending_edit_entry_id or "") == entry_id:
+            clear_treeview_selection(self._pending_tree)
+            self._reset_pending_draft_form(
                 message="已取消掛單選取；目前為新增掛單模式。"
-            ),
-        )
+            )
+            return "break"
+        self._pending_tree.selection_set(entry_id)
+        self._pending_tree.focus(entry_id)
+        self._on_pending_selected()
+        return "break"
 
     def _open_selected_pending_in_inspector(self, _event=None):
         row = self._selected_pending_row()
@@ -2773,6 +2841,14 @@ class TradingAccountPanel(ttk.Frame):
             return self._preview_pending_draft(use_current_overrides=True, silent=True)
         if self._pending_edit_entry_id and ticker == edit_ticker:
             return self._preview_pending_draft(use_current_overrides=True, silent=True)
+
+        # Duplicate ACTIVE pending intent is never a valid create-new action.
+        # If the user types the ticker of the one existing ACTIVE row, bind the
+        # form to that pending_entry_id and hydrate the full edit form instead of
+        # running the create path and reporting that the ticker blocks itself.
+        if self._bind_existing_pending_for_ticker(ticker, preserve_overrides=True):
+            return self._preview_pending_draft(use_current_overrides=True, silent=True)
+
         self._pending_draft_origin = "manual"
         self._pending_draft_candidate = None
         self._pending_draft_programmatic_update = True
@@ -3122,6 +3198,13 @@ class TradingAccountPanel(ttk.Frame):
         ticker = self._pending_order_ticker_var.get().strip().upper()
         if not ticker:
             return False
+        # Run this synchronously before any preview request.  Date/qty edits can
+        # cancel the delayed ticker-commit callback, so relying on that callback
+        # alone leaves the form on the create-new path and makes an existing
+        # ACTIVE pending order conflict with itself.
+        self._bind_existing_pending_for_ticker(
+            ticker, preserve_overrides=bool(use_current_overrides)
+        )
         try:
             request = self._build_pending_draft_request(use_current_overrides=use_current_overrides)
         except (ValueError, RuntimeError) as exc:

@@ -4138,12 +4138,46 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         )),
     )
     check(
-        "workbench_pending_refresh_clears_stale_edit_mode_instead_of_leaving_update_button_orphaned",
+        "workbench_pending_refresh_keeps_visual_selection_and_edit_identity_atomic",
         True,
         all(token in panel_source for token in (
-            'restore_id = edit_id or selected',
-            'elif edit_id:',
+            'if edit_id and edit_id in self._pending_rows:',
+            'self._pending_tree.selection_set(edit_id)',
+            'self._pending_edit_snapshot = dict(self._pending_rows[edit_id])',
+            'else:\n            clear_treeview_selection(self._pending_tree)',
             '原選取掛單已不存在或已結案；目前已回到新增掛單模式。',
+        ))
+        and 'restore_id = edit_id or selected' not in panel_source,
+    )
+    check(
+        "workbench_pending_row_click_uses_edit_identity_for_toggle_not_stale_visual_selection",
+        True,
+        all(token in panel_source for token in (
+            'if str(self._pending_edit_entry_id or "") == entry_id:',
+            'self._pending_tree.selection_set(entry_id)',
+            'self._pending_tree.focus(entry_id)',
+            'self._on_pending_selected()',
+            'return "break"',
+        )),
+    )
+    check(
+        "workbench_manual_ticker_matching_active_pending_auto_binds_existing_edit_instead_of_self_duplicate",
+        True,
+        all(token in panel_source for token in (
+            'def _bind_existing_pending_for_ticker',
+            'if len(matches) != 1:',
+            'self._set_pending_edit_mode(entry_id, row=row)',
+            'self._pending_order_qty_var.set(current_qty or str(int(row.get("planned_qty") or 0)))',
+            'if self._bind_existing_pending_for_ticker(ticker, preserve_overrides=True):',
+        )),
+    )
+    check(
+        "workbench_every_pending_preview_prebinds_unique_active_ticker_before_resource_check",
+        True,
+        all(token in panel_source for token in (
+            'self._bind_existing_pending_for_ticker(',
+            'ticker, preserve_overrides=bool(use_current_overrides)',
+            'request = self._build_pending_draft_request(use_current_overrides=use_current_overrides)',
         )),
     )
     check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
