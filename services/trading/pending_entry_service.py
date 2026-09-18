@@ -346,6 +346,7 @@ def _prepare_scanner_pending_entry(
             planned_trade_date=planned_trade_date,
         )
     )
+    plan["planned_trade_date"] = resolved_planned_date
     validate_pending_order_limit_price(
         project_root,
         ticker=ticker,
@@ -490,6 +491,7 @@ def _prepare_manual_pending_entry(
             planned_trade_date=planned_trade_date,
         )
     )
+    plan["planned_trade_date"] = resolved_planned_date
     validate_pending_order_limit_price(
         project_root,
         ticker=ticker_key,
@@ -620,7 +622,6 @@ def _prepare_existing_pending_entry_update(
         qty=qty,
         limit_price=limit_price,
     )
-    lineage = _rebuild_existing_pending_lineage(current, plan)
     requested_planned_date = planned_trade_date or current.get("planned_trade_date")
     resolved_planned_date = validate_pending_order_trade_date(
         project_root,
@@ -628,6 +629,8 @@ def _prepare_existing_pending_entry_update(
         latest_finalized_date=latest_finalized_date,
         planned_trade_date=requested_planned_date,
     )
+    plan["planned_trade_date"] = resolved_planned_date
+    lineage = _rebuild_existing_pending_lineage(current, plan)
     validate_pending_order_limit_price(
         project_root,
         ticker=ticker,

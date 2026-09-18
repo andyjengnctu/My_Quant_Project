@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.entry_plans import build_position_from_entry_fill
-from core.exact_accounting import calc_entry_total_cost, milli_to_money, milli_to_price
+from core.exact_accounting import calc_entry_total_cost, milli_to_money, milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping
 from core.trading_account_state import (
+    ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT,
     MANAGED_POSITION_SOURCES,
     POSITION_SOURCE_STRATEGY_FILL,
     TRADE_MUTATION_MANUAL_MANAGED_BUY,
@@ -48,6 +49,7 @@ from core.trade_lifecycle import (
     TRADE_LIFECYCLE_SHADOW,
     TRADE_LIFECYCLE_SIGNAL,
     TRADE_TRANSACTION_LINE_KEYS,
+    build_trade_lifecycle_row,
     build_prefill_lifecycle_timeline,
     iter_trade_lifecycle_line_values,
 )
@@ -382,6 +384,8 @@ def _trade_event_date(event: Mapping[str, Any]) -> str | None:
     mutation = str(event.get("mutation_type") or "")
     if mutation in _BUY_MUTATIONS or mutation == TRADE_MUTATION_SELL:
         return _date_text(details.get("trade_date"))
+    if mutation == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT:
+        return _date_text(details.get("management_start_date")) or _date_text(event.get("timestamp"))
     return _date_text(event.get("timestamp"))
 
 
@@ -488,6 +492,35 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         if event_date is None or event_date > date_text:
             continue
 
+        if mutation == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT:
+            position_after = details.get("position_after")
+            if not isinstance(position_after, Mapping):
+                continue
+            broker_after = dict(position_after.get("broker") or {})
+            management = dict(position_after.get("strategy_management") or {})
+            management_start = _date_text(management.get("management_start_date"))
+            if management_start is not None and date_text < management_start:
+                continue
+            managed_position = management.get("position_state")
+            if not isinstance(managed_position, Mapping):
+                continue
+            qty = int(broker_after.get("qty") or 0)
+            entry_qty = qty
+            entry_date = _date_text(broker_after.get("entry_date")) or management_start or event_date
+            gross_buy_milli = int(
+                broker_after.get("initial_gross_buy_milli")
+                or broker_after.get("initial_cost_basis_milli")
+                or 0
+            )
+            net_buy_milli = int(broker_after.get("initial_cost_basis_milli") or 0)
+            position_state = deepcopy(dict(managed_position))
+            lineage = deepcopy(dict(position_after.get("management_lineage") or {}))
+            entry_order_id = None
+            last_rollforward_date = _date_text(management.get("last_rollforward_date"))
+            trailing_stop_exact = True
+            closed_date = None
+            continue
+
         if mutation in _BUY_MUTATIONS:
             add_qty = int(details.get("qty") or details.get("fill_qty") or 0)
             if add_qty <= 0:
@@ -514,10 +547,30 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
                     management = position_after.get("strategy_management") or {}
                     management_start = _date_text(management.get("management_start_date"))
                     candidate_position = management.get("position_state")
+                    management_lineage = details.get("management_lineage")
+                    if not isinstance(management_lineage, Mapping):
+                        management_lineage = position_after.get("management_lineage")
+                    pending_managed_fill = (
+                        mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY
+                        and isinstance(management_lineage, Mapping)
+                        and str(management_lineage.get("origin") or "") == "manual_pending_entry"
+                    )
                     if (
                         isinstance(candidate_position, Mapping)
-                        and (management_start is None or date_text >= management_start)
+                        and (
+                            mutation == TRADE_MUTATION_STRATEGY_BUY
+                            or pending_managed_fill
+                            or management_start is None
+                            or date_text >= management_start
+                        )
                     ):
+                        # The initial position state attached to a confirmed
+                        # pending fill is mechanical fill-time evidence.  It may
+                        # be rendered from the actual fill date even when daily
+                        # roll-forward intentionally begins later at the frozen
+                        # information/management-start boundary.  Direct manual
+                        # backfills keep their prior "no management geometry
+                        # before management_start" contract.
                         position_state = deepcopy(dict(candidate_position))
                 lineage_key = "strategy_lineage" if mutation == TRADE_MUTATION_STRATEGY_BUY else "management_lineage"
                 if isinstance(details.get(lineage_key), Mapping):
@@ -884,6 +937,11 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
         return None
     origin = str(entry.get("origin") or "")
     manual_pending = origin == "manual_selected"
+    planned_trade_date = _date_text(entry.get("planned_trade_date"))
+    # A manual pending row is explicit user-confirmed order intent.  Its chart
+    # lifecycle therefore begins on the persisted planned order date, not on the
+    # later Workbench bookkeeping/information date.  The frozen plan itself is
+    # the audit evidence being replayed; no Research simulated fill is inferred.
     signal_date = information_date if manual_pending else (_date_text(entry.get("signal_date")) or information_date)
     seed = dict(entry.get("execution_plan_seed") or {})
     end_before = None
@@ -910,6 +968,8 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
         "frozen_params": deepcopy((entry.get("management_lineage") or {}).get("frozen_params")),
         "entry_type": str(seed.get("entry_type") or "manual"),
         "source": "manual_pending_entry" if manual_pending else "scanner_pending_entry",
+        "planned_trade_date": planned_trade_date,
+        "confirmed_pending_order": bool(manual_pending),
         "pending_entry_id": str(entry.get("pending_entry_id") or ""),
         "priority": 40,
     }
@@ -948,6 +1008,41 @@ def _pending_entry_is_effective_execution_evidence(
         # from ticker/date/price coincidence.
         return False
 
+    return _matching_account_buy_event_for_pending(entry, inspection) is not None
+
+
+def _matching_account_buy_event_for_pending(
+    entry: Mapping[str, Any],
+    inspection: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Match one FILLED pending audit row to its effective account BUY event.
+
+    Lineage alone is insufficient for legacy manual pending rows because old
+    lineage identities did not include ``planned_trade_date``.  Match the
+    immutable lineage together with actual fill date/qty/price so an older order
+    cannot be resurrected as a second chart annotation for the current position.
+    """
+
+    if not isinstance(entry, Mapping) or str(entry.get("status") or "") != PENDING_ENTRY_STATUS_FILLED:
+        return None
+    pending_lineage = entry.get("management_lineage")
+    pending_lineage_id = (
+        str((pending_lineage or {}).get("lineage_id") or "").strip()
+        if isinstance(pending_lineage, Mapping)
+        else ""
+    )
+    if not pending_lineage_id:
+        return None
+    fill = dict(entry.get("fill") or {})
+    fill_date = _date_text(fill.get("trade_date"))
+    fill_qty = int(fill.get("qty") or 0)
+    fill_price_milli = None
+    if fill.get("price") is not None:
+        try:
+            fill_price_milli = int(price_to_milli(fill.get("price")))
+        except (TypeError, ValueError):
+            return None
+
     for event in list(inspection.get("account_events") or []):
         if not isinstance(event, Mapping):
             continue
@@ -969,9 +1064,74 @@ def _pending_entry_is_effective_execution_evidence(
             )
         if not isinstance(lineage, Mapping):
             continue
-        if str(lineage.get("lineage_id") or "").strip() == pending_lineage_id:
-            return True
-    return False
+        if str(lineage.get("lineage_id") or "").strip() != pending_lineage_id:
+            continue
+        if fill_date is not None and _trade_event_date(event) != fill_date:
+            continue
+        event_qty = int(details.get("qty") or details.get("fill_qty") or 0)
+        if fill_qty > 0 and event_qty != fill_qty:
+            continue
+        event_price_milli = details.get("entry_fill_price_milli")
+        if event_price_milli is None:
+            event_price_milli = details.get("fill_price_milli")
+        if fill_price_milli is not None and event_price_milli is not None and int(event_price_milli) != fill_price_milli:
+            continue
+        return event
+    return None
+
+
+def _effective_pending_entries(inspection: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return current ACTIVE rows plus one canonical FILLED row per account BUY.
+
+    Multiple legacy manual pending rows could share a lineage identity.  When
+    they all matched the same effective account event the inspector drew more
+    than one ``掛單`` annotation.  Select the audit row whose fill confirmation
+    timestamp is closest to the account event timestamp; future rows include the
+    planned order date in lineage identity and naturally remain unique.
+    """
+
+    active: list[dict[str, Any]] = []
+    filled_by_event: dict[tuple[object, ...], tuple[float, dict[str, Any]]] = {}
+    for raw in list(inspection.get("pending_entries") or []):
+        if not isinstance(raw, Mapping):
+            continue
+        entry = deepcopy(dict(raw))
+        status = str(entry.get("status") or "")
+        if status == PENDING_ENTRY_STATUS_ACTIVE:
+            active.append(entry)
+            continue
+        if status != PENDING_ENTRY_STATUS_FILLED:
+            continue
+        event = _matching_account_buy_event_for_pending(entry, inspection)
+        if not isinstance(event, Mapping):
+            continue
+        key = (
+            event.get("revision"),
+            event.get("mutation_id"),
+            event.get("event_hash"),
+            event.get("timestamp"),
+            _trade_event_date(event),
+        )
+        event_ts = str(event.get("timestamp") or "")
+        fill_ts = str((entry.get("fill") or {}).get("confirmed_at") or entry.get("closed_at") or "")
+        distance = float("inf")
+        try:
+            event_dt = datetime.fromisoformat(event_ts)
+            fill_dt = datetime.fromisoformat(fill_ts)
+            distance = abs((event_dt - fill_dt).total_seconds())
+        except (TypeError, ValueError):
+            pass
+        prior = filled_by_event.get(key)
+        if prior is None or (distance, str(entry.get("pending_entry_id") or "")) < (
+            prior[0], str(prior[1].get("pending_entry_id") or "")
+        ):
+            filled_by_event[key] = (distance, entry)
+    rows = active + [pair[1] for pair in filled_by_event.values()]
+    rows.sort(key=lambda row: (
+        str(row.get("planned_trade_date") or row.get("information_date") or ""),
+        str(row.get("pending_entry_id") or ""),
+    ))
+    return rows
 
 
 def _plan_covers_date(plan: Mapping[str, Any], date_text: str) -> bool:
@@ -1020,9 +1180,7 @@ def _build_shadow_plans(
             candidate_plan["end_date"] = last_date
         plans.append(candidate_plan)
 
-    for pending in list(inspection.get("pending_entries") or []):
-        if not _pending_entry_is_effective_execution_evidence(pending, inspection):
-            continue
+    for pending in _effective_pending_entries(inspection):
         pending_plan = _shadow_plan_from_pending_entry(pending, last_date=last_date)
         if pending_plan is not None:
             plans.append(pending_plan)
@@ -1080,7 +1238,7 @@ def _shadow_state_from_plan(
     return {
         "state": lifecycle_state,
         "display_state": (
-            "掛單" if lifecycle_state == TRADE_LIFECYCLE_SIGNAL and str(plan.get("source")) == "manual_pending_entry"
+            "掛單" if str(plan.get("source")) == "manual_pending_entry"
             else ("買訊" if lifecycle_state == TRADE_LIFECYCLE_SIGNAL else "SHADOW")
         ),
         "source": str(plan.get("source") or "shadow_plan"),
@@ -1129,7 +1287,9 @@ def _prefill_state_as_of(
     )
     signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
     lifecycle_state = (
-        TRADE_LIFECYCLE_SIGNAL if signal_date == date_text else TRADE_LIFECYCLE_SHADOW
+        TRADE_LIFECYCLE_SHADOW
+        if signal_date == date_text and bool(plan.get("confirmed_pending_order"))
+        else (TRADE_LIFECYCLE_SIGNAL if signal_date == date_text else TRADE_LIFECYCLE_SHADOW)
     )
     return _shadow_state_from_plan(
         plan,
@@ -1326,6 +1486,37 @@ def _build_trading_prefill_lifecycle_timeline(
             plan=plan,
             params=plan_params,
         )
+        if bool(plan.get("confirmed_pending_order")):
+            signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
+            planned_trade_date = _date_text(plan.get("planned_trade_date")) or signal_date
+            for static_idx, static_date in enumerate(date_labels):
+                if static_date is None or planned_trade_date is None or signal_date is None:
+                    continue
+                if static_date < planned_trade_date or static_date > signal_date:
+                    continue
+                # A confirmed manual pending order already owns immutable
+                # planned L/S/TP geometry.  For a historical backfill, show that
+                # persisted plan from its planned order date through the later
+                # information date, but do not run today's frozen Params backward
+                # over those historical bars.  The canonical shadow engine above
+                # starts advancing only after the information bar.
+                static_row = build_trade_lifecycle_row(
+                    TRADE_LIFECYCLE_SHADOW,
+                    source=str(plan.get("source") or "manual_pending_entry"),
+                    signal_date=signal_date,
+                    information_date=plan.get("information_date"),
+                    entry_type=plan.get("entry_type"),
+                    limit_price=plan.get("limit_price"),
+                    entry_price=None,
+                    stop_price=plan.get("stop_price"),
+                    tp_price=plan.get("tp_price"),
+                    reserved_capital=plan.get("reserved_capital"),
+                    planned_qty=plan.get("planned_qty"),
+                    remaining_order_qty=plan.get("planned_qty"),
+                    confirmed_pending_order=True,
+                )
+                static_row["display_state"] = "掛單" if static_date == planned_trade_date else "SHADOW"
+                timeline[int(static_idx)] = static_row
         signal_key = str(_date_text(plan.get("signal_date")) or _date_text(plan.get("information_date")) or "")
         priority = int(plan.get("priority") or 0)
         for idx, row in timeline.items():
@@ -1620,12 +1811,17 @@ def project_trading_single_stock_chart_payload(
         marker_groups[trace_name].sort(key=lambda row: int(row.get("x") or 0))
     payload["marker_groups"] = marker_groups
 
-    # Keep Research buy/sell signal anchors, but remove replay sizing/capital so
-    # a signal can never look like a broker-confirmed Trading fill.
+    # Keep Research BUY anchors as context, but Trading SELL must come from the
+    # current holding's frozen Params / canonical Indicator SELL obligation.
+    # Reusing Research SELL annotations here could silently use a different
+    # parameter lineage than the actual managed position.
     signal_annotations = []
     for raw in list(payload.get("signal_annotations") or []):
         item = deepcopy(dict(raw))
-        if str(item.get("signal_type") or "").lower() in {"buy", "sell"}:
+        signal_type = str(item.get("signal_type") or "").lower()
+        if signal_type == "sell":
+            continue
+        if signal_type == "buy":
             meta = dict(item.get("meta") or {})
             for key in ("qty", "reserved_capital", "buy_capital"):
                 meta.pop(key, None)
@@ -1633,14 +1829,46 @@ def project_trading_single_stock_chart_payload(
             item["detail_text"] = ""
         signal_annotations.append(item)
 
+    indicator_exit = inspection.get("indicator_exit") or {}
+    if bool(indicator_exit.get("fresh")):
+        for exit_row in list(indicator_exit.get("exits") or []):
+            signal_date = _date_text(exit_row.get("signal_information_date"))
+            if signal_date is None or signal_date not in date_to_x:
+                continue
+            x = int(date_to_x[signal_date])
+            anchor = None
+            for series_key in ("high", "close"):
+                series = payload.get(series_key)
+                try:
+                    anchor = float(series[x])
+                except (TypeError, ValueError, IndexError):
+                    anchor = None
+                if anchor is not None:
+                    break
+            signal_annotations.append({
+                "date": signal_date,
+                "x": x,
+                "anchor_price": anchor,
+                "signal_type": "sell",
+                "title": "賣出訊號",
+                "detail_text": "",
+                "note": "Trading frozen Params 指標賣出訊號",
+                "meta": {
+                    "canonical_trading": True,
+                    "canonical_indicator_exit": True,
+                    "signal_key": exit_row.get("signal_key"),
+                    "qty": exit_row.get("qty"),
+                    "entry_order_id": exit_row.get("entry_order_id"),
+                    "frozen_params_sha256": exit_row.get("frozen_params_sha256"),
+                },
+            })
+
     # Pending-entry intent is a distinct Trading order layer, not a Research BUY
     # signal.  Keep Research signal anchors intact and add a dedicated order
     # annotation on the persisted planned_trade_date.  Cancelled/deleted rows
     # remain auditable in pending-entry state but are intentionally absent from
     # the current execution overlay.
-    for pending in list(inspection.get("pending_entries") or []):
-        if not _pending_entry_is_effective_execution_evidence(pending, inspection):
-            continue
+    for pending in _effective_pending_entries(inspection):
         status = str(pending.get("status") or "")
         pending_date = _date_text(pending.get("planned_trade_date")) or _date_text(pending.get("information_date"))
         if pending_date is None or pending_date not in date_to_x:

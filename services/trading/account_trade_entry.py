@@ -10,7 +10,8 @@ from __future__ import annotations
 import pandas as pd
 
 from core.data_utils import get_required_min_rows
-from core.exact_accounting import infer_security_profile, price_to_milli
+from core.exact_accounting import infer_security_profile, milli_to_price, price_to_milli, sync_position_display_fields
+from core.entry_plans import build_position_from_entry_fill
 from core.params_io import build_params_from_mapping
 from core.price_utils import calc_frozen_target_price, calc_initial_stop_from_reference, calc_initial_trailing_stop_from_reference
 from core.signal_utils import generate_signals, unpack_precomputed_signals
@@ -197,6 +198,126 @@ def _build_direct_manual_managed_entry_context(project_root, *, ticker: str, tra
         "reference_market_date": seed["reference_market_date"],
         "reference_close": prior_close,
         "reference_atr": prior_atr,
+    }
+
+
+def build_manual_adopted_management_context(
+    project_root,
+    *,
+    ticker: str,
+    broker: dict,
+) -> dict:
+    """Freeze current canonical Params when an existing manual holding is managed.
+
+    This is a current-time takeover, not a historical strategy backfill.  The
+    broker position/cost basis stays authoritative, while stop/target geometry is
+    initialized once from the current finalized ATR and the broker's average
+    entry basis.  Management begins at the current finalized information date so
+    no historical bar is retroactively presented as if this management existed.
+    """
+    ticker_key = str(ticker or "").strip().upper()
+    if not ticker_key:
+        raise ValueError("股票代號必填")
+    broker_state = dict(broker or {})
+    qty = int(broker_state.get("qty") or 0)
+    remaining_cost_milli = int(broker_state.get("remaining_cost_basis_milli") or 0)
+    if qty <= 0 or remaining_cost_milli <= 0:
+        raise ValueError(f"{ticker_key} broker position qty/cost 不合法")
+
+    runtime = load_trading_scanner_runtime(project_root)
+    params = runtime["params"]
+    information_date = normalize_trading_date(
+        runtime["latest_data_date"], field_name="information_date", allow_none=False
+    )
+    view = open_trading_v2_consumer_view(project_root)
+    frame = load_trading_v2_sanitized_ohlcv_frame(
+        view,
+        ticker=ticker_key,
+        through_date=information_date,
+        min_rows=get_required_min_rows(params),
+    )
+    if frame.empty:
+        raise RuntimeError(f"{ticker_key} 沒有可用 Trading adjusted 日K")
+    latest_market_date = pd.Timestamp(frame.index[-1]).strftime("%Y-%m-%d")
+    if latest_market_date != information_date:
+        raise RuntimeError(
+            f"{ticker_key} 最新可用交易日 {latest_market_date} 與目前資訊日 {information_date} 不一致"
+        )
+    signals = generate_signals(frame, params, ticker=ticker_key)
+    atr_values, _buy, _sell, _limits = unpack_precomputed_signals(signals)
+    current_atr = float(atr_values[-1])
+    current_close = float(frame["Close"].iloc[-1])
+    if current_atr <= 0 or current_close <= 0:
+        raise RuntimeError(f"{ticker_key} 最新 completed bar 無有效 Close/ATR")
+
+    initial_qty = int(broker_state.get("initial_qty") or qty)
+    price_basis_milli = broker_state.get("initial_gross_buy_milli")
+    if price_basis_milli is None:
+        price_basis_milli = broker_state.get("initial_cost_basis_milli")
+    price_basis_milli = int(price_basis_milli or 0)
+    if initial_qty <= 0 or price_basis_milli <= 0:
+        raise ValueError(f"{ticker_key} 缺少可建立管理狀態的 broker 平均成本")
+    average_entry_milli = max(1, (price_basis_milli + initial_qty // 2) // initial_qty)
+    average_entry_price = milli_to_price(average_entry_milli)
+    security_profile = infer_security_profile(ticker_key)
+    position_state = build_position_from_entry_fill(
+        buy_price=average_entry_price,
+        qty=qty,
+        params=params,
+        entry_type="manual_adopted_management",
+        entry_atr=current_atr,
+        ticker=ticker_key,
+        security_profile=security_profile,
+        trade_date=information_date,
+        target_reference_price=average_entry_price,
+    )
+
+    # Broker/account truth is never rewritten by management activation.
+    position_state["qty"] = qty
+    position_state["initial_qty"] = qty
+    position_state["net_buy_total_milli"] = int(broker_state.get("initial_cost_basis_milli") or remaining_cost_milli)
+    position_state["remaining_cost_basis_milli"] = remaining_cost_milli
+    position_state["realized_pnl_milli"] = int(broker_state.get("realized_pnl_milli") or 0)
+    if broker_state.get("initial_gross_buy_milli") is not None:
+        position_state["gross_buy_milli"] = int(broker_state.get("initial_gross_buy_milli") or 0)
+    if broker_state.get("initial_buy_fee_milli") is not None:
+        position_state["buy_fee_milli"] = int(broker_state.get("initial_buy_fee_milli") or 0)
+    position_state = sync_position_display_fields(position_state)
+
+    seed = {
+        "entry_type": "manual_adopted_management",
+        "entry_atr": current_atr,
+        "init_sl": position_state.get("initial_stop"),
+        "init_trail": position_state.get("trailing_stop"),
+        "target_price": position_state.get("tp_half"),
+        "target_reference_price": average_entry_price,
+        "limit_price": None,
+        "security_profile": security_profile,
+        "trade_date": information_date,
+        "reference_market_date": information_date,
+        "reference_close": current_close,
+        "broker_average_entry_price": average_entry_price,
+    }
+    lineage = build_trading_manual_management_lineage(
+        params=params,
+        execution_plan_seed=seed,
+        information_date=information_date,
+        origin="manual_adopted_management",
+        planned_qty=qty,
+        planned_cost=None,
+        target_reference_close=average_entry_price,
+    )
+    return {
+        "params": params,
+        "information_date": information_date,
+        "management_start_date": information_date,
+        "execution_plan_seed": seed,
+        "management_lineage": lineage,
+        "position_state": position_state,
+        "reference_market_date": information_date,
+        "reference_close": current_close,
+        "reference_atr": current_atr,
+        "average_entry_price": average_entry_price,
     }
 
 
@@ -401,6 +522,7 @@ def record_trading_account_inventory_sell(
 
 
 __all__ = [
+    "build_manual_adopted_management_context",
     "correct_trading_account_transaction",
     "list_active_sell_orders_for_ticker",
     "resolve_current_trading_scanner_candidate",

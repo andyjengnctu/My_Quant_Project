@@ -20,6 +20,7 @@ from core.trading_account_state import (
     apply_confirmed_manual_managed_buy_fill,
     apply_confirmed_sell_fill,
     apply_confirmed_strategy_buy_fill,
+    effective_trading_account_events,
     rebuild_trading_account_economics,
     validate_trading_account_state,
 )
@@ -1005,6 +1006,77 @@ def validate_trading_account_state_contract_case(base_params):
                 pending.result(timeout=concurrency_timeout_seconds)
         check("process_wide_mutex_preserves_first_project_commit", money_to_milli(90), load_trading_account_state(root_a)["cash_milli"])
         check("process_wide_mutex_leaves_second_project_unchanged", money_to_milli(200), load_trading_account_state(root_b)["cash_milli"])
+
+    # Existing broker truth can be promoted into the same frozen-Params managed
+    # position contract without changing cash or inventory economics.
+    from core.entry_plans import build_position_from_entry_fill as _build_managed_position
+    from core.file_integrity import canonical_json_sha256 as _canonical_json_sha256
+    from core.params_io import params_to_json_dict as _params_json
+    from core.trading_account_state import (
+        activate_manual_trading_position_management as _activate_manual_management,
+        adopt_manual_trading_position as _adopt_manual_position,
+        build_empty_trading_account_state as _empty_account,
+    )
+    _activation_state = _empty_account(
+        timestamp="2026-09-17T08:00:00+08:00", mutation_id="activation-init", cash=1_000_000
+    )
+    _activation_position = _build_managed_position(
+        buy_price=100.0, qty=1000, params=base_params, entry_atr=5.0,
+        ticker="2330", trade_date="2026-09-17",
+    )
+    _activation_cost = int(_activation_position["net_buy_total_milli"])
+    _activation_state = _adopt_manual_position(
+        _activation_state,
+        ticker="2330", qty=1000,
+        cost_basis_total=float(_activation_cost) / 1000.0,
+        entry_date="2026-08-01",
+        timestamp="2026-09-17T08:01:00+08:00", mutation_id="activation-adopt",
+    )
+    _frozen = _params_json(base_params)
+    _activation_lineage = {
+        "lineage_id": "MANUAL-ACTIVATION-LINEAGE",
+        "frozen_params": _frozen,
+        "frozen_params_sha256": _canonical_json_sha256(_frozen),
+    }
+    _activation_position["remaining_cost_basis_milli"] = int(
+        _activation_state["positions"]["2330"]["broker"]["remaining_cost_basis_milli"]
+    )
+    _activation_position["net_buy_total_milli"] = int(
+        _activation_state["positions"]["2330"]["broker"]["initial_cost_basis_milli"]
+    )
+    _activation_cash = _activation_state["cash_milli"]
+    _activation_broker = deepcopy(_activation_state["positions"]["2330"]["broker"])
+    _activation_state = _activate_manual_management(
+        _activation_state,
+        ticker="2330",
+        management_lineage=_activation_lineage,
+        position_state=_activation_position,
+        management_start_date="2026-09-17",
+        timestamp="2026-09-17T08:02:00+08:00",
+        mutation_id="activation-manage",
+    )
+    _activation_record = _activation_state["positions"]["2330"]
+    check(
+        "manual_adopted_management_activation_preserves_cash_and_broker_truth",
+        [_activation_cash, _activation_broker],
+        [_activation_state["cash_milli"], _activation_record["broker"]],
+    )
+    check(
+        "manual_adopted_management_activation_becomes_frozen_params_managed_position",
+        ["manual_managed", "active", "2026-09-17", "MANUAL-ACTIVATION-LINEAGE"],
+        [
+            _activation_record.get("source"),
+            (_activation_record.get("strategy_management") or {}).get("status"),
+            (_activation_record.get("strategy_management") or {}).get("management_start_date"),
+            (_activation_record.get("management_lineage") or {}).get("lineage_id"),
+        ],
+    )
+    _activation_rebuilt = rebuild_trading_account_economics(_activation_state)
+    check(
+        "manual_adopted_management_activation_survives_economic_replay_without_cash_change",
+        ["manual_managed", _activation_cash],
+        [_activation_rebuilt["positions"]["2330"].get("source"), _activation_rebuilt.get("cash_milli")],
+    )
 
     summary["checks"] = len(results)
     return results, summary
@@ -3362,6 +3434,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         fill_trading_pending_entry, get_trading_pending_entry_read_model, preview_trading_pending_entry_fill,
     )
     from services.trading.single_stock_inspection import (
+        _build_trading_prefill_lifecycle_timeline,
+        _effective_pending_entries,
         _shadow_plan_from_pending_entry, _shadow_state_from_plan,
     )
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -3662,6 +3736,37 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _manual_plan = _shadow_plan_from_pending_entry(_pending_entry, last_date="2026-09-15")
         _manual_signal = _shadow_state_from_plan(_manual_plan, lifecycle_state="SIGNAL")
         check("manual_pending_single_stock_signal_is_relabeled_as_order", "掛單", _manual_signal.get("display_state"))
+        _manual_shadow_chart = {
+            "date_labels": ["2026-09-13", "2026-09-14", "2026-09-15", "2026-09-16"],
+            "open": [99.0, 99.0, 99.0, 100.0], "high": [101.0, 101.0, 101.0, 102.0],
+            "low": [98.0, 98.0, 98.0, 99.0], "close": [100.0, 100.0, 100.0, 101.0],
+            "volume": [1000.0, 1000.0, 1000.0, 1200.0],
+            "strategy_lifecycle_inputs": {"atr": [5.0, 5.0, 5.0, 5.0], "sell_signal": [False, False, False, False]},
+        }
+        _manual_shadow_timeline = _build_trading_prefill_lifecycle_timeline(
+            {
+                "ticker": "2330", "candidate": {}, "entry_orders": [], "account_events": [],
+                "pending_entries": [_pending_entry], "current_position": None,
+            },
+            _manual_shadow_chart,
+            params=base_params,
+        )
+        _manual_order_row = _manual_shadow_timeline.get(0) or {}
+        _manual_static_shadow_row = _manual_shadow_timeline.get(1) or {}
+        _manual_information_row = _manual_shadow_timeline.get(2) or {}
+        _manual_engine_shadow_row = _manual_shadow_timeline.get(3) or {}
+        check(
+            "manual_pending_historical_order_draws_static_plan_until_information_then_advances_shadow_without_future_leak",
+            ["SHADOW", "掛單", 100.0, 90.0, 120.0, None, "SHADOW", 90.0, "SHADOW", 90.0, "SHADOW"],
+            [
+                _manual_order_row.get("state"), _manual_order_row.get("display_state"),
+                _manual_order_row.get("limit_price"), _manual_order_row.get("stop_price"),
+                _manual_order_row.get("tp_price"), _manual_order_row.get("entry_price"),
+                _manual_static_shadow_row.get("state"), _manual_static_shadow_row.get("stop_price"),
+                _manual_information_row.get("state"), _manual_information_row.get("stop_price"),
+                _manual_engine_shadow_row.get("state"),
+            ],
+        )
         try:
             preview_trading_pending_entry_fill(
                 _pending_fill_root, pending_entry_id=_pending_entry["pending_entry_id"],
@@ -3686,7 +3791,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _pending_fill_position = _pending_fill_result["account"]["positions"]["2330"]
         check("manual_pending_fill_transfers_to_managed_manual_position", "manual_managed", _pending_fill_position.get("source"))
         check("manual_pending_fill_closes_pending_entry_as_filled", "FILLED", _pending_fill_result["pending_entry"].get("status"))
-        check("manual_pending_historical_fill_starts_management_on_frozen_information_date", "2026-09-15", (_pending_fill_position.get("strategy_management") or {}).get("management_start_date"))
+        check("manual_pending_historical_fill_keeps_no_future_management_start", "2026-09-15", (_pending_fill_position.get("strategy_management") or {}).get("management_start_date"))
         from services.trading.position_rollforward import build_trading_position_rollforward_snapshot as _build_rollforward_snapshot
         _rollforward_account = _pending_fill_result["account"]
         _pre_management_frame = pd.DataFrame(
@@ -3702,13 +3807,64 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
              patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
              patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _pre_management_frame}):
             _before_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
-        check("manual_managed_rollforward_ignores_bars_before_management_start", False, _before_management_snapshot["positions"][0]["due"])
+        check("manual_pending_managed_rollforward_ignores_bars_before_management_start", False, _before_management_snapshot["positions"][0]["due"])
         with patch("services.trading.position_rollforward.resolve_trading_strategy_position_sources", return_value=(_rollforward_account, {"orders": {}}, object())), \
              patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-15"), \
              patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
              patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _management_frame}):
             _at_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
-        check("manual_managed_rollforward_starts_on_management_start_date", "2026-09-15", _at_management_snapshot["positions"][0]["target_rollforward_date"])
+        check("manual_pending_managed_rollforward_starts_on_management_start_date", "2026-09-15", _at_management_snapshot["positions"][0]["target_rollforward_date"])
+
+        _pending_account = load_trading_account_state(_pending_fill_root, required=True)
+        _filled_entry = deepcopy(_pending_fill_result["pending_entry"])
+        _legacy_duplicate = deepcopy(_filled_entry)
+        _legacy_duplicate["pending_entry_id"] = "LEGACY-DUPLICATE-PENDING"
+        _effective_pending = _effective_pending_entries({
+            "pending_entries": [_filled_entry, _legacy_duplicate],
+            "account_events": effective_trading_account_events(_pending_account),
+        })
+        check(
+            "single_stock_filled_pending_deduplicates_one_order_annotation_per_effective_account_buy",
+            1,
+            len(_effective_pending),
+        )
+        from services.trading.single_stock_inspection import project_trading_single_stock_chart_payload as _project_pending_manual_chart
+        _pending_manual_chart = {
+            "date_labels": ["2026-09-13", "2026-09-14", "2026-09-15"],
+            "open": [99.0, 99.0, 100.0], "high": [101.0, 101.0, 102.0],
+            "low": [98.0, 98.0, 99.0], "close": [100.0, 100.0, 101.0],
+            "volume": [1000.0, 1000.0, 1200.0],
+            "strategy_lifecycle_inputs": {"atr": [5.0, 5.0, 5.0], "sell_signal": [False, False, False]},
+            "strategy_prefill_lifecycle_by_index": {},
+            "marker_groups": {}, "signal_annotations": [],
+        }
+        _pending_manual_inspection = {
+            "ticker": "2330", "candidate": {}, "entry_orders": [],
+            "pending_entries": [_filled_entry, _legacy_duplicate],
+            "account_events": effective_trading_account_events(_pending_account),
+            "current_position": deepcopy(_pending_account["positions"]["2330"]),
+            "decision_errors": [],
+            "protection": {"fresh": False, "positions": []},
+            "indicator_exit": {"fresh": False, "exits": []},
+        }
+        _pending_manual_projected = _project_pending_manual_chart(
+            _pending_manual_chart, _pending_manual_inspection, params=base_params
+        )
+        _pending_manual_annotations = [
+            row for row in _pending_manual_projected.get("signal_annotations", [])
+            if str(row.get("title") or "") == "掛單"
+        ]
+        check(
+            "single_stock_manual_pending_fill_transitions_shadow_to_position_with_lines_and_one_order_marker",
+            ["SHADOW", "POSITION", True, True, 1],
+            [
+                (_pending_manual_projected.get("trading_lifecycle_by_index", {}).get(0) or {}).get("state"),
+                (_pending_manual_projected.get("trading_lifecycle_by_index", {}).get(1) or {}).get("state"),
+                not pd.isna(_pending_manual_projected.get("stop_line", [float("nan")]*3)[1]),
+                not pd.isna(_pending_manual_projected.get("tp_line", [float("nan")]*3)[1]),
+                len(_pending_manual_annotations),
+            ],
+        )
 
     import services.trading.operations_status as operations_status_module
     preloaded_operations = {
@@ -3824,6 +3980,12 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_refresh_reloads_account_aware_scanner_snapshot", True, "def refresh_candidate_snapshot_rows" in panel_source and "load_trading_candidate_snapshot_for_account" in panel_source)
     check("workbench_trading_initial_state_reads_off_tk_thread", True, 'name="workbench-trading-initial-state"' in panel_source and "build_trading_account_panel_initial_bundle" in panel_source and "_initial_state_results.put" in panel_source)
     check("workbench_trading_consumer_reconcile_runs_inside_background_bundle", True, 'bundle["reconcile"] = _capture_initial_panel_value' in panel_source and 'reconcile_trading_v2_consumer_state_from_local_evidence(root)' in panel_source)
+    check(
+        "workbench_trading_initial_bundle_promotes_legacy_manual_holdings_before_managed_read_models",
+        True,
+        "reconcile_trading_manual_position_management(root)" in panel_source
+        and panel_source.index("reconcile_trading_manual_position_management(root)") < panel_source.index('bundle["account"]'),
+    )
     operations_refresh_body = panel_source.split("def refresh_operations_status", 1)[1].split("def ", 1)[0]
     check("workbench_trading_status_render_never_reconciles_on_tk_thread", False, "reconcile_trading_v2_consumer_state_from_local_evidence" in operations_refresh_body)
     check("workbench_trading_background_worker_never_calls_tk_after", True, "self.after(0, self._finish_initial_state_load" not in panel_source and "def _drain_initial_state_results" in panel_source)
@@ -4582,6 +4744,69 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         security_profile={},
         trade_date="2026-09-18",
     )
+    _manual_activation_position = deepcopy(_position_state)
+    _manual_activation_record = {
+        "ticker": "2330",
+        "source": "manual_managed",
+        "broker": {
+            "qty": 333,
+            "initial_qty": 333,
+            "initial_cost_basis_milli": int(_manual_activation_position["net_buy_total_milli"]),
+            "remaining_cost_basis_milli": int(_manual_activation_position["remaining_cost_basis_milli"]),
+            "realized_pnl_milli": 0,
+            "entry_date": "2026-09-03",
+        },
+        "management_lineage": {
+            "lineage_id": "MANUAL-ACTIVATED-LINEAGE",
+            "planned_qty": 333,
+            "planned_cost": None,
+            "frozen_params": _params_to_json_dict(base_params),
+        },
+        "strategy_management": {
+            "status": "active",
+            "management_start_date": "2026-09-17",
+            "last_rollforward_date": None,
+            "position_state": _manual_activation_position,
+        },
+    }
+    _manual_activation_event = {
+        "mutation_type": "activate_manual_management",
+        "timestamp": "2026-09-18T08:00:00+08:00",
+        "details": {
+            "ticker": "2330",
+            "management_start_date": "2026-09-17",
+            "position_after": deepcopy(_manual_activation_record),
+        },
+    }
+    _manual_activation_chart = {
+        "date_labels": ["2026-09-16", "2026-09-17"],
+        "x": [0, 1],
+        "open": [99.0, 100.0], "high": [101.0, 102.0], "low": [98.0, 99.0], "close": [100.0, 101.0],
+        "volume": [1_000_000.0, 1_000_000.0],
+        "strategy_lifecycle_inputs": {"atr": [_synth_atr, _synth_atr], "sell_signal": [False, False]},
+        "marker_groups": {}, "signal_annotations": [],
+    }
+    _manual_activation_inspection = {
+        "ticker": "2330", "candidate": {}, "entry_orders": [], "pending_entries": [],
+        "account_events": [_manual_activation_event],
+        "current_position": deepcopy(_manual_activation_record),
+        "decision_errors": [],
+        "protection": {"fresh": False, "positions": []},
+        "indicator_exit": {"fresh": False, "exits": []},
+    }
+    _manual_activation_projected = project_trading_single_stock_chart_payload(
+        _manual_activation_chart, _manual_activation_inspection, params=base_params
+    )
+    check(
+        "workbench_single_stock_manual_adopted_management_starts_graph_only_at_management_start",
+        [None, "POSITION", float(_manual_activation_position["sl"]), float(_manual_activation_position["tp_half"])],
+        [
+            (_manual_activation_projected.get("trading_lifecycle_by_index", {}).get(0) or {}).get("state"),
+            (_manual_activation_projected.get("trading_lifecycle_by_index", {}).get(1) or {}).get("state"),
+            _manual_activation_projected["stop_line"][1],
+            _manual_activation_projected["tp_line"][1],
+        ],
+    )
     _overlay_order = deepcopy(_inspection_order["entry_orders"][0])
     _overlay_order["qty"] = 333
     _overlay_order["signal_date"] = "2026-09-14"
@@ -4813,6 +5038,36 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             (_projected["signal_annotations"][0].get("meta") or {}).get("qty"),
             _projected["signal_annotations"][0].get("detail_text"),
         ],
+    )
+    _indicator_payload = deepcopy(_base_overlay_payload)
+    _indicator_payload["signal_annotations"] = list(_indicator_payload.get("signal_annotations") or []) + [{
+        "signal_type": "sell", "date": "2026-09-17", "x": 3,
+        "anchor_price": 105.0, "title": "Research SELL", "meta": {"source": "research"},
+    }]
+    _indicator_inspection = deepcopy(_overlay_inspection)
+    _indicator_inspection["indicator_exit"] = {
+        "fresh": True,
+        "exits": [{
+            "ticker": "2330", "signal_information_date": "2026-09-17",
+            "signal_key": "TRADING-SELL-001", "qty": 333,
+            "entry_order_id": "POSITION:LINEAGE-001", "frozen_params_sha256": "params-sha",
+        }],
+    }
+    _indicator_projected = project_trading_single_stock_chart_payload(
+        _indicator_payload, _indicator_inspection, params=base_params
+    )
+    _sell_annotations = [
+        row for row in _indicator_projected.get("signal_annotations", [])
+        if str(row.get("signal_type") or "").lower() == "sell"
+    ]
+    check(
+        "workbench_single_stock_trading_sell_marker_uses_canonical_frozen_params_indicator_obligation",
+        [["2026-09-17", "賣出訊號", True, "TRADING-SELL-001"]],
+        [[
+            row.get("date"), row.get("title"),
+            bool((row.get("meta") or {}).get("canonical_indicator_exit")),
+            (row.get("meta") or {}).get("signal_key"),
+        ] for row in _sell_annotations],
     )
     check(
         "workbench_single_stock_trading_overlay_does_not_keep_simulated_fill_on_live_cycle",

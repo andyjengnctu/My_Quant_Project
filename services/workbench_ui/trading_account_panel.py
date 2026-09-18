@@ -42,7 +42,11 @@ from services.trading.scanner_state import (
     load_trading_candidate_snapshot_for_account,
     load_trading_scanner_runtime,
 )
-from services.trading.position_rollforward import build_trading_position_rollforward_snapshot, run_trading_position_rollforward
+from services.trading.position_rollforward import (
+    build_trading_position_rollforward_snapshot,
+    reconcile_trading_manual_position_management,
+    run_trading_position_rollforward,
+)
 from services.trading.order_form_constraints import (
     ORDER_FORM_DATE_KIND_FILL,
     ORDER_FORM_DATE_KIND_PENDING,
@@ -442,9 +446,12 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
     # Consumer promotion can change the finalized market-data identity, so it
     # remains the only sequential prerequisite. Everything after this point is
     # read-only against the same finalized generation.
-    bundle["reconcile"] = _capture_initial_panel_value(
-        lambda: reconcile_trading_v2_consumer_state_from_local_evidence(root)
-    )
+    def _reconcile_initial_state():
+        market_data = reconcile_trading_v2_consumer_state_from_local_evidence(root)
+        manual_management = reconcile_trading_manual_position_management(root)
+        return {"market_data": market_data, "manual_management": manual_management}
+
+    bundle["reconcile"] = _capture_initial_panel_value(_reconcile_initial_state)
     # Account recovery historically ran before protection/indicator readers. Keep
     # that ordering, then parallelize independent canonical read models.
     bundle["account"] = _capture_initial_panel_value(lambda: build_trading_account_panel_snapshot(root))

@@ -21,14 +21,17 @@ from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import (
     MANAGEMENT_STATUS_ACTIVE,
     MANAGED_POSITION_SOURCES,
+    POSITION_SOURCE_MANUAL_ADOPTED,
 )
 from core.trading_market_clock import latest_allowed_completed_daily_date
 from core.trading_order_state import active_trading_entry_orders
 from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from services.trading.account_state import (
+    activate_existing_manual_trading_position_management,
     load_trading_account_state,
     rollforward_trading_strategy_management,
 )
+from services.trading.account_trade_entry import build_manual_adopted_management_context
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.position_market_context import (
     load_trading_position_market_frame,
@@ -40,6 +43,60 @@ from services.trading.protection_planning import build_trading_protection_plan
 from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
 
 TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
+
+
+def reconcile_trading_manual_position_management(project_root: str | Path) -> dict[str, Any]:
+    """Promote legacy/manual-adopted holdings into frozen-Params management once.
+
+    Broker quantity/cost/cash are never changed.  Each successfully promoted
+    holding freezes the current canonical primary Params and starts management at
+    the current finalized information date.  Per-ticker failures are reported and
+    left unmanaged rather than blocking unrelated holdings.
+    """
+    root = Path(project_root).resolve()
+    recover_trading_fill_transaction(root)
+    account = load_trading_account_state(root, required=False)
+    if not account:
+        return {"status": "NO_ACCOUNT", "promoted": [], "errors": {}}
+
+    promoted: list[str] = []
+    errors: dict[str, str] = {}
+    state = account
+    for ticker in sorted(state.get("positions") or {}):
+        record = (state.get("positions") or {}).get(ticker)
+        if not isinstance(record, dict) or str(record.get("source") or "") != POSITION_SOURCE_MANUAL_ADOPTED:
+            continue
+        management = dict(record.get("strategy_management") or {})
+        if management.get("status") == MANAGEMENT_STATUS_ACTIVE:
+            continue
+        try:
+            context = build_manual_adopted_management_context(
+                root,
+                ticker=str(ticker),
+                broker=dict(record.get("broker") or {}),
+            )
+            state = activate_existing_manual_trading_position_management(
+                root,
+                ticker=str(ticker),
+                management_lineage=dict(context["management_lineage"]),
+                position_state=dict(context["position_state"]),
+                management_start_date=context["management_start_date"],
+                expected_revision=int(state["revision"]),
+            )
+            promoted.append(str(ticker))
+        except (OSError, TypeError, ValueError, KeyError, IndexError, RuntimeError) as exc:
+            errors[str(ticker)] = f"{type(exc).__name__}: {exc}"
+            # Refresh after a failed optimistic mutation attempt so a later
+            # ticker never reuses a stale revision.
+            latest = load_trading_account_state(root, required=False)
+            if latest is not None:
+                state = latest
+    return {
+        "status": "OK" if not errors else ("PARTIAL" if promoted else "NO_CHANGE"),
+        "promoted": promoted,
+        "promoted_count": len(promoted),
+        "errors": errors,
+    }
 
 
 def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dict[str, Any]:
@@ -174,12 +231,14 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path) -> dic
 def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     recover_trading_fill_transaction(root)
+    manual_management_reconcile = reconcile_trading_manual_position_management(root)
     account, orders, market_view = resolve_trading_strategy_position_sources(root)
     allowed_date = latest_allowed_completed_daily_date()
     if not account:
         return {
             "status": "NO_ACCOUNT",
             "runtime_domain": RUNTIME_DOMAIN_TRADING,
+            "manual_management_reconcile": manual_management_reconcile,
             "processed_position_count": 0,
             "processed_bar_count": 0,
             "positions": [],
@@ -268,6 +327,7 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
         return {
             "status": "UP_TO_DATE",
             "runtime_domain": RUNTIME_DOMAIN_TRADING,
+            "manual_management_reconcile": manual_management_reconcile,
             "account_revision": int(account["revision"]),
             "processed_position_count": 0,
             "processed_bar_count": 0,
@@ -288,6 +348,7 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
     return {
         "status": "READY",
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
+        "manual_management_reconcile": manual_management_reconcile,
         "account_revision": int(updated_account["revision"]),
         "allowed_completed_date": allowed_date,
         "processed_position_count": len(result_rows),
@@ -299,6 +360,7 @@ def run_trading_position_rollforward(project_root: str | Path) -> dict[str, Any]
 
 __all__ = [
     "TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION",
+    "reconcile_trading_manual_position_management",
     "build_trading_position_rollforward_snapshot",
     "run_trading_position_rollforward",
 ]

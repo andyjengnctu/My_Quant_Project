@@ -49,6 +49,7 @@ TRADE_MUTATION_STRATEGY_BUY_INCREMENT = "confirm_strategy_buy_fill_increment"
 TRADE_MUTATION_SELL = "confirm_sell_fill"
 TRADE_MUTATION_VOID = "void_manual_trade"
 ACCOUNT_MUTATION_HISTORICAL_INVENTORY = "historical_inventory_reconciliation"
+ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT = "activate_manual_management"
 TRADE_MUTATIONS = (
     TRADE_MUTATION_BUY,
     TRADE_MUTATION_MANUAL_MANAGED_BUY,
@@ -379,6 +380,19 @@ def _project_trading_account_economics(
                 "entry_date": details.get("entry_date"),
             })
             continue
+        if mutation == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT and ticker:
+            existing = positions.get(ticker)
+            if not isinstance(existing, dict):
+                raise ValueError(f"{ticker} 啟用手選策略管理時不存在可接管庫存")
+            positions[ticker] = _record_from_replayed_broker(
+                ticker,
+                POSITION_SOURCE_MANUAL_MANAGED,
+                deepcopy(existing.get("broker") or {}),
+                strategy_templates=strategy_templates,
+            )
+            if positions[ticker].get("source") != POSITION_SOURCE_MANUAL_MANAGED:
+                raise ValueError(f"{ticker} 缺少可重播的手選策略管理 template")
+            continue
         if mutation == "correct_manual_position" and ticker:
             broker = details.get("broker")
             if isinstance(broker, dict):
@@ -696,6 +710,8 @@ def _effective_position_source_before_revision(
             continue
         if mutation in {"adopt_manual_position", TRADE_MUTATION_BUY}:
             source = POSITION_SOURCE_MANUAL_ADOPTED
+        elif mutation == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT:
+            source = POSITION_SOURCE_MANUAL_MANAGED
         elif mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY:
             source = POSITION_SOURCE_MANUAL_MANAGED
         elif mutation in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}:
@@ -893,6 +909,83 @@ def adopt_manual_trading_position(
             "entry_date": adopted_entry_date,
             "note": None if note is None else str(note),
             "cash_changed": False,
+        },
+    )
+
+
+def activate_manual_trading_position_management(
+    state: dict[str, Any],
+    *,
+    ticker: object,
+    management_lineage: dict[str, Any],
+    position_state: dict[str, Any],
+    management_start_date: object,
+    timestamp: str,
+    mutation_id: str,
+) -> dict[str, Any]:
+    """Promote broker-truth-only inventory into canonical frozen-Params management.
+
+    This is a management-only mutation: cash and broker inventory are immutable.
+    Historical broker truth remains untouched; strategy management starts only at
+    ``management_start_date`` and therefore never fabricates retrospective stops,
+    targets, signals, or performance.
+    """
+    validate_trading_account_state(state)
+    ticker_key = _normalize_ticker(ticker)
+    current = (state.get("positions") or {}).get(ticker_key)
+    if not isinstance(current, dict):
+        raise ValueError(f"Trading 沒有 open position: {ticker_key}")
+    if str(current.get("source") or "") != POSITION_SOURCE_MANUAL_ADOPTED:
+        raise ValueError(f"只有 manual_adopted position 可啟用手選策略管理: {ticker_key}")
+    management = dict(current.get("strategy_management") or {})
+    if management.get("status") != MANAGEMENT_STATUS_UNMANAGED or management.get("position_state") is not None:
+        raise ValueError(f"Trading position 已有 strategy management: {ticker_key}")
+
+    checked_lineage = deepcopy(dict(management_lineage or {}))
+    frozen_params = checked_lineage.get("frozen_params")
+    frozen_sha = str(checked_lineage.get("frozen_params_sha256") or "")
+    if not isinstance(frozen_params, dict) or not frozen_sha or canonical_json_sha256(frozen_params) != frozen_sha:
+        raise ValueError(f"Trading management_lineage frozen_params/hash 不合法: {ticker_key}")
+    if not str(checked_lineage.get("lineage_id") or "").strip():
+        raise ValueError(f"Trading management_lineage 缺少 lineage_id: {ticker_key}")
+
+    broker = deepcopy(dict(current.get("broker") or {}))
+    broker_qty = int(broker.get("qty") or 0)
+    broker_cost = int(broker.get("remaining_cost_basis_milli") or 0)
+    managed_state = _json_safe(deepcopy(dict(position_state or {})))
+    if int(managed_state.get("qty") or 0) != broker_qty:
+        raise ValueError(f"Trading 手選管理 position/broker qty 不一致: {ticker_key}")
+    if int(managed_state.get("remaining_cost_basis_milli") or 0) != broker_cost:
+        raise ValueError(f"Trading 手選管理 position/broker cost basis 不一致: {ticker_key}")
+    start_date = _normalize_iso_date(management_start_date, field_name="management_start_date")
+    if start_date is None:
+        raise ValueError("management_start_date 必填")
+
+    updated = deepcopy(state)
+    updated_record = updated["positions"][ticker_key]
+    position_before = deepcopy(updated_record)
+    updated_record["source"] = POSITION_SOURCE_MANUAL_MANAGED
+    updated_record["management_lineage"] = checked_lineage
+    updated_record["strategy_management"] = {
+        "status": MANAGEMENT_STATUS_ACTIVE,
+        "management_start_date": start_date,
+        "last_rollforward_date": None,
+        "position_state": managed_state,
+    }
+    position_after = deepcopy(updated_record)
+    return _append_mutation(
+        updated,
+        mutation_id=mutation_id,
+        mutation_type=ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT,
+        timestamp=timestamp,
+        details={
+            "ticker": ticker_key,
+            "management_start_date": start_date,
+            "management_lineage": deepcopy(checked_lineage),
+            "position_before": position_before,
+            "position_after": position_after,
+            "cash_changed": False,
+            "broker_truth_changed": False,
         },
     )
 
@@ -2302,9 +2395,11 @@ __all__ = [
     "MANAGED_POSITION_SOURCES",
     "MANAGEMENT_STATUS_UNMANAGED",
     "MANAGEMENT_STATUS_ACTIVE",
+    "ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT",
     "build_empty_trading_account_state",
     "set_trading_account_cash",
     "adopt_manual_trading_position",
+    "activate_manual_trading_position_management",
     "correct_manual_trading_position",
     "remove_manual_trading_position",
     "apply_manual_trading_buy_fill",

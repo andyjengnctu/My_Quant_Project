@@ -22,7 +22,12 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_
 from core.runtime_utils import get_taipei_now
 from core.trading_policy import resolve_trading_selected_strategy_param_path
 from services.trading.account_state import load_trading_account_state, resolve_trading_account_state_path
-from core.trading_account_state import effective_trading_account_events, project_trading_account_transactions, rebuild_trading_account_economics
+from core.trading_account_state import (
+    ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT,
+    effective_trading_account_events,
+    project_trading_account_transactions,
+    rebuild_trading_account_economics,
+)
 from services.trading.accounting_policy import (
     build_standalone_trading_accounting_params,
     overlay_trading_accounting_params,
@@ -208,6 +213,13 @@ def _build_closed_round_trips(state: dict[str, Any], *, accounting_params=None) 
                 active[ticker]["entry_date"] = broker.get("entry_date")
                 active[ticker]["cost_basis_milli"] = int(broker.get("initial_cost_basis_milli") or 0)
                 active[ticker]["source"] = str(position.get("source") or active[ticker].get("source") or "unknown")
+        elif mutation == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT and ticker in active:
+            position_after = dict(details.get("position_after") or {})
+            position_state = dict((position_after.get("strategy_management") or {}).get("position_state") or {})
+            active[ticker]["source"] = "manual_managed"
+            active[ticker]["initial_risk_total_milli"] = int(
+                position_state.get("initial_risk_total_milli") or 0
+            )
         elif mutation in {"remove_manual_position", "remove_position_broker_truth"}:
             active.pop(ticker, None)
         elif mutation == "manual_buy_fill":

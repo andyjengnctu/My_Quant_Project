@@ -21,6 +21,7 @@ from core.trading_order_state import (
 )
 from core.trading_account_state import (
     TRADING_ACCOUNT_STATE_FILENAME,
+    activate_manual_trading_position_management,
     adopt_manual_trading_position,
     apply_trading_strategy_management_rollforward,
     apply_manual_trading_buy_fill,
@@ -271,6 +272,33 @@ def remove_existing_trading_position(
     )
 
 
+def activate_existing_manual_trading_position_management(
+    project_root,
+    *,
+    ticker,
+    management_lineage: dict[str, Any],
+    position_state: dict[str, Any],
+    management_start_date,
+    expected_revision: int,
+):
+    """Attach frozen strategy management to existing broker truth without cash changes."""
+    return _mutate_account(
+        project_root,
+        expected_revision=expected_revision,
+        guard_orders=False,
+        accounting_params=None,
+        mutator=lambda state, timestamp, mutation_id: activate_manual_trading_position_management(
+            state,
+            ticker=ticker,
+            management_lineage=management_lineage,
+            position_state=position_state,
+            management_start_date=management_start_date,
+            timestamp=timestamp,
+            mutation_id=mutation_id,
+        ),
+    )
+
+
 
 def record_manual_trading_buy(
     project_root,
@@ -513,6 +541,7 @@ __all__ = [
     "initialize_trading_account_state",
     "set_trading_cash_balance",
     "adopt_existing_trading_position",
+    "activate_existing_manual_trading_position_management",
     "correct_existing_trading_position",
     "remove_existing_trading_position",
     "record_manual_trading_buy",
