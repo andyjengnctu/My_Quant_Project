@@ -162,7 +162,7 @@ PARAM_MODE_BY_LABEL = {
     PARAM_MODE_TRAIN_LABEL: TRADING_PARAM_MODE_TRAIN,
 }
 
-WORKFLOW_HINT = "更新資料後，strategy_fill／manual_managed 持股都用各自 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。Stop/停利線/SELL 為決策資訊，券商操作由使用者自行完成。"
+WORKFLOW_HINT = "更新資料後，strategy_fill／manual_managed 持股都用各自 frozen params 做日終推進；Scanner 只接受已綁定目前 Trading data 的 Params。停損／停利／賣出訊號為持股資訊，券商操作由使用者自行完成。"
 CASH_HINT = "初始化可留空；更新現金會留下 revision event，不直接改檔。"
 MANUAL_POSITION_HINT = "修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。"
 FILL_HINT = "成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。"
@@ -170,10 +170,10 @@ PROPOSED_ORDER_HINT = "建議掛單的停利線是盤前策略參考：新訊號
 PROTECTION_HINT = "只由 confirmed managed fill 的 canonical position state＋frozen params 機械派生；不讀成交後行情、不代表券商已掛出 Stop/TP。"
 OCO_HINT = "系統不預設券商支援 OCO；只有你明確輸入實際券商 OCO/互斥群組 ID 時才允許 Stop full + TP 同時超額共享同一持股。尚未送券商的 logical plan 仍不是 broker truth。"
 INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。"
-POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；Stop / 停利線 / Trailing / SELL 訊號是持股決策資訊。"
-SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；選取候選後會帶入掛單輸入框，可在正式送出前修改股數／限價／掛單日。"
+POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；停損／停利／賣出訊號是持股區決策資訊。"
+SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；選取候選後會帶入掛單輸入框，可在正式送出前修改規劃股數／掛單日；買入限價由系統自動計算。"
 BUY_ENTRY_HINT = "直接補登買入不需經掛單區；成交日／成交價會先用 raw 市場證據檢查，手動股會凍結目前 Primary Params 並從 finalized information date 開始管理。"
-PENDING_ENTRY_HINT = "Scanner／手選股／既有掛單共用同一輸入介面；修改股票、股數、限價或日期會自動更新預覽。只有 ACTIVE 掛單占用 Params、資金與 slot；掛單結案即釋放。"
+PENDING_ENTRY_HINT = "Scanner／手選股／既有掛單共用同一輸入介面；修改股票、規劃股數或掛單日會自動更新預覽。買入限價、預留成本、停損、停利由系統自動計算；只有 ACTIVE 掛單占用 Params、資金與 slot。"
 
 _STATUS_TOKEN_TONES = {
     "READY": "success",
@@ -1030,18 +1030,17 @@ class TradingAccountPanel(ttk.Frame):
         self._remove_button.pack(side="left", padx=(8, 0))
         ttk.Button(button_row, text="清除輸入", command=self._clear_position_form, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(8, 0))
 
-        table_box = ttk.LabelFrame(content, text="持股決策", padding=8, style=WORKBENCH_LABELLF_STYLE)
+        table_box = ttk.LabelFrame(content, text="持股區", padding=8, style=WORKBENCH_LABELLF_STYLE)
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "trailing", "sell_signal")
+        columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
-            "open": "↗", "source": "來源", "ticker": "股票", "entry_date": "買入日", "qty": "股數", "avg_cost": "均價", "current": "市價",
-            "stop": "目前Stop", "target": "停利線", "trailing": "Trailing",
-            "sell_signal": "SELL訊號",
+            "open": "↗", "source": "來源", "ticker": "股票", "entry_date": "成交日", "qty": "股數", "avg_cost": "均價", "current": "市價",
+            "stop": "停損", "target": "停利", "sell_signal": "賣出訊號",
         }
-        widths = {"open": 36, "source": 90, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "trailing": 95, "sell_signal": 125}
+        widths = {"open": 36, "source": 90, "ticker": 80, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "sell_signal": 125}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
@@ -1074,18 +1073,17 @@ class TradingAccountPanel(ttk.Frame):
         _TradingStatusLine(pending_box, textvariable=self._pending_status_var, default_tone="muted", max_lines=2).grid(
             row=0, column=0, sticky="ew", pady=(0, 6)
         )
-        pending_columns = ("open", "source", "ticker", "date", "limit", "qty", "reserved", "stop", "target", "trailing", "status")
+        pending_columns = ("open", "source", "ticker", "date", "qty", "reserved", "limit", "stop", "target", "status")
         self._pending_tree = ttk.Treeview(
             pending_box, columns=pending_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=5
         )
         pending_headings = {
-            "open": "↗", "source": "來源", "ticker": "股票", "date": "掛單日", "limit": "買入限價",
-            "qty": "規劃股數", "reserved": "預留成本", "stop": "Stop", "target": "停利線",
-            "trailing": "Trailing", "status": "狀態",
+            "open": "↗", "source": "來源", "ticker": "股票", "date": "掛單日", "qty": "規劃股數",
+            "reserved": "預留成本", "limit": "買入限價", "stop": "停損", "target": "停利", "status": "狀態",
         }
         pending_widths = {
-            "open": 36, "source": 86, "ticker": 75, "date": 96, "limit": 90, "qty": 88,
-            "reserved": 110, "stop": 86, "target": 86, "trailing": 86, "status": 100,
+            "open": 36, "source": 86, "ticker": 75, "date": 96, "qty": 88,
+            "reserved": 110, "limit": 90, "stop": 86, "target": 86, "status": 100,
         }
         for key in pending_columns:
             self._pending_tree.heading(key, text=pending_headings[key])
@@ -1112,9 +1110,8 @@ class TradingAccountPanel(ttk.Frame):
         draft_labels = (
             ("來源", 10),
             ("股票", 10),
-            ("數量", 10),
-            ("買入限價", 12),
             ("掛單日", 12),
+            ("規劃股數", 10),
             ("成交日", 12),
             ("成交價", 12),
         )
@@ -1134,26 +1131,18 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_order_ticker_entry.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_order_ticker_entry.bind("<Return>", self._on_manual_pending_ticker_commit)
         self._pending_order_ticker_entry.bind("<KeyRelease>", self._schedule_manual_pending_ticker_preview)
-        self._pending_order_qty_entry = ttk.Entry(
-            pending_actions, textvariable=self._pending_order_qty_var, width=10, style=WORKBENCH_ENTRY_STYLE
-        )
-        self._pending_order_qty_entry.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
-        self._pending_order_limit_entry = ttk.Entry(
-            pending_actions,
-            textvariable=self._pending_order_limit_var,
-            width=12,
-            state="readonly",
-            style=WORKBENCH_ENTRY_STYLE,
-        )
-        self._pending_order_limit_entry.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_order_date_field = DatePickerField(
             pending_actions, textvariable=self._pending_order_date_var, width=12, allowed_dates=()
         )
-        self._pending_order_date_field.grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_order_date_field.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_order_qty_entry = ttk.Entry(
+            pending_actions, textvariable=self._pending_order_qty_var, width=10, style=WORKBENCH_ENTRY_STYLE
+        )
+        self._pending_order_qty_entry.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_fill_date_field = DatePickerField(
             pending_actions, textvariable=self._pending_fill_date_var, width=12, allowed_dates=()
         )
-        self._pending_fill_date_field.grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_fill_date_field.grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_fill_price_combo = ttk.Combobox(
             pending_actions,
             textvariable=self._pending_fill_price_var,
@@ -1162,13 +1151,13 @@ class TradingAccountPanel(ttk.Frame):
             state="disabled",
             style=WORKBENCH_COMBO_STYLE,
         )
-        self._pending_fill_price_combo.grid(row=1, column=6, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_fill_price_combo.grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
         for draft_var in (self._pending_order_qty_var, self._pending_order_date_var):
             draft_var.trace_add("write", self._schedule_pending_value_preview)
         self._pending_fill_date_var.trace_add("write", self._schedule_pending_fill_preview)
         self._pending_fill_price_var.trace_add("write", self._refresh_pending_fill_button_state)
         pending_draft_buttons = ttk.Frame(pending_actions, style=WORKBENCH_FRAME_STYLE)
-        pending_draft_buttons.grid(row=1, column=7, sticky="w", padx=(12, 0), pady=(4, 0))
+        pending_draft_buttons.grid(row=1, column=6, sticky="w", padx=(12, 0), pady=(4, 0))
         self._pending_submit_button = ttk.Button(
             pending_draft_buttons, text="確認掛單", command=self._confirm_submit_pending_draft, style=WORKBENCH_BUTTON_STYLE
         )
@@ -1189,13 +1178,13 @@ class TradingAccountPanel(ttk.Frame):
             state="disabled",
         )
         self._pending_delete_button.pack(side="left", padx=(8, 0))
-        self._pending_draft_preview_var = tk.StringVar(value="輸入手動股票或從 Scanner Pool 選取股票後，系統會自動帶入買入限價、數量、日期與盤前管理資訊。")
+        self._pending_draft_preview_var = tk.StringVar(value="輸入手動股票或從 Scanner Pool 選取股票後，系統會自動計算預留成本、買入限價、停損與停利。")
         _TradingStatusLine(
             pending_actions,
             textvariable=self._pending_draft_preview_var,
             default_tone="muted",
             max_lines=2,
-        ).grid(row=2, column=0, columnspan=8, sticky="ew", pady=(6, 0))
+        ).grid(row=2, column=0, columnspan=7, sticky="ew", pady=(6, 0))
 
         trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）", padding=10, style=WORKBENCH_LABELLF_STYLE)
         trade_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
@@ -2072,12 +2061,11 @@ class TradingAccountPanel(ttk.Frame):
                 "", "end", iid=entry_id,
                 values=(
                     "▣", source, row.get("ticker") or "-", row.get("planned_trade_date") or row.get("information_date") or "-",
-                    self._format_candidate_number(row.get("limit_price"), digits=2),
                     f"{int(row.get('planned_qty') or 0):,}",
                     self._format_candidate_number(row.get("reserved_cost"), digits=0),
+                    self._format_candidate_number(row.get("limit_price"), digits=2),
                     self._format_candidate_number(row.get("init_sl"), digits=2),
                     self._format_candidate_number(row.get("target_price"), digits=2),
-                    self._format_candidate_number(row.get("init_trail"), digits=2),
                     status,
                 ),
             )
@@ -2414,7 +2402,7 @@ class TradingAccountPanel(ttk.Frame):
         if hasattr(self, "_pending_fill_date_field"):
             self._pending_fill_date_field.set_allowed_dates(())
         self._pending_draft_preview_var.set(
-            message or "輸入股票或從 Scanner Pool 選取股票；買入限價自動計算，修改數量／日期後會自動更新盤前資訊。"
+            message or "輸入股票或從 Scanner Pool 選取股票；修改掛單日／規劃股數後會自動更新預留成本、買入限價、停損與停利。"
         )
 
     def _on_candidate_selected(self, row):
@@ -2791,13 +2779,9 @@ class TradingAccountPanel(ttk.Frame):
 
         self._apply_pending_order_form_constraints(order_constraints, editing=editing)
         self._apply_pending_fill_constraints(fill_constraints, editing=editing)
-        suffix = ""
-        if editing:
-            suffix = f"｜成交日需晚於掛單日 {row.get('planned_trade_date')}；選成交日後可直接確認成交"
         self._pending_draft_preview_var.set(
-            f"預留 {float(row.get('reserved_cost') or 0):,.0f}｜Stop {row.get('init_sl')}｜"
-            f"停利 {row.get('target_price')}｜Trailing {row.get('init_trail')}｜"
-            f"買入限價 {row.get('limit_price')}（自動計算）｜資訊日 {row.get('information_date') or '-'}{suffix}"
+            f"預留成本 {float(row.get('reserved_cost') or 0):,.0f}｜"
+            f"買入限價 {row.get('limit_price')}｜停損 {row.get('init_sl')}｜停利 {row.get('target_price')}"
         )
 
     def _invalidate_pending_preview(self) -> None:
@@ -2980,7 +2964,7 @@ class TradingAccountPanel(ttk.Frame):
             if not messagebox.askyesno(
                 action_text,
                 f"{row.get('ticker')}｜{int(row.get('planned_qty') or 0):,} 股｜限價 {row.get('limit_price')}｜{row.get('planned_trade_date')}\n"
-                f"預留 {float(row.get('reserved_cost') or 0):,.0f}｜Stop {row.get('init_sl')}｜停利 {row.get('target_price')}｜Trailing {row.get('init_trail')}\n\n"
+                f"預留成本 {float(row.get('reserved_cost') or 0):,.0f}｜停損 {row.get('init_sl')}｜停利 {row.get('target_price')}\n\n"
                 + ("確認後會原子取代原掛單，不會重複計算 reservation。" if editing else "確認後才會建立正式掛單並鎖定資金／持股 slot。"),
                 parent=self,
             ):
@@ -3080,7 +3064,7 @@ class TradingAccountPanel(ttk.Frame):
             f"{row.get('ticker')}｜{qty:,} 股 @ {price}｜{trade_date}\n"
             f"掛單限價 {row.get('limit_price')}｜規劃 {int(row.get('planned_qty') or 0):,} 股\n"
             f"市場證據 Low {evidence.get('market_low')} / High {evidence.get('market_high')}"
-            f"{warning_text}\n\n確認後將轉入持股決策。",
+            f"{warning_text}\n\n確認後將轉入持股區。",
             parent=self,
         ):
             return
@@ -3088,8 +3072,8 @@ class TradingAccountPanel(ttk.Frame):
         ticker = str(row.get("ticker") or "")
 
         def on_success(_result):
-            self._reset_pending_draft_form(message=f"{ticker} 已成交並轉入持股決策；掛單與帳務狀態已同步。")
-            messagebox.showinfo("掛單成交", f"{ticker} 已轉入持股決策。", parent=self)
+            self._reset_pending_draft_form(message=f"{ticker} 已成交並轉入持股區；掛單與帳務狀態已同步。")
+            messagebox.showinfo("掛單成交", f"{ticker} 已轉入持股區。", parent=self)
 
         self._submit_trading_command(
             f"{ticker} 掛單成交轉持股",
@@ -3656,7 +3640,6 @@ class TradingAccountPanel(ttk.Frame):
                     format_trading_money(row.get("current_price")),
                     format_trading_money(row.get("effective_stop")),
                     format_trading_money(row.get("target_price")),
-                    format_trading_money(row.get("trailing_stop")),
                     sell_signal,
                 ),
             )
@@ -3917,7 +3900,7 @@ class TradingAccountPanel(ttk.Frame):
             self._trade_date_field.set_allowed_dates(())
             messagebox.showinfo(
                 "成交登錄",
-                f"{ticker} 買入成交已寫入帳戶 SSOT；持股決策已同步重新整理。",
+                f"{ticker} 買入成交已寫入帳戶 SSOT；持股區已同步重新整理。",
                 parent=self.winfo_toplevel(),
             )
 

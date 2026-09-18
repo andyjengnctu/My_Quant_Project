@@ -3876,28 +3876,54 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
     pending_ui_source = panel_source.split('pending_box = ttk.LabelFrame(content, text="掛單區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[0]
     check(
-        "workbench_pending_buy_limit_and_fill_price_are_separate_controls",
+        "workbench_pending_table_uses_requested_schema_without_trailing",
+        True,
+        'pending_columns = ("open", "source", "ticker", "date", "qty", "reserved", "limit", "stop", "target", "status")' in panel_source
+        and all(token in panel_source for token in (
+            '"source": "來源"', '"ticker": "股票"', '"date": "掛單日"', '"qty": "規劃股數"',
+            '"reserved": "預留成本"', '"limit": "買入限價"', '"stop": "停損"', '"target": "停利"', '"status": "狀態"',
+        ))
+        and '"trailing": "Trailing"' not in pending_ui_source,
+    )
+    check(
+        "workbench_pending_auto_status_line_uses_reserved_limit_stop_target_order",
+        True,
+        "f\"預留成本 {float(row.get('reserved_cost') or 0):,.0f}｜\"" in panel_source
+        and "f\"買入限價 {row.get('limit_price')}｜停損 {row.get('init_sl')}｜停利 {row.get('target_price')}\"" in panel_source
+        and "Trailing {row.get('init_trail')}" not in panel_source.split('def _apply_pending_draft_preview', 1)[1].split('def _invalidate_pending_preview', 1)[0],
+    )
+    check(
+        "workbench_pending_input_uses_requested_compact_schema_without_buy_limit_control",
         True,
         all(token in pending_ui_source for token in (
-            'self._pending_order_limit_entry = ttk.Entry',
-            'textvariable=self._pending_order_limit_var',
-            'state="readonly"',
+            '("來源", 10)',
+            '("股票", 10)',
+            '("掛單日", 12)',
+            '("規劃股數", 10)',
+            '("成交日", 12)',
+            '("成交價", 12)',
             'self._pending_fill_price_combo = ttk.Combobox',
             'textvariable=self._pending_fill_price_var',
             'state="disabled"',
-            '("買入限價", 12)',
-            '("掛單日", 12)',
-            '("成交日", 12)',
-            '("成交價", 12)',
             'self._pending_fill_date_field = DatePickerField',
-        )),
+        ))
+        and 'self._pending_order_limit_entry = ttk.Entry' not in pending_ui_source
+        and '("數量", 10)' not in pending_ui_source
+        and '("買入限價", 12)' not in pending_ui_source,
     )
     check(
-        "workbench_pending_fill_date_precedes_fill_price_in_form",
+        "workbench_pending_input_order_is_source_ticker_order_date_planned_qty_fill_date_fill_price",
         True,
-        pending_ui_source.find('("成交日", 12)') < pending_ui_source.find('("成交價", 12)')
-        and 'self._pending_fill_date_field.grid(row=1, column=5' in pending_ui_source
-        and 'self._pending_fill_price_combo.grid(row=1, column=6' in pending_ui_source,
+        pending_ui_source.find('("來源", 10)')
+        < pending_ui_source.find('("股票", 10)')
+        < pending_ui_source.find('("掛單日", 12)')
+        < pending_ui_source.find('("規劃股數", 10)')
+        < pending_ui_source.find('("成交日", 12)')
+        < pending_ui_source.find('("成交價", 12)')
+        and 'self._pending_order_date_field.grid(row=1, column=2' in pending_ui_source
+        and 'self._pending_order_qty_entry.grid(row=1, column=3' in pending_ui_source
+        and 'self._pending_fill_date_field.grid(row=1, column=4' in pending_ui_source
+        and 'self._pending_fill_price_combo.grid(row=1, column=5' in pending_ui_source,
     )
     check(
         "workbench_pending_buy_limit_is_auto_calculated_not_user_override",
@@ -3944,14 +3970,20 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and '成交日必須晚於掛單日' in panel_source,
     )
     check(
-        "workbench_position_decisions_show_source_before_ticker_and_remove_suggested_action",
+        "workbench_holding_area_uses_requested_source_first_schema_without_trailing_or_suggested_action",
         True,
-        'columns = ("open", "source", "ticker", "entry_date"' in panel_source
+        'text="持股區"' in panel_source
+        and 'columns = ("open", "source", "ticker", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal")' in panel_source
         and '"source": "來源"' in panel_source
+        and '"entry_date": "成交日"' in panel_source
+        and '"stop": "停損"' in panel_source
+        and '"target": "停利"' in panel_source
+        and '"sell_signal": "賣出訊號"' in panel_source
         and 'source_text = source_labels.get(source_key, source_key or "-")' in panel_source
+        and '"trailing": "Trailing"' not in panel_source.split('table_box = ttk.LabelFrame(content, text="持股區"', 1)[1].split('candidate_box = ttk.LabelFrame', 1)[0]
         and '"action": "建議動作"' not in panel_source,
     )
-    check("workbench_position_decisions_expose_existing_entry_date_as_buy_date", True, 'columns = ("open", "source", "ticker", "entry_date"' in panel_source and '"entry_date": "買入日"' in panel_source and 'row.get("entry_date") or "-"' in panel_source)
+    check("workbench_holding_area_exposes_existing_entry_date_as_fill_date", True, 'row.get("entry_date") or "-"' in panel_source and '"entry_date": "成交日"' in panel_source)
     check(
         "workbench_direct_backfill_fill_date_and_price_use_canonical_constraints",
         True,
@@ -3968,7 +4000,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
     _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in _direct_buy_section)
-    check("workbench_trading_center_keeps_position_decisions_without_duplicate_account_dashboard", True, "text=\"持股決策\"" in panel_source and "for accounting_section in (header, cash_box, form, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box = ttk.LabelFrame' not in panel_source)
+    check("workbench_trading_center_keeps_position_decisions_without_duplicate_account_dashboard", True, "text=\"持股區\"" in panel_source and "for accounting_section in (header, cash_box, form, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box = ttk.LabelFrame' not in panel_source)
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_clean_inventory_trade_detail_titles_and_performance", True, all(text in accounting_source for text in ('text="庫存股"', 'text="買入明細"', 'text="賣出明細"', 'text="沖抵明細"', 'text="績效統計"', "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
@@ -4218,7 +4250,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_scanner_pool_hides_median_sort_evidence_column", False, any(row.get("key") == "ensemble_median_sort_value" for row in ensemble_metrics))
     check("workbench_accounting_tables_page_at_twelve_without_inner_scrollbars", True, accounting_source.count("page_size=12") >= 5 and accounting_source.count("ttk.Scrollbar(") == 1 and 'self._page_scrollbar = ttk.Scrollbar' in accounting_source)
     check("workbench_trading_scanner_pages_at_twelve_without_inner_scrollbar", True, "page_size=12" in panel_source and panel_source.count("ttk.Scrollbar(") == 1 and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
-    check("workbench_buy_success_stays_in_trading_center_with_refreshed_holdings", True, "持股決策已同步重新整理" in panel_source and '_open_accounting_center' not in panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0])
+    check("workbench_buy_success_stays_in_trading_center_with_refreshed_holdings", True, "持股區已同步重新整理" in panel_source and '_open_accounting_center' not in panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0])
     buy_entry_body = panel_source.split("def _record_simple_trade", 1)[1].split("def _position_form_values", 1)[0]
     check("workbench_buy_success_refreshes_trading_center_before_navigation", True, 'refresh_state=True' in buy_entry_body and 'refresh_state=False' not in buy_entry_body)
     state_sync_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "state_sync.py").read_text(encoding="utf-8")
