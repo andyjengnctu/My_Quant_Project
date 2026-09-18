@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import logging
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -1802,6 +1803,137 @@ def _canonical_account_marker_groups(
     return groups
 
 
+def _canonical_trading_sell_signal_annotations(
+    *,
+    lifecycle_by_index: Mapping[int, Mapping[str, Any]],
+    date_labels: list[str | None],
+    chart_payload: Mapping[str, Any],
+    indicator_exit: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Project Trading SELL annotations from the same lifecycle used by sidebar.
+
+    The single-stock sidebar consumes ``trading_lifecycle_by_index``.  SELL
+    labels must consume that same state rather than independently deciding
+    visibility from the current indicator-exit plan; otherwise a frozen-Params
+    replay can correctly show ``INDICATOR SELL`` in the sidebar while the chart
+    silently omits the signal annotation.
+
+    Current indicator-exit rows remain useful audit metadata only.  Persistent
+    obligations are de-duplicated by position cycle + SELL kind so one carried
+    signal does not paint a label on every later bar.
+    """
+
+    exit_rows = []
+    current_indicator = indicator_exit if isinstance(indicator_exit, Mapping) else {}
+    if bool(current_indicator.get("fresh")):
+        exit_rows = [
+            dict(row)
+            for row in list(current_indicator.get("exits") or [])
+            if isinstance(row, Mapping)
+        ]
+
+    annotations: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    high_values = _chart_series_values(chart_payload, "high")
+    close_values = _chart_series_values(chart_payload, "close")
+
+    for idx in sorted(int(value) for value in lifecycle_by_index):
+        state = lifecycle_by_index.get(idx)
+        if not isinstance(state, Mapping):
+            continue
+        if str(state.get("state") or "") != TRADE_LIFECYCLE_POSITION:
+            continue
+        sell_signal = str(state.get("sell_signal") or "").strip().upper()
+        if not sell_signal:
+            continue
+        if idx < 0 or idx >= len(date_labels):
+            continue
+        signal_date = _date_text(date_labels[idx])
+        if signal_date is None:
+            continue
+
+        cycle_key = str(state.get("entry_order_id") or "").strip()
+        if not cycle_key:
+            cycle_key = str(_date_text(state.get("entry_date")) or state.get("source") or "")
+        if not cycle_key:
+            cycle_key = f"position@{idx}"
+        dedupe_key = (cycle_key, sell_signal)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        anchor = None
+        for values in (high_values, close_values):
+            try:
+                candidate = float(values[idx])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if math.isfinite(candidate):
+                anchor = candidate
+                break
+        if anchor is None:
+            for field in ("stop_price", "entry_price"):
+                try:
+                    candidate = float(state.get(field))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(candidate):
+                    anchor = candidate
+                    break
+        if anchor is None:
+            continue
+
+        matched_exit = None
+        same_date_exits = [
+            row for row in exit_rows
+            if _date_text(row.get("signal_information_date")) == signal_date
+        ]
+        state_entry = str(state.get("entry_order_id") or "").strip()
+        for row in same_date_exits:
+            row_entry = str(row.get("entry_order_id") or "").strip()
+            if not state_entry or not row_entry or row_entry == state_entry:
+                matched_exit = row
+                break
+        # The Indicator plan uses the canonical management-lineage key while
+        # historical account replay can expose the broker ENTRY order id.  In a
+        # single-ticker inspector a unique same-date exit row is unambiguous and
+        # may safely enrich the lifecycle annotation with audit metadata.
+        if matched_exit is None and len(same_date_exits) == 1:
+            matched_exit = same_date_exits[0]
+
+        meta = {
+            "canonical_trading": True,
+            "canonical_lifecycle_sell": True,
+            "sell_signal": sell_signal,
+            "entry_order_id": state.get("entry_order_id"),
+        }
+        if matched_exit is not None:
+            meta.update({
+                "canonical_indicator_exit": sell_signal == "INDICATOR SELL",
+                "signal_key": matched_exit.get("signal_key"),
+                "qty": matched_exit.get("qty"),
+                "entry_order_id": matched_exit.get("entry_order_id") or state.get("entry_order_id"),
+                "frozen_params_sha256": matched_exit.get("frozen_params_sha256"),
+            })
+
+        note = (
+            "Trading frozen Params 指標賣出訊號"
+            if sell_signal == "INDICATOR SELL"
+            else f"Trading canonical SELL 訊號：{sell_signal}"
+        )
+        annotations.append({
+            "date": signal_date,
+            "x": idx,
+            "anchor_price": anchor,
+            "signal_type": "sell",
+            "title": "賣出訊號",
+            "detail_text": "",
+            "note": note,
+            "meta": meta,
+        })
+    return annotations
+
+
 def project_trading_single_stock_chart_payload(
     chart_payload: Mapping[str, Any] | None,
     inspection: Mapping[str, Any] | None,
@@ -1944,39 +2076,14 @@ def project_trading_single_stock_chart_payload(
             item["detail_text"] = ""
         signal_annotations.append(item)
 
-    indicator_exit = inspection.get("indicator_exit") or {}
-    if bool(indicator_exit.get("fresh")):
-        for exit_row in list(indicator_exit.get("exits") or []):
-            signal_date = _date_text(exit_row.get("signal_information_date"))
-            if signal_date is None or signal_date not in date_to_x:
-                continue
-            x = int(date_to_x[signal_date])
-            anchor = None
-            for series_key in ("high", "close"):
-                series = payload.get(series_key)
-                try:
-                    anchor = float(series[x])
-                except (TypeError, ValueError, IndexError):
-                    anchor = None
-                if anchor is not None:
-                    break
-            signal_annotations.append({
-                "date": signal_date,
-                "x": x,
-                "anchor_price": anchor,
-                "signal_type": "sell",
-                "title": "賣出訊號",
-                "detail_text": "",
-                "note": "Trading frozen Params 指標賣出訊號",
-                "meta": {
-                    "canonical_trading": True,
-                    "canonical_indicator_exit": True,
-                    "signal_key": exit_row.get("signal_key"),
-                    "qty": exit_row.get("qty"),
-                    "entry_order_id": exit_row.get("entry_order_id"),
-                    "frozen_params_sha256": exit_row.get("frozen_params_sha256"),
-                },
-            })
+    signal_annotations.extend(
+        _canonical_trading_sell_signal_annotations(
+            lifecycle_by_index=lifecycle_by_index,
+            date_labels=date_labels,
+            chart_payload=payload,
+            indicator_exit=inspection.get("indicator_exit"),
+        )
+    )
 
     # Pending-entry intent is a distinct Trading order layer, not a Research BUY
     # signal.  Keep Research signal anchors intact and add a dedicated order

@@ -5417,6 +5417,30 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             == _manual_activation_numpy_projected["tp_line"][1],
         ],
     )
+    with patch(
+        "services.trading.single_stock_inspection.unpack_precomputed_signals",
+        return_value=([_synth_atr, _synth_atr], [False, False], [False, True], [None, None]),
+    ):
+        _manual_sell_projected = project_trading_single_stock_chart_payload(
+            _manual_activation_chart,
+            _manual_activation_inspection,
+            params=base_params,
+        )
+    _manual_sell_annotations = [
+        row for row in _manual_sell_projected.get("signal_annotations", [])
+        if str(row.get("signal_type") or "").lower() == "sell"
+    ]
+    check(
+        "workbench_single_stock_manual_managed_frozen_replay_sell_signal_is_visible_in_sidebar_and_chart_from_same_lifecycle",
+        ["INDICATOR SELL", [["2026-09-17", "賣出訊號", True]]],
+        [
+            (_manual_sell_projected.get("trading_lifecycle_by_index", {}).get(1) or {}).get("sell_signal"),
+            [[
+                row.get("date"), row.get("title"),
+                bool((row.get("meta") or {}).get("canonical_lifecycle_sell")),
+            ] for row in _manual_sell_annotations],
+        ],
+    )
     _overlay_order = deepcopy(_inspection_order["entry_orders"][0])
     _overlay_order["qty"] = 333
     _overlay_order["signal_date"] = "2026-09-14"
@@ -5658,7 +5682,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _indicator_inspection["indicator_exit"] = {
         "fresh": True,
         "exits": [{
-            "ticker": "2330", "signal_information_date": "2026-09-17",
+            # Canonical Trading SELL cannot precede this synthetic position's
+            # effective 2026-09-18 account fill.  The Research SELL above is
+            # intentionally earlier and must be discarded by Trading mode.
+            "ticker": "2330", "signal_information_date": "2026-09-18",
             "signal_key": "TRADING-SELL-001", "qty": 333,
             "entry_order_id": "POSITION:LINEAGE-001", "frozen_params_sha256": "params-sha",
         }],
@@ -5672,12 +5699,46 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     ]
     check(
         "workbench_single_stock_trading_sell_marker_uses_canonical_frozen_params_indicator_obligation",
-        [["2026-09-17", "賣出訊號", True, "TRADING-SELL-001"]],
+        [["2026-09-18", "賣出訊號", True, "TRADING-SELL-001"]],
         [[
             row.get("date"), row.get("title"),
             bool((row.get("meta") or {}).get("canonical_indicator_exit")),
             (row.get("meta") or {}).get("signal_key"),
         ] for row in _sell_annotations],
+    )
+    from services.trading.single_stock_inspection import _canonical_trading_sell_signal_annotations
+    _lifecycle_only_sell_annotations = _canonical_trading_sell_signal_annotations(
+        lifecycle_by_index={
+            0: {
+                "state": "POSITION", "entry_date": "2026-09-14", "entry_order_id": "POSITION:MANUAL-001",
+                "sell_signal": None, "entry_price": 98.0, "stop_price": 90.0,
+            },
+            1: {
+                "state": "POSITION", "entry_date": "2026-09-14", "entry_order_id": "POSITION:MANUAL-001",
+                "sell_signal": "INDICATOR SELL", "entry_price": 98.0, "stop_price": 90.0,
+            },
+            2: {
+                "state": "POSITION", "entry_date": "2026-09-14", "entry_order_id": "POSITION:MANUAL-001",
+                "sell_signal": "INDICATOR SELL", "entry_price": 98.0, "stop_price": 90.0,
+            },
+        },
+        date_labels=["2026-09-16", "2026-09-17", "2026-09-18"],
+        chart_payload={"high": [103.0, 105.0, 104.0], "close": [101.0, 100.0, 99.0]},
+        indicator_exit={"fresh": False, "exits": []},
+    )
+    check(
+        "workbench_single_stock_sell_annotation_follows_same_lifecycle_sell_signal_as_sidebar_even_without_fresh_exit_plan",
+        [["2026-09-17", "賣出訊號", "INDICATOR SELL", True]],
+        [[
+            row.get("date"), row.get("title"),
+            (row.get("meta") or {}).get("sell_signal"),
+            bool((row.get("meta") or {}).get("canonical_lifecycle_sell")),
+        ] for row in _lifecycle_only_sell_annotations],
+    )
+    check(
+        "workbench_single_stock_carried_sell_obligation_draws_one_signal_annotation_not_one_per_bar",
+        1,
+        len(_lifecycle_only_sell_annotations),
     )
     check(
         "workbench_single_stock_trading_overlay_does_not_keep_simulated_fill_on_live_cycle",
