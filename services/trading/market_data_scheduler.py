@@ -6,7 +6,6 @@ remain owned by the Market Data runtime services.
 """
 from __future__ import annotations
 
-import base64
 import json
 import ntpath
 import os
@@ -87,20 +86,19 @@ $task = Get-ScheduledTask -TaskName $env:MQP_TASK_NAME -TaskPath '\' -ErrorActio
 if ($null -ne $task) { Unregister-ScheduledTask -TaskName $env:MQP_TASK_NAME -TaskPath '\' -Confirm:$false }'''
 
 
-def _powershell_single_quote(value: str) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
+def _windowless_python_executable(python_executable: str) -> str:
+    python_path = Path(python_executable)
+    if python_path.name.lower() == "pythonw.exe":
+        return str(python_path)
+    return str(python_path.with_name("pythonw.exe"))
 
 
 def _scheduled_action(*, project_root: Path, python_executable: str) -> tuple[str, str, str]:
     script = project_root / "apps" / "market_data_auto_update.py"
-    command = (
-        f"& {_powershell_single_quote(python_executable)} "
-        f"{_powershell_single_quote(str(script))} --project-root {_powershell_single_quote(str(project_root))}; "
-        "exit $LASTEXITCODE"
+    execute = _windowless_python_executable(python_executable)
+    arguments = subprocess.list2cmdline(
+        [str(script), "--project-root", str(project_root), "--quiet"]
     )
-    encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
-    execute = "powershell.exe"
-    arguments = f"-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand {encoded}"
     return execute, arguments, str(project_root)
 
 

@@ -21,6 +21,11 @@ def main(argv=None) -> int:
         help="Optional YYYY-MM-DD override for deterministic recovery/testing. Default can sparsely discover a newer completed market day, then runs the canonical V2 due planner.",
     )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON result.")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stdout for windowless scheduler execution.",
+    )
     args = parser.parse_args(None if argv is None else list(argv)[1:])
 
     from services.trading.market_data_auto_update import run_trading_market_data_auto_update
@@ -29,16 +34,17 @@ def main(argv=None) -> int:
         project_root=Path(args.project_root).resolve(),
         target_date=args.target_date,
     )
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str))
-    else:
-        print(
-            "Market Data V2 Auto Update | "
-            f"status={result.get('status')} | target={result.get('target_date') or '-'} | "
-            f"due={result.get('due_dataset_count', 0)} | data_req={result.get('data_requests', 0)} | "
-            f"usage_req={result.get('usage_requests', 0)} | full_market_exact={result.get('full_market_exact_date_request_count', 0)} | "
-            f"next={result.get('next_check_at') or '-'}"
-        )
+    if not args.quiet:
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str))
+        else:
+            print(
+                "Market Data V2 Auto Update | "
+                f"status={result.get('status')} | target={result.get('target_date') or '-'} | "
+                f"due={result.get('due_dataset_count', 0)} | data_req={result.get('data_requests', 0)} | "
+                f"usage_req={result.get('usage_requests', 0)} | full_market_exact={result.get('full_market_exact_date_request_count', 0)} | "
+                f"next={result.get('next_check_at') or '-'}"
+            )
     return 2 if str(result.get("status") or "") == "BLOCKED" else 0
 
 

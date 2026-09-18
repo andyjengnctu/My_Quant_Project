@@ -3696,9 +3696,26 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         remove_market_data_scheduler,
         set_market_data_scheduler_enabled,
     )
-    scheduler_spec = build_market_data_scheduler_spec(Path.cwd())
+    scheduler_python = Path.cwd() / ".venv" / "Scripts" / "python.exe"
+    scheduler_spec = build_market_data_scheduler_spec(Path.cwd(), python_executable=str(scheduler_python))
     check("scheduler_spec_targets_canonical_one_shot_app", "apps/market_data_auto_update.py", scheduler_spec["app_path"])
-    check("scheduler_spec_uses_hidden_powershell_launcher", "powershell.exe", scheduler_spec["execute"])
+    check("scheduler_spec_uses_windowless_python_launcher", "pythonw.exe", Path(str(scheduler_spec["execute"])).name.lower())
+    check("scheduler_spec_avoids_powershell_runtime_launcher", False, "powershell" in str(scheduler_spec["execute"]).lower())
+    check("scheduler_spec_runs_worker_quietly", True, "--quiet" in str(scheduler_spec["arguments"]).split())
+    from contextlib import redirect_stdout
+    import io
+    from apps.market_data_auto_update import main as run_market_data_auto_update_app
+    quiet_output = io.StringIO()
+    with patch(
+        "services.trading.market_data_auto_update.run_trading_market_data_auto_update",
+        return_value={"status": "READY"},
+    ):
+        with redirect_stdout(quiet_output):
+            quiet_exit_code = run_market_data_auto_update_app(
+                ["market_data_auto_update.py", "--project-root", str(Path.cwd()), "--quiet"]
+            )
+    check("scheduler_worker_quiet_mode_suppresses_console_output", "", quiet_output.getvalue())
+    check("scheduler_worker_quiet_mode_preserves_success_exit_code", 0, quiet_exit_code)
     unsupported_scheduler = get_market_data_scheduler_status(Path.cwd(), platform_name="posix")
     check("scheduler_non_windows_status_is_local_unsupported", SCHEDULER_STATUS_UNSUPPORTED, unsupported_scheduler["status"])
 
@@ -3739,31 +3756,38 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         raise AssertionError("unexpected scheduler PowerShell script")
 
     scheduler_missing = get_market_data_scheduler_status(
-        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+        Path.cwd(), python_executable=str(scheduler_python), runner=_fake_scheduler_runner, platform_name="nt"
     )
     check("scheduler_status_reports_not_installed_without_mutation", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_missing["status"])
     scheduler_installed = install_or_update_market_data_scheduler(
-        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+        Path.cwd(), python_executable=str(scheduler_python), runner=_fake_scheduler_runner, platform_name="nt"
     )
     check("scheduler_install_registers_enabled_canonical_task", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_installed["status"])
     check("scheduler_install_has_logon_trigger", True, scheduler_installed["logon_trigger"])
     check("scheduler_install_uses_configured_wake_interval", scheduler_spec["wake_minutes"], scheduler_installed["wake_minutes"])
+    fake_task["execute"] = "powershell.exe"
+    legacy_launcher_drift = get_market_data_scheduler_status(
+        Path.cwd(), python_executable=str(scheduler_python), runner=_fake_scheduler_runner, platform_name="nt"
+    )
+    check("scheduler_status_marks_legacy_powershell_launcher_as_drift", SCHEDULER_STATUS_DRIFTED_ENABLED, legacy_launcher_drift["status"])
+    check("scheduler_legacy_launcher_drift_identifies_execute", True, "execute" in legacy_launcher_drift["drift_reasons"])
+    fake_task["execute"] = scheduler_spec["execute"]
     fake_task["interval_minutes"] = int(scheduler_spec["wake_minutes"]) + 1
     scheduler_drifted = get_market_data_scheduler_status(
-        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+        Path.cwd(), python_executable=str(scheduler_python), runner=_fake_scheduler_runner, platform_name="nt"
     )
     check("scheduler_status_detects_registration_drift", SCHEDULER_STATUS_DRIFTED_ENABLED, scheduler_drifted["status"])
     fake_task["interval_minutes"] = int(scheduler_spec["wake_minutes"])
     scheduler_disabled = set_market_data_scheduler_enabled(
-        Path.cwd(), enabled=False, runner=_fake_scheduler_runner, platform_name="nt"
+        Path.cwd(), enabled=False, python_executable=str(scheduler_python), runner=_fake_scheduler_runner, platform_name="nt"
     )
     check("scheduler_can_be_disabled_without_deleting_task", SCHEDULER_STATUS_INSTALLED_DISABLED, scheduler_disabled["status"])
     scheduler_reenabled = set_market_data_scheduler_enabled(
-        Path.cwd(), enabled=True, runner=_fake_scheduler_runner, platform_name="nt"
+        Path.cwd(), enabled=True, python_executable=str(scheduler_python), runner=_fake_scheduler_runner, platform_name="nt"
     )
     check("scheduler_can_be_reenabled", SCHEDULER_STATUS_INSTALLED_ENABLED, scheduler_reenabled["status"])
     scheduler_removed = remove_market_data_scheduler(
-        Path.cwd(), runner=_fake_scheduler_runner, platform_name="nt"
+        Path.cwd(), python_executable=str(scheduler_python), runner=_fake_scheduler_runner, platform_name="nt"
     )
     check("scheduler_remove_only_removes_os_registration", SCHEDULER_STATUS_NOT_INSTALLED, scheduler_removed["status"])
 
