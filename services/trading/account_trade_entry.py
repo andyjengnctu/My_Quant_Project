@@ -142,6 +142,36 @@ def _resolve_direct_buy_candidate(project_root, *, ticker: str, candidate: dict 
     )
 
 
+def resolve_trading_direct_buy_source(
+    project_root,
+    *,
+    ticker: object,
+    candidate: dict | None = None,
+) -> dict:
+    """Resolve direct-BUY provenance from canonical Scanner truth.
+
+    The UI consumes this read-only resolver so the displayed source and the
+    eventual account mutation use the same route decision.
+    """
+    ticker_key = str(ticker or "").strip().upper()
+    if not ticker_key:
+        raise ValueError("股票代號必填")
+    current_candidate = _resolve_direct_buy_candidate(
+        project_root, ticker=ticker_key, candidate=candidate
+    )
+    if current_candidate is not None:
+        return {
+            "route": "scanner_strategy_buy",
+            "source": "strategy_fill",
+            "candidate": current_candidate,
+        }
+    return {
+        "route": "manual_managed_buy",
+        "source": "manual_managed",
+        "candidate": None,
+    }
+
+
 def _scanner_buy_warnings_and_limits(*, candidate: dict, qty: int, price, trade_date) -> list[str]:
     warnings: list[str] = []
     seed = dict(candidate.get("execution_plan_seed") or {})
@@ -416,9 +446,10 @@ def preview_trading_account_buy(
         trade_date=trade_date,
         latest_date=latest_finalized_date,
     )
-    current_candidate = _resolve_direct_buy_candidate(
+    source_resolution = resolve_trading_direct_buy_source(
         project_root, ticker=ticker_key, candidate=candidate
     )
+    current_candidate = source_resolution["candidate"]
     manual_management = None
     warnings: list[str] = []
     if current_candidate is not None:
@@ -435,7 +466,8 @@ def preview_trading_account_buy(
             project_root, ticker=ticker_key, trade_date=trade_date
         )
     return {
-        "route": "scanner_strategy_buy" if current_candidate is not None else "manual_managed_buy",
+        "route": source_resolution["route"],
+        "source": source_resolution["source"],
         "candidate": current_candidate,
         "manual_management": manual_management,
         "warnings": warnings,
@@ -615,6 +647,7 @@ __all__ = [
     "correct_trading_account_transaction",
     "list_active_sell_orders_for_ticker",
     "resolve_current_trading_scanner_candidate",
+    "resolve_trading_direct_buy_source",
     "preview_trading_account_buy",
     "record_trading_account_buy",
     "record_trading_account_inventory_sell",

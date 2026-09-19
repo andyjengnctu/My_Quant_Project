@@ -143,7 +143,11 @@ from services.workbench_ui.selection_behavior import (
     clear_treeview_selection,
     handle_treeview_toggle_click,
 )
-from services.trading.account_trade_entry import preview_trading_account_buy, record_trading_account_buy
+from services.trading.account_trade_entry import (
+    preview_trading_account_buy,
+    record_trading_account_buy,
+    resolve_trading_direct_buy_source,
+)
 from services.workbench_ui.workbench import (
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
@@ -1384,26 +1388,33 @@ class TradingAccountPanel(ttk.Frame):
 
         trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）", padding=10, style=WORKBENCH_LABELLF_STYLE)
         trade_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
-        trade_labels = ("股票", "數量", "成交價", "成交日")
+        trade_labels = ("股票", "數量", "成交日", "成交價", "來源")
         self._trade_ticker_var = tk.StringVar()
         self._trade_qty_var = tk.StringVar()
         self._trade_price_var = tk.StringVar()
         self._trade_date_var = tk.StringVar()
+        self._trade_source_var = tk.StringVar(value="-")
         for col, label in enumerate(trade_labels):
             ttk.Label(trade_box, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
         self._trade_ticker_entry = ttk.Entry(trade_box, textvariable=self._trade_ticker_var, width=12, style=WORKBENCH_ENTRY_STYLE)
         self._trade_ticker_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         ttk.Entry(trade_box, textvariable=self._trade_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._trade_date_field = DatePickerField(trade_box, textvariable=self._trade_date_var, width=12, allowed_dates=())
+        self._trade_date_field.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._trade_price_combo = ttk.Combobox(
             trade_box, textvariable=self._trade_price_var, values=(), width=14, state="normal", style=WORKBENCH_COMBO_STYLE
         )
-        self._trade_price_combo.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
-        self._trade_date_field = DatePickerField(trade_box, textvariable=self._trade_date_var, width=12, allowed_dates=())
-        self._trade_date_field.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
-        self._trade_ticker_var.trace_add("write", self._schedule_direct_fill_constraints)
+        self._trade_price_combo.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Label(
+            trade_box,
+            textvariable=self._trade_source_var,
+            width=10,
+            style=WORKBENCH_INFO_LABEL_STYLE,
+        ).grid(row=1, column=4, sticky="w", padx=(8, 0), pady=(4, 0))
+        self._trade_ticker_var.trace_add("write", self._schedule_direct_buy_ticker_constraints)
         self._trade_date_var.trace_add("write", self._schedule_direct_fill_constraints)
         trade_buttons = ttk.Frame(trade_box, style=WORKBENCH_FRAME_STYLE)
-        trade_buttons.grid(row=1, column=4, sticky="w", padx=(12, 0), pady=(4, 0))
+        trade_buttons.grid(row=1, column=5, sticky="w", padx=(12, 0), pady=(4, 0))
         ttk.Button(trade_buttons, text="登錄買入成交", command=lambda: self._record_simple_trade("BUY"), style=WORKBENCH_BUTTON_STYLE).pack(side="left")
         performance_box = ttk.LabelFrame(content, text="帳戶績效統計", padding=8, style=WORKBENCH_LABELLF_STYLE)
         performance_box.grid(row=8, column=0, sticky="nsew", pady=(0, 8))
@@ -4138,6 +4149,11 @@ class TradingAccountPanel(ttk.Frame):
             success_message="現金餘額已更新。",
         )
 
+    def _schedule_direct_buy_ticker_constraints(self, *_args):
+        if hasattr(self, "_trade_source_var"):
+            self._trade_source_var.set("-")
+        return self._schedule_direct_fill_constraints(*_args)
+
     def _schedule_direct_fill_constraints(self, *_args):
         if self._trade_constraint_programmatic_update:
             return None
@@ -4152,6 +4168,15 @@ class TradingAccountPanel(ttk.Frame):
 
     @staticmethod
     def _direct_fill_constraint_worker(token: int, ticker: str, selected_date: str | None):
+        source_resolution = None
+        source_error = None
+        try:
+            source_resolution = resolve_trading_direct_buy_source(
+                WORKBENCH_PROJECT_ROOT, ticker=ticker
+            )
+        except Exception as exc:
+            source_error = exc
+
         result = None
         error = None
         try:
@@ -4165,7 +4190,7 @@ class TradingAccountPanel(ttk.Frame):
             )
         except Exception as exc:
             error = exc
-        return token, result, error
+        return token, result, error, source_resolution, source_error
 
     def _start_direct_fill_constraints(self):
         self._trade_constraint_after_id = None
@@ -4175,6 +4200,7 @@ class TradingAccountPanel(ttk.Frame):
             self._trade_price_option_set = frozenset()
             self._trade_price_combo.configure(values=())
             self._trade_date_field.set_allowed_dates(())
+            self._trade_source_var.set("-")
             return
         selected_date = self._trade_date_var.get().strip() or None
         self._trade_constraint_token += 1
@@ -4198,12 +4224,18 @@ class TradingAccountPanel(ttk.Frame):
         self._trade_constraint_poll_after_id = None
         while True:
             try:
-                token, result, error = self._trade_constraint_results.get_nowait()
+                token, result, error, source_resolution, source_error = self._trade_constraint_results.get_nowait()
             except queue.Empty:
                 break
             self._trade_constraint_inflight = max(0, int(self._trade_constraint_inflight) - 1)
             if int(token) != int(self._trade_constraint_token):
                 continue
+            if source_error is not None:
+                self._trade_source_var.set("-")
+            else:
+                self._trade_source_var.set(
+                    trading_source_display_label(source=(source_resolution or {}).get("source"))
+                )
             if error is not None:
                 self._trade_fill_constraints = {}
                 self._trade_price_option_set = frozenset()
@@ -4272,9 +4304,7 @@ class TradingAccountPanel(ttk.Frame):
         except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
             messagebox.showerror("成交登錄失敗", str(exc), parent=self)
             return
-        source_text = trading_source_display_label(
-            source="strategy_fill" if preview.get("route") == "scanner_strategy_buy" else "manual_adopted"
-        )
+        source_text = trading_source_display_label(source=preview.get("source"))
         evidence = dict(preview.get("market_evidence") or {})
         evidence_text = (
             f"市場證據：{evidence.get('trade_date') or trade_date} "
@@ -4308,6 +4338,7 @@ class TradingAccountPanel(ttk.Frame):
             self._trade_qty_var.set("")
             self._trade_price_var.set("")
             self._trade_date_var.set("")
+            self._trade_source_var.set("-")
             self._trade_fill_constraints = {}
             self._trade_price_option_set = frozenset()
             self._trade_price_combo.configure(values=())

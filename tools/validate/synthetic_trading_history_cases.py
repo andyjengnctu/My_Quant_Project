@@ -439,8 +439,12 @@ def validate_trading_direct_fill_source_contract_case(base_params):
             atomic_write_json(path, snapshot)
         kwargs = dict(ticker="2330", qty=600, price=Decimal("100"), trade_date="2026-08-03")
         expected_lineage = build_trading_candidate_strategy_lineage(candidate)
+        typed_source = entry.resolve_trading_direct_buy_source(roots["typed"], ticker="2330")
+        check("typed_source_resolver_discovers_strategy_from_ticker", "strategy_fill", typed_source["source"])
+        check("typed_source_resolver_uses_strategy_route", "scanner_strategy_buy", typed_source["route"])
         preview = entry.preview_trading_account_buy(roots["typed"], **kwargs)
         check("typed_scanner_ticker_discovers_strategy_without_selection", "scanner_strategy_buy", preview["route"])
+        check("typed_preview_source_matches_source_resolver", typed_source["source"], preview["source"])
         check("typed_preview_reuses_exact_candidate", _digest(candidate), _digest(preview["candidate"]))
         check("strategy_discovery_does_not_construct_custom_context", None, preview["manual_management"])
         outcomes = {}
@@ -479,6 +483,9 @@ def validate_trading_direct_fill_source_contract_case(base_params):
         check("backfilled_strategy_no_post_exit_shadow", False, _idx(payload, "2026-09-10") in payload["trading_lifecycle_by_index"])
 
         # A genuinely custom ticker remains custom, with the same managed engine.
+        custom_source = entry.resolve_trading_direct_buy_source(roots["custom"], ticker="2454")
+        check("typed_non_candidate_source_resolver_is_custom", "manual_managed", custom_source["source"])
+        check("typed_non_candidate_source_resolver_uses_manual_route", "manual_managed_buy", custom_source["route"])
         custom = entry.record_trading_account_buy(roots["custom"], **dict(kwargs, ticker="2454"), expected_route="manual_managed_buy")
         check("non_candidate_stays_custom", "manual_managed", custom["account"]["positions"]["2454"]["source"])
         check("non_candidate_visible_source", "自選", trading_source_display_label(source=custom["account"]["positions"]["2454"]["source"]))

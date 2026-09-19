@@ -4921,6 +4921,18 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
     _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in _direct_buy_section)
+    check(
+        "workbench_direct_buy_orders_date_before_price_and_displays_canonical_source",
+        True,
+        'trade_labels = ("股票", "數量", "成交日", "成交價", "來源")' in _direct_buy_section
+        and 'self._trade_date_field.grid(row=1, column=2' in _direct_buy_section
+        and 'self._trade_price_combo.grid(row=1, column=3' in _direct_buy_section
+        and 'textvariable=self._trade_source_var' in _direct_buy_section
+        and ').grid(row=1, column=4' in _direct_buy_section
+        and 'resolve_trading_direct_buy_source(' in panel_source
+        and 'trading_source_display_label(source=(source_resolution or {}).get("source"))' in panel_source
+        and 'source_text = trading_source_display_label(source=preview.get("source"))' in panel_source,
+    )
     check("workbench_trading_center_keeps_position_decisions_without_duplicate_account_dashboard", True, "text=\"持股區\"" in panel_source and "for accounting_section in (header, cash_box, form, performance_box)" in panel_source and "accounting_section.grid_remove()" in panel_source and 'dashboard_box = ttk.LabelFrame' not in panel_source)
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")

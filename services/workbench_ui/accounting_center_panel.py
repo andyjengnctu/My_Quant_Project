@@ -369,7 +369,6 @@ class AccountingCenterPanel(ttk.Frame):
         self._perf = PagedTable(
             perf,
             columns=(
-                TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("scope", "範圍", 9),
                 TableColumn("stock_count", "股票檔數", 9, formatter=lambda v, _r: _integer(v)),
                 TableColumn("value", "淨值", 12, formatter=lambda v, _r: _amount(v)),
