@@ -71,6 +71,7 @@ WORKBENCH_COMBOBOX_POPUP_SCREEN_MARGIN = 18
 WORKBENCH_COMBOBOX_POPUP_ROW_PADDING = 8
 WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES = 4
 WORKBENCH_COMBOBOX_POPUP_FIT_RETRY_MS = 8
+WORKBENCH_DEFAULT_PANEL_ID = "trading_account"
 
 
 def _scale_right_sidebar_font_size(base_size):
@@ -97,16 +98,6 @@ def _load_panel_factory(factory_path):
 
 PANEL_SPECS = (
     {
-        "panel_id": "single_stock_backtest_inspector",
-        "tab_label": "單股回測檢視",
-        "backend_runner": "services.trade_analysis.trade_log.run_ticker_analysis",
-        "artifact_keys": ("excel_path",),
-        "inline_chart_backend": "services.trade_analysis.charting.create_matplotlib_trade_chart_figure",
-        "default_show_volume": False,
-        "jump_to_trade_enabled": True,
-        "panel_factory_path": "services.workbench_ui.single_stock_inspector:SingleStockBacktestInspectorPanel",
-    },
-    {
         "panel_id": "portfolio_backtest_inspector",
         "tab_label": "投組回測檢視",
         "backend_runner": "services.portfolio_replay.run_portfolio_simulation_prepared",
@@ -115,6 +106,16 @@ PANEL_SPECS = (
         "default_show_volume": False,
         "jump_to_trade_enabled": True,
         "panel_factory_path": "services.workbench_ui.portfolio_backtest_inspector:PortfolioBacktestInspectorPanel",
+    },
+    {
+        "panel_id": "single_stock_backtest_inspector",
+        "tab_label": "單股回測檢視",
+        "backend_runner": "services.trade_analysis.trade_log.run_ticker_analysis",
+        "artifact_keys": ("excel_path",),
+        "inline_chart_backend": "services.trade_analysis.charting.create_matplotlib_trade_chart_figure",
+        "default_show_volume": False,
+        "jump_to_trade_enabled": True,
+        "panel_factory_path": "services.workbench_ui.single_stock_inspector:SingleStockBacktestInspectorPanel",
     },
     {
         "panel_id": "trading_account",
@@ -165,6 +166,7 @@ def build_workbench_spec():
         "title": WORKBENCH_TITLE,
         "geometry": WORKBENCH_GEOMETRY,
         "startup_window_mode": "maximized",
+        "default_panel_id": WORKBENCH_DEFAULT_PANEL_ID,
         "ui_theme": "deep_dark",
         "panels": [
             {
@@ -919,6 +921,9 @@ class StockToolsWorkbench:
             self._panel_hosts[panel_id] = host
             self._panel_status_labels[panel_id] = status
 
+        default_host = self._panel_hosts.get(WORKBENCH_DEFAULT_PANEL_ID)
+        if default_host is not None:
+            notebook.select(default_host)
         notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
 
     def _selected_panel_id(self):

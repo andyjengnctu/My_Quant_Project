@@ -116,18 +116,28 @@ class AccountingCenterPanel(ttk.Frame):
         self._all_sell_rows: list[dict] = []
         self._footer_hint_var = tk.StringVar(value="")
         self._footer_hint_after_id = None
+        self._sell_selected_ticker = ""
+        self._sell_fill_constraints: dict[str, object] = {}
+        self._sell_price_option_set: frozenset[str] = frozenset()
+        self._sell_constraint_after_id = None
+        self._sell_constraint_programmatic_update = False
+        self._sell_constraint_token = 0
+        self._sell_constraint_inflight = 0
+        self._sell_constraint_results: queue.Queue = queue.Queue()
+        self._sell_constraint_poll_after_id = None
         self._build_ui()
         self.after(80, self.refresh)
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-        self.rowconfigure(1, weight=0)
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=0)
         self._canvas = tk.Canvas(self, background=WORKBENCH_BG, highlightthickness=0, borderwidth=0)
         self._page_scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview, style=WORKBENCH_VSCROLL_STYLE)
         self._canvas.configure(yscrollcommand=self._page_scrollbar.set, yscrollincrement=36)
-        self._canvas.grid(row=0, column=0, sticky="nsew")
-        self._page_scrollbar.grid(row=0, column=1, sticky="ns")
+        self._canvas.grid(row=1, column=0, sticky="nsew")
+        self._page_scrollbar.grid(row=1, column=1, sticky="ns")
         content = ttk.Frame(self._canvas, style=WORKBENCH_FRAME_STYLE)
         self._window = self._canvas.create_window((0, 0), window=content, anchor="nw")
         content.columnconfigure(0, weight=1)
@@ -139,8 +149,8 @@ class AccountingCenterPanel(ttk.Frame):
         sell_hint = "左側 ▣ 可開啟單股回測檢視；賣出明細可修改或刪除；沖抵成本、損益與現金會依有效歷史重算。"
         offset_hint = "沖抵明細跟隨上方選取的賣出紀錄。"
 
-        dashboard = ttk.LabelFrame(content, text="帳戶儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        dashboard.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        dashboard = ttk.LabelFrame(self, text="帳戶儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        dashboard.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         dashboard_header = ttk.Frame(dashboard, style=WORKBENCH_FRAME_STYLE)
         dashboard_header.pack(fill="x", pady=(0, 6))
         self._refresh_status_var = tk.StringVar(value="")
@@ -217,15 +227,29 @@ class AccountingCenterPanel(ttk.Frame):
         self._sell_price_var = tk.StringVar()
         self._sell_date_var = tk.StringVar()
         ttk.Label(sell_entry, text="股票", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
-        ttk.Label(sell_entry, text="數量", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(sell_entry, text="成交日", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Label(sell_entry, text="成交價", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=2, sticky="w", padx=(8, 0))
-        ttk.Label(sell_entry, text="成交日", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=3, sticky="w", padx=(8, 0))
+        ttk.Label(sell_entry, text="數量", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=3, sticky="w", padx=(8, 0))
         ttk.Label(sell_entry, textvariable=self._sell_ticker_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT).grid(row=1, column=0, sticky="ew")
-        ttk.Entry(sell_entry, textvariable=self._sell_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0))
-        ttk.Entry(sell_entry, textvariable=self._sell_price_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0))
-        DatePickerField(sell_entry, textvariable=self._sell_date_var, width=12).grid(row=1, column=3, sticky="ew", padx=(8, 0))
+        self._sell_date_field = DatePickerField(
+            sell_entry, textvariable=self._sell_date_var, width=12, allowed_dates=()
+        )
+        self._sell_date_field.grid(row=1, column=1, sticky="ew", padx=(8, 0))
+        self._sell_price_combo = ttk.Combobox(
+            sell_entry,
+            textvariable=self._sell_price_var,
+            values=(),
+            width=12,
+            state="disabled",
+            style=WORKBENCH_COMBO_STYLE,
+        )
+        self._sell_price_combo.grid(row=1, column=2, sticky="ew", padx=(8, 0))
+        ttk.Entry(sell_entry, textvariable=self._sell_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=3, sticky="ew", padx=(8, 0))
         self._sell_button = ttk.Button(sell_entry, text="登錄賣出成交", command=self._record_inventory_sell, style=WORKBENCH_BUTTON_STYLE, state="disabled")
         self._sell_button.grid(row=1, column=4, sticky="e", padx=(8, 0))
+        self._sell_date_var.trace_add("write", self._schedule_sell_fill_constraints)
+        self._sell_price_var.trace_add("write", self._refresh_sell_button_state)
+        self._sell_qty_var.trace_add("write", self._refresh_sell_button_state)
 
         buy_box = ttk.LabelFrame(content, text="買入明細", padding=8, style=WORKBENCH_LABELLF_STYLE)
         buy_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
@@ -346,7 +370,7 @@ class AccountingCenterPanel(ttk.Frame):
 
         # Fixed bottom status line: hints never consume scrollable page space.
         self._footer_bar = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
-        self._footer_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self._footer_bar.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Separator(self._footer_bar, orient="horizontal").pack(fill="x", pady=(0, 3))
         footer_line = ttk.Frame(self._footer_bar, style=WORKBENCH_FRAME_STYLE)
         footer_line.pack(fill="x")
@@ -359,6 +383,7 @@ class AccountingCenterPanel(ttk.Frame):
         self._bind_footer_hint(buy_box, buy_hint)
         self._bind_footer_hint(sell_box, sell_hint)
         self._bind_footer_hint(offset_box, offset_hint)
+        self._bind_page_mousewheel(dashboard)
         # Bind the whole panel, canvas, fixed footer and all existing descendants.
         # PagedTable separately binds cells created later during refresh.
         self._bind_page_mousewheel(self)
@@ -594,14 +619,200 @@ class AccountingCenterPanel(ttk.Frame):
         active = bool(row)
         self._edit_inventory_button.configure(state="normal" if active else "disabled")
         self._delete_inventory_button.configure(state="normal" if active else "disabled")
-        self._sell_button.configure(state="normal" if active else "disabled")
-        self._sell_ticker_var.set(str(row.get("ticker") or "-") if row else "-")
+        ticker = str(row.get("ticker") or "").strip().upper() if row else ""
+        self._sell_ticker_var.set(ticker or "-")
         if not row:
-            self._sell_qty_var.set("")
-            self._sell_price_var.set("")
-            self._sell_date_var.set("")
+            self._sell_selected_ticker = ""
+            self._sell_constraint_programmatic_update = True
+            try:
+                self._sell_qty_var.set("")
+                self._sell_price_var.set("")
+                self._sell_date_var.set("")
+            finally:
+                self._sell_constraint_programmatic_update = False
+            self._clear_sell_fill_constraints()
+        elif ticker != self._sell_selected_ticker:
+            self._sell_selected_ticker = ticker
+            self._sell_constraint_programmatic_update = True
+            try:
+                self._sell_qty_var.set(str(int(row.get("qty") or 0)))
+                self._sell_price_var.set("")
+                self._sell_date_var.set("")
+            finally:
+                self._sell_constraint_programmatic_update = False
+            self._clear_sell_fill_constraints()
+            self._schedule_sell_fill_constraints()
+        self._refresh_sell_button_state()
         if rerender_buys:
             self._apply_inventory_filter()
+
+    @staticmethod
+    def _normalize_price_option_text(value) -> str:
+        try:
+            return f"{float(value):.3f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return str(value or "").strip()
+
+    def _clear_sell_fill_constraints(self, *, invalidate: bool = True) -> None:
+        if invalidate:
+            self._sell_constraint_token += 1
+            if self._sell_constraint_after_id is not None:
+                try:
+                    self.after_cancel(self._sell_constraint_after_id)
+                except tk.TclError as exc:
+                    _warn_gui_fallback("Accounting sell-fill constraint clear", exc)
+                self._sell_constraint_after_id = None
+        self._sell_fill_constraints = {}
+        self._sell_price_option_set = frozenset()
+        if hasattr(self, "_sell_price_combo"):
+            self._sell_price_combo.configure(values=(), state="disabled")
+        if hasattr(self, "_sell_date_field"):
+            self._sell_date_field.set_allowed_dates(())
+
+    def _schedule_sell_fill_constraints(self, *_args):
+        if self._sell_constraint_programmatic_update:
+            return None
+        self._sell_constraint_token += 1
+        if self._sell_constraint_after_id is not None:
+            try:
+                self.after_cancel(self._sell_constraint_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Accounting sell-fill constraint debounce", exc)
+        # A date change invalidates the previous day's price universe immediately.
+        # Clear the actual-fill price before the async constraint refresh so a
+        # stale tick can never remain submittable while the new date is loading.
+        self._sell_constraint_programmatic_update = True
+        try:
+            self._sell_price_var.set("")
+        finally:
+            self._sell_constraint_programmatic_update = False
+        self._sell_price_option_set = frozenset()
+        self._sell_price_combo.configure(values=(), state="disabled")
+        self._sell_constraint_after_id = self.after(120, self._start_sell_fill_constraints)
+        self._refresh_sell_button_state()
+        return None
+
+    @staticmethod
+    def _sell_fill_constraint_worker(
+        token: int,
+        ticker: str,
+        selected_date: str | None,
+        earliest_exclusive_date: str | None,
+    ):
+        result = None
+        error = None
+        try:
+            runtime = load_trading_scanner_runtime(WORKBENCH_PROJECT_ROOT)
+            latest = str(runtime.get("latest_data_date") or "").strip()
+            result = build_trading_actual_fill_form_constraints(
+                WORKBENCH_PROJECT_ROOT,
+                ticker=ticker,
+                selected_date=selected_date or None,
+                latest_finalized_date=latest or None,
+                earliest_exclusive_date=earliest_exclusive_date or None,
+            )
+        except Exception as exc:
+            error = exc
+        return token, result, error
+
+    def _start_sell_fill_constraints(self):
+        self._sell_constraint_after_id = None
+        row = self._selected_inventory()
+        ticker = str((row or {}).get("ticker") or "").strip().upper()
+        if not ticker:
+            self._clear_sell_fill_constraints()
+            self._refresh_sell_button_state()
+            return
+        selected_date = self._sell_date_var.get().strip() or None
+        earliest_exclusive_date = str((row or {}).get("entry_date") or "").strip() or None
+        self._sell_constraint_token += 1
+        token = int(self._sell_constraint_token)
+        self._sell_constraint_inflight += 1
+
+        def worker():
+            self._sell_constraint_results.put(
+                self._sell_fill_constraint_worker(
+                    token,
+                    ticker,
+                    selected_date,
+                    earliest_exclusive_date,
+                )
+            )
+
+        threading.Thread(
+            target=worker,
+            name=f"workbench-account-sell-fill-constraint-{token}",
+            daemon=True,
+        ).start()
+        if self._sell_constraint_poll_after_id is None:
+            self._sell_constraint_poll_after_id = self.after(30, self._drain_sell_fill_constraints)
+
+    def _drain_sell_fill_constraints(self):
+        self._sell_constraint_poll_after_id = None
+        while True:
+            try:
+                token, result, error = self._sell_constraint_results.get_nowait()
+            except queue.Empty:
+                break
+            self._sell_constraint_inflight = max(0, int(self._sell_constraint_inflight) - 1)
+            if int(token) != int(self._sell_constraint_token):
+                continue
+            if error is not None:
+                self._clear_sell_fill_constraints(invalidate=False)
+                self._refresh_sell_button_state()
+                continue
+            payload = dict(result or {})
+            self._sell_fill_constraints = payload
+            allowed_dates = tuple(payload.get("allowed_dates") or ())
+            prices = tuple(str(value) for value in (payload.get("price_options") or ()))
+            self._sell_price_option_set = frozenset(
+                self._normalize_price_option_text(value) for value in prices
+            )
+            self._sell_date_field.set_allowed_dates(allowed_dates)
+            self._sell_price_combo.configure(
+                values=prices,
+                state="readonly" if prices else "disabled",
+            )
+            current_price = self._normalize_price_option_text(self._sell_price_var.get())
+            if current_price and current_price not in self._sell_price_option_set:
+                self._sell_constraint_programmatic_update = True
+                try:
+                    self._sell_price_var.set("")
+                finally:
+                    self._sell_constraint_programmatic_update = False
+            if not self._sell_date_var.get().strip() and payload.get("preferred_fill_date"):
+                # selected_date=None already returns the preferred day's price
+                # options from the canonical constraint builder. Set the date
+                # without launching a duplicate query for the same payload.
+                self._sell_constraint_programmatic_update = True
+                try:
+                    self._sell_date_var.set(str(payload.get("preferred_fill_date")))
+                finally:
+                    self._sell_constraint_programmatic_update = False
+            self._refresh_sell_button_state()
+        if self._sell_constraint_inflight > 0:
+            self._sell_constraint_poll_after_id = self.after(30, self._drain_sell_fill_constraints)
+
+    def _refresh_sell_button_state(self, *_args) -> None:
+        if not hasattr(self, "_sell_button"):
+            return
+        row = self._selected_inventory()
+        if not row:
+            self._sell_button.configure(state="disabled")
+            return
+        fill_date = self._sell_date_var.get().strip()
+        allowed_dates = set(self._sell_fill_constraints.get("allowed_dates") or ())
+        valid_date = bool(fill_date and fill_date in allowed_dates)
+        price_text = self._normalize_price_option_text(self._sell_price_var.get())
+        valid_price = bool(price_text and price_text in self._sell_price_option_set)
+        try:
+            qty = _parse_positive_int(self._sell_qty_var.get(), "數量")
+            valid_qty = qty <= int(row.get("qty") or 0)
+        except ValueError:
+            valid_qty = False
+        self._sell_button.configure(
+            state="normal" if valid_date and valid_price and valid_qty else "disabled"
+        )
 
     def _record_inventory_sell(self):
         row = self._selected_inventory()
@@ -615,7 +826,12 @@ class AccountingCenterPanel(ttk.Frame):
             trade_date = self._sell_date_var.get().strip()
             if not trade_date:
                 raise ValueError("成交日必填")
-            expected_revision = int(self._snapshot["revision"])
+            allowed_dates = set(self._sell_fill_constraints.get("allowed_dates") or ())
+            if trade_date not in allowed_dates:
+                raise ValueError("成交日不是目前最新 finalized 範圍內、且晚於買入日的可選日期")
+            normalized_price = self._normalize_price_option_text(price)
+            if normalized_price not in self._sell_price_option_set:
+                raise ValueError("成交價不在所選成交日的合法市場價格 ticks 內")
         except Exception as exc:
             messagebox.showerror("賣出登錄", str(exc), parent=self)
             return
@@ -637,9 +853,15 @@ class AccountingCenterPanel(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("賣出登錄失敗", str(exc), parent=self)
             return
-        self._sell_qty_var.set("")
-        self._sell_price_var.set("")
-        self._sell_date_var.set("")
+        self._sell_selected_ticker = ""
+        self._sell_constraint_programmatic_update = True
+        try:
+            self._sell_qty_var.set("")
+            self._sell_price_var.set("")
+            self._sell_date_var.set("")
+        finally:
+            self._sell_constraint_programmatic_update = False
+        self._clear_sell_fill_constraints()
         messagebox.showinfo("賣出登錄", f"{ticker} 實際賣出成交已寫入帳戶 SSOT。", parent=self)
         self._refresh_after_account_mutation()
 

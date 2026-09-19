@@ -1038,15 +1038,16 @@ class TradingAccountPanel(ttk.Frame):
         # making Scanner / proposed-order details effectively invisible.  Keep the
         # existing tables and semantics, but put the whole page in one vertical canvas.
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-        self.rowconfigure(1, weight=0)
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=0)
         self._page_canvas = tk.Canvas(self, background=WORKBENCH_BG, highlightthickness=0, borderwidth=0)
         self._page_scrollbar = ttk.Scrollbar(
             self, orient="vertical", command=self._page_canvas.yview, style=WORKBENCH_VSCROLL_STYLE
         )
         self._page_canvas.configure(yscrollcommand=self._page_scrollbar.set, yscrollincrement=36)
-        self._page_canvas.grid(row=0, column=0, sticky="nsew")
-        self._page_scrollbar.grid(row=0, column=1, sticky="ns")
+        self._page_canvas.grid(row=1, column=0, sticky="nsew")
+        self._page_scrollbar.grid(row=1, column=1, sticky="ns")
         content = ttk.Frame(self._page_canvas, style=WORKBENCH_FRAME_STYLE)
         self._page_content = content
         self._page_window = self._page_canvas.create_window((0, 0), window=content, anchor="nw")
@@ -1056,8 +1057,8 @@ class TradingAccountPanel(ttk.Frame):
 
         self._footer_hint_var = tk.StringVar(value="")
 
-        operations_box = ttk.LabelFrame(content, text="Trading 儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        operations_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        operations_box = ttk.LabelFrame(self, text="Trading 儀表板", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        operations_box.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         operations_box.columnconfigure(0, weight=1)
         self._overview_vars = {
             key: tk.StringVar(value="-")
@@ -1072,7 +1073,7 @@ class TradingAccountPanel(ttk.Frame):
             ("總股數", "total"),
             ("符合快篩數", "quick"),
             ("Scanner 候選數", "candidates"),
-            ("剩餘可買數", "buyable"),
+            ("剩餘資源", "buyable"),
             ("策略 / Params", "strategy_params"),
         )):
             box = ttk.LabelFrame(overview_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
@@ -1136,7 +1137,7 @@ class TradingAccountPanel(ttk.Frame):
         workflow_buttons.grid(row=1, column=0, sticky="w", pady=(8, 0))
         for text, action in (
             ("1 更新資料", "data"),
-            ("2 套用新進場 Params", "params"),
+            ("套用參數Params", "params"),
             ("3 Scanner 候選", "scanner"),
             ("每日流程 1→2→3", "all"),
         ):
@@ -1646,7 +1647,7 @@ class TradingAccountPanel(ttk.Frame):
 
         # Fixed bottom status line: contextual help never scrolls away or consumes page space.
         self._footer_bar = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
-        self._footer_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self._footer_bar.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Separator(self._footer_bar, orient="horizontal").pack(fill="x", pady=(0, 3))
         footer_line = ttk.Frame(self._footer_bar, style=WORKBENCH_FRAME_STYLE)
         footer_line.pack(fill="x")
@@ -1659,6 +1660,7 @@ class TradingAccountPanel(ttk.Frame):
         self._bind_footer_hint(candidate_box, SCANNER_HINT)
         self._bind_footer_hint(pending_box, PENDING_ENTRY_HINT)
         self._bind_footer_hint(trade_box, BUY_ENTRY_HINT)
+        self._bind_page_mousewheel(operations_box)
         self._bind_page_mousewheel(content)
 
     def _sync_page_scrollregion(self, _event=None) -> None:
@@ -2028,12 +2030,23 @@ class TradingAccountPanel(ttk.Frame):
         )
         free_slots = snapshot.get("portfolio_free_slot_count")
         max_positions = snapshot.get("portfolio_max_positions")
-        unheld_count = snapshot.get("scanner_unheld_candidate_ticker_count")
-        buyable_detail = (
-            f"未持有候選 {int(unheld_count):,} | 空位 {int(free_slots):,}/{int(max_positions):,}"
-            if buyable_count is not None and unheld_count is not None and free_slots is not None and max_positions is not None
-            else "需 fresh Scanner 與帳戶狀態"
-        )
+        locked_slots = snapshot.get("pending_locked_slot_count")
+        reserved_milli = snapshot.get("pending_reserved_total_milli")
+        cash = snapshot.get("cash")
+        if (
+            buyable_count is not None
+            and free_slots is not None
+            and max_positions is not None
+            and locked_slots is not None
+            and reserved_milli is not None
+        ):
+            cash_text = "-" if cash is None else f"{float(cash):,.0f}"
+            buyable_detail = (
+                f"空位 {int(free_slots):,}/{int(max_positions):,} | "
+                f"鎖定 {int(locked_slots):,} | 預留 {float(reserved_milli) / 1000.0:,.0f}/{cash_text}"
+            )
+        else:
+            buyable_detail = "需 fresh Scanner 與帳戶狀態"
         self._set_overview_card(
             "buyable",
             count_text(buyable_count),
@@ -2062,7 +2075,7 @@ class TradingAccountPanel(ttk.Frame):
         elif rollforward_due:
             next_text = "等待 lifecycle 自動同步／修正同步失敗"
         elif not snapshot.get("params_ready_for_scan"):
-            next_text = "2 套用 Params"
+            next_text = "套用參數Params"
         elif not scanner_fresh:
             next_text = "3 Scanner 候選"
         else:
@@ -2315,14 +2328,8 @@ class TradingAccountPanel(ttk.Frame):
             )
         else:
             clear_treeview_selection(self._pending_tree)
-        usage = dict(snapshot.get("resource_usage") or {})
-        reserved = float(usage.get("reserved_total_milli") or snapshot.get("reserved_total_milli") or 0) / 1000.0
-        locked_slots = int(usage.get("locked_slots") or snapshot.get("locked_count") or 0)
-        slot_quota = int(usage.get("slot_quota") or 0)
-        cash_limit_milli = usage.get("cash_limit_milli")
-        cash_limit_text = "-" if cash_limit_milli is None else f"{float(cash_limit_milli) / 1000.0:,.0f}"
         self._pending_status_var.set(
-            f"資源鎖定 {locked_slots}/{slot_quota}｜預留 {reserved:,.0f}/{cash_limit_text}"
+            "尚無掛單。" if not active_rows else f"目前 ACTIVE 掛單 {len(active_rows):,} 筆。"
         )
 
     def refresh_proposed_order_plan(self):

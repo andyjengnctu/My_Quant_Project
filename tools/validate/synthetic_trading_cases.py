@@ -1356,15 +1356,15 @@ def validate_trading_daily_workflow_contract_case(base_params):
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
     check("workbench_removes_manual_position_rollforward_button", True, '持股日終推進' not in panel_source)
-    check("workbench_exposes_separate_param_button", True, '"2 套用新進場 Params"' in panel_source)
+    check("workbench_exposes_separate_param_button", True, '"套用參數Params"' in panel_source and "套用新進場" not in panel_source)
     check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
     check("workbench_uses_shared_downloader_console_progress", True, "MarketDataDailyConsoleProgress" in panel_source)
     check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "侯選區" in panel_source and "advanced_notebook.grid(" not in panel_source)
-    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數", "策略 / Params")))
-    check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=1", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
+    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘資源", "策略 / Params")))
+    check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=2", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
     # AI: This contract is about preserving and rendering the original parameter
     # training date in reuse mode, not about freezing one historical UI phrase.
     # The runtime checks above already prove reuse keeps the original training date;
@@ -3320,6 +3320,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     workbench_spec = build_workbench_spec()
     panel_specs = {row["panel_id"]: row for row in workbench_spec.get("panels", [])}
+    panel_labels = [row.get("tab_label") for row in workbench_spec.get("panels", [])]
+    check("workbench_defaults_to_trading_center", "trading_account", workbench_spec.get("default_panel_id"))
+    check("workbench_backtest_tabs_order_portfolio_then_single", ["投組回測檢視", "單股回測檢視"], panel_labels[:2])
     check("actual_trading_panel_is_registered", True, "trading_account" in panel_specs)
     trading_panel = panel_specs.get("trading_account", {})
     accounting_panel = panel_specs.get("accounting_center", {})
@@ -4324,7 +4327,19 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             'request = self._build_pending_draft_request(use_current_overrides=use_current_overrides)',
         )),
     )
-    check("workbench_pending_resource_status_shows_used_over_current_limits", True, all(token in panel_source for token in ('資源鎖定 {locked_slots}/{slot_quota}', '預留 {reserved:,.0f}/{cash_limit_text}', 'resource_usage')))
+    check(
+        "workbench_pending_resource_status_moves_to_overview_remaining_resources",
+        True,
+        all(token in panel_source for token in (
+            'snapshot.get("pending_locked_slot_count")',
+            'snapshot.get("pending_reserved_total_milli")',
+            'f"空位 {int(free_slots):,}/{int(max_positions):,} | "',
+            'f"鎖定 {int(locked_slots):,} | 預留 {float(reserved_milli) / 1000.0:,.0f}/{cash_text}"',
+            '"尚無掛單。" if not active_rows else f"目前 ACTIVE 掛單 {len(active_rows):,} 筆。"',
+        ))
+        and '資源鎖定 {locked_slots}/{slot_quota}' not in panel_source
+        and 'resource_usage' not in panel_source,
+    )
     check(
         "workbench_pending_status_summary_does_not_duplicate_per_row_sync_status",
         True,
@@ -4642,7 +4657,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "workbench_daily_workflow_auto_syncs_lifecycle_without_manual_rollforward_button",
         True,
         '("2 持股日終推進", "rollforward")' not in panel_source
-        and '("2 套用新進場 Params", "params")' in panel_source
+        and '("套用參數Params", "params")' in panel_source
         and '("3 Scanner 候選", "scanner")' in panel_source
         and 'run_trading_lifecycle_sync' in panel_source
         and 'bundle["lifecycle_sync"]' in panel_source,
@@ -4879,6 +4894,22 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_clean_inventory_trade_detail_titles_and_performance", True, all(text in accounting_source for text in ('text="庫存股"', 'text="買入明細"', 'text="賣出明細"', 'text="沖抵明細"', 'text="績效統計"', "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
     check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ('text="賣出成交登錄"', "record_trading_account_inventory_sell", "先在券商完成賣出")) and "對應券商 SELL 單" not in accounting_source)
+    sell_entry_source = accounting_source.split('sell_entry = ttk.LabelFrame(inventory, text="賣出成交登錄"', 1)[1].split('buy_box = ttk.LabelFrame', 1)[0]
+    check(
+        "workbench_accounting_inventory_sell_form_autofills_and_uses_canonical_date_tick_constraints",
+        True,
+        sell_entry_source.index('text="成交日"') < sell_entry_source.index('text="成交價"') < sell_entry_source.index('text="數量"')
+        and 'self._sell_date_field = DatePickerField(' in sell_entry_source
+        and 'self._sell_price_combo = ttk.Combobox(' in sell_entry_source
+        and 'state="disabled"' in sell_entry_source
+        and 'self._sell_qty_var.set(str(int(row.get("qty") or 0)))' in accounting_source
+        and 'build_trading_actual_fill_form_constraints(' in accounting_source
+        and 'earliest_exclusive_date=earliest_exclusive_date or None' in accounting_source
+        and 'latest_finalized_date=latest or None' in accounting_source
+        and 'self._sell_price_combo.configure(' in accounting_source
+        and 'state="readonly" if prices else "disabled"' in accounting_source
+        and '成交價不在所選成交日的合法市場價格 ticks 內' in accounting_source,
+    )
     check("workbench_accounting_center_supports_transaction_edit_delete_without_primary_existing_inventory_entry", True, all(text in accounting_source for text in ("修改選取買入", "刪除選取買入", "修改選取賣出", "刪除選取賣出", "correct_trading_account_transaction", "delete_trading_transaction")) and "inv_actions.grid_remove()" in accounting_source)
     check(
         "workbench_accounting_buy_edit_uses_same_fill_date_and_price_constraints",
@@ -4998,6 +5029,28 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check("direct_fill_calendar_never_exceeds_latest_finalized_date", False, "2026-09-18" in set(_direct_fill_constraints["allowed_dates"]))
     check("direct_fill_price_options_follow_selected_date_market_range", [98.0, 101.0], [float(_direct_fill_constraints["price_options"][0]), float(_direct_fill_constraints["price_options"][-1])])
+    _inventory_sell_constraints = _build_actual_fill_constraints(
+        Path("."), ticker="2330", latest_finalized_date="2026-09-18",
+        earliest_exclusive_date="2026-09-16", market_view=_order_view,
+    )
+    check(
+        "inventory_sell_fill_calendar_is_strictly_after_inventory_entry_date",
+        ["2026-09-17", "2026-09-18"],
+        list(_inventory_sell_constraints["allowed_dates"]),
+    )
+    check(
+        "inventory_sell_fill_calendar_prefers_latest_legal_date",
+        "2026-09-18",
+        _inventory_sell_constraints["preferred_fill_date"],
+    )
+    check(
+        "inventory_sell_preferred_date_price_options_follow_that_day_market_range",
+        [101.0, 104.0],
+        [
+            float(_inventory_sell_constraints["price_options"][0]),
+            float(_inventory_sell_constraints["price_options"][-1]),
+        ],
+    )
 
     _invalid_order_date_rejected = False
     try:
@@ -5195,12 +5248,22 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     idle_refresh_started = TradingAccountPanel.refresh_for_state_domains(idle_external_refresh_panel, PENDING_MUTATION_DOMAINS)
     check("workbench_external_state_refresh_reloads_one_canonical_trading_bundle", [True, 0, [("同步狀態變更", True)]], [idle_refresh_started, len(idle_external_refresh_panel._external_state_refresh_pending_domains), external_refresh_calls])
     check("workbench_account_mutations_resolve_latest_revision_inside_lock", True, "expected_account_revision=None" in panel_source and "expected_revision=None" in accounting_source)
-    check("workbench_centers_use_fixed_contextual_footer_status_bars", True, "self._footer_bar.grid(row=1" in accounting_source and "操作提示｜" in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source and "self._footer_bar.grid(row=1" in panel_source and "操作提示｜" in panel_source)
+    check("workbench_centers_use_fixed_contextual_footer_status_bars", True, "self._footer_bar.grid(row=2" in accounting_source and "操作提示｜" in accounting_source and "_bind_footer_hint(sell_entry" in accounting_source and "先在券商完成賣出，再登錄實際股數" in accounting_source and "self._footer_bar.grid(row=2" in panel_source and "操作提示｜" in panel_source)
+    check(
+        "workbench_trading_and_account_dashboards_are_fixed_above_scroll_canvas",
+        True,
+        'operations_box = ttk.LabelFrame(self, text="Trading 儀表板"' in panel_source
+        and 'operations_box.grid(row=0, column=0, columnspan=2' in panel_source
+        and 'self._page_canvas.grid(row=1, column=0' in panel_source
+        and 'dashboard = ttk.LabelFrame(self, text="帳戶儀表板"' in accounting_source
+        and 'dashboard.grid(row=0, column=0, columnspan=2' in accounting_source
+        and 'self._canvas.grid(row=1, column=0' in accounting_source,
+    )
     check("workbench_primary_ui_has_single_fixed_bottom_right_refresh_per_center", True, panel_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in panel_source and 'text="全狀態刷新", command=self._refresh_all_trading_state' in panel_source and 'pack(side="right"' in panel_source and accounting_source.count('text="全狀態刷新"') == 1 and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新", command=self.refresh' in accounting_source)
-    overview_schema = panel_source.split('operations_box = ttk.LabelFrame(content, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
+    overview_schema = panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
     workflow_schema = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
     check("workbench_overview_removes_account_card_and_consolidates_strategy_params", True, '帳戶"' not in overview_schema and '策略 / Params' in overview_schema and 'member' not in overview_schema.lower() and 'agree' not in overview_schema.lower())
-    check("workbench_overview_exposes_requested_funnel_cards", True, all(label in overview_schema for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘可買數")))
+    check("workbench_overview_exposes_requested_funnel_cards", True, all(label in overview_schema for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘資源")))
     check("workbench_overview_limits_dynamic_status_to_two_single_line_rows", True, '_operations_next_label.grid(' in overview_schema and '_operations_detail_label.grid(' in overview_schema and overview_schema.count('max_lines=1') >= 2 and '_live_audit_label' not in overview_schema)
     check("workbench_daily_workflow_does_not_repeat_status_rows", True, '_workflow_status_label' not in workflow_schema and '_param_mode_detail_label' not in workflow_schema)
     check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_detail_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
@@ -5231,7 +5294,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         True,
         'capital_lines.append(trading_status)' in selected_sidebar_body
         and selected_sidebar_body.index('capital_lines.append(trading_status)')
-        > selected_sidebar_body.index('self._format_sidebar_qty_value("持有股數", held_qty)'),
+        > selected_sidebar_body.index('self._format_sidebar_qty_value("持有股數", held_qty)')
+        and '交易狀態:' in selected_sidebar_body
+        and 'Trading狀態:' not in selected_sidebar_body,
     )
     open_ticker_body = inspector_source.split("def open_ticker", 1)[1].split("def ", 1)[0]
     check("workbench_single_stock_cross_panel_navigation_does_not_sync_refresh_auxiliary_lists", False, "_refresh_holdings_options()" in open_ticker_body or "_load_current_trading_candidate_pool()" in open_ticker_body)

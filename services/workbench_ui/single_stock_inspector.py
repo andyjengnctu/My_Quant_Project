@@ -2339,7 +2339,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             self._selected_limit_var.set("限價: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
-            self._selected_capital_var.set("預留: -\n實支: -\nTrading狀態: 無交易")
+            self._selected_capital_var.set("預留: -\n實支: -\n交易狀態: 無交易")
             return
 
         lifecycle_state = str(canonical.get("state") or "")
@@ -2363,7 +2363,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             display_state = {"SIGNAL": "買訊", "SHADOW": "Shadow", "POSITION": "持股"}.get(
                 lifecycle_state, "無交易"
             )
-        trading_status = f"Trading狀態: {display_state}"
+        trading_status = f"交易狀態: {display_state}"
         if canonical.get("sell_signal"):
             trading_status += f"｜SELL訊號: {canonical.get('sell_signal')}"
         if canonical.get("decision_errors"):
@@ -2394,7 +2394,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if lifecycle_state == "POSITION" and remaining_order_qty not in (None, 0):
             capital_lines.append(self._format_sidebar_qty_value("未成交股數", remaining_order_qty))
 
-        # Trading state is intentionally the final transaction-info line so the
+        # 交易狀態 is intentionally the final transaction-info line so the
         # numeric reservation/spend/quantity values remain grouped together.
         capital_lines.append(trading_status)
         self._selected_capital_var.set("\n".join(capital_lines))
