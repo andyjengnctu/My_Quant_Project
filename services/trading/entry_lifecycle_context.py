@@ -6,7 +6,7 @@ from frozen lineage to the instant before the reported fill. No fill inference.
 from copy import deepcopy
 import pandas as pd
 from core.data_utils import get_required_min_rows
-from core.trading_lifecycle_plans import resolve_confirmed_entry_plan_from_frame
+from core.trading_lifecycle_plans import frozen_lineage_origin_date, resolve_confirmed_entry_plan_from_frame
 from services.trading.lifecycle_context import resolve_trading_lifecycle_context
 from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame
 
@@ -22,7 +22,10 @@ def resolve_trading_confirmed_entry_seed(project_root, *, ticker, lineage, param
         raise ValueError("Confirmed strategy fill precedes its original signal/order")
     # A verified information-day snapshot is sufficient only when there is no
     # intervening calendar day at all. Do not guess exchange calendars/holidays.
-    if entry is None and info is not None and fill == info + pd.Timedelta(days=1):
+    origin_date = pd.Timestamp(frozen_lineage_origin_date(lineage, seed, information_date=info))
+    if (entry is None and info is not None and fill == info + pd.Timedelta(days=1)
+            and origin_date <= info
+            and (seed.get("shadow_position_state") or {}).get("pending_exit_action") not in {"STOP", "TP_HALF"}):
         seed["management_information_date"] = info.strftime("%Y-%m-%d")
         return seed
     context = resolve_trading_lifecycle_context(project_root)

@@ -409,6 +409,20 @@ def validate_trading_direct_fill_source_contract_case(base_params):
     raw = {"ticker": "2330", "trade_date": "2026-09-18", "signal_date": "2026-07-31", "kind": "extended",
            "execution_plan_seed": seed, "limit_price": 102., "proj_qty": 1000, "proj_cost": 102000., "rank": 9}
 
+    # AI: Backfill has actual first-signal evidence. The September snapshot is
+    # not permission to use September geometry in an August acquisition.
+    from core.portfolio_ensemble import annotate_ensemble_candidate
+    from services.trading.signal_lineage import _record as record_signal_origin
+    first = deepcopy(raw)
+    first["trade_date"] = "2026-07-31"
+    first["execution_plan_seed"]["trade_date"] = "2026-07-31"
+    first = annotate_ensemble_candidate(first, member=runtime["param_members"][0], params_obj=p, member_key="1")
+    first["ensemble_member_params_by_key"] = {"1": params_to_json_dict(p)}
+    raw["signal_lineage"] = record_signal_origin(
+        first, strategy_id=runtime["profile"].strategy_id, observed_date="2026-07-31",
+        source_binding=runtime["param_binding_sha256"],
+    )
+
     class Market:
         def read_dataset_frame(self, dataset, **kwargs):
             day = pd.Timestamp(kwargs["start_date"])
@@ -529,6 +543,22 @@ def validate_trading_direct_fill_source_contract_case(base_params):
             rejected = False
         check("preview_source_change_requires_reconfirmation", True, rejected)
         check("rejected_operations_do_not_write_ledger", before, load_trading_account_state(guard)["revision"])
+
+        # Removing the real original evidence must not silently backdate today's
+        # plan or relabel the strategy stock as custom to bypass PIT validation.
+        late_raw = deepcopy(raw)
+        late_raw.pop("signal_lineage")
+        late_snapshot = _build_synthetic_candidate_snapshot_payload(guard, candidate_rows=[late_raw])
+        atomic_write_json(scanner_state.resolve_trading_candidate_snapshot_path(guard), late_snapshot)
+        try:
+            entry.record_trading_account_buy(guard, **kwargs)
+        except ValueError as exc:
+            rejected = "PIT" in str(exc)
+        else:
+            rejected = False
+        check("backfill_without_original_geometry_is_rejected_before_commit", True, rejected)
+        check("pit_rejection_does_not_write_ledger", before, load_trading_account_state(guard)["revision"])
+        atomic_write_json(scanner_state.resolve_trading_candidate_snapshot_path(guard), snapshot)
 
         # Execute the real UI handler with no selected row, then inspect its
         # queued command after confirmation. No UI-only source guessing.

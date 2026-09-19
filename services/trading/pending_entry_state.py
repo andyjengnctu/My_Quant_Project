@@ -154,6 +154,28 @@ def _locked_for_information_date(entry: dict[str, Any], current_information_date
     return str(entry.get("status") or "") == PENDING_ENTRY_STATUS_ACTIVE
 
 
+def project_trading_pending_intent_entries(state: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """AI: One read-only projection of accepted decisions for all consumers.
+
+    Keep only intent fields from the hash-validated journal, not recursive entry
+    snapshots. These derived rows must never become another persisted ledger.
+    """
+    entries = deepcopy((state or {}).get("entries") or {})
+    fields = ("planned_trade_date", "information_date", "order_decision_date",
+              "limit_price", "planned_qty", "reserved_cost")
+    for row in entries.values():
+        row["order_intent_history"] = []
+    for event in (state or {}).get("events") or ():
+        details = event.get("details") or {}
+        snapshot = details.get("entry")
+        row = entries.get(str(details.get("pending_entry_id") or ""))
+        if not isinstance(row, dict) or not isinstance(snapshot, dict):
+            continue
+        if snapshot.get("ticker") == row.get("ticker"):
+            row["order_intent_history"].append({k: deepcopy(snapshot[k]) for k in fields if k in snapshot})
+    return entries
+
+
 def project_trading_pending_entry_state(
     state: dict[str, Any] | None,
     *,
@@ -236,6 +258,8 @@ def update_trading_pending_entry(
         raise ValueError(f"只有 ACTIVE 掛單可修改: {entry_id}")
 
     payload = deepcopy(dict(replacement or {}))
+    # AI: Journal projections are read models, never new persistence truth.
+    payload.pop("order_intent_history", None)
     ticker = normalize_trading_ticker(payload.get("ticker"))
     for other_id, row in state["entries"].items():
         if str(other_id) == entry_id:

@@ -24,7 +24,7 @@ from core.exact_accounting import (
     round_price_to_tick_milli,
 )
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
-from core.trading_lifecycle_plans import resolve_confirmed_entry_plan_from_frame
+from core.trading_lifecycle_plans import frozen_lineage_origin_seed, resolve_confirmed_entry_plan_from_frame
 from services.trading.lifecycle_context import resolve_trading_lifecycle_context
 from core.params_io import build_params_from_mapping
 from core.price_utils import adjust_long_buy_limit
@@ -59,6 +59,7 @@ from services.trading.pending_entry_state import (
     create_trading_pending_entry,
     delete_trading_pending_entry,
     load_trading_pending_entry_state,
+    project_trading_pending_intent_entries,
     mark_trading_pending_entry_filled,
     project_trading_pending_entry_state,
     update_trading_pending_entry,
@@ -164,7 +165,7 @@ def _pending_entry_payload(
     candidate_reference: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     seed = deepcopy(dict(plan))
-    seed["trade_date"] = information_date
+    seed.setdefault("trade_date", information_date)
     seed["entry_type"] = str(seed.get("entry_type") or ("manual" if origin == PENDING_ENTRY_ORIGIN_MANUAL else "normal"))
     reserved_milli = int(seed.get("reserved_cost_milli") or 0)
     return {
@@ -437,7 +438,19 @@ def _prepare_manual_pending_entry(
     )
     _assert_can_add_ticker(resources, ticker=ticker_key)
     params = runtime["params"]
-    market = _manual_market_context(project_root, ticker=ticker_key, params=params, through_date=information_date)
+    resolved_planned_date = (
+        resolve_preferred_pending_order_date(
+            project_root, ticker=ticker_key, latest_finalized_date=information_date
+        )
+        if planned_trade_date is None
+        else validate_pending_order_trade_date(
+            project_root,
+            ticker=ticker_key,
+            latest_finalized_date=information_date,
+            planned_trade_date=planned_trade_date,
+        )
+    )
+    market = _manual_market_context(project_root, ticker=ticker_key, params=params, through_date=resolved_planned_date)
     security_profile = infer_security_profile(ticker_key)
     user_limit_price = limit_price
     default_limit_price = adjust_long_buy_limit(
@@ -452,7 +465,7 @@ def _prepare_manual_pending_entry(
         params,
         ticker=ticker_key,
         security_profile=security_profile,
-        trade_date=information_date,
+        trade_date=resolved_planned_date,
     )
     if base_plan is None:
         raise ValueError(f"{ticker_key} 無法建立盤前 entry plan")
@@ -464,18 +477,6 @@ def _prepare_manual_pending_entry(
         resources=resources,
         qty=qty,
         limit_price=user_limit_price,
-    )
-    resolved_planned_date = (
-        resolve_preferred_pending_order_date(
-            project_root, ticker=ticker_key, latest_finalized_date=information_date
-        )
-        if planned_trade_date is None
-        else validate_pending_order_trade_date(
-            project_root,
-            ticker=ticker_key,
-            latest_finalized_date=information_date,
-            planned_trade_date=planned_trade_date,
-        )
     )
     plan["planned_trade_date"] = resolved_planned_date
     validate_pending_order_limit_price(
@@ -543,11 +544,37 @@ def create_manual_trading_pending_entry(
     return create_trading_pending_entry(project_root, entry=entry)
 
 
-def _rebuild_existing_pending_lineage(entry: Mapping[str, Any], plan: Mapping[str, Any]) -> dict[str, Any]:
+def _rebuild_existing_pending_lineage(
+    entry: Mapping[str, Any], plan: Mapping[str, Any], *, decision_information_date: str | None = None,
+) -> dict[str, Any]:
     lineage = deepcopy(dict(entry.get("management_lineage") or {}))
     if not lineage:
         raise RuntimeError("既有掛單缺少 frozen management lineage")
+    prior_seed = deepcopy(dict(lineage.get("execution_plan_seed") or {}))
+    # AI: Accepted price/quantity edits are not a new lifecycle. Preserve the
+    # immutable birth seed while the decision journal records changed choices.
+    lineage.setdefault("prefill_origin_seed", frozen_lineage_origin_seed(lineage, prior_seed))
     seed = deepcopy(dict(plan or {}))
+    current_limit = (entry.get("execution_plan_seed") or {}).get("limit_price")
+    limit_changed = seed.get("limit_price") != current_limit
+    if not limit_changed:
+        # AI: A quantity/date edit is not a new management origin. In particular,
+        # never freeze yesterday's synchronized Shadow back onto the old order.
+        decision_fields = (
+            "qty", "reserved_cost", "reserved_cost_milli", "planned_trade_date",
+            "user_qty_override", "user_limit_override", "strategy_executable_qty_ceiling",
+        )
+        accepted = {key: deepcopy(seed[key]) for key in decision_fields if key in seed}
+        seed = prior_seed
+        seed.update(accepted)
+    else:
+        # A new user price is known at this decision, not on a backdated order.
+        seed["trade_date"] = normalize_trading_date(
+            decision_information_date or seed.get("trade_date") or entry.get("information_date"),
+            field_name="pending_update.information_date", allow_none=False,
+        )
+        seed.pop("shadow_position_state", None)
+        seed.pop("management_information_date", None)
     lineage["execution_plan_seed"] = seed
     lineage["planned_qty"] = int(seed.get("qty") or 0)
     lineage["planned_cost"] = float(seed.get("reserved_cost") or 0.0)
@@ -616,7 +643,9 @@ def _prepare_existing_pending_entry_update(
         planned_trade_date=requested_planned_date,
     )
     plan["planned_trade_date"] = resolved_planned_date
-    lineage = _rebuild_existing_pending_lineage(current, plan)
+    lineage = _rebuild_existing_pending_lineage(
+        current, plan, decision_information_date=latest_finalized_date,
+    )
     validate_pending_order_limit_price(
         project_root,
         ticker=ticker,
@@ -633,6 +662,8 @@ def _prepare_existing_pending_entry_update(
         lineage=lineage,
         signal_date=normalize_trading_date(current.get("signal_date"), field_name="signal_date", allow_none=True),
     )
+    # AI: This choice becomes known now, not on the original backdated order.
+    replacement["order_decision_date"] = latest_finalized_date
     replacement["candidate_reference_sha256"] = current.get("candidate_reference_sha256")
     replacement["resource_summary"] = _resource_summary(resources)
     return replacement
@@ -762,7 +793,7 @@ def get_trading_pending_entry_read_model(project_root) -> dict[str, Any]:
 def _load_active_pending(project_root, pending_entry_id: str) -> dict[str, Any]:
     state = load_trading_pending_entry_state(project_root, required=True)
     entry_id = str(pending_entry_id or "").strip()
-    row = (state.get("entries") or {}).get(entry_id)
+    row = project_trading_pending_intent_entries(state).get(entry_id)
     if not isinstance(row, dict):
         raise ValueError(f"找不到 Trading 掛單: {entry_id}")
     if str(row.get("status")) != PENDING_ENTRY_STATUS_ACTIVE:

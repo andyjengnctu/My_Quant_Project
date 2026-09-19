@@ -10,12 +10,44 @@ from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.params_io import build_params_from_mapping
 from core.price_utils import calc_half_take_profit_sell_qty
 from core.entry_plans import build_position_from_frozen_entry_plan
+from core.position_management import POSITION_MANAGEMENT_FIELDS
 from core.exact_accounting import milli_to_price, price_to_milli
 from core.trading_account_state import MANAGEMENT_SELL_SIGNAL_STOP, MANAGEMENT_SELL_SIGNAL_INDICATOR, TRADE_MUTATION_BUY, TRADE_MUTATION_MANUAL_MANAGED_BUY, TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT
 
-def build_confirmed_position_origin(record, *, binding, params, account_events=(), frame=None):
+# AI: Version the acquisition-input contract independently of session rules.
+# A source-resolution change must invalidate already-synchronized projections.
+CONFIRMED_POSITION_ORIGIN_CONTRACT_VERSION = 2
+
+
+def _confirmed_prefill_entry(record, binding, supplied):
+    """Normalize existing frozen evidence; do not infer an order from a ticker."""
+    lineage = deepcopy(record.get("management_lineage") or record.get("strategy_lineage") or {})
+    lineage.update(deepcopy(binding))
+    if supplied is not None:
+        entry = deepcopy(supplied)
+        saved = dict(entry.get("management_lineage") or {})
+        if str(entry.get("ticker") or "") != str(record.get("ticker") or ""):
+            raise ValueError("Confirmed acquisition and pre-fill intent ticker mismatch")
+        for key in ("lineage_id", "frozen_params_sha256"):
+            if not saved.get(key) or saved.get(key) != binding.get(key):
+                raise ValueError("Confirmed acquisition and pre-fill intent " + key + " mismatch")
+        return entry
+    signal = lineage.get("signal_date")
+    seed = dict(lineage.get("execution_plan_seed") or {})
+    # Direct manual acquisition has no invented pending interval. Its dated
+    # immutable acquisition is handled below, not converted to a Scanner signal.
+    if not signal:
+        return None
+    info = lineage.get("candidate_trade_date") or seed.get("trade_date") or signal
+    return {"ticker": record.get("ticker"), "origin": "scanner_strategy",
+            "signal_date": signal, "information_date": info,
+            "execution_plan_seed": seed, "management_lineage": lineage}
+
+
+def build_confirmed_position_origin(record, *, binding, params, account_events=(), frame=None, prefill_entry=None):
     broker = dict(record.get("broker") or {})
     management = dict(record.get("strategy_management") or {})
+    prefill = _confirmed_prefill_entry(record, binding, prefill_entry)
     origin = management.get("entry_position_state")
     entry_date = str(broker.get("entry_date") or "")
     buys = [dict(e.get("details") or {}) for e in account_events
@@ -38,7 +70,7 @@ def build_confirmed_position_origin(record, *, binding, params, account_events=(
         if total_qty <= 0 or gross <= 0:
             raise ValueError("Confirmed acquisition journal is missing quantity/gross-price evidence")
         first_buy = {"qty": total_qty, "entry_fill_price_milli": (gross + total_qty // 2) // total_qty}
-    if isinstance(origin, dict) and first_buy is None:
+    if prefill is None and isinstance(origin, dict) and first_buy is None:
         if str(origin.get("entry_trade_date") or "") == entry_date and int(origin.get("initial_qty") or origin.get("qty") or 0) == int(broker.get("initial_qty") or broker.get("qty") or 0):
             return deepcopy(origin)
         # Explicit broker corrections invalidate old acquisition geometry too.
@@ -50,13 +82,42 @@ def build_confirmed_position_origin(record, *, binding, params, account_events=(
         raise RuntimeError("Managed position is missing its initial confirmed quantity")
     entry_price_milli = (first_buy or {}).get("entry_fill_price_milli") or (first_buy or {}).get("fill_price_milli")
     entry_price = milli_to_price(int(entry_price_milli)) if entry_price_milli else current.get("entry_fill_price")
-    if isinstance(origin, dict) and int(origin.get("qty") or 0) == initial_qty and str(origin.get("entry_trade_date") or "") == entry_date and entry_price is not None and int(origin.get("entry_fill_price_milli") or 0) == price_to_milli(entry_price):
+    if prefill is None and isinstance(origin, dict) and int(origin.get("qty") or 0) == initial_qty and str(origin.get("entry_trade_date") or "") == entry_date and entry_price is not None and int(origin.get("entry_fill_price_milli") or 0) == price_to_milli(entry_price):
         return deepcopy(origin)
     if entry_price is None:
         gross = int(broker.get("initial_gross_buy_milli") or 0)
         if gross <= 0:
             raise RuntimeError("Managed position is missing original fill-price evidence")
         entry_price = milli_to_price((gross + initial_qty // 2) // initial_qty)
+    if prefill is not None:
+        # AI: Equal fill date/price/qty verifies broker facts, NOT Shadow origin.
+        # Resolve the same frozen pre-fill timeline used by new acquisitions and
+        # charts even when a legacy entry_position_state already exists. Only
+        # derived management is rebuilt; immutable snapshots remain evidence.
+        if frame is None:
+            raise RuntimeError("Confirmed pre-fill handoff requires its frozen pre-entry market evidence")
+        seed = resolve_confirmed_entry_plan_from_frame(
+            entry=prefill, frame=frame, params=params, fill_date=entry_date,
+        )
+        rebuilt = build_position_from_frozen_entry_plan(
+            seed, buy_price=float(entry_price), qty=initial_qty, params=params,
+            entry_type=str(seed.get("entry_type") or current.get("entry_type") or "normal"),
+            ticker=str(record.get("ticker") or ""), trade_date=entry_date,
+        )
+        if (isinstance(origin, dict)
+                and int(origin.get("qty") or 0) == initial_qty
+                and str(origin.get("entry_trade_date") or "") == entry_date
+                and int(origin.get("entry_fill_price_milli") or 0) == price_to_milli(entry_price)):
+            # Recorded acquisition economics (including original risk evidence)
+            # are not revised by a management-cache repair. Corrections above
+            # still rebuild actual fill inputs when those inputs have changed.
+            preserved = deepcopy(origin)
+            for key in POSITION_MANAGEMENT_FIELDS:
+                preserved.pop(key, None)
+                if key in rebuilt:
+                    preserved[key] = deepcopy(rebuilt[key])
+            return preserved
+        return rebuilt
     old_entry_date = str((origin or current).get("entry_trade_date") or "")
     date_changed = bool((isinstance(origin, dict) or first_buy is not None) and old_entry_date and old_entry_date != entry_date)
     source_info = str(seed.get("management_information_date") or "")

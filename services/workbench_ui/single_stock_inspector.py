@@ -1948,12 +1948,18 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
         display_state = str(canonical.get("display_state") or "").strip()
         if not display_state:
-            display_state = {"SIGNAL": "買訊", "SHADOW": "Shadow", "POSITION": "持股"}.get(
+            display_state = {"SIGNAL": "買訊", "PENDING": "掛單", "SHADOW": "Shadow", "POSITION": "持股"}.get(
                 lifecycle_state, "無交易"
             )
         trading_status = f"交易狀態: {display_state}"
         if canonical.get("sell_signal") and canonical.get("position_qty") != 0:
             trading_status += "｜賣出訊號"
+        if canonical.get("management_evidence_status") == "BEFORE_ORIGIN":
+            trading_status += "｜管理數值尚未可得"
+        elif canonical.get("management_evidence_status") == "TERMINATED":
+            trading_status += "｜策略已失效"
+        elif canonical.get("management_evidence_status") == "UNAVAILABLE":
+            trading_status += "｜管理資料待確認"
         if canonical.get("management_projection_error"):
             trading_status += "\uff5c\u7ba1\u7406\u8cc7\u6599: \u5f85\u540c\u6b65"
         elif canonical.get("decision_errors"):
@@ -1975,6 +1981,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         buy_qty = canonical.get("buy_qty")
         held_qty = canonical.get("position_qty") if lifecycle_state == "POSITION" else None
         remaining_order_qty = canonical.get("remaining_order_qty")
+        if lifecycle_state == "PENDING" and planned_qty is not None:
+            capital_lines.append(self._format_sidebar_qty_value("掛單股數", planned_qty))
         if lifecycle_state in {"SIGNAL", "SHADOW"} and planned_qty is not None:
             capital_lines.append(self._format_sidebar_qty_value("參考股數", planned_qty))
         if lifecycle_state == "POSITION" and buy_qty is not None:

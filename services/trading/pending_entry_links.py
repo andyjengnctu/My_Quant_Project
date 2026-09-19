@@ -84,4 +84,32 @@ def resolve_pending_entry_for_buy_event(
     return min(matches, key=key)
 
 
-__all__ = ['original_buy_event', 'pending_entry_matches_buy', 'resolve_pending_entry_for_buy_event']
+def resolve_position_pending_entry(
+    record: Mapping[str, Any],
+    pending_entries: Iterable[Mapping[str, Any]],
+    *,
+    account_events: Iterable[Mapping[str, Any]] = (),
+    account_audit_events: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any] | None:
+    """Join one acquisition to its original accepted intent, including corrections.
+
+    AI: Inspector and synchronization must use this same evidence join. A ticker
+    match, today's candidate or a later acquisition is never a management origin.
+    The existing buy-event link owns legacy ambiguity and correction semantics.
+    """
+    events = list(account_events)
+    audit = list(account_audit_events) or events
+    entries = list(pending_entries)
+    ticker = str(record.get("ticker") or "")
+    entry_date = str((record.get("broker") or {}).get("entry_date") or "")
+    for event in events:
+        details = event.get("details") or {}
+        if str(details.get("ticker") or "") != ticker or str(details.get("trade_date") or "") != entry_date:
+            continue
+        match = resolve_pending_entry_for_buy_event(event, entries, account_events=audit)
+        if match is not None:
+            return match
+    return None
+
+
+__all__ = ['original_buy_event', 'pending_entry_matches_buy', 'resolve_pending_entry_for_buy_event', 'resolve_position_pending_entry']

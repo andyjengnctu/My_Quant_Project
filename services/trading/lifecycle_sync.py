@@ -15,14 +15,14 @@ from typing import Any, Mapping
 import pandas as pd
 
 from core.data_utils import get_required_min_rows
-from core.entry_plans import accept_entry_quantity_decision
+from core.entry_plans import validate_accepted_entry_reservation
 from core.file_integrity import canonical_json_sha256
-from core.exact_accounting import build_buy_ledger, milli_to_money, price_to_milli
+from core.exact_accounting import price_to_milli
 from core.params_io import build_params_from_mapping
 from core.serialization_utils import json_native_value
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trade_lifecycle import build_prefill_lifecycle_from_frame
-from core.trading_lifecycle_plans import build_pending_prefill_plan
+from core.trading_lifecycle_plans import PREFILL_ORIGIN_CONTRACT_VERSION, build_pending_prefill_plan
 from services.trading.lifecycle_context import resolve_trading_lifecycle_context
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.account_state import load_trading_account_state
@@ -36,6 +36,7 @@ from services.trading.market_data_consumer import (
 from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_ACTIVE,
     load_trading_pending_entry_state,
+    project_trading_pending_intent_entries,
     update_trading_pending_entry,
 )
 from services.trading.position_rollforward import (
@@ -48,13 +49,15 @@ from services.trading.lifecycle_sync_status import (
 )
 
 TRADING_LIFECYCLE_SYNC_SCHEMA_VERSION = 1
+# AI: Invalidate old derived refreshes without changing any strategy identity.
+PENDING_MANAGEMENT_SYNC_CONTRACT_VERSION = 1
 
 
-def _available_cash_for_pending(
+def _available_cash_milli_for_pending(
     account: Mapping[str, Any] | None,
     active_entries: list[Mapping[str, Any]],
     current: Mapping[str, Any],
-) -> float:
+) -> int:
     if not isinstance(account, Mapping) or account.get("cash_milli") is None:
         raise RuntimeError("Trading cash 尚未設定，不能同步掛單規劃")
     current_id = str(current.get("pending_entry_id") or "")
@@ -64,7 +67,7 @@ def _available_cash_for_pending(
         if str(row.get("pending_entry_id") or "") != current_id
     )
     available_milli = max(0, int(account.get("cash_milli") or 0) - other_reserved)
-    return milli_to_money(available_milli)
+    return available_milli
 
 
 
@@ -94,7 +97,9 @@ def _latest_shadow_state(
     latest_index = max(timeline)
     row = dict(timeline[latest_index])
     row_date = pd.Timestamp(frame.index[int(latest_index)]).strftime("%Y-%m-%d")
-    return row, row_date
+    # AI: An outstanding order remains visible after strategy termination; the
+    # error must still identify the actual terminal bar, not the latest display.
+    return row, row.get("prefill_terminated_date") or row_date
 
 
 def _sync_one_pending(
@@ -113,7 +118,34 @@ def _sync_one_pending(
         field_name="pending_entry.evaluated_through_date",
         allow_none=False,
     )
+    prefill_origin = build_pending_prefill_plan(entry)
+    if prefill_origin["plan_as_of_date"] > latest_finalized_date:
+        raise RuntimeError(f"{ticker} frozen plan availability is ahead of the pinned finalized boundary")
+    lineage = dict(entry.get("management_lineage") or {})
+    frozen_params = lineage.get("frozen_params")
+    if not isinstance(frozen_params, Mapping):
+        raise RuntimeError(f"{ticker} pending entry lacks frozen params")
+    params = build_params_from_mapping(dict(frozen_params))
+    accepted_plan = dict(entry.get("execution_plan_seed") or {})
+    # AI: Accepted economics have duplicated display fields. Reject disagreement
+    # rather than quietly choosing one version and rewriting broker/user intent.
+    for field, seed_field in (("planned_qty", "qty"), ("reserved_cost_milli", "reserved_cost_milli")):
+        if accepted_plan.get(seed_field) is not None and accepted_plan[seed_field] != entry.get(field):
+            raise ValueError(f"{ticker} accepted pending {field} disagrees with its execution plan")
+        accepted_plan[seed_field] = entry.get(field)
+    if accepted_plan.get("limit_price") is not None and price_to_milli(accepted_plan["limit_price"]) != price_to_milli(entry.get("limit_price")):
+        raise ValueError(f"{ticker} accepted pending limit disagrees with its execution plan")
+    accepted_plan["limit_price"] = entry.get("limit_price")
+    accepted_plan["reserved_cost"] = entry.get("reserved_cost")
+    validate_accepted_entry_reservation(
+        accepted_plan,
+        available_cash_milli=_available_cash_milli_for_pending(account, active_entries, entry),
+        params=params,
+    )
     context_fingerprint = canonical_json_sha256({
+        "pending_management_sync_contract_version": PENDING_MANAGEMENT_SYNC_CONTRACT_VERSION,
+        "prefill_origin_contract_version": PREFILL_ORIGIN_CONTRACT_VERSION,
+        "prefill_origin": prefill_origin,
         "market_context": lifecycle_context.fingerprint if lifecycle_context is not None else latest_finalized_date,
         "lineage": entry.get("management_lineage"),
         "planned_qty": entry.get("planned_qty"),
@@ -124,11 +156,6 @@ def _sync_one_pending(
     if evaluated > latest_finalized_date:
         raise RuntimeError(f"{ticker} pending evaluation is ahead of the pinned finalized boundary")
 
-    lineage = dict(entry.get("management_lineage") or {})
-    frozen_params = lineage.get("frozen_params")
-    if not isinstance(frozen_params, Mapping):
-        raise RuntimeError(f"{ticker} 掛單缺少 frozen params")
-    params = build_params_from_mapping(dict(frozen_params))
     shadow_row, shadow_date = _latest_shadow_state(
         project_root,
         entry=entry,
@@ -145,12 +172,12 @@ def _sync_one_pending(
             raise RuntimeError(
                 f"{ticker} frozen lineage 已於 {shadow_date or '-'} 觸發 shadow exit；ACTIVE 掛單需確認後結案"
             )
-        if shadow_row.get("limit_price") is not None:
-            seed["limit_price"] = float(shadow_row["limit_price"])
         if shadow_row.get("stop_price") is not None:
             seed["init_sl"] = float(shadow_row["stop_price"])
         if shadow_row.get("tp_price") is not None:
             seed["target_price"] = float(shadow_row["tp_price"])
+        if shadow_row.get("entry_atr") is not None:
+            seed["entry_atr"] = float(shadow_row["entry_atr"])
         if shadow_state:
             seed["shadow_position_state"] = json_native_value(shadow_state)
             if shadow_state.get("trailing_stop") is not None:
@@ -158,23 +185,14 @@ def _sync_one_pending(
 
     seed["trade_date"] = latest_finalized_date
     seed["planned_trade_date"] = entry.get("planned_trade_date")
-    # AI: A confirmed user decision is not an auto-resizing suggestion. Refresh
-    # management/validation only; a newly infeasible quantity is reported, never
-    # silently reduced or used to release/reallocate its reservation.
-    chosen_qty = int(entry.get("planned_qty") or 0)
-    available_cash = _available_cash_for_pending(account, active_entries, entry)
-    refreshed = accept_entry_quantity_decision(
-        seed, available_cash=available_cash, params=params, requested_qty=chosen_qty,
-    )
-    refreshed["user_qty_override"] = seed.get("user_qty_override")
-    replacement["execution_plan_seed"] = deepcopy(refreshed)
-    replacement["planned_qty"] = int(refreshed["qty"])
-    replacement["reserved_cost_milli"] = int(refreshed["reserved_cost_milli"])
-    replacement["reserved_cost"] = float(refreshed["reserved_cost"])
-    replacement["limit_price"] = float(refreshed["limit_price"])
-    replacement["init_sl"] = float(refreshed["init_sl"])
-    replacement["init_trail"] = float(refreshed["init_trail"])
-    replacement["target_price"] = float(refreshed["target_price"])
+    # AI: Only management state advances. The saved ceiling, chosen quantity,
+    # order limit, reservation, capital basis and user overrides remain intact.
+    # Explicit create/amend commands alone can accept a new quantity decision.
+    replacement["execution_plan_seed"] = seed
+    replacement["init_sl"] = float(seed["init_sl"])
+    replacement["init_trail"] = float(seed["init_trail"])
+    replacement["target_price"] = float(seed["target_price"])
+    replacement["entry_atr"] = seed.get("entry_atr")
     replacement["evaluated_through_date"] = latest_finalized_date
     replacement["evaluation_context_fingerprint"] = context_fingerprint
     replacement["sync_error"] = None
@@ -197,8 +215,8 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
     """Idempotently advance pending + position lifecycle state before reads."""
 
     root = Path(project_root).resolve()
-    # AI: Finish a durable account-commit/pending-close transaction before sizing
-    # any active intent. Otherwise the same filled order can reserve cash twice.
+    # AI: Finish a durable account-commit/pending-close transaction before validating
+    # any active reservation. Otherwise the same filled order can reserve cash twice.
     recover_trading_pending_entry_transaction(root)
     consumer_state = load_trading_v2_consumer_state(root, required=False)
     if consumer_state is None:
@@ -219,7 +237,7 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
     pending_state = load_trading_pending_entry_state(root, required=False)
     active_entries = [] if pending_state is None else [
         deepcopy(row)
-        for row in (pending_state.get("entries") or {}).values()
+        for row in project_trading_pending_intent_entries(pending_state).values()
         if str(row.get("status") or "") == PENDING_ENTRY_STATUS_ACTIVE
     ]
     active_entries.sort(key=lambda row: (str(row.get("created_at") or ""), str(row.get("pending_entry_id") or "")))
@@ -239,13 +257,6 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
                 lifecycle_context=lifecycle_context,
             )
             pending_results.append(result)
-            if bool(result.get("changed")):
-                # Later siblings must see the updated reservation amount.
-                for index, current in enumerate(active_entries):
-                    if str(current.get("pending_entry_id") or "") == entry_id:
-                        latest_state = load_trading_pending_entry_state(root, required=True)
-                        active_entries[index] = deepcopy(latest_state["entries"][entry_id])
-                        break
         except (OSError, TypeError, ValueError, KeyError, IndexError, RuntimeError) as exc:
             pending_errors[entry_id] = f"{type(exc).__name__}: {exc}"
             pending_results.append({

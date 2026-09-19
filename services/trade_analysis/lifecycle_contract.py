@@ -5,6 +5,7 @@ kept as a stable import seam for older callers; it must not infer lifecycle stat
 from rendered chart geometry.
 """
 from core.trade_lifecycle import (  # noqa: F401
+    TRADE_LIFECYCLE_PENDING,
     TRADE_LIFECYCLE_POSITION,
     TRADE_LIFECYCLE_SHADOW,
     TRADE_LIFECYCLE_SIGNAL,
@@ -21,6 +22,7 @@ from core.trade_lifecycle import (  # noqa: F401
 )
 
 __all__ = [
+    "TRADE_LIFECYCLE_PENDING",
     "TRADE_LIFECYCLE_POSITION",
     "TRADE_LIFECYCLE_SHADOW",
     "TRADE_LIFECYCLE_SIGNAL",

@@ -293,6 +293,17 @@ def build_trading_status_segments(text: str, *, default_tone: str = "text") -> l
     return segments
 
 
+def _pending_sync_failure_at_cell(tree, rows, event):
+    """Resolve diagnostics by logical column, without selecting or mutating intent."""
+    if event is None or str(tree.identify_region(event.x, event.y) or "") != "cell":
+        return None
+    row = rows.get(str(tree.identify_row(event.y) or ""))
+    if not row or not row.get("sync_error"):
+        return None
+    column = tree.identify_column(event.x)
+    return row if str(tree.column(column, "id")) == "status" else None
+
+
 class _TradingStatusLine(tk.Text):
     """Read-only wrapping status text with token-level emphasis instead of whole-line coloring."""
 
@@ -2305,7 +2316,10 @@ class TradingAccountPanel(ttk.Frame):
                 continue
             self._pending_rows[entry_id] = row
             source = trading_source_display_label(origin=row.get("origin"))
-            if entry_id in pending_sync_errors:
+            # AI: Preserve the canonical failure on the read-only display row.
+            # A service-wide failure must not leave individual orders looking current.
+            row["sync_error"] = pending_sync_errors.get(entry_id) or self._lifecycle_sync_snapshot.get("error")
+            if row["sync_error"]:
                 status = SYNC_STATUS_FAILED
             else:
                 status = str(row.get("sync_status") or (SYNC_STATUS_PENDING if bool(row.get("stale")) else SYNC_STATUS_LATEST))
@@ -2360,9 +2374,11 @@ class TradingAccountPanel(ttk.Frame):
             )
         else:
             clear_treeview_selection(self._pending_tree)
-        self._pending_status_var.set(
-            "尚無掛單。" if not active_rows else f"目前 ACTIVE 掛單 {len(active_rows):,} 筆。"
-        )
+        status_text = "尚無掛單。" if not active_rows else f"目前 ACTIVE 掛單 {len(active_rows):,} 筆。"
+        failed_tickers = [str(row.get("ticker") or "-") for row in self._pending_rows.values() if row.get("sync_error")]
+        if failed_tickers:
+            status_text += "\n同步失敗：" + "、".join(failed_tickers) + "。點選該列「狀態」查看完整原因。"
+        self._pending_status_var.set(status_text)
 
     def refresh_proposed_order_plan(self):
         try:
@@ -2843,6 +2859,15 @@ class TradingAccountPanel(ttk.Frame):
         self._preview_pending_draft(use_current_overrides=True, silent=True)
 
     def _on_pending_tree_click(self, event):
+        failure_row = _pending_sync_failure_at_cell(self._pending_tree, self._pending_rows, event)
+        if failure_row is not None:
+            # AI: This is a diagnostic read, not a selection/edit/retry command.
+            messagebox.showerror(
+                "掛單同步失敗",
+                f"{failure_row.get('ticker') or '-'}\n\n{failure_row['sync_error']}",
+                parent=self,
+            )
+            return "break"
         region = str(self._pending_tree.identify_region(event.x, event.y) or "")
         if region == "heading":
             return None
@@ -2879,6 +2904,8 @@ class TradingAccountPanel(ttk.Frame):
         return "break"
 
     def _open_selected_pending_in_inspector(self, _event=None):
+        if _pending_sync_failure_at_cell(self._pending_tree, self._pending_rows, _event) is not None:
+            return "break"
         row = self._selected_pending_row()
         if row:
             self._open_ticker_in_inspector(str(row.get("ticker") or ""))

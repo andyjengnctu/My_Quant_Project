@@ -524,3 +524,41 @@ def accept_entry_quantity_decision(candidate_plan, *, available_cash, params, re
     plan["reserved_cost"] = milli_to_money(plan["reserved_cost_milli"])
     plan["user_qty_override"] = requested_qty
     return plan
+
+
+def validate_accepted_entry_reservation(accepted_plan, *, available_cash_milli, params):
+    """Validate persisted intent economics without making a new sizing decision.
+
+    AI: Call only for an already accepted order. Initial acceptance and explicit
+    amendments still use accept_entry_quantity_decision. Replayed management
+    geometry is not a new authorization to resize or withdraw an existing order.
+    Cash coverage is live, so callers must check it even on a management-cache hit.
+    """
+    qty = accepted_plan.get("qty")
+    if isinstance(qty, bool) or qty is None or int(qty) != qty or int(qty) <= 0:
+        raise ValueError("Accepted quantity must be a positive integer")
+    qty = int(qty)
+    # Older accepted snapshots may lack the optional approval ceiling. Never
+    # manufacture it by re-sizing from a later management stop or account value.
+    ceiling = accepted_plan.get("strategy_executable_qty_ceiling")
+    if ceiling is not None:
+        if isinstance(ceiling, bool) or int(ceiling) != ceiling or int(ceiling) <= 0:
+            raise ValueError("Recorded accepted quantity ceiling is invalid")
+        if qty > int(ceiling):
+            raise ValueError(f"Accepted quantity {qty} exceeds recorded approval ceiling {ceiling}")
+    limit_price = accepted_plan.get("limit_price")
+    if limit_price is None or not np.isfinite(float(limit_price)) or float(limit_price) <= 0:
+        raise ValueError("Accepted order limit must be a positive finite price")
+    recorded = accepted_plan.get("reserved_cost_milli")
+    if isinstance(recorded, bool) or recorded is None or int(recorded) != recorded or int(recorded) <= 0:
+        raise ValueError("Accepted reservation must be positive integer milli-money")
+    expected = int(build_buy_ledger(price_to_milli(limit_price), qty, params)["cash_buy_total_milli"])
+    if int(recorded) != expected:
+        raise ValueError(f"Accepted reservation mismatch: recorded {recorded}, required {expected} milli-money")
+    if accepted_plan.get("reserved_cost") is not None and money_to_milli(accepted_plan["reserved_cost"]) != expected:
+        raise ValueError("Accepted reservation display value differs from exact ledger")
+    if expected > int(available_cash_milli):
+        raise ValueError(
+            f"Accepted order reservation {milli_to_money(expected):.3f} exceeds available cash "
+            f"{milli_to_money(int(available_cash_milli)):.3f} after other pending reservations"
+        )

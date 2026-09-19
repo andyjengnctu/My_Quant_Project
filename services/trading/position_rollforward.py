@@ -10,8 +10,9 @@ from core.exact_accounting import milli_to_price, price_to_milli
 from core.file_integrity import canonical_json_sha256
 from core.params_io import build_params_from_mapping
 from core.position_management import POSITION_MANAGEMENT_FIELDS
-from core.trading_position_projection import build_confirmed_position_origin, collect_confirmed_position_events, project_full_exit_obligation
+from core.trading_position_projection import CONFIRMED_POSITION_ORIGIN_CONTRACT_VERSION, build_confirmed_position_origin, collect_confirmed_position_events, project_full_exit_obligation
 from core.position_replay import POSITION_REPLAY_CONTRACT_VERSION, replay_confirmed_position_management
+from core.trading_lifecycle_plans import PREFILL_ORIGIN_CONTRACT_VERSION
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from core.serialization_utils import json_native_value
 from core.trading_account_state import (
@@ -32,6 +33,8 @@ from services.trading.position_market_context import (
     resolve_trading_strategy_position_sources,
 )
 from services.trading.protection_planning import build_trading_protection_plan
+from services.trading.pending_entry_links import resolve_position_pending_entry
+from services.trading.pending_entry_state import load_trading_pending_entry_state, project_trading_pending_intent_entries
 from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
 
 TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
@@ -55,10 +58,14 @@ def _confirmed_events(account, record, *, through_date):
     return collect_confirmed_position_events(effective_trading_account_events(account), record, through_date=through_date)
 
 
-def _evaluation_identity(record, binding, context, events):
+def _evaluation_identity(record, binding, context, events, prefill_entry=None):
     management = dict(record.get("strategy_management") or {})
     return canonical_json_sha256(json_native_value({
         "replay_contract_version": POSITION_REPLAY_CONTRACT_VERSION,
+        "acquisition_origin_contract_version": CONFIRMED_POSITION_ORIGIN_CONTRACT_VERSION,
+        "prefill_origin_contract_version": PREFILL_ORIGIN_CONTRACT_VERSION,
+        "frozen_binding": binding,
+        "accepted_prefill_entry": prefill_entry,
         "market_context": context.fingerprint,
         "lineage_id": binding.get("lineage_id"),
         "frozen_params_sha256": binding.get("frozen_params_sha256"),
@@ -67,6 +74,13 @@ def _evaluation_identity(record, binding, context, events):
         "confirmed_events": events,
         "broker": record.get("broker"),
     }))
+
+
+def _position_prefill_entry(account, pending_entries, record):
+    return resolve_position_pending_entry(
+        record, pending_entries, account_events=effective_trading_account_events(account),
+        account_audit_events=account.get("events") or (),
+    )
 
 
 def reconcile_trading_manual_position_management(project_root: str | Path, *, lifecycle_context=None) -> dict[str, Any]:
@@ -150,13 +164,16 @@ def build_trading_position_rollforward_snapshot(project_root: str | Path, *, lif
     context = lifecycle_context or resolve_trading_lifecycle_context(root)
     account, orders, _view = resolve_trading_strategy_position_sources(root, lifecycle_context=context)
     rows = []
+    pending_entries = list(project_trading_pending_intent_entries(
+        load_trading_pending_entry_state(root, required=False)).values())
     for ticker, record in sorted(account.get("positions", {}).items()):
         if record.get("source") not in MANAGED_POSITION_SOURCES:
             continue
         management = dict(record.get("strategy_management") or {})
         binding = resolve_trading_position_management_binding(record, orders=orders)
         events = _confirmed_events(account, record, through_date=context.finalized_date)
-        fingerprint = _evaluation_identity(record, binding, context, events)
+        prefill_entry = _position_prefill_entry(account, pending_entries, record)
+        fingerprint = _evaluation_identity(record, binding, context, events, prefill_entry)
         due = str(management.get("evaluation_context_fingerprint") or "") != fingerprint
         rows.append({"ticker": ticker, "entry_date": (record.get("broker") or {}).get("entry_date"),
                      "last_rollforward_date": management.get("last_rollforward_date"),
@@ -179,6 +196,8 @@ def run_trading_position_rollforward(project_root: str | Path, *, lifecycle_cont
     context = lifecycle_context or resolve_trading_lifecycle_context(root)
     reconciliation = reconcile_trading_manual_position_management(root, lifecycle_context=context)
     account, orders, market_view = resolve_trading_strategy_position_sources(root, lifecycle_context=context)
+    pending_entries = list(project_trading_pending_intent_entries(
+        load_trading_pending_entry_state(root, required=False)).values())
     updates, rows, errors = {}, [], {}
     signal_tickers = []
     for ticker, record in sorted(account.get("positions", {}).items()):
@@ -190,15 +209,21 @@ def run_trading_position_rollforward(project_root: str | Path, *, lifecycle_cont
                 raise RuntimeError("Managed position is not active")
             binding = resolve_trading_position_management_binding(record, orders=orders)
             events = _confirmed_events(account, record, through_date=context.finalized_date)
-            fingerprint = _evaluation_identity(record, binding, context, events)
+            prefill_entry = _position_prefill_entry(account, pending_entries, record)
+            fingerprint = _evaluation_identity(record, binding, context, events, prefill_entry)
             if management.get("evaluation_context_fingerprint") == fingerprint:
                 continue
             params = build_params_from_mapping(binding["frozen_params"])
             frame = load_trading_position_market_frame(view=market_view, ticker=ticker, params=params, allowed_date=context.finalized_date)
             if frame.index.max() > pd.Timestamp(context.finalized_date):
                 raise RuntimeError("Market frame exceeds the pinned finalized boundary")
+            acquisition = build_confirmed_position_origin(
+                record, binding=binding, params=params,
+                account_events=effective_trading_account_events(account), frame=frame,
+                prefill_entry=prefill_entry,
+            )
             projection = replay_confirmed_position_management(
-                build_confirmed_position_origin(record, binding=binding, params=params, account_events=effective_trading_account_events(account), frame=frame),
+                acquisition,
                 frame=frame, params=params, start_date=record["broker"].get("entry_date"),
                 confirmed_quantity_events=events,
             )
@@ -208,6 +233,9 @@ def run_trading_position_rollforward(project_root: str | Path, *, lifecycle_cont
             # Only copy the core-owned management fields; economics stay actual.
             position = deepcopy(management["position_state"])
             for key in POSITION_MANAGEMENT_FIELDS:
+                # Optional obligations from an incompatible old origin must not
+                # survive merely because the canonical replay no longer has one.
+                position.pop(key, None)
                 if key in replayed:
                     position[key] = deepcopy(replayed[key])
             obligation = project_full_exit_obligation(projection["full_exit_obligation"])
@@ -228,6 +256,14 @@ def run_trading_position_rollforward(project_root: str | Path, *, lifecycle_cont
                 "evaluation_context_fingerprint": fingerprint, "evaluated_through_date": context.finalized_date,
                 "replay_contract_version": POSITION_REPLAY_CONTRACT_VERSION,
                 "derived_exit_obligation": obligation,
+                "acquisition_replay": {
+                    "origin_contract_version": CONFIRMED_POSITION_ORIGIN_CONTRACT_VERSION,
+                    "prefill_origin_contract_version": PREFILL_ORIGIN_CONTRACT_VERSION,
+                    "frozen_params_sha256": binding.get("frozen_params_sha256"),
+                    "pending_entry_id": (prefill_entry or {}).get("pending_entry_id"),
+                    "stored_entry_state_sha256": canonical_json_sha256(json_native_value(management.get("entry_position_state"))),
+                    "resolved_entry_state_sha256": canonical_json_sha256(json_native_value(acquisition)),
+                },
             }
             rows.append({"ticker": ticker, "processed_bar_count": len(projection["processed_dates"]),
                          "processed_from_date": projection["processed_dates"][0],

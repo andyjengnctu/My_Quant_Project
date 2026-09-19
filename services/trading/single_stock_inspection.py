@@ -46,7 +46,7 @@ from core.trading_order_state import (
 )
 from services.trading.account_state import load_trading_account_state
 from services.trading.pending_entry_links import (
-    original_buy_event, pending_entry_matches_buy, resolve_pending_entry_for_buy_event,
+    original_buy_event, pending_entry_matches_buy, resolve_pending_entry_for_buy_event, resolve_position_pending_entry,
 )
 from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_ACTIVE,
@@ -54,16 +54,20 @@ from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_CANCELLED_USER_DELETED,
     PENDING_ENTRY_STATUS_FILLED,
     load_trading_pending_entry_state,
+    project_trading_pending_intent_entries,
 )
 from services.trading.accounting_policy import overlay_trading_accounting_params, build_standalone_trading_accounting_params
 from services.trading.order_state import load_trading_order_state
 from services.trading.protection_planning import get_trading_protection_plan_read_model
 from services.trading.indicator_exit_planning import get_trading_indicator_exit_plan_read_model
 from services.trading.strategy_param_runtime import resolve_trading_position_management_binding, resolve_trading_candidate_frozen_params, build_trading_order_strategy_lineage
+from core.trading_lifecycle_plans import build_pending_prefill_plan
 from core.trade_lifecycle import (
     TRADE_LIFECYCLE_POSITION,
     TRADE_LIFECYCLE_SHADOW,
     TRADE_LIFECYCLE_SIGNAL,
+    TRADE_LIFECYCLE_PENDING,
+    overlay_confirmed_order_intent,
     TRADE_TRANSACTION_LINE_KEYS,
     build_trade_lifecycle_row,
     build_prefill_lifecycle_timeline,
@@ -226,7 +230,7 @@ def build_trading_single_stock_inspection(
     pending_state = load_trading_pending_entry_state(root, required=False)
     pending_entries = [
         deepcopy(dict(row))
-        for row in ((pending_state or {}).get("entries") or {}).values()
+        for row in project_trading_pending_intent_entries(pending_state).values()
         if _ticker_matches(row, ticker_key)
     ]
 
@@ -293,6 +297,14 @@ def build_trading_single_stock_inspection(
     if market_frame is not None and consumer_state is None:
         raise ValueError("Inspection market_frame requires its pinned consumer_state")
     consumer = deepcopy(dict(consumer_state)) if consumer_state is not None else load_trading_v2_consumer_state(root, required=False)
+    # AI: Display candles may be float32 or a cropped window. Keep the already
+    # pinned full-precision input available to pre-fill replay as well as POSITION.
+    # This reference is operation-local, never a second persisted market source.
+    if market_frame is not None:
+        if market_frame.empty or pd.Timestamp(market_frame.index.max()).normalize() > pd.Timestamp(consumer["market_date"]):
+            raise ValueError("Inspection frame exceeds the pinned finalized boundary")
+        if not market_frame.index.is_unique or not market_frame.index.is_monotonic_increasing:
+            raise ValueError("Inspection frame must have unique chronological dates")
     position_history = collect_confirmed_position_cycles(
         account_events, ticker=ticker_key, current_position=current_position,
     )
@@ -334,7 +346,11 @@ def build_trading_single_stock_inspection(
             frame = frame_cache[signature].loc[:through]
             cycle["projection"] = replay_confirmed_position_management(
                 build_confirmed_position_origin(record, binding=binding, params=params,
-                    account_events=cycle["events"], frame=frame),
+                    account_events=cycle["events"], frame=frame,
+                    prefill_entry=resolve_position_pending_entry(
+                        record, pending_entries, account_events=cycle["events"],
+                        account_audit_events=account.get("events") or () if account else (),
+                    )),
                 frame=frame, params=params, start_date=cycle["entry_date"],
                 confirmed_quantity_events=collect_confirmed_position_events(cycle["events"], record, through_date=through),
             )
@@ -357,6 +373,7 @@ def build_trading_single_stock_inspection(
         ],
         "entry_orders": entry_orders,
         "pending_entries": pending_entries,
+        "prefill_market_frame": market_frame,
         "current_position": deepcopy(current_position),
         "position_binding": deepcopy(position_binding),
         "management_projection": management_projection,
@@ -927,6 +944,37 @@ def _chart_series_values(chart_payload: Mapping[str, Any], key: str) -> list[Any
 
 
 
+def _bind_chart_prefill_origin(plan: Mapping[str, Any], lineage: Mapping[str, Any]) -> dict[str, Any]:
+    """AI: Unit/display adapters cannot independently date management geometry."""
+    fallback_seed = {
+        "trade_date": plan.get("information_date"), "entry_type": plan.get("entry_type"),
+        "limit_price": plan.get("limit_price"), "init_sl": plan.get("stop_price"),
+        "init_trail": plan.get("init_trail"), "target_price": plan.get("tp_price"),
+        "entry_atr": plan.get("entry_atr"), "security_profile": plan.get("security_profile"),
+        "shadow_position_state": plan.get("shadow_position_state"),
+    }
+    canonical = build_pending_prefill_plan({
+        "origin": "scanner_strategy", "ticker": plan.get("ticker"),
+        "planned_trade_date": plan.get("planned_trade_date") if plan.get("confirmed_pending_order") else None,
+        "signal_date": plan.get("signal_date"), "information_date": plan.get("information_date"),
+        "management_lineage": {**lineage, "frozen_params": lineage.get("frozen_params") or plan.get("frozen_params")},
+        "execution_plan_seed": fallback_seed,
+        "planned_qty": plan.get("planned_qty"), "reserved_cost": plan.get("reserved_capital"),
+        "limit_price": plan.get("limit_price"), "init_sl": plan.get("stop_price"),
+        "init_trail": plan.get("init_trail"), "target_price": plan.get("tp_price"),
+        "entry_atr": plan.get("entry_atr"),
+    })
+    result = deepcopy(dict(plan))
+    # Accepted quantities/labels are display facts. Only dated management comes
+    # from the shared normalizer, just as in pending sync and acquisition.
+    for key in ("order_intent", "signal_date", "origin_signal_date", "plan_as_of_date", "limit_price", "stop_price",
+                "init_trail", "tp_price", "entry_atr", "shadow_position_state", "shadow_as_of_date"):
+        result[key] = canonical[key]
+    if canonical.get("origin_reconstruction"):
+        result["origin_reconstruction"] = deepcopy(canonical["origin_reconstruction"])
+    return result
+
+
 def _shadow_plan_from_candidate(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
     """Normalize the current Scanner row into the common pre-fill plan contract."""
     if not isinstance(candidate, Mapping) or not candidate:
@@ -944,7 +992,7 @@ def _shadow_plan_from_candidate(candidate: Mapping[str, Any]) -> dict[str, Any] 
     except (TypeError, ValueError, KeyError, RuntimeError) as exc:
         _LOGGER.warning("Candidate has no verifiable frozen lifecycle Params: %s", exc)
         return None
-    return {
+    return _bind_chart_prefill_origin({
         "frozen_params": params_to_json_dict(frozen_params),
         "signal_date": signal_date,
         "information_date": information_date,
@@ -965,7 +1013,7 @@ def _shadow_plan_from_candidate(candidate: Mapping[str, Any]) -> dict[str, Any] 
         "entry_type": str(seed.get("entry_type") or seed.get("entry_source") or candidate.get("kind") or "normal"),
         "source": "scanner_candidate",
         "priority": 10,
-    }
+    }, {"execution_plan_seed": seed, "candidate_trade_date": information_date, "signal_origin": candidate.get("signal_lineage")})
 
 
 def _shadow_plan_from_order(
@@ -999,7 +1047,7 @@ def _shadow_plan_from_order(
             return None
 
     reserved_raw = order.get("reserved_cost_milli")
-    return {
+    return _bind_chart_prefill_origin({
         "signal_date": signal_date,
         "information_date": information_date,
         "end_date": None if effective_fill_date is not None else (cancel_date or last_date),
@@ -1019,9 +1067,11 @@ def _shadow_plan_from_order(
         "frozen_params": deepcopy(order.get("frozen_params")),
         "entry_type": str(order.get("entry_type") or order.get("kind") or "normal"),
         "source": "broker_entry_order",
+        "planned_trade_date": _date_text(order.get("planned_trade_date")) or information_date,
+        "confirmed_pending_order": True,
         "order_id": str(order.get("order_id") or ""),
         "priority": 20,
-    }
+    }, {"execution_plan_seed": order.get("execution_plan_seed"), "candidate_trade_date": information_date, "signal_origin": order.get("signal_lineage")})
 
 
 def _shadow_plan_from_strategy_buy_event(
@@ -1086,7 +1136,7 @@ def _shadow_plan_from_strategy_buy_event(
         limit_price = _fallback_order_price(limit_price, "limit_price_milli")
         stop_price = _fallback_order_price(stop_price, "init_sl_milli")
         tp_price = _fallback_order_price(tp_price, "target_price_milli")
-    return {
+    return _bind_chart_prefill_origin({
         "signal_date": signal_date,
         "information_date": information_date,
         "end_date": None,
@@ -1108,7 +1158,7 @@ def _shadow_plan_from_strategy_buy_event(
         "source": "position_manual_management_lineage" if mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY else "position_strategy_lineage",
         "order_id": order_id or None,
         "priority": 30,
-    }
+    }, lineage)
 
 
 def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str | None) -> dict[str, Any] | None:
@@ -1129,18 +1179,9 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
     origin = str(entry.get("origin") or "")
     manual_pending = origin == "manual_selected"
     planned_trade_date = _date_text(entry.get("planned_trade_date"))
-    # Manual pending has no Research signal of its own.  Treat its persisted
-    # planned order date as the lifecycle information bar so it follows the
-    # exact same completed-bar timing as Research: the order bar is SIGNAL
-    # (planned values are visible in the sidebar but own no transaction lines),
-    # and only the next completed trading bar may become SHADOW.  Scanner rows
-    # preserve their canonical strategy signal date.
-    signal_date = (
-        planned_trade_date or information_date
-        if manual_pending
-        else (_date_text(entry.get("signal_date")) or information_date)
-    )
-    # AI: Never project a later synchronized stop/target back onto the order day.
+    # AI: Synchronization, acquisition and display share the same dated origin.
+    # planned_trade_date remains an order fact, not geometry-availability proof.
+    canonical_plan = build_pending_prefill_plan(entry)
     lineage = dict(entry.get("management_lineage") or {})
     seed = dict(lineage.get("execution_plan_seed") or entry.get("execution_plan_seed") or {})
     end_before = None
@@ -1153,24 +1194,14 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
         # overlays still exclude them via _effective_pending_entries().
         end_date = planned_trade_date or information_date
     return {
-        "signal_date": signal_date,
-        "information_date": information_date,
+        **canonical_plan,
         "end_date": end_date,
         "end_before_date": end_before,
-        "limit_price": seed.get("limit_price", entry.get("limit_price")),
-        "stop_price": seed.get("init_sl", entry.get("init_sl")),
-        "init_trail": seed.get("init_trail", entry.get("init_trail")),
-        "tp_price": seed.get("target_price", entry.get("target_price")),
-        "entry_atr": seed.get("entry_atr", entry.get("entry_atr")),
         "entry_price": seed.get("shadow_entry_price", seed.get("entry_ref_price")),
-        "shadow_position_state": deepcopy(seed.get("shadow_position_state")),
         "planned_qty": int(entry.get("planned_qty") or 0) or None,
         "reserved_capital": entry.get("reserved_cost"),
         "sizing_capital": seed.get("sizing_capital"),
-        "ticker": str(entry.get("ticker") or ""),
-        "security_profile": deepcopy(seed.get("security_profile")),
-        "frozen_params": deepcopy((entry.get("management_lineage") or {}).get("frozen_params")),
-        "entry_type": str(seed.get("entry_type") or "manual"),
+        "frozen_params": deepcopy(lineage.get("frozen_params")),
         "source": "manual_pending_entry" if manual_pending else "scanner_pending_entry",
         "planned_trade_date": planned_trade_date,
         "confirmed_pending_order": True,
@@ -1275,7 +1306,9 @@ def _effective_pending_entries(inspection: Mapping[str, Any]) -> list[dict[str, 
 
 def _plan_covers_date(plan: Mapping[str, Any], date_text: str) -> bool:
     signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
-    if signal_date is None or date_text < signal_date:
+    order_date = _date_text((plan.get("order_intent") or {}).get("planned_trade_date"))
+    starts = [value for value in (signal_date, order_date) if value is not None]
+    if not starts or date_text < min(starts):
         return False
     end_before = _date_text(plan.get("end_before_date"))
     if end_before is not None and date_text >= end_before:
@@ -1338,6 +1371,10 @@ def _build_shadow_plans(
             # available as SHADOW evidence, preserving historical visibility.
             if list(order.get("fills") or []) and order_id not in effective_fill_date_by_order:
                 plan["priority"] = 5
+                # AI: A voided fill's closed broker audit is not an outstanding
+                # user order. It may retain strategy context, never intent rank.
+                plan["order_intent"] = None
+                plan["confirmed_pending_order"] = False
             plans.append(plan)
 
     for event in list(inspection.get("account_events") or []):
@@ -1413,7 +1450,7 @@ def _prefill_state_as_of(
     candidates: list[dict[str, Any]] = []
     ranges = _account_cycle_ranges(inspection, last_date=last_date or date_text)
     for plan in _build_shadow_plans(inspection, last_date=last_date):
-        origin = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
+        origin = _date_text(plan.get("origin_signal_date")) or _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
         if not _prefill_lineage_available(origin, date_text, ranges):
             continue
         if _plan_covers_date(plan, date_text):
@@ -1425,17 +1462,21 @@ def _prefill_state_as_of(
     plan = max(
         candidates,
         key=lambda row: (
+            int(bool(overlay_confirmed_order_intent({}, date_labels=[date_text], plan=row))),
             str(_date_text(row.get("signal_date")) or ""),
             int(row.get("priority") or 0),
         ),
     )
     signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
-    lifecycle_state = TRADE_LIFECYCLE_SIGNAL if signal_date == date_text else TRADE_LIFECYCLE_SHADOW
-    return _shadow_state_from_plan(
-        plan,
-        strategy_state=strategy_state,
-        lifecycle_state=lifecycle_state,
-    )
+    management = {}
+    if signal_date is not None and date_text >= signal_date:
+        lifecycle_state = TRADE_LIFECYCLE_SIGNAL if signal_date == date_text else TRADE_LIFECYCLE_SHADOW
+        management[0] = _shadow_state_from_plan(
+            plan, strategy_state=strategy_state, lifecycle_state=lifecycle_state,
+        )
+    # AI: The full chart and this date-only compatibility query use the same
+    # core order/management join. Never expose future geometry for an old order.
+    return overlay_confirmed_order_intent(management, date_labels=[date_text], plan=plan).get(0)
 
 def _account_cycle_ranges(inspection: Mapping[str, Any], *, last_date: str | None) -> list[tuple[str, str]]:
     ticker = str(inspection.get("ticker") or "")
@@ -1588,10 +1629,17 @@ def _build_trading_prefill_lifecycle_timeline(
     total = len(date_labels)
     if total <= 0:
         return {}
-    frame = pd.DataFrame({
-        name: list(chart_payload.get(key) if chart_payload.get(key) is not None else [float("nan")] * total)
-        for name, key in (("Open", "open"), ("High", "high"), ("Low", "low"), ("Close", "close"), ("Volume", "volume"))
-    }, index=pd.to_datetime(date_labels))
+    authoritative_frame = inspection.get("prefill_market_frame")
+    if isinstance(authoritative_frame, pd.DataFrame):
+        frame = authoritative_frame
+    else:
+        # Compatibility for standalone projections without a supplied full frame.
+        # The Workbench always supplies its pinned full-precision market input.
+        frame = pd.DataFrame({
+            name: list(chart_payload.get(key) if chart_payload.get(key) is not None else [float("nan")] * total)
+            for name, key in (("Open", "open"), ("High", "high"), ("Low", "low"), ("Close", "close"), ("Volume", "volume"))
+        }, index=pd.to_datetime(date_labels))
+    chart_indices = {date: idx for idx, date in enumerate(date_labels)}
     finalized = inspection.get("finalized_date")
     if finalized:
         frame = frame.loc[frame.index <= pd.Timestamp(finalized)]
@@ -1600,7 +1648,7 @@ def _build_trading_prefill_lifecycle_timeline(
     last_date = next((value for value in reversed(date_labels) if value is not None), None)
     ranges = _account_cycle_ranges(inspection, last_date=last_date)
     merged: dict[int, dict[str, Any]] = {}
-    owner_key: dict[int, tuple[str, int]] = {}
+    owner_key: dict[int, tuple[int, str, int]] = {}
 
     # Historical strategy signals are first-class pre-fill evidence.  They are
     # generated by the same canonical shadow engine during Research analysis and
@@ -1618,36 +1666,34 @@ def _build_trading_prefill_lifecycle_timeline(
         if idx < 0 or idx >= total:
             continue
         row = deepcopy(dict(raw_row))
-        signal_key = str(_date_text(row.get("signal_date")) or _date_text(row.get("information_date")) or "")
+        signal_key = str(_date_text(row.get("origin_signal_date")) or _date_text(row.get("signal_date")) or _date_text(row.get("information_date")) or "")
         if finalized and date_labels[idx] and date_labels[idx] > finalized:
             continue
         if not _prefill_lineage_available(signal_key, date_labels[idx], ranges):
             continue
         merged[idx] = row
-        owner_key[idx] = (signal_key, 0)
+        owner_key[idx] = (0, signal_key, 0)
 
     for plan in _build_shadow_plans(inspection, last_date=last_date):
         plan_params = _resolve_lifecycle_plan_params(plan, params)
-        if plan_params is None:
+        if plan_params is None and not plan.get("order_intent"):
             continue
         timeline = build_prefill_lifecycle_from_frame(
             frame=frame, plan=plan, params=plan_params, indicator_cache=indicator_cache,
         )
-        if bool(plan.get("confirmed_pending_order")):
-            signal_date = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
-            for signal_idx, row in timeline.items():
-                if (
-                    _date_text(date_labels[int(signal_idx)]) == signal_date
-                    and str(row.get("state") or "") == TRADE_LIFECYCLE_SIGNAL
-                ):
-                    row["display_state"] = "掛單"
-                    row["confirmed_pending_order"] = True
-        signal_key = str(_date_text(plan.get("signal_date")) or _date_text(plan.get("information_date")) or "")
+        signal_key = str(_date_text(plan.get("origin_signal_date")) or _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date")) or "")
         priority = int(plan.get("priority") or 0)
-        for idx, row in timeline.items():
+        for source_idx, row in timeline.items():
+            # The full source may start before the visible candle window.
+            source_date = pd.Timestamp(frame.index[int(source_idx)]).strftime("%Y-%m-%d")
+            idx = chart_indices.get(source_date)
+            if idx is None:
+                continue
             if not _prefill_lineage_available(signal_key, date_labels[idx], ranges):
                 continue
-            key = (signal_key, priority)
+            # AI: An accepted order owns its interval ahead of hypothetical
+            # later scanner signals; actual POSITION still supersedes both.
+            key = (int(bool(row.get("confirmed_pending_order"))), signal_key, priority)
             if idx not in owner_key or key >= owner_key[idx]:
                 merged[int(idx)] = deepcopy(dict(row))
                 owner_key[int(idx)] = key
@@ -1707,7 +1753,11 @@ def _build_manual_managed_position_replay_timeline(
                     raise ValueError("Cropped display frame is not full management history")
                 projection = replay_confirmed_position_management(
                     build_confirmed_position_origin(record, binding=binding, params=params,
-                        account_events=cycle["events"], frame=frame),
+                        account_events=cycle["events"], frame=frame,
+                        prefill_entry=resolve_position_pending_entry(
+                            record, inspection.get("pending_entries") or (), account_events=cycle["events"],
+                            account_audit_events=inspection.get("account_audit_events") or inspection.get("account_events") or (),
+                        )),
                     frame=frame, params=params, start_date=cycle["entry_date"],
                     confirmed_quantity_events=collect_confirmed_position_events(cycle["events"], record, through_date=through),
                 )
@@ -2120,6 +2170,7 @@ def project_trading_single_stock_chart_payload(
             tp_price=state_copy.get("tp_price"),
             limit_price=state_copy.get("limit_price"),
             entry_price=state_copy.get("entry_price"),
+            pending_limit_price=state_copy.get("pending_limit_line"),
         ):
             if value is not None:
                 _assign_chart_float(
@@ -2167,7 +2218,7 @@ def project_trading_single_stock_chart_payload(
         last_state = None if last_idx is None else lifecycle_by_index.get(last_idx)
         if isinstance(last_state, Mapping):
             last_lifecycle = str(last_state.get("state") or "")
-            if last_lifecycle == TRADE_LIFECYCLE_SIGNAL:
+            if last_lifecycle in {TRADE_LIFECYCLE_SIGNAL, TRADE_LIFECYCLE_PENDING}:
                 # Match Research fresh-signal semantics exactly: after today's
                 # completed signal/order bar, only the next-session buy limit is
                 # previewable.  Stop/TP/entry are planned sidebar values but are

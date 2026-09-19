@@ -1939,6 +1939,12 @@ def apply_trading_strategy_management_rollforward(
             management["evaluation_context_fingerprint"] = context_fingerprint
             management["evaluated_through_date"] = str(payload.get("evaluated_through_date") or processed_through)
             management["replay_contract_version"] = payload.get("replay_contract_version")
+        # AI: Keep old entry snapshots immutable. Store the identity of the
+        # rebuilt derivative beside the evaluation context and in its journal.
+        if "acquisition_replay" in payload:
+            if not is_context_rebuild or not isinstance(payload["acquisition_replay"], dict):
+                raise ValueError("Acquisition replay evidence requires a verified rebuild context")
+            management["acquisition_replay"] = _json_safe(deepcopy(payload["acquisition_replay"]))
         previous_obligation = {key: management.get(key) for key in (
             "sell_signal", "sell_signal_date", "sell_signal_trigger_price_milli"
         )}
@@ -1955,6 +1961,7 @@ def apply_trading_strategy_management_rollforward(
         details_rows.append(
             {
                 "ticker": ticker,
+                "acquisition_replay": management.get("acquisition_replay"),
                 "previous_exit_obligation": previous_obligation,
                 "derived_exit_obligation": payload.get("derived_exit_obligation"),
                 "evaluation_context_fingerprint": context_fingerprint,

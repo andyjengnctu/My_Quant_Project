@@ -161,6 +161,18 @@ def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
     return stop_hit or target_hit
 
 
+def shadow_has_reached_exit_barrier(shadow_position, *, day_low=np.nan, day_high=np.nan):
+    """Public Shadow adapter to the same continuation barrier owner as Research."""
+    if shadow_position is None:
+        return False
+    return _did_extended_signal_touch_barrier(
+        {"shadow_position": shadow_position,
+         "continuation_invalidation_barrier": shadow_position.get("sl", np.nan),
+         "continuation_completion_barrier": shadow_position.get("tp_half", np.nan)},
+        day_low=day_low, day_high=day_high,
+    )
+
+
 # # (AI註: scanner/單股顯示層：是否列為 extended_tbd 只看今日 Low 是否到原始買入限價；shadow_price 僅負責管理線)
 def is_extended_tbd_display_day(signal_state, day_low):
     if signal_state is None or pd.isna(day_low):

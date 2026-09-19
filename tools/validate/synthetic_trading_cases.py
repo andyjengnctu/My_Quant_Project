@@ -4264,6 +4264,49 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("侯選區", "掛單區", "掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）", "確認掛單", "確認成交", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
+
+    # AI: Error diagnostics consume the service's exact result. Opening them is
+    # not a pending selection, sizing request, state write or synchronization retry.
+    from services.workbench_ui.trading_account_panel import _pending_sync_failure_at_cell
+    _diagnostic_error = "RuntimeError: synthetic frozen lineage shadow exit"
+    _diagnostic_rows = {"failed": {"ticker": "2330", "sync_error": _diagnostic_error},
+                        "healthy": {"ticker": "1101", "sync_error": None}}
+    _diagnostic_row_id = ["failed"]
+    _diagnostic_region = ["cell"]
+    _diagnostic_column = ["status"]
+    _diagnostic_tree = SimpleNamespace(
+        identify_region=lambda *_: _diagnostic_region[0],
+        identify_row=lambda *_: _diagnostic_row_id[0],
+        identify_column=lambda *_: "#1",
+        column=lambda *_: _diagnostic_column[0],
+    )
+    _diagnostic_event = SimpleNamespace(x=1, y=1)
+    _diagnostic_panel = SimpleNamespace(_pending_tree=_diagnostic_tree, _pending_rows=_diagnostic_rows)
+    _diagnostic_before = deepcopy(_diagnostic_rows)
+    check("pending_error_hit_uses_logical_column_not_display_number", _diagnostic_rows["failed"],
+          _pending_sync_failure_at_cell(_diagnostic_tree, _diagnostic_rows, _diagnostic_event))
+    with patch("services.workbench_ui.trading_account_panel.messagebox.showerror") as _diagnostic_dialog:
+        check("pending_error_click_does_not_run_order_edit", "break",
+              TradingAccountPanel._on_pending_tree_click(_diagnostic_panel, _diagnostic_event))
+        check("pending_error_dialog_is_explicit_not_automatic", 1, _diagnostic_dialog.call_count)
+        check("pending_error_dialog_preserves_original_reason", True,
+              _diagnostic_error in _diagnostic_dialog.call_args.args[1])
+    check("pending_error_double_click_does_not_open_another_selected_stock", "break",
+          TradingAccountPanel._open_selected_pending_in_inspector(_diagnostic_panel, _diagnostic_event))
+    check("pending_error_diagnostics_are_read_only", _diagnostic_before, _diagnostic_rows)
+    _diagnostic_column[0] = "ticker"
+    check("pending_error_other_cells_keep_existing_behavior", None,
+          _pending_sync_failure_at_cell(_diagnostic_tree, _diagnostic_rows, _diagnostic_event))
+    _diagnostic_column[0] = "status"
+    _diagnostic_row_id[0] = "healthy"
+    check("pending_healthy_status_is_not_an_error_dialog", None,
+          _pending_sync_failure_at_cell(_diagnostic_tree, _diagnostic_rows, _diagnostic_event))
+    _diagnostic_row_id[0] = "failed"
+    _diagnostic_region[0] = "heading"
+    check("pending_error_hit_does_not_intercept_sorting", None,
+          _pending_sync_failure_at_cell(_diagnostic_tree, _diagnostic_rows, _diagnostic_event))
+    check("pending_keyboard_inspector_action_has_no_error_hit", None,
+          _pending_sync_failure_at_cell(_diagnostic_tree, _diagnostic_rows, None))
     check("workbench_pending_scanner_and_manual_share_one_order_form", True, all(token in panel_source for token in ("_pending_order_ticker_var", "_pending_order_qty_var", "_pending_order_limit_var", "_pending_fill_price_var", "_pending_order_date_var", "preview_scanner_trading_pending_entry", "preview_manual_trading_pending_entry")))
     check("workbench_pending_manual_ticker_auto_previews_after_input", True, all(token in panel_source for token in ('bind("<KeyRelease>", self._schedule_manual_pending_ticker_preview)', "_auto_preview_manual_pending_ticker", "after(350")))
     check("workbench_pending_values_auto_preview_without_recalculate_button", True, 'trace_add("write", self._schedule_pending_value_preview)' in panel_source and 'text="重新試算"' not in panel_source)
@@ -5720,6 +5763,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _overlay_order = deepcopy(_inspection_order["entry_orders"][0])
     _overlay_order["qty"] = 333
     _overlay_order["signal_date"] = "2026-09-14"
+    # AI: These unchanged-behavior fixtures assert geometry already known at the
+    # original signal, not a later snapshot retroactively applied to that date.
+    _overlay_order["information_date"] = "2026-09-14"
     _overlay_order["fills"] = [{
         "fill_id": "SINGLE-STOCK-FILL-OVERLAY",
         "qty": 333,
@@ -5742,7 +5788,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "entry_order_id": "SINGLE-STOCK-SYN-001",
             "strategy_lineage": {
                 "execution_plan_seed": {
-                    "trade_date": "2026-09-15",
+                    "trade_date": "2026-09-14",
                     "limit_price": _synth_limit,
                     "init_sl": _synth_stop,
                     "init_trail": _synth_trail,
@@ -6320,7 +6366,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _cross_day_candidate["candidate"] = deepcopy(_inspection_candidate["candidate"])
     _cross_day_candidate["candidate"]["signal_date"] = "2026-09-15"
     _cross_day_candidate["candidate"]["trade_date"] = "2026-09-17"
-    _cross_day_candidate["candidate"]["execution_plan_seed"]["trade_date"] = "2026-09-17"
+    _cross_day_candidate["candidate"]["execution_plan_seed"]["trade_date"] = "2026-09-15"
     _cross_day_chart = {
         "date_labels": ["2026-09-15", "2026-09-16", "2026-09-17"],
         "x": [0, 1, 2],
@@ -6657,6 +6703,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _extended_candidate_inspection["candidate"] = deepcopy(_inspection_candidate["candidate"])
     _extended_candidate_inspection["candidate"]["kind"] = "extended"
     _extended_candidate_inspection["candidate"]["signal_date"] = "2026-09-12"
+    _extended_candidate_inspection["candidate"]["execution_plan_seed"]["trade_date"] = "2026-09-12"
     _extended_candidate_inspection["candidate"]["execution_plan_seed"]["entry_source"] = "extended"
     _extended_state = resolve_trading_single_stock_sidebar_state(_extended_candidate_inspection, "2026-09-15")
     _extended_projected = project_trading_single_stock_chart_payload(_candidate_chart, _extended_candidate_inspection, params=base_params)
