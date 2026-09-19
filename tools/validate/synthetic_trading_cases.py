@@ -1759,7 +1759,15 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     check("workbench_exposes_proposed_order_button", True, '"5 建議掛單"' in panel_source)
-    check("workbench_proposed_orders_use_background_thread", True, 'elif action == "orders"' in panel_source and "threading.Thread(" in panel_source)
+    check(
+        "workbench_proposed_orders_use_background_thread",
+        True,
+        'if action == "orders"' in panel_source
+        and "lambda: self._run_workflow_command(action, param_mode)" in panel_source
+        and "self._submit_trading_command(" in panel_source
+        and "target=self._trading_command_worker" in panel_source
+        and "thread = threading.Thread(" in panel_source,
+    )
     check("workbench_does_not_confirm_fill_from_proposal_action", False, "confirm_trading_strategy_buy_fill" in panel_source)
 
     summary["checks"] = len(results)
