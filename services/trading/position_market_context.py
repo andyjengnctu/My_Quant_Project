@@ -7,6 +7,8 @@ from typing import Any
 import pandas as pd
 
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+from core.trading_order_state import build_empty_trading_order_state
+from services.trading.lifecycle_context import TradingLifecycleContext, resolve_trading_lifecycle_context
 from core.trading_account_state import MANAGED_POSITION_SOURCES
 from core.trading_identity import normalize_trading_date
 from services.trading.account_state import load_trading_account_state
@@ -69,21 +71,22 @@ def load_trading_position_market_frames(
 
 
 def resolve_trading_strategy_position_sources(
-    project_root: Path,
+    project_root: Path, *, lifecycle_context: TradingLifecycleContext | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], TradingMarketDataV2View | None]:
     account = load_trading_account_state(project_root, required=False)
     if account is None:
         return {}, {}, None
     orders = load_trading_order_state(project_root, required=False)
     if orders is None:
-        orders = {"orders": {}}
+        orders = build_empty_trading_order_state(timestamp="1970-01-01T00:00:00+00:00", mutation_id="optional-order-state")
     has_strategy_positions = any(
         isinstance(record, dict) and record.get("source") in MANAGED_POSITION_SOURCES
         for record in (account.get("positions") or {}).values()
     )
     if not has_strategy_positions:
         return account, orders, None
-    return account, orders, TradingMarketDataV2View.open(project_root)
+    context = lifecycle_context or resolve_trading_lifecycle_context(project_root)
+    return account, orders, context.view
 
 
 __all__ = [

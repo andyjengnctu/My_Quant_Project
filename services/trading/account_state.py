@@ -365,6 +365,7 @@ def record_managed_manual_trading_buy(
             timestamp=timestamp,
             mutation_id=mutation_id,
             trade_date=trade_date,
+            execution_plan_seed=seed,
             init_sl=seed.get("init_sl"),
             init_trail=seed.get("init_trail"),
             target_price=seed.get("target_price"),
@@ -438,6 +439,7 @@ def record_strategy_trading_buy(
             timestamp=timestamp,
             mutation_id=mutation_id,
             trade_date=trade_date,
+            execution_plan_seed=seed,
             init_sl=seed.get("init_sl"),
             init_trail=seed.get("init_trail"),
             target_price=seed.get("target_price"),
@@ -525,7 +527,7 @@ def rollforward_trading_strategy_management(
         project_root,
         expected_revision=expected_revision,
         guard_orders=False,
-        accounting_params=build_standalone_trading_accounting_params(),
+        # AI: A management-only mutation must never replay or rewrite economics.
         mutator=lambda state, timestamp, mutation_id: apply_trading_strategy_management_rollforward(
             state,
             updates=updates,
@@ -545,7 +547,7 @@ def record_trading_strategy_management_sell_signals(
         project_root,
         expected_revision=expected_revision,
         guard_orders=False,
-        accounting_params=build_standalone_trading_accounting_params(),
+        # AI: A management-only mutation must never replay or rewrite economics.
         mutator=lambda state, timestamp, mutation_id: apply_trading_strategy_management_sell_signals(
             state,
             signals=signals,

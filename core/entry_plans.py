@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from core.position_management import complete_position_entry_session, inherit_shadow_management
+
 from core.exact_accounting import (
     build_buy_ledger,
     build_buy_ledger_from_price,
@@ -203,41 +205,9 @@ def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, tar
     return resolved_init_sl, resolved_init_trail, resolved_target_price
 
 
-def _apply_entry_day_position_state(position, *, t_high):
-    position["entry_day_stop_triggered"] = False
-    position["entry_day_tp_triggered"] = False
-    position["pending_exit_action"] = None
-    position["pending_exit_trigger_price"] = np.nan
-
-    highest_high_milli = position.get("highest_high_since_entry_milli", position["entry_fill_price_milli"])
-    if not pd.isna(t_high):
-        highest_high_milli = max(highest_high_milli, price_to_milli(t_high))
-    position["highest_high_since_entry_milli"] = highest_high_milli
-    position["highest_high_since_entry"] = milli_to_price(highest_high_milli)
-    return position
 
 
 
-def _apply_entry_day_pending_exit(position, *, t_high, t_low, params):
-    if position is None or position.get("qty", 0) <= 0:
-        return position
-
-    stop_hit = (not pd.isna(t_low)) and price_to_milli(t_low) <= int(position["sl_milli"])
-    half_sell_qty = calc_half_take_profit_sell_qty(position["qty"], params.tp_percent)
-    tp_hit = (not pd.isna(t_high)) and price_to_milli(t_high) >= int(position["tp_half_milli"])
-
-    stop_hit, tp_hit = resolve_stop_tp_hits(stop_hit=stop_hit, tp_hit=tp_hit)
-
-    position["entry_day_stop_triggered"] = bool(stop_hit)
-    position["entry_day_tp_triggered"] = bool(tp_hit)
-
-    if stop_hit:
-        position["pending_exit_action"] = "STOP"
-        position["pending_exit_trigger_price"] = milli_to_price(position["sl_milli"])
-    elif tp_hit and half_sell_qty > 0 and not position.get("sold_half", False):
-        position["pending_exit_action"] = "TP_HALF"
-        position["pending_exit_trigger_price"] = milli_to_price(position["tp_half_milli"])
-    return position
 
 
 def _recompute_inherited_position_risk(position, *, params):
@@ -268,45 +238,10 @@ def _apply_inherited_shadow_management(position, *, shadow_position, params=None
     if position is None or shadow_position is None:
         return position
 
-    inherited_fields = (
-        'sl_milli',
-        'initial_stop_milli',
-        'trailing_stop_milli',
-        'tp_half_milli',
-        'sl',
-        'initial_stop',
-        'trailing_stop',
-        'tp_half',
-        'sold_half',
-        'highest_high_since_entry_milli',
-        'highest_high_since_entry',
-        'pending_exit_action',
-        'pending_exit_trigger_price',
-    )
-    for field in inherited_fields:
-        if field in shadow_position:
-            position[field] = shadow_position[field]
-
-    position['inherited_shadow_management'] = True
-    position['shadow_entry_fill_price_milli'] = shadow_position.get('entry_fill_price_milli', 0)
-    position['shadow_entry_fill_price'] = shadow_position.get('entry_fill_price', float('nan'))
-    position['shadow_sold_half'] = bool(shadow_position.get('sold_half', False))
+    inherit_shadow_management(position, shadow_position)
     return _recompute_inherited_position_risk(position, params=params)
 
 
-def _apply_inherited_shadow_entry_day_state(position, *, t_high):
-    if position is None:
-        return position
-
-    position['entry_day_stop_triggered'] = False
-    position['entry_day_tp_triggered'] = False
-
-    highest_high_milli = int(position.get('highest_high_since_entry_milli', position['entry_fill_price_milli']))
-    if not pd.isna(t_high):
-        highest_high_milli = max(highest_high_milli, price_to_milli(t_high))
-    position['highest_high_since_entry_milli'] = highest_high_milli
-    position['highest_high_since_entry'] = milli_to_price(highest_high_milli)
-    return position
 
 
 def _resolve_inherited_shadow_effective_stop_milli(shadow_position):
@@ -349,23 +284,12 @@ def build_counterfactual_shadow_position_from_plan(entry_plan, *, t_open, t_high
         return None
 
     buy_price = adjust_long_buy_fill_price(min(t_open, limit_price), ticker=resolved_ticker, security_profile=resolved_security_profile)
-    position = build_position_from_entry_fill(
-        buy_price=buy_price,
-        qty=qty,
-        init_sl=entry_plan.get('init_sl'),
-        init_trail=entry_plan.get('init_trail'),
-        params=params,
-        entry_type='extended_shadow',
-        target_price=entry_plan.get('target_price'),
-        limit_price=limit_price,
-        entry_atr=entry_plan.get('entry_atr'),
-        ticker=resolved_ticker,
-        security_profile=resolved_security_profile,
-        trade_date=trade_date,
+    return build_position_from_frozen_entry_plan(
+        entry_plan, buy_price=buy_price, qty=qty, params=params,
+        entry_type="extended_shadow", ticker=resolved_ticker,
+        security_profile=resolved_security_profile, trade_date=trade_date,
+        t_high=t_high, t_low=t_low,
     )
-    position = _apply_entry_day_position_state(position, t_high=t_high)
-    position = _apply_entry_day_pending_exit(position, t_high=t_high, t_low=t_low, params=params)
-    return position
 
 
 # # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
@@ -522,27 +446,12 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         result["count_as_missed_buy"] = should_count_miss_buy(qty, is_worse_than_initial_stop=True)
         return result
 
-    entry_atr_for_position = None if inherited_shadow_position is not None else entry_plan.get("entry_atr")
-    position = build_position_from_entry_fill(
-        buy_price=buy_price,
-        qty=qty,
-        init_sl=entry_plan.get("init_sl"),
-        init_trail=entry_plan.get("init_trail"),
-        params=params,
-        entry_type=entry_type,
-        target_price=entry_plan.get("target_price"),
-        limit_price=limit_price,
-        entry_atr=entry_atr_for_position,
-        ticker=resolved_ticker,
-        security_profile=resolved_security_profile,
-        trade_date=trade_date,
+    position = build_position_from_frozen_entry_plan(
+        entry_plan, buy_price=buy_price, qty=qty, params=params,
+        entry_type=entry_type, ticker=resolved_ticker,
+        security_profile=resolved_security_profile, trade_date=trade_date,
+        t_high=t_high, t_low=t_low,
     )
-    if inherited_shadow_position is not None:
-        position = _apply_inherited_shadow_management(position, shadow_position=inherited_shadow_position, params=params)
-        position = _apply_inherited_shadow_entry_day_state(position, t_high=t_high)
-    else:
-        position = _apply_entry_day_position_state(position, t_high=t_high)
-    position = _apply_entry_day_pending_exit(position, t_high=t_high, t_low=t_low, params=params)
     result["filled"] = True
     result["count_as_missed_buy"] = False
     result["position"] = position
@@ -558,3 +467,60 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     result["buy_fee_rebate_receivable_milli"] = position["buy_fee_rebate_receivable_milli"]
     result["entry_cost"] = milli_to_money(position["net_buy_total_milli"])
     return result
+
+
+def build_position_from_frozen_entry_plan(
+    entry_plan, *, buy_price, qty, params, entry_type="normal", ticker=None,
+    security_profile=None, trade_date=None, t_high=None, t_low=None,
+):
+    """The sole SIGNAL/SHADOW -> confirmed-position management handoff.
+
+    AI: The plan describes strategy geometry, while buy_price/qty are fill facts.
+    Missing completed entry-day OHLC postpones the entry-session seal to replay;
+    it must never be replaced by order-day or future OHLC.
+    """
+    seed = dict(entry_plan or {})
+    shadow = seed.get("shadow_position_state")
+    position = build_position_from_entry_fill(
+        buy_price=buy_price, qty=qty, init_sl=seed.get("init_sl"),
+        init_trail=seed.get("init_trail"), params=params, entry_type=entry_type,
+        target_price=seed.get("target_price"), limit_price=seed.get("limit_price"),
+        entry_atr=None if shadow is not None else seed.get("entry_atr"),
+        target_reference_price=seed.get("target_reference_price"),
+        ticker=ticker or seed.get("ticker"),
+        security_profile=security_profile or seed.get("security_profile"),
+        trade_date=trade_date,
+    )
+    if shadow is not None:
+        _apply_inherited_shadow_management(position, shadow_position=shadow, params=params)
+    if t_high is not None or t_low is not None:
+        complete_position_entry_session(position, t_high=t_high, t_low=t_low, params=params)
+    return position
+
+
+def accept_entry_quantity_decision(candidate_plan, *, available_cash, params, requested_qty=None):
+    """Validate a chosen quantity within the canonical strategy/resource envelope.
+
+    AI: Return the unmodified maximum separately from the accepted user quantity.
+    Selecting a lower quantity is not a new sizing algorithm or parameter edit.
+    """
+    plan = build_cash_capped_entry_plan(candidate_plan, available_cash, params)
+    if plan is None or int(plan.get("qty") or 0) <= 0:
+        raise ValueError("No executable quantity within the strategy/cash envelope")
+    ceiling = int(plan["qty"])
+    if requested_qty is None:
+        qty = ceiling
+    else:
+        if isinstance(requested_qty, bool):
+            raise ValueError("Requested quantity must be a positive integer")
+        qty = int(requested_qty)
+        if qty != requested_qty or qty <= 0:
+            raise ValueError("Requested quantity must be a positive integer")
+    if qty > ceiling:
+        raise ValueError(f"Requested quantity {qty} exceeds strategy/cash maximum {ceiling}")
+    plan["strategy_executable_qty_ceiling"] = ceiling
+    plan["qty"] = qty
+    plan["reserved_cost_milli"] = int(build_buy_ledger(price_to_milli(plan["limit_price"]), qty, params)["cash_buy_total_milli"])
+    plan["reserved_cost"] = milli_to_money(plan["reserved_cost_milli"])
+    plan["user_qty_override"] = requested_qty
+    return plan

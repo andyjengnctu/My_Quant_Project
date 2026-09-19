@@ -15,12 +15,15 @@ from typing import Any, Mapping
 import pandas as pd
 
 from core.data_utils import get_required_min_rows
-from core.entry_plans import build_cash_capped_entry_plan
+from core.entry_plans import accept_entry_quantity_decision
+from core.file_integrity import canonical_json_sha256
 from core.exact_accounting import build_buy_ledger, milli_to_money, price_to_milli
 from core.params_io import build_params_from_mapping
 from core.serialization_utils import json_native_value
 from core.signal_utils import generate_signals, unpack_precomputed_signals
-from core.trade_lifecycle import build_prefill_lifecycle_timeline
+from core.trade_lifecycle import build_prefill_lifecycle_from_frame
+from core.trading_lifecycle_plans import build_pending_prefill_plan
+from services.trading.lifecycle_context import resolve_trading_lifecycle_context
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.account_state import load_trading_account_state
 from services.trading.state_lock import serialized_trading_state_mutation
@@ -64,33 +67,6 @@ def _available_cash_for_pending(
     return milli_to_money(available_milli)
 
 
-def _build_pending_lifecycle_plan(entry: Mapping[str, Any]) -> dict[str, Any]:
-    # AI: Replay always starts from the immutable confirmed plan, not yesterday's
-    # derived stop/target. Otherwise repeated daily reads rewrite the past and
-    # differ from a single replay to the same finalized date.
-    lineage = dict(entry.get("management_lineage") or {})
-    seed = dict(lineage.get("execution_plan_seed") or entry.get("execution_plan_seed") or {})
-    manual = str(entry.get("origin") or "") == "manual_selected"
-    signal_date = (
-        entry.get("planned_trade_date") or entry.get("information_date")
-        if manual else entry.get("signal_date") or entry.get("information_date")
-    )
-    return {
-        "source": "trading_pending_frozen_lineage",
-        "signal_date": signal_date,
-        "information_date": entry.get("information_date"),
-        "entry_type": seed.get("entry_type") or "normal",
-        "limit_price": seed.get("limit_price", entry.get("limit_price")),
-        "stop_price": seed.get("init_sl", entry.get("init_sl")),
-        "init_trail": seed.get("init_trail", entry.get("init_trail")),
-        "tp_price": seed.get("target_price", entry.get("target_price")),
-        "entry_atr": seed.get("entry_atr", entry.get("entry_atr")),
-        "ticker": entry.get("ticker"),
-        "security_profile": deepcopy(seed.get("security_profile")),
-        "planned_qty": seed.get("qty", entry.get("planned_qty")),
-        "reserved_capital": seed.get("reserved_cost", entry.get("reserved_cost")),
-    }
-
 
 def _latest_shadow_state(
     project_root: Path,
@@ -98,9 +74,10 @@ def _latest_shadow_state(
     entry: Mapping[str, Any],
     latest_finalized_date: str,
     params,
+    lifecycle_context=None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     ticker = normalize_trading_ticker(entry.get("ticker"))
-    view = open_trading_v2_consumer_view(project_root)
+    view = lifecycle_context.view if lifecycle_context is not None else open_trading_v2_consumer_view(project_root)
     frame = load_trading_v2_sanitized_ohlcv_frame(
         view,
         ticker=ticker,
@@ -109,20 +86,8 @@ def _latest_shadow_state(
     )
     if frame.empty:
         raise RuntimeError(f"{ticker} 沒有可用 Trading adjusted 日K")
-    signals = generate_signals(frame, params, ticker=ticker)
-    atr_values, _buy_values, sell_values, _limits = unpack_precomputed_signals(signals)
-    plan = _build_pending_lifecycle_plan(entry)
-    timeline = build_prefill_lifecycle_timeline(
-        date_labels=list(frame.index),
-        open_values=list(frame["Open"]),
-        high_values=list(frame["High"]),
-        low_values=list(frame["Low"]),
-        close_values=list(frame["Close"]),
-        volume_values=list(frame["Volume"]) if "Volume" in frame.columns else None,
-        atr_values=list(atr_values),
-        sell_signals=list(sell_values),
-        plan=plan,
-        params=params,
+    timeline = build_prefill_lifecycle_from_frame(
+        frame=frame, plan=build_pending_prefill_plan(entry), params=params,
     )
     if not timeline:
         return None, None
@@ -139,6 +104,7 @@ def _sync_one_pending(
     active_entries: list[Mapping[str, Any]],
     account: Mapping[str, Any] | None,
     latest_finalized_date: str,
+    lifecycle_context=None,
 ) -> dict[str, Any]:
     entry_id = str(entry.get("pending_entry_id") or "")
     ticker = normalize_trading_ticker(entry.get("ticker"))
@@ -147,8 +113,16 @@ def _sync_one_pending(
         field_name="pending_entry.evaluated_through_date",
         allow_none=False,
     )
-    if evaluated >= latest_finalized_date:
+    context_fingerprint = canonical_json_sha256({
+        "market_context": lifecycle_context.fingerprint if lifecycle_context is not None else latest_finalized_date,
+        "lineage": entry.get("management_lineage"),
+        "planned_qty": entry.get("planned_qty"),
+        "planned_trade_date": entry.get("planned_trade_date"),
+    })
+    if entry.get("evaluation_context_fingerprint") == context_fingerprint:
         return {"pending_entry_id": entry_id, "ticker": ticker, "status": SYNC_STATUS_LATEST, "changed": False}
+    if evaluated > latest_finalized_date:
+        raise RuntimeError(f"{ticker} pending evaluation is ahead of the pinned finalized boundary")
 
     lineage = dict(entry.get("management_lineage") or {})
     frozen_params = lineage.get("frozen_params")
@@ -160,6 +134,7 @@ def _sync_one_pending(
         entry=entry,
         latest_finalized_date=latest_finalized_date,
         params=params,
+        lifecycle_context=lifecycle_context,
     )
 
     replacement = deepcopy(dict(entry))
@@ -183,30 +158,15 @@ def _sync_one_pending(
 
     seed["trade_date"] = latest_finalized_date
     seed["planned_trade_date"] = entry.get("planned_trade_date")
-    # Existing reservations own their slot/cash.  Automatic sync may tighten or
-    # reduce a plan but must never steal additional allocation from sibling
-    # pending orders; cap the refreshed sizing at the currently reserved qty.
-    seed["max_qty"] = min(
-        int(seed.get("max_qty") or int(entry.get("planned_qty") or 0)),
-        int(entry.get("planned_qty") or 0),
-    )
+    # AI: A confirmed user decision is not an auto-resizing suggestion. Refresh
+    # management/validation only; a newly infeasible quantity is reported, never
+    # silently reduced or used to release/reallocate its reservation.
+    chosen_qty = int(entry.get("planned_qty") or 0)
     available_cash = _available_cash_for_pending(account, active_entries, entry)
-    refreshed = build_cash_capped_entry_plan(seed, available_cash, params)
-    if refreshed is None or int(refreshed.get("qty") or 0) <= 0:
-        raise RuntimeError(f"{ticker} 依 latest finalized state 已無可執行規劃股數")
-
-    user_qty_override = seed.get("user_qty_override")
-    if user_qty_override is not None:
-        try:
-            requested_qty = max(1, int(user_qty_override))
-        except (TypeError, ValueError):
-            requested_qty = int(refreshed["qty"])
-        refreshed["qty"] = min(int(refreshed["qty"]), requested_qty)
-        refreshed["reserved_cost_milli"] = int(
-            build_buy_ledger(price_to_milli(refreshed["limit_price"]), int(refreshed["qty"]), params)["cash_buy_total_milli"]
-        )
-        refreshed["reserved_cost"] = milli_to_money(int(refreshed["reserved_cost_milli"]))
-
+    refreshed = accept_entry_quantity_decision(
+        seed, available_cash=available_cash, params=params, requested_qty=chosen_qty,
+    )
+    refreshed["user_qty_override"] = seed.get("user_qty_override")
     replacement["execution_plan_seed"] = deepcopy(refreshed)
     replacement["planned_qty"] = int(refreshed["qty"])
     replacement["reserved_cost_milli"] = int(refreshed["reserved_cost_milli"])
@@ -216,6 +176,7 @@ def _sync_one_pending(
     replacement["init_trail"] = float(refreshed["init_trail"])
     replacement["target_price"] = float(refreshed["target_price"])
     replacement["evaluated_through_date"] = latest_finalized_date
+    replacement["evaluation_context_fingerprint"] = context_fingerprint
     replacement["sync_error"] = None
     updated = update_trading_pending_entry(
         project_root,
@@ -252,9 +213,8 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
             "position_status_by_ticker": {},
             "position_due_tickers": [],
         }
-    latest_finalized_date = normalize_trading_date(
-        consumer_state.get("market_date"), field_name="latest_finalized_date", allow_none=False
-    )
+    lifecycle_context = resolve_trading_lifecycle_context(root, consumer_state=consumer_state)
+    latest_finalized_date = lifecycle_context.finalized_date
 
     pending_state = load_trading_pending_entry_state(root, required=False)
     active_entries = [] if pending_state is None else [
@@ -276,6 +236,7 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
                 active_entries=active_entries,
                 account=account,
                 latest_finalized_date=latest_finalized_date,
+                lifecycle_context=lifecycle_context,
             )
             pending_results.append(result)
             if bool(result.get("changed")):
@@ -297,13 +258,13 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
 
     position_error = None
     try:
-        position_result = run_trading_position_rollforward(root)
+        position_result = run_trading_position_rollforward(root, lifecycle_context=lifecycle_context)
     except (OSError, TypeError, ValueError, KeyError, IndexError, RuntimeError) as exc:
         position_error = f"{type(exc).__name__}: {exc}"
         position_result = {"status": SYNC_STATUS_FAILED, "error": position_error}
 
     try:
-        post_rollforward = build_trading_position_rollforward_snapshot(root)
+        post_rollforward = build_trading_position_rollforward_snapshot(root, lifecycle_context=lifecycle_context)
     except (OSError, TypeError, ValueError, KeyError, IndexError, RuntimeError) as exc:
         post_rollforward = {"due_tickers": []}
         if position_error is None:
@@ -319,6 +280,7 @@ def run_trading_lifecycle_sync(project_root: str | Path) -> dict[str, Any]:
         str(ticker): str(error)
         for ticker, error in dict(reconcile.get("errors") or {}).items()
     }
+    position_errors.update({str(k): str(v) for k, v in dict(position_result.get("errors") or {}).items()})
     protection_error = position_result.get("protection_plan_refresh_error")
     if protection_error and position_error is None:
         position_error = str(protection_error)

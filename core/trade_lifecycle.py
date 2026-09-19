@@ -508,3 +508,33 @@ __all__ = [
     "normalize_trade_lifecycle_state",
     "record_lifecycle_row",
 ]
+
+
+def build_prefill_lifecycle_from_frame(*, frame, plan, params, indicator_cache=None):
+    """Bind every plan to indicators computed with that plan's frozen Params.
+
+    AI: A renderer cannot attach current-parameter ATR/sell arrays to an older
+    plan. The optional operation-local cache is keyed by Params and frame content,
+    never only ticker/date; it is not another persistent artifact identity.
+    """
+    import pandas as pd
+    from core.file_integrity import canonical_json_sha256
+    from core.params_io import params_to_json_dict
+    from core.signal_utils import generate_signals, unpack_precomputed_signals
+    import hashlib
+
+    if frame.empty:
+        return {}
+    frame_digest = hashlib.sha256(pd.util.hash_pandas_object(frame, index=True).values.tobytes()).hexdigest()
+    key = (str(plan.get("ticker") or ""), canonical_json_sha256(params_to_json_dict(params)), frame_digest)
+    cached = None if indicator_cache is None else indicator_cache.get(key)
+    if cached is None:
+        cached = unpack_precomputed_signals(generate_signals(frame, params, ticker=plan.get("ticker")))
+        if indicator_cache is not None:
+            indicator_cache[key] = cached
+    atr, _buy, sell, _limits = cached
+    return build_prefill_lifecycle_timeline(
+        date_labels=list(frame.index), open_values=frame["Open"], high_values=frame["High"],
+        low_values=frame["Low"], close_values=frame["Close"], volume_values=frame["Volume"],
+        atr_values=atr, sell_signals=sell, plan=plan, params=params,
+    )

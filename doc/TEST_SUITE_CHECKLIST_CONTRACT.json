@@ -4529,6 +4529,17 @@
       "entry": "`config/broker_accounting.py`, `config/execution_policy.py`, `services/trading/accounting_policy.py`, `core/exact_accounting.py`, `core/fee_rebate.py`, `core/backtest_core.py`, `core/portfolio_engine.py`, `tools/validate/synthetic_unit_cases.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 408
+    },
+    {
+      "id": "B421",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Trading / Research lifecycle owner and human decision boundary",
+      "item": "Strategy management ordering, entry inheritance and confirmed-fact replay have one core owner; user-selected quantities and candidate order remain explicit legal inputs, not strategy forks.",
+      "gap": "One management transition owner; source-bound indicators and finalized context; immutable first-signal binding; actual fill and cost facts remain separate from derived management. Independent synthetic checks do not represent local formal-suite PASS.",
+      "entry": "`core/position_management.py`, `core/position_replay.py`, `core/trading_lifecycle_plans.py`, `core/trading_position_projection.py`, `services/trading/lifecycle_context.py`, `services/trading/signal_lineage.py`, `tools/validate/synthetic_lifecycle_ssot_cases.py`",
+      "initial_status": "NEW",
+      "order": 409
     }
   ],
   "tests": [
@@ -8333,6 +8344,69 @@
       "description": "validate_research_fee_rebate_cash_timing_case 鎖定 Research broker-cash / economic-net / rebate-receivable 守恆、未結算 rebate 不可下單與月界線 settlement equity-neutral；Trading accounting contract 另鎖定 cash==net、rebate==0。",
       "initial_status": "NEW",
       "order": 534
+    },
+    {
+      "id": "T545",
+      "b_id": "B421",
+      "description": "validate_lifecycle_management_owner_contract_case - Shared management owner, shadow inheritance, deferred obligations and quantity decisions.",
+      "initial_status": "NEW",
+      "order": 535
+    },
+    {
+      "id": "T546",
+      "b_id": "B421",
+      "description": "validate_trading_lifecycle_persistent_simulation_case - Persisted Pending/Position finalized source, corrected-generation replay and idempotence.",
+      "initial_status": "NEW",
+      "order": 536
+    },
+    {
+      "id": "T547",
+      "b_id": "B421",
+      "description": "validate_lifecycle_prefill_provenance_contract_case - Frozen parameter/indicator provenance and strict pre-acquisition Shadow boundary.",
+      "initial_status": "NEW",
+      "order": 537
+    },
+    {
+      "id": "T548",
+      "b_id": "B421",
+      "description": "validate_trading_deferred_exit_full_cycle_case - Persisted deferred market half-exit, partial fills, completion and stop liquidation.",
+      "initial_status": "NEW",
+      "order": 538
+    },
+    {
+      "id": "T549",
+      "b_id": "B421",
+      "description": "validate_trading_signal_origin_persistence_case - First-observation lineage persistence, continued-signal rebinding prevention and tamper guard.",
+      "initial_status": "NEW",
+      "order": 539
+    },
+    {
+      "id": "T550",
+      "b_id": "B421",
+      "description": "validate_lifecycle_architecture_contract_case - Layer dependency, adapter delegation and management-only write ownership.",
+      "initial_status": "NEW",
+      "order": 540
+    },
+    {
+      "id": "T551",
+      "b_id": "B421",
+      "description": "validate_trading_discretion_pending_fill_correction_case - User ranking choice, downward quantity edit, partial BUY, actual correction and cancellation.",
+      "initial_status": "NEW",
+      "order": 541
+    },
+    {
+      "id": "T552",
+      "b_id": "B421",
+      "description": "validate_lifecycle_same_session_confirmation_order_case - Same-session confirmed half exit precedes the subsequent full exit decision.",
+      "initial_status": "NEW",
+      "order": 542
+    },
+    {
+      "id": "T553",
+      "b_id": "B421",
+      "description": "validate_lifecycle_randomized_confirmed_replay_case - Fixed-seed randomized simulator facts versus canonical confirmed replay.",
+      "initial_status": "NEW",
+      "order": 543
     }
   ],
   "transitions": [
@@ -26735,6 +26809,86 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "Locks broker cash/economic net/rebate conservation and month-boundary settlement semantics."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "B421",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T545",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T546",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T547",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T548",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T549",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T550",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T551",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T552",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T553",
+      "description": "Register lifecycle ownership and execution-fact capability contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
     }
   ]
 }

@@ -83,6 +83,7 @@ from services.workbench_ui.state_sync import (
 from services.trading.single_stock_inspection import (
     build_trading_single_stock_inspection,
     load_trading_single_stock_position_binding,
+    load_trading_single_stock_pending_binding,
     project_trading_single_stock_chart_payload,
 )
 from services.trading.market_data_consumer import (
@@ -1419,6 +1420,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             params = build_params_from_mapping(dict(position_binding["frozen_params"]))
             signature = str(position_binding.get("params_signature") or "").strip()
             return params, signature, "position_frozen_params"
+        pending_binding = load_trading_single_stock_pending_binding(WORKBENCH_PROJECT_ROOT, ticker)
+        if pending_binding is not None:
+            params = build_params_from_mapping(dict(pending_binding["frozen_params"]))
+            return params, str(pending_binding.get("params_signature") or ""), "pending_frozen_params"
         if candidate_row:
             params, member = resolve_trading_candidate_frozen_params(candidate_row)
             signature = str(member.get("params_signature") or "").strip()

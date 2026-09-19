@@ -10,6 +10,7 @@ from uuid import uuid4
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from services.trading.state_lock import serialized_trading_state_mutation
 from services.trading.accounting_policy import overlay_trading_accounting_params
+from services.trading.entry_lifecycle_context import resolve_trading_confirmed_entry_seed
 from services.trading.strategy_param_runtime import build_trading_order_strategy_lineage, resolve_trading_position_management_binding
 from core.exact_accounting import milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping
@@ -206,6 +207,11 @@ def confirm_trading_buy_order_fill(
 
     existing = (account.get("positions") or {}).get(ticker)
     if existing is None:
+        strategy_lineage = build_trading_order_strategy_lineage(record)
+        acquisition_seed = resolve_trading_confirmed_entry_seed(
+            root, ticker=ticker, lineage=strategy_lineage, params=params,
+            fill_date=buy_trade_date, information_date=record.get("information_date"),
+        )
         account_target = apply_confirmed_strategy_buy_fill(
             account,
             ticker=ticker,
@@ -223,7 +229,8 @@ def confirm_trading_buy_order_fill(
             security_profile=record.get("security_profile"),
             entry_type=str(record.get("entry_type") or "normal"),
             entry_order_id=order_id_text,
-            strategy_lineage=build_trading_order_strategy_lineage(record),
+            strategy_lineage=strategy_lineage,
+            execution_plan_seed=acquisition_seed,
         )
     else:
         account_target = apply_confirmed_strategy_buy_fill_increment(

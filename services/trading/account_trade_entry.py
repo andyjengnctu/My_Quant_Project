@@ -11,9 +11,9 @@ import pandas as pd
 
 from core.data_utils import get_required_min_rows
 from core.exact_accounting import infer_security_profile, milli_to_price, price_to_milli, sync_position_display_fields
-from core.entry_plans import build_position_from_entry_fill
+from core.entry_plans import build_position_from_frozen_entry_plan
 from core.params_io import build_params_from_mapping
-from core.position_step import rollforward_position_management_from_completed_bar
+from core.position_replay import replay_confirmed_position_management
 from core.price_utils import calc_frozen_target_price, calc_initial_stop_from_reference, calc_initial_trailing_stop_from_reference
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.file_integrity import canonical_json_sha256
@@ -27,6 +27,7 @@ from core.trading_account_state import (
 )
 from core.trading_identity import normalize_trading_date
 from core.trading_order_state import TRADING_ACTIVE_ORDER_STATUSES, TRADING_ORDER_SIDE_SELL
+from services.trading.entry_lifecycle_context import resolve_trading_confirmed_entry_seed
 from services.trading.account_state import (
     correct_trading_transaction,
     load_trading_account_state,
@@ -213,6 +214,7 @@ def build_manual_adopted_management_context(
     *,
     ticker: str,
     broker: dict,
+    lifecycle_context=None,
 ) -> dict:
     """Normalize an existing manual holding to the canonical managed contract.
 
@@ -239,7 +241,9 @@ def build_manual_adopted_management_context(
     information_date = normalize_trading_date(
         runtime["latest_data_date"], field_name="information_date", allow_none=False
     )
-    view = open_trading_v2_consumer_view(project_root)
+    if lifecycle_context is not None:
+        information_date = lifecycle_context.finalized_date
+    view = lifecycle_context.view if lifecycle_context is not None else open_trading_v2_consumer_view(project_root)
     frame = load_trading_v2_sanitized_ohlcv_frame(
         view,
         ticker=ticker_key,
@@ -277,16 +281,15 @@ def build_manual_adopted_management_context(
     average_entry_milli = max(1, (price_basis_milli + initial_qty // 2) // initial_qty)
     average_entry_price = milli_to_price(average_entry_milli)
     security_profile = infer_security_profile(ticker_key)
-    initial_position_state = build_position_from_entry_fill(
+    initial_position_state = build_position_from_frozen_entry_plan(
+        {"entry_atr": entry_atr, "target_reference_price": prior_close},
         buy_price=average_entry_price,
         qty=qty,
         params=params,
         entry_type="manual",
-        entry_atr=entry_atr,
         ticker=ticker_key,
         security_profile=security_profile,
         trade_date=entry_date,
-        target_reference_price=prior_close,
     )
 
     # Broker/account truth is never rewritten by management activation.
@@ -301,21 +304,11 @@ def build_manual_adopted_management_context(
         initial_position_state["buy_fee_milli"] = int(broker_state.get("initial_buy_fee_milli") or 0)
     initial_position_state = sync_position_display_fields(initial_position_state)
 
-    position_state = dict(initial_position_state)
-    processed_dates: list[str] = []
-    for idx, date_value in enumerate(frame.index):
-        date_text = pd.Timestamp(date_value).strftime("%Y-%m-%d")
-        if date_text < entry_date:
-            continue
-        rollforward_position_management_from_completed_bar(
-            position_state,
-            completed_high=float(frame["High"].iloc[idx]),
-            completed_atr=float(atr_values[idx]),
-            params=params,
-            sync_display_fields=True,
-        )
-        processed_dates.append(date_text)
-    last_rollforward_date = processed_dates[-1] if processed_dates else None
+    projection = replay_confirmed_position_management(
+        initial_position_state, frame=frame, params=params, start_date=entry_date,
+    )
+    position_state = projection["position_state"]
+    last_rollforward_date = projection["processed_through_date"]
 
     seed = {
         "entry_type": "manual",
@@ -443,6 +436,10 @@ def record_trading_account_buy(
         # decimal-like inputs.  Normalize only at this strategy/account boundary
         # so UI Decimal input never leaks into stop/risk arithmetic.
         strategy_price = float(price)
+        acquisition_seed = resolve_trading_confirmed_entry_seed(
+            project_root, ticker=ticker_key, lineage=strategy_lineage, params=params,
+            fill_date=trade_date, information_date=candidate_row.get("trade_date"),
+        )
         account = record_strategy_trading_buy(
             project_root,
             ticker=ticker_key,
@@ -451,7 +448,7 @@ def record_trading_account_buy(
             trade_date=trade_date,
             expected_revision=(None if expected_account_revision is None else int(expected_account_revision)),
             params=params,
-            execution_plan_seed=dict(candidate_row.get("execution_plan_seed") or {}),
+            execution_plan_seed=acquisition_seed,
             strategy_lineage=strategy_lineage,
         )
         return {

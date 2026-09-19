@@ -2704,7 +2704,8 @@ def validate_trading_position_rollforward_contract_case(base_params):
     from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
     from core.file_integrity import compute_file_sha256
     from core.params_io import params_to_json_dict
-    from core.position_step import rollforward_position_management_from_completed_bar
+    from core.position_management import complete_position_entry_session
+    from services.trading.lifecycle_context import resolve_trading_lifecycle_context
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from core.signal_utils import generate_signals, unpack_precomputed_signals
     from core.trading_capabilities import build_trading_capability_snapshot
@@ -2833,14 +2834,12 @@ def validate_trading_position_rollforward_contract_case(base_params):
         atr_values, _buy, _sell, _limits = unpack_precomputed_signals(generate_signals(clean_df, base_params, ticker="2454"))
         expected_position = deepcopy(position_before)
         final_idx = len(clean_df) - 1
-        rollforward_position_management_from_completed_bar(
-            expected_position,
-            completed_high=float(clean_df["High"].iloc[final_idx]),
-            completed_atr=float(atr_values[final_idx]),
-            params=base_params,
-        )
+        complete_position_entry_session(expected_position,
+            t_high=float(clean_df["High"].iloc[final_idx]),
+            t_low=float(clean_df["Low"].iloc[final_idx]), params=base_params)
+        pinned_context = resolve_trading_lifecycle_context(root)
 
-        with patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-04"):
+        with patch("services.trading.position_rollforward.resolve_trading_lifecycle_context", return_value=pinned_context):
             due = build_trading_position_rollforward_snapshot(root)
             check("confirmed_position_is_due_through_latest_completed_bar", ["2454"], due["due_tickers"])
             rolled = run_trading_position_rollforward(root)
@@ -2859,27 +2858,36 @@ def validate_trading_position_rollforward_contract_case(base_params):
         check("idempotent_second_run_does_not_advance_revision", revision_after_first, int(second["account_revision"]))
 
         protection_after = get_trading_protection_plan_read_model(root)
-        check("old_active_stop_is_flagged_stale_after_trailing_state_changes", ["2454"], protection_after.get("stale_active_protection_tickers"))
+        check("entry_high_water_only_does_not_reprice_or_stale_active_stop", [], protection_after.get("stale_active_protection_tickers"))
         check("active_protection_order_is_not_silently_cancelled_or_rewritten", 1, len([row for row in load_trading_order_state(root)["orders"].values() if row.get("status") == "ORDERED" and row.get("side") == "SELL"]))
 
         future = pd.concat([completed_next_day, pd.DataFrame([{
-            "Date": "2026-09-05", "Open": 251.0, "High": 270.0, "Low": 250.0, "Close": 265.0, "Volume": 1_000_000,
+            "Date": "2026-09-07", "Open": 251.0, "High": 270.0, "Low": 250.0, "Close": 265.0, "Volume": 1_000_000,
         }])], ignore_index=True)
         future.to_csv(csv_path, index=False)
         selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
             selector=profile.param_selector,
-            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-05"}},
+            meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-07"}},
         ), ensure_ascii=False), encoding="utf-8")
         _publish_synthetic_trading_input_lineage(
             root,
-            market_date="2026-09-05",
+            market_date="2026-09-07",
             current_universe_tickers=["2454"],
             required_position_tickers=["2454"],
         )
-        with patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-04"):
+        with patch("services.trading.position_rollforward.resolve_trading_lifecycle_context", return_value=pinned_context):
             future_cutoff = build_trading_position_rollforward_snapshot(root)
         check("rollforward_v2_reader_excludes_uncompleted_future_daily_bar_at_cutoff", [], future_cutoff["due_tickers"])
+        # AI: Entry high is recorded, not immediately repriced. A later completed
+        # session with a genuinely new high must still stale the old broker stop.
+        run_trading_position_rollforward(root)
+        final_account = load_trading_account_state(root)
+        final_stop = final_account["positions"]["2454"]["strategy_management"]["position_state"]["sl_milli"]
+        check_true("later_new_high_advances_next_session_stop", int(final_stop) > int(position_after["sl_milli"]))
+        later_protection = get_trading_protection_plan_read_model(root)
+        check("old_active_stop_is_flagged_stale_after_later_trailing_change", ["2454"], later_protection.get("stale_active_protection_tickers"))
+
 
     capability = build_trading_capability_snapshot()
     check("daily_position_rollforward_capability_is_implemented", True, bool(capability["capabilities"]["daily_position_rollforward"]["implemented"]))
@@ -2898,9 +2906,9 @@ def validate_trading_position_rollforward_contract_case(base_params):
     check(
         "rollforward_service_detects_strategy_stop_touch_into_account_sell_obligation",
         True,
-        "resolve_position_intraday_exit_hits(" in service_source
-        and '"sell_signal": MANAGEMENT_SELL_SIGNAL_STOP' in service_source
-        and "record_trading_strategy_management_sell_signals(" in service_source,
+        "replay_confirmed_position_management(" in service_source
+        and "project_full_exit_obligation(" in service_source
+        and '"derived_exit_obligation": obligation' in service_source,
     )
     check(
         "workbench_removes_explicit_position_rollforward_action",
@@ -3996,7 +4004,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         else:
             _same_day_fill_rejected = False
         check("pending_fill_service_rejects_fill_on_same_day_as_order", True, _same_day_fill_rejected)
+        from services.trading.lifecycle_context import TradingLifecycleContext
+        _fixture_context = TradingLifecycleContext("2026-09-15", "fixture-market-identity", {}, object())
+        _fixture_prefill = pd.DataFrame(
+            {"Open": [99.0], "High": [101.0], "Low": [98.0], "Close": [100.0], "Volume": [1000.0]},
+            index=pd.to_datetime(["2026-09-12"]),
+        )
         with patch("services.trading.pending_entry_service.load_trading_scanner_runtime", return_value={"latest_data_date": "2026-09-15"}), \
+             patch("services.trading.pending_entry_service.resolve_trading_lifecycle_context", return_value=_fixture_context), \
+             patch("services.trading.pending_entry_service.load_trading_v2_sanitized_ohlcv_frame", return_value=_fixture_prefill), \
              patch("services.trading.pending_entry_service.validate_trading_actual_fill", return_value=synthetic_evidence):
             _pending_preview = preview_trading_pending_entry_fill(
                 _pending_fill_root, pending_entry_id=_pending_entry["pending_entry_id"],
@@ -4022,15 +4038,15 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             index=pd.to_datetime(["2026-09-14", "2026-09-15"]),
         )
         with patch("services.trading.position_rollforward.resolve_trading_strategy_position_sources", return_value=(_rollforward_account, {"orders": {}}, object())), \
-             patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-15"), \
+             patch("services.trading.position_rollforward.resolve_trading_lifecycle_context", return_value=_fixture_context), \
              patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
-             patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _pre_management_frame}):
+             patch("services.trading.position_rollforward.load_trading_position_market_frame", return_value=_pre_management_frame):
             _before_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
         check("manual_pending_managed_rollforward_includes_fill_date_bar", True, _before_management_snapshot["positions"][0]["due"])
         with patch("services.trading.position_rollforward.resolve_trading_strategy_position_sources", return_value=(_rollforward_account, {"orders": {}}, object())), \
-             patch("services.trading.position_rollforward.latest_allowed_completed_daily_date", return_value="2026-09-15"), \
+             patch("services.trading.position_rollforward.resolve_trading_lifecycle_context", return_value=_fixture_context), \
              patch("services.trading.position_rollforward.build_trading_stop_exit_progress", return_value={"triggered": False}), \
-             patch("services.trading.position_rollforward.load_trading_position_market_frames", return_value={"2330": _management_frame}):
+             patch("services.trading.position_rollforward.load_trading_position_market_frame", return_value=_management_frame):
             _at_management_snapshot = _build_rollforward_snapshot(_pending_fill_root)
         check("manual_pending_managed_rollforward_advances_through_latest_available_bar", "2026-09-15", _at_management_snapshot["positions"][0]["target_rollforward_date"])
 
@@ -4647,9 +4663,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         all(token in lifecycle_sync_source for token in (
             'lineage = dict(entry.get("management_lineage") or {})',
             'frozen_params = lineage.get("frozen_params")',
-            'build_prefill_lifecycle_timeline(',
+            'build_prefill_lifecycle_from_frame(',
             'replacement["evaluated_through_date"] = latest_finalized_date',
-            'run_trading_position_rollforward(root)',
+            'run_trading_position_rollforward(root, lifecycle_context=lifecycle_context)',
         )),
     )
     # AI: Behavioral regression for actual execution, not source-token presence.
@@ -4734,13 +4750,14 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _mutated_entry = deepcopy(_audit_entry)
     _mutated_entry["init_sl"] = 500
     _mutated_entry["execution_plan_seed"] = {**_audit_seed, "init_sl":500}
-    check("audit_sync_replay_uses_frozen_not_latest_geometry", _audit_seed["init_sl"], _sync._build_pending_lifecycle_plan(_mutated_entry)["stop_price"])
+    check("audit_sync_replay_uses_frozen_not_latest_geometry", _audit_seed["init_sl"], _sync.build_pending_prefill_plan(_mutated_entry)["stop_price"])
     _backfill_entry = {**_audit_entry, "information_date":"2026-09-17"}
-    check("audit_manual_sync_uses_order_day_not_current_info_day", "2026-09-10", _sync._build_pending_lifecycle_plan(_backfill_entry)["signal_date"])
+    check("audit_manual_sync_uses_order_day_not_current_info_day", "2026-09-10", _sync.build_pending_prefill_plan(_backfill_entry)["signal_date"])
 
     with tempfile.TemporaryDirectory() as td, _AuditStack() as stack:
         root = Path(td)
         stack.enter_context(patch.object(_sync, "load_trading_v2_consumer_state", return_value={"market_date":"2026-09-17"}))
+        stack.enter_context(patch.object(_sync, "resolve_trading_lifecycle_context", return_value=TradingLifecycleContext("2026-09-17", "fixture-failure-context", {}, object())))
         stack.enter_context(patch.object(_sync, "load_trading_pending_entry_state", return_value=None))
         stack.enter_context(patch.object(_sync, "load_trading_account_state", return_value={"positions":{"2330":{}}}))
         stack.enter_context(patch.object(_sync, "run_trading_position_rollforward", return_value={"status":"NO_CHANGE", "manual_management_reconcile":{"errors":{"2330":"market evidence missing"}}}))
@@ -5313,6 +5330,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             "ticker": "2330",
             "trade_date": "2026-09-15",
             "signal_date": "2026-09-15",
+            "ensemble_member_key": "1",
+            "ensemble_member_params_by_key": {"1": _params_to_json_dict(base_params)},
             "proj_cost": 100000.0,
             "proj_qty": 1000,
             "execution_plan_seed": {
@@ -5466,6 +5485,17 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "protection": {"fresh": False, "positions": []},
         "indicator_exit": {"fresh": False, "exits": []},
     }
+    # AI: A cropped chart no longer owns the acquisition replay. Build the
+    # query projection from complete frozen history, then display two dates.
+    from core.trading_position_projection import build_confirmed_position_origin as _origin
+    from core.position_replay import replay_confirmed_position_management as _replay
+    _manual_full_frame = pd.DataFrame({"Open": 99., "High": 101., "Low": 98., "Close": 100., "Volume": 1000000.},
+        index=pd.bdate_range(end="2026-09-17", periods=340))
+    def _manual_query_projection():
+        return _replay(_origin(_manual_activation_record, binding=_manual_activation_inspection["position_binding"],
+            params=base_params, account_events=[_manual_activation_event], frame=_manual_full_frame),
+            frame=_manual_full_frame, params=base_params, start_date="2026-09-03")
+    _manual_activation_inspection["management_projection"] = _manual_query_projection()
     _manual_activation_projected = project_trading_single_stock_chart_payload(
         _manual_activation_chart, _manual_activation_inspection, params=base_params
     )
@@ -5508,9 +5538,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         ],
     )
     with patch(
-        "services.trading.single_stock_inspection.unpack_precomputed_signals",
-        return_value=([_synth_atr, _synth_atr], [False, False], [False, True], [None, None]),
+        "core.position_replay.unpack_precomputed_signals",
+        return_value=([_synth_atr] * len(_manual_full_frame), [False] * len(_manual_full_frame),
+                      [False] * (len(_manual_full_frame) - 1) + [True], [None] * len(_manual_full_frame)),
     ):
+        _manual_activation_inspection["management_projection"] = _manual_query_projection()
         _manual_sell_projected = project_trading_single_stock_chart_payload(
             _manual_activation_chart,
             _manual_activation_inspection,
@@ -5896,7 +5928,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         index=pd.to_datetime(["2026-09-09", "2026-09-14"]),
     )
     with patch(
-        "services.trading.position_rollforward.generate_signals",
+        "core.position_replay.generate_signals",
         return_value=([5.0, 5.0], [False, False], [False, False], [None, None]),
     ):
         _stop_obligation = _replay_sell_obligation(
@@ -7533,7 +7565,9 @@ def validate_trading_ssot_identity_path_scale_contract_case(base_params):
     check("execution_consumers_do_not_rederive_milli_scale_with_raw_1000_arithmetic", [], raw_scale_sites)
 
     order_planning_source = (project_root / "services" / "trading" / "order_planning.py").read_text(encoding="utf-8")
-    position_step_source = (project_root / "core" / "position_step.py").read_text(encoding="utf-8")
+    # AI: Price display semantics belong to the management owner; the
+    # Research accounting adapter reexports its compatibility API only.
+    position_step_source = (project_root / "core" / "position_management.py").read_text(encoding="utf-8")
     account_state_source = (project_root / "core" / "trading_account_state.py").read_text(encoding="utf-8")
     order_state_source = (project_root / "core" / "trading_order_state.py").read_text(encoding="utf-8")
     scanner_state_source = (project_root / "services" / "trading" / "scanner_state.py").read_text(encoding="utf-8")

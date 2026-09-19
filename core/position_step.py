@@ -6,7 +6,6 @@ from core.fee_rebate import (
     accrue_fee_rebate,
     validate_fee_rebate_settlement_basis,
 )
-from core.exit_priority import resolve_stop_tp_hits
 from core.exact_accounting import (
     allocate_cost_basis_milli,
     build_sell_ledger_from_price,
@@ -15,12 +14,6 @@ from core.exact_accounting import (
     milli_to_price,
     price_to_milli,
     sync_position_display_fields,
-)
-from core.price_utils import (
-    adjust_long_sell_fill_price,
-    adjust_long_stop_price,
-    calc_half_take_profit_sell_qty,
-    get_exit_sell_block_reason,
 )
 
 
@@ -138,258 +131,16 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
     return cash_freed_milli, pnl_milli
 
 
-def _sync_trailing_stop_display_fields(position):
-    position['highest_high_since_entry'] = milli_to_price(position['highest_high_since_entry_milli'])
-    position['trailing_stop'] = milli_to_price(position['trailing_stop_milli'])
-    position['sl'] = milli_to_price(position['sl_milli'])
 
 
-def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_fields=True):
-    previous_high_milli = int(position.get('highest_high_since_entry_milli', position['entry_fill_price_milli']))
-    highest_high_milli = previous_high_milli
-    made_new_high = False
-
-    if not pd.isna(y_high):
-        y_high_milli = price_to_milli(y_high)
-        if y_high_milli > previous_high_milli:
-            highest_high_milli = y_high_milli
-            made_new_high = True
-
-    position['highest_high_since_entry_milli'] = highest_high_milli
-
-    if made_new_high and not pd.isna(y_atr):
-        trail_reference = milli_to_price(highest_high_milli)
-        candidate_trail = adjust_long_stop_price(
-            trail_reference - (y_atr * params.atr_times_trail),
-            ticker=position.get('ticker'),
-            security_profile=position.get('security_profile'),
-        )
-        candidate_trail_milli = price_to_milli(candidate_trail)
-        position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), candidate_trail_milli)
-
-    position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])
-    if sync_display_fields:
-        _sync_trailing_stop_display_fields(position)
 
 
-def rollforward_position_management_from_completed_bar(
-    position,
-    *,
-    completed_high,
-    completed_atr,
-    params,
-    sync_display_fields=True,
-):
-    """Advance only next-session trailing-stop state from one completed bar.
-
-    This is the live Trading counterpart of the y_high/y_atr management update
-    inside ``execute_bar_step``.  It intentionally does not infer any broker
-    fill, execute Stop/TP, or consume next-session OHLC.
-    """
-    if int(position.get('qty', 0) or 0) <= 0:
-        return position
-    _update_trailing_stop(
-        position,
-        y_high=completed_high,
-        y_atr=completed_atr,
-        params=params,
-        sync_display_fields=sync_display_fields,
-    )
-    return position
 
 
-def resolve_position_intraday_exit_hits(position, *, t_high, t_low, params):
-    """Resolve canonical STOP/TP touches against the stop active for this bar.
-
-    The caller owns timing.  In particular, live completed-bar replay must call
-    this *before* advancing trailing state with the same bar, because Research's
-    ``execute_bar_step`` evaluates today's Low/High against geometry prepared
-    from prior completed information.
-    """
-    is_stop_hit = price_to_milli(t_low) <= int(position['sl_milli'])
-    half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
-    is_tp_hit = (
-        price_to_milli(t_high) >= int(position['tp_half_milli'])
-        and not position['sold_half']
-        and half_sell_qty > 0
-    )
-    return resolve_stop_tp_hits(stop_hit=is_stop_hit, tp_hit=is_tp_hit)
 
 
-def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True, sync_display_fields=True, fee_rebate_state=None, settlement_basis=None):
-    pending_action = position.get('pending_exit_action')
-    if pending_action is None or position.get('qty', 0) <= 0:
-        return False, 0, 0, []
-
-    sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get('ticker'))
-    if sell_block_reason is not None:
-        return True, 0, 0, ['MISSED_SELL', sell_block_reason]
-
-    exec_price = adjust_long_sell_fill_price(t_open, ticker=position.get('ticker'))
-    if pending_action == 'STOP':
-        leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
-            position,
-            event='STOP',
-            exec_price=exec_price,
-            sell_qty=position['qty'],
-            params=params,
-            deferred=True,
-            trigger_price=position.get('pending_exit_trigger_price'),
-            trade_date=current_date,
-            record_exec_contexts=record_exec_contexts,
-            sync_display_fields=sync_display_fields,
-            fee_rebate_state=fee_rebate_state,
-            settlement_basis=settlement_basis,
-        )
-        position['pending_exit_action'] = None
-        position['pending_exit_trigger_price'] = float('nan')
-        return True, leg_freed_cash_milli, leg_pnl_milli, ['DEFERRED_STOP_ON_OPEN', 'STOP']
-
-    if pending_action == 'TP_HALF':
-        sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
-        if sell_qty <= 0:
-            position['pending_exit_action'] = None
-            position['pending_exit_trigger_price'] = float('nan')
-            return True, 0, 0, []
-        leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
-            position,
-            event='TP_HALF',
-            exec_price=exec_price,
-            sell_qty=sell_qty,
-            params=params,
-            deferred=True,
-            trigger_price=position.get('pending_exit_trigger_price'),
-            trade_date=current_date,
-            record_exec_contexts=record_exec_contexts,
-            sync_display_fields=sync_display_fields,
-            fee_rebate_state=fee_rebate_state,
-            settlement_basis=settlement_basis,
-        )
-        position['sold_half'] = True
-        position['pending_exit_action'] = None
-        position['pending_exit_trigger_price'] = float('nan')
-        return True, leg_freed_cash_milli, leg_pnl_milli, ['DEFERRED_TP_HALF_ON_OPEN', 'TP_HALF']
-
-    return False, 0, 0, []
 
 
-def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None, return_milli=False, record_exec_contexts=True, sync_display_fields=True, fee_rebate_state=None, settlement_basis=None):
-    validate_fee_rebate_settlement_basis(settlement_basis, fee_rebate_state)
-    freed_cash_milli, pnl_realized_milli = 0, 0
-    events = []
-    _reset_exec_contexts(position, enabled=record_exec_contexts)
-
-    def _finish():
-        if return_milli:
-            return position, freed_cash_milli, pnl_realized_milli, events
-        return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
-
-    if position['qty'] <= 0:
-        return _finish()
-
-    pending_consumed, pending_freed_cash_milli, pending_pnl_milli, pending_events = _try_execute_pending_exit_on_open(
-        position,
-        y_close=y_close,
-        t_open=t_open,
-        t_high=t_high,
-        t_low=t_low,
-        t_close=t_close,
-        t_volume=t_volume,
-        params=params,
-        current_date=current_date,
-        record_exec_contexts=record_exec_contexts,
-        sync_display_fields=sync_display_fields,
-        fee_rebate_state=fee_rebate_state,
-        settlement_basis=settlement_basis,
-    )
-    if pending_consumed:
-        freed_cash_milli += pending_freed_cash_milli
-        pnl_realized_milli += pending_pnl_milli
-        events.extend(pending_events)
-        if position['qty'] <= 0 or 'MISSED_SELL' in pending_events:
-            return _finish()
-
-    _update_trailing_stop(position, y_high=y_high, y_atr=y_atr, params=params, sync_display_fields=sync_display_fields)
-
-    if y_ind_sell:
-        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
-        if sell_block_reason is None:
-            exec_price = adjust_long_sell_fill_price(t_open, ticker=position.get("ticker"))
-            leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
-                position,
-                event='IND_SELL',
-                exec_price=exec_price,
-                sell_qty=position['qty'],
-                params=params,
-                deferred=False,
-                trade_date=current_date,
-                record_exec_contexts=record_exec_contexts,
-                sync_display_fields=sync_display_fields,
-                fee_rebate_state=fee_rebate_state,
-                settlement_basis=settlement_basis,
-            )
-            freed_cash_milli += leg_freed_cash_milli
-            pnl_realized_milli += leg_pnl_milli
-            events.append('IND_SELL')
-        else:
-            events.extend(['MISSED_SELL', sell_block_reason])
-        return _finish()
-
-    is_stop_hit, is_tp_hit = resolve_position_intraday_exit_hits(
-        position,
-        t_high=t_high,
-        t_low=t_low,
-        params=params,
-    )
-    half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
-
-    if is_tp_hit and not (pd.isna(t_volume) or t_volume <= 0):
-        exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open), ticker=position.get('ticker'))
-        leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
-            position,
-            event='TP_HALF',
-            exec_price=exec_price,
-            sell_qty=half_sell_qty,
-            params=params,
-            deferred=False,
-            trigger_price=position['tp_half'],
-            trade_date=current_date,
-            record_exec_contexts=record_exec_contexts,
-            sync_display_fields=sync_display_fields,
-            fee_rebate_state=fee_rebate_state,
-            settlement_basis=settlement_basis,
-        )
-        freed_cash_milli += leg_freed_cash_milli
-        pnl_realized_milli += leg_pnl_milli
-        position['sold_half'] = True
-        events.append('TP_HALF')
-
-    if is_stop_hit and position['qty'] > 0:
-        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
-        if sell_block_reason is None:
-            stop_price = position['sl'] if sync_display_fields else milli_to_price(position['sl_milli'])
-            exec_price = adjust_long_sell_fill_price(min(stop_price, t_open), ticker=position.get('ticker'))
-            leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
-                position,
-                event='STOP',
-                exec_price=exec_price,
-                sell_qty=position['qty'],
-                params=params,
-                deferred=False,
-                trigger_price=stop_price,
-                trade_date=current_date,
-                record_exec_contexts=record_exec_contexts,
-                sync_display_fields=sync_display_fields,
-                fee_rebate_state=fee_rebate_state,
-                settlement_basis=settlement_basis,
-            )
-            freed_cash_milli += leg_freed_cash_milli
-            pnl_realized_milli += leg_pnl_milli
-            events.append('STOP')
-        else:
-            events.extend(['MISSED_SELL', sell_block_reason])
-
-    return _finish()
 
 
 def execute_confirmed_position_sell_fill(
@@ -420,3 +171,43 @@ def execute_confirmed_position_sell_fill(
         sync_display_fields=True,
         settlement_basis=SETTLEMENT_BASIS_LEDGER_NET,
     )
+
+
+# AI: Compatibility imports, not a second implementation of management rules.
+from core.position_management import (
+    PositionExitDecision, _update_trailing_stop,
+    rollforward_position_management_from_completed_bar,
+    resolve_position_intraday_exit_hits, step_position_management,
+)
+
+
+def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None, return_milli=False, record_exec_contexts=True, sync_display_fields=True, fee_rebate_state=None, settlement_basis=None):
+    """Research execution adapter over the canonical management transition."""
+    validate_fee_rebate_settlement_basis(settlement_basis, fee_rebate_state)
+    freed_cash_milli, pnl_realized_milli = 0, 0
+    _reset_exec_contexts(position, enabled=record_exec_contexts)
+
+    def execute(decision: PositionExitDecision) -> bool:
+        nonlocal freed_cash_milli, pnl_realized_milli
+        if not decision.executable:
+            return False
+        cash, pnl = _execute_sell_leg(
+            position, event=decision.event, exec_price=decision.reference_price,
+            sell_qty=decision.qty, params=params, deferred=decision.deferred,
+            trigger_price=decision.trigger_price, trade_date=decision.trade_date,
+            record_exec_contexts=record_exec_contexts, sync_display_fields=sync_display_fields,
+            fee_rebate_state=fee_rebate_state, settlement_basis=settlement_basis,
+        )
+        freed_cash_milli += cash
+        pnl_realized_milli += pnl
+        return True
+
+    events = step_position_management(
+        position, y_atr=y_atr, y_ind_sell=y_ind_sell, y_close=y_close,
+        t_open=t_open, t_high=t_high, t_low=t_low, t_close=t_close, t_volume=t_volume,
+        params=params, on_decision=execute, current_date=current_date, y_high=y_high,
+        sync_display_fields=sync_display_fields,
+    )
+    if return_milli:
+        return position, freed_cash_milli, pnl_realized_milli, events
+    return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events

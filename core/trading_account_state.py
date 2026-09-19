@@ -1,6 +1,9 @@
 """Canonical Trading account-state schema and pure mutation semantics."""
 from __future__ import annotations
 
+from core.entry_plans import build_position_from_frozen_entry_plan
+from core.position_management import acknowledge_position_exit, POSITION_MANAGEMENT_FIELDS
+
 from copy import deepcopy
 from datetime import date, datetime
 import math
@@ -215,6 +218,12 @@ def _record_from_replayed_broker(
     if previous_risk:
         position_state["initial_risk_total_milli"] = int(round(previous_risk * qty / previous_initial_qty))
     management["status"] = MANAGEMENT_STATUS_ACTIVE
+    if broker.get("entry_date"):
+        position_state["entry_trade_date"] = str(broker["entry_date"])
+        if management.get("management_start_date") != str(broker["entry_date"]):
+            management["management_start_date"] = str(broker["entry_date"])
+            management.pop("evaluation_context_fingerprint", None)
+            management.pop("evaluated_through_date", None)
     management["position_state"] = _json_safe(sync_position_display_fields(position_state))
     record["strategy_management"] = management
     return record
@@ -991,6 +1000,8 @@ def activate_manual_trading_position_management(
         "management_start_date": start_date,
         "last_rollforward_date": rollforward_date,
         "position_state": managed_state,
+        "entry_position_state": deepcopy(initial_state),
+        "entry_execution_plan": deepcopy(checked_lineage.get("execution_plan_seed") or {}),
     }
     position_after = deepcopy(updated_record)
     return _append_mutation(
@@ -1561,6 +1572,7 @@ def _apply_confirmed_managed_buy_fill(
     lineage_payload: dict[str, Any] | None,
     mutation_type: str,
     management_start_date: object | None = None,
+    execution_plan_seed: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_trading_account_state(state)
     ticker_key = _normalize_ticker(ticker)
@@ -1582,12 +1594,18 @@ def _apply_confirmed_managed_buy_fill(
     if _has_sell_fill_on_date(state, ticker_key, trade_date_text):
         raise ValueError(f"{ticker_key} 同一交易日已有賣出成交；Trading 禁止同日買賣")
 
-    position_state = build_position_from_entry_fill(
-        buy_price=buy_price, qty=int(qty), init_sl=init_sl, init_trail=init_trail,
-        params=params, entry_type=entry_type, target_price=target_price,
-        limit_price=limit_price, entry_atr=entry_atr, ticker=ticker_key,
-        security_profile=security_profile, trade_date=trade_date_text,
-        target_reference_price=target_reference_price,
+    entry_seed = deepcopy(dict(execution_plan_seed or (lineage_payload or {}).get("execution_plan_seed") or {}))
+    explicit_levels = {
+        "init_sl": init_sl, "init_trail": init_trail, "target_price": target_price,
+        "limit_price": limit_price, "entry_atr": entry_atr,
+        "target_reference_price": target_reference_price, "security_profile": security_profile,
+    }
+    for key, value in explicit_levels.items():
+        if value is not None:
+            entry_seed[key] = value
+    position_state = build_position_from_frozen_entry_plan(
+        entry_seed, buy_price=buy_price, qty=int(qty), params=params,
+        entry_type=entry_type, ticker=ticker_key, trade_date=trade_date_text,
     )
     position_state = _json_safe(position_state)
     net_buy_total_milli = int(position_state["net_buy_total_milli"])
@@ -1630,6 +1648,8 @@ def _apply_confirmed_managed_buy_fill(
             "status": MANAGEMENT_STATUS_ACTIVE,
             "management_start_date": resolved_management_start,
             "position_state": position_state,
+            "entry_execution_plan": _json_safe(entry_seed),
+            "entry_position_state": deepcopy(position_state),
         },
     }
     updated["positions"][ticker_key] = record
@@ -1658,6 +1678,7 @@ def apply_confirmed_strategy_buy_fill(
     target_price=None, limit_price=None, entry_atr=None, target_reference_price=None, security_profile=None,
     entry_type: str = "normal", entry_order_id: str | None = None,
     strategy_lineage: dict[str, Any] | None = None,
+    execution_plan_seed: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _apply_confirmed_managed_buy_fill(
         state, ticker=ticker, qty=qty, buy_price=buy_price, params=params,
@@ -1667,6 +1688,7 @@ def apply_confirmed_strategy_buy_fill(
         entry_type=entry_type, entry_order_id=entry_order_id,
         position_source=POSITION_SOURCE_STRATEGY_FILL, lineage_field="strategy_lineage",
         lineage_payload=strategy_lineage, mutation_type=TRADE_MUTATION_STRATEGY_BUY,
+        execution_plan_seed=execution_plan_seed,
     )
 
 
@@ -1676,6 +1698,7 @@ def apply_confirmed_manual_managed_buy_fill(
     target_price=None, limit_price=None, entry_atr=None, target_reference_price=None, security_profile=None,
     entry_type: str = "manual", management_lineage: dict[str, Any] | None = None,
     management_start_date: object | None = None,
+    execution_plan_seed: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     updated = _apply_confirmed_managed_buy_fill(
         state, ticker=ticker, qty=qty, buy_price=buy_price, params=params,
@@ -1686,6 +1709,7 @@ def apply_confirmed_manual_managed_buy_fill(
         position_source=POSITION_SOURCE_MANUAL_MANAGED, lineage_field="management_lineage",
         lineage_payload=management_lineage, mutation_type=TRADE_MUTATION_MANUAL_MANAGED_BUY,
         management_start_date=management_start_date,
+        execution_plan_seed=execution_plan_seed,
     )
     return updated
 
@@ -1762,19 +1786,16 @@ def apply_confirmed_strategy_buy_fill_increment(
     total_net_milli = int(position_state.get("net_buy_total_milli", 0) or 0) + new_cost_milli
     average_fill_price_milli = (total_gross_milli + total_qty // 2) // total_qty
 
-    rebuilt = build_position_from_entry_fill(
-        buy_price=milli_to_price(average_fill_price_milli),
-        qty=total_qty,
-        params=params,
-        entry_type=entry_type,
-        init_sl=init_sl,
-        init_trail=init_trail,
-        target_price=target_price,
-        limit_price=limit_price,
-        entry_atr=entry_atr,
-        ticker=ticker_key,
-        security_profile=security_profile,
-        trade_date=trade_date_text,
+    acquisition_seed = deepcopy(dict(management.get("entry_execution_plan") or
+        (record.get("strategy_lineage") or {}).get("execution_plan_seed") or {}))
+    for field, value in (("init_sl", init_sl), ("init_trail", init_trail), ("target_price", target_price),
+                         ("limit_price", limit_price), ("entry_atr", entry_atr)):
+        if value is not None:
+            acquisition_seed.setdefault(field, value)
+    rebuilt = build_position_from_frozen_entry_plan(
+        acquisition_seed, buy_price=milli_to_price(average_fill_price_milli), qty=total_qty,
+        params=params, entry_type=entry_type, ticker=ticker_key,
+        security_profile=security_profile, trade_date=trade_date_text,
     )
     rebuilt["gross_buy_milli"] = total_gross_milli
     rebuilt["buy_fee_milli"] = total_fee_milli
@@ -1817,6 +1838,9 @@ def apply_confirmed_strategy_buy_fill_increment(
     target_broker["initial_buy_fee_milli"] = total_fee_milli
     target_broker["remaining_buy_fee_milli"] = total_fee_milli
     target["strategy_management"]["position_state"] = _json_safe(rebuilt)
+    target["strategy_management"]["entry_execution_plan"] = _json_safe(acquisition_seed)
+    target["strategy_management"]["entry_position_state"] = _json_safe(deepcopy(rebuilt))
+    target["strategy_management"].pop("evaluation_context_fingerprint", None)
     return _append_mutation(
         updated,
         mutation_id=mutation_id,
@@ -1890,18 +1914,50 @@ def apply_trading_strategy_management_rollforward(
         previous_date = _normalize_iso_date(
             management.get("last_rollforward_date"), field_name="last_rollforward_date"
         )
-        if previous_date is not None and processed_through <= previous_date:
+        context_fingerprint = str(payload.get("evaluation_context_fingerprint") or "")
+        is_context_rebuild = bool(
+            payload.get("rebuild") and context_fingerprint
+            and context_fingerprint != str(management.get("evaluation_context_fingerprint") or "")
+        )
+        if previous_date is not None and (
+            processed_through < previous_date or (processed_through == previous_date and not is_context_rebuild)
+        ):
             raise ValueError(
                 f"Trading rollforward date 必須前進: {ticker} {previous_date} -> {processed_through}"
             )
 
         before_position = management.get("position_state") or {}
+        # AI: The management capability cannot acquire accounting write access.
+        allowed = frozenset(POSITION_MANAGEMENT_FIELDS)
+        old_economics = {key: value for key, value in before_position.items() if key not in allowed}
+        new_economics = {key: value for key, value in new_position.items() if key not in allowed}
+        if _json_safe(old_economics) != _json_safe(new_economics):
+            raise ValueError("Management-only rollforward cannot rewrite acquisition or accounting fields")
         management["position_state"] = _json_safe(new_position)
         management["last_rollforward_date"] = processed_through
+        if context_fingerprint:
+            management["evaluation_context_fingerprint"] = context_fingerprint
+            management["evaluated_through_date"] = str(payload.get("evaluated_through_date") or processed_through)
+            management["replay_contract_version"] = payload.get("replay_contract_version")
+        previous_obligation = {key: management.get(key) for key in (
+            "sell_signal", "sell_signal_date", "sell_signal_trigger_price_milli"
+        )}
+        if "derived_exit_obligation" in payload:
+            if not is_context_rebuild:
+                raise ValueError("Derived obligation replacement requires a verified replay context")
+            obligation = dict(payload.get("derived_exit_obligation") or {})
+            signal = obligation.get("sell_signal")
+            if signal is not None and signal not in MANAGEMENT_SELL_SIGNALS:
+                raise ValueError("Unknown canonical management exit obligation")
+            for key in ("sell_signal", "sell_signal_date", "sell_signal_trigger_price_milli", "execution_after_date"):
+                management[key] = obligation.get(key)
         record["strategy_management"] = management
         details_rows.append(
             {
                 "ticker": ticker,
+                "previous_exit_obligation": previous_obligation,
+                "derived_exit_obligation": payload.get("derived_exit_obligation"),
+                "evaluation_context_fingerprint": context_fingerprint,
                 "previous_rollforward_date": previous_date,
                 "processed_through_date": processed_through,
                 "processed_bar_count": processed_bar_count,
@@ -2110,7 +2166,7 @@ def apply_confirmed_sell_fill(
         if int(freed_cash_milli) != net_sell_total_milli or int(strategy_pnl_milli) != pnl_milli:
             raise RuntimeError("Trading broker/strategy sell accounting diverged from canonical position accounting")
         if mark_tp_half_complete and int(strategy_position.get("qty", 0) or 0) > 0:
-            strategy_position["sold_half"] = True
+            acknowledge_position_exit(strategy_position, event="TP_HALF")
         strategy_management["position_state"] = _json_safe(strategy_position)
 
     remaining_qty = int(broker["qty"])
@@ -2144,6 +2200,7 @@ def apply_confirmed_sell_fill(
             "remaining_qty": max(remaining_qty, 0),
             "cash_milli_after": int(updated["cash_milli"]),
             "event": str(event),
+            "tp_half_complete": bool(mark_tp_half_complete),
             "position_source": position_before.get("source"),
             "strategy_managed": isinstance(strategy_position, dict),
             "position_before": position_before,

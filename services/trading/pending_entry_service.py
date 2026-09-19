@@ -15,7 +15,7 @@ import pandas as pd
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 from core.capital_policy import resolve_scanner_live_capital
 from core.data_utils import get_required_min_rows
-from core.entry_plans import build_cash_capped_entry_plan, build_normal_candidate_plan
+from core.entry_plans import build_cash_capped_entry_plan, build_normal_candidate_plan, accept_entry_quantity_decision
 from core.exact_accounting import (
     build_buy_ledger,
     infer_security_profile,
@@ -24,6 +24,8 @@ from core.exact_accounting import (
     round_price_to_tick_milli,
 )
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from core.trading_lifecycle_plans import resolve_confirmed_entry_plan_from_frame
+from services.trading.lifecycle_context import resolve_trading_lifecycle_context
 from core.params_io import build_params_from_mapping
 from core.price_utils import adjust_long_buy_limit
 from core.runtime_utils import get_taipei_now
@@ -247,26 +249,9 @@ def _apply_pending_draft_overrides(
         seed = preserved
         seed["limit_price"] = resolved_limit
 
-    auto_plan = build_cash_capped_entry_plan(seed, float(resources["available_cash"]), params)
-    if auto_plan is None or int(auto_plan.get("qty") or 0) <= 0:
-        raise ValueError(f"{ticker} 在目前可用現金下無可執行股數")
-    max_safe_qty = int(auto_plan["qty"])
-    resolved_qty = max_safe_qty if qty is None else int(qty)
-    if resolved_qty <= 0:
-        raise ValueError("掛單股數必須 > 0")
-    if resolved_qty > max_safe_qty:
-        raise ValueError(
-            f"掛單股數 {resolved_qty:,} 超過目前參數／資金可執行上限 {max_safe_qty:,}"
-        )
-    reserved_cost_milli = int(
-        build_buy_ledger(price_to_milli(auto_plan["limit_price"]), resolved_qty, params)["cash_buy_total_milli"]
+    auto_plan = accept_entry_quantity_decision(
+        seed, available_cash=float(resources["available_cash"]), params=params, requested_qty=qty,
     )
-    if reserved_cost_milli > int(resources["available_cash_milli"]):
-        raise ValueError("掛單預留成本超過目前可用現金")
-    auto_plan["qty"] = resolved_qty
-    auto_plan["reserved_cost_milli"] = reserved_cost_milli
-    auto_plan["reserved_cost"] = milli_to_money(reserved_cost_milli)
-    auto_plan["user_qty_override"] = None if qty is None else int(qty)
     auto_plan["user_limit_override"] = None if limit_price is None else float(resolved_limit)
     return auto_plan
 
@@ -896,6 +881,18 @@ def fill_trading_pending_entry(
     )
     entry = dict(preview["entry"])
     fill_date = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
+    lineage = dict(entry["management_lineage"])
+    params = build_params_from_mapping(lineage["frozen_params"])
+    context = resolve_trading_lifecycle_context(project_root)
+    if fill_date > context.finalized_date:
+        raise ValueError("Confirmed fill date exceeds the finalized market-data boundary")
+    frame = load_trading_v2_sanitized_ohlcv_frame(
+        context.view, ticker=entry["ticker"], through_date=fill_date,
+        min_rows=get_required_min_rows(params),
+    )
+    acquisition_seed = resolve_confirmed_entry_plan_from_frame(
+        entry=entry, frame=frame, params=params, fill_date=fill_date,
+    )
     fill = {
         "ticker": entry["ticker"],
         "qty": int(qty),
@@ -915,7 +912,7 @@ def fill_trading_pending_entry(
     try:
         lineage = dict(entry["management_lineage"])
         params = build_params_from_mapping(lineage["frozen_params"])
-        seed = dict(entry["execution_plan_seed"])
+        seed = acquisition_seed
         if str(entry.get("origin")) == PENDING_ENTRY_ORIGIN_SCANNER:
             account = record_strategy_trading_buy(
                 project_root,

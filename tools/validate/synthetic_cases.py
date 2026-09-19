@@ -57,6 +57,17 @@ from .synthetic_unit_cases import (
     validate_price_utils_unit_case,
     validate_signal_utils_unit_case,
 )
+from .synthetic_lifecycle_ssot_cases import (
+    validate_lifecycle_management_owner_contract_case,
+    validate_trading_lifecycle_persistent_simulation_case,
+    validate_lifecycle_prefill_provenance_contract_case,
+    validate_trading_deferred_exit_full_cycle_case,
+    validate_trading_signal_origin_persistence_case,
+    validate_lifecycle_architecture_contract_case,
+    validate_trading_discretion_pending_fill_correction_case,
+    validate_lifecycle_same_session_confirmation_order_case,
+    validate_lifecycle_randomized_confirmed_replay_case,
+)
 from .synthetic_trading_cases import (
     validate_trading_account_state_contract_case,
     validate_trading_daily_workflow_contract_case,
@@ -411,6 +422,15 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_single_backtest_not_gated_by_own_history_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_synthetic_single_backtest_uses_compounding_capital_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_lifecycle_management_owner_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_lifecycle_persistent_simulation_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_lifecycle_prefill_provenance_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_deferred_exit_full_cycle_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_signal_origin_persistence_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_lifecycle_architecture_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_discretion_pending_fill_correction_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_lifecycle_same_session_confirmation_order_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_lifecycle_randomized_confirmed_replay_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_account_state_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_daily_workflow_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_actionable_universe_scanner_membership_contract_case, layer="core_invariant", cost_class="fast"),

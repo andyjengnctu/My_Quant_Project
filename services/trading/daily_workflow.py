@@ -1,6 +1,9 @@
 """Trading daily Workbench workflow using canonical data/params/scanner producers."""
 from __future__ import annotations
 
+from services.trading.signal_lineage import freeze_trading_candidate_lineages
+from core.file_integrity import load_json_strict
+
 from pathlib import Path
 import time
 from typing import Any
@@ -166,7 +169,6 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
     live_reentry_tickers = {str(row.get("ticker") or "") for row in live_reentry_rows}
     actual_scanned_tickers = sorted(set(result.get("scanned_tickers") or []) | live_reentry_tickers)
     result["scanned_tickers"] = actual_scanned_tickers
-    runtime_after = load_trading_scanner_runtime(project_root, verify_dataset_content=True)
     stable_fields = (
         "latest_data_date",
         "selected_params_sha256",
@@ -176,11 +178,30 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         "member_count",
         "param_min_agree",
     )
-    changed = [field for field in stable_fields if str(runtime_after.get(field) or "") != str(runtime.get(field) or "")]
-    if changed:
-        raise RuntimeError(
-            "Trading Scanner 執行期間 inputs 已變更，禁止發布混合 lineage candidate snapshot: " + ",".join(changed)
-        )
+    def assert_runtime_unchanged():
+        current = load_trading_scanner_runtime(project_root, verify_dataset_content=True)
+        changed = [field for field in stable_fields if str(current.get(field) or "") != str(runtime.get(field) or "")]
+        if changed:
+            raise RuntimeError("Scanner inputs changed during evaluation; refusing mixed lineage: " + ",".join(changed))
+    assert_runtime_unchanged()
+    # AI: Current-param scan output is provisional until durable signal bindings
+    # are resolved. Existing signals must be recalculated, not merely relabeled.
+    snapshot_path = resolve_trading_candidate_snapshot_path(root)
+    previous_snapshot = load_json_strict(snapshot_path) if snapshot_path.exists() else None
+    regular_rows, reentry_rows = [], []
+    for row in result.get("candidate_rows") or []:
+        if str((row.get("execution_plan_seed") or {}).get("entry_source") or row.get("entry_source") or "") == BREAKOUT_REENTRY_SOURCE:
+            reentry_rows.append(row)
+        else:
+            regular_rows.append(row)
+    frozen_rows = freeze_trading_candidate_lineages(
+        root, candidate_rows=regular_rows, prepared_frames=prepared_frames,
+        information_date=str(runtime["latest_data_date"]), strategy_id=runtime["profile"].strategy_id,
+        source_binding=runtime["param_binding_sha256"], previous_snapshot=previous_snapshot,
+        pre_persist_guard=assert_runtime_unchanged,
+    )
+    result["candidate_rows"] = sort_aggregated_ensemble_candidate_rows(frozen_rows + reentry_rows)
+    result["count_history_qualified"] = len(result["candidate_rows"])
     raw_candidate_rows = [_persistable_trading_candidate_row(dict(row)) for row in list(result.get('candidate_rows') or [])]
     candidate_rows, stale_candidate_rows = partition_trading_candidate_rows_for_information_date(
         raw_candidate_rows,
@@ -209,6 +230,7 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         'candidate_rows': candidate_rows,
         'stale_candidate_rows_skipped': stale_candidate_rows,
     }
+    assert_runtime_unchanged()
     atomic_write_json(snapshot_path, snapshot_payload)
     return {
         **dict(result),

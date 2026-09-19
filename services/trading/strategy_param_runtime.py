@@ -168,6 +168,8 @@ def build_trading_candidate_strategy_lineage(candidate: Mapping[str, Any]) -> di
         "planned_cost": candidate.get("proj_cost"),
         "candidate_kind": str(candidate.get("kind") or seed.get("entry_source") or "normal"),
         "origin": "scanner_candidate",
+        "signal_lineage_id": (candidate.get("signal_lineage") or {}).get("lineage_id"),
+        "signal_origin": deepcopy(candidate.get("signal_lineage")),
     }
 
 
@@ -185,10 +187,15 @@ def build_trading_order_strategy_lineage(order: Mapping[str, Any]) -> dict[str, 
     params_obj = build_params_from_mapping(frozen_params)
     params_signature = str(order.get("params_signature") or build_portfolio_params_signature(params_obj))
     member_key = str(order.get("ensemble_member_key") or "").strip()
-    execution_seed = {
-        "entry_type": str(order.get("entry_type") or "normal"),
-        "security_profile": deepcopy(order.get("security_profile")),
-    }
+    execution_seed = deepcopy(dict(order.get("execution_plan_seed") or {}))
+    execution_seed.setdefault("entry_type", str(order.get("entry_type") or "normal"))
+    execution_seed.setdefault("security_profile", deepcopy(order.get("security_profile")))
+    from core.exact_accounting import milli_to_price
+    for field, source in (("init_sl", "init_sl_milli"), ("init_trail", "init_trail_milli"),
+                          ("target_price", "target_price_milli"), ("limit_price", "limit_price_milli"),
+                          ("entry_atr", "entry_atr_milli")):
+        if source in order and order[source] is not None:
+            execution_seed.setdefault(field, milli_to_price(int(order[source])))
     identity_payload = {
         "params_signature": params_signature,
         "ensemble_member_key": member_key,
@@ -204,6 +211,10 @@ def build_trading_order_strategy_lineage(order: Mapping[str, Any]) -> dict[str, 
         "frozen_params_sha256": frozen_sha,
         "execution_plan_seed": execution_seed,
         "origin": "legacy_entry_order",
+        "signal_date": order.get("signal_date") or order.get("information_date"),
+        "candidate_trade_date": order.get("information_date"),
+        "signal_lineage_id": (order.get("signal_lineage") or {}).get("lineage_id"),
+        "signal_origin": deepcopy(order.get("signal_lineage")),
         "legacy_entry_order_id": str(order.get("order_id") or "") or None,
     }
 
@@ -256,6 +267,9 @@ def resolve_trading_position_strategy_binding(
             "params_signature": checked["params_signature"],
             "ensemble_member_key": str(checked.get("ensemble_member_key") or ""),
             "execution_plan_seed": deepcopy(dict(checked.get("execution_plan_seed") or {})),
+            "signal_date": checked.get("signal_date"),
+            "signal_lineage_id": checked.get("signal_lineage_id"),
+            "signal_origin": deepcopy(checked.get("signal_origin")),
             "source": "position_strategy_lineage",
         }
 
@@ -277,7 +291,8 @@ def resolve_trading_position_strategy_binding(
                 "frozen_params_sha256": actual_sha,
                 "params_signature": build_portfolio_params_signature(params_obj),
                 "ensemble_member_key": str(order.get("ensemble_member_key") or ""),
-                "execution_plan_seed": deepcopy(dict(order.get("execution_plan_seed") or {})),
+                "execution_plan_seed": build_trading_order_strategy_lineage(order)["execution_plan_seed"],
+                "signal_date": order.get("signal_date") or order.get("information_date"),
                 "source": "legacy_entry_order",
             }
     raise RuntimeError("Trading strategy position 缺少 immutable strategy_lineage / legacy frozen params")
@@ -377,6 +392,9 @@ def resolve_trading_position_management_binding(
             "params_signature": checked["params_signature"],
             "ensemble_member_key": str(checked.get("ensemble_member_key") or "PRIMARY"),
             "execution_plan_seed": deepcopy(dict(checked.get("execution_plan_seed") or {})),
+            "signal_date": checked.get("signal_date"),
+            "signal_lineage_id": checked.get("signal_lineage_id"),
+            "signal_origin": deepcopy(checked.get("signal_origin")),
             "origin": str(checked.get("origin") or "manual_managed"),
             "source": "position_management_lineage",
         }

@@ -46,8 +46,18 @@ TRADING_INDICATOR_ORDER_TYPE_MARKET = "MARKET"
 
 TRADING_PROTECTION_ACTION_STOP_FULL = "STOP_FULL"
 TRADING_PROTECTION_ACTION_TP_HALF = "TP_HALF"
+TRADING_PROTECTION_ACTION_TP_DEFERRED = "TP_HALF_DEFERRED_OPEN"
+TRADING_PROTECTION_ACTION_STOP_EXIT = "STOP_EXIT_MARKET"
 TRADING_PROTECTION_ACTION_STOP_REMAINDER_EXIT = "STOP_REMAINDER_EXIT"
 TRADING_PROTECTION_ACTION_SPECS = {
+    TRADING_PROTECTION_ACTION_TP_DEFERRED: {
+        "purpose": TRADING_ORDER_PURPOSE_PROTECTION_TP,
+        "order_type": TRADING_PROTECTION_ORDER_TYPE_MARKET,
+    },
+    TRADING_PROTECTION_ACTION_STOP_EXIT: {
+        "purpose": TRADING_ORDER_PURPOSE_PROTECTION_STOP,
+        "order_type": TRADING_PROTECTION_ORDER_TYPE_MARKET,
+    },
     TRADING_PROTECTION_ACTION_STOP_FULL: {
         "purpose": TRADING_ORDER_PURPOSE_PROTECTION_STOP,
         "order_type": TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET,
@@ -69,6 +79,22 @@ def get_trading_protection_action_spec(action: object) -> dict[str, str]:
     if spec is None:
         raise ValueError(f"Trading protection action 不合法: {action_key or '-'}")
     return dict(spec)
+
+
+def validate_trading_protection_terms(*, purpose, order_type, trigger_price_milli, limit_price_milli):
+    """AI: Price roles follow the registered execution type, not call-site guesses."""
+    matches = [spec for spec in TRADING_PROTECTION_ACTION_SPECS.values()
+               if spec["purpose"] == purpose and spec["order_type"] == order_type]
+    if not matches:
+        raise ValueError("Unregistered protection purpose/execution-type combination")
+    if order_type == TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET:
+        valid = int(trigger_price_milli or 0) > 0 and limit_price_milli is None
+    elif order_type == TRADING_PROTECTION_ORDER_TYPE_LIMIT:
+        valid = int(limit_price_milli or 0) > 0 and trigger_price_milli is None
+    else:
+        valid = trigger_price_milli is None and limit_price_milli is None
+    if not valid:
+        raise ValueError("Protection prices do not match their canonical execution type")
 
 
 def _normalize_optional_text(value) -> str | None:
@@ -215,6 +241,9 @@ def append_ordered_trading_proposal(
         "target_price_milli": target_price_milli,
         "entry_atr_milli": entry_atr_milli,
         "security_profile": deepcopy(proposal.get("security_profile")),
+        "execution_plan_seed": deepcopy(proposal.get("execution_plan_seed") or proposal),
+        "signal_date": proposal.get("signal_date"),
+        "signal_lineage": deepcopy(proposal.get("signal_lineage")),
         "status": TRADING_ORDER_STATUS_ORDERED,
         "filled_qty": 0,
         "remaining_qty": qty,
@@ -336,15 +365,8 @@ def _build_ordered_protection_record(
     limit_milli = leg.get("limit_price_milli")
     trigger_milli = None if trigger_milli is None else int(trigger_milli)
     limit_milli = None if limit_milli is None else int(limit_milli)
-    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
-        if trigger_milli is None or trigger_milli <= 0 or limit_milli is not None:
-            raise ValueError("Trading STOP protection 必須只有有效 trigger price")
-    elif purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP:
-        if limit_milli is None or limit_milli <= 0 or trigger_milli is not None:
-            raise ValueError("Trading TP protection 必須只有有效 limit price")
-    else:
-        if trigger_milli is not None or limit_milli is not None:
-            raise ValueError("Trading STOP remainder forced exit 必須使用 MARKET 且不得有 trigger/limit")
+    validate_trading_protection_terms(purpose=purpose, order_type=order_type,
+        trigger_price_milli=trigger_milli, limit_price_milli=limit_milli)
     oco_group = _normalize_optional_text(broker_oco_group_id)
     oco_confirmed = bool(broker_native_oco_confirmed)
     if oco_confirmed and not oco_group:
@@ -369,6 +391,8 @@ def _build_ordered_protection_record(
         "account_revision": int(account_revision),
         "side": TRADING_ORDER_SIDE_SELL,
         "purpose": purpose,
+        "action": action,
+        "execution_after_date": position_plan.get("execution_after_date"),
         "ticker": ticker,
         "rank": int(leg.get("priority") or 0),
         "qty": qty,
@@ -779,7 +803,7 @@ def record_trading_sell_order_fill(
     fill_price_milli = price_to_milli(fill_price)
     if fill_price_milli <= 0:
         raise ValueError("Trading SELL fill_price 必須 > 0")
-    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP and fill_price_milli < int(record.get("limit_price_milli") or 0):
+    if purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP and record.get("order_type") == TRADING_PROTECTION_ORDER_TYPE_LIMIT and fill_price_milli < int(record.get("limit_price_milli") or 0):
         raise ValueError("Trading TP 實際成交價不可低於原始賣出限價")
     trade_date_text = require_trading_date_after(
         trade_date,
@@ -787,6 +811,9 @@ def record_trading_sell_order_fill(
         field_name="SELL fill trade_date",
         after_field_name="entry_trade_date",
     )
+    if record.get("execution_after_date"):
+        trade_date_text = require_trading_date_after(trade_date_text, after=record["execution_after_date"],
+            field_name="deferred fill trade_date", after_field_name="obligation information_date")
     if purpose == TRADING_ORDER_PURPOSE_INDICATOR_EXIT:
         trade_date_text = require_trading_date_after(
             trade_date_text,
@@ -1109,15 +1136,17 @@ def validate_trading_order_state(state: dict[str, Any]) -> None:
             if purpose in TRADING_PROTECTION_ORDER_PURPOSES:
                 if not str(record.get("protection_plan_fingerprint") or ""):
                     raise ValueError("Trading protection SELL 缺少 protection plan fingerprint")
-                if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP:
-                    if order_type != TRADING_PROTECTION_ORDER_TYPE_STOP_MARKET or int(trigger or 0) <= 0 or limit is not None:
-                        raise ValueError("Trading protection STOP order semantics 不合法")
-                elif purpose == TRADING_ORDER_PURPOSE_PROTECTION_TP:
-                    if order_type != TRADING_PROTECTION_ORDER_TYPE_LIMIT or int(limit or 0) <= 0 or trigger is not None:
-                        raise ValueError("Trading protection TP order semantics 不合法")
-                else:
-                    if order_type != TRADING_PROTECTION_ORDER_TYPE_MARKET or trigger is not None or limit is not None:
-                        raise ValueError("Trading STOP remainder forced exit 必須使用 MARKET 且不得有 trigger/limit")
+                validate_trading_protection_terms(purpose=purpose, order_type=order_type,
+                    trigger_price_milli=trigger, limit_price_milli=limit)
+                if record.get("action"):
+                    spec = get_trading_protection_action_spec(record["action"])
+                    if spec["purpose"] != purpose or spec["order_type"] != order_type:
+                        raise ValueError("Protection action identity differs from persisted terms")
+                for fill in fills:
+                    if record.get("execution_after_date"):
+                        require_trading_date_after(fill.get("trade_date"), after=record["execution_after_date"],
+                            field_name="deferred fill trade_date", after_field_name="obligation information_date")
+                if purpose == TRADING_ORDER_PURPOSE_PROTECTION_STOP_REMAINDER:
                     for field in ("stop_forced_exit_key", "stop_trigger_order_id", "stop_trigger_fill_id", "stop_trigger_trade_date"):
                         if not str(record.get(field) or ""):
                             raise ValueError(f"Trading STOP remainder forced exit 缺少 immutable binding: {field}")
@@ -1266,6 +1295,9 @@ __all__ = [
     "TRADING_PROTECTION_ACTION_TP_HALF",
     "TRADING_PROTECTION_ACTION_STOP_REMAINDER_EXIT",
     "TRADING_PROTECTION_ACTION_SPECS",
+    "TRADING_PROTECTION_ACTION_TP_HALF_DEFERRED_OPEN",
+    "TRADING_PROTECTION_ACTION_STOP_EXIT_MARKET",
+    "validate_trading_protection_terms",
     "get_trading_protection_action_spec",
     "build_empty_trading_order_state",
     "build_trading_proposal_key",
