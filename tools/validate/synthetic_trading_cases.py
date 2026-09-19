@@ -3315,6 +3315,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     allowed_runtime_globals = set(dir(_builtins)) | {
         "__file__", "__name__", "__package__", "__spec__", "__loader__",
         "__cached__", "__builtins__",
+        # AI: CPython 3.14 may expose this compiler-managed annotation bookkeeping
+        # name through symtable; it is not a source-level runtime dependency.
+        "__conditional_annotations__",
     }
     for module_path in sorted(workbench_ui_root.glob("*.py")):
         module_source = module_path.read_text(encoding="utf-8")
@@ -6794,30 +6797,36 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _pending_dropdown_panel._pending_map = {}
     _pending_dropdown_panel._pending_combo = _SingleStockComboProbe()
     _pending_dropdown_panel._autosize_combobox = lambda *args, **kwargs: None
-    with patch.object(
-        single_stock_inspector_module,
-        "get_trading_pending_entry_read_model",
-        return_value={
-            "entries": [
-                {"status": "FILLED", "ticker": "1101", "planned_trade_date": "2026-09-15", "origin": "scanner_strategy"},
-                {"status": "ACTIVE", "ticker": "2330", "planned_trade_date": "2026-09-16", "origin": "scanner_strategy"},
-                {"status": "ACTIVE", "ticker": "2317", "planned_trade_date": "2026-09-17", "origin": "manual_selected"},
-            ]
-        },
+    def _synthetic_pending_stock_name(_project_root, ticker, *, default="-"):
+        return {"2317": "鴻海", "2330": "台積電"}.get(str(ticker), default)
+
+    with (
+        patch.object(
+            single_stock_inspector_module,
+            "get_trading_pending_entry_read_model",
+            return_value={
+                "entries": [
+                    {"status": "FILLED", "ticker": "1101", "planned_trade_date": "2026-09-15", "origin": "scanner_strategy"},
+                    {"status": "ACTIVE", "ticker": "2330", "planned_trade_date": "2026-09-16", "origin": "scanner_strategy"},
+                    {"status": "ACTIVE", "ticker": "2317", "planned_trade_date": "2026-09-17", "origin": "manual_selected"},
+                ]
+            },
+        ),
+        patch("services.workbench_ui.stock_names.workbench_stock_name", side_effect=_synthetic_pending_stock_name),
     ):
         SingleStockBacktestInspectorPanel._refresh_pending_options(_pending_dropdown_panel)
     check(
         "workbench_single_stock_pending_dropdown_lists_active_orders_only_sorted_by_ticker",
-        ("2317 | - | 自選", "2330 | - | 策略"),
+        ("2317 | 鴻海 | 自選", "2330 | 台積電 | 策略"),
         tuple(_pending_dropdown_panel._pending_combo.options.get("values") or ()),
     )
     check(
         "workbench_single_stock_pending_dropdown_maps_labels_to_tickers",
-        {"2317 | - | 自選": "2317", "2330 | - | 策略": "2330"},
+        {"2317 | 鴻海 | 自選": "2317", "2330 | 台積電 | 策略": "2330"},
         dict(_pending_dropdown_panel._pending_map),
     )
     _pending_selected_runs = []
-    _pending_dropdown_panel._pending_display_var.set("2330 | - | 策略")
+    _pending_dropdown_panel._pending_display_var.set("2330 | 台積電 | 策略")
     _pending_dropdown_panel._ticker_var = _SingleStockVarProbe("")
     _pending_dropdown_panel._apply_runtime_domain_controls = lambda: None
     _pending_dropdown_panel._run_analysis = lambda: _pending_selected_runs.append(_pending_dropdown_panel._ticker_var.get())

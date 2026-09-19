@@ -2866,11 +2866,12 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     # remain available to sorting/sidebar but are not dropdown display fields.
     from services.workbench_ui.portfolio_backtest_inspector import PortfolioBacktestInspectorPanel
     from services.workbench_ui.trading_source_labels import TRADING_SOURCE_STRATEGY_LABEL
-    label = PortfolioBacktestInspectorPanel._format_ticker_dropdown_label(
-        None, ticker="2330", first_buy_row={"date": "2026-08-03", "qty": 1000},
-        stats={"total_pnl_text": "+999", "win_rate_text": "99%", "trade_count_text": "999"},
-    )
-    check("portfolio_dropdown_uses_ticker_name_and_source_only", f"2330 | - | {TRADING_SOURCE_STRATEGY_LABEL}", label)
+    with patch("services.workbench_ui.stock_names.workbench_stock_name", return_value="台積電"):
+        label = PortfolioBacktestInspectorPanel._format_ticker_dropdown_label(
+            None, ticker="2330", first_buy_row={"date": "2026-08-03", "qty": 1000},
+            stats={"total_pnl_text": "+999", "win_rate_text": "99%", "trade_count_text": "999"},
+        )
+    check("portfolio_dropdown_uses_ticker_name_and_source_only", f"2330 | 台積電 | {TRADING_SOURCE_STRATEGY_LABEL}", label)
     check_true("portfolio_dropdown_retains_all_event_membership", "event_rows = df_tr[df_tr.apply(_is_portfolio_kline_event_row, axis=1)].copy()" in portfolio_inspector_source)
     check("portfolio_ticker_chart_uses_all_kline_events_not_actual_trades_only", True, "df_tr.apply(_is_portfolio_kline_event_row, axis=1)" in portfolio_inspector_source and 'elif str(action).startswith("錯失買進")' in portfolio_inspector_source and 'elif action == "錯失賣出"' in portfolio_inspector_source)
     check("portfolio_kline_distinguishes_normal_extended_reentry_buy_actions", True, 'BUY_TRADE_ACTIONS = ("買進", "買進(延續候選)", "買進(重進)")' in portfolio_inspector_source and 'return "買進(重進)"' in portfolio_inspector_source and 'return "買進(延續候選)"' in portfolio_inspector_source and 'CHART_BUY_TRACE_NAMES = ("買進", "買進(延續候選)", "買進(重進)")' in charting_source and '"買進(延續候選)": "買進"' not in charting_source)
