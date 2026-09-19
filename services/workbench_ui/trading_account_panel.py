@@ -191,8 +191,8 @@ OCO_HINT = "系統不預設券商支援 OCO；只有你明確輸入實際券商 
 INDICATOR_HINT = "Signal 只由 completed bar + source entry frozen params 產生；計畫不是券商送單，實際成交仍須在掛單表輸入 broker fill。"
 POSITION_DECISION_HINT = "左側 ▣ 可直接開啟單股回測檢視；停損／停利／賣出訊號是持股區決策資訊。"
 SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；選取候選後會帶入掛單輸入框，可在正式送出前修改規劃股數／掛單日；買入限價由系統自動計算。"
-BUY_ENTRY_HINT = "直接補登買入不需經掛單區；成交日／成交價會先用 raw 市場證據檢查，手動股會凍結目前 Primary Params 並從 finalized information date 開始管理。"
-PENDING_ENTRY_HINT = "Scanner／手選股／既有掛單共用同一輸入介面；修改股票、規劃股數或掛單日會自動更新預覽。買入限價、預留成本、停損、停利由系統自動計算；只有 ACTIVE 掛單占用 Params、資金與 slot。"
+BUY_ENTRY_HINT = "直接補登買入｜不經掛單區；成交日／成交價會先用 raw 市場證據檢查，手動股會凍結目前 Primary Params 並從 finalized information date 開始管理。"
+PENDING_ENTRY_HINT = "掛單輸入｜輸入手動股票或從 Scanner Pool 選取；修改股票、規劃股數或掛單日會自動更新預覽。買入限價、預留成本、停損、停利由系統自動計算；選取既有掛單後可直接填成交價／成交日並確認成交；只有 ACTIVE 掛單占用 Params、資金與 slot。"
 
 
 
@@ -676,8 +676,7 @@ class TradingAccountPanel(ttk.Frame):
         self.after(80, self._start_initial_state_load)
 
     def _set_initial_loading_state(self):
-        self._operations_next_var.set("LOADING | Trading 狀態載入中…")
-        self._operations_detail_var.set("canonical Trading state 正在背景讀取。")
+        self._operations_next_var.set("LOADING | Trading 狀態載入中… | 下一步：等待載入完成")
         self._set_workflow_buttons_state("disabled")
         for button_name in ("_initialize_button", "_set_cash_button", "_add_button", "_correct_button", "_remove_button", "_confirm_ordered_button"):
             button = getattr(self, button_name, None)
@@ -772,8 +771,7 @@ class TradingAccountPanel(ttk.Frame):
                     button.configure(state="disabled")
                 except tk.TclError as exc:
                     _warn_gui_fallback("Trading command disable button", exc)
-            self._operations_next_var.set(f"BUSY | {label} 執行中…")
-            self._operations_detail_var.set("背景執行 canonical Trading command；Workbench 可正常捲動與重繪，完成後只刷新一次 canonical state。")
+            self._operations_next_var.set(f"BUSY | {label} 執行中… | 下一步：等待完成")
             return
         saved = dict(self._command_saved_button_states)
         self._command_saved_button_states.clear()
@@ -1110,11 +1108,8 @@ class TradingAccountPanel(ttk.Frame):
             overview_grid.columnconfigure(col, weight=1)
 
         self._operations_next_var = tk.StringVar(value="下一步：-")
-        self._operations_detail_var = tk.StringVar(value="")
         self._operations_next_label = _TradingStatusLine(operations_box, textvariable=self._operations_next_var, max_lines=1)
-        self._operations_detail_label = _TradingStatusLine(operations_box, textvariable=self._operations_detail_var, default_tone="muted", max_lines=1)
         self._operations_next_label.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        self._operations_detail_label.grid(row=2, column=0, sticky="ew", pady=(2, 0))
 
         # Trading Center still consumes the account dashboard read model for current
         # position valuation, but its duplicate account-summary cards belong only to
@@ -1268,10 +1263,6 @@ class TradingAccountPanel(ttk.Frame):
         pending_box = ttk.LabelFrame(content, text="掛單區", padding=8, style=WORKBENCH_LABELLF_STYLE)
         pending_box.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
         pending_box.columnconfigure(0, weight=1)
-        self._pending_status_var = tk.StringVar(value="尚無掛單。")
-        _TradingStatusLine(pending_box, textvariable=self._pending_status_var, default_tone="muted", max_lines=2).grid(
-            row=0, column=0, sticky="ew", pady=(0, 6)
-        )
         pending_columns = ("open", "source", "ticker", "stock_name", "date", "qty", "reserved", "limit", "stop", "target", "status")
         self._pending_tree = ttk.Treeview(
             pending_box, columns=pending_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=5
@@ -1305,18 +1296,18 @@ class TradingAccountPanel(ttk.Frame):
             default_column="source",
             default_ascending=True,
         )
-        self._pending_tree.grid(row=1, column=0, sticky="ew")
+        self._pending_tree.grid(row=0, column=0, sticky="ew")
         self._pending_tree.bind("<<TreeviewSelect>>", self._on_pending_selected)
         self._pending_tree.bind("<Button-1>", self._on_pending_tree_click, add="+")
         self._pending_tree.bind("<Double-1>", self._open_selected_pending_in_inspector, add="+")
 
         pending_actions = ttk.LabelFrame(
             pending_box,
-            text="掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）",
+            text="掛單輸入",
             padding=8,
             style=WORKBENCH_LABELLF_STYLE,
         )
-        pending_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        pending_actions.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         self._pending_order_source_var = tk.StringVar(value=TRADING_SOURCE_CUSTOM_LABEL)
         self._pending_order_ticker_var = tk.StringVar()
         self._pending_order_stock_name_var = tk.StringVar(value="-")
@@ -1399,7 +1390,7 @@ class TradingAccountPanel(ttk.Frame):
             state="disabled",
         )
         self._pending_delete_button.pack(side="left", padx=(8, 0))
-        self._pending_draft_preview_var = tk.StringVar(value="輸入手動股票或從 Scanner Pool 選取股票後，系統會自動計算預留成本、買入限價、停損與停利。")
+        self._pending_draft_preview_var = tk.StringVar(value="")
         _TradingStatusLine(
             pending_actions,
             textvariable=self._pending_draft_preview_var,
@@ -1407,7 +1398,7 @@ class TradingAccountPanel(ttk.Frame):
             max_lines=2,
         ).grid(row=2, column=0, columnspan=8, sticky="ew", pady=(6, 0))
 
-        trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）", padding=10, style=WORKBENCH_LABELLF_STYLE)
+        trade_box = ttk.LabelFrame(content, text="直接補登買入", padding=10, style=WORKBENCH_LABELLF_STYLE)
         trade_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
         trade_labels = ("來源", "股票", "名稱", "數量", "成交日", "成交價")
         self._trade_ticker_var = tk.StringVar()
@@ -2015,8 +2006,7 @@ class TradingAccountPanel(ttk.Frame):
                 self._set_overview_card(
                     key, "-", "狀態讀取失敗", tone="muted", detail_tone="error"
                 )
-            self._operations_next_var.set("下一步：先修正 Trading 整體狀態讀取錯誤")
-            self._operations_detail_var.set(f"FAIL：{exc}")
+            self._operations_next_var.set(f"FAIL | Trading 狀態讀取失敗：{exc} | 下一步：修正 Trading 整體狀態")
             self._set_workflow_buttons_state("disabled")
             return
         self._operations_snapshot = snapshot
@@ -2128,19 +2118,6 @@ class TradingAccountPanel(ttk.Frame):
             else "WAIT"
         )
         self._operations_next_var.set(f"{display_status} | 下一步：{next_text}")
-        details = []
-        param_error = snapshot.get("param_error")
-        param_binding_error = snapshot.get("param_binding_error")
-        if param_error:
-            details.append(f"Params：{param_error}")
-        elif param_binding_error and not snapshot.get("params_ready_for_scan"):
-            details.append("Params 尚未綁定目前 Trading Data")
-        trading_blockers = [str(item) for item in list(snapshot.get("trading_data_blockers") or []) if str(item)]
-        if trading_blockers:
-            details.append("Data：" + "；".join(trading_blockers[:2]))
-        if rollforward_due:
-            details.append("Lifecycle 待自動同步: " + ",".join(rollforward_due))
-        self._operations_detail_var.set(" | ".join(details))
         self._apply_workflow_action_availability()
 
     def _run_operational_audit(self):
@@ -2149,15 +2126,15 @@ class TradingAccountPanel(ttk.Frame):
             warnings = list((audit or {}).get("warnings") or [])
             if blockers:
                 summary = "；".join(blockers[:2])
-                self._operations_detail_var.set(f"實盤就緒：{audit.get('status')}｜{summary}")
+                self._operations_next_var.set("LIVE_BLOCKED | 實盤就緒檢查未通過 | 下一步：修正阻擋項目")
                 messagebox.showwarning("Trading 尚不可實盤", summary, parent=self)
             else:
                 suffix = f"｜警告 {len(warnings)} 項" if warnings else ""
-                self._operations_detail_var.set(f"實盤就緒：{audit.get('status')}{suffix}")
+                self._operations_next_var.set(f"DONE | 實盤就緒檢查 {audit.get('status')}{suffix} | 下一步：依目前 Trading 狀態操作")
                 messagebox.showinfo("Trading 實盤就緒檢查", f"{audit.get('status')}{suffix}", parent=self)
 
         def on_error(exc):
-            self._operations_detail_var.set(f"實盤就緒：LIVE_BLOCKED｜Audit 失敗：{exc}")
+            self._operations_next_var.set(f"FAIL | 實盤就緒檢查失敗：{exc} | 下一步：修正 Audit 錯誤")
             messagebox.showerror("Trading 實盤就緒檢查失敗", str(exc), parent=self)
 
         self._submit_trading_command(
@@ -2254,18 +2231,18 @@ class TradingAccountPanel(ttk.Frame):
             )
         except (OSError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([], candidate_payload=None)
-            self._operations_detail_var.set(f"Scanner snapshot 讀取失敗：{exc}")
+            self._operations_next_var.set(f"FAIL | Scanner snapshot 讀取失敗：{exc} | 下一步：重新執行 Scanner")
             return
         if not bool(snapshot.get("valid")):
             self._reload_candidate_rows([], candidate_payload=None)
-            self._operations_detail_var.set(
-                f"Scanner snapshot 無效：{snapshot.get('error') or 'schema 不相容'}；請重新執行 Scanner。"
+            self._operations_next_var.set(
+                f"WAIT | Scanner snapshot 無效：{snapshot.get('error') or 'schema 不相容'} | 下一步：重新執行 Scanner"
             )
             return
         if not bool(snapshot.get("fresh")):
             self._reload_candidate_rows([], candidate_payload=None)
-            self._operations_detail_var.set(
-                f"Scanner snapshot 已過期：{snapshot.get('error') or 'inputs 已變更'}；請重新執行 Scanner。"
+            self._operations_next_var.set(
+                f"WAIT | Scanner snapshot 已過期：{snapshot.get('error') or 'inputs 已變更'} | 下一步：重新執行 Scanner"
             )
             return
         try:
@@ -2278,7 +2255,7 @@ class TradingAccountPanel(ttk.Frame):
             )
         except (OSError, FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
             self._reload_candidate_rows([], candidate_payload=None)
-            self._operations_detail_var.set(f"Scanner snapshot 讀取失敗：{exc}")
+            self._operations_next_var.set(f"FAIL | Scanner snapshot 讀取失敗：{exc} | 下一步：重新執行 Scanner")
             return
         self._reload_candidate_rows(payload.get("candidate_rows") or [], candidate_payload=payload)
 
@@ -2294,7 +2271,7 @@ class TradingAccountPanel(ttk.Frame):
                 self._clear_table_sort_values(self._pending_tree)
                 for item in self._pending_tree.get_children():
                     self._pending_tree.delete(item)
-            self._pending_status_var.set(f"掛單讀取失敗：{exc}")
+            self._operations_next_var.set(f"FAIL | 掛單讀取失敗：{exc} | 下一步：全狀態刷新")
             return
         self._pending_snapshot = dict(snapshot or {})
         selected = self._selected_pending_entry_id()
@@ -2374,11 +2351,6 @@ class TradingAccountPanel(ttk.Frame):
             )
         else:
             clear_treeview_selection(self._pending_tree)
-        status_text = "尚無掛單。" if not active_rows else f"目前 ACTIVE 掛單 {len(active_rows):,} 筆。"
-        failed_tickers = [str(row.get("ticker") or "-") for row in self._pending_rows.values() if row.get("sync_error")]
-        if failed_tickers:
-            status_text += "\n同步失敗：" + "、".join(failed_tickers) + "。點選該列「狀態」查看完整原因。"
-        self._pending_status_var.set(status_text)
 
     def refresh_proposed_order_plan(self):
         try:
@@ -2428,7 +2400,7 @@ class TradingAccountPanel(ttk.Frame):
             )
         except (OSError, ValueError, RuntimeError) as exc:
             self._latest_workflow_snapshot = {}
-            self._operations_detail_var.set(f"FAIL：Workflow 狀態讀取失敗：{exc}")
+            self._operations_next_var.set(f"FAIL | Workflow 狀態讀取失敗：{exc} | 下一步：全狀態刷新")
             return
         self._latest_workflow_snapshot = dict(snapshot)
         reusable = bool(snapshot.get("params_reusable"))
@@ -2466,13 +2438,13 @@ class TradingAccountPanel(ttk.Frame):
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
             return
-        self._operations_detail_var.set(f"執行中：{labels[action]}")
+        self._operations_next_var.set(f"BUSY | {labels[action]} 執行中… | 下一步：等待完成")
 
         def on_success(result):
             self._finish_workflow_success(action, result)
 
         def on_error(exc):
-            self._operations_detail_var.set(f"FAIL：{type(exc).__name__}: {exc}")
+            self._operations_next_var.set(f"FAIL | {type(exc).__name__}: {exc} | 下一步：修正錯誤後重試")
             messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
 
         self._submit_trading_command(
@@ -2721,9 +2693,7 @@ class TradingAccountPanel(ttk.Frame):
             self._pending_order_date_field.set_allowed_dates(())
         if hasattr(self, "_pending_fill_date_field"):
             self._pending_fill_date_field.set_allowed_dates(())
-        self._pending_draft_preview_var.set(
-            message or "輸入股票或從 Scanner Pool 選取股票；修改掛單日／規劃股數後會自動更新預留成本、買入限價、停損與停利。"
-        )
+        self._pending_draft_preview_var.set(message or "")
 
     def _on_candidate_selected(self, row):
         ticker = str((row or {}).get("ticker") or "").strip().upper()
@@ -3893,32 +3863,15 @@ class TradingAccountPanel(ttk.Frame):
         )
 
     def _finish_workflow_success(self, action: str, result):
-        result = dict(result or {})
-        scan_result = dict(result.get("scanner") or {}) if action == "all" else (dict(result) if action == "scanner" else {})
-        if action == "data":
-            v2 = dict(result.get("market_data_v2_archive") or {})
-            self._operations_detail_var.set(
-                f"資料更新完成：market {result.get('market_date') or '-'} | "
-                f"新進場池 {result.get('current_execution_pool_ticker_count', 0)} 檔 | "
-                f"訓練池 {result.get('training_ticker_count', 0)} 檔 | "
-                f"V2 {v2.get('status') or '-'} | "
-                f"data/usage requests {v2.get('data_requests', 0)}/{v2.get('usage_requests', 0)}"
-            )
-        elif action == "params":
-            usage_mode = str(result.get("param_usage_mode") or "-")
-            usage_label = "沿用既有" if usage_mode == TRADING_PARAM_USAGE_REUSE_EXISTING else "重新訓練"
-            self._operations_detail_var.set(
-                f"Params 套用完成（{usage_label}）：訓練資料至 {result.get('param_training_data_date') or '-'} | "
-                f"Trading data {result.get('latest_data_date') or '-'}"
-            )
-        elif action == "orders":
-            self._operations_detail_var.set(
-                f"建議掛單完成：{len(result.get('orders') or [])} 筆 | 預留 {format_trading_money(result.get('reserved_total'))} | account rev {result.get('account_revision')}"
-            )
-        else:
-            self._operations_detail_var.set(
-                f"每日 Scanner 完成：候選 {len(scan_result.get('candidate_rows') or [])} 檔 | data {scan_result.get('latest_data_date') or '-'}"
-            )
+        labels = {
+            "data": ("資料更新完成", "套用參數Params"),
+            "params": ("Params 套用完成", "3 Scanner 候選"),
+            "orders": ("建議掛單完成", "檢查掛單計畫"),
+            "scanner": ("Scanner 完成", "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"),
+            "all": ("每日流程 1→2→3 完成", "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"),
+        }
+        done_text, next_text = labels.get(str(action), ("Trading 操作完成", "依目前 Trading 狀態操作"))
+        self._operations_next_var.set(f"DONE | {done_text} | 下一步：{next_text}")
 
 
     def _current_revision(self) -> int:
@@ -4019,8 +3972,8 @@ class TradingAccountPanel(ttk.Frame):
             )
         except (ValueError, RuntimeError, OSError) as exc:
             self._snapshot = {}
-            self._operations_detail_var.set(f"Trading account 狀態讀取失敗：{exc}")
             self.refresh_operations_status()
+            self._operations_next_var.set(f"FAIL | Trading account 狀態讀取失敗：{exc} | 下一步：全狀態刷新")
             return
         self._snapshot = snapshot
         initialized = bool(snapshot.get("initialized"))

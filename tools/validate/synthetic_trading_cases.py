@@ -1388,7 +1388,26 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "侯選區" in panel_source and "advanced_notebook.grid(" not in panel_source)
     check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("總股數", "符合快篩數", "Scanner 候選數", "可操作檔位", "可操作資金", "策略 / Params")) and "同步狀態" not in panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0])
-    check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=2", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
+    check(
+        "workbench_fixed_notes_move_to_fixed_bottom_status_bar",
+        True,
+        all(token in panel_source for token in (
+            "self._footer_bar.grid(row=2",
+            "操作提示｜",
+            "_bind_footer_hint(workflow_box, WORKFLOW_HINT)",
+            "_bind_footer_hint(candidate_box, SCANNER_HINT)",
+            "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)",
+            "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)",
+            'text="掛單輸入"',
+            'text="直接補登買入"',
+            'self._pending_draft_preview_var = tk.StringVar(value="")',
+            "輸入手動股票或從 Scanner Pool 選取",
+            "買入限價、預留成本、停損、停利由系統自動計算",
+            "不經掛單區",
+        ))
+        and "掛單輸入（買入限價自動計算" not in panel_source
+        and "直接補登買入（不經掛單區）" not in panel_source,
+    )
     # AI: This contract is about preserving and rendering the original parameter
     # training date in reuse mode, not about freezing one historical UI phrase.
     # The runtime checks above already prove reuse keeps the original training date;
@@ -4264,7 +4283,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_initial_bundle_reuses_single_operations_snapshot", True, 'bundle["operations"]' in panel_source and "self._suspend_operations_refresh = True" in panel_source)
     check("workbench_trading_initial_bundle_parallelizes_independent_reads", True, "ThreadPoolExecutor" in panel_source and "TRADING_WORKBENCH_INITIAL_READ_WORKERS" in panel_source and 'thread_name_prefix="workbench-trading-read"' in panel_source)
     check("workbench_trading_initial_bundle_reuses_preloaded_operations_components", True, "derive_trading_operations_status_from_preloaded" in panel_source and '"position_rollforward": _preloaded_value("position_rollforward", "position_rollforward")' in panel_source and '"candidate": _preloaded_value("candidate_read", "candidate")' in panel_source)
-    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("侯選區", "掛單區", "掛單輸入（買入限價自動計算；選取既有掛單後可直接填成交價／成交日並確認成交）", "確認掛單", "確認成交", "直接補登買入（不經掛單區）", "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
+    check("workbench_trading_center_exposes_scanner_pending_and_direct_backfill", True, all(text in panel_source for text in ("侯選區", "掛單區", 'text="掛單輸入"', "確認掛單", "確認成交", 'text="直接補登買入"', "BUY_ENTRY_HINT", "PENDING_ENTRY_HINT")))
     check("workbench_pending_area_is_between_scanner_and_position_decisions", True, all(token in panel_source for token in ('candidate_box.grid(row=3', 'pending_box.grid(row=4', 'table_box.grid(row=5')))
     check("workbench_pending_area_supports_single_stock_inspection", True, "def _open_selected_pending_in_inspector" in panel_source and "def _on_pending_tree_click" in panel_source)
 
@@ -4415,8 +4434,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             'f"掛單: {int(locked_slots):,} | "',
             'f"持有: {int(held_count):,} | 上限: {int(max_positions):,}"',
             'fund_detail = f"掛單: {amount_text(reserved_cash)} | 現金餘額: {amount_text(cash)}"',
-            '"尚無掛單。" if not active_rows else f"目前 ACTIVE 掛單 {len(active_rows):,} 筆。"',
         ))
+        and '目前 ACTIVE 掛單' not in panel_source
+        and '_pending_status_var' not in panel_source
         and '資源鎖定 {locked_slots}/{slot_quota}' not in panel_source
         and 'resource_usage' not in panel_source,
     )
@@ -4428,7 +4448,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and 'pending_count = sum(' not in panel_source
         and 'failed_count = sum(' not in panel_source,
     )
-    pending_ui_source = panel_source.split('pending_box = ttk.LabelFrame(content, text="掛單區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[0]
+    pending_ui_source = panel_source.split('pending_box = ttk.LabelFrame(content, text="掛單區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="直接補登買入"', 1)[0]
     check(
         "workbench_pending_table_uses_requested_schema_without_trailing",
         True,
@@ -4969,7 +4989,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("pending_sync_freshness_uses_evaluated_through_date_not_original_information_date", 0, _synced_projection["stale_active_count"])
     check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", source_text, ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
-    _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]
+    _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]
     check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出"' in _direct_buy_section)
     check(
         "workbench_direct_buy_orders_date_before_price_and_displays_canonical_source",
@@ -5396,9 +5416,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_overview_removes_account_card_and_consolidates_strategy_params", True, '帳戶"' not in overview_schema and '策略 / Params' in overview_schema and 'member' not in overview_schema.lower() and 'agree' not in overview_schema.lower())
     check("workbench_overview_exposes_requested_funnel_and_resource_cards", True, all(label in overview_schema for label in ("總股數", "符合快篩數", "Scanner 候選數", "可操作檔位", "可操作資金")) and "同步狀態" not in overview_schema and "剩餘資源" not in overview_schema)
     check("workbench_overview_count_cards_show_date_only_with_freshness_color", True, 'latest_data_date,' in panel_source and 'scanner_date,' in panel_source and 'detail_tone=latest_date_tone' in panel_source and 'detail_tone=candidate_date_tone' in panel_source and '_overview_detail_labels' in panel_source)
-    check("workbench_overview_limits_dynamic_status_to_two_single_line_rows", True, '_operations_next_label.grid(' in overview_schema and '_operations_detail_label.grid(' in overview_schema and overview_schema.count('max_lines=1') >= 2 and '_live_audit_label' not in overview_schema)
+    check("workbench_overview_limits_dynamic_status_to_one_single_line_row", True, '_operations_next_label.grid(' in overview_schema and '_operations_detail_label' not in overview_schema and '_operations_detail_var' not in panel_source and overview_schema.count('max_lines=1') == 1 and '_live_audit_label' not in overview_schema)
     check("workbench_daily_workflow_does_not_repeat_status_rows", True, '_workflow_status_label' not in workflow_schema and '_param_mode_detail_label' not in workflow_schema)
-    check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_detail_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
+    check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_next_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
     scanner_schema = panel_source.split('candidate_box = ttk.LabelFrame(content, text="侯選區"', 1)[1].split('trade_box = ttk.LabelFrame(content, text="買入成交登錄"', 1)[0]
     candidate_static_schema = panel_source.split('def _candidate_static_columns_after_dynamic', 1)[1].split('def _candidate_metric_formatter', 1)[0]
     check("workbench_scanner_pool_uses_take_profit_reference_qty_cost_without_summary", True, 'TableColumn("target_price", "停利線"' in candidate_static_schema and 'TableColumn("proj_qty", "參考股數"' in candidate_static_schema and 'TableColumn("proj_cost", "參考投入"' in candidate_static_schema and 'Scanner 摘要' not in scanner_schema and candidate_static_schema.index('"停利線"') < candidate_static_schema.index('"參考股數"') < candidate_static_schema.index('"參考投入"'))
@@ -7149,19 +7169,21 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_persisted_proposed_plan_reloads_rows", "2820", persisted_rows[0]["ticker"] if persisted_rows else None)
     check_true("workbench_persisted_proposed_plan_refreshes_status", bool(persisted_status and "PROPOSED" in persisted_status[-1]))
 
-    # AI: Completion callbacks now only render command results; canonical state refresh is
-    # applied once by the shared background command executor.
+    # AI: Completion callbacks now render only compact progress + next-step text;
+    # canonical counts/dates remain in the dashboard and state refresh is applied once.
     messages = []
-    panel = SimpleNamespace(_operations_detail_var=SimpleNamespace(set=messages.append))
+    panel = SimpleNamespace(_operations_next_var=SimpleNamespace(set=messages.append))
     TradingAccountPanel._finish_workflow_success(panel, "data", {
         "market_date": "2026-09-09", "current_execution_pool_ticker_count": 17,
         "training_ticker_count": 23,
         "market_data_v2_archive": {"status": "UPDATED", "data_requests": 31, "usage_requests": 2},
     })
-    check("workbench_data_completion_uses_v2_result_fields", True, all(
+    check("workbench_data_completion_is_compact_progress_and_next_step", True, all(
+        text in messages[-1] for text in ("DONE", "資料更新完成", "下一步：套用參數Params")
+    ))
+    check("workbench_data_completion_does_not_repeat_dashboard_metrics", False, any(
         text in messages[-1] for text in ("2026-09-09", "新進場池 17", "訓練池 23", "V2 UPDATED", "31/2")
     ))
-    check("workbench_data_completion_drops_retired_download_counts", False, "成功 0" in messages[-1])
 
     command_worker_body = panel_source.split("def _trading_command_worker", 1)[1].split("def _schedule_command_poll", 1)[0]
     command_finish_body = panel_source.split("def _finish_trading_command", 1)[1].split("def _request_state_refresh", 1)[0]
