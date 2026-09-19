@@ -133,6 +133,7 @@ from services.workbench_ui.state_sync import (
     normalize_state_domains,
 )
 from services.workbench_ui.paged_table import PagedTable, TableColumn
+from services.workbench_ui.stock_names import workbench_stock_name
 from services.workbench_ui.trading_source_labels import (
     TRADING_SOURCE_CUSTOM_LABEL,
     TRADING_SOURCE_STRATEGY_LABEL,
@@ -1169,23 +1170,26 @@ class TradingAccountPanel(ttk.Frame):
 
         form = ttk.LabelFrame(content, text="既有持股（manual adopted broker truth）", padding=10, style=WORKBENCH_LABELLF_STYLE)
         form.grid(row=6, column=0, sticky="ew", pady=(0, 8))
-        labels = ("股票代號", "股數", "剩餘成本總額", "買入日 YYYY-MM-DD", "備註")
+        labels = ("股票代號", "名稱", "股數", "剩餘成本總額", "買入日 YYYY-MM-DD", "備註")
         for col, label in enumerate(labels):
             ttk.Label(form, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
         self._ticker_var = tk.StringVar()
+        self._ticker_name_var = tk.StringVar(value="-")
+        self._ticker_var.trace_add("write", lambda *_args: self._ticker_name_var.set(workbench_stock_name(WORKBENCH_PROJECT_ROOT, self._ticker_var.get())))
         self._qty_var = tk.StringVar()
         self._cost_var = tk.StringVar()
         self._entry_date_var = tk.StringVar()
         self._note_var = tk.StringVar()
         ttk.Entry(form, textvariable=self._ticker_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        ttk.Entry(form, textvariable=self._qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
-        ttk.Entry(form, textvariable=self._cost_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
-        DatePickerField(form, textvariable=self._entry_date_var, width=14).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
-        ttk.Entry(form, textvariable=self._note_var, width=36, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
-        form.columnconfigure(4, weight=1)
+        ttk.Label(form, textvariable=self._ticker_name_var, width=14, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Entry(form, textvariable=self._qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Entry(form, textvariable=self._cost_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        DatePickerField(form, textvariable=self._entry_date_var, width=14).grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Entry(form, textvariable=self._note_var, width=36, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
+        form.columnconfigure(5, weight=1)
 
         button_row = ttk.Frame(form, style=WORKBENCH_FRAME_STYLE)
-        button_row.grid(row=2, column=0, columnspan=5, sticky="w", pady=(10, 0))
+        button_row.grid(row=2, column=0, columnspan=6, sticky="w", pady=(10, 0))
         self._add_button = ttk.Button(button_row, text="新增既有持股", command=self._adopt_position, style=WORKBENCH_BUTTON_STYLE)
         self._add_button.pack(side="left")
         self._correct_button = ttk.Button(button_row, text="修正選取持股", command=self._correct_position, style=WORKBENCH_BUTTON_STYLE)
@@ -1198,13 +1202,13 @@ class TradingAccountPanel(ttk.Frame):
         table_box.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         table_box.rowconfigure(0, weight=1)
         table_box.columnconfigure(0, weight=1)
-        columns = ("open", "source", "ticker", "order_date", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")
+        columns = ("open", "source", "ticker", "stock_name", "order_date", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")
         self._tree = ttk.Treeview(table_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=7)
         headings = {
-            "open": "↗", "source": "來源", "ticker": "股票", "order_date": "掛單日", "entry_date": "成交日", "qty": "股數", "avg_cost": "均價", "current": "市價",
+            "open": "↗", "source": "來源", "ticker": "股票", "stock_name": "名稱", "order_date": "掛單日", "entry_date": "成交日", "qty": "股數", "avg_cost": "均價", "current": "市價",
             "stop": "停損", "target": "停利", "sell_signal": "賣出訊號", "status": "狀態",
         }
-        widths = {"open": 36, "source": 90, "ticker": 80, "order_date": 100, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "sell_signal": 125, "status": 88}
+        widths = {"open": 36, "source": 90, "ticker": 80, "stock_name": 120, "order_date": 100, "entry_date": 100, "qty": 85, "avg_cost": 95, "current": 90, "stop": 95, "target": 95, "sell_signal": 125, "status": 88}
         for key in columns:
             self._tree.heading(key, text=headings[key])
             self._tree.column(key, width=widths[key], anchor="center", stretch=(key != "open"))
@@ -1214,6 +1218,7 @@ class TradingAccountPanel(ttk.Frame):
             sort_kinds={
                 "source": "text",
                 "ticker": "text",
+                "stock_name": "text",
                 "order_date": "date",
                 "entry_date": "date",
                 "qty": "numeric",
@@ -1256,16 +1261,16 @@ class TradingAccountPanel(ttk.Frame):
         _TradingStatusLine(pending_box, textvariable=self._pending_status_var, default_tone="muted", max_lines=2).grid(
             row=0, column=0, sticky="ew", pady=(0, 6)
         )
-        pending_columns = ("open", "source", "ticker", "date", "qty", "reserved", "limit", "stop", "target", "status")
+        pending_columns = ("open", "source", "ticker", "stock_name", "date", "qty", "reserved", "limit", "stop", "target", "status")
         self._pending_tree = ttk.Treeview(
             pending_box, columns=pending_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse", height=5
         )
         pending_headings = {
-            "open": "↗", "source": "來源", "ticker": "股票", "date": "掛單日", "qty": "規劃股數",
+            "open": "↗", "source": "來源", "ticker": "股票", "stock_name": "名稱", "date": "掛單日", "qty": "規劃股數",
             "reserved": "預留成本", "limit": "買入限價", "stop": "停損", "target": "停利", "status": "狀態",
         }
         pending_widths = {
-            "open": 36, "source": 86, "ticker": 75, "date": 96, "qty": 88,
+            "open": 36, "source": 86, "ticker": 75, "stock_name": 120, "date": 96, "qty": 88,
             "reserved": 110, "limit": 90, "stop": 86, "target": 86, "status": 100,
         }
         for key in pending_columns:
@@ -1277,6 +1282,7 @@ class TradingAccountPanel(ttk.Frame):
             sort_kinds={
                 "source": "text",
                 "ticker": "text",
+                "stock_name": "text",
                 "date": "date",
                 "qty": "numeric",
                 "reserved": "numeric",
@@ -1302,6 +1308,8 @@ class TradingAccountPanel(ttk.Frame):
         pending_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self._pending_order_source_var = tk.StringVar(value=TRADING_SOURCE_CUSTOM_LABEL)
         self._pending_order_ticker_var = tk.StringVar()
+        self._pending_order_stock_name_var = tk.StringVar(value="-")
+        self._pending_order_ticker_var.trace_add("write", lambda *_args: self._pending_order_stock_name_var.set(workbench_stock_name(WORKBENCH_PROJECT_ROOT, self._pending_order_ticker_var.get())))
         self._pending_order_qty_var = tk.StringVar()
         self._pending_order_limit_var = tk.StringVar()
         self._pending_fill_price_var = tk.StringVar()
@@ -1310,6 +1318,7 @@ class TradingAccountPanel(ttk.Frame):
         draft_labels = (
             ("來源", 10),
             ("股票", 10),
+            ("名稱", 14),
             ("掛單日", 12),
             ("規劃股數", 10),
             ("成交日", 12),
@@ -1329,20 +1338,21 @@ class TradingAccountPanel(ttk.Frame):
             pending_actions, textvariable=self._pending_order_ticker_var, width=10, style=WORKBENCH_ENTRY_STYLE
         )
         self._pending_order_ticker_entry.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Label(pending_actions, textvariable=self._pending_order_stock_name_var, width=14, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_order_ticker_entry.bind("<Return>", self._on_manual_pending_ticker_commit)
         self._pending_order_ticker_entry.bind("<KeyRelease>", self._schedule_manual_pending_ticker_preview)
         self._pending_order_date_field = DatePickerField(
             pending_actions, textvariable=self._pending_order_date_var, width=12, allowed_dates=()
         )
-        self._pending_order_date_field.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_order_date_field.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_order_qty_entry = ttk.Entry(
             pending_actions, textvariable=self._pending_order_qty_var, width=10, style=WORKBENCH_ENTRY_STYLE
         )
-        self._pending_order_qty_entry.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_order_qty_entry.grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_fill_date_field = DatePickerField(
             pending_actions, textvariable=self._pending_fill_date_var, width=12, allowed_dates=()
         )
-        self._pending_fill_date_field.grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_fill_date_field.grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._pending_fill_price_combo = ttk.Combobox(
             pending_actions,
             textvariable=self._pending_fill_price_var,
@@ -1351,13 +1361,13 @@ class TradingAccountPanel(ttk.Frame):
             state="disabled",
             style=WORKBENCH_COMBO_STYLE,
         )
-        self._pending_fill_price_combo.grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._pending_fill_price_combo.grid(row=1, column=6, sticky="ew", padx=(8, 0), pady=(4, 0))
         for draft_var in (self._pending_order_qty_var, self._pending_order_date_var):
             draft_var.trace_add("write", self._schedule_pending_value_preview)
         self._pending_fill_date_var.trace_add("write", self._schedule_pending_fill_preview)
         self._pending_fill_price_var.trace_add("write", self._refresh_pending_fill_button_state)
         pending_draft_buttons = ttk.Frame(pending_actions, style=WORKBENCH_FRAME_STYLE)
-        pending_draft_buttons.grid(row=1, column=6, sticky="w", padx=(12, 0), pady=(4, 0))
+        pending_draft_buttons.grid(row=1, column=7, sticky="w", padx=(12, 0), pady=(4, 0))
         self._pending_submit_button = ttk.Button(
             pending_draft_buttons, text="確認掛單", command=self._confirm_submit_pending_draft, style=WORKBENCH_BUTTON_STYLE
         )
@@ -1384,12 +1394,14 @@ class TradingAccountPanel(ttk.Frame):
             textvariable=self._pending_draft_preview_var,
             default_tone="muted",
             max_lines=2,
-        ).grid(row=2, column=0, columnspan=7, sticky="ew", pady=(6, 0))
+        ).grid(row=2, column=0, columnspan=8, sticky="ew", pady=(6, 0))
 
         trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）", padding=10, style=WORKBENCH_LABELLF_STYLE)
         trade_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
-        trade_labels = ("來源", "股票", "數量", "成交日", "成交價")
+        trade_labels = ("來源", "股票", "名稱", "數量", "成交日", "成交價")
         self._trade_ticker_var = tk.StringVar()
+        self._trade_stock_name_var = tk.StringVar(value="-")
+        self._trade_ticker_var.trace_add("write", lambda *_args: self._trade_stock_name_var.set(workbench_stock_name(WORKBENCH_PROJECT_ROOT, self._trade_ticker_var.get())))
         self._trade_qty_var = tk.StringVar()
         self._trade_price_var = tk.StringVar()
         self._trade_date_var = tk.StringVar()
@@ -1404,17 +1416,18 @@ class TradingAccountPanel(ttk.Frame):
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         self._trade_ticker_entry = ttk.Entry(trade_box, textvariable=self._trade_ticker_var, width=12, style=WORKBENCH_ENTRY_STYLE)
         self._trade_ticker_entry.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
-        ttk.Entry(trade_box, textvariable=self._trade_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Label(trade_box, textvariable=self._trade_stock_name_var, width=14, style=WORKBENCH_LABEL_STYLE).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Entry(trade_box, textvariable=self._trade_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._trade_date_field = DatePickerField(trade_box, textvariable=self._trade_date_var, width=12, allowed_dates=())
-        self._trade_date_field.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._trade_date_field.grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._trade_price_combo = ttk.Combobox(
             trade_box, textvariable=self._trade_price_var, values=(), width=14, state="normal", style=WORKBENCH_COMBO_STYLE
         )
-        self._trade_price_combo.grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self._trade_price_combo.grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(4, 0))
         self._trade_ticker_var.trace_add("write", self._schedule_direct_buy_ticker_constraints)
         self._trade_date_var.trace_add("write", self._schedule_direct_fill_constraints)
         trade_buttons = ttk.Frame(trade_box, style=WORKBENCH_FRAME_STYLE)
-        trade_buttons.grid(row=1, column=5, sticky="w", padx=(12, 0), pady=(4, 0))
+        trade_buttons.grid(row=1, column=6, sticky="w", padx=(12, 0), pady=(4, 0))
         ttk.Button(trade_buttons, text="登錄買入", command=lambda: self._record_simple_trade("BUY"), style=WORKBENCH_BUTTON_STYLE).pack(side="left")
         performance_box = ttk.LabelFrame(content, text="帳戶績效統計", padding=8, style=WORKBENCH_LABELLF_STYLE)
         performance_box.grid(row=8, column=0, sticky="nsew", pady=(0, 8))
@@ -1460,13 +1473,13 @@ class TradingAccountPanel(ttk.Frame):
         self._proposed_status_var = tk.StringVar(value="尚未產生建議掛單。")
         self._proposed_status_label = _TradingStatusLine(proposed_box, textvariable=self._proposed_status_var, default_tone="muted", max_lines=2)
         self._proposed_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        proposed_columns = ("rank", "ticker", "kind", "agree", "limit", "qty", "reserved", "stop", "target")
+        proposed_columns = ("rank", "ticker", "stock_name", "kind", "agree", "limit", "qty", "reserved", "stop", "target")
         self._proposed_tree = ttk.Treeview(proposed_box, columns=proposed_columns, show="headings", style=WORKBENCH_TREE_STYLE, height=6)
         proposed_headings = {
-            "rank": "順位", "ticker": "股票", "kind": "類型", "agree": "同意/成員",
+            "rank": "順位", "ticker": "股票", "stock_name": "名稱", "kind": "類型", "agree": "同意/成員",
             "limit": "買入限價", "qty": "股數", "reserved": "預留資金", "stop": "初始Stop", "target": "停利線"
         }
-        proposed_widths = {"rank": 60, "ticker": 80, "kind": 110, "agree": 115, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 135}
+        proposed_widths = {"rank": 60, "ticker": 80, "stock_name": 120, "kind": 110, "agree": 115, "limit": 100, "qty": 90, "reserved": 120, "stop": 100, "target": 135}
         for key in proposed_columns:
             self._proposed_tree.heading(key, text=proposed_headings[key])
             self._proposed_tree.column(key, width=proposed_widths[key], anchor="center")
@@ -1497,16 +1510,16 @@ class TradingAccountPanel(ttk.Frame):
         self._order_status_var = tk.StringVar(value="尚無實際送單紀錄。")
         self._order_status_label = _TradingStatusLine(pending_box, textvariable=self._order_status_var, default_tone="muted", max_lines=2)
         self._order_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        order_columns = ("ticker", "side", "purpose", "status", "order_type", "price", "qty", "filled", "remaining", "avg_fill", "broker_id", "info_date", "ordered_at", "filled_at", "cancelled_at")
+        order_columns = ("ticker", "stock_name", "side", "purpose", "status", "order_type", "price", "qty", "filled", "remaining", "avg_fill", "broker_id", "info_date", "ordered_at", "filled_at", "cancelled_at")
         self._order_tree = ttk.Treeview(pending_box, columns=order_columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
         order_headings = {
-            "ticker": "股票", "side": "方向", "purpose": "用途", "status": "狀態", "order_type": "類型",
+            "ticker": "股票", "stock_name": "名稱", "side": "方向", "purpose": "用途", "status": "狀態", "order_type": "類型",
             "price": "委託/觸發價", "qty": "委託股數", "filled": "已成交", "remaining": "未成交",
             "avg_fill": "平均成交價", "broker_id": "券商委託號", "info_date": "資訊日",
             "ordered_at": "送單時間", "filled_at": "完成時間", "cancelled_at": "取消時間",
         }
         order_widths = {
-            "ticker": 80, "side": 65, "purpose": 125, "status": 90, "order_type": 100, "price": 105,
+            "ticker": 80, "stock_name": 120, "side": 65, "purpose": 125, "status": 90, "order_type": 100, "price": 105,
             "qty": 95, "filled": 90, "remaining": 90, "avg_fill": 105, "broker_id": 130, "info_date": 105,
             "ordered_at": 160, "filled_at": 160, "cancelled_at": 160,
         }
@@ -1552,7 +1565,7 @@ class TradingAccountPanel(ttk.Frame):
         self._protection_status_var = tk.StringVar(value="尚未建立成交後保護單計畫。")
         self._protection_status_label = _TradingStatusLine(protection_box, textvariable=self._protection_status_var, default_tone="muted", max_lines=2)
         self._protection_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        protection_columns = ("ticker", "qty", "entry", "stop_qty", "stop", "tp_qty", "target", "entry_order_status", "priority")
+        protection_columns = ("ticker", "stock_name", "qty", "entry", "stop_qty", "stop", "tp_qty", "target", "entry_order_status", "priority")
         self._protection_tree = ttk.Treeview(
             protection_box,
             columns=protection_columns,
@@ -1562,6 +1575,7 @@ class TradingAccountPanel(ttk.Frame):
         )
         protection_headings = {
             "ticker": "股票",
+            "stock_name": "名稱",
             "qty": "目前持股",
             "entry": "實際成交均價",
             "stop_qty": "Stop股數",
@@ -1572,7 +1586,7 @@ class TradingAccountPanel(ttk.Frame):
             "priority": "同bar優先序",
         }
         protection_widths = {
-            "ticker": 80, "qty": 95, "entry": 110, "stop_qty": 95, "stop": 105,
+            "ticker": 80, "stock_name": 120, "qty": 95, "entry": 110, "stop_qty": 95, "stop": 105,
             "tp_qty": 90, "target": 105, "entry_order_status": 95, "priority": 120,
         }
         for key in protection_columns:
@@ -1636,10 +1650,10 @@ class TradingAccountPanel(ttk.Frame):
         self._indicator_status_var = tk.StringVar(value="尚未建立 Indicator SELL 計畫。")
         self._indicator_status_label = _TradingStatusLine(indicator_box, textvariable=self._indicator_status_var, default_tone="muted", max_lines=2)
         self._indicator_status_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        columns=("ticker","signal","qty","entry_date","type","carried")
+        columns=("ticker","stock_name","signal","qty","entry_date","type","carried")
         self._indicator_tree=ttk.Treeview(indicator_box, columns=columns, show="headings", style=WORKBENCH_TREE_STYLE, selectmode="browse")
-        headings={"ticker":"股票","signal":"Signal日","qty":"賣出股數","entry_date":"Entry日","type":"委託","carried":"狀態"}
-        widths={"ticker":90,"signal":100,"qty":100,"entry_date":100,"type":90,"carried":110}
+        headings={"ticker":"股票","stock_name":"名稱","signal":"Signal日","qty":"賣出股數","entry_date":"Entry日","type":"委託","carried":"狀態"}
+        widths={"ticker":90,"stock_name":120,"signal":100,"qty":100,"entry_date":100,"type":90,"carried":110}
         for key in columns:
             self._indicator_tree.heading(key,text=headings[key]); self._indicator_tree.column(key,width=widths[key],anchor="center")
         self._indicator_tree.grid(row=1,column=0,sticky="nsew")
@@ -1732,6 +1746,7 @@ class TradingAccountPanel(ttk.Frame):
                 iid=str(row.get("ticker") or ""),
                 values=(
                     row.get("ticker") or "-",
+                    workbench_stock_name(WORKBENCH_PROJECT_ROOT, row.get("ticker")),
                     f"{int(row.get('position_qty') or 0):,}",
                     self._format_candidate_number(row.get("entry_fill_price"), digits=2),
                     f"{int(row.get('stop_qty') or 0):,}",
@@ -1892,7 +1907,7 @@ class TradingAccountPanel(ttk.Frame):
         for row in self._indicator_rows:
             signal_key=str(row.get("signal_key") or "")
             iid=signal_key or f"{row.get('ticker')}:{row.get('signal_information_date')}"
-            self._indicator_tree.insert("", "end", iid=iid, values=(row.get("ticker") or "-", row.get("signal_information_date") or "-", f"{int(row.get('qty') or 0):,}", row.get("entry_trade_date") or "-", row.get("order_type") or "MARKET", "CARRIED" if row.get("carried_forward") else "NEW"))
+            self._indicator_tree.insert("", "end", iid=iid, values=(row.get("ticker") or "-", workbench_stock_name(WORKBENCH_PROJECT_ROOT, row.get("ticker")), row.get("signal_information_date") or "-", f"{int(row.get('qty') or 0):,}", row.get("entry_trade_date") or "-", row.get("order_type") or "MARKET", "CARRIED" if row.get("carried_forward") else "NEW"))
 
     def _selected_indicator_row(self):
         selected=self._indicator_tree.selection()
@@ -2303,7 +2318,7 @@ class TradingAccountPanel(ttk.Frame):
             self._pending_tree.insert(
                 "", "end", iid=entry_id,
                 values=(
-                    "▣", source, row.get("ticker") or "-", planned_date,
+                    "▣", source, row.get("ticker") or "-", workbench_stock_name(WORKBENCH_PROJECT_ROOT, row.get("ticker")), planned_date,
                     f"{qty:,}",
                     self._format_candidate_number(reserved_cost, digits=0),
                     self._format_candidate_number(limit_price, digits=2),
@@ -2318,6 +2333,7 @@ class TradingAccountPanel(ttk.Frame):
                 {
                     "source": source,
                     "ticker": row.get("ticker"),
+                    "stock_name": workbench_stock_name(WORKBENCH_PROJECT_ROOT, row.get("ticker")),
                     "date": planned_date,
                     "qty": qty,
                     "reserved": reserved_cost,
@@ -2492,6 +2508,7 @@ class TradingAccountPanel(ttk.Frame):
         return (
             TableColumn("rank", "順位", 5, sort_kind="numeric"),
             TableColumn("ticker", "股票", 7),
+            TableColumn("stock_name", "名稱", 12),
             TableColumn("kind_label", "類型", 10),
         )
 
@@ -2576,6 +2593,7 @@ class TradingAccountPanel(ttk.Frame):
                 "_table_id": f"candidate:{ticker}",
                 "rank": idx,
                 "ticker": ticker,
+                "stock_name": workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker),
                 "kind_label": kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "-")),
                 "signal_date": _candidate_signal_date_text(row.get("signal_date")),
                 "signal_age_days": _candidate_signal_age_days(row.get("signal_date"), candidate_date),
@@ -3554,6 +3572,7 @@ class TradingAccountPanel(ttk.Frame):
                 values=(
                     int(row.get("rank") or 0),
                     row.get("ticker") or "-",
+                    workbench_stock_name(WORKBENCH_PROJECT_ROOT, row.get("ticker")),
                     {"buy": "新訊號", "extended": "延續", "extended_tbd": "延續(TBD)", "reentry": "再進場"}.get(
                         str(row.get("kind") or ""), str(row.get("kind") or "-")
                     ),
@@ -3608,6 +3627,7 @@ class TradingAccountPanel(ttk.Frame):
                 iid=order_id,
                 values=(
                     row.get("ticker") or "-",
+                    workbench_stock_name(WORKBENCH_PROJECT_ROOT, row.get("ticker")),
                     row.get("side") or "-",
                     row.get("purpose") or "-",
                     row.get("status") or "-",
@@ -4036,7 +4056,7 @@ class TradingAccountPanel(ttk.Frame):
             self._tree.insert(
                 "", "end", iid=ticker,
                 values=(
-                    "▣", source_text, ticker, order_date, entry_date, f"{qty:,}",
+                    "▣", source_text, ticker, workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker), order_date, entry_date, f"{qty:,}",
                     format_trading_money(average_cost),
                     format_trading_money(current_price),
                     format_trading_money(effective_stop),
@@ -4051,6 +4071,7 @@ class TradingAccountPanel(ttk.Frame):
                 {
                     "source": source_text,
                     "ticker": ticker,
+                    "stock_name": workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker),
                     "order_date": order_date,
                     "entry_date": entry_date,
                     "qty": qty,

@@ -4386,7 +4386,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check(
         "workbench_pending_table_uses_requested_schema_without_trailing",
         True,
-        'pending_columns = ("open", "source", "ticker", "date", "qty", "reserved", "limit", "stop", "target", "status")' in panel_source
+        'pending_columns = ("open", "source", "ticker", "stock_name", "date", "qty", "reserved", "limit", "stop", "target", "status")' in panel_source
         and all(token in panel_source for token in (
             '"source": "來源"', '"ticker": "股票"', '"date": "掛單日"', '"qty": "規劃股數"',
             '"reserved": "預留成本"', '"limit": "買入限價"', '"stop": "停損"', '"target": "停利"', '"status": "狀態"',
@@ -4430,18 +4430,20 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and '("買入限價", 12)' not in pending_ui_source,
     )
     check(
-        "workbench_pending_input_order_is_source_ticker_order_date_planned_qty_fill_date_fill_price",
+        "workbench_pending_input_order_is_source_ticker_name_order_date_planned_qty_fill_date_fill_price",
         True,
         pending_ui_source.find('("來源", 10)')
         < pending_ui_source.find('("股票", 10)')
+        < pending_ui_source.find('("名稱", 14)')
         < pending_ui_source.find('("掛單日", 12)')
         < pending_ui_source.find('("規劃股數", 10)')
         < pending_ui_source.find('("成交日", 12)')
         < pending_ui_source.find('("成交價", 12)')
-        and 'self._pending_order_date_field.grid(row=1, column=2' in pending_ui_source
-        and 'self._pending_order_qty_entry.grid(row=1, column=3' in pending_ui_source
-        and 'self._pending_fill_date_field.grid(row=1, column=4' in pending_ui_source
-        and 'self._pending_fill_price_combo.grid(row=1, column=5' in pending_ui_source,
+        and 'self._pending_order_stock_name_var' in pending_ui_source
+        and 'self._pending_order_date_field.grid(row=1, column=3' in pending_ui_source
+        and 'self._pending_order_qty_entry.grid(row=1, column=4' in pending_ui_source
+        and 'self._pending_fill_date_field.grid(row=1, column=5' in pending_ui_source
+        and 'self._pending_fill_price_combo.grid(row=1, column=6' in pending_ui_source,
     )
     check(
         "workbench_pending_buy_limit_is_auto_calculated_not_user_override",
@@ -4569,7 +4571,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "workbench_holding_area_uses_requested_source_first_schema_without_trailing_or_suggested_action",
         True,
         'text="持股區"' in panel_source
-        and 'columns = ("open", "source", "ticker", "order_date", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")' in panel_source
+        and 'columns = ("open", "source", "ticker", "stock_name", "order_date", "entry_date", "qty", "avg_cost", "current", "stop", "target", "sell_signal", "status")' in panel_source
         and '"source": "來源"' in panel_source
         and '"order_date": "掛單日"' in panel_source
         and '"entry_date": "成交日"' in panel_source
@@ -4926,14 +4928,16 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check(
         "workbench_direct_buy_orders_date_before_price_and_displays_canonical_source",
         True,
-        'trade_labels = ("來源", "股票", "數量", "成交日", "成交價")' in _direct_buy_section
+        'trade_labels = ("來源", "股票", "名稱", "數量", "成交日", "成交價")' in _direct_buy_section
         and 'textvariable=self._trade_source_var' in _direct_buy_section
         and ').grid(row=1, column=0' in _direct_buy_section
         and 'self._trade_ticker_entry.grid(row=1, column=1' in _direct_buy_section
-        and 'textvariable=self._trade_qty_var, width=12' in _direct_buy_section
+        and 'textvariable=self._trade_stock_name_var' in _direct_buy_section
         and '.grid(row=1, column=2' in _direct_buy_section
-        and 'self._trade_date_field.grid(row=1, column=3' in _direct_buy_section
-        and 'self._trade_price_combo.grid(row=1, column=4' in _direct_buy_section
+        and 'textvariable=self._trade_qty_var, width=12' in _direct_buy_section
+        and '.grid(row=1, column=3' in _direct_buy_section
+        and 'self._trade_date_field.grid(row=1, column=4' in _direct_buy_section
+        and 'self._trade_price_combo.grid(row=1, column=5' in _direct_buy_section
         and 'text="登錄買入"' in _direct_buy_section
         and 'resolve_trading_direct_buy_source(' in panel_source
         and 'trading_source_display_label(source=(source_resolution or {}).get("source"))' in panel_source
@@ -5256,6 +5260,20 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         and 'TableColumn("source", "來源"' not in _performance_ui_source,
     )
     check("workbench_page_mousewheel_binds_static_dynamic_and_full_accounting_panel", True, "def _bind_page_mousewheel" in accounting_source and "self._bind_page_mousewheel(self)" in accounting_source and "on_mousewheel=self._on_mousewheel" in accounting_source and "self._bind_mousewheel(cell)" in paged_source and "self._bind_pointer_callbacks(cell)" in paged_source)
+    from services.workbench_ui.stock_names import build_workbench_stock_name_map
+    inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
+    portfolio_inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
+    _stock_name_map = build_workbench_stock_name_map(pd.DataFrame([
+        {"date": "2026-01-01", "stock_id": "2330", "stock_name": "舊名稱"},
+        {"date": "2026-09-01", "stock_id": "2330", "stock_name": "台積電"},
+        {"date": "2026-09-01", "stock_id": "0050", "stock_name": "元大台灣50"},
+    ]))
+    check("workbench_stock_name_ssot_uses_latest_finmind_taiwan_stock_info_name", {"0050": "元大台灣50", "2330": "台積電"}, _stock_name_map)
+    check("workbench_stock_name_ssot_has_no_legacy_mops_isin_fetcher", True, "MOPS" not in inspector_source and "ISIN" not in inspector_source and "reduced_stock_company_names_cache" not in inspector_source)
+    check("workbench_all_primary_stock_tables_put_name_next_to_ticker", True, all(token in panel_source for token in ('"ticker", "stock_name"', 'TableColumn("stock_name", "名稱"')) and accounting_source.count('TableColumn("ticker", "股票", 8),\n                TableColumn("stock_name", "名稱", 12),') >= 4 and 'scanner_columns = ("rank", "ticker", "stock_name"' in inspector_source)
+    check("workbench_buy_sell_and_backtest_inputs_show_official_name_beside_ticker", True, all(token in panel_source for token in ("_pending_order_stock_name_var", "_trade_stock_name_var")) and "_sell_stock_name_var" in accounting_source and "_ticker_name_var" in inspector_source)
+    check("workbench_stock_dropdowns_include_official_name_and_source", True, "format_workbench_stock_label(WORKBENCH_PROJECT_ROOT, ticker, source_label=source_label)" in inspector_source and "format_workbench_stock_label(WORKBENCH_PROJECT_ROOT, ticker, source_label=TRADING_SOURCE_STRATEGY_LABEL)" in portfolio_inspector_source)
+
     from services.workbench_ui.accounting_center_panel import AccountingCenterPanel
     accounting_scroll_calls = []
     accounting_scroll_panel = SimpleNamespace(_canvas=SimpleNamespace(yview_scroll=lambda units, mode: accounting_scroll_calls.append((units, mode))))
@@ -5342,7 +5360,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
     portfolio_inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
-    check("workbench_backtest_stock_dropdowns_show_ticker_and_source_only", True, 'display_label = f"{ticker} | {TRADING_SOURCE_CUSTOM_LABEL}"' in inspector_source and 'return f"{ticker} | {source_label}"' in inspector_source and 'return f"{ticker} | {TRADING_SOURCE_STRATEGY_LABEL}"' in portfolio_inspector_source and 'label = f"{ticker} | {source_label}"' in inspector_source)
+    check("workbench_backtest_stock_dropdowns_show_ticker_official_name_and_source", True, 'display_label = f"{ticker} | {name} | {TRADING_SOURCE_CUSTOM_LABEL}"' in inspector_source and 'format_workbench_stock_label(WORKBENCH_PROJECT_ROOT, ticker, source_label=source_label)' in inspector_source and 'format_workbench_stock_label(WORKBENCH_PROJECT_ROOT, ticker, source_label=TRADING_SOURCE_STRATEGY_LABEL)' in portfolio_inspector_source)
     check("workbench_sell_signal_hides_raw_stop_exit_label", True, 'sell_signal = "賣出訊號" if row.get("sell_signal") else "-"' in panel_source and 'trading_status += "｜賣出訊號"' in inspector_source and 'SELL訊號:' not in inspector_source)
     gui_payload_body = inspector_source.split("def _build_gui_chart_payload", 1)[1].split("def ", 1)[0]
     check("workbench_single_stock_trading_hides_backtest_forced_close_visual_only", True, 'self._runtime_domain_key() == "trading"' in gui_payload_body and 'hidden.add("強制結算")' in gui_payload_body and 'chart_payload["hidden_trace_names"]' in gui_payload_body)
@@ -6743,16 +6761,16 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         SingleStockBacktestInspectorPanel._refresh_pending_options(_pending_dropdown_panel)
     check(
         "workbench_single_stock_pending_dropdown_lists_active_orders_only_sorted_by_ticker",
-        ("2317 | 自選", "2330 | 策略"),
+        ("2317 | - | 自選", "2330 | - | 策略"),
         tuple(_pending_dropdown_panel._pending_combo.options.get("values") or ()),
     )
     check(
         "workbench_single_stock_pending_dropdown_maps_labels_to_tickers",
-        {"2317 | 自選": "2317", "2330 | 策略": "2330"},
+        {"2317 | - | 自選": "2317", "2330 | - | 策略": "2330"},
         dict(_pending_dropdown_panel._pending_map),
     )
     _pending_selected_runs = []
-    _pending_dropdown_panel._pending_display_var.set("2330 | 策略")
+    _pending_dropdown_panel._pending_display_var.set("2330 | - | 策略")
     _pending_dropdown_panel._ticker_var = _SingleStockVarProbe("")
     _pending_dropdown_panel._apply_runtime_domain_controls = lambda: None
     _pending_dropdown_panel._run_analysis = lambda: _pending_selected_runs.append(_pending_dropdown_panel._ticker_var.get())

@@ -25,6 +25,7 @@ from services.trading.order_form_constraints import build_trading_actual_fill_fo
 from services.trading.scanner_state import load_trading_scanner_runtime
 from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.paged_table import PagedTable, TableColumn
+from services.workbench_ui.stock_names import enrich_workbench_stock_rows, workbench_stock_name
 from services.workbench_ui.state_sync import ACCOUNT_MUTATION_DOMAINS
 from services.workbench_ui.trading_source_labels import trading_source_display_label
 from services.workbench_ui.workbench import (
@@ -210,6 +211,7 @@ class AccountingCenterPanel(ttk.Frame):
             columns=(
                 TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
+                TableColumn("stock_name", "名稱", 12),
                 TableColumn("average_cost", "均價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
                 TableColumn("qty", "股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
                 TableColumn("holding_cost", "持有成本", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
@@ -241,18 +243,21 @@ class AccountingCenterPanel(ttk.Frame):
         sell_entry = ttk.LabelFrame(inventory, text="賣出成交登錄", padding=8, style=WORKBENCH_LABELLF_STYLE)
         sell_entry.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self._sell_ticker_var = tk.StringVar(value="-")
+        self._sell_stock_name_var = tk.StringVar(value="-")
         self._sell_qty_var = tk.StringVar()
         self._sell_price_var = tk.StringVar()
         self._sell_date_var = tk.StringVar()
         ttk.Label(sell_entry, text="股票", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=0, sticky="w")
-        ttk.Label(sell_entry, text="成交日", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=1, sticky="w", padx=(8, 0))
-        ttk.Label(sell_entry, text="成交價", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=2, sticky="w", padx=(8, 0))
-        ttk.Label(sell_entry, text="數量", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=3, sticky="w", padx=(8, 0))
+        ttk.Label(sell_entry, text="名稱", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(sell_entry, text="成交日", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=2, sticky="w", padx=(8, 0))
+        ttk.Label(sell_entry, text="成交價", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=3, sticky="w", padx=(8, 0))
+        ttk.Label(sell_entry, text="數量", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=4, sticky="w", padx=(8, 0))
         ttk.Label(sell_entry, textvariable=self._sell_ticker_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT).grid(row=1, column=0, sticky="ew")
+        ttk.Label(sell_entry, textvariable=self._sell_stock_name_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT).grid(row=1, column=1, sticky="ew", padx=(8, 0))
         self._sell_date_field = DatePickerField(
             sell_entry, textvariable=self._sell_date_var, width=12, allowed_dates=()
         )
-        self._sell_date_field.grid(row=1, column=1, sticky="ew", padx=(8, 0))
+        self._sell_date_field.grid(row=1, column=2, sticky="ew", padx=(8, 0))
         self._sell_price_combo = ttk.Combobox(
             sell_entry,
             textvariable=self._sell_price_var,
@@ -261,10 +266,10 @@ class AccountingCenterPanel(ttk.Frame):
             state="disabled",
             style=WORKBENCH_COMBO_STYLE,
         )
-        self._sell_price_combo.grid(row=1, column=2, sticky="ew", padx=(8, 0))
-        ttk.Entry(sell_entry, textvariable=self._sell_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=3, sticky="ew", padx=(8, 0))
+        self._sell_price_combo.grid(row=1, column=3, sticky="ew", padx=(8, 0))
+        ttk.Entry(sell_entry, textvariable=self._sell_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=4, sticky="ew", padx=(8, 0))
         self._sell_button = ttk.Button(sell_entry, text="登錄賣出", command=self._record_inventory_sell, style=WORKBENCH_BUTTON_STYLE, state="disabled")
-        self._sell_button.grid(row=1, column=4, sticky="e", padx=(8, 0))
+        self._sell_button.grid(row=1, column=5, sticky="e", padx=(8, 0))
         self._sell_date_var.trace_add("write", self._schedule_sell_fill_constraints)
         self._sell_price_var.trace_add("write", self._refresh_sell_button_state)
         self._sell_qty_var.trace_add("write", self._refresh_sell_button_state)
@@ -277,6 +282,7 @@ class AccountingCenterPanel(ttk.Frame):
             columns=(
                 TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
+                TableColumn("stock_name", "名稱", 12),
                 TableColumn("trade_date", "成交日", 11, sort_kind="date"),
                 TableColumn("price", "成交價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
                 TableColumn("qty", "數量", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
@@ -310,6 +316,7 @@ class AccountingCenterPanel(ttk.Frame):
             columns=(
                 TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
+                TableColumn("stock_name", "名稱", 12),
                 TableColumn("trade_date", "日期", 11, sort_kind="date"),
                 TableColumn("qty", "股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
                 TableColumn("price", "成交價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
@@ -346,6 +353,7 @@ class AccountingCenterPanel(ttk.Frame):
             columns=(
                 TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
+                TableColumn("stock_name", "名稱", 12),
                 TableColumn("trade_date", "賣出日", 11, sort_kind="date"),
                 TableColumn("qty", "賣出股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
                 TableColumn("offset_gross_amount", "沖抵買入價金", 13, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
@@ -556,17 +564,20 @@ class AccountingCenterPanel(ttk.Frame):
             item["entry_date"] = account_row.get("entry_date", item.get("entry_date"))
             item["_table_id"] = ticker
             inventory_rows.append(item)
+        inventory_rows = enrich_workbench_stock_rows(WORKBENCH_PROJECT_ROOT, inventory_rows)
         self._inventory.set_rows(inventory_rows, preserve_selection=True)
 
         self._all_buy_rows = []
         for row in self._dashboard.get("buy_details") or []:
             item = dict(row)
             item["_table_id"] = f"buy-{int(item.get('revision') or 0)}"
+            item["stock_name"] = workbench_stock_name(WORKBENCH_PROJECT_ROOT, item.get("ticker"))
             self._all_buy_rows.append(item)
         self._all_sell_rows = []
         for row in self._dashboard.get("sell_details") or []:
             item = dict(row)
             item["_table_id"] = f"sell-{int(item.get('revision') or 0)}"
+            item["stock_name"] = workbench_stock_name(WORKBENCH_PROJECT_ROOT, item.get("ticker"))
             self._all_sell_rows.append(item)
         self._sells.set_rows(self._all_sell_rows, preserve_selection=True)
         self._perf.set_rows([
@@ -651,6 +662,7 @@ class AccountingCenterPanel(ttk.Frame):
         self._delete_inventory_button.configure(state="normal" if active else "disabled")
         ticker = str(row.get("ticker") or "").strip().upper() if row else ""
         self._sell_ticker_var.set(ticker or "-")
+        self._sell_stock_name_var.set(workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker) if ticker else "-")
         if not row:
             self._sell_selected_ticker = ""
             self._sell_constraint_programmatic_update = True
@@ -903,6 +915,8 @@ class AccountingCenterPanel(ttk.Frame):
         body = ttk.Frame(top, padding=12, style=WORKBENCH_FRAME_STYLE)
         body.pack(fill="both", expand=True)
         ticker_var = tk.StringVar(value="" if row is None else str(row.get("ticker") or ""))
+        stock_name_var = tk.StringVar(value=workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker_var.get()))
+        ticker_var.trace_add("write", lambda *_args: stock_name_var.set(workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker_var.get())))
         qty_var = tk.StringVar(value="" if row is None else str(int(row.get("qty") or 0)))
         cost_var = tk.StringVar(value="" if row is None else _money(row.get("holding_cost")))
         date_var = tk.StringVar(value="" if row is None else str(row.get("entry_date") or ""))
@@ -910,6 +924,8 @@ class AccountingCenterPanel(ttk.Frame):
             ttk.Label(body, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=r, column=0, sticky="w", pady=4)
         ticker_entry = ttk.Entry(body, textvariable=ticker_var, width=18, style=WORKBENCH_ENTRY_STYLE)
         ticker_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=4)
+        ttk.Label(body, text="名稱", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=2, sticky="w", padx=(12, 0), pady=4)
+        ttk.Label(body, textvariable=stock_name_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT).grid(row=0, column=3, sticky="w", padx=(8, 0), pady=4)
         if mode == "edit":
             ticker_entry.configure(state="readonly")
         ttk.Entry(body, textvariable=qty_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=4)
@@ -1019,12 +1035,15 @@ class AccountingCenterPanel(ttk.Frame):
         body = ttk.Frame(top, padding=12, style=WORKBENCH_FRAME_STYLE)
         body.pack(fill="both", expand=True)
         ticker_var = tk.StringVar(value=str(row.get("ticker") or ""))
+        stock_name_var = tk.StringVar(value=workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker_var.get()))
         qty_var = tk.StringVar(value=str(int(row.get("qty") or 0)))
         price_var = tk.StringVar(value=_price(row.get("price")))
         date_var = tk.StringVar(value=str(row.get("trade_date") or ""))
         for r, label in enumerate(("股票", "數量", "成交價", "成交日")):
             ttk.Label(body, text=label, style=WORKBENCH_LABEL_STYLE).grid(row=r, column=0, sticky="w", pady=4)
         ttk.Label(body, textvariable=ticker_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT).grid(row=0, column=1, sticky="w", padx=(8, 0), pady=4)
+        ttk.Label(body, text="名稱", style=WORKBENCH_LABEL_STYLE).grid(row=0, column=2, sticky="w", padx=(12, 0), pady=4)
+        ttk.Label(body, textvariable=stock_name_var, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT).grid(row=0, column=3, sticky="w", padx=(8, 0), pady=4)
         ttk.Entry(body, textvariable=qty_var, width=18, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=4)
         price_widget = None
         date_field = None

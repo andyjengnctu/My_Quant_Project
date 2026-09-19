@@ -1,13 +1,18 @@
 - Trading
     - 股票中文名稱: 能否在workbench的所有股票欄邊加入股票的中文名稱
-    
+    - 交易區
+        - 每區的買賣輸入移到表格上面
+        - 目前Active掛單訊息移除
+        - (買入限價自動...) (輸入手動...) (不經掛單區) 固定操作提示文字一律移到最小方操作提示顯示
+
+        - 為何2002顯示同步失敗
 
 - restreucture
     - 刪除不再需要的相容層的code，精簡程式也避免之後誤接
 
 - non-DL 
     - 加入validate period early stop，驗證最適回數，再用此回數retrain traning+valid完整資料，最後再用research的即有的選單來測試效果
-    
+
 - imrove DL learnability
     - 0050 only DL
     - 還是應該廣義成圖形辦識的多層結構，而不是人為克意去分層

@@ -14,9 +14,11 @@ import pandas as pd
 from services.workbench_ui.param_sources import build_workbench_param_source_options
 from services.workbench_ui.state_sync import (
     ACCOUNT_MUTATION_DOMAINS,
+    STATE_MARKET_DATA,
     normalize_state_domains,
     panel_depends_on_state_domains,
 )
+from services.workbench_ui.stock_names import invalidate_workbench_stock_name_cache
 
 
 WORKBENCH_TITLE = "股票工具工作台"
@@ -1060,6 +1062,8 @@ class StockToolsWorkbench:
         normalized = normalize_state_domains(domains)
         if not normalized:
             return
+        if STATE_MARKET_DATA in normalized:
+            invalidate_workbench_stock_name_cache()
         source_id = None if source_panel_id is None else str(source_panel_id)
         for panel_id, panel in list(self._panel_instances.items()):
             if source_id is not None and str(panel_id) == source_id:

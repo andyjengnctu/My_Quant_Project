@@ -66,6 +66,7 @@ from services.trade_analysis.charting import (
     scroll_chart_to_latest,
 )
 from services.workbench_ui.trading_source_labels import TRADING_SOURCE_STRATEGY_LABEL
+from services.workbench_ui.stock_names import format_workbench_stock_label
 from services.workbench_ui.workbench import (
     WorkbenchConsoleWriter,
     WorkbenchInspectorSharedMixin,
@@ -2088,7 +2089,7 @@ class PortfolioBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame):
 
     def _format_ticker_dropdown_label(self, *, ticker, first_buy_row, stats):
         del first_buy_row, stats
-        return f"{ticker} | {TRADING_SOURCE_STRATEGY_LABEL}"
+        return format_workbench_stock_label(WORKBENCH_PROJECT_ROOT, ticker, source_label=TRADING_SOURCE_STRATEGY_LABEL)
 
     def _refresh_trade_ticker_dropdown(self, result_payload):
         df_tr = result_payload.get("df_tr")
