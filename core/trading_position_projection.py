@@ -22,6 +22,15 @@ def build_confirmed_position_origin(record, *, binding, params, account_events=(
         if str((e.get("details") or {}).get("ticker") or "") == str(record.get("ticker") or "")
         and str((e.get("details") or {}).get("trade_date") or "") == entry_date
         and e.get("mutation_type") in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT, TRADE_MUTATION_MANUAL_MANAGED_BUY, TRADE_MUTATION_BUY}]
+    if not isinstance(origin, dict):
+        # AI: Pre-migration BUY events already froze the mechanical initial
+        # position. Reuse that exact evidence, never a later rolling snapshot.
+        for details in buys:
+            snapshot = details.get("position_after") or {}
+            initial = (snapshot.get("strategy_management") or {}).get("position_state")
+            if isinstance(initial, dict) and str(initial.get("entry_trade_date") or "") == entry_date:
+                origin = deepcopy(initial)
+                break
     first_buy = None
     if buys:
         total_qty = sum(int(d.get("fill_qty") or d.get("qty") or 0) for d in buys)
@@ -125,4 +134,140 @@ def collect_confirmed_position_events(account_events, record, *, through_date):
         elif event.get("mutation_type") == TRADE_MUTATION_STRATEGY_BUY_INCREMENT and date != entry_date:
             raise ValueError("Canonical partial BUY fills must belong to the original acquisition session")
     return events
+
+
+
+def collect_confirmed_position_cycles(account_events, *, ticker, current_position=None):
+    """Partition effective, correction-ordered facts by acquisition, not ticker.
+
+    AI: This is an evidence join, not an accounting or strategy replay. Only
+    confirmed acquisitions/imports create a cycle. A later snapshot can supply
+    its frozen binding but cannot invent a BUY or reopen a fully sold cycle.
+    Each cycle carries only its own confirmations into the canonical replay.
+    """
+    from core.trading_account_state import (
+        ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT, MANAGED_POSITION_SOURCES,
+        POSITION_SOURCE_MANUAL_ADOPTED, POSITION_SOURCE_MANUAL_MANAGED,
+        POSITION_SOURCE_STRATEGY_FILL,
+    )
+
+    buy_sources = {
+        TRADE_MUTATION_BUY: POSITION_SOURCE_MANUAL_ADOPTED,
+        TRADE_MUTATION_MANUAL_MANAGED_BUY: POSITION_SOURCE_MANUAL_MANAGED,
+        TRADE_MUTATION_STRATEGY_BUY: POSITION_SOURCE_STRATEGY_FILL,
+        TRADE_MUTATION_STRATEGY_BUY_INCREMENT: POSITION_SOURCE_STRATEGY_FILL,
+    }
+    cycles = []
+    active = None
+
+    def new_cycle(date, event, *, source, record=None):
+        logical = (event.get("details") or {}).get("replacement_for_revision") or event.get("revision") or date
+        cycle = {
+            "cycle_id": f"{ticker}:{logical}:{date}", "entry_date": date,
+            "exit_date": None, "events": [], "record": deepcopy(record or {}),
+            "source": source, "qty": 0, "initial_qty": 0,
+            "initial_gross_buy_milli": 0, "initial_cost_basis_milli": 0,
+            "has_buy_event": False,
+        }
+        cycles.append(cycle)
+        return cycle
+
+    def attach(cycle, snapshot):
+        if not isinstance(snapshot, dict):
+            return
+        previous = cycle["record"]
+        # Prefer this cycle's acquisition/activation binding over a stale
+        # pre-sale snapshot or a different, currently held acquisition.
+        old_lineage = previous.get("management_lineage") or previous.get("strategy_lineage") or {}
+        incoming = snapshot.get("management_lineage") or snapshot.get("strategy_lineage") or {}
+        if old_lineage.get("lineage_id") and incoming.get("lineage_id") and old_lineage["lineage_id"] != incoming["lineage_id"]:
+            return
+        if previous.get("source") in MANAGED_POSITION_SOURCES and snapshot.get("source") not in MANAGED_POSITION_SOURCES:
+            return
+        merged = deepcopy(snapshot)
+        previous_management = previous.get("strategy_management") or {}
+        management = merged.setdefault("strategy_management", {})
+        for field in ("entry_execution_plan", "entry_position_state"):
+            if field not in management and field in previous_management:
+                management[field] = deepcopy(previous_management[field])
+        for key in ("management_lineage", "strategy_lineage"):
+            if key not in merged and key in previous:
+                merged[key] = deepcopy(previous[key])
+        cycle["record"] = merged
+        cycle["source"] = str(merged.get("source") or cycle["source"])
+
+    for event in account_events:
+        details = dict(event.get("details") or {})
+        if str(details.get("ticker") or "") != str(ticker):
+            continue
+        mutation = str(event.get("mutation_type") or "")
+        date = str(details.get("trade_date") or "")[:10]
+        if mutation in buy_sources:
+            qty = int(details.get("fill_qty") or details.get("qty") or 0)
+            if qty <= 0 or not date:
+                continue
+            if active is None:
+                active = new_cycle(date, event, source=buy_sources[mutation])
+            active["events"].append(deepcopy(event))
+            active["has_buy_event"] = True
+            active["qty"] += qty
+            active["initial_qty"] += qty
+            active["initial_gross_buy_milli"] += int(details.get("gross_buy_milli") or 0)
+            active["initial_cost_basis_milli"] += int(details.get("net_buy_total_milli") or 0)
+            attach(active, details.get("position_after"))
+            # Legacy acquisition events can carry lineage outside the snapshot.
+            for key in ("management_lineage", "strategy_lineage"):
+                if isinstance(details.get(key), dict):
+                    active["record"][key] = deepcopy(details[key])
+            continue
+        if mutation == "adopt_manual_position":
+            date = str(details.get("entry_date") or "")[:10]
+            if not date:
+                continue
+            active = new_cycle(date, event, source=POSITION_SOURCE_MANUAL_ADOPTED)
+            active["qty"] = active["initial_qty"] = int(details.get("qty") or 0)
+            active["initial_cost_basis_milli"] = int(details.get("cost_basis_total_milli") or 0)
+            active["events"].append(deepcopy(event))
+            continue
+        if mutation == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT:
+            snapshot = details.get("position_after")
+            broker = (snapshot or {}).get("broker") or {}
+            date = str(broker.get("entry_date") or "")[:10]
+            if active is None:
+                # Compatibility: an explicit retained adoption and matching
+                # current inventory prove stock ownership, not a fictional fill.
+                current_broker = (current_position or {}).get("broker") or {}
+                if not date or current_broker.get("entry_date") != date:
+                    continue
+                active = new_cycle(date, event, source=POSITION_SOURCE_MANUAL_MANAGED, record=snapshot)
+                active["qty"] = active["initial_qty"] = int(broker.get("initial_qty") or broker.get("qty") or 0)
+                active["initial_gross_buy_milli"] = int(broker.get("initial_gross_buy_milli") or 0)
+                active["initial_cost_basis_milli"] = int(broker.get("initial_cost_basis_milli") or 0)
+            attach(active, snapshot)
+            active["events"].append(deepcopy(event))
+            continue
+        if mutation == "confirm_sell_fill" and active is not None:
+            active["events"].append(deepcopy(event))
+            attach(active, details.get("position_before"))
+            active["qty"] = int(details.get("remaining_qty", active["qty"] - int(details.get("qty") or 0)))
+            if active["qty"] <= 0:
+                active["exit_date"] = date
+                active = None
+        elif mutation in {"remove_manual_position", "remove_position_broker_truth"}:
+            active = None
+
+    if active is not None and isinstance(current_position, dict):
+        if str((current_position.get("broker") or {}).get("entry_date") or "") == active["entry_date"]:
+            attach(active, current_position)
+    for cycle in cycles:
+        record = cycle["record"]
+        record["ticker"] = str(ticker)
+        record["source"] = cycle["source"]
+        broker = deepcopy(record.get("broker") or {})
+        broker.update(qty=max(0, cycle["qty"]), initial_qty=cycle["initial_qty"], entry_date=cycle["entry_date"])
+        for key in ("initial_gross_buy_milli", "initial_cost_basis_milli"):
+            if cycle[key] > 0:
+                broker[key] = cycle[key]
+        record["broker"] = broker
+    return cycles
 

@@ -934,6 +934,12 @@
 | T551 | validate_trading_discretion_pending_fill_correction_case - User ranking choice, downward quantity edit, partial BUY, actual correction and cancellation. | B421 |
 | T552 | validate_lifecycle_same_session_confirmation_order_case - Same-session confirmed half exit precedes the subsequent full exit decision. | B421 |
 | T553 | validate_lifecycle_randomized_confirmed_replay_case - Fixed-seed randomized simulator facts versus canonical confirmed replay. | B421 |
+| T554 | validate_trading_confirmed_cycle_history_contract_case - Per-acquisition closed-history replay, manual fill reasons, chart/hover agreement, binding isolation and read-only error boundaries. | B421 |
+| T555 | validate_trading_corrected_chart_ledger_contract_case - Corrected BUY chronology and immutable binding; SELL chart amounts consume canonical corrected account economics. | B421 |
+| T556 | validate_trading_partial_exit_chart_contract_case - Incomplete/complete TP confirmation, manual/unknown execution reason preservation and unmanaged legacy fact isolation. | B421 |
+| T557 | validate_trading_prefill_position_exclusion_contract_case - Confirmed acquisition consumes existing prefill lineage; signals born during holding do not revive after exit, while genuine new post-exit signals remain available. | B421 |
+| T558 | validate_trading_pinned_history_input_contract_case - Full pinned consumer input preserves automatic/manual frozen management on fresh and cropped views; legacy origin and read-error recovery must not erase existing valid geometry. | B421 |
+| T559 | validate_trading_direct_fill_source_contract_case - Direct fills resolve Scanner source independently of selection; frozen lineage, quantity discretion, stale guards and execution reason remain distinct. | B421 |
 
 ## G. 逐項收斂紀錄
 
@@ -3251,3 +3257,9 @@
 | 2026-09-19 | T551 | Register lifecycle ownership and execution-fact capability contract. | NEW -> DONE | Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed. |
 | 2026-09-19 | T552 | Register lifecycle ownership and execution-fact capability contract. | NEW -> DONE | Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed. |
 | 2026-09-19 | T553 | Register lifecycle ownership and execution-fact capability contract. | NEW -> DONE | Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed. |
+| 2026-09-19 | T554 | Register historical confirmed-fact chart regression capability. | NEW -> DONE | Independent scoped simulations cover this contract; no local formal-suite PASS is claimed. |
+| 2026-09-19 | T555 | Register historical confirmed-fact chart regression capability. | NEW -> DONE | Independent scoped simulations cover this contract; no local formal-suite PASS is claimed. |
+| 2026-09-19 | T556 | Register historical confirmed-fact chart regression capability. | NEW -> DONE | Independent scoped simulations cover this contract; no local formal-suite PASS is claimed. |
+| 2026-09-19 | T557 | Register positive-preservation and real-shadow exclusion capability. | NEW -> DONE | Independent scoped simulations completed; not a local formal-suite PASS. |
+| 2026-09-19 | T558 | Register positive-preservation and real-shadow exclusion capability. | NEW -> DONE | Independent scoped simulations completed; not a local formal-suite PASS. |
+| 2026-09-19 | T559 | Register direct-fill source provenance capability. | NEW -> DONE | Independent snapshot/account/UI simulations; no formal-suite status implied. |

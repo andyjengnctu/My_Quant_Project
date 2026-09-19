@@ -23,7 +23,7 @@ from core.entry_plans import build_position_from_frozen_entry_plan
 from core.exact_accounting import calc_entry_total_cost, milli_to_money, milli_to_price, price_to_milli
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.position_replay import replay_confirmed_position_management
-from core.trading_position_projection import build_confirmed_position_origin, collect_confirmed_position_events, project_full_exit_obligation
+from core.trading_position_projection import build_confirmed_position_origin, collect_confirmed_position_events, collect_confirmed_position_cycles, project_full_exit_obligation
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trading_account_state import (
     ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT,
@@ -37,6 +37,7 @@ from core.trading_account_state import (
     TRADE_MUTATION_STRATEGY_BUY,
     TRADE_MUTATION_STRATEGY_BUY_INCREMENT,
     effective_trading_account_events,
+    project_trading_account_transactions,
 )
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from core.trading_order_state import (
@@ -54,7 +55,7 @@ from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_FILLED,
     load_trading_pending_entry_state,
 )
-from services.trading.accounting_policy import overlay_trading_accounting_params
+from services.trading.accounting_policy import overlay_trading_accounting_params, build_standalone_trading_accounting_params
 from services.trading.order_state import load_trading_order_state
 from services.trading.protection_planning import get_trading_protection_plan_read_model
 from services.trading.indicator_exit_planning import get_trading_indicator_exit_plan_read_model
@@ -174,11 +175,48 @@ def load_trading_single_stock_pending_binding(project_root: str | Path, ticker: 
     from services.trading.strategy_param_runtime import validate_trading_position_management_lineage
     return validate_trading_position_management_lineage(entries[0]["management_lineage"])
 
+def _inspection_account_events(account):
+    """Consume the SAME corrected economic rows as the account transaction table.
+
+    AI: The immutable raw SELL may predate a BUY correction. Reusing its old
+    cost/PnL (or appending the replacement BUY after SELL) is not account truth.
+    Management journal metadata is retained; no fee/PnL formula is repeated here.
+    """
+    trades = {int(e["revision"]): e for e in project_trading_account_transactions(
+        account, accounting_params=build_standalone_trading_accounting_params()
+    )}
+    events = []
+    for raw in effective_trading_account_events(account):
+        event = deepcopy(raw)
+        trade = trades.get(int(event.get("revision") or 0))
+        if trade is not None:
+            event["details"] = deepcopy(trade["details"])
+            if event.get("mutation_type") in _BUY_MUTATIONS:
+                # AI: Corrections replace economics, not the original strategy
+                # binding. Resolve the immutable acquisition, never today's
+                # ticker template or another cycle's last SELL snapshot.
+                origin = original_buy_event(raw, account.get("events") or [])
+                original_details = origin.get("details") or {}
+                for key in ("position_after", "management_lineage", "strategy_lineage", "entry_order_id"):
+                    if key in original_details:
+                        event["details"][key] = deepcopy(original_details[key])
+        events.append(event)
+    return sorted(events, key=lambda e: (
+        int((e.get("details") or {}).get("effective_before_revision")
+            or (e.get("details") or {}).get("replacement_for_revision") or e.get("revision") or 0),
+        -1 if (e.get("details") or {}).get("effective_before_revision") else 0,
+        int(e.get("revision") or 0),
+    ))
+
+
+
 def build_trading_single_stock_inspection(
     project_root: str | Path,
     ticker: object,
     *,
     candidate_row: Mapping[str, Any] | None = None,
+    market_frame: pd.DataFrame | None = None,
+    consumer_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Read canonical Trading evidence once for date-aware inspector rendering."""
     root = Path(project_root).resolve()
@@ -202,7 +240,7 @@ def build_trading_single_stock_inspection(
     if account:
         account_events = [
             deepcopy(event)
-            for event in effective_trading_account_events(account)
+            for event in _inspection_account_events(account)
             if _ticker_matches(event.get("details") or {}, ticker_key)
             or any(
                 _ticker_matches(row, ticker_key)
@@ -249,28 +287,63 @@ def build_trading_single_stock_inspection(
         decision_errors.append(f"indicator_exit: {type(exc).__name__}: {exc}")
 
     from services.trading.market_data_consumer import load_trading_v2_consumer_state
-    consumer = load_trading_v2_consumer_state(root, required=False)
+    # AI: The GUI already owns a verified, full consumer frame. Reuse that exact
+    # pinned input for frozen management too; a second independent reload can
+    # fail or switch generations after the chart has successfully loaded.
+    if market_frame is not None and consumer_state is None:
+        raise ValueError("Inspection market_frame requires its pinned consumer_state")
+    consumer = deepcopy(dict(consumer_state)) if consumer_state is not None else load_trading_v2_consumer_state(root, required=False)
+    position_history = collect_confirmed_position_cycles(
+        account_events, ticker=ticker_key, current_position=current_position,
+    )
     management_projection = None
-    if consumer is not None and current_position is not None and position_binding is not None:
+    context = None
+    frame_cache = {}
+    for cycle in position_history:
+        record = cycle["record"]
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
+            continue
         try:
-            # AI: The query owns full acquisition history. A zoomed/windowed
-            # chart must not become a second, truncated replay data source.
+            is_current = (cycle.get("exit_date") is None and current_position is not None
+                          and (current_position.get("broker") or {}).get("entry_date") == cycle["entry_date"])
+            binding = position_binding if is_current else resolve_trading_position_management_binding(record, orders=orders)
+            cycle["binding"] = binding
+            if consumer is None:
+                continue
             from services.trading.lifecycle_context import resolve_trading_lifecycle_context
             from services.trading.position_market_context import load_trading_position_market_frame
-            context = resolve_trading_lifecycle_context(root, consumer_state=consumer)
-            frozen_params = build_params_from_mapping(position_binding["frozen_params"])
-            frame = load_trading_position_market_frame(view=context.view, ticker=ticker_key,
-                params=frozen_params, allowed_date=context.finalized_date)
-            management_projection = replay_confirmed_position_management(
-                build_confirmed_position_origin(current_position, binding=position_binding,
-                    params=frozen_params, account_events=account_events, frame=frame),
-                frame=frame, params=frozen_params,
-                start_date=current_position["broker"]["entry_date"],
-                confirmed_quantity_events=collect_confirmed_position_events(account_events,
-                    current_position, through_date=context.finalized_date),
+            from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+            params = build_params_from_mapping(binding["frozen_params"])
+            through = min(str(consumer["market_date"]), cycle.get("exit_date") or str(consumer["market_date"]))
+            if cycle["entry_date"] > through:
+                continue
+            signature = binding["params_signature"]
+            if signature not in frame_cache:
+                if market_frame is not None:
+                    if market_frame.empty or pd.Timestamp(market_frame.index.max()).normalize() > pd.Timestamp(consumer["market_date"]):
+                        raise ValueError("Inspection frame exceeds the pinned finalized boundary")
+                    frame_cache[signature], _ = sanitize_ohlcv_dataframe(
+                        market_frame.rename_axis("Date").reset_index(), ticker_key, min_rows=get_required_min_rows(params),
+                    )
+                else:
+                    if context is None:
+                        context = resolve_trading_lifecycle_context(root, consumer_state=consumer)
+                    frame_cache[signature] = load_trading_position_market_frame(
+                        view=context.view, ticker=ticker_key, params=params, allowed_date=context.finalized_date,
+                    )
+            frame = frame_cache[signature].loc[:through]
+            cycle["projection"] = replay_confirmed_position_management(
+                build_confirmed_position_origin(record, binding=binding, params=params,
+                    account_events=cycle["events"], frame=frame),
+                frame=frame, params=params, start_date=cycle["entry_date"],
+                confirmed_quantity_events=collect_confirmed_position_events(cycle["events"], record, through_date=through),
             )
+            if is_current:
+                management_projection = cycle["projection"]
         except (OSError, TypeError, ValueError, KeyError, IndexError, RuntimeError) as exc:
-            decision_errors.append(f"management_projection: {type(exc).__name__}: {exc}")
+            cycle["projection_error"] = f"management_projection[{cycle['cycle_id']}]: {type(exc).__name__}: {exc}"
+            _LOGGER.warning("%s", cycle["projection_error"])
+            decision_errors.append(cycle["projection_error"])
     return {
         "ticker": ticker_key,
         "finalized_date": None if consumer is None else consumer.get("market_date"),
@@ -287,6 +360,7 @@ def build_trading_single_stock_inspection(
         "current_position": deepcopy(current_position),
         "position_binding": deepcopy(position_binding),
         "management_projection": management_projection,
+        "position_history": position_history,
         "protection": {
             "fresh": bool(protection.get("fresh")),
             "positions": [
@@ -473,10 +547,13 @@ def _current_position_effective_date(
     return max(effective_dates)
 
 
-def _sell_signal_as_of(inspection: Mapping[str, Any], date_text: str) -> str | None:
+def _sell_signal_as_of(inspection: Mapping[str, Any], date_text: str, *, entry_date: str | None = None) -> str | None:
     """Project the same canonical account SELL obligation shown by Trading Center."""
     current_position = inspection.get("current_position")
     if isinstance(current_position, Mapping):
+        current_entry = _date_text((current_position.get("broker") or {}).get("entry_date"))
+        if entry_date is not None and current_entry != entry_date:
+            return None
         management = dict(current_position.get("strategy_management") or {})
         signal = str(management.get("sell_signal") or "").strip()
         signal_date = _date_text(management.get("sell_signal_date"))
@@ -664,7 +741,7 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
             if isinstance(position_state, Mapping) and qty > 0:
                 position_state = deepcopy(dict(position_state))
                 position_state["qty"] = qty
-                if str(details.get("event") or "").upper() == "TP_HALF":
+                if str(details.get("event") or "").upper() == "TP_HALF" and details.get("tp_half_complete", True):
                     # Historical account events persist the pre-sell position,
                     # not a second post-sell snapshot.  The confirmed TP event is
                     # sufficient evidence that subsequent dates must no longer
@@ -673,7 +750,7 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
             if qty <= 0:
                 closed_date = event_date
 
-    if entry_date is None or closed_date is not None and closed_date <= date_text:
+    if entry_date is None or closed_date is not None and closed_date < date_text:
         return None
 
     # If this cycle was born from a broker ENTRY order, that order is the exact
@@ -730,14 +807,15 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
     average_entry = None
     if entry_qty > 0 and gross_buy_milli > 0:
         average_entry = milli_to_price((gross_buy_milli + entry_qty // 2) // entry_qty)
-    if isinstance(position_state, Mapping):
-        average_entry = position_state.get("entry_fill_price", average_entry)
+    if average_entry is None and isinstance(position_state, Mapping):
+        average_entry = position_state.get("entry_fill_price")
 
     lineage_planned_qty = lineage.get("planned_qty") if isinstance(lineage, Mapping) else None
     lineage_planned_cost = lineage.get("planned_cost") if isinstance(lineage, Mapping) else None
     return {
         "state": TRADE_LIFECYCLE_POSITION,
-        "display_state": "持股",
+        "display_state": "\u5df2\u51fa\u5834" if closed_date == date_text else "\u6301\u80a1",
+        "closed_date": closed_date,
         "source": "canonical_account_position",
         "entry_date": entry_date,
         "entry_order_id": entry_order_id,
@@ -766,7 +844,7 @@ def _account_cycle_as_of(inspection: Mapping[str, Any], date_text: str) -> dict[
         "strategy_lineage": lineage,
         "management_lineage": lineage,
         "sold_half": bool(position_state.get("sold_half", False)) if isinstance(position_state, Mapping) else False,
-        "sell_signal": management_sell_signal or _sell_signal_as_of(inspection, date_text),
+        "sell_signal": management_sell_signal or _sell_signal_as_of(inspection, date_text, entry_date=entry_date),
         "sell_signal_date": management_sell_signal_date,
         "decision_errors": list(inspection.get("decision_errors") or []),
     }
@@ -977,6 +1055,11 @@ def _shadow_plan_from_strategy_buy_event(
         or entry_date
     )
     signal_date = _date_text(lineage.get("signal_date")) or information_date
+    # AI: A direct backfill/adoption supplies management origin, not a pending
+    # order or strategy signal. Its later registration/information date must
+    # never create a new SIGNAL after the confirmed acquisition or exit.
+    if signal_date >= entry_date:
+        return None
     planned_qty = lineage.get("planned_qty")
     reserved_capital = lineage.get("planned_cost")
     limit_price = seed.get("limit_price")
@@ -1328,7 +1411,11 @@ def _prefill_state_as_of(
 ) -> dict[str, Any] | None:
     """Resolve SIGNAL/SHADOW from normalized plan evidence and Research strategy state."""
     candidates: list[dict[str, Any]] = []
+    ranges = _account_cycle_ranges(inspection, last_date=last_date or date_text)
     for plan in _build_shadow_plans(inspection, last_date=last_date):
+        origin = _date_text(plan.get("signal_date")) or _date_text(plan.get("information_date"))
+        if not _prefill_lineage_available(origin, date_text, ranges):
+            continue
         if _plan_covers_date(plan, date_text):
             candidates.append(plan)
     if not candidates:
@@ -1389,6 +1476,19 @@ def _account_cycle_ranges(inspection: Mapping[str, Any], *, last_date: str | Non
     return ranges
 
 
+def _prefill_lineage_available(signal_date, date_text, position_ranges):
+    """A real acquisition consumes prior intent; held-period signals never revive.
+
+    AI: A genuinely fresh signal AFTER the completed exit remains eligible.
+    Voided BUY events are absent from position_ranges and therefore do not
+    suppress the historical unfilled lifecycle.
+    """
+    if signal_date is None or date_text is None:
+        return False
+    return not any(start <= date_text and signal_date <= end
+                   for start, end in position_ranges)
+
+
 def _sell_event_position_before(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
     if str(event.get("mutation_type") or "") != TRADE_MUTATION_SELL:
         return None
@@ -1417,8 +1517,10 @@ def _sell_trace_name(event_name: object) -> str:
     if normalized == "TP_HALF":
         return "停利"
     if normalized == "IND_SELL":
-        return "指標賣出"
-    return "指標賣出"
+        return "\u6307\u6a19\u8ce3\u51fa"
+    if normalized in {"MANUAL_ACCOUNT_SELL", "MANUAL_CONFIRMED_SELL", "ACCOUNT_CORRECTION_SELL"}:
+        return "\u624b\u52d5\u8ce3\u51fa"
+    return "\u8ce3\u51fa\u6210\u4ea4"
 
 
 def _canonical_marker(
@@ -1496,6 +1598,7 @@ def _build_trading_prefill_lifecycle_timeline(
     indicator_cache = {}
 
     last_date = next((value for value in reversed(date_labels) if value is not None), None)
+    ranges = _account_cycle_ranges(inspection, last_date=last_date)
     merged: dict[int, dict[str, Any]] = {}
     owner_key: dict[int, tuple[str, int]] = {}
 
@@ -1516,6 +1619,10 @@ def _build_trading_prefill_lifecycle_timeline(
             continue
         row = deepcopy(dict(raw_row))
         signal_key = str(_date_text(row.get("signal_date")) or _date_text(row.get("information_date")) or "")
+        if finalized and date_labels[idx] and date_labels[idx] > finalized:
+            continue
+        if not _prefill_lineage_available(signal_key, date_labels[idx], ranges):
+            continue
         merged[idx] = row
         owner_key[idx] = (signal_key, 0)
 
@@ -1538,6 +1645,8 @@ def _build_trading_prefill_lifecycle_timeline(
         signal_key = str(_date_text(plan.get("signal_date")) or _date_text(plan.get("information_date")) or "")
         priority = int(plan.get("priority") or 0)
         for idx, row in timeline.items():
+            if not _prefill_lineage_available(signal_key, date_labels[idx], ranges):
+                continue
             key = (signal_key, priority)
             if idx not in owner_key or key >= owner_key[idx]:
                 merged[int(idx)] = deepcopy(dict(row))
@@ -1548,58 +1657,83 @@ def _build_trading_prefill_lifecycle_timeline(
 def _build_manual_managed_position_replay_timeline(
     inspection: Mapping[str, Any], chart_payload: Mapping[str, Any],
 ) -> dict[int, dict[str, Any]]:
-    """Compatibility name; query the same replay for ALL managed source types.
+    """Compatibility name: project EVERY confirmed cycle with its own binding.
 
-    AI: Account events remain the only authority for POSITION/quantity. This
-    query supplies management geometry only, never inferred inventory/fills.
+    AI: Closed histories must not disappear when current inventory is empty.
+    An open later acquisition cannot supply Params, quantity or SELL obligations
+    to an older one. Read-only compatibility replay uses the same domain owner.
     """
-    record = inspection.get("current_position")
-    binding = inspection.get("position_binding")
-    if not isinstance(record, Mapping) or record.get("source") not in MANAGED_POSITION_SOURCES or not isinstance(binding, Mapping):
-        return {}
     labels = _chart_date_labels(chart_payload)
-    projection = inspection.get("management_projection")
-    if projection is None:
-        required = {key: _chart_series_values(chart_payload, key) for key in ("open", "high", "low", "close", "volume")}
-        if not labels or any(len(values) < len(labels) for values in required.values()):
-            return {}
-        frame = pd.DataFrame({key.title(): values[:len(labels)] for key, values in required.items()},
-                             index=pd.to_datetime(labels))
-        frame = frame.loc[~frame.index.isna()]
-        finalized = inspection.get("finalized_date")
-        if finalized:
-            frame = frame.loc[frame.index <= pd.Timestamp(finalized)]
-        if frame.empty:
-            return {}
-        params = build_params_from_mapping(dict(binding["frozen_params"]))
-        events = list(inspection.get("account_events") or [])
-        try:
-            projection = replay_confirmed_position_management(
-                build_confirmed_position_origin(record, binding=binding, params=params, account_events=events, frame=frame),
-                frame=frame, params=params,
-                start_date=(record.get("broker") or {}).get("entry_date"),
-                confirmed_quantity_events=collect_confirmed_position_events(events, record, through_date=frame.index[-1].strftime("%Y-%m-%d")),
-            )
-        except (TypeError, ValueError, KeyError, IndexError, RuntimeError) as exc:
-            _LOGGER.warning("Managed timeline could not be replayed for %s: %s", inspection.get("ticker"), exc)
-            return {}
     indices = {label: idx for idx, label in enumerate(labels)}
-    result = {}
-    for session in projection["sessions"]:
-        if session["date"] not in indices:
-            continue
-        position = session["position_state"]
-        obligation = project_full_exit_obligation(session["full_exit_obligation"]) or {}
-        result[indices[session["date"]]] = build_trade_lifecycle_row(
-            TRADE_LIFECYCLE_POSITION, source="confirmed_management_projection",
-            information_date=session["date"], entry_type=position.get("entry_type"),
-            limit_price=position.get("limit_price"), entry_price=position.get("entry_fill_price"),
-            stop_price=position.get("sl"), tp_price=None if position.get("sold_half") else position.get("tp_half"),
-            buy_qty=position.get("initial_qty"), position_qty=position.get("qty"), remaining_order_qty=0,
-            entry_date=position.get("entry_trade_date"), initial_stop_price=position.get("initial_stop"),
-            trailing_stop_price=position.get("trailing_stop"), sell_signal=obligation.get("sell_signal"),
-            management_lineage=deepcopy(record.get("management_lineage") or record.get("strategy_lineage")),
+    history = inspection.get("position_history")
+    if history is None:
+        history = collect_confirmed_position_cycles(
+            list(inspection.get("account_events") or []), ticker=inspection.get("ticker"),
+            current_position=inspection.get("current_position"),
         )
+    result = {}
+
+    for cycle in history:
+        record = cycle["record"]
+        if record.get("source") not in MANAGED_POSITION_SOURCES:
+            continue
+        projection = cycle.get("projection")
+        binding = cycle.get("binding")
+        current = inspection.get("current_position") or {}
+        is_current = (cycle.get("exit_date") is None and
+            (current.get("broker") or {}).get("entry_date") == cycle["entry_date"])
+        if is_current:
+            binding = binding or inspection.get("position_binding")
+            if projection is None:
+                projection = inspection.get("management_projection")
+        try:
+            if binding is None:
+                binding = resolve_trading_position_management_binding(record, orders={
+                    "orders": {o.get("order_id"): o for o in inspection.get("entry_orders") or []}
+                })
+            if projection is None:
+                required = {key: _chart_series_values(chart_payload, key) for key in ("open", "high", "low", "close", "volume")}
+                if not labels or any(len(values) < len(labels) for values in required.values()):
+                    raise ValueError("Confirmed management replay requires complete OHLCV evidence")
+                frame = pd.DataFrame({key.title(): values[:len(labels)] for key, values in required.items()}, index=pd.to_datetime(labels))
+                frame = frame.loc[~frame.index.isna()]
+                through = min(filter(None, (inspection.get("finalized_date"), cycle.get("exit_date"), labels[-1])))
+                frame = frame.loc[:through]
+                if frame.empty or cycle["entry_date"] > through:
+                    continue
+                params = build_params_from_mapping(dict(binding["frozen_params"]))
+                from core.data_utils import get_required_min_rows
+                if inspection.get("position_history") is not None and len(frame) < get_required_min_rows(params):
+                    raise ValueError("Cropped display frame is not full management history")
+                projection = replay_confirmed_position_management(
+                    build_confirmed_position_origin(record, binding=binding, params=params,
+                        account_events=cycle["events"], frame=frame),
+                    frame=frame, params=params, start_date=cycle["entry_date"],
+                    confirmed_quantity_events=collect_confirmed_position_events(cycle["events"], record, through_date=through),
+                )
+        except (TypeError, ValueError, KeyError, IndexError, RuntimeError) as exc:
+            _LOGGER.warning("Managed cycle %s could not be replayed: %s", cycle["cycle_id"], exc)
+            continue
+        for session in projection["sessions"]:
+            if session["date"] not in indices:
+                continue
+            position = session["position_state"]
+            obligation = project_full_exit_obligation(session["full_exit_obligation"]) or {}
+            row = build_trade_lifecycle_row(
+                TRADE_LIFECYCLE_POSITION, source="confirmed_management_projection",
+                information_date=session["date"], entry_type=position.get("entry_type"),
+                limit_price=position.get("limit_price"), entry_price=position.get("entry_fill_price"),
+                stop_price=position.get("sl"), tp_price=None if position.get("sold_half") else position.get("tp_half"),
+                buy_qty=position.get("initial_qty"), position_qty=position.get("qty"), remaining_order_qty=0,
+                entry_date=cycle["entry_date"], initial_stop_price=position.get("initial_stop"),
+                trailing_stop_price=position.get("trailing_stop"), sell_signal=obligation.get("sell_signal"),
+                sell_signal_date=obligation.get("sell_signal_date"), sold_half=bool(position.get("sold_half")),
+                management_lineage=deepcopy(record.get("management_lineage") or record.get("strategy_lineage")),
+                cycle_id=cycle["cycle_id"], management_binding_sha256=binding.get("frozen_params_sha256"),
+                confirmed_inventory_evidence=not cycle.get("has_buy_event"),
+            )
+            row["position_qty"] = int(position.get("qty") or 0)
+            result[indices[session["date"]]] = row
     return result
 
 
@@ -1632,17 +1766,11 @@ def build_trading_single_stock_lifecycle_timeline(
             # AI: A recorded broker adoption is actual inventory evidence even
             # before the later management-activation date. A replay by itself
             # can NEVER create POSITION or a BUY marker.
-            current = inspection.get("current_position") or {}
-            broker_entry = _date_text((current.get("broker") or {}).get("entry_date"))
-            adopted = any(
-                e.get("mutation_type") == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT
-                and _ticker_matches(e.get("details") or {}, str(inspection.get("ticker") or ""))
-                and _date_text((((e.get("details") or {}).get("position_after") or {}).get("broker") or {}).get("entry_date")) == broker_entry
-                for e in inspection.get("account_events") or []
-            )
-            if adopted and broker_entry is not None and broker_entry <= date_text:
-                position_state = deepcopy(manual_replay[int(idx)])
+            row = manual_replay[int(idx)]
+            if row.get("confirmed_inventory_evidence"):
+                position_state = deepcopy(row)
                 position_state["source"] = "confirmed_manual_adoption_projection"
+                position_state["display_state"] = "\u5df2\u51fa\u5834" if row.get("position_qty") == 0 else "\u6301\u80a1"
         if position_state is not None:
             replay_state = manual_replay.get(int(idx))
             if isinstance(replay_state, Mapping):
@@ -1653,10 +1781,18 @@ def build_trading_single_stock_lifecycle_timeline(
                 position_state["initial_stop_price"] = replay_state.get("initial_stop_price")
                 position_state["trailing_stop_price"] = replay_state.get("trailing_stop_price")
                 position_state["stop_price"] = replay_state.get("stop_price")
-                if not bool(position_state.get("sold_half", False)):
-                    position_state["tp_price"] = replay_state.get("tp_price")
-                if not position_state.get("sell_signal"):
-                    position_state["sell_signal"] = replay_state.get("sell_signal")
+                position_state["tp_price"] = replay_state.get("tp_price")
+                position_state["sold_half"] = replay_state.get("sold_half", False)
+                position_state["sell_signal"] = replay_state.get("sell_signal")
+                position_state["sell_signal_date"] = replay_state.get("sell_signal_date")
+                position_state["cycle_id"] = replay_state.get("cycle_id")
+                position_state["management_binding_sha256"] = replay_state.get("management_binding_sha256")
+                position_state["management_geometry_source"] = "confirmed_management_projection"
+                position_state["decision_errors"] = [error for error in position_state.get("decision_errors") or []
+                                                      if not str(error).startswith("management_projection[")]
+            elif any(str(error).startswith("management_projection[") for error in inspection.get("decision_errors") or []):
+                position_state["management_geometry_source"] = "persisted_account_evidence"
+                position_state["management_projection_error"] = "Full management history unavailable; retained confirmed evidence"
             # Order evidence can contribute reservation metadata for a genuine
             # partial fill but never creates POSITION by itself.
             entry_order_id = str(position_state.get("entry_order_id") or "").strip()
@@ -1676,6 +1812,9 @@ def build_trading_single_stock_lifecycle_timeline(
                 elif raw_order_state == "FILLED":
                     position_state["reserved_capital"] = order_state.get("original_reserved_capital")
                 break
+            if position_state.get("position_qty") == 0:
+                position_state["sell_signal"] = None
+                position_state["sell_signal_date"] = None
             position_state["state"] = TRADE_LIFECYCLE_POSITION
             timeline[int(idx)] = deepcopy(dict(position_state))
             continue
@@ -1766,7 +1905,10 @@ def _canonical_account_marker_groups(
                 "sell_capital": milli_to_money(int(details.get("net_sell_total_milli") or 0)),
                 "pnl_value": milli_to_money(pnl_milli),
                 "pnl_pct": pnl_pct,
-                "result": str(details.get("event") or "實際成交"),
+                "result": str(details.get("event") or "\u5be6\u969b\u6210\u4ea4"),
+                "account_event_revision": event.get("revision"),
+                "execution_reason": details.get("event"),
+                "position_source": details.get("position_source"),
             },
         )
         groups.setdefault(trace_name, []).append(marker)
@@ -1999,6 +2141,8 @@ def project_trading_single_stock_chart_payload(
         if not isinstance(state, Mapping):
             continue
         idx = date_to_x[event_date]
+        if (lifecycle_by_index.get(idx) or {}).get("management_geometry_source") == "confirmed_management_projection":
+            continue
         values = {
             "entry_line": state.get("entry_fill_price"),
             "stop_line": state.get("sl", state.get("initial_stop")),
@@ -2046,7 +2190,8 @@ def project_trading_single_stock_chart_payload(
     # do not: Trading buy/sell icons are created only from confirmed account
     # events.  Remove transaction traces globally, not only on lifecycle bars.
     marker_groups = {
-        str(trace_name): [deepcopy(dict(marker)) for marker in list(markers or [])]
+        str(trace_name): [deepcopy(dict(marker)) for marker in list(markers or [])
+                          if not (marker.get("meta") or {}).get("canonical_trading")]
         for trace_name, markers in dict(payload.get("marker_groups") or {}).items()
         if str(trace_name) not in _TRADING_REPLAY_TRANSACTION_TRACES
     }
@@ -2063,6 +2208,7 @@ def project_trading_single_stock_chart_payload(
     # Reusing Research SELL annotations here could silently use a different
     # parameter lineage than the actual managed position.
     signal_annotations = []
+    position_ranges = _account_cycle_ranges(inspection, last_date=last_date)
     for raw in list(payload.get("signal_annotations") or []):
         item = deepcopy(dict(raw))
         signal_type = str(item.get("signal_type") or "").lower()
@@ -2070,6 +2216,13 @@ def project_trading_single_stock_chart_payload(
             continue
         if signal_type == "buy":
             meta = dict(item.get("meta") or {})
+            if meta.get("canonical_trading_pending"):
+                continue
+            signal_date = _date_text(item.get("date"))
+            if signal_date is None and item.get("x") is not None and 0 <= int(item["x"]) < total:
+                signal_date = date_labels[int(item["x"])]
+            if signal_date and not _prefill_lineage_available(signal_date, signal_date, position_ranges):
+                continue
             for key in ("qty", "reserved_capital", "buy_capital"):
                 meta.pop(key, None)
             item["meta"] = meta

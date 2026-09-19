@@ -1,9 +1,9 @@
 """Workbench-facing actual-account trade entry orchestration.
 
 Workbench is a decision/accounting tool, not a broker OMS.  The user executes at
-his broker and records the actual fill here.  Scanner-selected BUYs preserve the
-strategy-management lineage; direct manual BUYs are explicit manual-managed
-positions.  SELLs are recorded directly against the selected broker inventory.
+his broker and records the actual fill here.  Scanner-origin BUYs preserve the
+strategy-management lineage even without a selected widget row; non-candidate
+manual BUYs remain manual-managed positions.  SELLs are recorded directly against the selected broker inventory.
 """
 from __future__ import annotations
 
@@ -43,7 +43,10 @@ from services.trading.pending_entry_state import load_trading_pending_entry_stat
 from services.trading.pending_entry_links import resolve_pending_entry_for_buy_event
 from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame, open_trading_v2_consumer_view
 from services.trading.order_state import get_trading_order_read_model
-from services.trading.scanner_state import load_trading_candidate_snapshot_for_account, load_trading_scanner_runtime
+from services.trading.scanner_state import (
+    load_trading_candidate_snapshot_for_account, load_trading_scanner_runtime,
+    resolve_trading_candidate_snapshot_path,
+)
 from services.trading.strategy_param_runtime import (
     build_trading_candidate_strategy_lineage,
     build_trading_manual_management_lineage,
@@ -103,6 +106,42 @@ def resolve_current_trading_scanner_candidate(project_root, *, ticker: str, cand
     )
 
 
+def _resolve_direct_buy_candidate(project_root, *, ticker: str, candidate: dict | None) -> dict | None:
+    """Resolve provenance from Scanner truth, never from widget selection alone.
+
+    AI: Typing a Scanner ticker or losing a table selection cannot convert a
+    strategy acquisition into a custom one. Discovery is read-only; an existing
+    match still goes through the same currentness/hash guard as explicit picks.
+    An absent snapshot means there is no Scanner evidence, not a failed match.
+    Invalid or stale matching evidence must not silently downgrade provenance.
+    """
+    if candidate is not None:
+        return _resolve_current_scanner_candidate(
+            project_root, ticker=ticker, candidate_reference=dict(candidate)
+        )
+    if not resolve_trading_candidate_snapshot_path(project_root).is_file():
+        return None
+    snapshot = load_trading_candidate_snapshot_for_account(project_root, require_current=False)
+    projection = dict(snapshot.get("entry_projection") or {})
+    pending = set(projection.get("active_pending_tickers") or ())
+    pending.update(snapshot.get("active_pending_candidate_tickers_skipped") or ())
+    held = set(projection.get("held_tickers") or ())
+    held.update(snapshot.get("held_candidate_tickers_skipped") or ())
+    if ticker in pending:
+        raise ValueError(f"{ticker} 已有掛單；請在掛單區確認成交，不可另建來源")
+    if ticker in held:
+        raise ValueError(f"{ticker} 已有持股；直接補單不可另建來源")
+    matches = [dict(row) for row in snapshot.get("candidate_rows") or []
+               if str(row.get("ticker") or "").strip().upper() == ticker]
+    if len(matches) > 1:
+        raise ValueError(f"{ticker} 的 Scanner 來源不唯一；請更新 Scanner 後再確認")
+    if not matches:
+        return None
+    return _resolve_current_scanner_candidate(
+        project_root, ticker=ticker, candidate_reference=matches[0]
+    )
+
+
 def _scanner_buy_warnings_and_limits(*, candidate: dict, qty: int, price, trade_date) -> list[str]:
     warnings: list[str] = []
     seed = dict(candidate.get("execution_plan_seed") or {})
@@ -124,7 +163,7 @@ def _scanner_buy_warnings_and_limits(*, candidate: dict, qty: int, price, trade_
     if limit_price is not None and int(price_to_milli(price)) > int(price_to_milli(limit_price)):
         raise ValueError(
             f"成交價 {price} 高於 Scanner 盤前買價上限 {limit_price}；"
-            "不能標記為 Scanner 策略成交。若為自行交易，請取消 Scanner 選取後另行登錄。"
+            "不能標記為 Scanner 策略成交。請確認原始成交資料；不能藉取消清單選取改變來源。"
         )
 
     planned_qty = candidate.get("proj_qty")
@@ -377,15 +416,12 @@ def preview_trading_account_buy(
         trade_date=trade_date,
         latest_date=latest_finalized_date,
     )
-    current_candidate = None
+    current_candidate = _resolve_direct_buy_candidate(
+        project_root, ticker=ticker_key, candidate=candidate
+    )
     manual_management = None
     warnings: list[str] = []
-    if candidate is not None:
-        current_candidate = _resolve_current_scanner_candidate(
-            project_root,
-            ticker=ticker_key,
-            candidate_reference=dict(candidate),
-        )
+    if current_candidate is not None:
         warnings.extend(
             _scanner_buy_warnings_and_limits(
                 candidate=current_candidate,
@@ -417,6 +453,7 @@ def record_trading_account_buy(
     trade_date,
     expected_account_revision: int | None = None,
     candidate: dict | None = None,
+    expected_route: str | None = None,
 ):
     preview = preview_trading_account_buy(
         project_root,
@@ -426,6 +463,8 @@ def record_trading_account_buy(
         trade_date=trade_date,
         candidate=candidate,
     )
+    if expected_route is not None and preview["route"] != expected_route:
+        raise RuntimeError("買入來源在預覽後已改變；請重新檢視來源並確認")
     ticker_key = str(ticker or "").strip().upper()
     candidate_row = preview.get("candidate")
     if candidate_row is not None:

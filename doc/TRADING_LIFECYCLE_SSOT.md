@@ -59,3 +59,21 @@ Pending 與 Position 共用同一個固定的 finalized 日期及資料來源。
 依賴檢查與寫入契約補足結果對照，但不代表所有未來修改都不可能出错，也不能防止刻意繞過。獨立模擬使用暫存帳戶／OMS 檔案與合成市場儲存 fixture，實際執行策略計算與持久化；不是實際市場 Parquet、GUI、券商或本機正式整合測試。`apps/run_bundle.py` 仍是使用者本機正式驗證入口。
 
 重播契約變更後首次同步可能需要重建持股歷史，後續相同來源則依 fingerprint 重用。完整歷史查詢優先確保 frozen 指標正確，不採不安全的裁切視窗捷徑；本輪未宣稱實際大型帳戶的延遲或 UI 效能已完成量測。
+
+## Confirmed-history chart ownership and recovery
+
+- `collect_confirmed_position_cycles` partitions effective corrected account facts by acquisition. Each historical or current managed cycle uses its own frozen binding and the common position replay; a later acquisition cannot supply geometry to an older one.
+- Inspector construction reuses the already verified full `clean_df` together with its pinned `consumer_state`, for both fresh analysis and analysis-cache hits. It does not independently change source generations. Visible/cropped candles are a rendering window, never a new management origin.
+- Legacy immutable BUY snapshots may prove the original state. A redundant source-read failure must not blanket-clear verified management geometry. Complete frozen-input replay can recover it; otherwise retained persisted evidence is marked pending synchronization, not silently asserted current. Missing binding is never replaced with today's Params.
+- Confirmed inventory consumes pre-existing prefill intent. Signals dated inside an actual holding interval (including full-exit day) cannot reappear as SHADOW after exit. A genuine signal strictly after the full exit remains valid, and unrelated unfilled history remains visible. The same exclusion governs timelines, direct sidebar resolution, annotations and future preview.
+- A direct backfill's later registration/information date is not a new buy signal. A prefill plan must predate its confirmed entry. Actual execution dates and reasons come from corrected account facts; a manual sell must not be inferred as an indicator sell.
+- The full-exit bar retains its management geometry, while post-fill inventory is zero and the next bar does not extend the old cycle. Adjacent acquisitions have separate line segments. Research historical metrics remain independent and unchanged.
+
+
+## Direct-fill acquisition provenance
+
+`services/trading/account_trade_entry.py` resolves an unselected/typed ticker against the canonical account-aware Scanner snapshot. A matching candidate goes through the same freshness and exact-reference guard as an explicitly selected candidate and retains that candidate's frozen strategy lineage. A ticker merely present in the scanned universe, but not a candidate, is not classified as strategy. A stale/corrupt match is rejected rather than silently converted to custom. Existing pending intent must be filled through its owning pending entry, not replaced by a new acquisition origin.
+
+The confirmation dialog and submitted command share the resolved candidate and route. A source change between preview and commit requires confirmation again. User-reduced quantity remains distinct from the strategy reference quantity. Corrected transactions retain their acquisition source. Account sell-detail source follows the acquired position; `execution_reason` separately identifies a manual sell, so a strategy-origin holding can be manually sold without becoming custom. No historical manual record is relabelled from today's candidate membership in the absence of original provenance.
+
+The existing capability catalog now includes `validate_trading_direct_fill_source_contract_case`: actual persisted candidate/account records, source validation, direct/clicked equivalence, frozen/current Params separation, manual reductions, corrections, sell source/reason independence, stale guards and the real GUI confirmation handler. External market and runtime providers use isolated test fixtures; this is not a claim about a live broker or user account.

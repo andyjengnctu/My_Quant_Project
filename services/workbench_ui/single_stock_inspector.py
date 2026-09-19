@@ -1513,7 +1513,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             # background cache warming intentionally stops at the pure replay.
             if include_live_inspection:
                 result["trading_inspection"] = build_trading_single_stock_inspection(
-                    WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
+                    WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {}),
+                    market_frame=result["clean_df"], consumer_state=consumer_state,
                 )
             result["_workbench_perf"] = {
                 "analysis_cache_hit": True,
@@ -1569,7 +1570,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             )
         if include_live_inspection:
             result["trading_inspection"] = build_trading_single_stock_inspection(
-                WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {})
+                WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {}),
+                market_frame=result["clean_df"], consumer_state=consumer_state,
             )
         result["_workbench_perf"] = {
             "analysis_cache_hit": False,
@@ -2350,9 +2352,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 lifecycle_state, "無交易"
             )
         trading_status = f"交易狀態: {display_state}"
-        if canonical.get("sell_signal"):
+        if canonical.get("sell_signal") and canonical.get("position_qty") != 0:
             trading_status += "｜賣出訊號"
-        if canonical.get("decision_errors"):
+        if canonical.get("management_projection_error"):
+            trading_status += "\uff5c\u7ba1\u7406\u8cc7\u6599: \u5f85\u540c\u6b65"
+        elif canonical.get("decision_errors"):
             trading_status += "｜SELL狀態: ERROR"
         capital_lines = []
 

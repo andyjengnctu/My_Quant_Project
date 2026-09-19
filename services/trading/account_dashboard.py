@@ -375,11 +375,6 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
             cost_milli = int(details.get("allocated_cost_milli") or 0)
             pnl_milli = int(details.get("realized_pnl_milli") or 0)
             source_before = str(details.get("position_source") or active_source.get(ticker) or "")
-            strategy_managed = bool(details.get("strategy_managed")) or source_before in {"strategy_fill", "manual_managed"}
-            manual_sell = (
-                str(details.get("event") or "") == "MANUAL_ACCOUNT_SELL"
-                or (source_before == "manual_adopted" and not strategy_managed)
-            )
             sells.append({
                 "ticker": ticker,
                 "trade_date": details.get("trade_date"),
@@ -395,7 +390,10 @@ def _build_transaction_details(state: dict[str, Any], *, accounting_params=None)
                 "return_pct": _safe_pct(pnl_milli, cost_milli),
                 "remaining_qty": int(details.get("remaining_qty") or 0),
                 "revision": revision,
-                "source": "手動成交" if manual_sell else ("手動管理" if source_before == "manual_managed" else "策略成交"),
+                # AI: Acquisition source and execution reason are independent.
+                # A manual SELL cannot relabel a strategy-origin holding.
+                "source": source_before or None,
+                "execution_reason": details.get("event"),
                 "editable": True,
                 "is_latest_ticker_trade": revision == latest_trade_revision_by_ticker.get(ticker),
             })

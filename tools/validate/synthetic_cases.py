@@ -57,6 +57,14 @@ from .synthetic_unit_cases import (
     validate_price_utils_unit_case,
     validate_signal_utils_unit_case,
 )
+from .synthetic_trading_history_cases import (
+    validate_trading_confirmed_cycle_history_contract_case,
+    validate_trading_corrected_chart_ledger_contract_case,
+    validate_trading_partial_exit_chart_contract_case,
+    validate_trading_prefill_position_exclusion_contract_case,
+    validate_trading_pinned_history_input_contract_case,
+    validate_trading_direct_fill_source_contract_case,
+)
 from .synthetic_lifecycle_ssot_cases import (
     validate_lifecycle_management_owner_contract_case,
     validate_trading_lifecycle_persistent_simulation_case,
@@ -431,6 +439,12 @@ def get_synthetic_validator_entries():
         _entry(validate_trading_discretion_pending_fill_correction_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_lifecycle_same_session_confirmation_order_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_lifecycle_randomized_confirmed_replay_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_confirmed_cycle_history_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_corrected_chart_ledger_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_partial_exit_chart_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_prefill_position_exclusion_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_pinned_history_input_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_trading_direct_fill_source_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_account_state_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_daily_workflow_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_trading_actionable_universe_scanner_membership_contract_case, layer="core_invariant", cost_class="fast"),

@@ -8407,6 +8407,48 @@
       "description": "validate_lifecycle_randomized_confirmed_replay_case - Fixed-seed randomized simulator facts versus canonical confirmed replay.",
       "initial_status": "NEW",
       "order": 543
+    },
+    {
+      "id": "T554",
+      "b_id": "B421",
+      "description": "validate_trading_confirmed_cycle_history_contract_case - Per-acquisition closed-history replay, manual fill reasons, chart/hover agreement, binding isolation and read-only error boundaries.",
+      "initial_status": "NEW",
+      "order": 544
+    },
+    {
+      "id": "T555",
+      "b_id": "B421",
+      "description": "validate_trading_corrected_chart_ledger_contract_case - Corrected BUY chronology and immutable binding; SELL chart amounts consume canonical corrected account economics.",
+      "initial_status": "NEW",
+      "order": 545
+    },
+    {
+      "id": "T556",
+      "b_id": "B421",
+      "description": "validate_trading_partial_exit_chart_contract_case - Incomplete/complete TP confirmation, manual/unknown execution reason preservation and unmanaged legacy fact isolation.",
+      "initial_status": "NEW",
+      "order": 546
+    },
+    {
+      "id": "T557",
+      "b_id": "B421",
+      "description": "validate_trading_prefill_position_exclusion_contract_case - Confirmed acquisition consumes existing prefill lineage; signals born during holding do not revive after exit, while genuine new post-exit signals remain available.",
+      "initial_status": "NEW",
+      "order": 547
+    },
+    {
+      "id": "T558",
+      "b_id": "B421",
+      "description": "validate_trading_pinned_history_input_contract_case - Full pinned consumer input preserves automatic/manual frozen management on fresh and cropped views; legacy origin and read-error recovery must not erase existing valid geometry.",
+      "initial_status": "NEW",
+      "order": 548
+    },
+    {
+      "id": "T559",
+      "b_id": "B421",
+      "description": "validate_trading_direct_fill_source_contract_case - Direct fills resolve Scanner source independently of selection; frozen lineage, quantity discretion, stale guards and execution reason remain distinct.",
+      "initial_status": "NEW",
+      "order": 549
     }
   ],
   "transitions": [
@@ -26889,6 +26931,54 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "Implementation and independent scoped simulation completed; local apps/run_bundle.py formal verification is not claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T554",
+      "description": "Register historical confirmed-fact chart regression capability.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Independent scoped simulations cover this contract; no local formal-suite PASS is claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T555",
+      "description": "Register historical confirmed-fact chart regression capability.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Independent scoped simulations cover this contract; no local formal-suite PASS is claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T556",
+      "description": "Register historical confirmed-fact chart regression capability.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Independent scoped simulations cover this contract; no local formal-suite PASS is claimed."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T557",
+      "description": "Register positive-preservation and real-shadow exclusion capability.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Independent scoped simulations completed; not a local formal-suite PASS."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T558",
+      "description": "Register positive-preservation and real-shadow exclusion capability.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Independent scoped simulations completed; not a local formal-suite PASS."
+    },
+    {
+      "date": "2026-09-19",
+      "id": "T559",
+      "description": "Register direct-fill source provenance capability.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "Independent snapshot/account/UI simulations; no formal-suite status implied."
     }
   ]
 }

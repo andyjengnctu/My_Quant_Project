@@ -4297,7 +4297,10 @@ class TradingAccountPanel(ttk.Frame):
             price=price,
             trade_date=trade_date,
             expected_account_revision=None,
-            candidate=candidate,
+            # AI: Confirm the provenance shown in the preview, not a transient
+            # table selection. The service revalidates this reference under lock.
+            candidate=preview.get("candidate"),
+            expected_route=preview["route"],
         )
 
         def on_success(_result):

@@ -639,3 +639,15 @@ Final Closure 另把 execution-only raw/prepared cache 與 Research generation �
 - Canonical strategy cap, accepted user choice and actual fill stay separate. Ranking is advisory to Trading; legal downward quantity edits, order cancellation and confirmed transaction corrections remain explicit operations. A background management sync cannot change those choices or broker/accounting facts.
 - `services/trading/single_stock_inspection.py` produces a common full-history projection; a cropped chart only renders it. Frozen Params and their indicators travel together. Deferred TP and full-STOP duties do not fabricate actual sales.
 - Ownership, timing, migration boundaries, write restrictions and regression coverage are documented in `doc/TRADING_LIFECYCLE_SSOT.md`. The existing synthetic/checklist registry remains the only formal test definition source.
+
+
+### Trading single-stock confirmed-history projection
+
+`services/trading/single_stock_inspection.py` consumes the effective account economic projection and `core/trading_position_projection.collect_confirmed_position_cycles`. Each acquisition delegates management to `core/position_replay.py`; chart/UI code must not implement strategy updates. Foreground and cached inspection share the full, verified market frame and consumer context already resolved by the workbench. Account facts are re-read even when Research analysis is cached.
+
+A shared prefill eligibility rule excludes consumed and holding-period signal lineages without deleting genuinely new post-exit signals or unrelated never-filled history. Manual registration dates are not strategy signals. Geometry and selected-day values consume the same lifecycle rows; manual execution labels, closed-day inventory and per-cycle line connectors are presentation of confirmed facts. Source failures cannot blanket-null valid existing management values. Recovery uses frozen full-history inputs; unavailable data remains explicitly pending, never substituted with current Params.
+
+Capability contracts live in `tools/validate/synthetic_trading_history_cases.py` and the existing synthetic registry/checklist transaction, not a separate gate. Coverage includes original strategy/manual geometry preservation, source-read failure recovery, cropped history, corrected economics, partial/full exits, ghost exclusion and fresh post-exit prefill.
+
+
+Direct-account BUY provenance is owned by `services/trading/account_trade_entry.py`, not the transient Scanner widget selection. Optional candidate discovery uses the canonical account-aware snapshot and delegates matching rows to the existing currentness/reference validator. Workbench commits the resolved preview reference and source route. `services/trading/account_dashboard.py` preserves acquisition source independently of SELL execution reason. These source changes do not rewrite prior events, reclassify historical custom entries from current membership, or redefine Research statistics.

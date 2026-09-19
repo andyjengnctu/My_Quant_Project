@@ -2862,7 +2862,16 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     check("portfolio_buy_rows_keep_reserved_and_actual_capital_separate", True, "'預留總金額': milli_to_money(reserved_cost_milli)" in portfolio_entries_source and '"reserved_capital": None if pd.isna(reserved_capital) else float(reserved_capital)' in portfolio_inspector_source and '"reserved_capital": reserved_capital' in charting_source and '"預留總金額", "投入總金額"' in portfolio_reporting_source)
     check("portfolio_missed_buy_rows_keep_qty_reserved_and_zero_actual_spend", True, "'股數': chosen_entry_plan['qty']" in portfolio_entries_source and "'預留總金額': milli_to_money(reserved_cost_milli)" in portfolio_entries_source and "'投入總金額': 0.0" in portfolio_entries_source)
     check("portfolio_missed_sell_rows_keep_reference_fields", True, "'停損價': pos.get('trailing_stop', pos.get('initial_stop'))" in portfolio_exits_source and "'參考收盤價': get_fast_close(fast_df, pos=t_pos)" in portfolio_exits_source and "'股數': pos.get('qty')" in portfolio_exits_source)
-    check("portfolio_dropdown_includes_compact_ticker_stats", True, "event_rows = df_tr[df_tr.apply(_is_portfolio_kline_event_row, axis=1)].copy()" in portfolio_inspector_source and "總損益 {stats.get('total_pnl_text', '-')}" in portfolio_inspector_source and "勝率 {stats.get('win_rate_text', '-')}" in portfolio_inspector_source and "交易次數 {stats.get('trade_count_text', '-')}" in portfolio_inspector_source and "錯買" not in portfolio_inspector_source)
+    # AI: The canonical UI contract is ticker | source; ranking statistics
+    # remain available to sorting/sidebar but are not dropdown display fields.
+    from services.workbench_ui.portfolio_backtest_inspector import PortfolioBacktestInspectorPanel
+    from services.workbench_ui.trading_source_labels import TRADING_SOURCE_STRATEGY_LABEL
+    label = PortfolioBacktestInspectorPanel._format_ticker_dropdown_label(
+        None, ticker="2330", first_buy_row={"date": "2026-08-03", "qty": 1000},
+        stats={"total_pnl_text": "+999", "win_rate_text": "99%", "trade_count_text": "999"},
+    )
+    check("portfolio_dropdown_uses_ticker_and_source_only", f"2330 | {TRADING_SOURCE_STRATEGY_LABEL}", label)
+    check_true("portfolio_dropdown_retains_all_event_membership", "event_rows = df_tr[df_tr.apply(_is_portfolio_kline_event_row, axis=1)].copy()" in portfolio_inspector_source)
     check("portfolio_ticker_chart_uses_all_kline_events_not_actual_trades_only", True, "df_tr.apply(_is_portfolio_kline_event_row, axis=1)" in portfolio_inspector_source and 'elif str(action).startswith("錯失買進")' in portfolio_inspector_source and 'elif action == "錯失賣出"' in portfolio_inspector_source)
     check("portfolio_kline_distinguishes_normal_extended_reentry_buy_actions", True, 'BUY_TRADE_ACTIONS = ("買進", "買進(延續候選)", "買進(重進)")' in portfolio_inspector_source and 'return "買進(重進)"' in portfolio_inspector_source and 'return "買進(延續候選)"' in portfolio_inspector_source and 'CHART_BUY_TRACE_NAMES = ("買進", "買進(延續候選)", "買進(重進)")' in charting_source and '"買進(延續候選)": "買進"' not in charting_source)
     check("portfolio_kline_labels_use_stock_trade_sequence_not_total_count", True, "next_trade_sequence += 1" in portfolio_inspector_source and 'enriched["trade_sequence"] = int(trade_sequence)' in portfolio_inspector_source and 'enriched["trade_count"]' not in portfolio_inspector_source and "交易次數: 第 {int(trade_sequence)} 次" in charting_source)

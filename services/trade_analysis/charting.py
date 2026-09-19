@@ -114,7 +114,7 @@ CHART_TRACE_NAME_ALIASES = {
 CHART_BUY_TRACE_NAMES = ("買進", "買進(延續候選)", "買進(重進)")
 CHART_MISSED_BUY_TRACE_NAMES = ("錯失買進", "錯失買進(延續候選)", "錯失買進(重進)")
 CHART_BUY_AND_MISSED_BUY_TRACE_NAMES = CHART_BUY_TRACE_NAMES + CHART_MISSED_BUY_TRACE_NAMES
-CHART_EXIT_TRACE_NAMES = ("停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出")
+CHART_EXIT_TRACE_NAMES = ("停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出", "\u624b\u52d5\u8ce3\u51fa", "\u8ce3\u51fa\u6210\u4ea4")
 CHART_TRADE_LABEL_TRACE_NAMES = CHART_BUY_AND_MISSED_BUY_TRACE_NAMES + CHART_EXIT_TRACE_NAMES
 
 ACTION_STYLE_MAP = {
@@ -128,6 +128,8 @@ ACTION_STYLE_MAP = {
     "停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
     "停損賣出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
+    "\u624b\u52d5\u8ce3\u51fa": {"plotly_symbol": "triangle-down", "mpl_marker": "v", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
+    "\u8ce3\u51fa\u6210\u4ea4": {"plotly_symbol": "triangle-down", "mpl_marker": "v", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
     "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
 }
@@ -731,6 +733,11 @@ def _mask_entry_line_when_same_as_limit_for_render(entry_values, limit_values):
 
 
 def _apply_chart_display_line_clipping(payload):
+    # AI: Trading line presence is already decided by the canonical daily read
+    # model. A higher trailing stop is NOT a confirmed sale; renderer clipping
+    # must not remove a real holding's entry line or disagree with its sidebar.
+    if payload.get("trading_overlay_source") == "canonical_execution_lifecycle":
+        return payload
     marker_groups = dict(payload.get("marker_groups") or {})
     payload["limit_line"] = _clip_limit_line_after_buy(payload["limit_line"], marker_groups, buy_trace_names=CHART_BUY_TRACE_NAMES)
     payload["shadow_limit_line"] = _clip_limit_line_after_buy(payload["shadow_limit_line"], marker_groups, buy_trace_names=CHART_BUY_TRACE_NAMES)
@@ -1328,7 +1335,7 @@ def _resolve_trade_box_style(trace_name, marker):
         return MATPLOTLIB_BUY_FILL_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
     if trace_name == "錯失賣出":
         return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_INDICATOR_SELL_COLOR, "above"
-    if trace_name in {"停損賣出", "指標賣出", "強制結算"}:
+    if trace_name in {"停損賣出", "指標賣出", "強制結算", "\u624b\u52d5\u8ce3\u51fa", "\u8ce3\u51fa\u6210\u4ea4"}:
         pnl_pct = meta.get("pnl_pct")
         if pnl_pct is None:
             pnl_pct = _extract_signed_percent(marker.get("note", ""))
@@ -1401,6 +1408,8 @@ def _format_chart_entry_type(value):
         return "延續"
     if normalized in {"normal", "正常"}:
         return "正常"
+    if normalized in {"manual", "manual_direct_backfill", "manual_pending_entry", "manual_managed"}:
+        return "\u81ea\u9078"
     return str(value).strip() or "-"
 
 
@@ -1437,6 +1446,8 @@ CHART_INFO_BOX_SCHEMAS = {
     "停利": ("qty", "sell_capital", "pnl", "pnl_pct"),
     "停損": ("qty", "sell_capital", "pnl", "pnl_pct"),
     "指標賣出": ("qty", "sell_capital", "pnl", "pnl_pct"),
+    "\u624b\u52d5\u8ce3\u51fa": ("qty", "sell_capital", "pnl", "pnl_pct"),
+    "\u8ce3\u51fa\u6210\u4ea4": ("qty", "sell_capital", "pnl", "pnl_pct"),
     "強制結算": ("qty", "sell_capital", "pnl", "pnl_pct"),
 }
 
@@ -1544,6 +1555,8 @@ def _build_trade_label_text(trace_name, marker):
         meta.setdefault("result", "未成交")
         meta.setdefault("entry_type", _normalize_entry_type_for_missed_buy_marker(marker))
         return _build_chart_info_box_text("錯失買進", meta, marker=marker)
+    if trace_name in {"\u624b\u52d5\u8ce3\u51fa", "\u8ce3\u51fa\u6210\u4ea4"}:
+        return _build_chart_info_box_text(trace_name, meta, marker=marker)
     if trace_name == "錯失賣出":
         meta.setdefault("result", "賣出受阻")
         return _build_chart_info_box_text("指標賣出", meta, marker=marker)
@@ -2036,7 +2049,31 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annota
         rendered.append(_tag_chart_annotation_layout(artist, placement=placement, base_position=(x_offset, y_offset), kind="trade"))
     return rendered
 
-def _render_bar_scoped_transaction_line(axis_price, x_positions, values, *, color, linewidth, linestyle="solid", zorder=4.0):
+def _chart_transaction_line_connections(chart_payload):
+    """AI: Render boundaries come from canonical cycle identity, never prices."""
+    if chart_payload.get("trading_overlay_source") != "canonical_execution_lifecycle":
+        return None
+    rows = chart_payload.get("trading_lifecycle_by_index") or {}
+    owners = [(rows.get(idx) or rows.get(str(idx)) or {}).get("cycle_id")
+              for idx in range(len(chart_payload.get("x", [])))]
+    return [left == right for left, right in zip(owners, owners[1:])]
+
+
+def _transaction_line_plotly_points(dates, values, connections):
+    """Preserve each owned bar while breaking cross-cycle joins in HTML."""
+    if connections is None:
+        return dates, values
+    xs, ys = [], []
+    for idx, (date, value) in enumerate(zip(dates, values)):
+        if idx and not connections[idx - 1]:
+            xs.append(date)
+            ys.append(float("nan"))
+        xs.append(date)
+        ys.append(value)
+    return xs, ys
+
+
+def _render_bar_scoped_transaction_line(axis_price, x_positions, values, *, color, linewidth, linestyle="solid", zorder=4.0, connections=None):
     """Render one lifecycle level as an explicit segment on every owned bar.
 
     ``matplotlib.step`` does not render an isolated finite point between NaNs,
@@ -2060,7 +2097,7 @@ def _render_bar_scoped_transaction_line(axis_price, x_positions, values, *, colo
         y = float(arr[i])
         horizontal.append(((x - 0.5, y), (x + 0.5, y)))
         j = int(i) + 1
-        if j < count and finite[j]:
+        if j < count and finite[j] and (connections is None or connections[i]):
             next_y = float(arr[j])
             if abs(next_y - y) > 1e-12:
                 mid = (float(xs[i]) + float(xs[j])) / 2.0
@@ -2100,7 +2137,7 @@ def _render_future_preview_lines(axis_price, chart_payload):
     return rendered
 
 
-def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_overlay_specs=None, hidden_trace_names=None):
+def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_overlay_specs=None, hidden_trace_names=None, extra_trace_names=()):
     from matplotlib.lines import Line2D
 
     def _build_line_handle(label, color, linestyle, linewidth, alpha=1.0):
@@ -2141,7 +2178,9 @@ def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_over
 
     hidden_trace_names = {str(name).strip() for name in (hidden_trace_names or []) if str(name).strip()}
     event_handle_lookup = {}
-    for label in CHART_EVENT_LEGEND_ORDER:
+    extra_labels = [name for name in extra_trace_names if name in ACTION_STYLE_MAP
+                    and name not in CHART_EVENT_LEGEND_ORDER and name not in hidden_trace_names]
+    for label in (*CHART_EVENT_LEGEND_ORDER, *extra_labels):
         if label in hidden_trace_names:
             continue
         style = CHART_SIGNAL_LEGEND_STYLE.get(label) or ACTION_STYLE_MAP.get(label)
@@ -2157,6 +2196,7 @@ def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_over
     if show_price_ma:
         top_row_labels.extend(str(spec.get("label") or "") for spec in normalized_price_overlay_specs if str(spec.get("label") or "").strip())
     bottom_row_labels = [label if label not in hidden_trace_names else None for label in CHART_LEGEND_SECOND_ROW_ITEMS]
+    bottom_row_labels.extend(extra_labels)
     total_columns = max(len(top_row_labels), len(bottom_row_labels), int(CHART_MATPLOTLIB_LEGEND_COLUMNS))
     top_row_labels.extend([None] * (total_columns - len(top_row_labels)))
     bottom_row_labels.extend([None] * (total_columns - len(bottom_row_labels)))
@@ -2269,14 +2309,15 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         chart_payload["entry_line"],
         chart_payload["limit_line"],
     )
+    transaction_connections = _chart_transaction_line_connections(chart_payload)
     _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["shadow_stop_line"], color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=3.8)
     _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["shadow_tp_line"], color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=3.8)
     _render_bar_scoped_transaction_line(axis_price, x_positions, shadow_entry_line_for_render, color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.75)
     _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["shadow_limit_line"], color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=3.8)
-    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["stop_line"], color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=4.0)
-    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["tp_line"], color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=4.0)
-    _render_bar_scoped_transaction_line(axis_price, x_positions, entry_line_for_render, color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.95)
-    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["limit_line"], color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=4.0)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["stop_line"], color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=4.0, connections=transaction_connections)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["tp_line"], color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=4.0, connections=transaction_connections)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, entry_line_for_render, color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.95, connections=transaction_connections)
+    _render_bar_scoped_transaction_line(axis_price, x_positions, chart_payload["limit_line"], color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=4.0, connections=transaction_connections)
     for trace_name, markers in chart_payload["marker_groups"].items():
         style = ACTION_STYLE_MAP.get(trace_name, {"mpl_marker": "o", "color": MATPLOTLIB_TEXT_COLOR})
         axis_price.scatter(
@@ -2309,6 +2350,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         show_price_ma=bool(show_price_ma),
         price_overlay_specs=chart_payload.get("price_overlay_specs"),
         hidden_trace_names=chart_payload.get("hidden_trace_names"),
+        extra_trace_names=tuple(chart_payload.get("marker_groups") or {}),
     )
     legend_columns = max(int(CHART_MATPLOTLIB_LEGEND_COLUMNS), int(len(legend_handles) / 2))
     axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=legend_columns, frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
@@ -2933,6 +2975,10 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
         chart_payload["entry_line"],
         chart_payload["limit_line"],
     )
+    transaction_connections = _chart_transaction_line_connections(chart_payload)
+    def transaction_points(values):
+        xs, ys = _transaction_line_plotly_points(dates, values, transaction_connections)
+        return {"x": xs, "y": ys}
     if np.isfinite(chart_payload["shadow_stop_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_tp_line"]).any():
@@ -2941,13 +2987,13 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
         fig.add_trace(go.Scatter(x=dates, y=shadow_entry_line_for_render, mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_limit_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dot"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dates, y=chart_payload["stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
+    fig.add_trace(go.Scatter(**transaction_points(chart_payload["stop_line"]), mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["tp_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["tp_line"], mode="lines", name="停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
+        fig.add_trace(go.Scatter(**transaction_points(chart_payload["tp_line"]), mode="lines", name="停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(entry_line_for_render).any():
-        fig.add_trace(go.Scatter(x=dates, y=entry_line_for_render, mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False), row=1, col=1)
+        fig.add_trace(go.Scatter(**transaction_points(entry_line_for_render), mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["limit_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dot"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(**transaction_points(chart_payload["limit_line"]), mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dot"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     present_plotly_legends = {"K線", "停損線"}
     if np.isfinite(chart_payload["tp_line"]).any():
         present_plotly_legends.add("停利線")

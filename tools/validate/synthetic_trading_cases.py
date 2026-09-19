@@ -1328,6 +1328,26 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("multi_member_scanner_executes_each_finalist_member", 2, ensemble_scanner_mock.call_count)
         check("multi_member_scanner_applies_canonical_agreement", 1, len(ensemble_scan.get("candidate_rows") or []))
         ensemble_row = dict((ensemble_scan.get("candidate_rows") or [{}])[0])
+        # AI: This signal was born under the one-member policy above. Changing
+        # current Params must not rewrite its frozen vote/threshold identity.
+        check("existing_signal_keeps_frozen_vote_count", 1, ensemble_row.get("ensemble_vote_count"))
+        check("existing_signal_keeps_frozen_min_agree", 1, ensemble_row.get("ensemble_min_agree"))
+        # Test the two-member birth contract in a genuinely independent state,
+        # not by deleting the original binding or weakening freeze semantics.
+        with tempfile.TemporaryDirectory() as fresh_dir:
+            fresh_root = Path(fresh_dir)
+            fresh_paths = resolve_runtime_domain_paths(fresh_root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
+            fresh_data_dir = Path(fresh_paths.data_dir)
+            fresh_data_dir.mkdir(parents=True)
+            (fresh_data_dir / "2330.csv").write_bytes((data_dir / "2330.csv").read_bytes())
+            fresh_selected = Path(resolve_trading_selected_strategy_param_path(fresh_root))
+            fresh_selected.parent.mkdir(parents=True, exist_ok=True)
+            fresh_selected.write_bytes(selected_path.read_bytes())
+            _publish_synthetic_trading_input_lineage(fresh_root, market_date="2026-09-04")
+            with patch.object(daily_workflow, "run_daily_scanner", side_effect=[deepcopy(fake_scan), deepcopy(fake_scan)]) as fresh_scanner:
+                fresh_scan = daily_workflow.run_trading_candidate_scan(project_root=fresh_root)
+            check("new_multi_member_signal_evaluates_each_member", 2, fresh_scanner.call_count)
+            ensemble_row = dict((fresh_scan.get("candidate_rows") or [{}])[0])
         check("multi_member_candidate_records_vote_count", 2, ensemble_row.get("ensemble_vote_count"))
         check("multi_member_candidate_records_min_agree", 2, ensemble_row.get("ensemble_min_agree"))
         check("multi_member_candidate_keeps_representative_params_identity", True, bool(ensemble_row.get("params_signature")) and bool(ensemble_row.get("ensemble_member_key")))
