@@ -1,15 +1,13 @@
 - Trading
     - 股票中文名稱: 能否在workbench的所有股票欄邊加入股票的中文名稱
-    - 自動更新太干擾
-
-
-- bus fix 
-    - 成交後停損 會小於 
+    
 
 - restreucture
     - 刪除不再需要的相容層的code，精簡程式也避免之後誤接
 
-
+- non-DL 
+    - 加入validate period early stop，驗證最適回數，再用此回數retrain traning+valid完整資料，最後再用research的即有的選單來測試效果
+    
 - imrove DL learnability
     - 0050 only DL
     - 還是應該廣義成圖形辦識的多層結構，而不是人為克意去分層

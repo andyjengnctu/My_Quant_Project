@@ -9,6 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.trading_source import (
+    TRADING_SOURCE_FAMILY_CUSTOM,
+    TRADING_SOURCE_FAMILY_STRATEGY,
+    normalize_trading_source_family,
+)
 from core.console_report import project_relative_display_path
 from core.exact_accounting import (
     build_sell_ledger_from_price,
@@ -459,10 +464,12 @@ def _actual_outcome_metrics(rows: list[dict[str, Any]]) -> dict[str, float | Non
     }
 
 
+
 def _performance_summary_row(
     label: str,
     rows: list[dict[str, Any]],
     *,
+    source: str,
     value: float | None,
     pnl: float | None,
     stock_tickers: set[str],
@@ -471,6 +478,7 @@ def _performance_summary_row(
     cost = sum(float(row.get("cost_basis") or 0) for row in rows)
     metrics = _actual_outcome_metrics(list(metric_rows or []))
     return {
+        "source": source,
         "scope": label,
         "stock_count": len(stock_tickers),
         "value": value,
@@ -661,40 +669,62 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
     buy_details, sell_details = _build_transaction_details(state, accounting_params=accounting_params)
     closed_trades = _build_closed_round_trips(state, accounting_params=accounting_params)
     open_perf_rows = [
-        {"ticker": row["ticker"], "cost_basis": row["holding_cost"], "pnl": row.get("unrealized_pnl")}
+        {
+            "ticker": row["ticker"],
+            "source": normalize_trading_source_family(row.get("source")),
+            "value": row.get("net_liquidation_value"),
+            "cost_basis": row["holding_cost"],
+            "pnl": row.get("unrealized_pnl"),
+        }
         for row in enriched_positions
     ]
     closed_perf_rows = [
         {
-            "ticker": row["ticker"], "cost_basis": row["cost_basis"], "pnl": row["pnl"],
+            "ticker": row["ticker"],
+            "source": normalize_trading_source_family(row.get("source")),
+            "value": row.get("net_sell_total"),
+            "cost_basis": row["cost_basis"],
+            "pnl": row["pnl"],
             "r_mult": row.get("r_mult"),
         }
         for row in closed_trades
         if float(row.get("cost_basis") or 0) > 0
     ]
-    open_value = None if not net_liquidation_complete else sum(float(row.get("net_liquidation_value") or 0) for row in enriched_positions)
-    open_pnl = None if not open_unrealized_complete else sum(float(row.get("unrealized_pnl") or 0) for row in enriched_positions)
-    closed_value = sum(float(row.get("net_sell_total") or 0) for row in closed_trades)
-    closed_pnl = sum(float(row.get("pnl") or 0) for row in closed_perf_rows)
-    open_tickers = {str(row.get("ticker") or "") for row in enriched_positions if row.get("ticker")}
-    closed_tickers = {str(row.get("ticker") or "") for row in closed_perf_rows if row.get("ticker")}
-    combined_pnl = None if open_pnl is None else float(open_pnl) + closed_pnl
-    combined_value = None if open_value is None else float(open_value) + closed_value
-    performance = [
-        _performance_summary_row(
-            "庫存股", open_perf_rows, value=open_value, pnl=open_pnl,
-            stock_tickers=open_tickers, metric_rows=open_perf_rows,
-        ),
-        _performance_summary_row(
-            "平倉股", closed_perf_rows, value=closed_value, pnl=closed_pnl,
-            stock_tickers=closed_tickers, metric_rows=closed_perf_rows,
-        ),
-        _performance_summary_row(
-            "加總", [*open_perf_rows, *closed_perf_rows],
-            value=combined_value, pnl=combined_pnl, stock_tickers=open_tickers | closed_tickers,
-            metric_rows=[*open_perf_rows, *closed_perf_rows],
-        ),
-    ]
+
+    performance: list[dict[str, Any]] = []
+    present_sources = {
+        str(row.get("source"))
+        for row in [*open_perf_rows, *closed_perf_rows]
+        if row.get("source") in {TRADING_SOURCE_FAMILY_STRATEGY, TRADING_SOURCE_FAMILY_CUSTOM}
+    }
+    for source in (TRADING_SOURCE_FAMILY_STRATEGY, TRADING_SOURCE_FAMILY_CUSTOM):
+        if source not in present_sources:
+            continue
+        source_open = [row for row in open_perf_rows if row.get("source") == source]
+        source_closed = [row for row in closed_perf_rows if row.get("source") == source]
+        open_value = None if not net_liquidation_complete else sum(float(row.get("value") or 0) for row in source_open)
+        open_pnl = None if not open_unrealized_complete else sum(float(row.get("pnl") or 0) for row in source_open)
+        closed_value = sum(float(row.get("value") or 0) for row in source_closed)
+        closed_pnl = sum(float(row.get("pnl") or 0) for row in source_closed)
+        open_tickers = {str(row.get("ticker") or "") for row in source_open if row.get("ticker")}
+        closed_tickers = {str(row.get("ticker") or "") for row in source_closed if row.get("ticker")}
+        combined_pnl = None if open_pnl is None else float(open_pnl) + closed_pnl
+        combined_value = None if open_value is None else float(open_value) + closed_value
+        performance.extend([
+            _performance_summary_row(
+                "庫存股", source_open, source=source, value=open_value, pnl=open_pnl,
+                stock_tickers=open_tickers, metric_rows=source_open,
+            ),
+            _performance_summary_row(
+                "平倉股", source_closed, source=source, value=closed_value, pnl=closed_pnl,
+                stock_tickers=closed_tickers, metric_rows=source_closed,
+            ),
+            _performance_summary_row(
+                "加總", [*source_open, *source_closed], source=source,
+                value=combined_value, pnl=combined_pnl, stock_tickers=open_tickers | closed_tickers,
+                metric_rows=[*source_open, *source_closed],
+            ),
+        ])
 
 
     return {

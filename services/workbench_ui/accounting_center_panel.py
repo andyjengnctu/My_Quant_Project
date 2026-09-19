@@ -26,6 +26,7 @@ from services.trading.scanner_state import load_trading_scanner_runtime
 from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.paged_table import PagedTable, TableColumn
 from services.workbench_ui.state_sync import ACCOUNT_MUTATION_DOMAINS
+from services.workbench_ui.trading_source_labels import trading_source_display_label
 from services.workbench_ui.workbench import (
     WORKBENCH_BG,
     WORKBENCH_BUTTON_STYLE,
@@ -160,16 +161,22 @@ class AccountingCenterPanel(ttk.Frame):
 
         grid = ttk.Frame(dashboard, style=WORKBENCH_FRAME_STYLE)
         grid.pack(fill="x")
-        self._metric_vars = {key: tk.StringVar(value="-") for key in ("cash", "market", "liquidation", "equity")}
+        self._metric_vars = {key: tk.StringVar(value="-") for key in ("liquidation", "cash", "equity")}
         self._metric_labels = {}
-        cards = (("revision", "revision"), ("市價日", "market_date"), ("現金餘額", "cash"), ("持股市值", "market"), ("可清算淨值", "liquidation"), ("帳戶淨值", "equity"))
+        cards = (
+            ("revision", "revision"),
+            ("市價日", "market_date"),
+            ("股票淨值", "liquidation"),
+            ("現金餘額", "cash"),
+            ("帳戶淨值", "equity"),
+        )
         for col, (label, key) in enumerate(cards):
             box = ttk.LabelFrame(grid, text=label, padding=(8, 5), style=WORKBENCH_LABELLF_STYLE)
             box.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
             variable = self._status_var if key == "revision" else self._market_date_var if key == "market_date" else self._metric_vars[key]
             metric_label = ttk.Label(
                 box, textvariable=variable, style=WORKBENCH_LABEL_STYLE,
-                foreground=WORKBENCH_INFO if key in {"market_date", "cash", "equity"} else WORKBENCH_TEXT,
+                foreground=WORKBENCH_INFO if key == "market_date" else WORKBENCH_TEXT,
             )
             metric_label.pack(fill="x")
             self._metric_labels[key] = metric_label
@@ -191,6 +198,7 @@ class AccountingCenterPanel(ttk.Frame):
         self._inventory = PagedTable(
             inventory,
             columns=(
+                TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
                 TableColumn("average_cost", "均價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
                 TableColumn("qty", "股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
@@ -257,6 +265,7 @@ class AccountingCenterPanel(ttk.Frame):
         self._buys = PagedTable(
             buy_box,
             columns=(
+                TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
                 TableColumn("trade_date", "成交日", 11, sort_kind="date"),
                 TableColumn("price", "成交價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
@@ -264,7 +273,6 @@ class AccountingCenterPanel(ttk.Frame):
                 TableColumn("gross_amount", "價金", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("buy_fee", "買入手續費", 11, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("holding_cost", "持有成本", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
-                TableColumn("source", "來源", 9),
             ),
             page_size=12,
             default_sort_key="trade_date",
@@ -290,6 +298,7 @@ class AccountingCenterPanel(ttk.Frame):
         self._sells = PagedTable(
             sell_box,
             columns=(
+                TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
                 TableColumn("trade_date", "日期", 11, sort_kind="date"),
                 TableColumn("qty", "股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
@@ -325,6 +334,7 @@ class AccountingCenterPanel(ttk.Frame):
         self._offset = PagedTable(
             offset_box,
             columns=(
+                TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("ticker", "股票", 8),
                 TableColumn("trade_date", "賣出日", 11, sort_kind="date"),
                 TableColumn("qty", "賣出股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
@@ -349,9 +359,10 @@ class AccountingCenterPanel(ttk.Frame):
         self._perf = PagedTable(
             perf,
             columns=(
+                TableColumn("source", "來源", 9, formatter=lambda v, _r: trading_source_display_label(source=v)),
                 TableColumn("scope", "範圍", 9),
                 TableColumn("stock_count", "股票檔數", 9, formatter=lambda v, _r: _integer(v)),
-                TableColumn("value", "價值", 12, formatter=lambda v, _r: _amount(v)),
+                TableColumn("value", "淨值", 12, formatter=lambda v, _r: _amount(v)),
                 TableColumn("cost", "成本", 12, formatter=lambda v, _r: _amount(v)),
                 TableColumn("pnl", "損益", 12, performance=True, formatter=lambda v, _r: _amount(v)),
                 TableColumn("return_pct", "報酬率", 10, performance=True, formatter=lambda v, _r: _pct(v)),
@@ -505,10 +516,20 @@ class AccountingCenterPanel(ttk.Frame):
 
     def _render(self):
         summary = dict(self._dashboard.get("summary") or {})
-        self._metric_vars["cash"].set(_amount(summary.get("cash")))
-        self._metric_vars["market"].set(_amount(summary.get("holdings_market_value")))
-        self._metric_vars["liquidation"].set(_amount(summary.get("holdings_net_liquidation")))
-        self._metric_vars["equity"].set(_amount(summary.get("equity")))
+        monetary_metrics = {
+            "liquidation": summary.get("holdings_net_liquidation"),
+            "cash": summary.get("cash"),
+            "equity": summary.get("equity"),
+        }
+        for key, value in monetary_metrics.items():
+            self._metric_vars[key].set(_amount(value))
+            if value is None or float(value) == 0.0:
+                color = WORKBENCH_TEXT
+            elif float(value) > 0.0:
+                color = WORKBENCH_ERROR
+            else:
+                color = WORKBENCH_SUCCESS
+            self._metric_labels[key].configure(foreground=color)
         self._cash_var.set(_amount(self._snapshot.get("cash")) if self._snapshot.get("cash") is not None else "")
         self._init_button.configure(state="disabled")
         self._cash_button.configure(state="normal")

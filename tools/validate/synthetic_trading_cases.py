@@ -933,6 +933,7 @@ def validate_trading_account_state_contract_case(base_params):
         lineage_dashboard = build_trading_account_dashboard_read_model(lineage_root)
         lineage_closed = lineage_dashboard["closed_trades"][0]
         lineage_perf = lineage_dashboard["performance"][1]
+        check("performance_strategy_lifecycle_uses_strategy_source_family", "strategy", lineage_perf["source"])
         check_true("closed_trade_keeps_strategy_r_multiple_as_lineage_diagnostic", lineage_closed["r_mult"] is not None)
         check("performance_actual_closed_win_rate_uses_net_pnl_outcome", 100.0, lineage_perf["win_rate_pct"])
         check("performance_all_wins_has_no_observed_loss_r_unit", None, lineage_perf["expected_value_r"])
@@ -963,6 +964,7 @@ def validate_trading_account_state_contract_case(base_params):
         )
         dashboard_open = build_trading_account_dashboard_read_model(root)
         open_perf = dashboard_open["performance"][0]
+        check("performance_manual_inventory_uses_custom_source_family", "custom", open_perf["source"])
         check("performance_missing_market_price_keeps_open_stock_count", 1, open_perf["stock_count"])
         check("performance_missing_market_price_keeps_open_cost", 20_000.0, open_perf["cost"])
         check("performance_open_inventory_has_no_fake_trade_win_rate", None, open_perf["win_rate_pct"])
@@ -1363,7 +1365,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "侯選區" in panel_source and "advanced_notebook.grid(" not in panel_source)
-    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘資源", "策略 / Params")))
+    check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("總股數", "符合快篩數", "Scanner 候選數", "可操作檔位", "可操作資金", "策略 / Params")) and "同步狀態" not in panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0])
     check("workbench_fixed_notes_move_to_fixed_bottom_status_bar", True, all(token in panel_source for token in ("self._footer_bar.grid(row=2", "操作提示｜", "_bind_footer_hint(workflow_box, WORKFLOW_HINT)", "_bind_footer_hint(candidate_box, SCANNER_HINT)", "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)")))
     # AI: This contract is about preserving and rendering the original parameter
     # training date in reuse mode, not about freezing one historical UI phrase.
@@ -3057,6 +3059,8 @@ def validate_trading_operations_status_contract_case(base_params):
     check("operations_status_exposes_scanner_candidate_count", 3, overview_counts["scanner_candidate_ticker_count"])
     check("operations_status_exposes_scanner_buyable_count", 3, overview_counts["scanner_buyable_ticker_count"])
     check("operations_status_exposes_portfolio_free_slots", 10, overview_counts["portfolio_free_slot_count"])
+    check("operations_status_exposes_open_position_count", 0, overview_counts["portfolio_open_position_count"])
+    check("operations_status_exposes_cash_after_pending_reservations", 500_000.0, overview_counts["available_cash_after_pending"])
     pending_slot_counts = derive(
         pending_entries={"locked_count": 8, "reserved_total_milli": money_to_milli(80_000)}
     )
@@ -3065,11 +3069,15 @@ def validate_trading_operations_status_contract_case(base_params):
     check("operations_status_exposes_pending_resource_reservation",
           [8, money_to_milli(80_000)],
           [pending_slot_counts["pending_locked_slot_count"], pending_slot_counts["pending_reserved_total_milli"]])
+    check("operations_status_available_cash_subtracts_pending_reservation_once",
+          [money_to_milli(420_000), 420_000.0],
+          [pending_slot_counts["available_cash_after_pending_milli"], pending_slot_counts["available_cash_after_pending"]])
     held_candidate_account = {
         "initialized": True, "revision": 8, "cash": 400_000.0,
         "positions": [{"ticker": "2317", "source": "strategy_fill", "qty": 100, "entry_order_id": "ENTRY-2317", "management_status": "active"}],
     }
     held_candidate_counts = derive(account=held_candidate_account)
+    check("operations_status_open_position_count_uses_canonical_account_positions", 1, held_candidate_counts["portfolio_open_position_count"])
     check("operations_status_buyable_excludes_held_candidate", 2, held_candidate_counts["scanner_unheld_candidate_ticker_count"])
     check("operations_status_buyable_uses_unheld_candidates", 2, held_candidate_counts["scanner_buyable_ticker_count"])
     near_full_account = {
@@ -4328,13 +4336,17 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         )),
     )
     check(
-        "workbench_pending_resource_status_moves_to_overview_remaining_resources",
+        "workbench_pending_resource_status_moves_to_overview_capacity_and_funds",
         True,
         all(token in panel_source for token in (
+            'snapshot.get("portfolio_free_slot_count")',
+            'snapshot.get("portfolio_open_position_count")',
             'snapshot.get("pending_locked_slot_count")',
             'snapshot.get("pending_reserved_total_milli")',
-            'f"空位 {int(free_slots):,}/{int(max_positions):,} | "',
-            'f"鎖定 {int(locked_slots):,} | 預留 {float(reserved_milli) / 1000.0:,.0f}/{cash_text}"',
+            'snapshot.get("available_cash_after_pending")',
+            'f"掛單: {int(locked_slots):,} | "',
+            'f"持有: {int(held_count):,} | 上限: {int(max_positions):,}"',
+            'fund_detail = f"掛單: {amount_text(reserved_cash)} | 現金餘額: {amount_text(cash)}"',
             '"尚無掛單。" if not active_rows else f"目前 ACTIVE 掛單 {len(active_rows):,} 筆。"',
         ))
         and '資源鎖定 {locked_slots}/{slot_quota}' not in panel_source
@@ -4361,7 +4373,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     )
     check(
         "workbench_pending_and_holding_source_labels_share_one_user_facing_vocabulary",
-        ["Scanner", "手選", "手選", "手選"],
+        ["策略", "自選", "自選", "自選"],
         [
             trading_source_display_label(origin="scanner_strategy"),
             trading_source_display_label(origin="manual_selected"),
@@ -4551,7 +4563,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check(
         "workbench_holding_sell_signal_reads_account_management_ssot_not_planner_snapshots",
         True,
-        'sell_signal = str(row.get("sell_signal") or "-")' in _holding_reload_body
+        'sell_signal = "賣出訊號" if row.get("sell_signal") else "-"' in _holding_reload_body
         and "_indicator_snapshot" not in _holding_reload_body
         and "_protection_snapshot" not in _holding_reload_body,
     )
@@ -5185,9 +5197,12 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_state_sync_contract_declares_pending_account_scanner_domains", True, all(token in state_sync_source for token in ("STATE_PENDING_ENTRIES", "STATE_RESOURCE_RESERVATION", "STATE_SCANNER_ELIGIBILITY", "PENDING_FILL_MUTATION_DOMAINS")))
     check("workbench_primary_ui_does_not_mount_broker_oms_notebook", False, "advanced_notebook.grid(" in panel_source or "advanced_notebook.pack(" in panel_source)
     check("workbench_performance_colour_is_cell_scoped", True, "performance=True" in accounting_source and "column.performance" in paged_source and 'tag_configure("gain"' not in accounting_source)
-    check("workbench_account_dashboard_uses_revision_market_date_cards_and_fixed_bottom_refresh", True, 'text="帳戶儀表板"' in accounting_source and 'cards = (("revision", "revision"), ("市價日", "market_date")' in accounting_source and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新"' in accounting_source and 'pack(side="right"' in accounting_source and 'WORKBENCH_INFO if key in {"market_date", "cash", "equity"}' in accounting_source)
+    check("workbench_account_dashboard_uses_requested_five_cards_and_fixed_bottom_refresh", True, 'text="帳戶儀表板"' in accounting_source and all(label in accounting_source for label in ('("revision", "revision")', '("市價日", "market_date")', '("股票淨值", "liquidation")', '("現金餘額", "cash")', '("帳戶淨值", "equity")')) and '("持股市值", "market")' not in accounting_source and '("可清算淨值", "liquidation")' not in accounting_source and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新"' in accounting_source and 'pack(side="right"' in accounting_source)
+    check("workbench_account_dashboard_amount_cards_use_tw_gain_loss_flat_colors", True, 'elif float(value) > 0.0:' in accounting_source and 'color = WORKBENCH_ERROR' in accounting_source and 'color = WORKBENCH_SUCCESS' in accounting_source and 'color = WORKBENCH_TEXT' in accounting_source)
     check("workbench_account_performance_labels_empirical_r_semantics", True, '"實績 EV(R)"' in accounting_source and '"實績賺賠比"' in accounting_source)
-    check("workbench_performance_is_fixed_three_row_unsortable_schema", True, all(text in accounting_source for text in ("股票檔數", 'TableColumn("value", "價值"', 'TableColumn("cost", "成本"', 'TableColumn("pnl", "損益"', "sortable=False")))
+    account_dashboard_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "account_dashboard.py").read_text(encoding="utf-8")
+    check("workbench_performance_is_source_partitioned_unsortable_net_value_schema", True, all(text in accounting_source for text in ('TableColumn("source", "來源"', "股票檔數", 'TableColumn("value", "淨值"', 'TableColumn("cost", "成本"', 'TableColumn("pnl", "損益"', "sortable=False")) and 'for source in (TRADING_SOURCE_FAMILY_STRATEGY, TRADING_SOURCE_FAMILY_CUSTOM):' in account_dashboard_source)
+    check("workbench_accounting_all_tables_put_canonical_source_first", True, accounting_source.count('columns=(\n                TableColumn("source", "來源"') >= 5 and accounting_source.count('trading_source_display_label(source=v)') >= 5)
     check("workbench_page_mousewheel_binds_static_dynamic_and_full_accounting_panel", True, "def _bind_page_mousewheel" in accounting_source and "self._bind_page_mousewheel(self)" in accounting_source and "on_mousewheel=self._on_mousewheel" in accounting_source and "self._bind_mousewheel(cell)" in paged_source and "self._bind_pointer_callbacks(cell)" in paged_source)
     from services.workbench_ui.accounting_center_panel import AccountingCenterPanel
     accounting_scroll_calls = []
@@ -5263,7 +5278,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     overview_schema = panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
     workflow_schema = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
     check("workbench_overview_removes_account_card_and_consolidates_strategy_params", True, '帳戶"' not in overview_schema and '策略 / Params' in overview_schema and 'member' not in overview_schema.lower() and 'agree' not in overview_schema.lower())
-    check("workbench_overview_exposes_requested_funnel_cards", True, all(label in overview_schema for label in ("同步狀態", "總股數", "符合快篩數", "Scanner 候選數", "剩餘資源")))
+    check("workbench_overview_exposes_requested_funnel_and_resource_cards", True, all(label in overview_schema for label in ("總股數", "符合快篩數", "Scanner 候選數", "可操作檔位", "可操作資金")) and "同步狀態" not in overview_schema and "剩餘資源" not in overview_schema)
+    check("workbench_overview_count_cards_show_date_only_with_freshness_color", True, 'latest_data_date,' in panel_source and 'scanner_date,' in panel_source and 'detail_tone=latest_date_tone' in panel_source and 'detail_tone=candidate_date_tone' in panel_source and '_overview_detail_labels' in panel_source)
     check("workbench_overview_limits_dynamic_status_to_two_single_line_rows", True, '_operations_next_label.grid(' in overview_schema and '_operations_detail_label.grid(' in overview_schema and overview_schema.count('max_lines=1') >= 2 and '_live_audit_label' not in overview_schema)
     check("workbench_daily_workflow_does_not_repeat_status_rows", True, '_workflow_status_label' not in workflow_schema and '_param_mode_detail_label' not in workflow_schema)
     check("workbench_dynamic_status_stays_out_of_footer", True, '_show_footer_hint(self._operations_detail_var.get())' not in panel_source and '_dashboard_detail_label.pack(' not in panel_source)
@@ -5273,6 +5289,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_buy_details_follow_inventory_selection", True, "def _apply_inventory_filter" in accounting_source and "if row:" in accounting_source.split("def _apply_inventory_filter", 1)[1].split("def _parse_cash", 1)[0] and "list(self._all_buy_rows)" in accounting_source)
     inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
     check("workbench_single_stock_supports_research_trading_switch", True, all(text in inspector_source for text in ("檢視模式", 'values=("Research", "Trading")', "run_trading_candidate_scan", "load_trading_v2_sanitized_ohlcv_frame")))
+    portfolio_inspector_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
+    check("workbench_backtest_stock_dropdowns_show_ticker_and_source_only", True, 'display_label = f"{ticker} | {TRADING_SOURCE_CUSTOM_LABEL}"' in inspector_source and 'return f"{ticker} | {source_label}"' in inspector_source and 'return f"{ticker} | {TRADING_SOURCE_STRATEGY_LABEL}"' in portfolio_inspector_source and 'label = f"{ticker} | {source_label}"' in inspector_source)
+    check("workbench_sell_signal_hides_raw_stop_exit_label", True, 'sell_signal = "賣出訊號" if row.get("sell_signal") else "-"' in panel_source and 'trading_status += "｜賣出訊號"' in inspector_source and 'SELL訊號:' not in inspector_source)
     gui_payload_body = inspector_source.split("def _build_gui_chart_payload", 1)[1].split("def ", 1)[0]
     check("workbench_single_stock_trading_hides_backtest_forced_close_visual_only", True, 'self._runtime_domain_key() == "trading"' in gui_payload_body and 'hidden.add("強制結算")' in gui_payload_body and 'chart_payload["hidden_trace_names"]' in gui_payload_body)
     check(
@@ -5369,7 +5388,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_trading_sidebar_uses_one_effective_stop_value", True, 'self._format_sidebar_line_value("停損", canonical.get("stop_price"))' in _trading_sidebar_body)
     check("workbench_single_stock_trading_sidebar_marks_prefill_entry_as_shadow_not_fill", True, 'lifecycle_state in {"SIGNAL", "SHADOW"}' in _trading_sidebar_body and 'else "成交"' in _trading_sidebar_body)
     check("workbench_single_stock_trading_sidebar_does_not_expose_no_canonical_backend_state", False, "無 canonical" in _trading_sidebar_body)
-    check("workbench_single_stock_trading_sidebar_surfaces_canonical_sell_signal", True, "SELL訊號:" in inspector_source and "SELL狀態: ERROR" in inspector_source)
+    check("workbench_single_stock_trading_sidebar_surfaces_canonical_sell_signal", True, 'trading_status += "｜賣出訊號"' in inspector_source and "SELL狀態: ERROR" in inspector_source and "SELL訊號:" not in inspector_source)
     check("workbench_single_stock_held_ticker_replay_prefers_position_frozen_params", True, "position_frozen_params" in inspector_source and "load_trading_single_stock_position_binding" in inspector_source)
     check("workbench_single_stock_combobox_reflow_rechecks_after_autosize", True, "def _autosize_combobox" in inspector_source and "self._schedule_single_stock_controls_layout()" in inspector_source)
 
@@ -6663,25 +6682,25 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "get_trading_pending_entry_read_model",
         return_value={
             "entries": [
-                {"status": "FILLED", "ticker": "1101", "planned_trade_date": "2026-09-15"},
-                {"status": "ACTIVE", "ticker": "2330", "planned_trade_date": "2026-09-16"},
-                {"status": "ACTIVE", "ticker": "2317", "planned_trade_date": "2026-09-17"},
+                {"status": "FILLED", "ticker": "1101", "planned_trade_date": "2026-09-15", "origin": "scanner_strategy"},
+                {"status": "ACTIVE", "ticker": "2330", "planned_trade_date": "2026-09-16", "origin": "scanner_strategy"},
+                {"status": "ACTIVE", "ticker": "2317", "planned_trade_date": "2026-09-17", "origin": "manual_selected"},
             ]
         },
     ):
         SingleStockBacktestInspectorPanel._refresh_pending_options(_pending_dropdown_panel)
     check(
         "workbench_single_stock_pending_dropdown_lists_active_orders_only_sorted_by_ticker",
-        ("2317 | 2026-09-17", "2330 | 2026-09-16"),
+        ("2317 | 自選", "2330 | 策略"),
         tuple(_pending_dropdown_panel._pending_combo.options.get("values") or ()),
     )
     check(
         "workbench_single_stock_pending_dropdown_maps_labels_to_tickers",
-        {"2317 | 2026-09-17": "2317", "2330 | 2026-09-16": "2330"},
+        {"2317 | 自選": "2317", "2330 | 策略": "2330"},
         dict(_pending_dropdown_panel._pending_map),
     )
     _pending_selected_runs = []
-    _pending_dropdown_panel._pending_display_var.set("2330 | 2026-09-16")
+    _pending_dropdown_panel._pending_display_var.set("2330 | 策略")
     _pending_dropdown_panel._ticker_var = _SingleStockVarProbe("")
     _pending_dropdown_panel._apply_runtime_domain_controls = lambda: None
     _pending_dropdown_panel._run_analysis = lambda: _pending_selected_runs.append(_pending_dropdown_panel._ticker_var.get())

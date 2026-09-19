@@ -13,6 +13,7 @@ from typing import Any
 
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 
+from core.exact_accounting import milli_to_money, money_to_milli
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from core.trading_account_state import MANAGED_POSITION_SOURCES
 from core.trading_order_state import (
@@ -405,10 +406,20 @@ def derive_trading_operations_status(
     }
     unheld_candidate_tickers = candidate_tickers - open_position_tickers
     pending_locked_slot_count = max(0, int(pending_entries.get("locked_count") or 0))
+    pending_reserved_total_milli = max(0, int(pending_entries.get("reserved_total_milli") or 0))
+    portfolio_open_position_count = len(open_position_tickers)
     portfolio_free_slot_count = max(
         0,
-        int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - len(open_position_tickers) - pending_locked_slot_count,
+        int(DEFAULT_PORTFOLIO_MAX_POSITIONS) - portfolio_open_position_count - pending_locked_slot_count,
     )
+    cash_value = account.get("cash")
+    available_cash_after_pending_milli = None
+    available_cash_after_pending = None
+    if bool(account.get("initialized")) and cash_value is not None:
+        available_cash_after_pending_milli = max(
+            0, money_to_milli(cash_value) - pending_reserved_total_milli
+        )
+        available_cash_after_pending = milli_to_money(available_cash_after_pending_milli)
     scanner_buyable_ticker_count = None
     if (
         candidate_snapshot_available
@@ -658,8 +669,11 @@ def derive_trading_operations_status(
         "scanner_buyable_ticker_count": scanner_buyable_ticker_count,
         "scanner_unheld_candidate_ticker_count": (len(unheld_candidate_tickers) if candidate_snapshot_available else None),
         "portfolio_free_slot_count": (portfolio_free_slot_count if bool(account.get("initialized")) else None),
+        "portfolio_open_position_count": (portfolio_open_position_count if bool(account.get("initialized")) else None),
         "pending_locked_slot_count": pending_locked_slot_count,
-        "pending_reserved_total_milli": int(pending_entries.get("reserved_total_milli") or 0),
+        "pending_reserved_total_milli": pending_reserved_total_milli,
+        "available_cash_after_pending_milli": available_cash_after_pending_milli,
+        "available_cash_after_pending": available_cash_after_pending,
         "portfolio_max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
         "scanner_information_date": candidate.get("information_date"),
         "strategy_id": workflow.get("strategy_id"),

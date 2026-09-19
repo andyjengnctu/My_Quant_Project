@@ -65,6 +65,7 @@ from services.trade_analysis.charting import (
     scroll_chart_to_adjacent_trade,
     scroll_chart_to_latest,
 )
+from services.workbench_ui.trading_source_labels import TRADING_SOURCE_STRATEGY_LABEL
 from services.workbench_ui.workbench import (
     WorkbenchConsoleWriter,
     WorkbenchInspectorSharedMixin,
@@ -2086,16 +2087,8 @@ class PortfolioBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame):
 
 
     def _format_ticker_dropdown_label(self, *, ticker, first_buy_row, stats):
-        label = (
-            f"{ticker}"
-            f" | 總損益 {stats.get('total_pnl_text', '-')}"
-            f" | 勝率 {stats.get('win_rate_text', '-')}"
-            f" | 交易次數 {stats.get('trade_count_text', '-')}"
-        )
-        missed_sell_count = int(stats.get("missed_sell_count", 0) or 0)
-        if missed_sell_count > 0:
-            label = f"{label} | 錯失: {missed_sell_count}"
-        return label
+        del first_buy_row, stats
+        return f"{ticker} | {TRADING_SOURCE_STRATEGY_LABEL}"
 
     def _refresh_trade_ticker_dropdown(self, result_payload):
         df_tr = result_payload.get("df_tr")

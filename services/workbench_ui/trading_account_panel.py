@@ -133,6 +133,11 @@ from services.workbench_ui.state_sync import (
     normalize_state_domains,
 )
 from services.workbench_ui.paged_table import PagedTable, TableColumn
+from services.workbench_ui.trading_source_labels import (
+    TRADING_SOURCE_CUSTOM_LABEL,
+    TRADING_SOURCE_STRATEGY_LABEL,
+    trading_source_display_label,
+)
 from services.workbench_ui.selection_behavior import (
     bind_treeview_toggle_selection,
     clear_treeview_selection,
@@ -164,8 +169,6 @@ from services.workbench_ui.workbench import (
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MANUAL_SOURCE = "manual_adopted"
 UNMANAGED_STATUS = "unmanaged"
-TRADING_SOURCE_SCANNER_LABEL = "Scanner"
-TRADING_SOURCE_MANUAL_LABEL = "手選"
 PARAM_MODE_REUSE_LABEL = "沿用既有 Params"
 PARAM_MODE_TRAIN_LABEL = "重新訓練 Params"
 PARAM_MODE_BY_LABEL = {
@@ -186,24 +189,6 @@ SCANNER_HINT = "左側 ▣ 可直接開啟單股回測檢視；選取候選後�
 BUY_ENTRY_HINT = "直接補登買入不需經掛單區；成交日／成交價會先用 raw 市場證據檢查，手動股會凍結目前 Primary Params 並從 finalized information date 開始管理。"
 PENDING_ENTRY_HINT = "Scanner／手選股／既有掛單共用同一輸入介面；修改股票、規劃股數或掛單日會自動更新預覽。買入限價、預留成本、停損、停利由系統自動計算；只有 ACTIVE 掛單占用 Params、資金與 slot。"
 
-
-def trading_source_display_label(*, origin: object = None, source: object = None) -> str:
-    """Return one canonical user-facing source label for Trading tables/forms."""
-
-    values = {
-        str(value or "").strip()
-        for value in (origin, source)
-        if str(value or "").strip()
-    }
-    if values.intersection({"scanner", "scanner_strategy", "strategy_fill"}):
-        return TRADING_SOURCE_SCANNER_LABEL
-    if values.intersection({"manual", "manual_selected", "manual_adopted", "manual_managed"}):
-        return TRADING_SOURCE_MANUAL_LABEL
-    for value in (source, origin):
-        text = str(value or "").strip()
-        if text:
-            return text
-    return "-"
 
 
 def holding_order_date_by_lineage(pending_entries) -> dict[tuple[str, str], str]:
@@ -1062,18 +1047,19 @@ class TradingAccountPanel(ttk.Frame):
         operations_box.columnconfigure(0, weight=1)
         self._overview_vars = {
             key: tk.StringVar(value="-")
-            for key in ("sync", "total", "quick", "candidates", "buyable", "strategy_params")
+            for key in ("total", "quick", "candidates", "slots", "funds", "strategy_params")
         }
         self._overview_detail_vars = {key: tk.StringVar(value="-") for key in self._overview_vars}
         self._overview_primary_labels: dict[str, tk.Label] = {}
+        self._overview_detail_labels: dict[str, ttk.Label] = {}
         overview_grid = ttk.Frame(operations_box, style=WORKBENCH_FRAME_STYLE)
         overview_grid.grid(row=0, column=0, sticky="ew")
         for col, (title, key) in enumerate((
-            ("同步狀態", "sync"),
             ("總股數", "total"),
             ("符合快篩數", "quick"),
             ("Scanner 候選數", "candidates"),
-            ("剩餘資源", "buyable"),
+            ("可操作檔位", "slots"),
+            ("可操作資金", "funds"),
             ("策略 / Params", "strategy_params"),
         )):
             box = ttk.LabelFrame(overview_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
@@ -1087,14 +1073,16 @@ class TradingAccountPanel(ttk.Frame):
                 justify="center",
             )
             primary.pack(fill="x")
-            ttk.Label(
+            detail_label = ttk.Label(
                 box,
                 textvariable=self._overview_detail_vars[key],
                 style=WORKBENCH_LABEL_STYLE,
                 foreground=WORKBENCH_MUTED,
                 justify="center",
-            ).pack(fill="x", pady=(1, 0))
+            )
+            detail_label.pack(fill="x", pady=(1, 0))
             self._overview_primary_labels[key] = primary
+            self._overview_detail_labels[key] = detail_label
             overview_grid.columnconfigure(col, weight=1)
 
         self._operations_next_var = tk.StringVar(value="下一步：-")
@@ -1300,7 +1288,7 @@ class TradingAccountPanel(ttk.Frame):
             style=WORKBENCH_LABELLF_STYLE,
         )
         pending_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        self._pending_order_source_var = tk.StringVar(value=TRADING_SOURCE_MANUAL_LABEL)
+        self._pending_order_source_var = tk.StringVar(value=TRADING_SOURCE_CUSTOM_LABEL)
         self._pending_order_ticker_var = tk.StringVar()
         self._pending_order_qty_var = tk.StringVar()
         self._pending_order_limit_var = tk.StringVar()
@@ -1952,18 +1940,22 @@ class TradingAccountPanel(ttk.Frame):
             state_domains={STATE_ORDERS, STATE_INDICATOR_EXIT},
         )
 
-    def _set_overview_card(self, key: str, primary: object, detail: object = "", *, tone: str = "text") -> None:
+    def _set_overview_card(
+        self, key: str, primary: object, detail: object = "", *,
+        tone: str = "text", detail_tone: str = "muted",
+    ) -> None:
         self._overview_vars[key].set(str(primary if primary not in (None, "") else "-"))
         self._overview_detail_vars[key].set(str(detail or ""))
-        color = {
+        colors = {
             "text": WORKBENCH_TEXT,
             "muted": WORKBENCH_MUTED,
             "info": WORKBENCH_INFO,
             "success": WORKBENCH_SUCCESS,
             "warning": WORKBENCH_WARNING,
             "error": WORKBENCH_ERROR,
-        }.get(str(tone), WORKBENCH_TEXT)
-        self._overview_primary_labels[key].configure(foreground=color)
+        }
+        self._overview_primary_labels[key].configure(foreground=colors.get(str(tone), WORKBENCH_TEXT))
+        self._overview_detail_labels[key].configure(foreground=colors.get(str(detail_tone), WORKBENCH_MUTED))
 
     def refresh_operations_status(self):
         if bool(getattr(self, "_suspend_operations_refresh", False)):
@@ -1976,10 +1968,7 @@ class TradingAccountPanel(ttk.Frame):
             self._operations_snapshot = {}
             for key in self._overview_vars:
                 self._set_overview_card(
-                    key,
-                    "BLOCKED" if key == "sync" else "-",
-                    "狀態讀取失敗" if key == "sync" else "",
-                    tone="error" if key == "sync" else "muted",
+                    key, "-", "狀態讀取失敗", tone="muted", detail_tone="error"
                 )
             self._operations_next_var.set("下一步：先修正 Trading 整體狀態讀取錯誤")
             self._operations_detail_var.set(f"FAIL：{exc}")
@@ -1988,70 +1977,78 @@ class TradingAccountPanel(ttk.Frame):
         self._operations_snapshot = snapshot
 
         overall = str(snapshot.get("overall_status") or "-")
-        latest_data_date = snapshot.get("latest_data_date") or "-"
+        latest_data_date = str(snapshot.get("latest_data_date") or "-")
         data_ready = bool(snapshot.get("trading_data_ready"))
-        sync_status = "READY" if data_ready else "NOT READY"
-        sync_tone = "success" if data_ready else ("error" if overall in {"BLOCKED", "LIVE_BLOCKED"} else "warning")
-        self._set_overview_card(
-            "sync",
-            sync_status,
-            f"資料日 {latest_data_date} | Trading Data {sync_status}",
-            tone=sync_tone,
-        )
 
         def count_text(value: object) -> str:
             return "-" if value is None else f"{int(value):,} 檔"
 
+        def amount_text(value: object) -> str:
+            return "-" if value is None else f"{float(value):,.0f}"
+
         listed_count = snapshot.get("listed_ticker_count")
         quick_count = snapshot.get("quick_filter_qualified_count")
         candidate_count = snapshot.get("scanner_candidate_ticker_count")
-        buyable_count = snapshot.get("scanner_buyable_ticker_count")
         scanner_fresh = bool(snapshot.get("candidate_snapshot_fresh"))
-        scanner_date = snapshot.get("scanner_information_date") or "-"
+        scanner_date = str(snapshot.get("scanner_information_date") or "-")
+        latest_date_tone = "text" if latest_data_date != "-" else "muted"
+        candidate_date_tone = (
+            "text"
+            if scanner_fresh and scanner_date != "-" and scanner_date == latest_data_date
+            else ("warning" if scanner_date != "-" else "muted")
+        )
         self._set_overview_card(
             "total",
             count_text(listed_count),
-            "當日市場 universe",
+            latest_data_date,
             tone="success" if listed_count is not None else "muted",
+            detail_tone=latest_date_tone,
         )
         self._set_overview_card(
             "quick",
             count_text(quick_count),
-            "快篩後可進 Scanner",
+            latest_data_date,
             tone="success" if quick_count is not None else "muted",
+            detail_tone=latest_date_tone,
         )
-        scanner_tone = "success" if scanner_fresh else ("warning" if candidate_count is not None else "muted")
-        scanner_status = "FRESH" if scanner_fresh else ("STALE" if candidate_count is not None else "尚未掃描")
         self._set_overview_card(
             "candidates",
             count_text(candidate_count),
-            f"{scanner_status} | {scanner_date}",
-            tone=scanner_tone,
+            scanner_date,
+            tone="success" if scanner_fresh else ("warning" if candidate_count is not None else "muted"),
+            detail_tone=candidate_date_tone,
         )
+
         free_slots = snapshot.get("portfolio_free_slot_count")
+        held_count = snapshot.get("portfolio_open_position_count")
         max_positions = snapshot.get("portfolio_max_positions")
         locked_slots = snapshot.get("pending_locked_slot_count")
-        reserved_milli = snapshot.get("pending_reserved_total_milli")
-        cash = snapshot.get("cash")
-        if (
-            buyable_count is not None
-            and free_slots is not None
-            and max_positions is not None
-            and locked_slots is not None
-            and reserved_milli is not None
-        ):
-            cash_text = "-" if cash is None else f"{float(cash):,.0f}"
-            buyable_detail = (
-                f"空位 {int(free_slots):,}/{int(max_positions):,} | "
-                f"鎖定 {int(locked_slots):,} | 預留 {float(reserved_milli) / 1000.0:,.0f}/{cash_text}"
+        if None not in (free_slots, held_count, max_positions, locked_slots):
+            slot_detail = (
+                f"掛單: {int(locked_slots):,} | "
+                f"持有: {int(held_count):,} | 上限: {int(max_positions):,}"
             )
         else:
-            buyable_detail = "需 fresh Scanner 與帳戶狀態"
+            slot_detail = "掛單: - | 持有: - | 上限: -"
         self._set_overview_card(
-            "buyable",
-            count_text(buyable_count),
-            buyable_detail,
-            tone="success" if buyable_count is not None else "muted",
+            "slots",
+            "-" if free_slots is None else f"{int(free_slots):,}",
+            slot_detail,
+            tone="success" if free_slots is not None else "muted",
+            detail_tone="text",
+        )
+
+        available_cash = snapshot.get("available_cash_after_pending")
+        reserved_milli = snapshot.get("pending_reserved_total_milli")
+        cash = snapshot.get("cash")
+        reserved_cash = None if reserved_milli is None else float(reserved_milli) / 1000.0
+        fund_detail = f"掛單: {amount_text(reserved_cash)} | 現金餘額: {amount_text(cash)}"
+        self._set_overview_card(
+            "funds",
+            amount_text(available_cash),
+            fund_detail,
+            tone="success" if available_cash is not None else "muted",
+            detail_tone="text",
         )
 
         strategy_id = snapshot.get("strategy_id") or "-"
@@ -2653,7 +2650,7 @@ class TradingAccountPanel(ttk.Frame):
         self._set_pending_edit_mode(None)
         self._pending_draft_programmatic_update = True
         try:
-            self._pending_order_source_var.set(TRADING_SOURCE_MANUAL_LABEL)
+            self._pending_order_source_var.set(TRADING_SOURCE_CUSTOM_LABEL)
             self._pending_order_ticker_var.set("")
             self._pending_order_qty_var.set("")
             self._pending_order_limit_var.set("")
@@ -2702,7 +2699,7 @@ class TradingAccountPanel(ttk.Frame):
         )
         self._pending_draft_programmatic_update = True
         try:
-            self._pending_order_source_var.set(TRADING_SOURCE_SCANNER_LABEL)
+            self._pending_order_source_var.set(TRADING_SOURCE_STRATEGY_LABEL)
             self._pending_order_ticker_var.set(ticker)
             self._pending_order_qty_var.set("" if candidate_qty is None else str(int(candidate_qty)))
             self._pending_order_limit_var.set("" if candidate_price is None else str(candidate_price))
@@ -2927,7 +2924,7 @@ class TradingAccountPanel(ttk.Frame):
         self._pending_draft_candidate = None
         self._pending_draft_programmatic_update = True
         try:
-            self._pending_order_source_var.set(TRADING_SOURCE_MANUAL_LABEL)
+            self._pending_order_source_var.set(TRADING_SOURCE_CUSTOM_LABEL)
             self._pending_order_ticker_var.set(ticker)
             self._pending_order_qty_var.set("")
             self._pending_order_limit_var.set("")
@@ -4002,7 +3999,7 @@ class TradingAccountPanel(ttk.Frame):
             # Editing eligibility belongs to the canonical account read model.
             row["has_sell_history"] = bool(base_row.get("has_sell_history"))
             self._position_rows[ticker] = row
-            sell_signal = str(row.get("sell_signal") or "-")
+            sell_signal = "賣出訊號" if row.get("sell_signal") else "-"
             source_text = trading_source_display_label(source=row.get("source"))
             lineage_id = str(row.get("management_lineage_id") or row.get("strategy_lineage_id") or "").strip()
             entry_date = row.get("entry_date") or "-"
@@ -4267,7 +4264,9 @@ class TradingAccountPanel(ttk.Frame):
         except (ValueError, RuntimeError, OSError, FileNotFoundError) as exc:
             messagebox.showerror("成交登錄失敗", str(exc), parent=self)
             return
-        source_text = "Scanner 策略買入" if preview.get("route") == "scanner_strategy_buy" else "自行買入"
+        source_text = trading_source_display_label(
+            source="strategy_fill" if preview.get("route") == "scanner_strategy_buy" else "manual_adopted"
+        )
         evidence = dict(preview.get("market_evidence") or {})
         evidence_text = (
             f"市場證據：{evidence.get('trade_date') or trade_date} "

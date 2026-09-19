@@ -98,6 +98,11 @@ from services.trading.strategy_param_runtime import (
     load_trading_strategy_param_runtime,
     resolve_trading_candidate_frozen_params,
 )
+from services.workbench_ui.trading_source_labels import (
+    TRADING_SOURCE_CUSTOM_LABEL,
+    TRADING_SOURCE_STRATEGY_LABEL,
+    trading_source_display_label,
+)
 from services.workbench_ui.workbench import (
     WorkbenchConsoleWriter,
     WorkbenchInspectorSharedMixin,
@@ -520,17 +525,16 @@ def _load_reduced_stock_tickers():
 
 
 def _build_reduced_stock_dropdown_options(*, company_name_map=None):
+    # ``company_name_map`` remains in the signature for compatibility with the
+    # existing background cache refresh, but all stock selectors in the backtest
+    # views share one user-facing contract: ``ticker | source``.  Reduced/common
+    # stocks are explicit user picks rather than Scanner-generated candidates.
+    del company_name_map
     tickers = _load_reduced_stock_tickers()
-    normalized_name_map = {
-        _normalize_security_code(ticker): _normalize_company_name(name)
-        for ticker, name in dict(company_name_map or {}).items()
-        if _normalize_company_name(name)
-    }
     display_values = []
     display_map = {}
     for ticker in tickers:
-        company_name = normalized_name_map.get(ticker, "")
-        display_label = f"{ticker} | {company_name}" if company_name else ticker
+        display_label = f"{ticker} | {TRADING_SOURCE_CUSTOM_LABEL}"
         display_values.append(display_label)
         display_map[display_label] = ticker
     return tickers, display_values, display_map
@@ -1221,8 +1225,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             ticker = str(row.get("ticker") or "").strip().upper()
             if not ticker:
                 continue
-            planned_date = str(row.get("planned_trade_date") or row.get("information_date") or "-")
-            label = f"{ticker} | {planned_date}"
+            source_label = trading_source_display_label(origin=row.get("origin"), source=row.get("source"))
+            label = f"{ticker} | {source_label}"
             labels.append(label)
             self._pending_map[label] = ticker
         self._pending_combo.configure(values=labels)
@@ -1259,7 +1263,8 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             ticker = str(row.get("ticker") or "").strip().upper()
             if not ticker:
                 continue
-            label = f"{ticker} | {int(row.get('qty') or 0):,}股 | {row.get('source') or '-'}"
+            source_label = trading_source_display_label(source=row.get("source"))
+            label = f"{ticker} | {source_label}"
             labels.append(label)
             self._holdings_map[label] = ticker
         self._holdings_combo.configure(values=labels)
@@ -1982,31 +1987,12 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
 
     def _format_scan_dropdown_label(self, item):
         ticker = str(item.get("ticker") or "").strip()
-        kind = str(item.get("kind") or "candidate").strip()
-        kind_label = SCAN_DROPDOWN_KIND_LABELS.get(kind, kind or "-")
-        sort_method = get_buy_sort_method()
-        raw_sort_metric_label = get_buy_sort_metric_label(sort_method)
-        sort_metric_label = SCAN_DROPDOWN_SORT_LABELS.get(raw_sort_metric_label, raw_sort_metric_label)
-        sort_value = self._coerce_optional_float(item.get("sort_value"))
-        win_rate = self._resolve_scan_dropdown_win_rate_pct(item)
-        trade_count = self._resolve_scan_dropdown_trade_count(item)
-        sort_probe_text = self._resolve_scan_dropdown_sort_probe_text(
-            item,
-            sort_method=sort_method,
-            sort_value=sort_value,
-            win_rate=win_rate,
-            trade_count=trade_count,
+        source_label = trading_source_display_label(
+            origin=item.get("origin"),
+            source=item.get("source"),
+            default=TRADING_SOURCE_STRATEGY_LABEL,
         )
-        sort_value_text = "-" if sort_value is None else format_buy_sort_metric_value(sort_value, sort_method)
-        win_rate_text = "-" if win_rate is None else f"{win_rate:.1f}%"
-        trade_count_text = "-" if trade_count is None else str(trade_count)
-        if sort_probe_text:
-            sort_probe_payload = {"text": sort_probe_text}
-            probe_win_rate = self._resolve_scan_dropdown_win_rate_pct(sort_probe_payload)
-            probe_trade_count = self._resolve_scan_dropdown_trade_count(sort_probe_payload)
-            win_rate_text = "-" if probe_win_rate is None else f"{probe_win_rate:.1f}%"
-            trade_count_text = "-" if probe_trade_count is None else str(probe_trade_count)
-        return f"{ticker}|{kind_label}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
+        return f"{ticker} | {source_label}"
 
     def _apply_scan_dropdown(
         self, *, combo, value_var, mapping, display_values, rule_key, sync_ticker=True
@@ -2365,7 +2351,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             )
         trading_status = f"交易狀態: {display_state}"
         if canonical.get("sell_signal"):
-            trading_status += f"｜SELL訊號: {canonical.get('sell_signal')}"
+            trading_status += "｜賣出訊號"
         if canonical.get("decision_errors"):
             trading_status += "｜SELL狀態: ERROR"
         capital_lines = []
