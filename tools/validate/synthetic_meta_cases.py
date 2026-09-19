@@ -3745,7 +3745,42 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "entry_plan_resize_threads_ticker_security_profile_and_trade_date", True, 'ticker=candidate_plan.get("ticker")' in entry_plans_source and 'security_profile=candidate_plan.get("security_profile")' in entry_plans_source and 'trade_date=candidate_plan.get("trade_date")' in entry_plans_source)
     add_check(results, "meta_contract", case_id, "scanner_projected_qty_threads_ticker_and_trade_date", True, "calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)" in scanner_processor_source and "calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)" in scanner_processor_source)
     add_check(results, "meta_contract", case_id, "scanner_response_threads_latest_trade_date", True, 'resolve_latest_trade_date_from_frame' in scanner_processor_source and 'trade_date = resolve_latest_trade_date_from_frame(df)' in scanner_processor_source and 'build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats, trade_date=trade_date)' in scanner_processor_source)
-    add_check(results, "meta_contract", case_id, "position_step_exit_path_uses_position_ticker", True, 'ticker=position.get("ticker")' in position_step_source)
+    position_step_tree = ast.parse(position_step_source, filename=str(position_step_path))
+    position_step_exit_uses_position_ticker = False
+    for node in ast.walk(position_step_tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func_name = node.func.id if isinstance(node.func, ast.Name) else (
+            node.func.attr if isinstance(node.func, ast.Attribute) else ""
+        )
+        if func_name != "build_sell_ledger_from_price":
+            continue
+        ticker_keyword = next((kw for kw in node.keywords if kw.arg == "ticker"), None)
+        if ticker_keyword is None:
+            continue
+        value = ticker_keyword.value
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id == "position"
+            and value.func.attr == "get"
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Constant)
+            and value.args[0].value == "ticker"
+        ):
+            position_step_exit_uses_position_ticker = True
+            break
+        if (
+            isinstance(value, ast.Subscript)
+            and isinstance(value.value, ast.Name)
+            and value.value.id == "position"
+            and isinstance(value.slice, ast.Constant)
+            and value.slice.value == "ticker"
+        ):
+            position_step_exit_uses_position_ticker = True
+            break
+    add_check(results, "meta_contract", case_id, "position_step_exit_path_uses_position_ticker", True, position_step_exit_uses_position_ticker)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_uses_weakest_ticker", True, 'adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)' in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_has_no_undefined_ticker_reference", False, 'adjust_long_sell_fill_price(w_open, ticker=ticker)' in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "price_utils_position_size_routes_tax_schedule_by_security_profile", True, 'tax_ppm = resolve_sell_tax_ppm(params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)' in price_source)
