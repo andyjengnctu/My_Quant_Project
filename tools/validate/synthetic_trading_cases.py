@@ -4920,15 +4920,19 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_primary_tables_use_left_stock_inspector_links_without_redundant_footer_buttons", True, all(token in panel_source for token in ('"open": "↗"', '"▣", source_text, ticker', "def _on_position_tree_click", "def _open_ticker_in_inspector", "on_open_stock=self._open_candidate_ticker_in_inspector")) and 'text="檢視選取股票"' not in panel_source and 'text="在單股回測檢視"' not in panel_source)
     check("workbench_trading_fixed_annotations_are_contextual_footer_hints", True, "雙擊股票可直接切到單股回測檢視" not in panel_source and "_trade_note_var" not in panel_source and "_bind_footer_hint(candidate_box, SCANNER_HINT)" in panel_source and "_bind_footer_hint(pending_box, PENDING_ENTRY_HINT)" in panel_source and "_bind_footer_hint(trade_box, BUY_ENTRY_HINT)" in panel_source)
     _direct_buy_section = panel_source.split('trade_box = ttk.LabelFrame(content, text="直接補登買入（不經掛單區）"', 1)[1].split('performance_box = ttk.LabelFrame', 1)[0]
-    check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出成交"' in _direct_buy_section)
+    check("workbench_trading_center_has_no_primary_sell_entry", False, 'text="登錄賣出"' in _direct_buy_section)
     check(
         "workbench_direct_buy_orders_date_before_price_and_displays_canonical_source",
         True,
-        'trade_labels = ("股票", "數量", "成交日", "成交價", "來源")' in _direct_buy_section
-        and 'self._trade_date_field.grid(row=1, column=2' in _direct_buy_section
-        and 'self._trade_price_combo.grid(row=1, column=3' in _direct_buy_section
+        'trade_labels = ("來源", "股票", "數量", "成交日", "成交價")' in _direct_buy_section
         and 'textvariable=self._trade_source_var' in _direct_buy_section
-        and ').grid(row=1, column=4' in _direct_buy_section
+        and ').grid(row=1, column=0' in _direct_buy_section
+        and 'self._trade_ticker_entry.grid(row=1, column=1' in _direct_buy_section
+        and 'textvariable=self._trade_qty_var, width=12' in _direct_buy_section
+        and '.grid(row=1, column=2' in _direct_buy_section
+        and 'self._trade_date_field.grid(row=1, column=3' in _direct_buy_section
+        and 'self._trade_price_combo.grid(row=1, column=4' in _direct_buy_section
+        and 'text="登錄買入"' in _direct_buy_section
         and 'resolve_trading_direct_buy_source(' in panel_source
         and 'trading_source_display_label(source=(source_resolution or {}).get("source"))' in panel_source
         and 'source_text = trading_source_display_label(source=preview.get("source"))' in panel_source,
@@ -4937,7 +4941,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     accounting_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "accounting_center_panel.py").read_text(encoding="utf-8")
     workbench_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
     check("workbench_accounting_center_exposes_clean_inventory_trade_detail_titles_and_performance", True, all(text in accounting_source for text in ('text="庫存股"', 'text="買入明細"', 'text="賣出明細"', 'text="沖抵明細"', 'text="績效統計"', "持有成本", "買入手續費", "交易稅", "沖抵買入價金", "沖抵買入手續費")))
-    check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ('text="賣出成交登錄"', "record_trading_account_inventory_sell", "先在券商完成賣出")) and "對應券商 SELL 單" not in accounting_source)
+    check("workbench_accounting_center_owns_direct_inventory_sell_entry_without_broker_order_mapping", True, all(text in accounting_source for text in ('text="賣出成交登錄"', 'text="登錄賣出"', "record_trading_account_inventory_sell", "先在券商完成賣出")) and "對應券商 SELL 單" not in accounting_source)
     sell_entry_source = accounting_source.split('sell_entry = ttk.LabelFrame(inventory, text="賣出成交登錄"', 1)[1].split('buy_box = ttk.LabelFrame', 1)[0]
     check(
         "workbench_accounting_inventory_sell_form_autofills_and_uses_canonical_date_tick_constraints",
@@ -5233,8 +5237,22 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_account_dashboard_amount_cards_use_tw_gain_loss_flat_colors", True, 'elif float(value) > 0.0:' in accounting_source and 'color = WORKBENCH_ERROR' in accounting_source and 'color = WORKBENCH_SUCCESS' in accounting_source and 'color = WORKBENCH_TEXT' in accounting_source)
     check("workbench_account_performance_labels_empirical_r_semantics", True, '"實績 EV(R)"' in accounting_source and '"實績賺賠比"' in accounting_source)
     account_dashboard_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "account_dashboard.py").read_text(encoding="utf-8")
-    check("workbench_performance_is_source_partitioned_unsortable_net_value_schema", True, all(text in accounting_source for text in ('TableColumn("source", "來源"', "股票檔數", 'TableColumn("value", "淨值"', 'TableColumn("cost", "成本"', 'TableColumn("pnl", "損益"', "sortable=False")) and 'for source in (TRADING_SOURCE_FAMILY_STRATEGY, TRADING_SOURCE_FAMILY_CUSTOM):' in account_dashboard_source)
-    check("workbench_accounting_all_tables_put_canonical_source_first", True, accounting_source.count('columns=(\n                TableColumn("source", "來源"') >= 5 and accounting_source.count('trading_source_display_label(source=v)') >= 5)
+    _performance_ui_source = accounting_source.split('perf = ttk.LabelFrame(content, text="績效統計"', 1)[1].split('# Fixed bottom status line', 1)[0]
+    check(
+        "workbench_performance_is_account_wide_unsortable_net_value_schema",
+        True,
+        all(text in _performance_ui_source for text in ("股票檔數", 'TableColumn("value", "淨值"', 'TableColumn("cost", "成本"', 'TableColumn("pnl", "損益"', "sortable=False"))
+        and 'TableColumn("source", "來源"' not in _performance_ui_source
+        and all(label in account_dashboard_source for label in ('"庫存股"', '"平倉股"', '"加總"'))
+        and 'for source in (TRADING_SOURCE_FAMILY_STRATEGY, TRADING_SOURCE_FAMILY_CUSTOM):' not in account_dashboard_source,
+    )
+    check(
+        "workbench_accounting_transaction_tables_put_canonical_source_first_and_performance_does_not",
+        True,
+        accounting_source.count('columns=(\n                TableColumn("source", "來源"') >= 4
+        and accounting_source.count('trading_source_display_label(source=v)') >= 4
+        and 'TableColumn("source", "來源"' not in _performance_ui_source,
+    )
     check("workbench_page_mousewheel_binds_static_dynamic_and_full_accounting_panel", True, "def _bind_page_mousewheel" in accounting_source and "self._bind_page_mousewheel(self)" in accounting_source and "on_mousewheel=self._on_mousewheel" in accounting_source and "self._bind_mousewheel(cell)" in paged_source and "self._bind_pointer_callbacks(cell)" in paged_source)
     from services.workbench_ui.accounting_center_panel import AccountingCenterPanel
     accounting_scroll_calls = []

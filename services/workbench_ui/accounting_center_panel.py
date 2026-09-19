@@ -263,7 +263,7 @@ class AccountingCenterPanel(ttk.Frame):
         )
         self._sell_price_combo.grid(row=1, column=2, sticky="ew", padx=(8, 0))
         ttk.Entry(sell_entry, textvariable=self._sell_qty_var, width=12, style=WORKBENCH_ENTRY_STYLE).grid(row=1, column=3, sticky="ew", padx=(8, 0))
-        self._sell_button = ttk.Button(sell_entry, text="登錄賣出成交", command=self._record_inventory_sell, style=WORKBENCH_BUTTON_STYLE, state="disabled")
+        self._sell_button = ttk.Button(sell_entry, text="登錄賣出", command=self._record_inventory_sell, style=WORKBENCH_BUTTON_STYLE, state="disabled")
         self._sell_button.grid(row=1, column=4, sticky="e", padx=(8, 0))
         self._sell_date_var.trace_add("write", self._schedule_sell_fill_constraints)
         self._sell_price_var.trace_add("write", self._refresh_sell_button_state)
