@@ -3229,11 +3229,13 @@ def validate_gui_workbench_contract_case(base_params):
     panel_specs = workbench_spec.get("panels", [])
     panel_ids = [panel.get("panel_id") for panel in panel_specs]
     check("gui_workbench_panel_ids",
-        ["single_stock_backtest_inspector", "portfolio_backtest_inspector", "trading_account", "accounting_center", "market_data_ops"],
+        ["portfolio_backtest_inspector", "single_stock_backtest_inspector", "trading_account", "accounting_center", "market_data_ops"],
         panel_ids,
     )
-    if panel_specs:
-        panel_spec = panel_specs[0]
+    panel_by_id = {str(panel.get("panel_id") or ""): panel for panel in panel_specs}
+
+    panel_spec = panel_by_id.get("single_stock_backtest_inspector")
+    if panel_spec:
         check("gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
         check("gui_workbench_backend_runner", "services.trade_analysis.trade_log.run_ticker_analysis", panel_spec.get("backend_runner"))
         check("gui_workbench_artifact_keys", ["excel_path"], panel_spec.get("artifact_keys"))
@@ -3241,27 +3243,27 @@ def validate_gui_workbench_contract_case(base_params):
         check("gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
         check("gui_workbench_single_jump_to_trade_enabled", True, panel_spec.get("jump_to_trade_enabled"))
 
-    if len(panel_specs) > 1:
-        portfolio_panel_spec = panel_specs[1]
+    portfolio_panel_spec = panel_by_id.get("portfolio_backtest_inspector")
+    if portfolio_panel_spec:
         check("gui_workbench_portfolio_panel_tab_label", "投組回測檢視", portfolio_panel_spec.get("tab_label"))
         check("gui_workbench_portfolio_backend_runner", "services.portfolio_replay.run_portfolio_simulation_prepared", portfolio_panel_spec.get("backend_runner"))
         check("gui_workbench_portfolio_artifact_keys", ["dashboard_html_path", "report_xlsx_path"], portfolio_panel_spec.get("artifact_keys"))
         check("gui_workbench_portfolio_jump_to_trade_enabled", True, portfolio_panel_spec.get("jump_to_trade_enabled"))
 
-    if len(panel_specs) > 2:
-        trading_panel_spec = panel_specs[2]
+    trading_panel_spec = panel_by_id.get("trading_account")
+    if trading_panel_spec:
         check("gui_workbench_trading_panel_tab_label", "交易中心", trading_panel_spec.get("tab_label"))
         check("gui_workbench_trading_panel_backend", "services.trading.account_state.get_trading_account_read_model", trading_panel_spec.get("backend_runner"))
         check("gui_workbench_trading_panel_has_no_artifact_outputs", [], trading_panel_spec.get("artifact_keys"))
 
-    if len(panel_specs) > 3:
-        accounting_panel_spec = panel_specs[3]
+    accounting_panel_spec = panel_by_id.get("accounting_center")
+    if accounting_panel_spec:
         check("gui_workbench_accounting_tab_label", "帳務中心", accounting_panel_spec.get("tab_label"))
         check("gui_workbench_accounting_backend", "services.trading.account_dashboard.build_trading_account_dashboard_read_model", accounting_panel_spec.get("backend_runner"))
         check("gui_workbench_accounting_has_no_artifact_outputs", [], accounting_panel_spec.get("artifact_keys"))
 
-    if len(panel_specs) > 4:
-        data_ops_panel_spec = panel_specs[4]
+    data_ops_panel_spec = panel_by_id.get("market_data_ops")
+    if data_ops_panel_spec:
         check("gui_workbench_data_ops_tab_label", "資料中心", data_ops_panel_spec.get("tab_label"))
         check("gui_workbench_data_ops_backend", "services.trading.market_data_ops.build_market_data_ops_read_model", data_ops_panel_spec.get("backend_runner"))
         check("gui_workbench_data_ops_has_no_artifact_outputs", [], data_ops_panel_spec.get("artifact_keys"))
@@ -3269,6 +3271,7 @@ def validate_gui_workbench_contract_case(base_params):
     inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     portfolio_inspector_source = build_project_absolute_path("services", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
     trading_account_panel_source = build_project_absolute_path("services", "workbench_ui", "trading_account_panel.py").read_text(encoding="utf-8")
+    accounting_center_source = build_project_absolute_path("services", "workbench_ui", "accounting_center_panel.py").read_text(encoding="utf-8")
     data_ops_panel_source = build_project_absolute_path("services", "workbench_ui", "data_ops_panel.py").read_text(encoding="utf-8")
     portfolio_runner_source = build_project_absolute_path("services", "portfolio_replay.py").read_text(encoding="utf-8")
     workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
@@ -3283,6 +3286,19 @@ def validate_gui_workbench_contract_case(base_params):
             ('gui_workbench_shell_is_built_before_root_is_shown', True, 'self.root.withdraw()' in workbench_source and 'self._build_ui()' in workbench_source and 'self.root.deiconify()' in workbench_source,),
             ('gui_workbench_panel_import_is_off_tk_thread', True, 'name=f"workbench-panel-import-{panel_id}"' in workbench_source and 'self._panel_load_results.put' in workbench_source,),
             ('gui_workbench_unselected_imported_panel_constructor_is_deferred', True, '_panel_factories' in workbench_source and '_construct_ready_panel_if_selected' in workbench_source and 'self._selected_panel_id() != panel_id' in workbench_source,),
+            (
+                'gui_workbench_three_center_dashboard_information_cards_are_centered',
+                True,
+                'labelanchor="n"' in trading_account_panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
+                and 'anchor="center"' in trading_account_panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
+                and 'justify="center"' in trading_account_panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0]
+                and 'labelanchor="n"' in accounting_center_source.split('cards = (', 1)[1].split('cash_box = ttk.LabelFrame', 1)[0]
+                and 'anchor="center"' in accounting_center_source.split('cards = (', 1)[1].split('cash_box = ttk.LabelFrame', 1)[0]
+                and 'justify="center"' in accounting_center_source.split('cards = (', 1)[1].split('cash_box = ttk.LabelFrame', 1)[0]
+                and data_ops_panel_source.split('summary_grid = ttk.Frame', 1)[1].split('notebook = ttk.Notebook', 1)[0].count('labelanchor="n"') >= 4
+                and data_ops_panel_source.split('summary_grid = ttk.Frame', 1)[1].split('notebook = ttk.Notebook', 1)[0].count('anchor="center"') >= 5
+                and data_ops_panel_source.split('summary_grid = ttk.Frame', 1)[1].split('notebook = ttk.Notebook', 1)[0].count('justify="center"') >= 5,
+            ),
             ('gui_trading_account_panel_uses_account_service_not_raw_json', True, 'services.trading.account_state' in trading_account_panel_source and 'atomic_write_json' not in trading_account_panel_source and ('load_json_strict' not in trading_account_panel_source),),
             ('gui_data_ops_panel_consumes_canonical_read_model', True, 'build_market_data_ops_read_model' in data_ops_panel_source,),
             ('gui_data_ops_panel_reads_local_status_off_tk_thread', True, 'target=self._refresh_local_status_worker' in data_ops_panel_source and 'name=f"workbench-data-ops-status-{token}"' in data_ops_panel_source and 'self._status_refresh_results.put' in data_ops_panel_source,),

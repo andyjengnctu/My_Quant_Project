@@ -263,7 +263,13 @@ class MarketDataOpsPanel(ttk.Frame):
             ("Auto Worker", "auto"),
         )
         for col, (title, key) in enumerate(labels):
-            box = ttk.LabelFrame(summary_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
+            box = ttk.LabelFrame(
+                summary_grid,
+                text=title,
+                padding=(8, 4),
+                style=WORKBENCH_LABELLF_STYLE,
+                labelanchor="n",
+            )
             box.grid(row=0, column=col, padx=(0, 6), sticky="nsew")
             primary = tk.Label(
                 box,
@@ -271,6 +277,7 @@ class MarketDataOpsPanel(ttk.Frame):
                 background=WORKBENCH_BG,
                 foreground=WORKBENCH_TEXT,
                 font=(WORKBENCH_UI_FONT[0], WORKBENCH_UI_FONT[1], "bold"),
+                anchor="center",
                 justify="center",
             )
             primary.pack(fill="x")
@@ -278,6 +285,7 @@ class MarketDataOpsPanel(ttk.Frame):
                 box,
                 textvariable=self._kpi_detail_vars[key],
                 style=WORKBENCH_MUTED_LABEL_STYLE,
+                anchor="center",
                 justify="center",
             ).pack(fill="x", pady=(1, 0))
             self._kpi_labels[key] = primary
@@ -290,6 +298,7 @@ class MarketDataOpsPanel(ttk.Frame):
             text="Trading Ready",
             padding=(8, 4),
             style=WORKBENCH_LABELLF_STYLE,
+            labelanchor="n",
         )
         trading_readiness_box.grid(row=1, column=0, columnspan=1, sticky="nsew", padx=(0, 6), pady=(6, 0))
         self._trading_readiness_progress = ttk.Progressbar(
@@ -303,34 +312,50 @@ class MarketDataOpsPanel(ttk.Frame):
             trading_readiness_box,
             textvariable=self._trading_readiness_text,
             style=WORKBENCH_INFO_LABEL_STYLE,
+            anchor="center",
+            justify="center",
         )
-        self._trading_readiness_label.pack(anchor="w", pady=(2, 0))
+        self._trading_readiness_label.pack(fill="x", pady=(2, 0))
 
         readiness_box = ttk.LabelFrame(
             summary_grid,
             text="V2 Ready",
             padding=(8, 4),
             style=WORKBENCH_LABELLF_STYLE,
+            labelanchor="n",
         )
         readiness_box.grid(row=1, column=1, columnspan=3, sticky="nsew", padx=(0, 6), pady=(6, 0))
         self._readiness_progress = ttk.Progressbar(readiness_box, maximum=100.0, mode="determinate")
         self._readiness_progress.pack(fill="x")
         self._readiness_text = tk.StringVar(value="-")
-        self._readiness_label = ttk.Label(readiness_box, textvariable=self._readiness_text, style=WORKBENCH_INFO_LABEL_STYLE)
-        self._readiness_label.pack(anchor="w", pady=(2, 0))
+        self._readiness_label = ttk.Label(
+            readiness_box,
+            textvariable=self._readiness_text,
+            style=WORKBENCH_INFO_LABEL_STYLE,
+            anchor="center",
+            justify="center",
+        )
+        self._readiness_label.pack(fill="x", pady=(2, 0))
 
         quota_box = ttk.LabelFrame(
             summary_grid,
             text="Last Observed Provider Quota",
             padding=(8, 4),
             style=WORKBENCH_LABELLF_STYLE,
+            labelanchor="n",
         )
         quota_box.grid(row=1, column=4, columnspan=2, sticky="nsew", padx=(0, 6), pady=(6, 0))
         self._quota_progress = ttk.Progressbar(quota_box, maximum=100.0, mode="determinate")
         self._quota_progress.pack(fill="x")
         self._quota_text = tk.StringVar(value="尚無 quota evidence；本頁刷新不會查 provider。")
-        self._quota_label = ttk.Label(quota_box, textvariable=self._quota_text, style=WORKBENCH_MUTED_LABEL_STYLE)
-        self._quota_label.pack(anchor="w", pady=(2, 0))
+        self._quota_label = ttk.Label(
+            quota_box,
+            textvariable=self._quota_text,
+            style=WORKBENCH_MUTED_LABEL_STYLE,
+            anchor="center",
+            justify="center",
+        )
+        self._quota_label.pack(fill="x", pady=(2, 0))
 
         notebook = ttk.Notebook(self, style=WORKBENCH_NOTEBOOK_STYLE)
         notebook.pack(fill="both", expand=True)

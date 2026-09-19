@@ -654,8 +654,8 @@
       "order": 57,
       "category": "GUI",
       "item": "`apps/workbench.py` 必須作為單一 GUI 啟用入口，且 workbench panel registry / 單股回測後端 / Excel artifact 與 inline chart payload 契約必須穩定",
-      "gap": "已補 GUI workbench contract，直接釘死 `apps/workbench.py` 必須對應到 `services.workbench_ui.main`、workbench 必須註冊單股回測檢視 panel，且 GUI 單股後端必須產生 `Debug_TradeLog_<ticker>.xlsx` 並回傳 inline `chart_payload`，不得再把 HTML artifact 當成 GUI 必要輸出；workbench panel registry 與 inspector 內部整合必須優先使用 canonical `run_ticker_analysis` / `resolve_trade_analysis_data_dir` / `create_matplotlib_trade_chart_figure` aliases，不得再把 legacy `run_debug_ticker_analysis` / `resolve_debug_data_dir` / `create_matplotlib_debug_chart_figure` 當成 workbench 內部正式介面",
-      "entry": "`apps/workbench.py`, `services/workbench_ui/workbench.py`, `services/workbench_ui/single_stock_inspector.py`, `services/trade_analysis/trade_log.py`, `services/trade_analysis/charting.py`, `tools/validate/synthetic_contract_cases.py`"
+      "gap": "已補 GUI workbench contract，直接釘死 `apps/workbench.py` 必須對應到 `services.workbench_ui.main`、workbench 必須註冊單股回測檢視 panel，且 GUI 單股後端必須產生 `Debug_TradeLog_<ticker>.xlsx` 並回傳 inline `chart_payload`，不得再把 HTML artifact 當成 GUI 必要輸出；workbench panel registry 與 inspector 內部整合必須優先使用 canonical `run_ticker_analysis` / `resolve_trade_analysis_data_dir` / `create_matplotlib_trade_chart_figure` aliases，不得再把 legacy `run_debug_ticker_analysis` / `resolve_debug_data_dir` / `create_matplotlib_debug_chart_figure` 當成 workbench 內部正式介面；Workbench 三個中心（交易中心／帳務中心／資料中心）的儀表板資訊框標題與框內文字必須一律置中，禁止依賴 Tk 預設 anchor/justify",
+      "entry": "`apps/workbench.py`, `services/workbench_ui/workbench.py`, `services/workbench_ui/single_stock_inspector.py`, `services/trade_analysis/trade_log.py`, `services/trade_analysis/charting.py`, `tools/validate/synthetic_contract_cases.py`, `services/workbench_ui/trading_account_panel.py`, `services/workbench_ui/accounting_center_panel.py`, `services/workbench_ui/data_ops_panel.py`"
     },
     {
       "id": "B67",

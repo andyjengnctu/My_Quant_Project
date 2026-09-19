@@ -1062,7 +1062,13 @@ class TradingAccountPanel(ttk.Frame):
             ("可操作資金", "funds"),
             ("策略 / Params", "strategy_params"),
         )):
-            box = ttk.LabelFrame(overview_grid, text=title, padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
+            box = ttk.LabelFrame(
+                overview_grid,
+                text=title,
+                padding=(8, 4),
+                style=WORKBENCH_LABELLF_STYLE,
+                labelanchor="n",
+            )
             box.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
             primary = tk.Label(
                 box,
@@ -1070,6 +1076,7 @@ class TradingAccountPanel(ttk.Frame):
                 background=WORKBENCH_BG,
                 foreground=WORKBENCH_TEXT,
                 font=(WORKBENCH_UI_FONT[0], WORKBENCH_UI_FONT[1], "bold"),
+                anchor="center",
                 justify="center",
             )
             primary.pack(fill="x")
@@ -1078,6 +1085,7 @@ class TradingAccountPanel(ttk.Frame):
                 textvariable=self._overview_detail_vars[key],
                 style=WORKBENCH_LABEL_STYLE,
                 foreground=WORKBENCH_MUTED,
+                anchor="center",
                 justify="center",
             )
             detail_label.pack(fill="x", pady=(1, 0))

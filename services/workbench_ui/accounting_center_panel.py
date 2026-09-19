@@ -171,12 +171,22 @@ class AccountingCenterPanel(ttk.Frame):
             ("帳戶淨值", "equity"),
         )
         for col, (label, key) in enumerate(cards):
-            box = ttk.LabelFrame(grid, text=label, padding=(8, 5), style=WORKBENCH_LABELLF_STYLE)
+            box = ttk.LabelFrame(
+                grid,
+                text=label,
+                padding=(8, 5),
+                style=WORKBENCH_LABELLF_STYLE,
+                labelanchor="n",
+            )
             box.grid(row=0, column=col, padx=(0 if col == 0 else 6, 0), sticky="nsew")
             variable = self._status_var if key == "revision" else self._market_date_var if key == "market_date" else self._metric_vars[key]
             metric_label = ttk.Label(
-                box, textvariable=variable, style=WORKBENCH_LABEL_STYLE,
+                box,
+                textvariable=variable,
+                style=WORKBENCH_LABEL_STYLE,
                 foreground=WORKBENCH_INFO if key == "market_date" else WORKBENCH_TEXT,
+                anchor="center",
+                justify="center",
             )
             metric_label.pack(fill="x")
             self._metric_labels[key] = metric_label
