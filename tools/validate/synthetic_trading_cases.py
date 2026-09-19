@@ -933,7 +933,8 @@ def validate_trading_account_state_contract_case(base_params):
         lineage_dashboard = build_trading_account_dashboard_read_model(lineage_root)
         lineage_closed = lineage_dashboard["closed_trades"][0]
         lineage_perf = lineage_dashboard["performance"][1]
-        check("performance_strategy_lifecycle_uses_strategy_source_family", "strategy", lineage_perf["source"])
+        check("closed_trade_strategy_lifecycle_preserves_raw_source", "strategy_fill", lineage_closed["source"])
+        check("performance_strategy_lifecycle_is_account_wide_without_source_dimension", False, "source" in lineage_perf)
         check_true("closed_trade_keeps_strategy_r_multiple_as_lineage_diagnostic", lineage_closed["r_mult"] is not None)
         check("performance_actual_closed_win_rate_uses_net_pnl_outcome", 100.0, lineage_perf["win_rate_pct"])
         check("performance_all_wins_has_no_observed_loss_r_unit", None, lineage_perf["expected_value_r"])
@@ -964,7 +965,8 @@ def validate_trading_account_state_contract_case(base_params):
         )
         dashboard_open = build_trading_account_dashboard_read_model(root)
         open_perf = dashboard_open["performance"][0]
-        check("performance_manual_inventory_uses_custom_source_family", "custom", open_perf["source"])
+        check("open_inventory_preserves_manual_raw_source", "manual_adopted", dashboard_open["positions"][0]["source"])
+        check("performance_manual_inventory_is_account_wide_without_source_dimension", False, "source" in open_perf)
         check("performance_missing_market_price_keeps_open_stock_count", 1, open_perf["stock_count"])
         check("performance_missing_market_price_keeps_open_cost", 20_000.0, open_perf["cost"])
         check("performance_open_inventory_has_no_fake_trade_win_rate", None, open_perf["win_rate_pct"])
