@@ -43,6 +43,41 @@ def _source_references_identifier(source_text: str, identifier: str) -> bool:
     return re.search(pattern, source_text) is not None
 
 
+def _build_synthetic_trading_pit_param_payload(*, members, selector: str, meta=None) -> dict:
+    """Build a minimal rolling PIT artifact for Trading synthetic fixtures.
+
+    Most Trading lifecycle synthetics test state transitions rather than Optimizer
+    schedule construction.  Pin the single synthetic fold to the fixture's declared
+    latest-data date so those tests exercise the production rolling runtime without
+    depending on Research producer internals.
+    """
+    meta_payload = dict(meta or {})
+    walk_forward = dict(meta_payload.get("walk_forward_policy") or {})
+    information_date = str(
+        walk_forward.get("latest_data_date")
+        or meta_payload.get("latest_data_date")
+        or ""
+    ).strip()
+    if not information_date:
+        raise ValueError("Synthetic Trading PIT Params requires meta.walk_forward_policy.latest_data_date")
+    meta_payload["oos_horizon_months"] = 12
+    return {
+        "schema_type": "optimizer_active_param_ensemble",
+        "schema_version": 1,
+        "mode": "rolling",
+        "type": "active_param_ensemble",
+        "selector": str(selector),
+        "meta": meta_payload,
+        "params_ensemble_by_effective_date": {information_date: list(members)},
+        "folds": [{
+            "selection_end_date": information_date,
+            "effective_start": information_date,
+            "effective_end": information_date,
+        }],
+        "summary": {"oos_end_date": information_date},
+    }
+
+
 from services.trading.account_state import (
     TradingAccountRevisionConflict,
     adopt_existing_trading_position,
@@ -1177,7 +1212,6 @@ def validate_trading_daily_workflow_contract_case(base_params):
     case_id = "TRADING_DAILY_WORKFLOW"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_daily')
 
-    from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.params_io import params_to_json_dict
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
@@ -1208,7 +1242,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
                 {"member_index": idx + 1, "seed": idx + 1, "params": params_to_json_dict(base_params)}
                 for idx in range(member_count)
             ]
-            payload = build_static_active_param_ensemble_payload(
+            payload = _build_synthetic_trading_pit_param_payload(
                 members=members,
                 selector=profile.param_selector,
                 meta={
@@ -1431,7 +1465,6 @@ def validate_trading_actionable_universe_scanner_membership_contract_case(base_p
     case_id = "TRADING_ACTIONABLE_UNIVERSE_SCANNER_MEMBERSHIP"
     results, summary, check, check_true = bind_synthetic_case(case_id, "trading_scanner_membership")
 
-    from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.params_io import params_to_json_dict
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
     from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
@@ -1469,7 +1502,7 @@ def validate_trading_actionable_universe_scanner_membership_contract_case(base_p
 
         selected_path = Path(resolve_trading_selected_strategy_param_path(root))
         selected_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = build_static_active_param_ensemble_payload(
+        payload = _build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
@@ -1619,7 +1652,6 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
     case_id = "TRADING_PROPOSED_ORDERS"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_orders')
 
-    from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.exact_accounting import build_sell_ledger_from_price
     from core.file_integrity import compute_file_sha256
     from core.params_io import params_to_json_dict
@@ -1675,7 +1707,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
 
         selected_path = Path(resolve_trading_selected_strategy_param_path(root))
         selected_path.parent.mkdir(parents=True, exist_ok=True)
-        selected_payload = build_static_active_param_ensemble_payload(
+        selected_payload = _build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
@@ -1779,7 +1811,6 @@ def validate_trading_pending_order_state_contract_case(base_params):
     case_id = "TRADING_PENDING_ORDERS"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_pending')
 
-    from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.file_integrity import compute_file_sha256
     from core.params_io import params_to_json_dict
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
@@ -1816,7 +1847,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
 
         selected_path = Path(resolve_trading_selected_strategy_param_path(root))
         selected_path.parent.mkdir(parents=True, exist_ok=True)
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+        selected_path.write_text(json.dumps(_build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
@@ -2027,7 +2058,6 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
     case_id = "TRADING_CONFIRMED_FILLS"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_fill')
 
-    from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256
     from core.params_io import params_to_json_dict
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
@@ -2061,7 +2091,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
         }).to_csv(data_dir / "2454.csv", index=False)
         selected_path = Path(resolve_trading_selected_strategy_param_path(root))
         selected_path.parent.mkdir(parents=True, exist_ok=True)
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+        selected_path.write_text(json.dumps(_build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
@@ -2102,7 +2132,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
 
         changed = deepcopy(base_params)
         changed.high_len = int(getattr(changed, "high_len")) + 5
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+        selected_path.write_text(json.dumps(_build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
@@ -2751,7 +2781,6 @@ def validate_trading_position_rollforward_contract_case(base_params):
     case_id = "TRADING_POSITION_ROLLFORWARD"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_rollforward')
 
-    from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
     from core.file_integrity import compute_file_sha256
     from core.params_io import params_to_json_dict
@@ -2803,7 +2832,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
 
         selected_path = Path(resolve_trading_selected_strategy_param_path(root))
         selected_path.parent.mkdir(parents=True, exist_ok=True)
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+        selected_path.write_text(json.dumps(_build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-03"}},
@@ -2857,7 +2886,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
 
         changed = deepcopy(base_params)
         changed.atr_times_trail = float(base_params.atr_times_trail) + 5.0
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+        selected_path.write_text(json.dumps(_build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
@@ -2916,7 +2945,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
             "Date": "2026-09-07", "Open": 251.0, "High": 270.0, "Low": 250.0, "Close": 265.0, "Volume": 1_000_000,
         }])], ignore_index=True)
         future.to_csv(csv_path, index=False)
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+        selected_path.write_text(json.dumps(_build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(changed)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-07"}},
@@ -8181,7 +8210,6 @@ def validate_trading_market_data_lineage_contract_case(base_params):
     case_id = "TRADING_MARKET_DATA_LINEAGE"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'trading_data_lineage')
 
-    from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.file_integrity import canonical_json_sha256, compute_file_sha256
     from core.params_io import params_to_json_dict
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
@@ -8222,7 +8250,7 @@ def validate_trading_market_data_lineage_contract_case(base_params):
 
         selected_path = Path(resolve_trading_selected_strategy_param_path(root))
         selected_path.parent.mkdir(parents=True, exist_ok=True)
-        selected_path.write_text(json.dumps(build_static_active_param_ensemble_payload(
+        selected_path.write_text(json.dumps(_build_synthetic_trading_pit_param_payload(
             members=[{"member_index": 1, "seed": 1, "params": params_to_json_dict(base_params)}],
             selector=profile.param_selector,
             meta={"selected_model_mode": "trade", "walk_forward_policy": {"latest_data_date": "2026-09-04"}},
@@ -8312,11 +8340,12 @@ def validate_trading_market_data_lineage_contract_case(base_params):
         def _optimizer_and_mutate(**_kwargs):
             _mutate_synthetic_trading_v2_consumer_membership(root, ticker="9999")
             return {
-                "selected_params_path": str(selected_path),
+                "status": "READY",
+                "path": str(selected_path),
                 "manifest_path": str(selected_path.parent / "manifest.json"),
             }
 
-        with patch.object(param_training, "run_static_strategy_parameter_training", side_effect=_optimizer_and_mutate):
+        with patch.object(param_training, "build_isolated_strategy_parameter_schedule", side_effect=_optimizer_and_mutate):
             try:
                 param_training.run_trading_strategy_param_training(project_root=root, environ={})
             except RuntimeError as exc:

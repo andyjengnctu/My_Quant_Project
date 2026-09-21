@@ -996,6 +996,157 @@ def _build_canonical_schedule(
         "published_paths": published,
     }
 
+def build_isolated_strategy_parameter_schedule(
+    project_root: str | Path,
+    *,
+    family: str,
+    policy: str,
+    comparison_end_date: str,
+    dataset: str,
+    selected_data_dir: str | Path,
+    raw_data_loader,
+    strategy_params_root: str | Path,
+    models_dir: str | Path,
+    work_root: str | Path,
+    runtime_domain: str,
+    data_identity: dict[str, Any],
+    environ=None,
+) -> dict[str, Any]:
+    """Build one PIT schedule with the canonical Optimizer into an isolated domain.
+
+    The search/trial/seed/window semantics come exclusively from the same rolling
+    Strategy Parameter contract used by Research.  Callers may isolate only storage
+    and data access; they may not redefine the scientific training policy.
+    """
+    from services.optimizer.strategy_param_training import (
+        prepare_selection_historical_full_roos_params,
+    )
+
+    root = Path(project_root).resolve()
+    normalized_family = normalize_strategy_param_family(family)
+    normalized_policy = normalize_strategy_param_policy(policy)
+    if normalized_family != "full":
+        raise ValueError("isolated PIT schedule目前只支援Trading使用的full family")
+    end_date = str(comparison_end_date or "").strip()
+    if not end_date:
+        raise ValueError("isolated PIT schedule缺少comparison_end_date")
+    domain = str(runtime_domain or "").strip()
+    if not domain:
+        raise ValueError("isolated PIT schedule缺少runtime_domain")
+    if not isinstance(data_identity, dict) or not data_identity:
+        raise ValueError("isolated PIT schedule缺少data_identity")
+
+    contract = _canonical_schedule_build_contract(
+        family=normalized_family,
+        dataset=str(dataset),
+    )
+    compare_policy = _compare_policy_name(normalized_policy)
+    isolated_work_root = Path(work_root).resolve()
+    schedule_work = isolated_work_root / "schedule_2021_forward"
+    isolated_work_root.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        isolated_work_root / "work_contract.json",
+        {
+            "schema": "isolated_strategy_schedule_work_v1",
+            "runtime_domain": domain,
+            "family": normalized_family,
+            "build_contract": contract,
+            "data_identity": dict(data_identity),
+            "policy_outputs": list(COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.values()),
+        },
+    )
+
+    result = prepare_selection_historical_full_roos_params(
+        project_root=root,
+        dataset=str(contract["dataset"]),
+        param_policy=compare_policy,
+        trials_per_fold=int(contract["trials_per_fold"]),
+        max_positions=int(contract["max_positions"]),
+        rotation=str(contract["rotation"]),
+        fixed_risk=float(contract["fixed_risk"]),
+        max_position_cap_pct=float(contract["max_position_cap_pct"]),
+        optimizer_seed=int(contract["optimizer_seed"]),
+        resume_parameter_training=True,
+        quiet=False,
+        first_oos_date=str(contract["schedule_start"]),
+        last_oos_date=end_date,
+        train_window_months=int(contract["train_window_months"]),
+        oos_months=int(contract["oos_horizon_months"]),
+        output_relative_dir=schedule_work,
+        build_context_label=f"{domain.capitalize()} PIT",
+        optimizer_output_title="Optimizer 工作工件（非正式策略參數）",
+        selected_data_dir_override=selected_data_dir,
+        raw_data_loader=raw_data_loader,
+        latest_data_date_override=end_date,
+        models_dir_override=models_dir,
+        dataset_identity_override=dict(data_identity),
+        environ_override=environ,
+    )
+    source_path = Path(result["params_path"]).resolve()
+    _assert_optimizer_work_source(source_path=source_path, work_root=isolated_work_root)
+    emitted = _optimizer_compare_policy_outputs(source_path)
+    if normalized_policy not in emitted:
+        raise FileNotFoundError(
+            "Optimizer完成但requested policy工作工件缺少: "
+            f"policy={normalized_policy}, source_dir={source_path.parent.as_posix()}"
+        )
+
+    runtime_strategy_params_root = Path(strategy_params_root).resolve()
+    published: dict[str, Path] = {}
+    source_records: dict[str, dict[str, Any]] = {}
+    for emitted_policy, emitted_path in emitted.items():
+        target_path = resolve_strategy_param_artifact_path(
+            root,
+            family=normalized_family,
+            evaluation_mode="rolling",
+            policy=emitted_policy,
+            strategy_params_root=runtime_strategy_params_root,
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        _copy_json_payload(emitted_path, target_path)
+        published[emitted_policy] = target_path
+        source_records[emitted_policy] = {
+            "optimizer_build": True,
+            "path": _project_relative(root, emitted_path),
+            "build_contract": contract,
+            "schedule_kind": "annual_refit",
+            "same_json_oos_rolling": True,
+            "runtime_domain": domain,
+            "data_identity_sha256": canonical_json_sha256(data_identity),
+        }
+
+    training_policy = dict(get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"))
+    training_policy["evaluation_mode"] = "schedule"
+    training_policy["consumption_modes"] = ["oos", "rolling"]
+    training_policy["runtime_domain"] = domain
+    training_policy["data_source"] = "trading_market_data_v2_historical_latest_view" if domain == "trading" else domain
+    manifest = refresh_strategy_parameter_manifest(
+        root,
+        family=normalized_family,
+        evaluation_mode="rolling",
+        source_records=source_records,
+        strategy_params_root=runtime_strategy_params_root,
+        training_policy_override=training_policy,
+    )
+    target = published[normalized_policy]
+    coverage_end = _canonical_schedule_coverage_end(target)
+    if coverage_end is None or str(coverage_end) < end_date:
+        raise RuntimeError(
+            "isolated PIT schedule coverage不足: "
+            f"required={end_date}, actual={coverage_end or '-'}"
+        )
+    return {
+        "status": "READY",
+        "path": target,
+        "manifest_path": manifest,
+        "sha256": compute_strategy_param_file_sha256(target),
+        "schedule_kind": "annual_refit",
+        "published_paths": published,
+        "build_contract": contract,
+        "coverage_end": coverage_end,
+    }
+
+
 def ensure_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -1679,6 +1830,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
 
 
 __all__ = [
+    "build_isolated_strategy_parameter_schedule",
     "ensure_robustness_benchmark_strategy_parameter_artifact",
     "inspect_robustness_benchmark_strategy_parameter_artifact",
     "ensure_strategy_parameter_artifact",

@@ -1636,20 +1636,6 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({'C53-C42': {'left': 'C53',
 # exact scientific definitions for historical result/artifact interpretation;
 # they are no longer part of the active extending_current matrix.
 HISTORICAL_STRATEGY_COMPARE_ARMS.update({
-    "C62": {
-        "name": "Full Base-Finalists-Agree",
-        "description": (
-            "Extending-Window Full DL-off parameter-policy reference；與C61完全相同formal rules／execution，"
-            "唯一差異為canonical parameter policy使用base-finalists-agree。"
-        ),
-        "param_source": "full_rolling",
-        "param_policy": "base-finalists-agree",
-        "rule_policy": "formal",
-        "dl_enabled": False,
-        "dl_id": None,
-        "dl_runtime_mode": None,
-        "robustness_role": "off",
-    },
     "C63": {
         "name": "Min Base-Finalists-Agree",
         "description": (
@@ -1752,7 +1738,6 @@ HISTORICAL_STRATEGY_COMPARE_ARMS.update({
 })
 
 HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
-    "C62-C61": {"left": "C62", "right": "C61", "description": "{left}相對{right}的Full parameter-policy單變量差異"},
     "C63-C58": {"left": "C63", "right": "C58", "description": "{left}相對{right}的Min parameter-policy單變量差異"},
     "C62-C63": {"left": "C62", "right": "C63", "description": "base-finalists-agree政策下Full相對Min的完整策略體系差異"},
     "C68-C59": {"left": "C68", "right": "C59", "description": "dedicated matched fixed-K feasible-ascent相對exact C59；隔離global exact→matched deterministic local-search solver effect"},

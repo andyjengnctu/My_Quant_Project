@@ -14,7 +14,7 @@ from services.trading.market_data_consumer import (
     load_trading_v2_consumer_state,
 )
 
-TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 5
+TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 6
 TRADING_STRATEGY_PARAM_BINDING_FILENAME = "trading_param_binding.json"
 TRADING_PARAM_USAGE_TRAINED_CURRENT = "trained_current"
 TRADING_PARAM_USAGE_REUSE_EXISTING = "reuse_existing"
@@ -43,6 +43,8 @@ def _validate_binding(payload: dict[str, Any]) -> None:
         "market_data_source_view_fingerprint",
         "latest_data_date",
         "param_training_data_date",
+        "param_effective_date",
+        "param_valid_through_date",
         "usage_mode",
         "param_member_count",
         "param_min_agree",
@@ -55,32 +57,44 @@ def _validate_binding(payload: dict[str, Any]) -> None:
     min_agree = int(payload.get("param_min_agree") or 0)
     if member_count < 1 or min_agree < 1 or min_agree > member_count:
         raise ValueError("Trading param binding Params ensemble metadata 不合法")
-    if str(payload.get("param_training_data_date")) > str(payload.get("latest_data_date")):
-        raise ValueError("Trading param binding 的 Params 訓練資料日晚於使用資料日")
-    if (
-        str(payload.get("usage_mode")) == TRADING_PARAM_USAGE_TRAINED_CURRENT
-        and str(payload.get("param_training_data_date")) != str(payload.get("latest_data_date"))
-    ):
-        raise ValueError("trained_current binding 要求 Params 訓練資料日與使用資料日相同")
+    training_date = str(payload.get("param_training_data_date"))
+    effective_date = str(payload.get("param_effective_date"))
+    valid_through_date = str(payload.get("param_valid_through_date"))
+    latest_data_date = str(payload.get("latest_data_date"))
+    if training_date > effective_date:
+        raise ValueError("Trading param binding 的 Params 訓練資料日晚於生效日")
+    if effective_date > latest_data_date:
+        raise ValueError("Trading param binding 的 Params 生效日晚於使用資料日")
+    if latest_data_date > valid_through_date:
+        raise ValueError("Trading param binding 已超過目前 Params PIT refit period")
     core = {key: value for key, value in payload.items() if key != "binding_fingerprint"}
     if str(payload.get("binding_fingerprint") or "") != canonical_json_sha256(core):
         raise ValueError("Trading param binding fingerprint 不一致")
 
 
-def _selected_param_metadata(selected_path: Path, *, expected_selector: str) -> dict[str, Any]:
+def _selected_param_metadata(
+    selected_path: Path,
+    *,
+    expected_selector: str,
+    information_date: str,
+) -> dict[str, Any]:
     selected_payload = load_json_strict(selected_path)
     if not isinstance(selected_payload, dict):
         raise TypeError("Trading selected strategy params payload 必須是 object")
     if str(selected_payload.get("selector") or "").strip() != str(expected_selector):
         raise RuntimeError("Trading selected strategy params selector 與目前 Trading 設定不一致")
-    param_runtime = load_trading_strategy_param_runtime(selected_path)
-    meta = dict(selected_payload.get("meta") or {})
-    walk_forward_policy = dict(meta.get("walk_forward_policy") or {})
-    training_date = str(walk_forward_policy.get("latest_data_date") or "").strip()
-    if not training_date:
-        raise ValueError("Trading selected strategy params 缺少訓練資料日")
+    param_runtime = load_trading_strategy_param_runtime(
+        selected_path, information_date=str(information_date)
+    )
+    training_date = str(param_runtime.get("training_data_date") or "").strip()
+    effective_date = str(param_runtime.get("effective_date") or "").strip()
+    valid_through_date = str(param_runtime.get("scheduled_effective_end_date") or "").strip()
+    if not training_date or not effective_date or not valid_through_date:
+        raise ValueError("Trading rolling strategy params 缺少PIT fold lineage")
     return {
         "training_date": training_date,
+        "effective_date": effective_date,
+        "valid_through_date": valid_through_date,
         "member_count": int(param_runtime["member_count"]),
         "min_agree": int(param_runtime["min_agree"]),
     }
@@ -109,15 +123,12 @@ def publish_trading_strategy_param_binding(
     param_metadata = _selected_param_metadata(
         selected_path,
         expected_selector=profile.param_selector,
+        information_date=current_data_date,
     )
     param_training_data_date = str(param_metadata["training_date"])
     if param_training_data_date > current_data_date:
         raise RuntimeError(
             "Trading selected strategy params 訓練資料日晚於目前 Trading data；禁止使用未來 Params"
-        )
-    if normalized_usage_mode == TRADING_PARAM_USAGE_TRAINED_CURRENT and param_training_data_date != current_data_date:
-        raise RuntimeError(
-            "本次 Params 並非由目前 Trading data 重新訓練；若要沿用既有 Params，請選擇沿用模式"
         )
     payload: dict[str, Any] = {
         "schema_version": TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION,
@@ -131,6 +142,8 @@ def publish_trading_strategy_param_binding(
         "market_data_source_view_fingerprint": str(consumer_state["source_view_fingerprint"]),
         "latest_data_date": current_data_date,
         "param_training_data_date": param_training_data_date,
+        "param_effective_date": str(param_metadata["effective_date"]),
+        "param_valid_through_date": str(param_metadata["valid_through_date"]),
         "usage_mode": normalized_usage_mode,
         "param_member_count": int(param_metadata["member_count"]),
         "param_min_agree": int(param_metadata["min_agree"]),
@@ -179,9 +192,14 @@ def load_trading_strategy_param_binding(
     param_metadata = _selected_param_metadata(
         selected_path,
         expected_selector=profile.param_selector,
+        information_date=str(consumer_state.get("market_date") or ""),
     )
     if str(payload.get("param_training_data_date") or "") != str(param_metadata["training_date"]):
         raise RuntimeError("Trading Params artifact 訓練資料日已與 param binding 不一致")
+    if str(payload.get("param_effective_date") or "") != str(param_metadata["effective_date"]):
+        raise RuntimeError("Trading Params artifact effective date 已與 param binding 不一致")
+    if str(payload.get("param_valid_through_date") or "") != str(param_metadata["valid_through_date"]):
+        raise RuntimeError("Trading Params artifact PIT refit period 已與 param binding 不一致")
     if int(payload.get("param_member_count") or 0) != int(param_metadata["member_count"]):
         raise RuntimeError("Trading Params artifact member_count 已與 param binding 不一致")
     if int(payload.get("param_min_agree") or 0) != int(param_metadata["min_agree"]):

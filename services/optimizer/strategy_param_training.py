@@ -1853,14 +1853,24 @@ def _build_selection_full_roos_schedule_contract(
     }
 
 
-def _selection_full_roos_runtime_contract(*, root: Path, args, schedule_contract) -> dict[str, Any]:
+def _selection_full_roos_runtime_contract(
+    *,
+    root: Path,
+    args,
+    schedule_contract,
+    dataset_identity_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = {
         "schema_version": SCHEMA_VERSION,
         "mode": "selection_full_roos_parameter_training",
         "arm_id": "P4_HISTORY",
         "training_dl_enabled": False,
         "dataset": str(args.dataset),
-        "dataset_identity": build_source_data_inventory(root, args.dataset),
+        "dataset_identity": (
+            dict(dataset_identity_override)
+            if isinstance(dataset_identity_override, dict)
+            else build_source_data_inventory(root, args.dataset)
+        ),
         "parameter_reference": {
             "type": str(schedule_contract["reference_type"]),
             "path": None,
@@ -1953,6 +1963,12 @@ def prepare_selection_historical_full_roos_params(
     output_relative_dir: str | Path | None = None,
     build_context_label: str = "Selection",
     optimizer_output_title: str = "💾 輸出檔案",
+    selected_data_dir_override: str | Path | None = None,
+    raw_data_loader=None,
+    latest_data_date_override: str | None = None,
+    models_dir_override: str | Path | None = None,
+    dataset_identity_override: dict[str, Any] | None = None,
+    environ_override=None,
 ):
     """Build/reuse Full rolling params using the canonical full search space.
 
@@ -1996,6 +2012,7 @@ def prepare_selection_historical_full_roos_params(
         root=root,
         args=args,
         schedule_contract=schedule_contract,
+        dataset_identity_override=dataset_identity_override,
     )
     prior = _load_json(preflight_path)
     reusable = bool(
@@ -2046,8 +2063,13 @@ def prepare_selection_historical_full_roos_params(
             "train_max_positions": int(max_positions),
             "train_enable_rotation": str(rotation) == "on",
         }
-        outer_environ = dict(os.environ)
-        outer_environ["V16_MODELS_DIR"] = resolve_models_dir(str(root))
+        outer_environ = dict(os.environ if environ_override is None else environ_override)
+        resolved_models_dir = (
+            Path(models_dir_override).resolve()
+            if models_dir_override not in (None, "")
+            else Path(resolve_models_dir(str(root))).resolve()
+        )
+        outer_environ["V16_MODELS_DIR"] = str(resolved_models_dir)
         outer_environ["OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"
         outer_environ["OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = (
             "1" if bool(resume_parameter_training) else "0"
@@ -2058,9 +2080,13 @@ def prepare_selection_historical_full_roos_params(
             project_root=str(root),
             output_dir=str(optimizer_output_dir),
             base_policy=base_policy,
-            selected_data_dir=get_dataset_dir(str(root), str(dataset)),
+            selected_data_dir=str(
+                Path(selected_data_dir_override).resolve()
+                if selected_data_dir_override not in (None, "")
+                else Path(get_dataset_dir(str(root), str(dataset))).resolve()
+            ),
             dataset_label=str(dataset),
-            load_all_raw_data=load_all_raw_data,
+            load_all_raw_data=raw_data_loader or load_all_raw_data,
             optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
             build_optimizer_session=build_optimizer_session,
             create_optimizer_study=create_optimizer_study,
@@ -2071,6 +2097,7 @@ def prepare_selection_historical_full_roos_params(
             default_trials=int(trials_per_fold),
             timing_mode=False,
             paramset_models_dir=str(active_param_dir.resolve()),
+            latest_data_date_override=latest_data_date_override,
             output_files_title=str(optimizer_output_title or "💾 輸出檔案"),
         )
         if int(exit_code) != 0:

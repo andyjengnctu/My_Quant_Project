@@ -89,11 +89,6 @@ def partition_trading_candidate_rows_for_information_date(
     return current_rows, stale_rows
 
 
-def _selected_payload_latest_data_date(payload: dict[str, Any]) -> str:
-    meta = dict(payload.get("meta") or {})
-    policy = dict(meta.get("walk_forward_policy") or {})
-    return str(policy.get("latest_data_date") or "").strip()
-
 
 def resolve_trading_candidate_snapshot_path(project_root: str | Path) -> Path:
     root = Path(project_root).resolve()
@@ -132,14 +127,16 @@ def load_trading_scanner_runtime(
             "Trading selected strategy params selector與目前Trading設定不一致；請重新訓練。"
         )
 
-    param_runtime = load_trading_strategy_param_runtime(selected_path)
+    param_runtime = load_trading_strategy_param_runtime(
+        selected_path, information_date=latest_data_date
+    )
     member_count = int(param_runtime["member_count"])
     param_min_agree = int(param_runtime["min_agree"])
 
-    param_latest_data_date = _selected_payload_latest_data_date(payload)
+    param_latest_data_date = str(param_runtime.get("training_data_date") or "").strip()
     if not param_latest_data_date:
         raise RuntimeError(
-            "Trading selected strategy params 缺少訓練資料日；請重新訓練。"
+            "Trading selected strategy params 缺少PIT訓練截止日；請重新訓練。"
         )
     if param_latest_data_date > latest_data_date:
         raise RuntimeError(
@@ -162,6 +159,8 @@ def load_trading_scanner_runtime(
         "selected_path": selected_path,
         "selected_params_sha256": compute_file_sha256(selected_path),
         "param_latest_data_date": param_latest_data_date,
+        "param_effective_date": str(param_runtime.get("effective_date") or ""),
+        "param_valid_through_date": str(param_runtime.get("scheduled_effective_end_date") or ""),
         "param_usage_mode": str(param_binding.get("usage_mode") or ""),
         "member_count": member_count,
         "param_min_agree": param_min_agree,
@@ -195,6 +194,8 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
 
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     param_latest_data_date = ""
+    param_effective_date = ""
+    param_valid_through_date = ""
     member_count = 0
     param_min_agree = 0
     param_error = ""
@@ -205,8 +206,12 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             payload = load_json_strict(selected_path)
             if not isinstance(payload, dict):
                 raise ValueError("selected params root必須是object")
-            param_latest_data_date = _selected_payload_latest_data_date(payload)
-            param_runtime = load_trading_strategy_param_runtime(selected_path)
+            param_runtime = load_trading_strategy_param_runtime(
+                selected_path, information_date=latest_data_date
+            )
+            param_latest_data_date = str(param_runtime.get("training_data_date") or "").strip()
+            param_effective_date = str(param_runtime.get("effective_date") or "").strip()
+            param_valid_through_date = str(param_runtime.get("scheduled_effective_end_date") or "").strip()
             member_count = int(param_runtime["member_count"])
             param_min_agree = int(param_runtime["min_agree"])
             if str(payload.get("selector") or "").strip() != str(profile.param_selector):
@@ -298,6 +303,8 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
         "selected_params_path": project_relative_display_path(selected_path, project_root=root),
         "selected_params_exists": selected_path.is_file(),
         "param_latest_data_date": param_latest_data_date or None,
+        "param_effective_date": param_effective_date or None,
+        "param_valid_through_date": param_valid_through_date or None,
         "param_member_count": member_count,
         "param_min_agree": param_min_agree or None,
         "param_error": param_error or None,

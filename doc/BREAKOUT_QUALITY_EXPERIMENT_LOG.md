@@ -12018,3 +12018,15 @@ Decision：`ENGINEERING_ONLY / DOWNSTREAM_DATASET_GENERATION_IDENTITY_CLOSED / C
 - **Research state**：未執行模型訓練、Optimizer search、robustness 或 promotion；未改 target／loss／architecture／seed／OOS 邊界／常駐報表契約。既有 scientific identities 與歷史 evidence 保留；`MR-13BV` 仍為 `IMPLEMENTED / RESULT_PENDING`，Registry 與 Queue 的研究決策不變。
 
 Decision：`ENGINEERING_CORRECTION / CANONICAL_INPUT_CONTRACT_VERSIONED / STALE_DERIVED_DATA_REJECTED / LOCAL_FORMAL_UNVERIFIED / MR13BV_RESULT_PENDING_UNCHANGED`。
+
+
+## 2026-09-19 — Production-PIT non-DL baseline / Trading canonical rolling parameter contract
+
+- **User decision**：Trading暫停功能開發，回到DL／策略研究前先建立目前上線non-DL策略的合法PIT比較基準。Phase 1明確不加入inner-validation／early-stop；先把production training semantics收斂到目前Research canonical rolling budget，再與C61/C58用同一時間／訓練條件比較。Phase 2才研究validation-selected search budget + Train+Validation refit。
+- **Training contract**：Production-PIT固定沿用canonical rolling Strategy Parameter policy：Full family、`base-finalists-agree`、120M train window、12M annual refit、300 trials/fold、Optimizer Seed42、random-seed ensemble disabled。這取代Trading原本獨立的trade static multi-seed/1000-trial producer semantics；不新增第二套search／seed／trial SSOT。
+- **Scientific identity**：不新增Cxx。既有`SR-C62 Full Base-Finalists-Agree`重新進current suite並兼任Production-PIT non-DL reference；`C62-C61`保持parameter-policy單變量比較，另新增`C62-C58`作production-matched Full相對Min baseline的整體策略比較。`C63`仍只留historical compatibility。Current suite schema升至68。
+- **Compute control**：Full canonical rolling Optimizer一次search本來就會同時輸出`base-finalist-best`與`base-finalists-agree`；C61/C62必須共用同一search outputs，不為C62額外重跑300 trials。
+- **Trading runtime**：Trading保留Trading V2 data／models／outputs／state物理隔離，但producer改委派canonical rolling schedule builder。正式artifact保存完整annual PIT schedule；Scanner、binding與order submission依information date解析當期effective member set，超過該slice 12M refit horizon即fail-fast。Trading不讀Research physical strategy-param truth。
+- **Independent GPT evidence**：Python compile通過。`validate_runtime_domain_isolation_contract_case=39/39 PASS`、`validate_trading_strategy_param_producer_contract_case=42/42 PASS`、Strategy Compare core/readable/config-driven direct synthetics=`19/19、51/51、102/102 PASS`；其餘可執行Trading synthetics共通過大量既有checks。7個Trading data-flow cases因目前容器缺`pyarrow/fastparquet`而無法執行Parquet fixture，屬環境dependency blocker，未觀察到該7項的code-level FAIL。GPT未執行`apps/run_bundle.py`或`apps/test_suite.py`。
+
+Decision：`PRODUCTION_PIT_PHASE1_IMPLEMENTED / C62_CURRENT_PRODUCTION_REFERENCE / CANONICAL_300_TRIAL_SEED42_120M_12M / SAME_FULL_SEARCH_C61_C62 / TRADING_PHYSICAL_ISOLATION_PRESERVED / NO_VALIDATION_EARLY_STOP_YET / OOS_AND_ROLLING_RESULT_PENDING`。

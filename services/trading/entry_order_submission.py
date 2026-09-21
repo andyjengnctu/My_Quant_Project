@@ -62,7 +62,9 @@ def confirm_trading_order_submission(
         raise FileNotFoundError("Trading selected strategy params 已不存在；禁止建立無法重現的 ORDERED")
     if compute_file_sha256(selected_path) != str(plan.get("selected_params_sha256") or ""):
         raise RuntimeError("Trading selected strategy params 已與 proposed plan 不一致；請重新建立建議掛單")
-    param_runtime = load_trading_strategy_param_runtime(selected_path)
+    param_runtime = load_trading_strategy_param_runtime(
+        selected_path, information_date=str(plan.get("information_date") or "")
+    )
     if int(plan.get("param_member_count") or 0) != int(param_runtime["member_count"]):
         raise RuntimeError("Trading proposed plan Params member_count 已與目前 artifact 不一致")
     if int(plan.get("param_min_agree") or 0) != int(param_runtime["min_agree"]):

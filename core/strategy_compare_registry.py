@@ -30,7 +30,7 @@ from config.training_policy import (
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 67
+STRATEGY_COMPARE_SCHEMA_VERSION = 68
 
 _ROLLING_OOS = get_breakout_quality_rolling_test_mode("oos")
 _ROLLING_ROLLING = get_breakout_quality_rolling_test_mode("rolling")
@@ -97,8 +97,9 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13AK_NO_K_NO_R0 = "Min MR-13AK No-K No-R0"
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81", "C82", "C83"),
+        "arm_ids": ("C62", "C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81", "C82", "C83"),
         "contrast_ids": (
+            "C62-C61", "C62-C58",
             "C61-C58",
             "C59-C58",
             "C77-C58",
@@ -110,6 +111,7 @@ STRATEGY_COMPARE_SUITES = {
             "C82-C80", "C83-C81", "C82-C83",
         ),
         "display_name_bases": {
+            "C62": "Production PIT / Full Base-Finalists-Agree",
             "C61": "Full Base-Finalist-Best",
             "C58": "Min Base-Finalist-Best",
             "C59": "Min MR-13E Constrained",
@@ -168,6 +170,7 @@ STRATEGY_COMPARE_PROFILES = {
         "output_root": "outputs/strategy_compare/extending_window/oos_2021_forward",
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
+            "C62": "full_oos",
             "C61": "full_oos",
             "C58": "min_oos",
             "C59": "min_oos",
@@ -500,6 +503,21 @@ STRATEGY_DL_SOURCES = {
 # Arm definition本身不保存第二份enabled/mode membership；current matrix不得在profile或robustness重複列出。
 
 STRATEGY_COMPARE_ARMS = {
+    "C62": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE,
+        "description": (
+            "Production-matched PIT non-DL reference；與C61共用同一個Full canonical 120M/12M、"
+            "300 trials/fold、Seed42 Optimizer search，formal rules／execution相同；唯一parameter-policy"
+            "差異為base-finalists-agree。Trading使用同一訓練契約但維持Trading V2與artifact root物理隔離。"
+        ),
+        "param_source": "full_rolling",
+        "param_policy": "base-finalists-agree",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
     "C61": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
         "description": (
@@ -692,6 +710,8 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C62-C61": {"left": "C62", "right": "C61", "description": "同一Full PIT search／formal execution下，base-finalists-agree相對base-finalist-best的parameter-policy單變量差異"},
+    "C62-C58": {"left": "C62", "right": "C58", "description": "Production-matched Full finalists-agree相對Min base-finalist-best的整體策略體系比較；不是單一policy或單一rules效果"},
     "C61-C58": {"left": "C61", "right": "C58", "description": "Full相對Min的整體策略體系reference；不是單一DL效果"},
     "C59-C58": {"left": "C59", "right": "C58", "description": "既有MR-13E exact K/R0 constrained相對Min baseline"},
     "C77-C58": {"left": "C77", "right": "C58", "description": "MR-13H No-K/No-R0 single-head economic score相對Min baseline"},

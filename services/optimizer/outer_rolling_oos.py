@@ -1573,6 +1573,7 @@ def run_outer_rolling_oos(
     timing_mode: bool = False,
     paramset_models_dir: str | None = None,
     canonical_strategy_param_family: str | None = None,
+    latest_data_date_override: str | None = None,
     output_files_title: str = "💾 輸出檔案",
 ) -> int:
     from services.optimizer.session import close_study_storage
@@ -1595,7 +1596,15 @@ def run_outer_rolling_oos(
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(os.path.join(output_dir, "outer_rolling_oos"), exist_ok=True)
 
-    latest_date = _resolve_latest_date_from_csv_data_dir(selected_data_dir)
+    if latest_data_date_override not in (None, ""):
+        try:
+            latest_date = pd.Timestamp(str(latest_data_date_override)).normalize()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"latest_data_date_override不合法: {latest_data_date_override!r}"
+            ) from exc
+    else:
+        latest_date = _resolve_latest_date_from_csv_data_dir(selected_data_dir)
     latest_year = None if latest_date is None else int(latest_date.year)
 
     config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, latest_date=latest_date, default_trials=default_trials, timing_mode=bool(timing_mode))

@@ -7,16 +7,56 @@ engine, while adding Trading-specific validation and deterministic member lookup
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
-from core.active_param_ensemble import get_active_param_ensemble_policy
+from core.active_param_ensemble import (
+    get_active_param_ensemble_policy,
+    get_active_param_ensemble_record_for_date,
+    resolve_active_param_ensemble_mode,
+)
+from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
 from core.file_integrity import canonical_json_sha256
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_param_runtime import build_portfolio_params_signature, load_portfolio_param_source_from_json
 
 
-def load_trading_strategy_param_runtime(selected_path: str | Path) -> dict[str, Any]:
+def _scheduled_effective_end_date(payload: Mapping[str, Any], *, effective_date: str) -> str:
+    if not effective_date:
+        return ""
+    meta = dict(payload.get("meta") or {})
+    months = int(meta.get("oos_horizon_months") or 12)
+    if months < 1:
+        raise ValueError("Trading rolling Params oos_horizon_months必須>=1")
+    start = datetime.strptime(str(effective_date)[:10], "%Y-%m-%d").date()
+    month_index = (start.year * 12 + (start.month - 1)) + months
+    next_start = date(month_index // 12, month_index % 12 + 1, 1)
+    return (next_start - timedelta(days=1)).isoformat()
+
+
+def _rolling_fold_metadata(payload: Mapping[str, Any], *, effective_date: str) -> dict[str, Any]:
+    for raw in list(payload.get("folds") or []):
+        if not isinstance(raw, Mapping):
+            continue
+        start = str(raw.get("effective_start") or raw.get("oos_start_date") or "").strip()
+        if start == str(effective_date):
+            return dict(raw)
+    return {}
+
+
+def load_trading_strategy_param_runtime(
+    selected_path: str | Path,
+    *,
+    information_date: str | None = None,
+) -> dict[str, Any]:
+    """Resolve the legal Trading Params member set for one information date.
+
+    Rolling schedules are PIT-resolved by effective date.  When ``information_date``
+    is omitted, the last covered schedule record is selected for compatibility with
+    current-state display callers; Scanner/binding callers pass the market date
+    explicitly.
+    """
     path = Path(selected_path)
     source = load_portfolio_param_source_from_json(path)
     source_type = str(source.get("source_type") or "")
@@ -36,17 +76,47 @@ def load_trading_strategy_param_runtime(selected_path: str | Path) -> dict[str, 
             "member_count": 1,
             "min_agree": 1,
             "primary_params": source["primary_params"],
+            "effective_date": "",
+            "effective_end_date": "",
+            "training_data_date": "",
         }
 
     if source_type != "active_param_ensemble":
         raise RuntimeError(
-            "Trading 目前只接受單一參數或 static active-param ensemble；"
+            "Trading只接受單一參數或 active-param ensemble；"
             f"收到 source_type={source_type or '-'}"
         )
     schedule = list(source.get("schedule") or [])
-    if len(schedule) != 1 or str(schedule[0].get("mode") or "") != "static":
-        raise RuntimeError("Trading 目前只接受 static active-param ensemble，禁止 rolling param schedule")
-    members = [dict(member) for member in list(schedule[0].get("members") or [])]
+    if not schedule:
+        raise RuntimeError("Trading active-param ensemble 沒有可用 schedule")
+    mode = resolve_active_param_ensemble_mode(source["payload"])
+    if mode == "rolling":
+        if information_date in (None, ""):
+            selected_record = dict(schedule[-1])
+        else:
+            raw_record = get_active_param_ensemble_record_for_date(
+                source["payload"], information_date
+            )
+            effective_date = str(raw_record.get("effective_date_text") or "")
+            matches = [
+                dict(record)
+                for record in schedule
+                if str(record.get("effective_date_text") or "") == effective_date
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    "Trading rolling Params 無法唯一解析 information-date record: "
+                    f"information_date={information_date}, effective_date={effective_date}"
+                )
+            selected_record = matches[0]
+    elif mode == "static":
+        if len(schedule) != 1:
+            raise RuntimeError("Trading static active-param ensemble schedule 不唯一")
+        selected_record = dict(schedule[0])
+    else:
+        raise RuntimeError(f"Trading active-param ensemble mode不合法: {mode or '-'}")
+
+    members = [dict(member) for member in list(selected_record.get("members") or [])]
     if not members:
         raise RuntimeError("Trading active-param ensemble 沒有可用 members")
     for idx, member in enumerate(members, 1):
@@ -56,20 +126,45 @@ def load_trading_strategy_param_runtime(selected_path: str | Path) -> dict[str, 
             raise RuntimeError(f"Trading ensemble member 缺少 params runtime identity: member={member_key}")
 
     policy = get_active_param_ensemble_policy(source["payload"])
-    min_agree = int(policy.get("min_agree") or 0)
+    effective_date = str(selected_record.get("effective_date_text") or "")
+    fold = _rolling_fold_metadata(source["payload"], effective_date=effective_date) if mode == "rolling" else {}
+    scheduled_effective_end_date = (
+        _scheduled_effective_end_date(source["payload"], effective_date=effective_date)
+        if mode == "rolling"
+        else str(selected_record.get("effective_end_date_text") or "")
+    )
+    if mode == "rolling" and information_date not in (None, ""):
+        info_date = datetime.strptime(str(information_date)[:10], "%Y-%m-%d").date()
+        if scheduled_effective_end_date and info_date > datetime.strptime(scheduled_effective_end_date, "%Y-%m-%d").date():
+            raise RuntimeError(
+                "Trading rolling Params 已超過目前PIT refit period；請重新訓練 Params。"
+                f" information_date={info_date.isoformat()}, valid_through={scheduled_effective_end_date}"
+            )
+    requested_min_agree = fold.get("min_agree")
+    if requested_min_agree in (None, ""):
+        requested_min_agree = fold.get("min_agree_requested")
+    if requested_min_agree in (None, ""):
+        requested_min_agree = policy.get("min_agree_requested", policy.get("min_agree", "auto"))
+    min_agree = resolve_seed_ensemble_min_agree(len(members), requested_min_agree)
     if min_agree < 1 or min_agree > len(members):
         raise RuntimeError(
             "Trading ensemble min_agree 不合法；"
             f"min_agree={min_agree}, members={len(members)}"
         )
+    training_data_date = str(fold.get("selection_end_date") or "").strip()
     return {
         "source": source,
         "source_type": source_type,
+        "schedule_mode": mode,
         "members": members,
         "member_count": len(members),
-        "min_agree": min_agree,
+        "min_agree": int(min_agree),
         "ensemble_policy": policy,
-        "primary_params": source["primary_params"],
+        "primary_params": members[0]["params_obj"],
+        "effective_date": effective_date,
+        "effective_end_date": str(selected_record.get("effective_end_date_text") or ""),
+        "scheduled_effective_end_date": scheduled_effective_end_date,
+        "training_data_date": training_data_date,
     }
 
 
