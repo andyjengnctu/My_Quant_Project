@@ -2111,7 +2111,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         check_true,
         (
             ('robustness_attribution_progress_separates_missing_observation_from_attribution_rebuild', 'expected_model_units =' in multi_seed_source and 'scientific observation pending=' in multi_seed_source and ('attribution rebuild=' in multi_seed_source) and ('scientific_completed - attribution_ready' not in multi_seed_source),),
-            ('robustness_report_surfaces_run_pinned_seed_and_optimizer_budget_identity', '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_reporting_source and '("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-"))' in multi_seed_reporting_source and ('("Seed generator", str(contract.get("seed_generator_seed") or "-"))' in multi_seed_reporting_source) and ('非same-seed配對勝率' in multi_seed_reporting_source),),
+            ('robustness_report_surfaces_run_pinned_seed_and_optimizer_budget_identity', '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_reporting_source and '("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-"))' in multi_seed_reporting_source and ('("Seed generator", str(contract.get("seed_generator_seed") or "-"))' in multi_seed_reporting_source) and ('Robustness Extension｜Across-seed Stability' in research_report_contract_source),),
         ),
     )
 
@@ -2165,9 +2165,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "render_multi_seed_robustness_report" in multi_seed_source
                 and "render_strategy_aggregate_report" in multi_seed_reporting_source
                 and "common_strategy_report" in multi_seed_reporting_source
-                and "RoMD完整統計" in multi_seed_reporting_source
-                and "設定中的同seed contrasts" in multi_seed_reporting_source
-                and "歷年報酬跨seed完整統計" in multi_seed_reporting_source
+                and 'strategy_mode_extension_contract("robustness_stability")' in multi_seed_reporting_source
+                and "Robustness Extension｜Across-seed Stability" in research_report_contract_source
+                and "Robustness Extension｜Same-seed Contrasts" in multi_seed_reporting_source
+                and "RoMD完整統計" not in multi_seed_reporting_source
+                and "歷年報酬跨seed完整統計" not in multi_seed_reporting_source
+                and "非same-seed配對勝率" not in multi_seed_reporting_source
                 and "_upgrade_derived_report_summary" in multi_seed_source
                 and "report_refreshed_at_utc" in multi_seed_source,
     )

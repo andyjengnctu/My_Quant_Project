@@ -95,6 +95,11 @@ class ModelExtensionContract:
     robustness_aggregation: str = "single_seed_only"
 
 
+# Generic alias for non-model mode extensions.  The underlying schema shape is
+# identical; strategy/model ownership stays separated by the registries below.
+ReportExtensionContract = ModelExtensionContract
+
+
 @dataclass(frozen=True)
 class HeadLearnabilitySemanticContract:
     semantic_id: str
@@ -410,6 +415,43 @@ STRATEGY_STANDARD_SOP = PersistentReportContract(
         ("execution_summary", "Execution Summary"),
     ), start=1)),
 )
+
+STRATEGY_MODE_EXTENSION_SCHEMAS: Mapping[str, ReportExtensionContract] = {
+    "robustness_stability": ReportExtensionContract(
+        "robustness_stability",
+        "Robustness Extension｜Across-seed Stability",
+        "multi_seed_robustness_only",
+        (
+            T("romd_across_seed", (
+                C("name", "比較對象", alignment="left"),
+                C("n", "N", 0, format_kind="int"),
+                C("mean", "Mean", 2, preference="higher", format_kind="number"),
+                C("median", "Median", 2, preference="higher", format_kind="number"),
+                C("std", "Std", 2, preference="lower", format_kind="number"),
+                C("min", "Min", 2, preference="higher", format_kind="number"),
+                C("max", "Max", 2, preference="higher", format_kind="number"),
+            )),
+            T("same_seed_contrasts", (
+                C("contrast", "比較", alignment="left"),
+                C("n", "N", 0, format_kind="int"),
+                C("right_wins", "右勝", alignment="right"),
+                C("left_wins", "左勝", alignment="right"),
+                C("ties", "Tie", alignment="right"),
+                C("delta_romd_mean", "ΔRoMD Mean", 2, preference="higher", format_kind="signed_number"),
+                C("delta_romd_median", "Median", 2, preference="higher", format_kind="signed_number"),
+                C("delta_romd_std", "Std", 2, preference="lower", format_kind="number"),
+            )),
+        ),
+    ),
+}
+
+
+def strategy_mode_extension_contract(extension_id: str) -> ReportExtensionContract:
+    try:
+        return STRATEGY_MODE_EXTENSION_SCHEMAS[str(extension_id)]
+    except KeyError as exc:
+        raise KeyError(f"未知Strategy mode extension: {extension_id}") from exc
+
 
 OPPORTUNITY_SELECTION_REPORT = PersistentReportContract(
     report_id="audit.opportunity_selection", version=1, role="persistent_reusable",
@@ -806,6 +848,22 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
 }
 
 
+def strategy_mode_extension_contract_fingerprint(extension_id: str) -> str:
+    payload = json.dumps(
+        asdict(strategy_mode_extension_contract(extension_id)),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
+    # User-approved compact Strategy Robustness Extension (2026-09-27).
+    "robustness_stability": "44a3b6f619dd4472",
+}
+
+
 def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
     current = persistent_report_contract_fingerprints()
     reasons: list[str] = []
@@ -821,19 +879,38 @@ def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
                 f"UNAUTHORIZED_PERSISTENT_REPORT_CONTRACT_CHANGE: {report_id} "
                 f"current={fingerprint} approved={approved or '-'}"
             )
+    current_strategy_extensions = {
+        extension_id: strategy_mode_extension_contract_fingerprint(extension_id)
+        for extension_id in sorted(STRATEGY_MODE_EXTENSION_SCHEMAS)
+    }
+    if set(current_strategy_extensions) != set(APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS):
+        reasons.append(
+            "approved Strategy mode-extension set mismatch: "
+            f"current={sorted(current_strategy_extensions)}, "
+            f"approved={sorted(APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS)}"
+        )
+    for extension_id, fingerprint in current_strategy_extensions.items():
+        approved = APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS.get(extension_id)
+        if approved != fingerprint:
+            reasons.append(
+                f"UNAUTHORIZED_STRATEGY_MODE_EXTENSION_CHANGE: {extension_id} "
+                f"current={fingerprint} approved={approved or '-'}"
+            )
     return tuple(reasons)
 
 
 __all__ = [
     "APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS",
+    "APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS",
     "MODEL_EXTENSION_SCHEMAS", "MODEL_MODE_EXTENSION_SCHEMAS", "MODEL_STANDARD_SOP",
     "OPPORTUNITY_SELECTION_REPORT", "PORTFOLIO_DRAWDOWN_REPORT",
     "MODEL_STANDARD_COMPARISON", "PERSISTENT_REPORT_CONTRACTS", "STRATEGY_CONSISTENCY_METRIC_KEYS",
+    "STRATEGY_MODE_EXTENSION_SCHEMAS",
     "STRATEGY_CONSISTENCY_REPORT", "STRATEGY_STANDARD_SOP",
     "TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R", "TRADE_OUTCOME_PATH_REPORT", "ModelExtensionContract",
     "PersistentReportContract", "ReportColumnContract", "ReportSectionContract",
-    "ReportTableContract", "HeadLearnabilitySemanticContract", "MODEL_HEAD_LEARNABILITY_SEMANTICS",
-    "aggregate_robustness_row_extension", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "comparison_extension_ids_for_evidence_families", "extension_contract", "mode_extension_contract", "visible_extension_table", "format_contract_value", "persistent_report_contract_fingerprint",
+    "ReportTableContract", "ReportExtensionContract", "HeadLearnabilitySemanticContract", "MODEL_HEAD_LEARNABILITY_SEMANTICS",
+    "aggregate_robustness_row_extension", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "comparison_extension_ids_for_evidence_families", "extension_contract", "mode_extension_contract", "strategy_mode_extension_contract", "strategy_mode_extension_contract_fingerprint", "visible_extension_table", "format_contract_value", "persistent_report_contract_fingerprint",
     "persistent_report_contract_fingerprints", "report_contract", "section_contract",
     "table_contract", "validate_approved_persistent_report_contracts",
 ]

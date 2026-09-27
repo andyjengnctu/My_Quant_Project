@@ -12030,3 +12030,14 @@ Decision：`ENGINEERING_CORRECTION / CANONICAL_INPUT_CONTRACT_VERSIONED / STALE_
 - **Independent GPT evidence**：Python compile通過。`validate_runtime_domain_isolation_contract_case=39/39 PASS`、`validate_trading_strategy_param_producer_contract_case=42/42 PASS`、Strategy Compare core/readable/config-driven direct synthetics=`19/19、51/51、102/102 PASS`；其餘可執行Trading synthetics共通過大量既有checks。7個Trading data-flow cases因目前容器缺`pyarrow/fastparquet`而無法執行Parquet fixture，屬環境dependency blocker，未觀察到該7項的code-level FAIL。GPT未執行`apps/run_bundle.py`或`apps/test_suite.py`。
 
 Decision：`PRODUCTION_PIT_PHASE1_IMPLEMENTED / C62_CURRENT_PRODUCTION_REFERENCE / CANONICAL_300_TRIAL_SEED42_120M_12M / SAME_FULL_SEARCH_C61_C62 / TRADING_PHYSICAL_ISOLATION_PRESERVED / NO_VALIDATION_EARLY_STOP_YET / OOS_AND_ROLLING_RESULT_PENDING`。
+
+
+## 2026-09-27 — Strategy Robustness Extension compact presentation
+
+- 使用者明確指出Strategy Compare長期報表SOP應維持固定Standard SOP，Rolling／Robustness只能作append-only extension；先前把Robustness重組成另一套主報表的方向作廢。
+- 本輪只調整**Robustness Extension presentation**：`strategy.standard_sop` canonical renderer、section集合／順序、Compare Suite arms／contrasts、seed semantics、training／replay、scientific fingerprint與summary evidence計算全部不變。
+- Human report的Robustness Extension收斂為兩張表：Across-seed RoMD=`比較對象/N/Mean/Median/Std/Min/Max`；Same-seed contrasts=`比較/N/右勝/左勝/Tie/ΔRoMD Mean/Median/Std`。不再在人讀主報表展開CV/P25/P75、勝Min/勝Full、all-pairs probability、逐seed attribution、逐年same-seed delta與歷年跨seed完整統計。
+- 被移出人讀主報表的證據**沒有刪除或停止計算**，仍保留於`robustness_summary.json`、`seed_results.csv`、`seed_yearly_returns.csv`及既有attribution durable artifacts；舊completed run只做report-only schema refresh，不得重新train／score／strategy replay。
+- `strategy.standard_sop`本體**維持version 1與approved fingerprint `c4e92dcc1e1c731e`完全不變**；新增獨立machine-readable Strategy `robustness_stability` mode-extension schema與approved fingerprint `44a3b6f619dd4472`。Robustness display schema由12升13，仍不進scientific fingerprint。
+
+Decision：`STANDARD_SOP_UNCHANGED / ROBUSTNESS_APPEND_ONLY_EXTENSION_COMPACTED / FULL_EVIDENCE_RETAINED / REPORT_ONLY_REFRESH / NO_SCIENTIFIC_CHANGE`。

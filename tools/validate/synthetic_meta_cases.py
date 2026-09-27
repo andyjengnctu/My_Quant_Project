@@ -4119,11 +4119,14 @@ def validate_research_report_contract_freeze_case(_base_params):
     import core.breakout_quality_policy as bq_policy
     from core.research_report_contract import (
         APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS,
         MODEL_COMPARISON_EXTENSION_SCHEMAS,
         MODEL_EXTENSION_SCHEMAS,
         MODEL_STANDARD_COMPARISON,
         MODEL_STANDARD_SOP,
         MODEL_MODE_EXTENSION_SCHEMAS,
+        STRATEGY_MODE_EXTENSION_SCHEMAS,
+        STRATEGY_STANDARD_SOP,
         aggregate_robustness_row_extension,
         comparison_extension_contract,
         comparison_extension_ids,
@@ -4131,6 +4134,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         extension_contract,
         mode_extension_contract,
         persistent_report_contract_fingerprints,
+        strategy_mode_extension_contract_fingerprint,
         table_contract,
         validate_approved_persistent_report_contracts,
     )
@@ -4159,6 +4163,27 @@ def validate_research_report_contract_freeze_case(_base_params):
         not errors and current == dict(APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS),
         detail=str(errors),
     )
+    current_strategy_extensions = {
+        extension_id: strategy_mode_extension_contract_fingerprint(extension_id)
+        for extension_id in sorted(STRATEGY_MODE_EXTENSION_SCHEMAS)
+    }
+    check_true(
+        "strategy_standard_sop_remains_v1_and_robustness_extension_has_independent_freeze",
+        int(STRATEGY_STANDARD_SOP.version) == 1
+        and persistent_report_contract_fingerprints().get("strategy.standard_sop") == "c4e92dcc1e1c731e"
+        and current_strategy_extensions == dict(APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS),
+        detail=str(current_strategy_extensions),
+    )
+    robustness_extension = STRATEGY_MODE_EXTENSION_SCHEMAS.get("robustness_stability")
+    check_true(
+        "strategy_robustness_extension_is_compact_append_only_two_table_contract",
+        robustness_extension is not None
+        and [table.headers for table in robustness_extension.tables] == [
+            ("比較對象", "N", "Mean", "Median", "Std", "Min", "Max"),
+            ("比較", "N", "右勝", "左勝", "Tie", "ΔRoMD Mean", "Median", "Std"),
+        ],
+    )
+
     check_true(
         "standard_model_sop_v9_common_section_order_is_contiguous_1_to_6",
         int(MODEL_STANDARD_SOP.version) == 9
