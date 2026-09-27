@@ -89,6 +89,12 @@ from services.optimizer.outer_rolling_formatting import (
     print_optimizer_output_files,
 )
 from services.optimizer.outer_rolling_search_progress import _SearchProgress
+from services.optimizer.validation_budget_refit import (
+    build_inner_validation_policy,
+    resolve_validation_budget_spec,
+    select_trial_budget_from_validation,
+    validation_budget_protocol_enabled,
+)
 from services.optimizer.outer_rolling_progress import (
     PARALLEL_FOLD_PROGRESS_PREFIX,
     _collect_seed_progress_phase_metrics,
@@ -1185,11 +1191,18 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         session.n_trials = int(config.trials_per_fold)
         session.disable_milestone_dashboard = True
         session.timing_mode = bool(timing_mode)
+        validation_budget_spec = (
+            resolve_validation_budget_spec(int(config.trials_per_fold))
+            if validation_budget_protocol_enabled(fold_policy)
+            else None
+        )
+        validation_budget_result = None
+        refit_trials = int(config.trials_per_fold)
         sqlite_storage_enabled = _is_outer_rolling_sqlite_storage_enabled(os.environ)
         db_file = ""
         db_name = None
         resumed_db = False
-        if sqlite_storage_enabled:
+        if sqlite_storage_enabled and validation_budget_spec is None:
             db_file, resumed_db = _resolve_outer_rolling_db_file(
                 output_dir=output_dir,
                 session_ts=session_ts,
@@ -1217,6 +1230,139 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             )
             session.profile_recorder.init_output_files()
             session.profile_recorder.mark_run_started()
+
+            if validation_budget_spec is not None:
+                inner_policy, validation_start_date, validation_end_date = build_inner_validation_policy(
+                    fold_policy,
+                    selection_start_date=selection_start,
+                    selection_end_date=selection_end,
+                    spec=validation_budget_spec,
+                )
+                inner_policy = build_optimizer_runtime_policy(inner_policy, "split")
+                inner_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
+                inner_session_spec = dict(session_spec or {})
+                base_runtime_identity = str(inner_session_spec.get("runtime_cache_identity") or "")
+                inner_identity_payload = {
+                    "base_runtime_identity": base_runtime_identity,
+                    "protocol": validation_budget_spec.as_dict(),
+                    "stage": "inner_train",
+                    "selection_start": selection_start,
+                    "selection_end": selection_end,
+                    "validation_start": validation_start_date,
+                    "validation_end": validation_end_date,
+                }
+                inner_session_spec["runtime_cache_identity"] = hashlib.sha256(
+                    json.dumps(inner_identity_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                ).hexdigest()
+                inner_session = (
+                    build_optimizer_session_from_spec(
+                        walk_forward_policy=inner_policy,
+                        spec=inner_session_spec,
+                    )
+                    if inner_session_spec
+                    else build_optimizer_session(walk_forward_policy=inner_policy)
+                )
+                inner_study = None
+                try:
+                    _validate_optimizer_runtime_context(inner_session, inner_session_spec)
+                    inner_session.rolling_fold_workers_max = int(fold_workers)
+                    inner_session.rolling_fold_parallel = True
+                    inner_session.n_trials = int(config.trials_per_fold)
+                    inner_session.disable_milestone_dashboard = True
+                    inner_session.timing_mode = bool(timing_mode)
+                    inner_session.load_raw_data(
+                        selected_data_dir,
+                        load_all_raw_data=load_all_raw_data,
+                        required_min_rows=optimizer_required_min_rows,
+                    )
+                    inner_session.profile_recorder.init_output_files()
+                    inner_session.profile_recorder.mark_run_started()
+                    inner_db_name = None
+                    inner_db_file = ""
+                    if sqlite_storage_enabled:
+                        inner_task = dict(task)
+                        inner_task["runtime_cache_identity"] = str(
+                            inner_session_spec.get("runtime_cache_identity") or ""
+                        )
+                        inner_db_file, _inner_resumed = _resolve_outer_rolling_db_file(
+                            output_dir=os.path.join(output_dir, "validation_budget_inner"),
+                            session_ts=session_ts,
+                            oos_year=int(oos_year),
+                            task=inner_task,
+                            environ=os.environ,
+                        )
+                        inner_db_name = f"sqlite:///{inner_db_file}"
+                    inner_study = create_optimizer_study(
+                        inner_db_name, seed=optimizer_seed, sampler_kind=sampler_kind
+                    )
+                    ensure_study_effective_policy_compatible(
+                        study=inner_study, walk_forward_policy=inner_policy
+                    )
+                    _ensure_study_runtime_identity_compatible(inner_study, inner_session)
+                    inner_existing, inner_remaining = _remaining_optimizer_trials(
+                        inner_study, int(config.trials_per_fold)
+                    )
+                    if inner_existing > int(config.trials_per_fold):
+                        raise RuntimeError(
+                            "validation-budget inner study trials超過current max budget: "
+                            f"existing={inner_existing}, max={int(config.trials_per_fold)}"
+                        )
+                    print(
+                        f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
+                        f"validation search {inner_existing}/{int(config.trials_per_fold)} | "
+                        f"holdout={validation_start_date}~{validation_end_date}",
+                        flush=True,
+                    )
+                    search_parallel_trials = _resolve_single_fold_search_parallel_trials(
+                        os.environ, sampler_kind=sampler_kind
+                    )
+                    if inner_remaining > 0:
+                        inner_study.optimize(
+                            inner_session.objective,
+                            n_trials=int(inner_remaining),
+                            n_jobs=int(search_parallel_trials),
+                        )
+                    validation_budget_result = select_trial_budget_from_validation(
+                        study=inner_study,
+                        session=inner_session,
+                        objective_mode=str(inner_policy.get("objective_mode", "split_train_romd")),
+                        spec=validation_budget_spec,
+                        validation_start_date=validation_start_date,
+                        validation_end_date=validation_end_date,
+                    )
+                    refit_trials = int(validation_budget_result["selected_trials"])
+                    print(
+                        f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
+                        f"validation budget selected N*={refit_trials} | "
+                        f"score={float(validation_budget_result['selected_validation_score']):.3f}",
+                        flush=True,
+                    )
+                finally:
+                    inner_session.close_trial_prep_executor()
+                    if inner_study is not None:
+                        close_study_storage(inner_study)
+
+                session.n_trials = int(refit_trials)
+                if sqlite_storage_enabled:
+                    refit_task = dict(task)
+                    refit_identity_payload = {
+                        "base_runtime_identity": str((session_spec or {}).get("runtime_cache_identity") or ""),
+                        "protocol": validation_budget_spec.as_dict(),
+                        "stage": "full_refit",
+                        "selected_trials": int(refit_trials),
+                    }
+                    refit_task["runtime_cache_identity"] = hashlib.sha256(
+                        json.dumps(refit_identity_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                    ).hexdigest()
+                    db_file, resumed_db = _resolve_outer_rolling_db_file(
+                        output_dir=os.path.join(output_dir, f"validation_budget_refit_{int(refit_trials)}"),
+                        session_ts=session_ts,
+                        oos_year=int(oos_year),
+                        task=refit_task,
+                        environ=os.environ,
+                    )
+                    db_name = f"sqlite:///{db_file}"
+
             study_started = time.perf_counter()
             study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
@@ -1229,18 +1375,23 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 oos_year=oos_year,
                 selection_start=selection_start,
                 selection_end=selection_end,
-                total_trials=int(config.trials_per_fold),
+                total_trials=int(refit_trials),
                 seed_context=seed_context,
             )
             existing_trials, remaining_trials = _remaining_optimizer_trials(
-                study, int(config.trials_per_fold)
+                study, int(refit_trials)
             )
+            if existing_trials > int(refit_trials):
+                raise RuntimeError(
+                    "full-refit study trials超過validation-selected budget: "
+                    f"existing={existing_trials}, selected={int(refit_trials)}"
+                )
             session.current_session_trial = int(existing_trials)
             progress.emit(int(existing_trials), force=True)
             if resumed_db and existing_trials:
                 print(
                     f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
-                    f"resume study {existing_trials}/{int(config.trials_per_fold)} trials",
+                    f"resume study {existing_trials}/{int(refit_trials)} trials",
                     flush=True,
                 )
             optimize_started = time.perf_counter()
@@ -1255,7 +1406,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             search_done_ts = time.time()
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             trial_count = len(list(getattr(study, "trials", []) or []))
-            session.current_session_trial = int(trial_count or config.trials_per_fold)
+            session.current_session_trial = int(trial_count or refit_trials)
             progress.done(int(session.current_session_trial))
             best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
             best_base_text = format_optimizer_score_for_display(best_base_score, decimals=3)
@@ -1281,8 +1432,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     neighbor_total=int(data.get("neighbor_total", 0) or 0),
                     current=data.get("current"),
                     best=data.get("best"),
-                    completed=int(config.trials_per_fold),
-                    total=int(config.trials_per_fold),
+                    completed=int(refit_trials),
+                    total=int(refit_trials),
                     best_base_score=best_base_score,
                     status=str(data.get("status") or "RUN"),
                     elapsed_sec=max(0.0, time.perf_counter() - local_started),
@@ -1338,8 +1489,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 neighbor_total=1,
                 current=best_local_min_score,
                 best=best_local_min_score,
-                completed=int(config.trials_per_fold),
-                total=int(config.trials_per_fold),
+                completed=int(refit_trials),
+                total=int(refit_trials),
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
                 status="DONE",
@@ -1486,6 +1637,11 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "oos_diagnostics_sec": float(oos_diagnostics_sec),
                 "install_shared_cache_sec": float(install_shared_cache_sec),
                 "study_create_sec": float(study_create_sec),
+                "training_protocol": (
+                    dict(validation_budget_result)
+                    if isinstance(validation_budget_result, dict)
+                    else {}
+                ),
             }
             timing_row = _build_outer_timing_row(
                 fold_idx=fold_idx,
@@ -1756,6 +1912,69 @@ def run_outer_rolling_oos(
         oos_start_date = str(fold["oos_start_date"])
         oos_end_date = str(fold["oos_end_date"])
         print(f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | fold START", flush=True)
+        if validation_budget_protocol_enabled(base_policy):
+            log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
+            os.makedirs(log_dir, exist_ok=True)
+            config_payload = {
+                "training_start_year": int(config.training_start_year),
+                "first_oos_year": int(config.first_oos_year),
+                "last_oos_year": int(config.last_oos_year),
+                "trials_per_fold": int(config.trials_per_fold),
+                "window_mode": str(config.window_mode),
+                "train_window_years": int(config.train_window_years),
+                "first_oos_date": str(config.first_oos_date),
+                "last_oos_date": str(config.last_oos_date),
+                "train_window_months": int(config.train_window_months),
+                "oos_horizon_months": int(config.oos_horizon_months),
+                RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
+            }
+            task = {
+                "project_root": str(project_root),
+                "output_dir": str(output_dir),
+                "base_policy": dict(base_policy),
+                "selected_data_dir": str(selected_data_dir),
+                "optimizer_required_min_rows": int(optimizer_required_min_rows),
+                "session_ts": str(session_ts),
+                "config": dict(config_payload),
+                "fold_idx": int(fold_idx),
+                "fold_count": int(fold_count),
+                "oos_year": int(oos_year),
+                "oos_start_date": str(oos_start_date),
+                "oos_end_date": str(oos_end_date),
+                "oos_period": str(oos_period),
+                "selection_start_date": str(selection_start),
+                "selection_end_date": str(selection_end),
+                "selection_period": str(selection_period),
+                "optimizer_seed": optimizer_seed,
+                "sampler_kind": str(sampler_kind),
+                "timing_mode": bool(timing_mode),
+                "fold_workers": int(fold_workers),
+                "optimizer_session_spec": dict(session_spec),
+                "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
+            }
+            result = _run_outer_rolling_oos_fold_task(task)
+            chain_state = {"chain_max_positions": chain_max_positions, "chain_enable_rotation": chain_enable_rotation}
+            _consume_parallel_fold_result(
+                result=result, rows=rows, fold_timing_rows=fold_timing_rows, chain_state=chain_state
+            )
+            if chain_state.get("chain_max_positions") is not None:
+                chain_max_positions = int(chain_state.get("chain_max_positions"))
+            if chain_state.get("chain_enable_rotation") is not None:
+                chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
+            row = (result or {}).get("row")
+            if row is not None:
+                local_policy = dict(row.get("local") or {})
+                local_oos = float(local_policy.get("rank_1_oos", 0.0))
+                local_romd = _policy_plain_romd_score(local_policy)
+                selected_budget = int(dict(row.get("training_protocol") or {}).get("selected_trials", 0) or 0)
+                print(
+                    f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period_display} | "
+                    f"OOS {oos_period_display} | DONE validation-refit N*={selected_budget} | "
+                    f"local_score={format_optimizer_score_for_display(local_oos, decimals=OOS_SCORE_DECIMALS)} | "
+                    f"local_RoMD={local_romd:.{OOS_SCORE_DECIMALS}f} | elapsed={_fmt_duration(row.get('elapsed_sec'))}{C_RESET}"
+                )
+                _print_completed_results(rows)
+            continue
         if _is_rolling_random_seed_ensemble_enabled():
             log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
             os.makedirs(log_dir, exist_ok=True)

@@ -28,6 +28,7 @@ from core.strategy_comparison import (
     StrategyPreparationAction,
     StrategyPreparationPlan,
     resolve_strategy_comparison_arm_param_policy,
+    resolve_strategy_parameter_consumption_mode,
     strategy_comparison_param_artifact_key,
     strategy_comparison_fingerprint,
 )
@@ -1727,8 +1728,8 @@ def _find_reusable_baseline_source(
         "dataset": settings.dataset,
         "params_file_sha256": expected_param_sha,
         "requested_param_policy": resolve_strategy_comparison_arm_param_policy(settings, off_arm),
-        "param_evaluation_mode": str(
-            settings.parameter_sources[off_arm.param_source].canonical_evaluation_mode or "rolling"
+        "param_evaluation_mode": resolve_strategy_parameter_consumption_mode(
+            settings.parameter_sources[off_arm.param_source]
         ),
         "optional_entry_filter_policy": (
             OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF

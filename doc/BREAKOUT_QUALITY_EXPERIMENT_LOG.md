@@ -12041,3 +12041,25 @@ Decision：`PRODUCTION_PIT_PHASE1_IMPLEMENTED / C62_CURRENT_PRODUCTION_REFERENCE
 - `strategy.standard_sop`本體**維持version 1與approved fingerprint `c4e92dcc1e1c731e`完全不變**；新增獨立machine-readable Strategy `robustness_stability` mode-extension schema與approved fingerprint `44a3b6f619dd4472`。Robustness display schema由12升13，仍不進scientific fingerprint。
 
 Decision：`STANDARD_SOP_UNCHANGED / ROBUSTNESS_APPEND_ONLY_EXTENSION_COMPACTED / FULL_EVIDENCE_RETAINED / REPORT_ONLY_REFRESH / NO_SCIENTIFIC_CHANGE`。
+
+## 2026-09-27 — Production-PIT Phase 1 empirical closure / Phase 2 PARAM-P5 + C84 implementation
+
+- **Phase 1 evidence closure**：使用者完成Extending-Window Rolling 2021-01-01～2026-03-02的8-seed robustness。C62 Production-PIT `base-finalists-agree` mean Return/MDD/RoMD/Annual=`184.99%/16.66%/11.40/22.12%`；C61 Full `base-finalist-best`=`162.43%/15.69%/10.64/20.27%`；C58 Min `base-finalist-best`=`132.01%/13.84%/9.91/17.47%`。
+- **Stability interpretation**：C62對C61 same-seed RoMD勝負=`4/8 vs 4/8`、all-pairs `P(C62>C61)=53.12%`；C62對C58亦=`4/8 vs 4/8`、all-pairs=`57.81%`。因此C62是有效且具競爭力的production reference，但現有證據**不支持**把`base-finalists-agree`宣稱為跨seed穩定優於`base-finalist-best`。Phase 1正式結案並凍結，不以已觀察OOS回頭調production selector、trial budget、window或rules。
+- **Phase 2 identity**：使用者明確授權進行non-DL validation control，分配`PARAM-P5`與`SR-C84`。唯一treatment為`validation_budget_refit_v1`：selection window最後12M作inner validation；事前固定trial checkpoints=`50/100/150/200/250/300`；每個checkpoint只使用前N個inner-train trials形成同一`base-finalists-agree` policy並在validation replay canonical optimizer portfolio score；選分數最高N*，exact tie取較小N。
+- **Full refit semantics**：選N*後丟棄inner study作為正式params來源，另建fresh Optimizer study，在完整120M Train+Validation selection window只跑N* trials，再產生正式`base-finalists-agree` params。每個fold的validation period、checkpoint scores與selected N*保存於schedule fold evidence；OOS rows不參與budget selection。
+- **SSOT / evaluation**：PARAM-P5由Optimizer唯一產生，research-only physical truth位於`models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/`。C84 OOS與Rolling都消費同一physical schedule，只分別採freeze與date-effective consumption semantics；C62/C61/C58既有canonical truth與fingerprint保持不變。C84只加入Phase 2 dedicated research Compare Suite，不加入`extending_current`。Forward／Rolling與其Multi-seed Robustness都由同一current config/Registry可直接執行；不以計算成本另設人工authorization block。Phase 2 robustness採same-seed end-to-end parameter benchmark：C62/C61/C58使用canonical benchmark Optimizer params，C84以相同benchmark seed重跑`validation_budget_refit_v1` PARAM-P5 producer。
+- **Execution surface**：維持既有Research單一入口與穩定工作類型；Phase 2 current profiles由`config/strategy_compare.py`選定，使用`apps/research.py → 策略組合比較 → Forward OOS Test / Rolling OOS Test`，沿用Strategy Compare canonical orchestration／renderer；不新增experiment-specific App。
+
+Decision：`PHASE1_RESULT_AVAILABLE_BASELINE_FROZEN / C62_COMPETITIVE_NOT_STABLY_DOMINANT / PARAM_P5_C84_IMPLEMENTED_RESULT_PENDING / VALIDATION_ONLY_BUDGET_SELECTION / FRESH_FULL_REFIT / OOS_FEEDBACK_PROHIBITED / SINGLE_PHYSICAL_PARAM_TRUTH / ROBUSTNESS_CONFIGURED / NOT_PROMOTED`。
+
+## 2026-09-28 — Phase 2 robustness routing correction：configured means executable
+
+- **User correction**：既有Research操作原則不允許為已完整配置的正式工作類型再加人工BLOCK；Forward／Rolling及對應Robustness只要current config/Registry scientific contract完整，就應可由`apps/research.py`直接執行。運算成本只能影響建議順序，不構成authorization gate。
+- **Root cause**：Phase 2 robustness profile雖已建立，卻被額外寫成`enabled=False / Not Authorized`。此外若僅解除旗標，舊explicit profile會把C62/C61/C58固定、只把C84列stochastic，無法形成與現有end-to-end robustness一致的same-seed strategy-parameter comparison。
+- **Fix**：`non_dl_validation_budget_oos/rolling` robustness改為enabled current profiles，直接引用`non_dl_validation_budget_current` Compare Suite與`end_to_end_v1` benchmark。C62/C61/C58/C84四個arms全部逐benchmark seed建立strategy params；本suite沒有DL model dependency，因此`model_seed_sensitive_arm_ids=()`是合法strategy-only robustness，不再被generic validator誤判為不完整。
+- **PARAM-P5 same-seed producer**：C84 benchmark seed仍由canonical Optimizer owner執行相同`validation_budget_refit_v1`：同一120M/12M/max300/checkpoints/full-refit semantics，只替換optimizer seed；工件另存PARAM-P5 benchmark namespace，不覆寫Seed42 single-seed PARAM-P5 truth，也不與canonical Full benchmark schedule碰撞。OOS/ Rolling仍共用同一seed-specific physical schedule，只切freeze/date-effective consumption。
+- **Execution surface**：`apps/research.py → [3] 策略組合比較 → [1]～[4]`全部可執行；Robustness仍先顯示dependency plan並做既有一次確認，但不得因「尚未看single-seed結果」或「計算昂貴」被config直接BLOCK。
+
+Decision：`NO_ARTIFICIAL_ROBUSTNESS_BLOCK / ALL_CONFIGURED_RESEARCH_WORK_TYPES_EXECUTABLE / PHASE2_SAME_SEED_PARAMETER_ROBUSTNESS / PARAM_P5_PER_SEED_CANONICAL_OPTIMIZER / NO_SCIENTIFIC_FEEDBACK_FROM_OOS`。
+

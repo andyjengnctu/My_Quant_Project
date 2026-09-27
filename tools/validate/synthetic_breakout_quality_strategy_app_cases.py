@@ -308,8 +308,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         build_strategy_oos_rolling_consistency,
     )
 
-    oos_settings = settings_by_mode["extending_window_oos"]
-    rolling_settings = settings_by_mode["extending_window_rolling"]
+    oos_settings = next(
+        settings_by_mode[str(mode["profile_id"])]
+        for mode in modes
+        if bool(mode.get("single_score_block"))
+    )
+    rolling_settings = next(
+        settings_by_mode[str(mode["profile_id"])]
+        for mode in modes
+        if not bool(mode.get("single_score_block"))
+    )
+    current_rolling_settings = rolling_settings
     arm_ids = [arm.arm_id for arm in oos_settings.enabled_arms]
     contrasts = {
         item.contrast_id: {
@@ -436,19 +445,42 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"]))
         for mode in strategy_config.get_strategy_rolling_test_modes()
     ]
-    expected_robustness_arm_ids = tuple(expected_arm_ids)
-    expected_robustness_contrast_ids = tuple(expected_contrast_ids)
     check_true(
-        "current_robustness_membership_comes_from_same_shared_model_test_list",
+        "current_robustness_routes_are_executable_and_share_current_suite",
         all(
-            tuple(item.stochastic_arm_ids) == expected_robustness_arm_ids
-            and tuple(item.benchmark_strategy_arm_ids) == expected_robustness_arm_ids
+            item.enabled
+            and item.suite_id == suite_id
+            and not item.fixed_arm_ids
+            and tuple(item.stochastic_arm_ids) == expected_arm_ids
+            for item in current_robustness
+        ),
+    )
+
+    # The long-lived extending_current benchmark remains contract-tested even when
+    # another research profile is selected as current. Current routing must never
+    # redefine its historical/scientific membership.
+    extending_settings_by_mode = {
+        "extending_window_oos": strategy_config.get_strategy_comparison_settings("extending_window_oos"),
+        "extending_window_rolling": strategy_config.get_strategy_comparison_settings("extending_window_rolling"),
+    }
+    extending_suite = strategy_config.get_strategy_compare_suite("extending_current")
+    extending_arm_ids = tuple(extending_suite["arm_ids"])
+    extending_contrast_ids = tuple(extending_suite["contrast_ids"])
+    extending_robustness = [
+        strategy_config.get_strategy_multi_seed_robustness_settings("extending_window_oos"),
+        strategy_config.get_strategy_multi_seed_robustness_settings("extending_window_rolling"),
+    ]
+    check_true(
+        "extending_current_robustness_membership_comes_from_same_shared_model_test_list",
+        all(
+            tuple(item.stochastic_arm_ids) == extending_arm_ids
+            and tuple(item.benchmark_strategy_arm_ids) == extending_arm_ids
             and not tuple(item.fixed_arm_ids)
             and not tuple(item.consensus_reference_arm_ids)
             and tuple(spec["contrast_id"] for spec in item.paired_contrasts)
-            == expected_robustness_contrast_ids
+            == extending_contrast_ids
             and {"C77", "C80", "C81", "C82", "C83"}.issubset(set(item.model_seed_sensitive_arm_ids))
-            for item in current_robustness
+            for item in extending_robustness
         ),
     )
     # Completed mechanism arms remain reconstructable through the historical
@@ -456,7 +488,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     retired_ids = {"C64", "C66", "C71", "C72", "C73", "C74", "C75", "C76"}
     check_true(
         "completed_c64_c66_c71_c75_are_historical_not_current",
-        retired_ids.isdisjoint(set(expected_arm_ids))
+        retired_ids.isdisjoint(set(extending_arm_ids))
         and retired_ids.issubset(set(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)),
     )
 
@@ -470,7 +502,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C83": ("CONT13AK_ROLL", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise", "inception_time_shared_safety_mfe_v1"),
     }
     controlled_checks = []
-    for current_settings in settings_by_mode.values():
+    for current_settings in extending_settings_by_mode.values():
         c58 = current_settings.arms["C58"]
         c59 = current_settings.arms["C59"]
         c79 = current_settings.arms["C79"]
@@ -553,7 +585,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     selected_profiles = {profile for _model_id, profile in shared_models}
-    configured_suite = dict(strategy_config.STRATEGY_COMPARE_SUITES[suite_id])
+    configured_suite = dict(strategy_config.STRATEGY_COMPARE_SUITES["extending_current"])
     derived_arm_ids = []
     for arm_id in tuple(configured_suite.get("arm_ids") or ()):
         arm = dict(strategy_config.STRATEGY_COMPARE_ARMS[arm_id])
@@ -572,9 +604,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and str(strategy_config.STRATEGY_COMPARE_CONTRASTS[cid].get("right") or "") in derived_arm_set
     )
     check_true(
-        "current_suite_membership_is_derived_from_shared_model_list_without_inventing_strategy_arms",
-        expected_arm_ids == derived_arm_ids
-        and expected_contrast_ids == derived_contrast_ids
+        "extending_suite_membership_is_derived_from_shared_model_list_without_inventing_strategy_arms",
+        extending_arm_ids == derived_arm_ids
+        and extending_contrast_ids == derived_contrast_ids
         and all(
             set(row["strategy_arm_ids"]).issubset(derived_arm_set)
             for row in model_bindings
@@ -592,7 +624,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and settings.arms["C59"].rule_policy == settings.arms["C79"].rule_policy
             and settings.arms["C59"].dl_runtime_mode == settings.arms["C79"].dl_runtime_mode
             and dict(settings.arms["C59"].dl_runtime_options or {}) == dict(settings.arms["C79"].dl_runtime_options or {})
-            for settings in settings_by_mode.values()
+            for settings in extending_settings_by_mode.values()
         ),
     )
 
@@ -613,7 +645,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and settings.arms["C78"].dl_runtime_mode == settings.arms["C81"].dl_runtime_mode
             and dict(settings.arms["C78"].dl_runtime_options or {})
             == dict(settings.arms["C81"].dl_runtime_options or {})
-            for settings in settings_by_mode.values()
+            for settings in extending_settings_by_mode.values()
         ),
     )
 
@@ -634,14 +666,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and settings.arms["C81"].dl_runtime_mode == settings.arms["C83"].dl_runtime_mode
             and dict(settings.arms["C81"].dl_runtime_options or {})
             == dict(settings.arms["C83"].dl_runtime_options or {})
-            for settings in settings_by_mode.values()
+            for settings in extending_settings_by_mode.values()
         ),
     )
 
 
     enabled_dl_sources = [
         (str(settings.profile_id), str(arm.dl_id), settings.dl_sources[arm.dl_id])
-        for settings in settings_by_mode.values()
+        for settings in extending_settings_by_mode.values()
         for arm in settings.enabled_arms
         if arm.dl_enabled and arm.dl_id in settings.dl_sources
     ]
@@ -670,7 +702,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and is_breakout_quality_model_test_profile(str(ah_research_spec.profile_name))
         and all(
             settings.dl_sources["CONT13AH_ROLL"].single_seed_strategy_conversion_authorized
-            for settings in settings_by_mode.values()
+            for settings in extending_settings_by_mode.values()
         ),
     )
 
@@ -901,7 +933,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     isolated_safety_override_checks = []
-    for current_settings in settings_by_mode.values():
+    for current_settings in extending_settings_by_mode.values():
         for current_arm in current_settings.enabled_arms:
             options = dict(current_arm.dl_runtime_options or {})
             safety_dl_id = str(options.get("safety_dl_id") or "").strip()
@@ -949,9 +981,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         (int(single_seed_selected["seed"]), str(single_seed_selected["dl_id"])),
     )
 
-    rolling_settings = settings_by_mode[
-        next(profile_id for profile_id in settings_by_mode if profile_id.endswith("_rolling"))
-    ]
+    rolling_settings = extending_settings_by_mode["extending_window_rolling"]
     normal_dl = next(
         rolling_settings.dl_sources[arm.dl_id]
         for arm in rolling_settings.enabled_arms
@@ -1034,86 +1064,93 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "--strategy-compare-source-id" not in ak_args
         and ak_workflow.rolling_authorized is True,
     )
-    try:
-        strategy_config.validate_single_seed_strategy_conversion_authorization(
-            strategy_profile_id=str(rolling_settings.profile_id),
-            dl_id="CONT13AH_ROLL",
-            filter_id=str(ah_dl.filter_id),
-            model_architecture=str(ah_dl.model_architecture),
-            experiment_profile=str(ah_dl.experiment_profile),
-            seed=int(ah_workflow.seed) + 1,
+    current_ah_active = any(
+        arm.enabled and arm.dl_enabled and str(arm.dl_id or "") == "CONT13AH_ROLL"
+        for arm in current_rolling_settings.arms.values()
+    )
+    if current_ah_active:
+        current_ah_dl = current_rolling_settings.dl_sources["CONT13AH_ROLL"]
+        current_ah_workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(current_ah_dl.experiment_profile)
         )
-    except ValueError:
-        ah_noncanonical_seed_rejected = True
-    else:
-        ah_noncanonical_seed_rejected = False
-    check_true(
-        "ah_strategy_conversion_authorization_rejects_noncanonical_seed",
-        ah_noncanonical_seed_rejected,
-    )
-    canonical_scope_source = strategy_config.validate_single_seed_strategy_conversion_pit_scope(
-        strategy_profile_id=str(rolling_settings.profile_id),
-        dl_id="CONT13AH_ROLL",
-        filter_id=str(ah_dl.filter_id),
-        model_architecture=str(ah_dl.model_architecture),
-        experiment_profile=str(ah_dl.experiment_profile),
-        seed=int(ah_workflow.seed),
-        score_start_date=str(ah_dl.point_in_time_score_start_date),
-        score_end_date=ah_dl.point_in_time_score_end_date,
-        fold_months=int(ah_dl.point_in_time_fold_months),
-        fold_anchor_date=ah_dl.point_in_time_fold_anchor_date,
-        single_score_block=bool(ah_dl.point_in_time_single_score_block),
-        inner_validation_months=int(ah_workflow.point_in_time_inner_validation_months),
-        train_window_months=None,
-    )
-    check_true(
-        "ah_strategy_conversion_authorizes_only_canonical_profile_pit_scope",
-        canonical_scope_source.dl_id == "CONT13AH_ROLL",
-    )
-    try:
-        strategy_config.validate_single_seed_strategy_conversion_pit_scope(
-            strategy_profile_id=str(rolling_settings.profile_id),
-            dl_id="CONT13AH_ROLL",
-            filter_id=str(ah_dl.filter_id),
-            model_architecture=str(ah_dl.model_architecture),
-            experiment_profile=str(ah_dl.experiment_profile),
-            seed=int(ah_workflow.seed),
-            score_start_date=str(ah_dl.point_in_time_score_start_date),
-            score_end_date=ah_dl.point_in_time_score_end_date,
-            fold_months=int(ah_dl.point_in_time_fold_months),
-            fold_anchor_date=ah_dl.point_in_time_fold_anchor_date,
-            single_score_block=bool(ah_dl.point_in_time_single_score_block),
-            inner_validation_months=int(ah_workflow.point_in_time_inner_validation_months),
-            train_window_months=60,
+        try:
+            strategy_config.validate_single_seed_strategy_conversion_authorization(
+                strategy_profile_id=str(current_rolling_settings.profile_id),
+                dl_id="CONT13AH_ROLL",
+                filter_id=str(current_ah_dl.filter_id),
+                model_architecture=str(current_ah_dl.model_architecture),
+                experiment_profile=str(current_ah_dl.experiment_profile),
+                seed=int(current_ah_workflow.seed) + 1,
+            )
+        except ValueError:
+            ah_noncanonical_seed_rejected = True
+        else:
+            ah_noncanonical_seed_rejected = False
+        check_true(
+            "current_dl_strategy_conversion_authorization_rejects_noncanonical_seed",
+            ah_noncanonical_seed_rejected,
         )
-    except ValueError:
-        ah_fixed_scope_rejected = True
-    else:
-        ah_fixed_scope_rejected = False
-    try:
-        strategy_config.validate_single_seed_strategy_conversion_pit_scope(
-            strategy_profile_id=str(rolling_settings.profile_id),
+        canonical_scope_source = strategy_config.validate_single_seed_strategy_conversion_pit_scope(
+            strategy_profile_id=str(current_rolling_settings.profile_id),
             dl_id="CONT13AH_ROLL",
-            filter_id=str(ah_dl.filter_id),
-            model_architecture=str(ah_dl.model_architecture),
-            experiment_profile=str(ah_dl.experiment_profile),
-            seed=int(ah_workflow.seed),
-            score_start_date="2022-01-01",
-            score_end_date=ah_dl.point_in_time_score_end_date,
-            fold_months=int(ah_dl.point_in_time_fold_months),
-            fold_anchor_date=ah_dl.point_in_time_fold_anchor_date,
-            single_score_block=bool(ah_dl.point_in_time_single_score_block),
-            inner_validation_months=int(ah_workflow.point_in_time_inner_validation_months),
+            filter_id=str(current_ah_dl.filter_id),
+            model_architecture=str(current_ah_dl.model_architecture),
+            experiment_profile=str(current_ah_dl.experiment_profile),
+            seed=int(current_ah_workflow.seed),
+            score_start_date=str(current_ah_dl.point_in_time_score_start_date),
+            score_end_date=current_ah_dl.point_in_time_score_end_date,
+            fold_months=int(current_ah_dl.point_in_time_fold_months),
+            fold_anchor_date=current_ah_dl.point_in_time_fold_anchor_date,
+            single_score_block=bool(current_ah_dl.point_in_time_single_score_block),
+            inner_validation_months=int(current_ah_workflow.point_in_time_inner_validation_months),
             train_window_months=None,
         )
-    except ValueError:
-        ah_arbitrary_scope_rejected = True
+        check_true(
+            "current_dl_strategy_conversion_authorizes_only_canonical_profile_pit_scope",
+            canonical_scope_source.dl_id == "CONT13AH_ROLL",
+        )
+        try:
+            strategy_config.validate_single_seed_strategy_conversion_pit_scope(
+                strategy_profile_id=str(current_rolling_settings.profile_id),
+                dl_id="CONT13AH_ROLL",
+                filter_id=str(current_ah_dl.filter_id),
+                model_architecture=str(current_ah_dl.model_architecture),
+                experiment_profile=str(current_ah_dl.experiment_profile),
+                seed=int(current_ah_workflow.seed),
+                score_start_date=str(current_ah_dl.point_in_time_score_start_date),
+                score_end_date=current_ah_dl.point_in_time_score_end_date,
+                fold_months=int(current_ah_dl.point_in_time_fold_months),
+                fold_anchor_date=current_ah_dl.point_in_time_fold_anchor_date,
+                single_score_block=bool(current_ah_dl.point_in_time_single_score_block),
+                inner_validation_months=int(current_ah_workflow.point_in_time_inner_validation_months),
+                train_window_months=60,
+            )
+        except ValueError:
+            fixed_scope_rejected = True
+        else:
+            fixed_scope_rejected = False
+        check_true(
+            "current_dl_strategy_conversion_scope_rejects_fixed_window_build",
+            fixed_scope_rejected,
+        )
     else:
-        ah_arbitrary_scope_rejected = False
-    check_true(
-        "ah_strategy_conversion_scope_rejects_fixed_and_arbitrary_pit_builds",
-        ah_fixed_scope_rejected and ah_arbitrary_scope_rejected,
-    )
+        try:
+            strategy_config.validate_single_seed_strategy_conversion_authorization(
+                strategy_profile_id=str(current_rolling_settings.profile_id),
+                dl_id="CONT13AH_ROLL",
+                filter_id=str(ah_dl.filter_id),
+                model_architecture=str(ah_dl.model_architecture),
+                experiment_profile=str(ah_dl.experiment_profile),
+                seed=int(ah_workflow.seed),
+            )
+        except ValueError:
+            inactive_source_rejected = True
+        else:
+            inactive_source_rejected = False
+        check_true(
+            "current_non_dl_suite_does_not_authorize_inactive_dl_conversion",
+            inactive_source_rejected,
+        )
 
     preparation_status_source = read_source_text(
         project_root / "services" / "research" / "strategy_compare_preparation_status.py"

@@ -21,7 +21,10 @@ from services.research.strategy_compare_preparation_status import (
     resolve_param_source_path,
     resolve_required_param_policies_for_source,
 )
-from services.optimizer.strategy_param_service import ensure_strategy_parameter_artifact
+from services.optimizer.strategy_param_service import (
+    ensure_strategy_parameter_artifact,
+    ensure_validation_budget_strategy_parameter_artifact,
+)
 from services.research.artifact_orchestrator import run_research_artifact_preparation
 from services.optimizer.strategy_param_training import (
     prepare_extending_full_roos_params,
@@ -62,6 +65,22 @@ def _execute_preparation_action(
             allow_tf32=bool(options.get("allow_tf32", False)),
             preload_feature_bank=bool(options.get("preload_feature_bank", True)),
         )
+        return
+    if action.builder_type == "optimizer_validation_budget_refit_strategy_params":
+        _kind, source_id = action.artifact_key.split(":", 1)
+        if comparison_end_date in (None, ""):
+            raise RuntimeError("PARAM-P5 validation-budget builder缺少comparison_end_date")
+        for param_policy in resolve_required_param_policies_for_source(settings, source_id):
+            ensure_validation_budget_strategy_parameter_artifact(
+                root,
+                policy=param_policy,
+                comparison_end_date=str(comparison_end_date),
+                dataset=settings.dataset,
+                max_positions=int(settings.max_positions),
+                rotation=str(settings.rotation),
+                fixed_risk=float(DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            )
         return
     if action.builder_type == "canonical_optimizer_strategy_params":
         _kind, source_id = action.artifact_key.split(":", 1)

@@ -150,7 +150,11 @@ from services.research.training_process import (
 )
 from services.optimizer.strategy_param_service import (
     ensure_robustness_benchmark_strategy_parameter_artifact,
+    ensure_validation_budget_robustness_strategy_parameter_artifact,
     inspect_robustness_benchmark_strategy_parameter_artifact,
+    inspect_validation_budget_robustness_strategy_parameter_artifact,
+    validation_budget_robustness_strategy_param_artifact_path,
+    validation_budget_robustness_strategy_param_manifest_path,
 )
 from core.report_style import (
     signal_for_delta,
@@ -563,34 +567,52 @@ def _benchmark_param_binding(
     if robustness.benchmark_id is None:
         raise ValueError("historical robustness沒有benchmark parameter binding")
     source = settings.parameter_sources[str(arm.param_source)]
-    family = str(source.canonical_family or "").strip()
-    mode = str(source.canonical_evaluation_mode or "").strip()
-    if not family or not mode:
-        raise ValueError(
-            f"benchmark arm必須使用canonical strategy parameter source: {arm.arm_id}/{arm.param_source}"
-        )
     policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
-    path = resolve_strategy_param_benchmark_artifact_path(
-        PROJECT_ROOT,
-        benchmark_id=str(robustness.benchmark_id),
-        seed=int(seed),
-        family=family,
-        evaluation_mode=mode,
-        policy=policy,
+    builder_type = (
+        None if source.builder is None else str(source.builder.builder_type or "").strip()
     )
-    manifest_path = resolve_strategy_param_benchmark_manifest_path(
-        PROJECT_ROOT,
-        benchmark_id=str(robustness.benchmark_id),
-        seed=int(seed),
-        family=family,
-        evaluation_mode=mode,
-    )
+    if builder_type == "optimizer_validation_budget_refit_strategy_params":
+        family = "full"
+        mode = str(source.consumption_evaluation_mode or "rolling").strip()
+        path = validation_budget_robustness_strategy_param_artifact_path(
+            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id),
+            seed=int(seed), policy=policy,
+        )
+        manifest_path = validation_budget_robustness_strategy_param_manifest_path(
+            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed),
+        )
+        producer_variant = "validation_budget_refit_v1"
+    else:
+        family = str(source.canonical_family or "").strip()
+        mode = str(source.canonical_evaluation_mode or "").strip()
+        if not family or not mode:
+            raise ValueError(
+                f"benchmark arm缺少可重現的strategy-parameter producer contract: "
+                f"{arm.arm_id}/{arm.param_source}"
+            )
+        path = resolve_strategy_param_benchmark_artifact_path(
+            PROJECT_ROOT,
+            benchmark_id=str(robustness.benchmark_id),
+            seed=int(seed),
+            family=family,
+            evaluation_mode=mode,
+            policy=policy,
+        )
+        manifest_path = resolve_strategy_param_benchmark_manifest_path(
+            PROJECT_ROOT,
+            benchmark_id=str(robustness.benchmark_id),
+            seed=int(seed),
+            family=family,
+            evaluation_mode=mode,
+        )
+        producer_variant = "canonical_schedule_v1"
     return {
         "arm_id": arm.arm_id,
         "seed": int(seed),
         "family": family,
         "evaluation_mode": mode,
         "param_policy": policy,
+        "producer_variant": producer_variant,
         "path": path,
         "manifest_path": manifest_path,
     }
@@ -605,7 +627,7 @@ def _benchmark_parameter_plan_rows(
     rows: list[tuple[str, str, str]] = []
     blockers: list[str] = []
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
-    seen_units: set[tuple[int, str, str, str]] = set()
+    seen_units: set[tuple[int, str, str, str, str]] = set()
     for seed in robustness.resolved_seeds:
         for arm in benchmark_arms:
             binding = _benchmark_param_binding(
@@ -614,6 +636,7 @@ def _benchmark_parameter_plan_rows(
             bindings[(arm.arm_id, int(seed))] = binding
             unit = (
                 int(seed),
+                str(binding["producer_variant"]),
                 str(binding["family"]),
                 str(binding["evaluation_mode"]),
                 str(binding["param_policy"]),
@@ -623,9 +646,14 @@ def _benchmark_parameter_plan_rows(
             seen_units.add(unit)
             path = Path(binding["path"])
             manifest_path = Path(binding["manifest_path"])
+            variant_suffix = (
+                "" if str(binding["producer_variant"]) == "canonical_schedule_v1"
+                else f":{binding['producer_variant']}"
+            )
             label = (
                 f"param-benchmark:{robustness.benchmark_id}:seed={seed}:"
                 f"{binding['family']}:{binding['evaluation_mode']}:{binding['param_policy']}"
+                f"{variant_suffix}"
             )
             if comparison_end in (None, ""):
                 if path.is_file() or manifest_path.is_file():
@@ -641,20 +669,34 @@ def _benchmark_parameter_plan_rows(
                         "不得fallback到production Seed42策略參數",
                     ))
                 continue
-            state = inspect_robustness_benchmark_strategy_parameter_artifact(
-                PROJECT_ROOT,
-                benchmark_id=str(robustness.benchmark_id),
-                seed=int(seed),
-                family=str(binding["family"]),
-                evaluation_mode=str(binding["evaluation_mode"]),
-                policy=str(binding["param_policy"]),
-                comparison_end_date=str(comparison_end),
-                dataset=str(settings.dataset),
-                max_positions=int(settings.max_positions),
-                rotation=str(settings.rotation),
-                fixed_risk=float(DEFAULT_FIXED_RISK),
-                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
-            )
+            if str(binding["producer_variant"]) == "validation_budget_refit_v1":
+                state = inspect_validation_budget_robustness_strategy_parameter_artifact(
+                    PROJECT_ROOT,
+                    benchmark_id=str(robustness.benchmark_id),
+                    seed=int(seed),
+                    policy=str(binding["param_policy"]),
+                    comparison_end_date=str(comparison_end),
+                    dataset=str(settings.dataset),
+                    max_positions=int(settings.max_positions),
+                    rotation=str(settings.rotation),
+                    fixed_risk=float(DEFAULT_FIXED_RISK),
+                    max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                )
+            else:
+                state = inspect_robustness_benchmark_strategy_parameter_artifact(
+                    PROJECT_ROOT,
+                    benchmark_id=str(robustness.benchmark_id),
+                    seed=int(seed),
+                    family=str(binding["family"]),
+                    evaluation_mode=str(binding["evaluation_mode"]),
+                    policy=str(binding["param_policy"]),
+                    comparison_end_date=str(comparison_end),
+                    dataset=str(settings.dataset),
+                    max_positions=int(settings.max_positions),
+                    rotation=str(settings.rotation),
+                    fixed_risk=float(DEFAULT_FIXED_RISK),
+                    max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                )
             action = str(state["action"])
             if action == "REUSE":
                 detail = project_relative_display_path(path, project_root=PROJECT_ROOT)
@@ -684,7 +726,7 @@ def _prepare_benchmark_strategy_parameter_artifacts(
     if robustness.benchmark_id is None:
         return {}
     workflow = get_breakout_quality_workflow_settings()
-    built_by_unit: dict[tuple[int, str, str, str], dict[str, Any]] = {}
+    built_by_unit: dict[tuple[int, str, str, str, str], dict[str, Any]] = {}
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
     for seed in robustness.resolved_seeds:
         for arm in benchmark_arms:
@@ -692,35 +734,55 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 settings=settings, robustness=robustness, arm=arm, seed=int(seed)
             )
             unit = (
-                int(seed), str(binding["family"]), str(binding["evaluation_mode"]),
-                str(binding["param_policy"]),
+                int(seed), str(binding["producer_variant"]), str(binding["family"]),
+                str(binding["evaluation_mode"]), str(binding["param_policy"]),
             )
             result = built_by_unit.get(unit)
             if result is None:
-                result = ensure_robustness_benchmark_strategy_parameter_artifact(
-                    PROJECT_ROOT,
-                    benchmark_id=str(robustness.benchmark_id),
-                    seed=int(seed),
-                    family=str(binding["family"]),
-                    evaluation_mode=str(binding["evaluation_mode"]),
-                    policy=str(binding["param_policy"]),
-                    comparison_end_date=str(comparison_end),
-                    dataset=str(settings.dataset),
-                    filter_id=str(workflow.filter_id),
-                    model_architecture=str(workflow.model_architecture),
-                    experiment_profile=str(workflow.experiment_profile),
-                    max_positions=int(settings.max_positions),
-                    rotation=str(settings.rotation),
-                    fixed_risk=float(DEFAULT_FIXED_RISK),
-                    max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
-                    resume_parameter_training=True,
-                    quiet=False,
-                )
+                if str(binding["producer_variant"]) == "validation_budget_refit_v1":
+                    result = ensure_validation_budget_robustness_strategy_parameter_artifact(
+                        PROJECT_ROOT,
+                        benchmark_id=str(robustness.benchmark_id),
+                        seed=int(seed),
+                        policy=str(binding["param_policy"]),
+                        comparison_end_date=str(comparison_end),
+                        dataset=str(settings.dataset),
+                        max_positions=int(settings.max_positions),
+                        rotation=str(settings.rotation),
+                        fixed_risk=float(DEFAULT_FIXED_RISK),
+                        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                        resume_parameter_training=True,
+                        quiet=False,
+                    )
+                else:
+                    result = ensure_robustness_benchmark_strategy_parameter_artifact(
+                        PROJECT_ROOT,
+                        benchmark_id=str(robustness.benchmark_id),
+                        seed=int(seed),
+                        family=str(binding["family"]),
+                        evaluation_mode=str(binding["evaluation_mode"]),
+                        policy=str(binding["param_policy"]),
+                        comparison_end_date=str(comparison_end),
+                        dataset=str(settings.dataset),
+                        filter_id=str(workflow.filter_id),
+                        model_architecture=str(workflow.model_architecture),
+                        experiment_profile=str(workflow.experiment_profile),
+                        max_positions=int(settings.max_positions),
+                        rotation=str(settings.rotation),
+                        fixed_risk=float(DEFAULT_FIXED_RISK),
+                        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                        resume_parameter_training=True,
+                        quiet=False,
+                    )
                 built_by_unit[unit] = result
                 print(
                     "[" + styled_workflow_status(str(result["action"])) + "]"
                     + f" seed={seed} {binding['family']}/{binding['evaluation_mode']} "
                     + f"{binding['param_policy']}"
+                    + (
+                        "" if str(binding["producer_variant"]) == "canonical_schedule_v1"
+                        else f" [{binding['producer_variant']}]"
+                    )
                 )
             result_path = Path(result["path"])
             bindings[(arm.arm_id, int(seed))] = {

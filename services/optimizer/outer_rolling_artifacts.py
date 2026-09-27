@@ -204,6 +204,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "benchmark_oos_score": row.get("benchmark_oos_score"),
             "best_finalist_return_pct": row.get("best_finalist_return_pct"),
             "best_finalist_oos_score": row.get("best_finalist_oos_score"),
+            "training_protocol": dict(row.get("training_protocol") or {}),
         })
     seed_ensemble_policy = _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date, policy_name=policy_name)
     chain_all = dict(summary.get("chained_oos") or {})

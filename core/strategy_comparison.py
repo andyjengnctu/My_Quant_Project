@@ -94,9 +94,10 @@ class StrategyParameterSource:
     builder: StrategyArtifactBuilder | None = None
     canonical_family: str | None = None
     canonical_evaluation_mode: str | None = None
+    consumption_evaluation_mode: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "source_id": self.source_id,
             "path_template": self.path_template,
             "description": self.description,
@@ -109,6 +110,22 @@ class StrategyParameterSource:
             "canonical_family": self.canonical_family,
             "canonical_evaluation_mode": self.canonical_evaluation_mode,
         }
+        if self.consumption_evaluation_mode not in (None, ""):
+            payload["consumption_evaluation_mode"] = self.consumption_evaluation_mode
+        return payload
+
+
+def resolve_strategy_parameter_consumption_mode(source: StrategyParameterSource) -> str:
+    """Resolve replay semantics without duplicating the underlying parameter truth."""
+
+    from core.strategy_param_artifacts import normalize_strategy_param_evaluation_mode
+
+    raw = (
+        source.canonical_evaluation_mode
+        or source.consumption_evaluation_mode
+        or "rolling"
+    )
+    return normalize_strategy_param_evaluation_mode(raw)
 
 
 @dataclass(frozen=True)
@@ -357,8 +374,9 @@ def validate_strategy_multi_seed_robustness_settings(
     if settings.benchmark_id is not None:
         if not benchmark_ids:
             raise ValueError("end-to-end robustness benchmark至少需要一個strategy-seed arm")
-        if not model_ids:
-            raise ValueError("end-to-end robustness benchmark至少需要一個model-seed arm")
+        # Strategy-only suites (for example non-DL optimizer experiments) are valid
+        # end-to-end robustness targets even when no arm owns a seed-sensitive model.
+        # In that case every stochastic arm still varies its same-seed strategy params.
         if not set(model_ids).issubset(set(benchmark_ids)):
             raise ValueError("model_seed_sensitive_arm_ids必須是benchmark_strategy_arm_ids子集")
         if tuple(stochastic_ids) != tuple(benchmark_ids):
@@ -704,16 +722,32 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             raise ValueError(
                 f"parameter source {key}的canonical_family/evaluation_mode必須同時設定"
             )
+        from core.strategy_param_artifacts import (
+            normalize_strategy_param_evaluation_mode,
+            normalize_strategy_param_family,
+        )
         if source.canonical_family is not None:
-            from core.strategy_param_artifacts import (
-                normalize_strategy_param_evaluation_mode,
-                normalize_strategy_param_family,
-            )
             normalize_strategy_param_family(source.canonical_family)
             normalize_strategy_param_evaluation_mode(source.canonical_evaluation_mode)
             if source.path_template not in (None, "") or source.identity_manifest_path not in (None, ""):
                 raise ValueError(
                     f"parameter source {key}使用canonical resolver時不得再設定path_template/identity_manifest_path"
+                )
+        if source.consumption_evaluation_mode not in (None, ""):
+            consumption_mode = normalize_strategy_param_evaluation_mode(
+                source.consumption_evaluation_mode
+            )
+            if consumption_mode not in {"oos", "rolling"}:
+                raise ValueError(
+                    f"parameter source {key}的consumption_evaluation_mode只允許oos/rolling"
+                )
+            if (
+                source.canonical_evaluation_mode not in (None, "")
+                and consumption_mode
+                != normalize_strategy_param_evaluation_mode(source.canonical_evaluation_mode)
+            ):
+                raise ValueError(
+                    f"parameter source {key}的canonical/consumption evaluation mode衝突"
                 )
         if source.trained_with_dl_id and source.trained_with_dl_id not in settings.dl_sources:
             raise ValueError(
@@ -731,6 +765,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 "selection_historical_p2",
                 "selection_historical_full_roos",
                 "canonical_optimizer_strategy_params",
+                "optimizer_validation_budget_refit_strategy_params",
             },
         )
         if source.builder is not None and source.builder.enabled:

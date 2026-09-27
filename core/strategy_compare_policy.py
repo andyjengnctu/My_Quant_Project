@@ -46,6 +46,7 @@ from core.strategy_compare_registry import (
     STRATEGY_COMPARE_SUITES,
     STRATEGY_DL_SOURCES,
     STRATEGY_PARAM_SOURCES,
+    STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
 )
 from core.training_policy import (
     get_strategy_parameter_training_policy_snapshot,
@@ -105,7 +106,11 @@ def _compatibility_catalogs() -> tuple[
 
     return (
         _merge_compatibility_catalog(
-            STRATEGY_PARAM_SOURCES,
+            _merge_compatibility_catalog(
+                STRATEGY_PARAM_SOURCES,
+                STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+                catalog_name="current/experimental parameter source",
+            ),
             HISTORICAL_STRATEGY_PARAM_SOURCES,
             catalog_name="parameter source",
         ),
@@ -198,12 +203,14 @@ def _derived_robustness_membership(
         for arm in robustness_eligible
         if _arm_has_seed_sensitive_model_dependency(arm)
     )
-    if not benchmark or not model_sensitive:
+    if not benchmark:
         raise ValueError(
             "Compare Suite end-to-end robustness角色不完整: "
             f"suite={profile_settings.suite_id}, benchmark={list(benchmark)}, "
             f"model_sensitive={list(model_sensitive)}"
         )
+    # model_sensitive may legitimately be empty for a strategy-only/non-DL suite.
+    # The benchmark still varies same-seed strategy parameters for every arm.
     return (), benchmark, model_sensitive
 
 
@@ -458,6 +465,14 @@ def get_strategy_rolling_test_modes() -> tuple[dict[str, object], ...]:
         raw_robustness = dict(
             STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES[str(item["robustness_id"])]
         )
+        # Stable Research menu work types are executable once selected as current.
+        # Expensive runtime cost is not an authorization gate: a current robustness
+        # binding must itself be enabled and scientifically bind to the same suite.
+        if not bool(raw_robustness.get("enabled", True)):
+            raise ValueError(
+                "current robustness mode不可設定為disabled；若已綁定正式選單就必須可執行: "
+                f"robustness={item['robustness_id']}"
+            )
         if str(raw_robustness.get("suite_id") or "").strip() not in current_suite_ids:
             raise ValueError(
                 "current robustness mode必須引用與single-seed相同Compare Suite: "
@@ -660,6 +675,7 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             builder=_builder(raw.get("builder")),
             canonical_family=(None if raw.get("canonical_family") in (None, "") else str(raw.get("canonical_family"))),
             canonical_evaluation_mode=(None if raw.get("canonical_evaluation_mode") in (None, "") else str(raw.get("canonical_evaluation_mode"))),
+            consumption_evaluation_mode=(None if raw.get("consumption_evaluation_mode") in (None, "") else str(raw.get("consumption_evaluation_mode"))),
         )
         for source_id, raw in parameter_catalog.items()
     }

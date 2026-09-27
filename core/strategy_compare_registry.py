@@ -13,6 +13,10 @@ from core.breakout_quality_policy import (
     get_breakout_quality_rolling_test_mode,
 )
 from config.strategy_compare import (
+    STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+    STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS,
+    STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
+    STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS,
     STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
     STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
     STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
@@ -48,8 +52,8 @@ STRATEGY_COMPARE_ROLLING_TEST_MODES = (
         "fold_months": int(_ROLLING_OOS.fold_months),
         "fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
         "single_score_block": bool(_ROLLING_OOS.single_score_block),
-        "profile_id": "extending_window_oos",
-        "robustness_id": "extending_window_oos",
+        "profile_id": STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+        "robustness_id": STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS,
     },
     {
         "mode_id": _ROLLING_ROLLING.mode_id,
@@ -59,8 +63,8 @@ STRATEGY_COMPARE_ROLLING_TEST_MODES = (
         "fold_months": int(_ROLLING_ROLLING.fold_months),
         "fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
         "single_score_block": bool(_ROLLING_ROLLING.single_score_block),
-        "profile_id": "extending_window_rolling",
-        "robustness_id": "extending_window_rolling",
+        "profile_id": STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
+        "robustness_id": STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS,
     },
 )
 
@@ -69,6 +73,7 @@ STRATEGY_COMPARE_ROLLING_TEST_MODES = (
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE = "Full Base-Finalists-Agree"
+STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_BUDGET_REFIT = "Full Validation-Budget Refit"
 STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE = "Min Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_K_FLEX_R0 = "Min MR-13E K-Flex R0 Exact (Compute-Blocked)"
@@ -96,6 +101,16 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13AK_NO_K_NO_R0 = "Min MR-13AK No-K No-R0"
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
+    "non_dl_validation_budget_current": {
+        "arm_ids": ("C62", "C61", "C58", "C84"),
+        "contrast_ids": ("C84-C62", "C84-C61", "C84-C58"),
+        "display_name_bases": {
+            "C62": "Production PIT / Full Base-Finalists-Agree",
+            "C61": "Full Base-Finalist-Best",
+            "C58": "Min Base-Finalist-Best",
+            "C84": "Full Validation-Budget Refit",
+        },
+    },
     "extending_current": {
         "arm_ids": ("C62", "C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81", "C82", "C83"),
         "contrast_ids": (
@@ -206,6 +221,55 @@ STRATEGY_COMPARE_PROFILES = {
         # 舊2016～2025 aggregate保留historical-only；period不同時不得誤REUSE。
         "reuse_output_roots": ("outputs/strategy_compare/extending_window_rolling",),
     },
+    "non_dl_validation_budget_oos": {
+        "label": "Non-DL Validation-Budget | OOS Test",
+        "description": (
+            "Phase-2 research-only control：固定2021-01-01～2026-03-02；C84只新增inner validation"
+            "選trial budget + full refit，其他Full/base-finalists-agree條件與C62固定300-trial control一致。"
+        ),
+        "display_alignment_group": "non_dl_validation_budget",
+        "suite_id": "non_dl_validation_budget_current",
+        "display_suffix": "OOS",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_validation_budget/oos_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C62": "full_oos",
+            "C61": "full_oos",
+            "C58": "min_oos",
+            "C84": "full_validation_budget_oos_experiment",
+        },
+    },
+    "non_dl_validation_budget_rolling": {
+        "label": "Non-DL Validation-Budget | Rolling Test",
+        "description": (
+            "Phase-2 primary PIT evaluation：固定2021-01-01～2026-03-02；C84逐年度只以當時selection"
+            "window的trailing 12M validation選N*，再以完整120M重新搜尋N* trials；OOS不參與N*。"
+        ),
+        "display_alignment_group": "non_dl_validation_budget",
+        "suite_id": "non_dl_validation_budget_current",
+        "display_suffix": "Rolling",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_validation_budget/rolling_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C84": "full_validation_budget_rolling_experiment",
+        },
+    },
     # Legacy evaluation policies retained only for historical replay / artifact interpretation.
     "selection_pit": {
         "label": "Selection PIT 策略比較",
@@ -253,6 +317,58 @@ STRATEGY_COMPARE_PROFILES = {
 # Historical robustness profiles保留顯式membership供artifact compatibility；orchestration不得改動
 # 單次Strategy Compare arm identity/fingerprint。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
+    "non_dl_validation_budget_oos": {
+        "label": "Non-DL Validation-Budget Multi-seed Robustness | OOS Test",
+        "enabled": True,
+        "profile_id": "non_dl_validation_budget_oos",
+        "suite_id": "non_dl_validation_budget_current",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_oos", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_oos", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_validation_budget/oos_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_validation_budget/oos_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
+    "non_dl_validation_budget_rolling": {
+        "label": "Non-DL Validation-Budget Multi-seed Robustness | Rolling Test",
+        "enabled": True,
+        "profile_id": "non_dl_validation_budget_rolling",
+        "suite_id": "non_dl_validation_budget_current",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_rolling", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_rolling", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_validation_budget/rolling_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_validation_budget/rolling_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
     "extending_window_oos": {
         "label": "Extending-Window Multi-seed Robustness Test | OOS Test",
         "enabled": True,
@@ -410,6 +526,51 @@ STRATEGY_PARAM_SOURCES = {
     },
 }
 
+# Research-only parameter-source identities. These are deliberately outside the
+# current Strategy Compare parameter-source catalog so temporary experiments do
+# not expand the production/current menu contract. The resolver merges them for
+# profiles that explicitly opt in.
+STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
+    "full_validation_budget_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/{param_filename}",
+        "description": "PARAM-P5 optimizer-owned Full validation-budget schedule；OOS只freeze消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P5",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "validation_budget_refit_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_validation_budget_refit_strategy_params",
+            "options": {"parameter_set": "PARAM-P5", "optimizer_search_protocol": "validation_budget_refit_v1"},
+        },
+    },
+    "full_validation_budget_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/{param_filename}",
+        "description": "PARAM-P5 optimizer-owned Full validation-budget schedule；Rolling以date-effective語意消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P5",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "validation_budget_refit_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_validation_budget_refit_strategy_params",
+            "options": {"parameter_set": "PARAM-P5", "optimizer_search_protocol": "validation_budget_refit_v1"},
+        },
+    },
+}
+
 # =============================================================================
 # 4. DL工件來源
 # =============================================================================
@@ -503,6 +664,20 @@ STRATEGY_DL_SOURCES = {
 # Arm definition本身不保存第二份enabled/mode membership；current matrix不得在profile或robustness重複列出。
 
 STRATEGY_COMPARE_ARMS = {
+    "C84": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_BUDGET_REFIT,
+        "description": (
+            "PARAM-P5 Phase-2 non-DL treatment；Full/formal/base-finalists-agree固定，120M selection + 12M annual PIT固定；"
+            "每fold只以trailing 12M inner validation在事前checkpoints選N*，再以完整selection window全新study refit N* trials。"
+        ),
+        "param_source": "full_validation_budget_rolling_experiment",
+        "param_policy": "base-finalists-agree",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
     "C62": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE,
         "description": (
@@ -710,6 +885,9 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C84-C62": {"left": "C84", "right": "C62", "description": "Phase-2 primary：validation-selected trial budget + full refit相對固定300-trial Production-PIT control；其他Full/finalists-agree條件固定"},
+    "C84-C61": {"left": "C84", "right": "C61", "description": "Phase-2 treatment相對Full base-finalist-best reference"},
+    "C84-C58": {"left": "C84", "right": "C58", "description": "Phase-2 treatment相對Min base-finalist-best reference；整體策略體系比較"},
     "C62-C61": {"left": "C62", "right": "C61", "description": "同一Full PIT search／formal execution下，base-finalists-agree相對base-finalist-best的parameter-policy單變量差異"},
     "C62-C58": {"left": "C62", "right": "C58", "description": "Production-matched Full finalists-agree相對Min base-finalist-best的整體策略體系比較；不是單一policy或單一rules效果"},
     "C61-C58": {"left": "C61", "right": "C58", "description": "Full相對Min的整體策略體系reference；不是單一DL效果"},
@@ -741,6 +919,7 @@ __all__ = [
     "STRATEGY_COMPARE_PROFILES",
     "STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES",
     "STRATEGY_PARAM_SOURCES",
+    "STRATEGY_EXPERIMENTAL_PARAM_SOURCES",
     "STRATEGY_DL_SOURCES",
     "STRATEGY_COMPARE_ARMS",
     "STRATEGY_COMPARE_CONTRASTS",

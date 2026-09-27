@@ -48,6 +48,7 @@ from core.strategy_comparison import (
     StrategyPreparationAction,
     StrategyPreparationPlan,
     resolve_strategy_comparison_arm_param_policy,
+    resolve_strategy_parameter_consumption_mode,
     strategy_comparison_fingerprint,
 )
 from core.research_report_contract import section_contract
@@ -1235,8 +1236,8 @@ def run_strategy_comparison(
             comparison_end=comparison_end,
             quiet=quiet,
             baseline_reuse_dir=baseline_reuse_source,
-            param_evaluation_mode=(
-                settings.parameter_sources[off_arm.param_source].canonical_evaluation_mode or "rolling"
+            param_evaluation_mode=resolve_strategy_parameter_consumption_mode(
+                settings.parameter_sources[off_arm.param_source]
             ),
         )
         pair_payloads[group_id] = {
@@ -1481,8 +1482,8 @@ def run_strategy_comparison(
             output_dir=pair_dir,
             comparison_start=comparison_start,
             comparison_end=comparison_end,
-            param_evaluation_mode=(
-                settings.parameter_sources[on_arm.param_source].canonical_evaluation_mode or "rolling"
+            param_evaluation_mode=resolve_strategy_parameter_consumption_mode(
+                settings.parameter_sources[on_arm.param_source]
             ),
             score_overrides=(status.get("continuous_score_overrides") or {}),
             ranking_options_extra=ranking_options_extra,

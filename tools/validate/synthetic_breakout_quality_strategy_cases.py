@@ -1421,6 +1421,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _benchmark_manifest_matches_current_policy,
         _benchmark_schedule_build_contract,
         ensure_robustness_benchmark_strategy_parameter_artifact,
+        ensure_validation_budget_robustness_strategy_parameter_artifact,
+        validation_budget_robustness_strategy_param_artifact_path,
     )
     from filters.breakout_quality.strategy_compare_sources import (
         strategy_param_source_identity_sha256,
@@ -1630,6 +1632,77 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             and {"base_finalist_best", "base_finalists_agree"}.issubset(
                 set(benchmark_manifest.get("artifacts") or {})
             ),
+        )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        p5_calls = []
+
+        def fake_p5_benchmark_optimizer(**kwargs):
+            p5_calls.append(dict(kwargs))
+            active_dir = Path(kwargs["output_relative_dir"]) / "active_params"
+            active_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "schema_type": "active_param_ensemble",
+                "schema_version": 1,
+                "mode": "rolling",
+                "selector": "base_finalists_agree",
+                "params_ensemble_by_effective_date": {
+                    "2021-01-01": [
+                        {
+                            "member_index": 1,
+                            "seed": benchmark_seed,
+                            "params": {"high_len": 201, "atr_len": 14},
+                        }
+                    ]
+                },
+                "breakout_quality_param_adaptation": {
+                    "parameter_set": "PARAM-P5",
+                    "optimizer_search_protocol": "validation_budget_refit_v1",
+                },
+                "meta": {"last_oos_date": "2026-03-02"},
+                "summary": {"oos_end_date": "2026-03-02"},
+            }
+            target = active_dir / "roos_base_finalists_agree.json"
+            target.write_text(json.dumps(payload), encoding="utf-8")
+            return {"params_path": target}
+
+        p5_kwargs = {
+            "benchmark_id": str(benchmark["benchmark_id"]),
+            "seed": benchmark_seed,
+            "policy": "base-finalists-agree",
+            "comparison_end_date": "2026-03-02",
+            "dataset": "full",
+            "max_positions": 10,
+            "rotation": "off",
+            "fixed_risk": 0.01,
+            "max_position_cap_pct": 20.0,
+            "quiet": True,
+        }
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+            side_effect=fake_p5_benchmark_optimizer,
+        ):
+            p5_built = ensure_validation_budget_robustness_strategy_parameter_artifact(
+                temp_root, **p5_kwargs
+            )
+            p5_reused = ensure_validation_budget_robustness_strategy_parameter_artifact(
+                temp_root, **p5_kwargs
+            )
+        p5_path = validation_budget_robustness_strategy_param_artifact_path(
+            temp_root, benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed, policy="base-finalists-agree",
+        )
+        check_true(
+            "robustness_validation_budget_params_use_same_seed_canonical_optimizer_and_isolated_p5_namespace",
+            len(p5_calls) == 1
+            and int(p5_calls[0]["optimizer_seed"]) == benchmark_seed
+            and str(p5_calls[0]["optimizer_search_protocol"]) == "validation_budget_refit_v1"
+            and str(p5_calls[0]["parameter_set_identity"]) == "PARAM-P5"
+            and str(p5_built["action"]) in {"BUILD", "REBUILD"}
+            and str(p5_reused["action"]) == "REUSE"
+            and Path(p5_built["path"]) == p5_path
+            and "param_p5_validation_budget_refit" in p5_path.as_posix()
+            and f"seed_{benchmark_seed}" in p5_path.as_posix(),
         )
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)

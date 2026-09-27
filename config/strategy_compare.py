@@ -12,15 +12,20 @@ from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
 )
 
-# Current work-stage selection.
-STRATEGY_COMPARE_DEFAULT_PROFILE = "extending_window_oos"
+# Current work-stage selection. Stable menu work types live in apps/research.py;
+# only the current scientific profiles/bindings change here.
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_budget_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_budget_rolling"
+STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_validation_budget_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_validation_budget_rolling"
+STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
 STRATEGY_COMPARE_MENU_PROFILE_IDS = (
-    "extending_window_oos",
-    "extending_window_rolling",
+    STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+    STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
 )
 STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL = "Extending-Window Test"
 STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL = "Extending-Window Multi-seed Robustness Test"
-STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "extending_window_oos"
+STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS
 
 # Execution / retention knobs.
 STRATEGY_COMPARE_GPU_TRAIN_WORKERS = 1

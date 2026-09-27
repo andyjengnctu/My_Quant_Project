@@ -26,6 +26,7 @@ from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
     resolve_strategy_comparison_arm_param_policy,
+    resolve_strategy_parameter_consumption_mode,
     strategy_comparison_param_artifact_key,
     strategy_comparison_param_binding_key,
     StrategyPreparationPlan,
@@ -472,6 +473,28 @@ def _validate_param_training_identity(
                 or str(payload.get("coverage_end") or "") != actual_end
             ):
                 return False, "EXTENDING_STITCH_COVERAGE_MISMATCH", manifest_path
+            return True, "READY", manifest_path
+        if builder.builder_type == "optimizer_validation_budget_refit_strategy_params":
+            expected_parameter_set = str(options.get("parameter_set") or "").upper()
+            expected_protocol = str(options.get("optimizer_search_protocol") or "").strip()
+            if str(payload.get("producer") or "") != "optimizer":
+                return False, "VALIDATION_BUDGET_PRODUCER_MISMATCH", manifest_path
+            if str(payload.get("parameter_set") or "").upper() != expected_parameter_set:
+                return False, "VALIDATION_BUDGET_PARAMETER_SET_MISMATCH", manifest_path
+            if str(payload.get("optimizer_search_protocol") or "") != expected_protocol:
+                return False, "VALIDATION_BUDGET_PROTOCOL_MISMATCH", manifest_path
+            build_contract = dict(payload.get("build_contract") or {})
+            if str(build_contract.get("dataset") or "") != str(settings.dataset):
+                return False, "VALIDATION_BUDGET_DATASET_MISMATCH", manifest_path
+            if int(build_contract.get("max_positions") or 0) != int(settings.max_positions):
+                return False, "VALIDATION_BUDGET_MAX_POSITIONS_MISMATCH", manifest_path
+            if str(build_contract.get("rotation") or "") != str(settings.rotation):
+                return False, "VALIDATION_BUDGET_ROTATION_MISMATCH", manifest_path
+            output_path = resolve_param_source_path(root, settings, source_id)
+            if not output_path.is_file():
+                return False, "VALIDATION_BUDGET_OUTPUT_MISSING", manifest_path
+            if str(payload.get("artifact_sha256") or "") != compute_file_sha256(output_path):
+                return False, "VALIDATION_BUDGET_OUTPUT_HASH_MISMATCH", manifest_path
             return True, "READY", manifest_path
         if builder.builder_type == "oos_param_freeze":
             if str(payload.get("builder_type") or "") != "oos_param_freeze":
@@ -975,7 +998,10 @@ def _collect_parameter_artifact_status(
         elif action in {"BUILD", "REBUILD", "RESUME"}:
             if builder is None:
                 raise RuntimeError(f"策略參數action={action}卻缺少builder: {source_id}")
-            if builder.builder_type == "canonical_optimizer_strategy_params":
+            if builder.builder_type in {
+                "canonical_optimizer_strategy_params",
+                "optimizer_validation_budget_refit_strategy_params",
+            }:
                 description = (
                     "由canonical Optimizer parameter service解析／建立／接續策略參數工件"
                     f"｜policies={','.join(policies)}"
@@ -1042,7 +1068,10 @@ def _collect_parameter_artifact_status(
                     if action == "REUSE"
                     else (
                         "optimizer_strategy_parameter_service"
-                        if builder is not None and builder.builder_type == "canonical_optimizer_strategy_params"
+                        if builder is not None and builder.builder_type in {
+                            "canonical_optimizer_strategy_params",
+                            "optimizer_validation_budget_refit_strategy_params",
+                        }
                         else "strategy_parameter_optimization"
                     )
                     if action in {"BUILD", "REBUILD", "RESUME"}
@@ -1080,7 +1109,7 @@ def resolve_arm_parameter_evaluation_identities(
         if path is None or not Path(path).is_file():
             continue
         source = settings.parameter_sources[arm.param_source]
-        evaluation_mode = str(source.canonical_evaluation_mode or "rolling")
+        evaluation_mode = resolve_strategy_parameter_consumption_mode(source)
         try:
             replay_sha256 = resolve_strategy_param_evaluation_identity_sha256(
                 path,

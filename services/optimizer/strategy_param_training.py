@@ -655,6 +655,17 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
         "max_positions": int(args.max_positions),
         "rotation": str(args.rotation),
     }
+    optimizer_search_protocol = str(getattr(args, "optimizer_search_protocol", "") or "").strip()
+    if optimizer_search_protocol:
+        from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
+
+        payload["optimizer_search_protocol"] = optimizer_search_protocol
+        payload["validation_budget_refit"] = resolve_validation_budget_spec(
+            int(args.trials_per_fold)
+        ).as_dict()
+        payload["parameter_set_identity"] = str(
+            getattr(args, "parameter_set_identity", "PARAM-P5") or "PARAM-P5"
+        )
     payload["runtime_identity_sha256"] = _canonical_hash(payload)
     return payload
 
@@ -1932,12 +1943,42 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
             tp = float(params.get("tp_percent", 0.0) or 0.0)
             if not math.isclose(tp, float(OPTIMIZER_FIXED_TP_PERCENT), rel_tol=0.0, abs_tol=1e-12):
                 raise ValueError(f"Selection Full ROOS tp_percent未遵守training_policy固定值: {effective_date}")
+    parameter_set_identity = str(
+        getattr(args, "parameter_set_identity", "P4_HISTORY") or "P4_HISTORY"
+    )
+    optimizer_search_protocol = str(
+        getattr(args, "optimizer_search_protocol", "") or ""
+    ).strip()
+    if optimizer_search_protocol:
+        from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
+
+        spec = resolve_validation_budget_spec(int(args.trials_per_fold))
+        folds = list(payload.get("folds") or [])
+        if not folds:
+            raise ValueError("validation-budget Full ROOS參數缺少fold evidence")
+        for fold in folds:
+            protocol = dict((fold or {}).get("training_protocol") or {})
+            if str(protocol.get("protocol") or "") != str(spec.protocol):
+                raise ValueError("validation-budget Full ROOS fold缺少正確training protocol")
+            selected_trials = int(protocol.get("selected_trials", 0) or 0)
+            if selected_trials not in set(spec.checkpoints):
+                raise ValueError(
+                    "validation-budget Full ROOS selected trials不在預先固定checkpoint: "
+                    f"{selected_trials}"
+                )
+            if bool(protocol.get("oos_feedback_used", True)):
+                raise ValueError("validation-budget Full ROOS禁止OOS feedback進入budget selection")
     payload["breakout_quality_param_adaptation"] = {
         "mode": "selection_full_roos_training",
-        "parameter_set": "P4_HISTORY",
+        "parameter_set": parameter_set_identity,
         "training_dl_enabled": False,
         "search_fields": list(FULL_ROOS_SEARCH_FIELDS),
         "search_space_sha256": _canonical_hash(BREAKOUT_OPTIMIZER_SEARCH_SPACE),
+        **(
+            {"optimizer_search_protocol": optimizer_search_protocol}
+            if optimizer_search_protocol
+            else {}
+        ),
     }
     payload = _write_strategy_param_json(path, payload)
     return payload
@@ -1969,6 +2010,8 @@ def prepare_selection_historical_full_roos_params(
     models_dir_override: str | Path | None = None,
     dataset_identity_override: dict[str, Any] | None = None,
     environ_override=None,
+    optimizer_search_protocol: str | None = None,
+    parameter_set_identity: str = "P4_HISTORY",
 ):
     """Build/reuse Full rolling params using the canonical full search space.
 
@@ -1997,6 +2040,8 @@ def prepare_selection_historical_full_roos_params(
         max_position_cap_pct=float(max_position_cap_pct),
         resume_parameter_training=bool(resume_parameter_training),
         quiet=bool(quiet),
+        optimizer_search_protocol=str(optimizer_search_protocol or "").strip(),
+        parameter_set_identity=str(parameter_set_identity),
     )
     output_dir = (
         root / SELECTION_FULL_ROOS_RELATIVE_DIR
@@ -2048,6 +2093,11 @@ def prepare_selection_historical_full_roos_params(
                 f"| period={schedule_contract['meta']['first_oos_date']}~{schedule_contract['meta']['last_oos_date']} "
                 f"| train={int(train_window_months)}m | oos={int(oos_months)}m "
                 f"| trials={int(trials_per_fold)}/fold"
+                + (
+                    f" | protocol={str(optimizer_search_protocol)}"
+                    if str(optimizer_search_protocol or "").strip()
+                    else ""
+                )
             )
         base_policy = build_rolling_base_policy(root=root, baseline_contract=schedule_contract)
         base_policy.update(
@@ -2056,6 +2106,9 @@ def prepare_selection_historical_full_roos_params(
                 "evaluation_scope": "rolling_selection_diagnostic",
             }
         )
+        if str(optimizer_search_protocol or "").strip():
+            base_policy["optimizer_search_protocol"] = str(optimizer_search_protocol).strip()
+            base_policy["parameter_set_identity"] = str(parameter_set_identity)
         session_spec = {
             "output_dir": str((optimizer_output_dir / "sessions").resolve()),
             "runtime_cache_identity": contract["runtime_identity_sha256"],
@@ -2110,7 +2163,7 @@ def prepare_selection_historical_full_roos_params(
     return {
         "params_path": params_path,
         "summary": {
-            "parameter_set": "P4_HISTORY",
+            "parameter_set": str(parameter_set_identity),
             "status": "COMPLETED",
             "folds": int(dict(payload.get("summary") or {}).get("folds", 0) or 0),
             "trials_per_fold": int(trials_per_fold),

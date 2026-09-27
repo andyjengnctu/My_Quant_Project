@@ -142,6 +142,13 @@ OPTIMIZER_INNER_VALIDATE_MIN_SCORE = 0.0 # inner validation score 下限。第�
 OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE = 0.50 # inner validation 相對排名上限。0.50 代表只接受 finalists validation 排名前半段。
 OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS = 1 # 第一版固定切最後 1 年做 validation。
 
+# Phase-2 non-DL search-budget validation/refit capability.  This is opt-in and
+# does not alter the canonical Production-PIT/C61/C62 search contract.
+OPTIMIZER_VALIDATION_BUDGET_REFIT_PROTOCOL = "validation_budget_refit_v1"
+OPTIMIZER_VALIDATION_BUDGET_REFIT_HOLDOUT_MONTHS = 12
+OPTIMIZER_VALIDATION_BUDGET_REFIT_CHECKPOINTS = (50, 100, 150, 200, 250, 300)
+OPTIMIZER_VALIDATION_BUDGET_REFIT_POLICY = "base_finalists_agree"
+
 
 # =========================== 共用硬門檻 (投組期未績效門檻) ====================
 
