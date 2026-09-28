@@ -12131,3 +12131,14 @@ Decision：`CONFIG_DRIVEN_STRATEGY_PARAM_TARGET / VALIDATION_GENERIC_PROFILE_OPT
 - **Scientific impact**：無。Strategy Compare fingerprints、PARAM-P5/C84 semantics、validation checkpoints/holdout、seeds、120M/12M、report schema與canonical artifact identities均未變。
 
 Decision：`ENGINEERING_ONLY / SHARED_PRODUCER_EXECUTION_ACTION / READY_DEFAULT_REPORT / FORCE_REBUILD_FRESH_FIT_OR_SEARCH / PUBLICATION_ROLLBACK_ON_FAILURE / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-09-28 — Formal regression closure: canonical synthetic model identity + Optimizer Study DB sandbox
+
+- **Baseline / formal evidence**：`test-branch-1_20260928_211019_508a4682.zip`，SHA256=`4740fe33e795f2c5761e02d82cf6c364f860c92bc7960ddcdfe0dd3cb59aef38`。使用者formal summary為quick gate 3個Optimizer DB error-path FAIL、consistency 1 FAIL、meta quality 1 root FAIL（其餘7項為BLOCKED）；chain checks與ml smoke PASS。
+- **Consistency / meta root cause**：`validate_breakout_quality_continuous_ranker_contract_case`仍建立不存在於canonical Registry的`synthetic_model_gate_profile`，且menu routing regression仍patch舊的`_run_continuous_forward_model_gate`，但正式menu已委派`_interactive_continuous_forward_model_gate`。Registry正確拒絕虛構profile，synthetic suite因此在後續checks前crash；meta quality的`coverage_synthetic_suite_runs_successfully`為同一root cause。
+- **Synthetic fix**：validator改由`SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES`與canonical workflow resolver動態挑選合法、未授權Rolling的model-gate-only profile，完整settings由`get_breakout_quality_workflow_settings()`建立；menu regression改patch目前真正的interactive Forward/Rolling handlers。解開crash後另發現舊source assertion仍要求`if not core_ready:`，而Force Rebuild契約已合法擴充為`if force_core or not core_ready:`；同步更新assertion，不改runtime branch。
+- **Quick-gate root cause / fix**：三個Optimizer DB error-path仍把壞／缺／空DB寫到legacy `models/...db`；Study Mode現以canonical study DB resolver在Optimizer output namespace決定DB，因此舊fixture沒有命中被測DB，反而可能讀到其他合法study。Quick gate現於單一隔離child process中覆寫Optimizer/session output root，透過`_build_optimizer_study_db_file_path()`建立三種canonical Study DB狀態，再從`apps/research.py optimizer --model study --study-scope full`頂層入口驗證fail-fast。沒有新增第二套DB命名規則，也不再接受memory-study fallback作為這三個persistent Study DB error-path的替代答案。
+- **Independent regression evidence**：continuous-ranker synthetic contract=`53 checks / 0 FAIL`；`check_error_paths()`=`5/5 PASS`，其中broken/missing/empty Study DB三案分別命中`損壞或不可讀`、`不存在，無法輸出 base.json`、`為空，無法匯出`；兩個修改檔`py_compile` PASS。完整synthetic suite在本交付container因缺少可用Parquet engine（`pyarrow`/`fastparquet`）於既有Trading fixture中止，因此不宣稱本機formal suite PASS，仍以使用者環境formal rerun作最終gate。
+- **Scientific impact**：無。未修改production Research/Optimizer semantics、PARAM-P5/C84、MR-13BV identity/status、dataset/PIT/seed/target/loss/model architecture或artifact scientific identity；本輪只修formal regression fixture與validator，使其消費現行canonical owners。
+
+Decision：`ENGINEERING_ONLY / SYNTHETIC_FIXTURE_CANONICALIZED / STUDY_DB_ERROR_PATH_CANONICAL_SANDBOX / FORMAL_RERUN_REQUIRED / SCIENTIFIC_IDENTITY_UNCHANGED`。

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import io
+import json
 import os
 import runpy
 import shutil
@@ -755,10 +756,118 @@ def _build_models_sandbox_dir(case_name: str) -> Path:
     return sandbox_root / "models"
 
 
+_OPTIMIZER_STUDY_DB_ERROR_PROBE = r'''
+import contextlib
+import io
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+from apps import research as research_app
+from core.dataset_profiles import get_dataset_generation_namespace
+from core.runtime_utils import run_cli_entrypoint
+from services.optimizer import application as optimizer_app
+from services.optimizer import session_factory as session_factory
+
+probe_root = Path(sys.argv[1]).resolve()
+rows = {}
+for case_name, state in (
+    ("broken_optimizer_db", "broken"),
+    ("export_only_missing_db", "missing"),
+    ("export_only_empty_db", "empty"),
+):
+    output_dir = probe_root / case_name / "ml_optimizer"
+    optimizer_app.OUTPUT_DIR = str(output_dir)
+    session_factory.OUTPUT_DIR = str(output_dir)
+    generation_namespace = get_dataset_generation_namespace(
+        optimizer_app.PROJECT_ROOT, "reduced"
+    )
+    db_path = Path(
+        optimizer_app._build_optimizer_study_db_file_path(
+            output_dir=str(output_dir),
+            dataset_profile_key="reduced",
+            study_scope="full",
+            dataset_generation_namespace=generation_namespace,
+        )
+    )
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.unlink(missing_ok=True)
+    if state == "broken":
+        db_path.write_text("not-a-sqlite-db", encoding="utf-8")
+    elif state == "empty":
+        sqlite3.connect(db_path).close()
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    returncode = 127
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            run_cli_entrypoint(
+                research_app.main,
+                argv=[
+                    "apps/research.py",
+                    "optimizer",
+                    "--dataset", "reduced",
+                    "--model", "study",
+                    "--study-scope", "full",
+                ],
+            )
+            returncode = 0
+        except SystemExit as exc:
+            code = exc.code
+            returncode = 0 if code is None else int(code) if isinstance(code, int) else 1
+    rows[case_name] = {
+        "returncode": returncode,
+        "stdout": stdout.getvalue(),
+        "stderr": stderr.getvalue(),
+    }
+
+print("OPTIMIZER_STUDY_DB_ERROR_PROBE_JSON=" + json.dumps(rows, ensure_ascii=False))
+'''
+
+
+def _run_optimizer_study_db_error_probe(
+    *, timeout: int, models_dir: Path, run_best_params_path: Path
+) -> tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]:
+    probe_root = Path(
+        tempfile.mkdtemp(
+            prefix="quick_gate_optimizer_study_db_",
+            dir=str(PROJECT_ROOT / "outputs" / "local_regression" / "_staging"),
+        )
+    )
+    outcome = run_command(
+        [sys.executable, "-c", _OPTIMIZER_STUDY_DB_ERROR_PROBE, str(probe_root)],
+        timeout=timeout,
+        env={
+            "V16_OPTIMIZER_TRIALS": "0",
+            MODELS_DIR_ENV_VAR: str(models_dir),
+            RUN_BEST_PARAMS_PATH_ENV_VAR: str(run_best_params_path),
+        },
+    )
+    prefix = "OPTIMIZER_STUDY_DB_ERROR_PROBE_JSON="
+    payload_line = next(
+        (line for line in reversed(outcome["stdout"].splitlines()) if line.startswith(prefix)),
+        "",
+    )
+    if not payload_line:
+        return outcome, {}
+    try:
+        payload = json.loads(payload_line[len(prefix):])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return outcome, {}
+    if not isinstance(payload, dict):
+        return outcome, {}
+    return outcome, {
+        str(name): dict(case_outcome)
+        for name, case_outcome in payload.items()
+        if isinstance(case_outcome, dict)
+    }
+
+
 def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     results = []
     params_path = Path(resolve_default_primary_param_source_path(PROJECT_ROOT))
-    db_path = PROJECT_ROOT / "models" / "portfolio_ai_10pos_overnight_reduced.db"
 
     params_missing_models_dir = _build_models_sandbox_dir("missing_run_best_params")
     params_missing_models_dir.mkdir(parents=True, exist_ok=True)
@@ -784,54 +893,36 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     broken_db_models_dir = _build_models_sandbox_dir("broken_optimizer_db")
     broken_db_models_dir.mkdir(parents=True, exist_ok=True)
     _copy_file_if_exists(params_path, broken_db_models_dir / "run_best_params.json")
-    sandbox_db_path = broken_db_models_dir / db_path.name
-
-    def _optimizer_export_rejects_with_expected_contract(outcome, legacy_message: str) -> bool:
-        combined = f"{outcome['stdout']}\n{outcome['stderr']}"
-        memory_message = "memory study，不保留長期 DB"
-        return (
-            (not outcome.get("timed_out"))
-            and outcome["returncode"] != 0
-            and (legacy_message in combined or memory_message in combined)
-        )
-
-    sandbox_db_path.write_text("not-a-sqlite-db", encoding="utf-8")
-    outcome = _run_python_cli_probe(
-        [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
+    probe_outcome, optimizer_cases = _run_optimizer_study_db_error_probe(
         timeout=timeout,
-        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
+        models_dir=broken_db_models_dir,
+        run_best_params_path=broken_db_models_dir / "run_best_params.json",
     )
-    results.append(summarize_result(
-        "error_path::broken_optimizer_db",
-        _optimizer_export_rejects_with_expected_contract(outcome, "Optimizer 記憶庫檔案損壞或不可讀"),
-        detail=_outcome_detail(outcome, "壞 DB 或 memory-study export-only 應 fail-fast"),
-    ))
-
-    sandbox_db_path.unlink(missing_ok=True)
-    outcome = _run_python_cli_probe(
-        [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
-        timeout=timeout,
-        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
+    optimizer_error_contracts = (
+        ("error_path::broken_optimizer_db", "broken_optimizer_db", "Optimizer 記憶庫檔案損壞或不可讀"),
+        ("error_path::export_only_missing_db", "export_only_missing_db", "記憶庫不存在，無法輸出 base.json"),
+        ("error_path::export_only_empty_db", "export_only_empty_db", "記憶庫為空，無法匯出"),
     )
-    results.append(summarize_result(
-        "error_path::export_only_missing_db",
-        _optimizer_export_rejects_with_expected_contract(outcome, "記憶庫不存在，無法匯出"),
-        detail=_outcome_detail(outcome, "無 DB 或 memory-study export-only 應 fail-fast"),
-    ))
-
-    import sqlite3
-
-    sqlite3.connect(sandbox_db_path).close()
-    outcome = _run_python_cli_probe(
-        [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
-        timeout=timeout,
-        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
-    )
-    results.append(summarize_result(
-        "error_path::export_only_empty_db",
-        _optimizer_export_rejects_with_expected_contract(outcome, "記憶庫為空，無法匯出"),
-        detail=_outcome_detail(outcome, "空 DB 或 memory-study export-only 應 fail-fast"),
-    ))
+    for result_name, case_name, expected_message in optimizer_error_contracts:
+        case_outcome = optimizer_cases.get(case_name)
+        if case_outcome is None:
+            results.append(summarize_result(
+                result_name,
+                False,
+                detail=_outcome_detail(probe_outcome, "Optimizer Study DB 隔離探針未產生有效結果"),
+            ))
+            continue
+        combined = f"{case_outcome.get('stdout', '')}\n{case_outcome.get('stderr', '')}"
+        ok = int(case_outcome.get("returncode", 0)) != 0 and expected_message in combined
+        results.append(summarize_result(
+            result_name,
+            ok,
+            detail=(
+                expected_message
+                if ok
+                else f"returncode={case_outcome.get('returncode')}, expected={expected_message!r}"
+            ),
+        ))
     return results
 
 

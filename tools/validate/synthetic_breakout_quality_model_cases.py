@@ -1459,15 +1459,19 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     from services.research import breakout_quality_application as research_app
 
-    model_gate_settings = SimpleNamespace(
-        is_binary_classification=False,
-        is_continuous_ranker=True,
-        rolling_authorized=False,
-        filter_id="synthetic_quality",
-        model_architecture="synthetic_arch",
-        experiment_profile="synthetic_model_gate_profile",
-        training_objective=TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
-        seed=42,
+    # Canonical registry resolution is part of the public Research contract.  The
+    # synthetic case therefore selects an existing model-gate-only profile instead
+    # of inventing an experiment identity that production code is required to reject.
+    model_gate_profile = next(
+        profile_name
+        for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if not get_continuous_ranker_research_spec(profile_name).selection_pit_authorized
+        and not breakout_quality_policy.get_breakout_quality_workflow_settings(
+            experiment_profile=profile_name
+        ).rolling_authorized
+    )
+    model_gate_settings = breakout_quality_policy.get_breakout_quality_workflow_settings(
+        experiment_profile=model_gate_profile
     )
     ready_plan = SimpleNamespace(blocked=False, actions=(), overall_status="READY")
     gate_commands = []
@@ -1479,13 +1483,10 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     with (
         patch.object(research_app, "_print_workflow_status"),
         patch.object(
-            research_app, "get_continuous_ranker_research_spec",
-            return_value=SimpleNamespace(model_research_id="SYNTHETIC-MODEL"),
-        ),
-        patch.object(
             research_app, "_load_reusable_continuous_forward_contract",
             return_value=(None, "synthetic missing"),
         ),
+        patch.object(research_app, "_has_continuous_forward_fitted_candidate", return_value=False),
         patch.object(research_app, "_collect_continuous_research_input_plan", return_value=ready_plan),
         patch.object(research_app, "_render_continuous_research_input_plan"),
         patch.object(research_app, "_prompt_bool", return_value=True),
@@ -1501,10 +1502,10 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and gate_commands == [(
             "train-continuous-ranker",
             [
-                "--filter-id", "synthetic_quality",
-                "--model-architecture", "synthetic_arch",
-                "--experiment-profile", "synthetic_model_gate_profile",
-                "--seed", "42",
+                "--filter-id", str(model_gate_settings.filter_id),
+                "--model-architecture", str(model_gate_settings.model_architecture),
+                "--experiment-profile", str(model_gate_settings.experiment_profile),
+                "--seed", str(int(model_gate_settings.seed)),
                 "--reuse-fitted-model",
             ],
             "apps/research.py model",
@@ -1513,23 +1514,16 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch.object(
-            research_app,
-            "get_continuous_ranker_research_spec",
-            return_value=SimpleNamespace(
-                reference_profile_name=None, model_research_id="SYNTHETIC-MODEL"
-            ),
-        ),
         patch("builtins.input", return_value=""),
-        patch.object(research_app, "_run_continuous_forward_model_gate", return_value=29) as forward_gate,
-        patch.object(research_app, "_interactive_continuous_pit_validation", return_value=31) as pit_gate,
+        patch.object(research_app, "_interactive_continuous_forward_model_gate", return_value=29) as forward_gate,
+        patch.object(research_app, "_interactive_continuous_rolling_model_gate", return_value=31) as rolling_gate,
     ):
         menu_rc = research_app._interactive_model_research("apps/research.py model")
     check_true(
         "model_gate_only_continuous_profile_enter_routes_to_forward_gate_not_rolling_pit",
         menu_rc == 29
         and forward_gate.call_count == 1
-        and pit_gate.call_count == 0,
+        and rolling_gate.call_count == 0,
     )
 
     # Regression for B338: even if the current Training Model object carries a false
@@ -1537,13 +1531,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # and must not be re-gated by that current Training Model.
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch.object(
-            research_app,
-            "get_continuous_ranker_research_spec",
-            return_value=SimpleNamespace(
-                reference_profile_name=None, model_research_id="SYNTHETIC-MODEL"
-            ),
-        ),
         patch("builtins.input", side_effect=["4", "0"]),
         patch.object(research_app, "_run_configured_model_comparison", return_value=0) as rolling_compare,
     ):
@@ -1743,7 +1730,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and "def _rolling_robustness_score_core_ready" in app_source
         and "Rolling PIT score-output capability stale" in app_source
         and "get_continuous_ranker_score_output_columns" in app_source
-        and "if not core_ready:" in app_source
+        and "if force_core or not core_ready:" in app_source
         and '"audit-point-in-time-scores"' in app_source
         and "aggregate_robustness_row_extension" in app_source
         and "comparison_extension_aggregation" in app_source,
