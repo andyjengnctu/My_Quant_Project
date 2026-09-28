@@ -74,12 +74,14 @@ OPTIMIZER_POLICY_INDICATOR_ENABLED = {
 
 # ============================== 區間/次數 ====================================
 
-# optimizer 提供四種資料區間語意：
+# optimizer engine仍保留四種資料區間語意；Research互動進階選單只暴露
+# Study／Full／OOS／Rolling OOS。Trade正式操作入口已移至Workbench，
+# engine的trade mode只保留給CLI/internal compatibility。
 # study = 單 seed 研究模式；Study-Full / Study-OOS 由互動選單決定。
 # full = seed ensemble 全期間訓練；使用 FULL_START_YEAR~FULL_END_YEAR；無 OOS。
 # oos = seed ensemble 單一 fold OOS validation。rolling OOS = 多 fold OOS validation。
-# trade = 最新實際交易參數訓練；最近 OUTER_ROLLING_TRAIN_WINDOW_MONTHS；無 OOS。
-DEFAULT_OPTIMIZER_MODEL_MODE = 'trade'
+# trade = Workbench/compatibility使用；最近 OUTER_ROLLING_TRAIN_WINDOW_MONTHS；無 OOS。
+DEFAULT_OPTIMIZER_MODEL_MODE = 'study'
 FULL_START_YEAR = 2021
 FULL_END_YEAR = None  # None = 使用最新資料日
 OOS_EVALUATION_START_YEAR = 2021
@@ -142,12 +144,15 @@ OPTIMIZER_INNER_VALIDATE_MIN_SCORE = 0.0 # inner validation score 下限。第�
 OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE = 0.50 # inner validation 相對排名上限。0.50 代表只接受 finalists validation 排名前半段。
 OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS = 1 # 第一版固定切最後 1 年做 validation。
 
-# Phase-2 non-DL search-budget validation/refit capability.  This is opt-in and
-# does not alter the canonical Production-PIT/C61/C62 search contract.
+# Backward-compatible aliases.  Validation scientific settings are owned by
+# config/strategy_params.py so each strategy-parameter profile may opt in/out
+# without adding protocol-specific switches to the Optimizer engine.
+from config.strategy_params import STRATEGY_PARAM_VALIDATION_PROTOCOLS as _STRATEGY_PARAM_VALIDATION_PROTOCOLS
+_VALIDATION_BUDGET_V1 = dict(_STRATEGY_PARAM_VALIDATION_PROTOCOLS["validation_budget_refit_v1"])
 OPTIMIZER_VALIDATION_BUDGET_REFIT_PROTOCOL = "validation_budget_refit_v1"
-OPTIMIZER_VALIDATION_BUDGET_REFIT_HOLDOUT_MONTHS = 12
-OPTIMIZER_VALIDATION_BUDGET_REFIT_CHECKPOINTS = (50, 100, 150, 200, 250, 300)
-OPTIMIZER_VALIDATION_BUDGET_REFIT_POLICY = "base_finalists_agree"
+OPTIMIZER_VALIDATION_BUDGET_REFIT_HOLDOUT_MONTHS = int(_VALIDATION_BUDGET_V1["holdout_months"])
+OPTIMIZER_VALIDATION_BUDGET_REFIT_CHECKPOINTS = tuple(_VALIDATION_BUDGET_V1["checkpoints"])
+OPTIMIZER_VALIDATION_BUDGET_REFIT_POLICY = str(_VALIDATION_BUDGET_V1["selection_policy"])
 
 
 # =========================== 共用硬門檻 (投組期未績效門檻) ====================

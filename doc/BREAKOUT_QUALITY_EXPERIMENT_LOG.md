@@ -12111,3 +12111,14 @@ Decision：`VALIDATOR_CONSUMES_CANONICAL_COMPARE_DEPENDENCY_RESOLVER / STRATEGY_
 
 Decision：`ROBUSTNESS_NAMESPACE_IS_WRITE_ONLY / REGISTERED_RESULT_DISCOVERY / STRATEGY_ONLY_ARM_SEED_IDENTITY_REUSE / EXACT_SOURCE_COMMIT_REQUIRED / REUSED_RESULTS_PRUNE_PARAM_DEPENDENCIES / C84_ONLY_NEW_WORK_WHEN_BASELINES_MATCH / NO_SCIENTIFIC_CONDITION_CHANGE`。
 
+## 2026-09-28 — Research strategy-parameter config-driven producer menu
+
+- **Scope**：engineering/application ownership only；不建立新scientific identity、不改PARAM-P5/C84 checkpoints、holdout、seed、window、trials、selector、artifact path或Strategy Compare report contract。
+- **Research `[2]`**：由原本直接進generic Optimizer改為config-driven strategy-parameter producer application。Current target由`config/strategy_params.py::ACTIVE_STRATEGY_PARAM_PROFILE`決定；menu只保留Forward OOS、Rolling OOS、兩者Robustness四個穩定work types與`進階／單次 Optimizer`。Min/Full只作profile的`filter_profile`資料維度，C-arm／PARAM identity不作menu branch。
+- **Validation ownership**：`validation_budget_refit_v1`的holdout/checkpoints/selection metric/tie-break/full-refit等設定移至`config/strategy_params.py` reusable protocol catalog；strategy profile以`validation.enabled` opt-in/out。`services/optimizer/validation_budget_refit.py`改讀typed resolver；`config/training_policy.py`只保留舊常數compatibility alias。Resolved validation payload與Strategy Parameter training-policy snapshot前後完全一致。
+- **Producer SSOT**：正式menu只建立可稽核plan並委派既有`services/optimizer/strategy_param_service.py`；Strategy Compare preparation與Research `[2]`共用同一physical parameter truth。Forward只要求schedule start prefix，Rolling要求完整Research coverage；Robustness seeds仍由`end_to_end_v1` benchmark SSOT解析。
+- **Trade**：Research互動generic Optimizer移除Trade選項；Trade正式操作入口維持Workbench。底層`--model trade`保留CLI/internal compatibility，避免同輪誤刪仍被Trading service依賴的primitive。Generic Optimizer interactive default由Trade改為Study。
+- **Compatibility**：既有Optimizer artifacts/report renderer不變；`python apps/research.py optimizer --...` explicit options仍相容轉交advanced Optimizer。Phase2 OOS/ Rolling fingerprints與Extending OOS/Rolling fingerprints均未改變。
+
+Decision：`CONFIG_DRIVEN_STRATEGY_PARAM_TARGET / VALIDATION_GENERIC_PROFILE_OPTION / OPTIMIZER_SOLE_PRODUCER / TRADE_UI_OWNED_BY_WORKBENCH / NO_SCIENTIFIC_IDENTITY_CHANGE`。
+

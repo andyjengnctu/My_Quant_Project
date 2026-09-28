@@ -2096,7 +2096,15 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "OOS RoMD" in optimizer_walk_forward_source,
     )
     check("study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
-    check("interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] Full Mode [2] OOS Mode [3] Rolling OOS Mode  [4] Trade Mode" in optimizer_study_utils_source)
+    check("interactive_optimizer_menu_defaults_to_study_and_excludes_trade", True, "[Enter] Study Mode [1] Full Mode [2] OOS Mode [3] Rolling OOS Mode" in optimizer_study_utils_source and "[4] Trade Mode" not in optimizer_study_utils_source)
+    try:
+        study_utils._parse_optimizer_mode_request_raw("4", source_label="UI/MENU")
+        trade_menu_rejected = False
+    except ValueError:
+        trade_menu_rejected = True
+    check("interactive_optimizer_menu_rejects_trade_workbench_owned_mode", True, trade_menu_rejected)
+    trade_compat_request = study_utils._parse_optimizer_run_request_raw("TRADE", source_label="ENV:compat")
+    check("optimizer_trade_remains_noninteractive_compatibility_only", True, trade_compat_request.get("model_mode") == "trade" and trade_compat_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)
     with patch("builtins.input", side_effect=["1", "0"]):
         interactive_full_zero_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_one_routes_to_full_mode", True, interactive_full_zero_request.get("model_mode") == "full" and interactive_full_zero_request.get("n_trials") == 0 and interactive_full_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
@@ -2109,6 +2117,43 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     with patch("builtins.input", side_effect=["", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
         interactive_default_zero_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_enter_mode_defaults_to_study_base_export", True, interactive_default_zero_request.get("model_mode") == "study" and interactive_default_zero_request.get("n_trials") == 0 and interactive_default_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
+
+    strategy_param_config_source = (project_root / "config" / "strategy_params.py").read_text(encoding="utf-8")
+    strategy_param_app_source = (project_root / "services" / "research" / "strategy_param_application.py").read_text(encoding="utf-8")
+    research_entry_source = (project_root / "apps" / "research.py").read_text(encoding="utf-8")
+    from core.strategy_param_policy import get_active_strategy_param_training_profile
+    from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
+    active_param_profile = get_active_strategy_param_training_profile()
+    validation_spec = resolve_validation_budget_spec(300)
+    check("strategy_param_training_target_is_config_driven", True, "ACTIVE_STRATEGY_PARAM_PROFILE" in strategy_param_config_source and "get_active_strategy_param_training_profile" in strategy_param_app_source)
+    check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
+    check("strategy_param_validation_is_profile_config_not_optimizer_menu_switch", True, active_param_profile.validation_enabled and active_param_profile.validation_protocol == "validation_budget_refit_v1" and "STRATEGY_PARAM_VALIDATION_PROTOCOLS" in strategy_param_config_source)
+    check("strategy_param_validation_config_preserves_phase2_contract", True, validation_spec.as_dict() == {"protocol": "validation_budget_refit_v1", "holdout_months": 12, "checkpoints": [50, 100, 150, 200, 250, 300], "policy_name": "base_finalists_agree", "selection_metric": "canonical_optimizer_portfolio_score", "tie_break": "smaller_budget", "oos_feedback_used": False, "full_refit_required": True})
+    import core.strategy_param_policy as strategy_param_policy
+    disabled_profiles = {
+        "synthetic_no_validation": {
+            "label": "Synthetic",
+            "strategy_id": "synthetic",
+            "filter_profile": "synthetic_filter",
+            "parameter_policy": "synthetic-policy",
+            "parameter_set_identity": "SYNTHETIC",
+            "dataset": "full",
+            "schedule_start_date": "2021-01-01",
+            "coverage_end_date": "2021-12-31",
+            "validation": {"enabled": False},
+        }
+    }
+    with patch.object(strategy_param_policy, "STRATEGY_PARAM_PROFILES", disabled_profiles):
+        disabled_profile = strategy_param_policy.get_strategy_param_training_profile("synthetic_no_validation")
+    check("strategy_param_profile_can_disable_validation_without_menu_change", True, not disabled_profile.validation_enabled and disabled_profile.validation_protocol is None and disabled_profile.filter_profile == "synthetic_filter")
+    import services.research.strategy_param_application as strategy_param_application
+    producer_call = {}
+    def _capture_validation_producer(*args, **kwargs):
+        producer_call.update(kwargs)
+        return {"action": "REUSE"}
+    with patch.object(strategy_param_application, "ensure_validation_budget_strategy_parameter_artifact", side_effect=_capture_validation_producer):
+        strategy_param_application._ensure_single(active_param_profile, required_end="2021-01-01")
+    check("strategy_param_menu_delegates_config_identity_to_optimizer_owner", True, producer_call.get("parameter_set_identity") == active_param_profile.parameter_set_identity and producer_call.get("validation_protocol_id") == active_param_profile.validation_protocol and producer_call.get("comparison_end_date") == "2021-01-01")
     with patch("builtins.input", side_effect=["S", "", "1"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value="1"):
         interactive_restart_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)

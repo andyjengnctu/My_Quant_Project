@@ -2995,7 +2995,7 @@ def _prompt_optimizer_model_mode(default_model: str):
     try:
         default_normalized = normalize_optimizer_model_mode(default_model)
     except ValueError:
-        default_normalized = 'trade'
+        default_normalized = 'study'
     return default_normalized, 'UI/MENU_DEFAULT'
 
 
@@ -3015,7 +3015,7 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
         elif is_interactive_console():
             return _prompt_optimizer_model_mode(default_model)
         else:
-            normalized = str(default_model).strip().lower() or 'trade'
+            normalized = str(default_model).strip().lower() or 'study'
             source = 'DEFAULT'
     try:
         normalized = normalize_optimizer_model_mode(normalized)
@@ -3032,7 +3032,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/research.py optimizer")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model study|full|oos|trade] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
-        print("說明: 預設 trade；full 為 seed ensemble 全期間訓練且無 OOS，且 local_min review 預設關閉；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 可選 Study-OOS 或 Study-Full，且維持單一隨機 seed study 輸出；--outer-oos 執行 rolling monthly OOS test。舊 --model split 仍相容為 oos。")
+        print("說明: 互動模式預設 Study，提供 Study/Full/OOS/Rolling OOS；Trade正式操作已移至Workbench。--model trade僅保留CLI/internal compatibility，不再出現在Research互動選單。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs

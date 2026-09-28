@@ -25,7 +25,8 @@ project/
 │  ├─ breakout_quality.py             # BQ 使用者／專案可調設定與current workflow membership（declarative）
 │  ├─ strategy_compare.py             # Strategy Compare執行／diagnostic／promotion設定（declarative）
 │  ├─ audit.py                        # Audit active module與output root（declarative）
-│  ├─ training_policy.py              # Strategy Optimizer 使用者／專案訓練設定（declarative）
+│  ├─ training_policy.py              # Strategy Optimizer generic policy／execution defaults（declarative）
+│  ├─ strategy_params.py              # Research [2] current strategy-parameter target + validation protocol config
 │  ├─ training_performance_policy.py  # optimizer execution/performance／timing benchmark knobs（declarative）
 │  ├─ display_policy.py               # console/report 顯示設定值（declarative）
 │  ├─ broker_accounting.py            # 券商原始手續費／稅率／整元捨去 settlement SSOT
@@ -161,7 +162,7 @@ project/
    │  ├─ session.py                   # optimizer session 狀態 façade
 ```
 
-- `services/optimizer/application.py`承接正式策略參數最佳化application/orchestration，並由`apps/research.py`的「策略參數最佳化」工作類型進入；`tools/optimizer/main.py`與必要舊module路徑只保留legacy import/CLI compatibility façade。Optimizer共用primitive全部留在`services/optimizer/`，`filters/`不得反向依賴`tools.optimizer`。
+- `apps/research.py`的`[2] 策略參數最佳化`採與模型訓練相同的config-driven target語意：current training target由`config/strategy_params.py::ACTIVE_STRATEGY_PARAM_PROFILE`選定，`core/strategy_param_policy.py`解析profile與generic validation protocol，`services/research/strategy_param_application.py`只暴露穩定工作類型（Forward OOS／Rolling OOS／兩者Robustness）並先顯示BUILD／REBUILD／REUSE plan，再委派`services/optimizer/strategy_param_service.py` canonical producer。Min／Full只作`filter_profile`維度，PARAM/C-arm identity不得成為menu branch；validation以profile `validation.enabled + protocol` opt-in/out，holdout/checkpoints/selection policy等scientific設定由`config/strategy_params.py`持有。`services/optimizer/application.py`保留為`[5] 進階／單次 Optimizer`與explicit CLI compatibility；Research互動generic Optimizer只提供Study／Full／OOS／Rolling OOS，Trade正式操作入口已移至Workbench，底層`--model trade`只保留internal/CLI compatibility。既有Optimizer canonical工件與報表不另建第二套，RUN／REUSE仍消費同一artifact/report truth。`tools/optimizer/main.py`與必要舊module路徑只保留legacy import/CLI compatibility façade；Optimizer共用primitive全部留在`services/optimizer/`，`filters/`不得反向依賴`tools.optimizer`。
 - Research前置工件的狀態與依賴編排由`core/research_orchestration.py`與`services/research/artifact_orchestrator.py`共同持有SSOT：各domain readiness只能提供`ready / exists / resumable / canonical producer / dependencies`等事實，統一action policy映射為`REUSE / BUILD / REBUILD / RESUME / BLOCKED`；canonical Dataset／Target、模型／PIT score、Optimizer策略參數與可配置Audit source仍由各自domain service唯一產生，Research層只負責依dependency graph委派。Producer「存在」不得與其upstream「此刻READY」混為一談；每執行一個producer後必須重新讀取最新truth並re-plan，避免Dataset／Target重建前捕捉的舊period、fingerprint或coverage流入後續Optimizer／score工作。此契約同時適用完整缺件、部分缺件、stale／corrupt、config fingerprint變更、上游更新、partial seed／fold與合法cross-mode reuse；只有缺raw truth、無canonical producer、workflow未授權，或需要新Label／新model identity／target／architecture／loss／hyperparameter等研究選擇時才可`BLOCKED`。`status`／`report`類read-only入口不得因檢視而觸發長流程builder；執行入口須先顯示可稽核plan並只確認一次，再由共用orchestrator一路補建到READY或在第一個真正不可補的節點fail-fast。
 
 ### `services/trade_analysis/`

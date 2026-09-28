@@ -1,7 +1,7 @@
 # 常用指令
 
-python apps/research.py optimizer --dataset full --timing --trials 10 `效能驗證`
-python apps/research.py optimizer --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `rolling效能驗證`
+python apps/research.py optimizer advanced --dataset full --timing --trials 10 `效能驗證`
+python apps/research.py optimizer advanced --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `rolling效能驗證`
 
 ## 環境 / 測試
 
@@ -86,13 +86,29 @@ python apps/research.py
 ====================================================================================================
  Research
 ====================================================================================================
-[1]  模型訓練  (Enter)
+[1]  模型訓練／驗證  (Enter)
 [2]  策略參數最佳化
 [3]  策略組合比較
 [4]  Audit／診斷
-[5]  查看目前設定與工件狀態
+[5]  Runtime Promotion Gate  [歷史／唯讀]
+[6]  查看目前研究狀態與工件
+[7]  Market Data generation／Research V2 lifecycle
 [0]  離開
 ```
+
+
+`[2] 策略參數最佳化`的current training target由`config/strategy_params.py`決定，不在menu臨時選strategy/filter/validation：
+
+```text
+[1]  Forward OOS 參數訓練  (Enter)
+[2]  Rolling OOS 參數訓練
+[3]  Forward OOS Robustness 參數訓練
+[4]  Rolling OOS Robustness 參數訓練
+[5]  進階／單次 Optimizer
+[0]  返回
+```
+
+`[5]`保留Study／Full／OOS／Rolling OOS generic研究工具；Trade正式操作由Workbench負責，不再出現在Research互動Optimizer。explicit `optimizer --model trade ...`只保留CLI/internal compatibility。
 
 策略組合比較的Multiple-seed robustness由同一`config/strategy_compare.py`驅動；正式CLI可用：
 

@@ -1149,6 +1149,68 @@ def build_isolated_strategy_parameter_schedule(
     }
 
 
+def inspect_strategy_parameter_artifact(
+    project_root: str | Path,
+    *,
+    family: str,
+    evaluation_mode: str,
+    policy: str,
+    comparison_end_date: str | None = None,
+    dataset: str | None = None,
+    max_positions: int | None = None,
+    rotation: str | None = None,
+    fixed_risk: float | None = None,
+    max_position_cap_pct: float | None = None,
+) -> dict[str, Any]:
+    """Inspect one canonical Optimizer-owned schedule without creating it."""
+
+    root = Path(project_root).resolve()
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    policy = normalize_strategy_param_policy(policy)
+    target = resolve_strategy_param_artifact_path(
+        root, family=family, evaluation_mode=mode, policy=policy
+    )
+    coverage_end = _canonical_schedule_coverage_end(target)
+    if mode not in {"oos", "rolling"}:
+        ready = bool(target.is_file())
+        return {
+            "ready": ready,
+            "action": "REUSE" if ready else "BUILD",
+            "status": "READY" if ready else "ARTIFACT_MISSING",
+            "path": target,
+            "coverage_end": coverage_end,
+        }
+
+    identity_ready, identity_status = _canonical_manifest_matches_current_schedule(
+        root, family=family, policy=policy, target=target,
+        evaluation_mode=mode, comparison_end_date=comparison_end_date,
+        dataset=dataset, max_positions=max_positions, rotation=rotation,
+        fixed_risk=fixed_risk, max_position_cap_pct=max_position_cap_pct,
+    )
+    coverage_ready = bool(
+        comparison_end_date in (None, "")
+        or (coverage_end is not None and str(coverage_end) >= str(comparison_end_date))
+    )
+    ready = bool(target.is_file() and identity_ready and coverage_ready)
+    if ready:
+        status = "READY"
+    elif not target.is_file():
+        status = "ARTIFACT_MISSING"
+    elif not identity_ready:
+        status = str(identity_status)
+    else:
+        status = "SCHEDULE_COVERAGE_INCOMPLETE"
+    return {
+        "ready": ready,
+        "action": "REUSE" if ready else ("REBUILD" if target.is_file() else "BUILD"),
+        "status": status,
+        "path": target,
+        "coverage_end": coverage_end,
+        "identity_status": identity_status,
+    }
+
+
 def ensure_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -1860,6 +1922,27 @@ def validation_budget_strategy_param_manifest_path(project_root: str | Path) -> 
     return Path(project_root).resolve() / _VALIDATION_BUDGET_PARAMSET_RELATIVE / "identity_manifest.json"
 
 
+def _resolve_validation_budget_publication_identity(
+    *, parameter_set_identity: str, validation_protocol_id: str
+) -> tuple[str, str]:
+    parameter_set = str(parameter_set_identity or "").strip()
+    protocol = str(validation_protocol_id or "").strip()
+    # PARAM-P5 is the only durable validation-budget publication identity currently
+    # registered.  Future identities extend this producer owner rather than adding
+    # experiment-specific branches to Research menus/consumers.
+    if parameter_set != "PARAM-P5":
+        raise ValueError(
+            "validation-budget durable publication尚未登記parameter-set identity: "
+            f"{parameter_set or '(blank)'}"
+        )
+    if protocol != "validation_budget_refit_v1":
+        raise ValueError(
+            "validation-budget durable publication尚未登記protocol: "
+            f"{protocol or '(blank)'}"
+        )
+    return parameter_set, protocol
+
+
 def _validation_budget_build_contract(
     *,
     family: str,
@@ -1869,6 +1952,8 @@ def _validation_budget_build_contract(
     fixed_risk: float | None,
     max_position_cap_pct: float | None,
     optimizer_seed: int | None = None,
+    parameter_set_identity: str = "PARAM-P5",
+    validation_protocol_id: str = "validation_budget_refit_v1",
 ) -> dict[str, Any]:
     from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
 
@@ -1882,10 +1967,16 @@ def _validation_budget_build_contract(
     )
     if optimizer_seed is not None:
         base["optimizer_seed"] = int(optimizer_seed)
-    spec = resolve_validation_budget_spec(int(base["trials_per_fold"]))
+    parameter_set, protocol_id = _resolve_validation_budget_publication_identity(
+        parameter_set_identity=parameter_set_identity,
+        validation_protocol_id=validation_protocol_id,
+    )
+    spec = resolve_validation_budget_spec(
+        int(base["trials_per_fold"]), protocol_id=protocol_id
+    )
     return {
         **base,
-        "parameter_set": "PARAM-P5",
+        "parameter_set": parameter_set,
         "optimizer_search_protocol": spec.protocol,
         "validation_budget_refit": spec.as_dict(),
     }
@@ -1930,6 +2021,8 @@ def validation_budget_robustness_strategy_param_manifest_path(
 def _validation_budget_robustness_contract(
     *, benchmark_id: str, seed: int, dataset: str, max_positions: int,
     rotation: str, fixed_risk: float, max_position_cap_pct: float,
+    parameter_set_identity: str = "PARAM-P5",
+    validation_protocol_id: str = "validation_budget_refit_v1",
 ) -> dict[str, Any]:
     benchmark = dict(get_robustness_benchmark_policy_snapshot())
     benchmark_name = normalize_strategy_param_benchmark_id(str(benchmark_id))
@@ -1942,6 +2035,8 @@ def _validation_budget_robustness_contract(
         family="full", dataset=str(dataset), max_positions=int(max_positions),
         rotation=str(rotation), fixed_risk=float(fixed_risk),
         max_position_cap_pct=float(max_position_cap_pct), optimizer_seed=seed_value,
+        parameter_set_identity=parameter_set_identity,
+        validation_protocol_id=validation_protocol_id,
     )
     return {
         **contract,
@@ -1955,6 +2050,8 @@ def inspect_validation_budget_robustness_strategy_parameter_artifact(
     project_root: str | Path, *, benchmark_id: str, seed: int, policy: str,
     comparison_end_date: str, dataset: str, max_positions: int, rotation: str,
     fixed_risk: float, max_position_cap_pct: float,
+    parameter_set_identity: str = "PARAM-P5",
+    validation_protocol_id: str = "validation_budget_refit_v1",
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     target = validation_budget_robustness_strategy_param_artifact_path(
@@ -1967,6 +2064,8 @@ def inspect_validation_budget_robustness_strategy_parameter_artifact(
         benchmark_id=benchmark_id, seed=seed, dataset=dataset,
         max_positions=max_positions, rotation=rotation, fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
+        parameter_set_identity=parameter_set_identity,
+        validation_protocol_id=validation_protocol_id,
     )
     manifest = _load_json_object(manifest_path)
     coverage_end = _canonical_schedule_coverage_end(target)
@@ -1974,7 +2073,7 @@ def inspect_validation_budget_robustness_strategy_parameter_artifact(
         target.is_file()
         and manifest is not None
         and str(manifest.get("producer") or "") == "optimizer"
-        and str(manifest.get("parameter_set") or "") == "PARAM-P5"
+        and str(manifest.get("parameter_set") or "") == str(contract["parameter_set"])
         and str(manifest.get("policy") or "") == str(policy).strip()
         and dict(manifest.get("build_contract") or {}) == contract
         and str(manifest.get("artifact_sha256") or "") == compute_strategy_param_file_sha256(target)
@@ -1989,7 +2088,8 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
     project_root: str | Path, *, benchmark_id: str, seed: int, policy: str,
     comparison_end_date: str, dataset: str, max_positions: int, rotation: str,
     fixed_risk: float, max_position_cap_pct: float, resume_parameter_training: bool = True,
-    quiet: bool = False,
+    quiet: bool = False, parameter_set_identity: str = "PARAM-P5",
+    validation_protocol_id: str = "validation_budget_refit_v1",
 ) -> dict[str, Any]:
     from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
     from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
@@ -2006,6 +2106,8 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
         comparison_end_date=comparison_end_date, dataset=dataset,
         max_positions=max_positions, rotation=rotation, fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
+        parameter_set_identity=parameter_set_identity,
+        validation_protocol_id=validation_protocol_id,
     )
     target = Path(state["path"])
     manifest_path = Path(state["manifest_path"])
@@ -2013,6 +2115,8 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
         benchmark_id=benchmark_id, seed=seed, dataset=dataset,
         max_positions=max_positions, rotation=rotation, fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
+        parameter_set_identity=parameter_set_identity,
+        validation_protocol_id=validation_protocol_id,
     )
     if str(state["action"]) == "REUSE":
         return {
@@ -2030,7 +2134,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
     work_root.mkdir(parents=True, exist_ok=True)
     _write_json(work_root / "work_contract.json", dict(contract))
     schedule_work = work_root / "schedule_2021_forward"
-    spec = resolve_validation_budget_spec(int(contract["trials_per_fold"]))
+    spec = resolve_validation_budget_spec(int(contract["trials_per_fold"]), protocol_id=validation_protocol_id)
     result = prepare_selection_historical_full_roos_params(
         project_root=root, dataset=str(dataset), param_policy=compare_policy,
         trials_per_fold=int(contract["trials_per_fold"]),
@@ -2044,7 +2148,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
         output_relative_dir=schedule_work,
         build_context_label=f"PARAM-P5 Robustness {benchmark} seed={seed_value}",
         optimizer_output_title="Optimizer PARAM-P5 robustness工作工件（非production）",
-        optimizer_search_protocol=spec.protocol, parameter_set_identity="PARAM-P5",
+        optimizer_search_protocol=spec.protocol, parameter_set_identity=str(contract["parameter_set"]),
     )
     source = Path(result["params_path"]).resolve()
     _assert_optimizer_work_source(source_path=source, work_root=work_root)
@@ -2061,7 +2165,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
             f"required={comparison_end_date}, actual={coverage_end or '-'}"
         )
     adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
-    if str(adaptation.get("parameter_set") or "") != "PARAM-P5":
+    if str(adaptation.get("parameter_set") or "") != str(contract["parameter_set"]):
         raise RuntimeError("PARAM-P5 robustness artifact缺少parameter_set identity")
     if str(adaptation.get("optimizer_search_protocol") or "") != spec.protocol:
         raise RuntimeError("PARAM-P5 robustness artifact缺少validation-budget protocol identity")
@@ -2073,7 +2177,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
             "schema_version": 1,
             "producer": "optimizer",
             "training_dl_enabled": False,
-            "parameter_set": "PARAM-P5",
+            "parameter_set": str(contract["parameter_set"]),
             "policy": compare_policy,
             "benchmark_id": benchmark,
             "benchmark_seed": seed_value,
@@ -2098,6 +2202,8 @@ def inspect_validation_budget_strategy_parameter_artifact(
     comparison_end_date: str, dataset: str | None = None,
     max_positions: int | None = None, rotation: str | None = None,
     fixed_risk: float | None = None, max_position_cap_pct: float | None = None,
+    parameter_set_identity: str = "PARAM-P5",
+    validation_protocol_id: str = "validation_budget_refit_v1",
 ) -> dict[str, Any]:
     """Inspect one PARAM-P5 artifact against the exact producer/reuse contract.
 
@@ -2118,6 +2224,8 @@ def inspect_validation_budget_strategy_parameter_artifact(
     contract = _validation_budget_build_contract(
         family="full", dataset=dataset, max_positions=max_positions, rotation=rotation,
         fixed_risk=fixed_risk, max_position_cap_pct=max_position_cap_pct,
+        parameter_set_identity=parameter_set_identity,
+        validation_protocol_id=validation_protocol_id,
     )
     manifest = _load_json_object(manifest_path)
     payload = _load_json_object(target)
@@ -2130,7 +2238,7 @@ def inspect_validation_budget_strategy_parameter_artifact(
         status = "ARTIFACT_MISSING_OR_INVALID"
     elif str(payload.get("selector") or "") != normalized_policy:
         status = "POLICY_SELECTOR_MISMATCH"
-    elif str(adaptation.get("parameter_set") or "") != "PARAM-P5":
+    elif str(adaptation.get("parameter_set") or "") != str(contract["parameter_set"]):
         status = "PARAMETER_SET_MISMATCH"
     elif bool(adaptation.get("training_dl_enabled", True)):
         status = "TRAINING_DL_ENABLED_MISMATCH"
@@ -2144,7 +2252,7 @@ def inspect_validation_budget_strategy_parameter_artifact(
         status = "PRODUCER_MISMATCH"
     elif bool(manifest.get("training_dl_enabled")) is not False:
         status = "MANIFEST_TRAINING_DL_MISMATCH"
-    elif str(manifest.get("parameter_set") or "") != "PARAM-P5":
+    elif str(manifest.get("parameter_set") or "") != str(contract["parameter_set"]):
         status = "MANIFEST_PARAMETER_SET_MISMATCH"
     elif str(manifest.get("policy") or "") != compare_policy:
         status = "MANIFEST_POLICY_MISMATCH"
@@ -2177,6 +2285,8 @@ def ensure_validation_budget_strategy_parameter_artifact(
     rotation: str | None = None,
     fixed_risk: float | None = None,
     max_position_cap_pct: float | None = None,
+    parameter_set_identity: str = "PARAM-P5",
+    validation_protocol_id: str = "validation_budget_refit_v1",
 ) -> dict[str, Any]:
     """Build/reuse the PARAM-P5 validation-selected-budget Full PIT schedule.
 
@@ -2215,6 +2325,8 @@ def ensure_validation_budget_strategy_parameter_artifact(
         rotation=rotation,
         fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
+        parameter_set_identity=parameter_set_identity,
+        validation_protocol_id=validation_protocol_id,
     )
     target = Path(state["path"])
     manifest_path = Path(state["manifest_path"])
@@ -2231,7 +2343,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
         }
 
     work_root = root / _VALIDATION_BUDGET_WORK_RELATIVE
-    spec = resolve_validation_budget_spec(int(contract["trials_per_fold"]))
+    spec = resolve_validation_budget_spec(int(contract["trials_per_fold"]), protocol_id=validation_protocol_id)
     result = prepare_selection_historical_full_roos_params(
         project_root=root,
         dataset=str(DEFAULT_DATASET_PROFILE if dataset in (None, "") else dataset),
@@ -2258,7 +2370,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
         build_context_label="PARAM-P5 Validation-Budget",
         optimizer_output_title="Optimizer PARAM-P5 工作工件（非production）",
         optimizer_search_protocol=spec.protocol,
-        parameter_set_identity="PARAM-P5",
+        parameter_set_identity=str(contract["parameter_set"]),
     )
     source = Path(result["params_path"]).resolve()
     _assert_optimizer_work_source(source_path=source, work_root=work_root)
@@ -2274,7 +2386,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
             "PARAM-P5 schedule coverage不足: "
             f"required={end_date}, actual={coverage_end or '-'}"
         )
-    if str(dict(payload.get("breakout_quality_param_adaptation") or {}).get("parameter_set") or "") != "PARAM-P5":
+    if str(dict(payload.get("breakout_quality_param_adaptation") or {}).get("parameter_set") or "") != str(contract["parameter_set"]):
         raise RuntimeError("PARAM-P5 artifact缺少parameter_set identity")
     if str(dict(payload.get("breakout_quality_param_adaptation") or {}).get("optimizer_search_protocol") or "") != spec.protocol:
         raise RuntimeError("PARAM-P5 artifact缺少validation-budget protocol identity")
@@ -2287,7 +2399,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
             "schema_version": 1,
             "producer": "optimizer",
             "training_dl_enabled": False,
-            "parameter_set": "PARAM-P5",
+            "parameter_set": str(contract["parameter_set"]),
             "family": "full",
             "policy": compare_policy,
             "optimizer_search_protocol": spec.protocol,
@@ -2313,6 +2425,7 @@ __all__ = [
     "ensure_robustness_benchmark_strategy_parameter_artifact",
     "inspect_robustness_benchmark_strategy_parameter_artifact",
     "ensure_strategy_parameter_artifact",
+    "inspect_strategy_parameter_artifact",
     "ensure_validation_budget_strategy_parameter_artifact",
     "inspect_validation_budget_strategy_parameter_artifact",
     "ensure_validation_budget_robustness_strategy_parameter_artifact",

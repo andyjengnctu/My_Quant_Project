@@ -13,12 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-from config.training_policy import (
-    OPTIMIZER_VALIDATION_BUDGET_REFIT_CHECKPOINTS,
-    OPTIMIZER_VALIDATION_BUDGET_REFIT_HOLDOUT_MONTHS,
-    OPTIMIZER_VALIDATION_BUDGET_REFIT_POLICY,
-    OPTIMIZER_VALIDATION_BUDGET_REFIT_PROTOCOL,
-)
+from core.strategy_param_policy import get_strategy_param_validation_protocol
 from services.optimizer.outer_rolling_evaluation import (
     _evaluate_finalist_ensemble_oos_metrics,
 )
@@ -32,7 +27,10 @@ class ValidationBudgetSpec:
     holdout_months: int
     checkpoints: tuple[int, ...]
     policy_name: str
+    selection_metric: str
     tie_break: str = "smaller_budget"
+    oos_feedback_used: bool = False
+    full_refit_required: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -40,10 +38,10 @@ class ValidationBudgetSpec:
             "holdout_months": int(self.holdout_months),
             "checkpoints": [int(value) for value in self.checkpoints],
             "policy_name": self.policy_name,
-            "selection_metric": "canonical_optimizer_portfolio_score",
+            "selection_metric": self.selection_metric,
             "tie_break": self.tie_break,
-            "oos_feedback_used": False,
-            "full_refit_required": True,
+            "oos_feedback_used": bool(self.oos_feedback_used),
+            "full_refit_required": bool(self.full_refit_required),
         }
 
 
@@ -55,9 +53,12 @@ class _StudyTrialPrefix:
         self.trials = trials[: int(count)]
 
 
-def resolve_validation_budget_spec(max_trials: int) -> ValidationBudgetSpec:
+def resolve_validation_budget_spec(
+    max_trials: int, *, protocol_id: str = "validation_budget_refit_v1"
+) -> ValidationBudgetSpec:
     max_trials = int(max_trials)
-    raw = tuple(int(value) for value in OPTIMIZER_VALIDATION_BUDGET_REFIT_CHECKPOINTS)
+    configured = get_strategy_param_validation_protocol(protocol_id)
+    raw = tuple(int(value) for value in configured.checkpoints)
     checkpoints = tuple(value for value in raw if 0 < value <= max_trials)
     if not checkpoints:
         raise ValueError("validation-budget checkpoints在max_trials內沒有合法值")
@@ -68,20 +69,20 @@ def resolve_validation_budget_spec(max_trials: int) -> ValidationBudgetSpec:
             "validation-budget最後checkpoint必須等於fold最大trial budget: "
             f"last={checkpoints[-1]}, max={max_trials}"
         )
-    holdout = int(OPTIMIZER_VALIDATION_BUDGET_REFIT_HOLDOUT_MONTHS)
-    if holdout <= 0:
-        raise ValueError("validation-budget holdout months必須>0")
-    policy_name = str(OPTIMIZER_VALIDATION_BUDGET_REFIT_POLICY or "").strip()
-    if policy_name != "base_finalists_agree":
+    if configured.selection_policy != "base_finalists_agree":
         raise ValueError(
-            "Phase-2 validation-budget treatment目前必須維持base_finalists_agree，"
-            f"actual={policy_name!r}"
+            "validation-budget refit capability目前要求base_finalists_agree selector，"
+            f"actual={configured.selection_policy!r}"
         )
     return ValidationBudgetSpec(
-        protocol=str(OPTIMIZER_VALIDATION_BUDGET_REFIT_PROTOCOL),
-        holdout_months=holdout,
+        protocol=configured.protocol_id,
+        holdout_months=int(configured.holdout_months),
         checkpoints=checkpoints,
-        policy_name=policy_name,
+        policy_name=configured.selection_policy,
+        selection_metric=configured.selection_metric,
+        tie_break=configured.tie_break,
+        oos_feedback_used=configured.oos_feedback_used,
+        full_refit_required=configured.full_refit_required,
     )
 
 
@@ -240,8 +241,9 @@ def select_trial_budget_from_validation(
 
 
 def validation_budget_protocol_enabled(policy: dict[str, Any] | None) -> bool:
+    protocol = get_strategy_param_validation_protocol("validation_budget_refit_v1")
     return str(dict(policy or {}).get("optimizer_search_protocol") or "").strip() == str(
-        OPTIMIZER_VALIDATION_BUDGET_REFIT_PROTOCOL
+        protocol.protocol_id
     )
 
 

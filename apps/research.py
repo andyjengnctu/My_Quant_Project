@@ -135,6 +135,13 @@ def _run_strategy_param_migration() -> int:
     return 0 if str(result.get("status")) == "READY_FOR_CLEANUP" else 1
 
 
+def _run_advanced_optimizer(args: list[str] | None = None) -> int:
+    from services.optimizer.application import main as optimizer_main
+
+    routed_args = ["apps/research.py optimizer advanced", *list(args or [])]
+    return int(optimizer_main(argv=routed_args) or 0)
+
+
 def _run_optimizer(args: list[str] | None = None) -> int:
     routed = list(args or [])
     if routed and str(routed[0]).strip().lower() in {
@@ -146,10 +153,21 @@ def _run_optimizer(args: list[str] | None = None) -> int:
             raise ValueError(f"strategy-param migration不支援額外參數: {' '.join(routed[1:])}")
         return _run_strategy_param_migration()
 
-    from services.optimizer.application import main as optimizer_main
+    # Backward-compatible explicit CLI options still route to the generic optimizer.
+    # The formal interactive Research [2] entry is config-driven and owns no target selector.
+    if routed:
+        if str(routed[0]).strip().lower() in {"advanced", "generic", "legacy"}:
+            routed = routed[1:]
+        return _run_advanced_optimizer(routed)
 
-    routed_args = ["apps/research.py optimizer", *routed]
-    return int(optimizer_main(argv=routed_args) or 0)
+    from services.research.strategy_param_application import run_strategy_param_training_menu
+
+    return int(
+        run_strategy_param_training_menu(
+            advanced_handler=lambda: _run_advanced_optimizer([]),
+        )
+        or 0
+    )
 
 
 def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
@@ -696,7 +714,8 @@ def _show_research_status() -> int:
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             print(f"[狀態不可用] {type(exc).__name__}: {exc}")
     print("\n--- 策略參數最佳化 ---")
-    print("沿用 ml_optimizer 既有互動流程；執行設定集中於 config/ 與正式 optimizer policy。")
+    from services.research.strategy_param_application import show_strategy_param_status
+    show_strategy_param_status()
     return 0
 
 
@@ -756,7 +775,8 @@ def _print_help(program_name: str) -> None:
     print(f"用法: python {program_name} [model|optimizer|compare|audit|market-data|status] [options]")
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
-    print("  optimizer  策略參數最佳化；後續參數原樣轉交既有 ml_optimizer service")
+    print("  optimizer  依 config/strategy_params.py 執行目前策略參數訓練 profile")
+    print("             進階單次 Optimizer：optimizer advanced [options]")
     print("             一次性SSOT migration：optimizer migrate-strategy-params")
     integration_actions = "/".join(runtime_integration_allowed_actions())
     print(
