@@ -983,6 +983,7 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
     policy = _task_seed_ensemble_policy(task)
     seeds = resolve_seed_ensemble_seeds(policy)
     parallel_workers = _resolve_fold_seed_ensemble_parallel_workers(task, len(seeds))
+    parallel_backend = resolve_optimizer_random_seed_ensemble_parallel_backend_default()
     log_path = str(task.get("log_path") or "")
     fold_idx = int(task.get("fold_idx", 0) or 0)
     fold_count = int(task.get("fold_count", 0) or 0)
@@ -1023,6 +1024,60 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
         )
 
     started = time.perf_counter()
+    seed_contexts = [
+        {
+            "fold_idx": int(fold_idx),
+            "fold_count": int(fold_count),
+            "seed_index": int(member_index),
+            "seed_count": int(len(seeds)),
+            "seed": int(seed),
+            "oos_year": int(oos_year),
+            "oos_period": str(task.get("oos_period") or ""),
+            "selection_start": str(selection_start),
+            "selection_end": str(selection_end),
+            "selection_period": str(task.get("selection_period") or ""),
+            "show_oos": True,
+        }
+        for member_index, seed in enumerate(seeds, start=1)
+    ]
+
+    def _progress_header(board: OptimizerSeedEnsembleProgressBoard) -> str:
+        return format_optimizer_seed_ensemble_progress_header(
+            folds=1,
+            seeds=len(seeds),
+            min_agree=int(policy.get("min_agree", len(seeds)) or len(seeds)),
+            parallel_workers=int(parallel_workers),
+            selector=str(policy.get("selector") or policy.get("policy") or "base-finalists-agree"),
+            backend=str(parallel_backend),
+            completed_folds=board.get_completed_fold_count(),
+            pending_folds=max(0, 1 - board.get_completed_fold_count()),
+            total_elapsed_sec=max(0.0, time.perf_counter() - started),
+            completed_trials=board.get_completed_trial_count(),
+            search_wall_elapsed_sec=board.get_search_wall_elapsed_sec(),
+            completed_local_min_trials=board.get_completed_local_min_trial_count(),
+            local_min_wall_elapsed_sec=board.get_local_min_wall_elapsed_sec(),
+            completed_replays=board.get_completed_replay_count(),
+            replay_wall_elapsed_sec=board.get_replay_wall_elapsed_sec(),
+        )
+
+    progress_board = OptimizerSeedEnsembleProgressBoard(
+        seed_contexts, header_factory=_progress_header
+    )
+    last_progress_render_at = [0.0]
+
+    def _refresh_progress_board(*, force: bool = False) -> None:
+        now = time.perf_counter()
+        if not force and (now - float(last_progress_render_at[0])) < 5.0:
+            return
+        last_progress_render_at[0] = now
+        latest = _read_latest_parallel_fold_seed_progresses_for_task(task)
+        progress_board.update_many(
+            {
+                (int(fold_idx), int(member_index)): dict(progress)
+                for member_index, progress in dict(latest or {}).items()
+            },
+            force=force,
+        )
 
     def _build_member_task(member_index: int, seed: int) -> dict:
         member_task = dict(task)
@@ -1033,6 +1088,9 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
         if log_path:
             root, ext = os.path.splitext(log_path)
             member_task["log_path"] = f"{root}_seed{int(member_index):02d}_{int(seed)}{ext or '.log'}"
+        # Seed workers keep machine progress in their own logs. The parent live board
+        # renders one compact console view so process-parallel output does not interleave.
+        member_task["mirror_console"] = bool(task.get("mirror_console", False)) and int(parallel_workers) <= 1
         return member_task
 
     def _run_member(member_index: int, seed: int) -> dict:
@@ -1052,35 +1110,44 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
         return _run_outer_rolling_oos_fold_task(_build_member_task(member_index, int(seed)))
 
     seed_results: list[dict] = []
-    parallel_backend = resolve_optimizer_random_seed_ensemble_parallel_backend_default()
-    if int(parallel_workers) <= 1:
-        for member_index, seed in enumerate(seeds, start=1):
-            seed_results.append(_run_member(int(member_index), int(seed)))
-    else:
-        if parallel_backend == "process":
-            executor_kwargs, _start_method = get_process_pool_executor_kwargs()
-            with ProcessPoolExecutor(max_workers=int(parallel_workers), **executor_kwargs) as executor:
-                future_map = {
-                    executor.submit(_run_outer_rolling_oos_fold_task, _build_member_task(int(member_index), int(seed))): (int(member_index), int(seed))
-                    for member_index, seed in enumerate(seeds, start=1)
-                }
-                for future in as_completed(future_map):
-                    member_index, _seed = future_map[future]
-                    result = future.result()
-                    result["seed_ensemble_member_index"] = int(member_index)
-                    seed_results.append(result)
+    progress_board.render(force=True)
+    try:
+        if int(parallel_workers) <= 1:
+            for member_index, seed in enumerate(seeds, start=1):
+                seed_results.append(_run_member(int(member_index), int(seed)))
+                _refresh_progress_board(force=True)
         else:
-            with ThreadPoolExecutor(max_workers=int(parallel_workers)) as executor:
-                future_map = {
-                    executor.submit(_run_member, int(member_index), int(seed)): (int(member_index), int(seed))
-                    for member_index, seed in enumerate(seeds, start=1)
-                }
-                for future in as_completed(future_map):
-                    member_index, _seed = future_map[future]
-                    result = future.result()
-                    result["seed_ensemble_member_index"] = int(member_index)
-                    seed_results.append(result)
-        seed_results.sort(key=lambda item: int(item.get("seed_ensemble_member_index", 0) or 0))
+            executor_cls = ProcessPoolExecutor if parallel_backend == "process" else ThreadPoolExecutor
+            executor_kwargs = {}
+            if parallel_backend == "process":
+                executor_kwargs, _start_method = get_process_pool_executor_kwargs()
+            with executor_cls(max_workers=int(parallel_workers), **executor_kwargs) as executor:
+                if parallel_backend == "process":
+                    future_map = {
+                        executor.submit(
+                            _run_outer_rolling_oos_fold_task,
+                            _build_member_task(int(member_index), int(seed)),
+                        ): (int(member_index), int(seed))
+                        for member_index, seed in enumerate(seeds, start=1)
+                    }
+                else:
+                    future_map = {
+                        executor.submit(_run_member, int(member_index), int(seed)): (int(member_index), int(seed))
+                        for member_index, seed in enumerate(seeds, start=1)
+                    }
+                pending = set(future_map)
+                while pending:
+                    done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                    _refresh_progress_board(force=bool(done))
+                    for future in sorted(done, key=lambda item: int(future_map[item][0])):
+                        member_index, _seed = future_map[future]
+                        result = future.result()
+                        result["seed_ensemble_member_index"] = int(member_index)
+                        seed_results.append(result)
+            seed_results.sort(key=lambda item: int(item.get("seed_ensemble_member_index", 0) or 0))
+            _refresh_progress_board(force=True)
+    finally:
+        progress_board.close()
 
     result = _aggregate_seed_ensemble_fold_results(task=task, seed_results=seed_results)
     _write_parallel_fold_progress_event(
@@ -1894,8 +1961,24 @@ def run_outer_rolling_oos(
     )
     seed_ensemble_performance_metrics: dict = {}
     shared_raw_context = None
-    if fold_parallel_enabled:
+    seed_ensemble_process_parallel = False
+    if seed_ensemble_enabled:
+        resolved_seed_count = len(resolve_seed_ensemble_seeds(runtime_seed_policy))
+        resolved_seed_workers = _resolve_fold_seed_ensemble_parallel_workers(
+            {"fold_workers": int(fold_workers)}, resolved_seed_count
+        )
+        seed_ensemble_process_parallel = (
+            int(resolved_seed_workers) > 1
+            and resolve_optimizer_random_seed_ensemble_parallel_backend_default() == "process"
+        )
+    if fold_parallel_enabled or seed_ensemble_process_parallel:
         raw_data_load_sec = 0.0
+        if seed_ensemble_process_parallel and not fold_parallel_enabled:
+            print(
+                f"{C_CYAN}⏱️ Multi-seed process mode：略過父程序 shared raw cache；"
+                f"由 {int(resolved_seed_workers)} 個 seed workers 各自載入資料，避免父程序保留第 5 份資料副本。{C_RESET}",
+                flush=True,
+            )
     else:
         shared_load_start = time.perf_counter()
         shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
@@ -2109,6 +2192,7 @@ def run_outer_rolling_oos(
                 "optimizer_session_spec": dict(session_spec),
                 "seed_ensemble_policy": dict(runtime_seed_policy),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
+                "mirror_console": True,
             }
             result = _run_outer_rolling_oos_fold_task(task)
             chain_state = {"chain_max_positions": chain_max_positions, "chain_enable_rotation": chain_enable_rotation}

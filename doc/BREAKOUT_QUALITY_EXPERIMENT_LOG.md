@@ -12190,3 +12190,12 @@ Decision：`PARAM-P6 / SR-C85 / FIXED_8_FITTING_SEEDS / 300_TRIALS_PER_SEED / PR
 
 Decision：`PARAM-P6 / SR-C85 / FIXED_4_FITTING_SEEDS / 300_TRIALS_PER_SEED / OUTER_ROBUSTNESS_REPLICATION_SEED_GENERATES_INNER_4_SEED_BUNDLE / CURRENT_COMPARE_AND_ROBUSTNESS_ACTIVE / RESULT_PENDING / TRADING_UNCHANGED`。
 
+
+## 2026-09-29 — C85 fixed-multiseed single-fold live progress / parent-cache correction
+
+- **Observed issue**：`PARAM-P6 / SR-C85` Forward OOS 只有1個fold時，console在`fold START`後長時間沒有更新。實際4-seed process ensemble仍在執行，但single-fold path沒有使用既有seed live board，且parent fold task的human output未mirror到主console；每個seed的machine progress只存在各自`fold_logs/*_seed*.log`。
+- **Live progress fix**：single-fold fixed-multiseed現在重用既有`OptimizerSeedEnsembleProgressBoard`，每5秒最多刷新一次，顯示4個fitting seeds各自的optimizer/local-min進度與aggregate timing。seed worker machine events仍只寫canonical per-seed logs；parent只render compact human view，避免4個process stdout互相穿插。
+- **Memory / startup fix**：當seed ensemble以process backend且workers>1執行時，不再先於parent建立一份不會被Windows spawned workers共享的raw-data memory cache。各seed worker維持既有合法raw-data load；因此移除parent額外第5份cache副本與無效6秒級preload，不改sample、seed、trial、objective、selector或PIT semantics。
+- **Scientific impact**：無。C85/P6仍是4 fixed fitting seeds × 300 trials/seed、`base-finalists-agree`；Robustness outer replication、Trading production、Strategy Compare suite/fingerprint與artifact identity均不變。
+
+Decision：`ENGINEERING_ONLY / SINGLE_FOLD_MULTI_SEED_LIVE_BOARD / NO_UNUSED_PARENT_RAW_CACHE_IN_PROCESS_MODE / SCIENTIFIC_IDENTITY_UNCHANGED`。

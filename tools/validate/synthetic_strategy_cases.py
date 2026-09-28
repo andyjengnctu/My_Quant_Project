@@ -2334,6 +2334,16 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and 'PHASE 2/3 | VALIDATION BUDGET SELECTION' in optimizer_outer_rolling_source
         and 'PHASE 3/3 | FULL REFIT' in optimizer_outer_rolling_source,
     )
+    check(
+        "fixed_multiseed_single_fold_has_live_seed_board_and_avoids_unused_parent_raw_cache",
+        True,
+        "seed_ensemble_process_parallel" in optimizer_outer_rolling_source
+        and "progress_board = OptimizerSeedEnsembleProgressBoard" in optimizer_outer_rolling_source
+        and "_read_latest_parallel_fold_seed_progresses_for_task(task)" in optimizer_outer_rolling_source
+        and "last_progress_render_at" in optimizer_outer_rolling_source
+        and "略過父程序 shared raw cache" in optimizer_outer_rolling_source
+        and '"mirror_console": True' in optimizer_outer_rolling_source,
+    )
     import core.strategy_param_policy as strategy_param_policy
     disabled_profiles = {
         "synthetic_no_validation": {
