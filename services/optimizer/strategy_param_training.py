@@ -1900,6 +1900,35 @@ def _selection_full_roos_runtime_contract(
     return payload
 
 
+def _selection_full_roos_optimizer_runtime_cache_identity(
+    contract: dict[str, Any],
+    *,
+    optimizer_search_protocol: str | None,
+) -> str:
+    """Return a fold-search cache identity stable across schedule-prefix extension.
+
+    ``last_oos_date`` controls how many annual folds the producer is asked to publish;
+    it does not change the scientific search contract of an already-existing fold.
+    Validation-budget schedules therefore keep the same per-fold SQLite identity when
+    Forward OOS first builds a prefix and Rolling later extends the same physical truth.
+    """
+
+    protocol = str(optimizer_search_protocol or "").strip()
+    if not protocol:
+        return str(contract["runtime_identity_sha256"])
+    payload = {key: value for key, value in dict(contract).items() if key != "runtime_identity_sha256"}
+    rolling_policy = dict(payload.get("rolling_policy") or {})
+    rolling_policy.pop("last_oos_date", None)
+    payload["rolling_policy"] = rolling_policy
+    parameter_reference = dict(payload.get("parameter_reference") or {})
+    # This digest includes the requested schedule end; search-space identity is already
+    # carried separately by ``search_space_sha256`` and the reference type.
+    parameter_reference.pop("sha256", None)
+    payload["parameter_reference"] = parameter_reference
+    payload["schedule_extension_cache_contract"] = "fold_local_v1"
+    return _canonical_hash(payload)
+
+
 def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args) -> dict[str, Any]:
     payload = _load_json(path)
     if payload is None:
@@ -2111,7 +2140,9 @@ def prepare_selection_historical_full_roos_params(
             base_policy["parameter_set_identity"] = str(parameter_set_identity)
         session_spec = {
             "output_dir": str((optimizer_output_dir / "sessions").resolve()),
-            "runtime_cache_identity": contract["runtime_identity_sha256"],
+            "runtime_cache_identity": _selection_full_roos_optimizer_runtime_cache_identity(
+                contract, optimizer_search_protocol=optimizer_search_protocol
+            ),
             "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
             "train_max_positions": int(max_positions),
             "train_enable_rotation": str(rotation) == "on",

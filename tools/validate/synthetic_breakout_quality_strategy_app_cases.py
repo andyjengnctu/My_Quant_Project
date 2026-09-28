@@ -319,6 +319,115 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if not bool(mode.get("single_score_block"))
     )
     current_rolling_settings = rolling_settings
+
+    # Regression: Forward OOS may freeze one legal schedule member, so its
+    # prerequisite producer must not eagerly build later annual refit folds.
+    from core.strategy_comparison import (
+        StrategyPreparationAction,
+        resolve_strategy_parameter_required_schedule_end,
+    )
+    from services.research import strategy_compare_preparation as compare_preparation
+    p5_oos_arm = oos_settings.arms.get("C84")
+    p5_rolling_arm = rolling_settings.arms.get("C84")
+    if p5_oos_arm is not None and p5_rolling_arm is not None:
+        p5_oos_source = oos_settings.parameter_sources[p5_oos_arm.param_source]
+        p5_rolling_source = rolling_settings.parameter_sources[p5_rolling_arm.param_source]
+        check(
+            "validation_budget_oos_requires_only_freeze_start_schedule_prefix",
+            str(oos_settings.start_date),
+            resolve_strategy_parameter_required_schedule_end(
+                p5_oos_source,
+                comparison_start=oos_settings.start_date,
+                comparison_end=oos_settings.end_date,
+            ),
+        )
+        check(
+            "validation_budget_rolling_requires_full_schedule_coverage",
+            str(rolling_settings.end_date),
+            resolve_strategy_parameter_required_schedule_end(
+                p5_rolling_source,
+                comparison_start=rolling_settings.start_date,
+                comparison_end=rolling_settings.end_date,
+            ),
+        )
+        capture = {}
+
+        def _fake_ensure_p5(_root, **kwargs):
+            capture.update(kwargs)
+            return {"action": "BUILD"}
+
+        action = StrategyPreparationAction(
+            action_id=f"param:{p5_oos_arm.param_source}",
+            artifact_key=f"param:{p5_oos_arm.param_source}",
+            action="BUILD",
+            builder_type="optimizer_validation_budget_refit_strategy_params",
+            description="synthetic P5 OOS prefix",
+            path="synthetic.json",
+        )
+        with patch.object(
+            compare_preparation,
+            "ensure_validation_budget_strategy_parameter_artifact",
+            side_effect=_fake_ensure_p5,
+        ):
+            compare_preparation._execute_preparation_action(
+                root=project_root,
+                settings=oos_settings,
+                action=action,
+                comparison_start_date=str(oos_settings.start_date),
+                comparison_end_date=str(oos_settings.end_date),
+            )
+        check(
+            "validation_budget_oos_builder_receives_only_required_schedule_prefix",
+            str(oos_settings.start_date),
+            str(capture.get("comparison_end_date") or ""),
+        )
+
+        from services.optimizer.strategy_param_training import (
+            _build_selection_full_roos_schedule_contract,
+            _selection_full_roos_optimizer_runtime_cache_identity,
+            _selection_full_roos_runtime_contract,
+        )
+        runtime_args = SimpleNamespace(
+            dataset="full",
+            trials_per_fold=300,
+            fixed_risk=0.01,
+            max_position_cap_pct=20.0,
+            max_positions=10,
+            rotation="off",
+        )
+        one_fold_schedule = _build_selection_full_roos_schedule_contract(
+            first_oos_date="2021-01-01",
+            last_oos_date="2021-01-01",
+            train_window_months=120,
+            oos_months=12,
+        )
+        extended_schedule = _build_selection_full_roos_schedule_contract(
+            first_oos_date="2021-01-01",
+            last_oos_date="2026-03-02",
+            train_window_months=120,
+            oos_months=12,
+        )
+        dataset_identity = {"synthetic": True, "sha256": "a" * 64}
+        one_fold_contract = _selection_full_roos_runtime_contract(
+            root=project_root, args=runtime_args, schedule_contract=one_fold_schedule,
+            dataset_identity_override=dataset_identity,
+        )
+        extended_contract = _selection_full_roos_runtime_contract(
+            root=project_root, args=runtime_args, schedule_contract=extended_schedule,
+            dataset_identity_override=dataset_identity,
+        )
+        check_true(
+            "validation_budget_schedule_extension_keeps_fold_optimizer_cache_identity",
+            one_fold_contract["runtime_identity_sha256"]
+            != extended_contract["runtime_identity_sha256"]
+            and _selection_full_roos_optimizer_runtime_cache_identity(
+                one_fold_contract, optimizer_search_protocol="validation_budget_refit_v1"
+            )
+            == _selection_full_roos_optimizer_runtime_cache_identity(
+                extended_contract, optimizer_search_protocol="validation_budget_refit_v1"
+            ),
+        )
+
     arm_ids = [arm.arm_id for arm in oos_settings.enabled_arms]
     contrasts = {
         item.contrast_id: {

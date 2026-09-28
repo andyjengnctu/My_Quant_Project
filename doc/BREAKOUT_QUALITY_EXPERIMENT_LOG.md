@@ -12063,3 +12063,12 @@ Decision：`PHASE1_RESULT_AVAILABLE_BASELINE_FROZEN / C62_COMPETITIVE_NOT_STABLY
 
 Decision：`NO_ARTIFICIAL_ROBUSTNESS_BLOCK / ALL_CONFIGURED_RESEARCH_WORK_TYPES_EXECUTABLE / PHASE2_SAME_SEED_PARAMETER_ROBUSTNESS / PARAM_P5_PER_SEED_CANONICAL_OPTIMIZER / NO_SCIENTIFIC_FEEDBACK_FROM_OOS`。
 
+
+## 2026-09-28 — Phase 2 Forward-OOS prerequisite coverage correction
+
+- **Observed issue**：`Non-DL Validation-Budget | OOS Test`本身使用OOS freeze replay，但PARAM-P5前置builder錯把整個comparison end（2026-03-02）當成producer required coverage，導致選`Forward OOS Test`時先建立2021→2026六個annual rolling folds；後續五個fold不會被OOS replay使用，屬不必要計算。
+- **Correction**：Strategy Compare parameter preparation新增consumer-required schedule coverage解析。對PARAM-P5 `consumption_evaluation_mode=oos`，producer只要求comparison start（2021-01-01）的合法schedule member，因此canonical rolling producer只建立第一個12M fold；`consumption_evaluation_mode=rolling`仍要求完整comparison end。OOS/ Rolling仍共用同一PARAM-P5 physical truth，不新增freeze artifact或第二份schedule。
+- **Extension reuse**：validation-budget Full producer的fold-level Optimizer cache identity排除僅控制「要發布幾個fold」的`last_oos_date`，保留dataset/search-space/window/risk/execution等scientific search inputs。故OOS先完成第一fold後，Rolling延伸同一schedule時可resume/reuse該fold study，而不是因schedule終點延長重新搜尋。
+- **Scientific impact**：無。C84/PARAM-P5 training semantics、120M/12M、trial checkpoints、Seed42、validation選N*、fresh full refit、OOS freeze replay與Rolling date-effective replay均不變；只修正dependency coverage與execution strategy，不改Strategy Compare scientific/artifact identity。
+
+Decision：`FORWARD_OOS_BUILDS_ONLY_REQUIRED_PARAM_PREFIX / ROLLING_EXTENDS_SAME_PHYSICAL_SCHEDULE / COMPLETED_FOLD_SEARCH_REUSABLE / NO_SCIENTIFIC_IDENTITY_CHANGE`。

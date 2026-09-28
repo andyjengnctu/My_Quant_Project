@@ -128,6 +128,51 @@ def resolve_strategy_parameter_consumption_mode(source: StrategyParameterSource)
     return normalize_strategy_param_evaluation_mode(raw)
 
 
+def resolve_strategy_parameter_required_schedule_end_for_mode(
+    evaluation_mode: str,
+    *,
+    comparison_start: str | None,
+    comparison_end: str | None,
+) -> str | None:
+    """Resolve minimum physical schedule coverage for one replay mode.
+
+    Rolling replay needs date-effective members through the comparison end.
+    Forward OOS freezes the latest legal member at the comparison start, so later
+    annual refit folds are not prerequisites and must not be built eagerly.
+    """
+
+    from core.strategy_param_artifacts import normalize_strategy_param_evaluation_mode
+
+    if comparison_end in (None, ""):
+        return None
+    end = date.fromisoformat(str(comparison_end)[:10])
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    if mode != "oos":
+        return end.isoformat()
+    if comparison_start in (None, ""):
+        return None
+    start = date.fromisoformat(str(comparison_start)[:10])
+    if end < start:
+        raise ValueError(
+            "strategy parameter comparison period不合法: "
+            f"start={start.isoformat()}, end={end.isoformat()}"
+        )
+    return start.isoformat()
+
+
+def resolve_strategy_parameter_required_schedule_end(
+    source: StrategyParameterSource,
+    *,
+    comparison_start: str | None,
+    comparison_end: str | None,
+) -> str | None:
+    return resolve_strategy_parameter_required_schedule_end_for_mode(
+        resolve_strategy_parameter_consumption_mode(source),
+        comparison_start=comparison_start,
+        comparison_end=comparison_end,
+    )
+
+
 @dataclass(frozen=True)
 class StrategyDLSource:
     dl_id: str

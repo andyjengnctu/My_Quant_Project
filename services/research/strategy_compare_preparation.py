@@ -11,6 +11,7 @@ from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
     StrategyPreparationPlan,
+    resolve_strategy_parameter_required_schedule_end,
 )
 from services.breakout_quality.export_scores import export_forward_oos_scores
 from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
@@ -42,6 +43,7 @@ def _execute_preparation_action(
     root: Path,
     settings: StrategyComparisonSettings,
     action: StrategyPreparationAction,
+    comparison_start_date: str | None = None,
     comparison_end_date: str | None = None,
 ) -> None:
     if action.builder_type == "forward_oos_scores":
@@ -68,13 +70,19 @@ def _execute_preparation_action(
         return
     if action.builder_type == "optimizer_validation_budget_refit_strategy_params":
         _kind, source_id = action.artifact_key.split(":", 1)
-        if comparison_end_date in (None, ""):
-            raise RuntimeError("PARAM-P5 validation-budget builder缺少comparison_end_date")
+        source = settings.parameter_sources[source_id]
+        required_schedule_end = resolve_strategy_parameter_required_schedule_end(
+            source,
+            comparison_start=comparison_start_date,
+            comparison_end=comparison_end_date,
+        )
+        if required_schedule_end in (None, ""):
+            raise RuntimeError("PARAM-P5 validation-budget builder缺少可解析的required schedule end")
         for param_policy in resolve_required_param_policies_for_source(settings, source_id):
             ensure_validation_budget_strategy_parameter_artifact(
                 root,
                 policy=param_policy,
-                comparison_end_date=str(comparison_end_date),
+                comparison_end_date=str(required_schedule_end),
                 dataset=settings.dataset,
                 max_positions=int(settings.max_positions),
                 rotation=str(settings.rotation),
@@ -87,13 +95,15 @@ def _execute_preparation_action(
         source = settings.parameter_sources[source_id]
         if not source.canonical_family or not source.canonical_evaluation_mode:
             raise RuntimeError(f"canonical optimizer參數來源缺少family/mode: {source_id}")
+        if comparison_end_date in (None, ""):
+            raise RuntimeError(f"canonical optimizer參數來源缺少comparison_end_date: {source_id}")
         for param_policy in resolve_required_param_policies_for_source(settings, source_id):
             ensure_strategy_parameter_artifact(
                 root,
                 family=source.canonical_family,
                 evaluation_mode=source.canonical_evaluation_mode,
                 policy=param_policy,
-                comparison_end_date=comparison_end_date,
+                comparison_end_date=str(comparison_end_date),
                 dataset=settings.dataset,
                 max_positions=int(settings.max_positions),
                 rotation=str(settings.rotation),
@@ -379,6 +389,11 @@ def _run_preparation_plan(
             root=root,
             settings=settings,
             action=action,
+            comparison_start_date=(
+                None
+                if comparison_period.get("start") in (None, "")
+                else str(comparison_period.get("start"))
+            ),
             comparison_end_date=(
                 None
                 if comparison_period.get("end") in (None, "")

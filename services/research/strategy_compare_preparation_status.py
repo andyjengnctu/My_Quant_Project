@@ -27,6 +27,7 @@ from core.strategy_comparison import (
     StrategyPreparationAction,
     resolve_strategy_comparison_arm_param_policy,
     resolve_strategy_parameter_consumption_mode,
+    resolve_strategy_parameter_required_schedule_end,
     strategy_comparison_param_artifact_key,
     strategy_comparison_param_binding_key,
     StrategyPreparationPlan,
@@ -889,6 +890,18 @@ def _collect_parameter_artifact_status(
         policy_rows: dict[str, Any] = {}
         all_artifacts_ready = True
         any_target_exists = False
+        builder_type = (
+            "" if source.builder is None else str(source.builder.builder_type or "").strip()
+        )
+        required_schedule_end = (
+            resolve_strategy_parameter_required_schedule_end(
+                source,
+                comparison_start=comparison_start,
+                comparison_end=comparison_end,
+            )
+            if builder_type == "optimizer_validation_budget_refit_strategy_params"
+            else comparison_end
+        )
         for param_policy in policies:
             path = resolve_param_source_path(
                 root, settings, source_id, param_policy=param_policy
@@ -902,7 +915,7 @@ def _collect_parameter_artifact_status(
                 path,
                 param_policy=param_policy,
                 comparison_start=comparison_start,
-                comparison_end=comparison_end,
+                comparison_end=required_schedule_end,
                 artifact_contract=(
                     None if source.artifact_contract is None else dict(source.artifact_contract)
                 ),
@@ -916,7 +929,7 @@ def _collect_parameter_artifact_status(
                         family=str(source.canonical_family),
                         policy=param_policy,
                         evaluation_mode=str(source.canonical_evaluation_mode),
-                        comparison_end_date=comparison_end,
+                        comparison_end_date=required_schedule_end,
                         dataset=settings.dataset,
                         max_positions=int(settings.max_positions),
                         rotation=str(settings.rotation),
@@ -942,6 +955,7 @@ def _collect_parameter_artifact_status(
                 "coverage_start": None if policy is None else policy.get("coverage_start"),
                 "coverage_end": None if policy is None else policy.get("coverage_end"),
                 "coverage_status": artifact_status,
+                "required_schedule_end": required_schedule_end,
             }
             policy_rows[param_policy] = {
                 "ready": ready,
@@ -956,6 +970,7 @@ def _collect_parameter_artifact_status(
                 "selector": None if policy is None else policy.get("selector"),
                 "coverage_start": None if policy is None else policy.get("coverage_start"),
                 "coverage_end": None if policy is None else policy.get("coverage_end"),
+                "required_schedule_end": required_schedule_end,
             }
 
         builder = source.builder
