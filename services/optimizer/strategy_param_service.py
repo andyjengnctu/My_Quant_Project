@@ -2092,6 +2092,81 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
         "scientific_sha256": compute_strategy_param_scientific_sha256(target),
     }
 
+
+def inspect_validation_budget_strategy_parameter_artifact(
+    project_root: str | Path, *, policy: str = "base-finalists-agree",
+    comparison_end_date: str, dataset: str | None = None,
+    max_positions: int | None = None, rotation: str | None = None,
+    fixed_risk: float | None = None, max_position_cap_pct: float | None = None,
+) -> dict[str, Any]:
+    """Inspect one PARAM-P5 artifact against the exact producer/reuse contract.
+
+    Reuse must be at least as strict as Strategy Compare consumption readiness.
+    In particular, a manifest/hash match is insufficient when the payload predates
+    the PARAM-P5 adaptation/protocol stamp. Returning REBUILD here prevents the
+    orchestrator from repeatedly seeing a stale consumer contract after a no-op REUSE.
+    """
+
+    root = Path(project_root).resolve()
+    compare_policy = str(policy).strip()
+    normalized_policy = normalize_strategy_param_policy(compare_policy)
+    end_date = str(comparison_end_date or "").strip()
+    if not end_date:
+        raise ValueError("PARAM-P5缺少comparison_end_date")
+    target = validation_budget_strategy_param_artifact_path(root, policy=compare_policy)
+    manifest_path = validation_budget_strategy_param_manifest_path(root)
+    contract = _validation_budget_build_contract(
+        family="full", dataset=dataset, max_positions=max_positions, rotation=rotation,
+        fixed_risk=fixed_risk, max_position_cap_pct=max_position_cap_pct,
+    )
+    manifest = _load_json_object(manifest_path)
+    payload = _load_json_object(target)
+    coverage_end = _canonical_schedule_coverage_end(target)
+    spec_protocol = str(dict(contract.get("validation_budget_refit") or {}).get("protocol") or "")
+    adaptation = dict((payload or {}).get("breakout_quality_param_adaptation") or {})
+
+    status = "READY"
+    if payload is None:
+        status = "ARTIFACT_MISSING_OR_INVALID"
+    elif str(payload.get("selector") or "") != normalized_policy:
+        status = "POLICY_SELECTOR_MISMATCH"
+    elif str(adaptation.get("parameter_set") or "") != "PARAM-P5":
+        status = "PARAMETER_SET_MISMATCH"
+    elif bool(adaptation.get("training_dl_enabled", True)):
+        status = "TRAINING_DL_ENABLED_MISMATCH"
+    elif str(adaptation.get("optimizer_search_protocol") or "") != spec_protocol:
+        status = "OPTIMIZER_SEARCH_PROTOCOL_MISMATCH"
+    elif coverage_end is None or str(coverage_end) < end_date:
+        status = "SCHEDULE_COVERAGE_INCOMPLETE"
+    elif manifest is None:
+        status = "MANIFEST_MISSING_OR_INVALID"
+    elif str(manifest.get("producer") or "") != "optimizer":
+        status = "PRODUCER_MISMATCH"
+    elif bool(manifest.get("training_dl_enabled")) is not False:
+        status = "MANIFEST_TRAINING_DL_MISMATCH"
+    elif str(manifest.get("parameter_set") or "") != "PARAM-P5":
+        status = "MANIFEST_PARAMETER_SET_MISMATCH"
+    elif str(manifest.get("policy") or "") != compare_policy:
+        status = "MANIFEST_POLICY_MISMATCH"
+    elif str(manifest.get("optimizer_search_protocol") or "") != spec_protocol:
+        status = "MANIFEST_PROTOCOL_MISMATCH"
+    elif dict(manifest.get("build_contract") or {}) != contract:
+        status = "BUILD_CONTRACT_MISMATCH"
+    elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
+        status = "ARTIFACT_SHA_MISMATCH"
+
+    ready = status == "READY"
+    existed = bool(target.exists() or manifest_path.exists())
+    return {
+        "ready": ready,
+        "status": status,
+        "action": "REUSE" if ready else ("REBUILD" if existed else "BUILD"),
+        "path": target,
+        "manifest_path": manifest_path,
+        "coverage_end": coverage_end,
+        "build_contract": contract,
+    }
+
 def ensure_validation_budget_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -2131,39 +2206,27 @@ def ensure_validation_budget_strategy_parameter_artifact(
     if not end_date:
         raise ValueError("PARAM-P5缺少comparison_end_date")
 
-    target = validation_budget_strategy_param_artifact_path(root, policy=compare_policy)
-    manifest_path = validation_budget_strategy_param_manifest_path(root)
-    contract = _validation_budget_build_contract(
-        family="full",
+    state = inspect_validation_budget_strategy_parameter_artifact(
+        root,
+        policy=compare_policy,
+        comparison_end_date=end_date,
         dataset=dataset,
         max_positions=max_positions,
         rotation=rotation,
         fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
     )
-    existing_manifest = _load_json_object(manifest_path)
-    existed_before = bool(target.is_file() or manifest_path.is_file())
-    coverage_end = _canonical_schedule_coverage_end(target)
-    existing_ready = bool(
-        target.is_file()
-        and existing_manifest is not None
-        and str(existing_manifest.get("producer") or "") == "optimizer"
-        and bool(existing_manifest.get("training_dl_enabled")) is False
-        and str(existing_manifest.get("parameter_set") or "") == "PARAM-P5"
-        and str(existing_manifest.get("policy") or "") == compare_policy
-        and dict(existing_manifest.get("build_contract") or {}) == contract
-        and str(existing_manifest.get("artifact_sha256") or "")
-        == compute_strategy_param_file_sha256(target)
-        and coverage_end is not None
-        and str(coverage_end) >= end_date
-    )
-    if existing_ready:
+    target = Path(state["path"])
+    manifest_path = Path(state["manifest_path"])
+    contract = dict(state["build_contract"])
+    existed_before = str(state["action"]) == "REBUILD"
+    if bool(state["ready"]):
         return {
             "action": "REUSE",
             "path": target,
             "manifest_path": manifest_path,
             "sha256": compute_strategy_param_file_sha256(target),
-            "coverage_end": coverage_end,
+            "coverage_end": state.get("coverage_end"),
             "build_contract": contract,
         }
 
@@ -2251,6 +2314,7 @@ __all__ = [
     "inspect_robustness_benchmark_strategy_parameter_artifact",
     "ensure_strategy_parameter_artifact",
     "ensure_validation_budget_strategy_parameter_artifact",
+    "inspect_validation_budget_strategy_parameter_artifact",
     "ensure_validation_budget_robustness_strategy_parameter_artifact",
     "inspect_validation_budget_robustness_strategy_parameter_artifact",
     "validation_budget_strategy_param_artifact_path",

@@ -12072,3 +12072,12 @@ Decision：`NO_ARTIFICIAL_ROBUSTNESS_BLOCK / ALL_CONFIGURED_RESEARCH_WORK_TYPES_
 - **Scientific impact**：無。C84/PARAM-P5 training semantics、120M/12M、trial checkpoints、Seed42、validation選N*、fresh full refit、OOS freeze replay與Rolling date-effective replay均不變；只修正dependency coverage與execution strategy，不改Strategy Compare scientific/artifact identity。
 
 Decision：`FORWARD_OOS_BUILDS_ONLY_REQUIRED_PARAM_PREFIX / ROLLING_EXTENDS_SAME_PHYSICAL_SCHEDULE / COMPLETED_FOLD_SEARCH_REUSABLE / NO_SCIENTIFIC_IDENTITY_CHANGE`。
+
+## 2026-09-28 — PARAM-P5 stale REBUILD convergence fix
+
+- **Observed failure**：Phase 2 Forward OOS preparation plan correctly requested `REBUILD` for `param:full_validation_budget_oos_experiment`, but after one prerequisite invocation the generic Research orchestrator reported `沒有可執行且依賴已READY的動作` with the same REBUILD node remaining.
+- **Root cause**：`ensure_validation_budget_strategy_parameter_artifact()` reuse validation was weaker than Strategy Compare consumer readiness. A stale PARAM-P5 payload could retain a manifest/hash/build-contract that satisfied the Optimizer service while missing the current `breakout_quality_param_adaptation` / `PARAM-P5` / `validation_budget_refit_v1` payload contract. The producer therefore returned no-op REUSE, re-plan still saw REBUILD, and the generic orchestrator correctly refused to execute the same signature twice.
+- **Fix**：Optimizer now owns `inspect_validation_budget_strategy_parameter_artifact()` and uses the same strict payload + manifest + protocol + coverage contract before REUSE. Strategy Compare preparation status consumes that inspector for PARAM-P5 identity readiness. Stale payloads are deterministically REBUILD instead of no-op reuse; the generic anti-repeat orchestration rule is unchanged.
+- **Regression evidence**：Synthetic stale publication with valid manifest/hash but missing PARAM-P5 adaptation is classified `REBUILD / PARAMETER_SET_MISMATCH`; exact Strategy Compare parameter preparation converges in one producer wave from `REBUILD` to `REUSE / READY` without a second producer invocation. Forward OOS prefix semantics remain one-fold only and scientific identities are unchanged.
+
+Decision：`PARAM_P5_REUSE_CONTRACT_ALIGNED_WITH_CONSUMER_READY / STALE_REBUILD_CONVERGES_ONE_WAVE / GENERIC_ORCHESTRATOR_GUARD_UNCHANGED / NO_SCIENTIFIC_SEMANTICS_CHANGE`。

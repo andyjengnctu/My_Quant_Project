@@ -428,6 +428,138 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             ),
         )
 
+        # Regression: a stale published PARAM-P5 may have a manifest/hash that looks
+        # reusable while its payload predates the validation-budget adaptation stamp.
+        # Producer reuse must be at least as strict as consumer READY, otherwise one
+        # no-op REUSE leaves the re-plan at REBUILD and the generic orchestrator stops.
+        from services.optimizer import strategy_param_service as param_service
+        from core.strategy_param_artifacts import compute_strategy_param_file_sha256
+        with tempfile.TemporaryDirectory(prefix="p5_stale_rebuild_contract_") as temp_dir:
+            temp_root = Path(temp_dir)
+            stale_target = param_service.validation_budget_strategy_param_artifact_path(
+                temp_root, policy="base-finalists-agree"
+            )
+            stale_manifest = param_service.validation_budget_strategy_param_manifest_path(temp_root)
+            stale_target.parent.mkdir(parents=True, exist_ok=True)
+            stale_payload = {
+                "schema_type": "active_param_ensemble",
+                "schema_version": 1,
+                "mode": "rolling",
+                "type": "active_param_ensemble",
+                "selector": "base_finalists_agree",
+                "params_ensemble_by_effective_date": {
+                    "2021-01-01": [{"member_index": 1, "seed": 42, "params": {"high_len": 200}}]
+                },
+                "summary": {"oos_end_date": "2021-12-31"},
+            }
+            stale_target.write_text(json.dumps(stale_payload), encoding="utf-8")
+            build_contract = param_service._validation_budget_build_contract(
+                family="full", dataset="full", max_positions=10, rotation="off",
+                fixed_risk=0.01, max_position_cap_pct=20.0,
+            )
+            stale_manifest.write_text(
+                json.dumps({
+                    "schema_type": "strategy_parameter_research_identity",
+                    "schema_version": 1,
+                    "producer": "optimizer",
+                    "training_dl_enabled": False,
+                    "parameter_set": "PARAM-P5",
+                    "family": "full",
+                    "policy": "base-finalists-agree",
+                    "optimizer_search_protocol": "validation_budget_refit_v1",
+                    "build_contract": build_contract,
+                    "artifact_path": stale_target.relative_to(temp_root).as_posix(),
+                    "artifact_sha256": compute_strategy_param_file_sha256(stale_target),
+                    "coverage_end": "2021-12-31",
+                    "production_promotion": False,
+                }),
+                encoding="utf-8",
+            )
+            stale_state = param_service.inspect_validation_budget_strategy_parameter_artifact(
+                temp_root, policy="base-finalists-agree", comparison_end_date="2021-01-01",
+                dataset="full", max_positions=10, rotation="off", fixed_risk=0.01,
+                max_position_cap_pct=20.0,
+            )
+            check(
+                "validation_budget_stale_payload_manifest_is_rebuild_not_noop_reuse",
+                (False, "REBUILD", "PARAMETER_SET_MISMATCH"),
+                (bool(stale_state["ready"]), str(stale_state["action"]), str(stale_state["status"])),
+            )
+
+            def _fake_p5_rebuild(**kwargs):
+                active_dir = Path(kwargs["output_relative_dir"]) / "active_params"
+                active_dir.mkdir(parents=True, exist_ok=True)
+                source_path = active_dir / "roos_base_finalists_agree.json"
+                fresh_payload = dict(stale_payload)
+                fresh_payload["breakout_quality_param_adaptation"] = {
+                    "mode": "selection_full_roos_training",
+                    "parameter_set": "PARAM-P5",
+                    "training_dl_enabled": False,
+                    "search_fields": [],
+                    "search_space_sha256": "synthetic",
+                    "optimizer_search_protocol": "validation_budget_refit_v1",
+                }
+                source_path.write_text(json.dumps(fresh_payload), encoding="utf-8")
+                return {"params_path": source_path}
+
+            with patch(
+                "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+                side_effect=_fake_p5_rebuild,
+            ):
+                rebuild_result = param_service.ensure_validation_budget_strategy_parameter_artifact(
+                    temp_root, policy="base-finalists-agree", comparison_end_date="2021-01-01",
+                    dataset="full", max_positions=10, rotation="off", fixed_risk=0.01,
+                    max_position_cap_pct=20.0,
+                )
+            rebuilt_state = param_service.inspect_validation_budget_strategy_parameter_artifact(
+                temp_root, policy="base-finalists-agree", comparison_end_date="2021-01-01",
+                dataset="full", max_positions=10, rotation="off", fixed_risk=0.01,
+                max_position_cap_pct=20.0,
+            )
+            check_true(
+                "validation_budget_rebuild_converges_to_ready_after_stale_payload",
+                str(rebuild_result["action"]) == "REBUILD"
+                and bool(rebuilt_state["ready"])
+                and str(rebuilt_state["action"]) == "REUSE",
+            )
+
+            # Recreate the stale publication and exercise the exact Strategy Compare
+            # dependency runner that previously failed after one no-op producer call.
+            stale_target.write_text(json.dumps(stale_payload), encoding="utf-8")
+            stale_manifest_payload = json.loads(stale_manifest.read_text(encoding="utf-8"))
+            stale_manifest_payload["artifact_sha256"] = compute_strategy_param_file_sha256(stale_target)
+            stale_manifest.write_text(json.dumps(stale_manifest_payload), encoding="utf-8")
+            from services.research.strategy_compare_preparation_status import collect_preparation_status
+            initial_status = collect_preparation_status(project_root=temp_root, settings=oos_settings)
+            orchestrator_calls = []
+
+            def _fake_p5_rebuild_counted(**kwargs):
+                orchestrator_calls.append(1)
+                return _fake_p5_rebuild(**kwargs)
+
+            with patch(
+                "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+                side_effect=_fake_p5_rebuild_counted,
+            ), redirect_stdout(io.StringIO()):
+                final_status = compare_preparation.prepare_strategy_parameter_artifacts(
+                    project_root=temp_root,
+                    settings=oos_settings,
+                    status=initial_status,
+                    required_source_ids={p5_oos_arm.param_source},
+                    status_refresher=lambda: collect_preparation_status(
+                        project_root=temp_root, settings=oos_settings
+                    ),
+                )
+            initial_row = initial_status["parameters"][p5_oos_arm.param_source]
+            final_row = final_status["parameters"][p5_oos_arm.param_source]
+            check_true(
+                "validation_budget_stale_rebuild_orchestrator_converges_in_one_producer_wave",
+                str(initial_row["action"]) == "REBUILD"
+                and str(final_row["action"]) == "REUSE"
+                and str(final_row["policies"]["base-finalists-agree"]["status"]) == "READY"
+                and len(orchestrator_calls) == 1,
+            )
+
     arm_ids = [arm.arm_id for arm in oos_settings.enabled_arms]
     contrasts = {
         item.contrast_id: {

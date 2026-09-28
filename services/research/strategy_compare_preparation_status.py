@@ -97,6 +97,7 @@ from services.optimizer.strategy_param_training import (
     MIN_ROOS_SEARCH_FIELDS,
 )
 from services.optimizer.strategy_param_service import (
+    inspect_validation_budget_strategy_parameter_artifact,
     validate_strategy_parameter_artifact_identity,
 )
 
@@ -922,7 +923,20 @@ def _collect_parameter_artifact_status(
             )
             policy_identity_ready = identity_ready
             policy_identity_status = identity_status
-            if source.canonical_family and source.canonical_evaluation_mode:
+            if builder_type == "optimizer_validation_budget_refit_strategy_params":
+                p5_state = inspect_validation_budget_strategy_parameter_artifact(
+                    root,
+                    policy=param_policy,
+                    comparison_end_date=str(required_schedule_end),
+                    dataset=settings.dataset,
+                    max_positions=int(settings.max_positions),
+                    rotation=str(settings.rotation),
+                    fixed_risk=float(DEFAULT_FIXED_RISK),
+                    max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                )
+                policy_identity_ready = bool(p5_state["ready"])
+                policy_identity_status = str(p5_state["status"])
+            elif source.canonical_family and source.canonical_evaluation_mode:
                 policy_identity_ready, policy_identity_status, _canonical_target = (
                     validate_strategy_parameter_artifact_identity(
                         root,
