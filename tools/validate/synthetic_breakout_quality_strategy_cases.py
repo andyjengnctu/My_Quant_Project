@@ -1393,6 +1393,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _model_artifact_identity_payload,
         _validate_scientific_observation_manifest,
         _strategy_only_baseline_action,
+        _strategy_only_unit_scientific_signature_from_contract,
+        _materialize_registered_strategy_only_scientific_reuse,
+        _resolve_existing_scientific_unit_states,
         SCIENTIFIC_DURABLE_RESULT_KEYS,
         SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME,
         MEAN_METRICS,
@@ -1520,12 +1523,131 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "manifest_sha256": "manifest-b",
         }
     }
+    unit_contract_a = {
+        "scientific_contract_version": 6,
+        "robustness_id": "extending_window_rolling",
+        "profile_id": "extending_window_rolling",
+        "suite_id": "extending_current",
+        "fingerprint": "old-container",
+        "dataset": "full",
+        "dataset_identity": {"sha256": "dataset-a"},
+        "max_positions": 10,
+        "rotation": "off",
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "benchmark_id": "end_to_end_v1",
+        "strategy_trials_per_fold": 300,
+        "seed_pairing": "same_seed_strategy_optimizer_and_all_dl_sources",
+        "stochastic_arms": [
+            {
+                "arm_id": "C62", "param_source": "full_rolling",
+                "param_policy": "base-finalists-agree", "rule_policy": "formal",
+                "strategy_seed_sensitive": True, "model_seed_sensitive": False,
+            },
+            {
+                "arm_id": "C83", "param_source": "min_rolling",
+                "param_policy": "base-finalist-best", "rule_policy": "all_off",
+                "strategy_seed_sensitive": True, "model_seed_sensitive": True,
+            },
+        ],
+        "benchmark_parameter_artifact_identities": {
+            "C62:seed=11": {
+                "identity_schema": "strategy_param_scientific_v1",
+                "family": "full", "evaluation_mode": "rolling",
+                "param_policy": "base_finalists_agree", "sha256": "same-param",
+            }
+        },
+    }
+    unit_contract_b = json.loads(json.dumps(unit_contract_a))
+    unit_contract_b.update({
+        "robustness_id": "non_dl_validation_budget_rolling",
+        "profile_id": "non_dl_validation_budget_rolling",
+        "suite_id": "non_dl_validation_budget_current",
+        "fingerprint": "new-container",
+    })
+    unit_contract_b["stochastic_arms"] = [unit_contract_b["stochastic_arms"][0], {
+        "arm_id": "C84", "param_source": "full_validation_budget_rolling_experiment",
+        "param_policy": "base-finalists-agree", "rule_policy": "formal",
+        "strategy_seed_sensitive": True, "model_seed_sensitive": False,
+    }]
+    unit_contract_changed = json.loads(json.dumps(unit_contract_b))
+    unit_contract_changed["benchmark_parameter_artifact_identities"]["C62:seed=11"]["sha256"] = "different-param"
+    sig_a = _strategy_only_unit_scientific_signature_from_contract(
+        contract=unit_contract_a, arm_id="C62", seed=11
+    )
+    sig_b = _strategy_only_unit_scientific_signature_from_contract(
+        contract=unit_contract_b, arm_id="C62", seed=11
+    )
+    sig_changed = _strategy_only_unit_scientific_signature_from_contract(
+        contract=unit_contract_changed, arm_id="C62", seed=11
+    )
     run_bound_checks(
         check_true,
         (
             ('robustness_benchmark_manifest_publication_sha_does_not_change_scientific_param_identity', _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_a)) == _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_b)),),
-            ('robustness_cross_fingerprint_completed_result_migration_is_intentionally_unsupported', '_import_seed_expansion_results(' not in multi_seed_source and '_seed_expansion_source_run(' not in multi_seed_source and ('[COMPATIBLE RESULT REUSE]' not in multi_seed_source) and ('[SEED EXPANSION REUSE]' not in multi_seed_source),),
+            ('robustness_cross_profile_strategy_only_reuse_ignores_container_identity_but_requires_unit_scientific_identity', sig_a is not None and sig_a == sig_b and sig_a != sig_changed and '_discover_registered_strategy_only_scientific_reuse(' in multi_seed_source and '_materialize_registered_strategy_only_scientific_reuse(' in multi_seed_source,),
         ),
+    )
+
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    materialize_settings = get_strategy_comparison_settings(
+        "non_dl_validation_budget_rolling"
+    )
+    materialize_arms = tuple(
+        materialize_settings.arms[arm_id] for arm_id in ("C62", "C61", "C58", "C84")
+    )
+    materialize_seed = 11
+    materialize_contract = {
+        "resolved_seeds": [materialize_seed],
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "benchmark_id": "end_to_end_v1",
+        "model_seed_sensitive_arm_ids": [],
+        "benchmark_parameter_artifact_identities": {
+            f"{arm_id}:seed={materialize_seed}": {"sha256": f"sha-{arm_id}"}
+            for arm_id in ("C62", "C61", "C58", "C84")
+        },
+    }
+    materialize_reuse = {}
+    for arm_id in ("C62", "C61", "C58"):
+        row = {
+            "arm_id": arm_id, "name": "historical", "seed": materialize_seed,
+            "arm_order": 99, "seed_order": 99,
+            "strategy_param_sha256": f"sha-{arm_id}",
+            "strategy_param_manifest_sha256": "source-manifest",
+        }
+        row.update({key: 1.0 for _label, key, _unit in MEAN_METRICS})
+        yearly = pd.DataFrame([
+            {
+                "arm_id": arm_id, "name": "historical", "seed": materialize_seed,
+                "arm_order": 99, "seed_order": 99, "year": year,
+                "return_pct": 1.0, "is_complete_year": year < 2026,
+            }
+            for year in range(2021, 2027)
+        ])
+        materialize_reuse[(arm_id, materialize_seed)] = {
+            "row": row, "yearly": yearly, "source_run_root": Path("synthetic/source")
+        }
+    with tempfile.TemporaryDirectory(prefix="robustness_unit_materialize_") as temp_dir:
+        materialize_root = Path(temp_dir)
+        provenance = _materialize_registered_strategy_only_scientific_reuse(
+            run_root=materialize_root, contract=materialize_contract,
+            stochastic_arms=materialize_arms, reusable=materialize_reuse,
+        )
+        materialized_rows, materialized_yearly, materialized_states = (
+            _resolve_existing_scientific_unit_states(
+                run_root=materialize_root, contract=materialize_contract,
+                stochastic_arms=materialize_arms, reuse_completed=True,
+            )
+        )
+    check_true(
+        "robustness_cross_profile_strategy_only_observations_materialize_and_revalidate_under_current_contract",
+        len(provenance) == 3
+        and len(materialized_rows) == 3
+        and len(materialized_yearly) == 18
+        and all(
+            materialized_states[(arm_id, materialize_seed)]["action"] == "REUSE"
+            for arm_id in ("C62", "C61", "C58")
+        )
+        and materialized_states[("C84", materialize_seed)]["action"] != "REUSE",
     )
 
     benchmark = get_robustness_benchmark_policy_snapshot()
@@ -2151,12 +2273,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         lifecycle_independent_evidence = _validate_scientific_observation_manifest(
             evidence_root
         )
-        # Without the exact-fingerprint READY marker, no legacy/cross-fingerprint
-        # inference is attempted; the current scientific identity must rebuild.
+        # Without the source run's exact-fingerprint READY marker, no per-unit
+        # cross-profile inference is allowed; source scientific evidence is untrusted.
         (evidence_root / SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME).unlink()
         missing_ready_marker = _validate_scientific_observation_manifest(evidence_root)
     check_true(
-        "robustness_scientific_observation_commit_is_exact_fingerprint_only",
+        "robustness_cross_profile_unit_reuse_still_requires_exact_source_fingerprint_ready_commit",
         lifecycle_independent_evidence is not None
         and missing_ready_marker is None
         and SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME in multi_seed_source

@@ -815,6 +815,104 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    from core.strategy_compare_policy import resolve_strategy_robustness_result_search_roots
+    from services.research.strategy_multi_seed_robustness import (
+        _benchmark_parameter_plan_rows,
+    )
+    for robustness in current_robustness:
+        roots = resolve_strategy_robustness_result_search_roots(robustness)
+        check_true(
+            f"robustness_result_reuse_search_is_registry_derived:{robustness.robustness_id}",
+            roots[0] == robustness.output_root
+            and "outputs/strategy_compare/robustness/extending_window/oos_2021_forward" in roots
+            and "outputs/strategy_compare/robustness/extending_window/rolling_2021_forward" in roots
+            and len(roots) == len(set(roots)),
+        )
+
+        robust_settings = strategy_config.get_strategy_comparison_settings(robustness.profile_id)
+        reusable = {
+            (arm_id, int(seed)): {"source_run_root": Path("synthetic_registered_run")}
+            for arm_id in ("C62", "C61", "C58")
+            for seed in robustness.resolved_seeds
+        }
+        rows, blockers, _bindings = _benchmark_parameter_plan_rows(
+            settings=robust_settings,
+            robustness=robustness,
+            benchmark_arms=tuple(
+                robust_settings.arms[arm_id] for arm_id in robustness.stochastic_arm_ids
+            ),
+            comparison_start="2021-01-01",
+            comparison_end="2026-03-02",
+            reusable_observations=reusable,
+        )
+        reused_result_rows = [
+            row for row in rows
+            if row[0] == "REUSE" and str(row[1]).startswith("result:")
+        ]
+        pending_rows = [row for row in rows if row[0] != "REUSE"]
+        check_true(
+            f"robustness_reused_scientific_units_prune_param_dependencies:{robustness.robustness_id}",
+            not blockers
+            and len(reused_result_rows) == 24
+            and all(
+                any(f"result:{arm_id}:seed={int(seed)}" == row[1] for row in reused_result_rows)
+                for arm_id in ("C62", "C61", "C58")
+                for seed in robustness.resolved_seeds
+            )
+            and len(pending_rows) == 8
+            and all("validation_budget_refit_v1" in str(row[1]) for row in pending_rows),
+        )
+
+    from services.research.strategy_multi_seed_robustness import (
+        _render_robustness_execution_plan,
+        _robustness_arms,
+        collect_artifact_status as collect_robustness_artifact_status,
+    )
+    rolling_robustness = next(
+        item for item in current_robustness if item.profile_id.endswith("_rolling")
+    )
+    rolling_robust_settings = strategy_config.get_strategy_comparison_settings(
+        rolling_robustness.profile_id
+    )
+    rolling_fixed, rolling_stochastic = _robustness_arms(
+        rolling_robust_settings, rolling_robustness
+    )
+    rolling_reusable = {
+        (arm_id, int(seed)): {
+            "source_run_root": Path("synthetic_registered_extending_run"),
+            "row": {
+                "strategy_param_sha256": "synthetic",
+                "strategy_param_manifest_sha256": "synthetic-manifest",
+            },
+            "yearly": pd.DataFrame(),
+        }
+        for arm_id in ("C62", "C61", "C58")
+        for seed in rolling_robustness.resolved_seeds
+    }
+    with patch(
+        "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
+        return_value=rolling_reusable,
+    ):
+        rendered_robustness_plan, rendered_robustness_payload = (
+            _render_robustness_execution_plan(
+                cfg=rolling_robustness,
+                settings=rolling_robust_settings,
+                status=collect_robustness_artifact_status(settings=rolling_robust_settings),
+                fixed_arms=rolling_fixed,
+                stochastic_arms=rolling_stochastic,
+            )
+        )
+    check_true(
+        "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_c84_work",
+        len(rendered_robustness_payload.get("registered_scientific_reuse_units") or ()) == 24
+        and "8 pending search units" in rendered_robustness_plan
+        and "scientific result REUSE=24/32 arm×seed" in rendered_robustness_plan
+        and "REUSE         Production PIT / Full Base-Finalist" in rendered_robustness_plan
+        and "REUSE         Full Base-Finalist-Best" in rendered_robustness_plan
+        and "REUSE         Min Base-Finalist-Best" in rendered_robustness_plan
+        and "PARAM+REPLAY  Full Validation-Budget Refit" in rendered_robustness_plan,
+    )
+
     # The long-lived extending_current benchmark remains contract-tested even when
     # another research profile is selected as current. Current routing must never
     # redefine its historical/scientific membership.

@@ -637,6 +637,30 @@ def resolve_strategy_comparison_result_search_roots(
     return tuple(roots)
 
 
+def resolve_strategy_robustness_result_search_roots(
+    settings: StrategyMultiSeedRobustnessSettings,
+) -> tuple[str, ...]:
+    """Return registered robustness namespaces eligible for scientific-unit reuse.
+
+    A robustness profile owns only its write namespace.  Read-side discovery is
+    registry-derived so adding a new suite/profile cannot accidentally hide durable
+    observations produced by another registered profile.  Reuse legality is decided
+    later from per-arm/per-seed scientific identity, never from the namespace name.
+    """
+
+    roots: list[str] = []
+
+    def add(raw: object) -> None:
+        value = str(raw or "").strip()
+        if value and value not in roots:
+            roots.append(value)
+
+    add(settings.output_root)
+    for profile in STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.values():
+        add(profile.get("output_root"))
+    return tuple(roots)
+
+
 def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyComparisonSettings:
     selected_profile_id = str(profile_id or STRATEGY_COMPARE_DEFAULT_PROFILE).strip()
     if selected_profile_id not in STRATEGY_COMPARE_PROFILES:
@@ -1042,6 +1066,7 @@ __all__ = [
     "get_strategy_runtime_integration_settings",
     "get_strategy_comparison_settings",
     "resolve_strategy_comparison_result_search_roots",
+    "resolve_strategy_robustness_result_search_roots",
     "get_strategy_compare_model_bindings",
     "validate_single_seed_strategy_conversion_authorization",
     "validate_single_seed_strategy_conversion_pit_scope",

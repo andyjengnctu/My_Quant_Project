@@ -61,6 +61,7 @@ from core.training_policy import resolve_robustness_benchmark_seeds
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
+    resolve_strategy_robustness_result_search_roots,
 )
 from config.execution_policy import (
     DEFAULT_FIXED_RISK,
@@ -99,6 +100,7 @@ from core.strategy_param_artifacts import (
 from core.strategy_comparison import (
     StrategyComparisonArm,
     resolve_strategy_comparison_arm_param_policy,
+    resolve_strategy_parameter_required_schedule_end_for_mode,
     strategy_comparison_param_artifact_key,
     strategy_comparison_param_binding_key,
 )
@@ -620,20 +622,31 @@ def _benchmark_param_binding(
 
 def _benchmark_parameter_plan_rows(
     *, settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...],
-    comparison_end: str | None,
+    comparison_start: str | None, comparison_end: str | None,
+    reusable_observations: dict[tuple[str, int], dict[str, Any]] | None = None,
 ) -> tuple[list[tuple[str, str, str]], list[str], dict[tuple[str, int], dict[str, Any]]]:
     if robustness.benchmark_id is None:
         return [], [], {}
     rows: list[tuple[str, str, str]] = []
     blockers: list[str] = []
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
+    reusable_units = set(dict(reusable_observations or {}).keys())
     seen_units: set[tuple[int, str, str, str, str]] = set()
     for seed in robustness.resolved_seeds:
         for arm in benchmark_arms:
             binding = _benchmark_param_binding(
                 settings=settings, robustness=robustness, arm=arm, seed=int(seed)
             )
-            bindings[(arm.arm_id, int(seed))] = binding
+            unit_key = (arm.arm_id, int(seed))
+            bindings[unit_key] = binding
+            if unit_key in reusable_units:
+                rows.append((
+                    "REUSE",
+                    f"result:{arm.arm_id}:seed={int(seed)}",
+                    "registered sibling robustness scientific observation identity一致；"
+                    "不需重建benchmark params或strategy replay",
+                ))
+                continue
             unit = (
                 int(seed),
                 str(binding["producer_variant"]),
@@ -655,7 +668,12 @@ def _benchmark_parameter_plan_rows(
                 f"{binding['family']}:{binding['evaluation_mode']}:{binding['param_policy']}"
                 f"{variant_suffix}"
             )
-            if comparison_end in (None, ""):
+            required_schedule_end = resolve_strategy_parameter_required_schedule_end_for_mode(
+                str(binding["evaluation_mode"]),
+                comparison_start=comparison_start,
+                comparison_end=comparison_end,
+            )
+            if required_schedule_end in (None, ""):
                 if path.is_file() or manifest_path.is_file():
                     rows.append((
                         "CHECK", label,
@@ -675,7 +693,7 @@ def _benchmark_parameter_plan_rows(
                     benchmark_id=str(robustness.benchmark_id),
                     seed=int(seed),
                     policy=str(binding["param_policy"]),
-                    comparison_end_date=str(comparison_end),
+                    comparison_end_date=str(required_schedule_end),
                     dataset=str(settings.dataset),
                     max_positions=int(settings.max_positions),
                     rotation=str(settings.rotation),
@@ -690,7 +708,7 @@ def _benchmark_parameter_plan_rows(
                     family=str(binding["family"]),
                     evaluation_mode=str(binding["evaluation_mode"]),
                     policy=str(binding["param_policy"]),
-                    comparison_end_date=str(comparison_end),
+                    comparison_end_date=str(required_schedule_end),
                     dataset=str(settings.dataset),
                     max_positions=int(settings.max_positions),
                     rotation=str(settings.rotation),
@@ -721,31 +739,88 @@ def _benchmark_parameter_plan_rows(
 
 def _prepare_benchmark_strategy_parameter_artifacts(
     *, settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...],
-    comparison_start: str, comparison_end: str
+    comparison_start: str, comparison_end: str,
+    reusable_observations: dict[tuple[str, int], dict[str, Any]] | None = None,
 ) -> dict[tuple[str, int], dict[str, Any]]:
     if robustness.benchmark_id is None:
         return {}
     workflow = get_breakout_quality_workflow_settings()
     built_by_unit: dict[tuple[int, str, str, str, str], dict[str, Any]] = {}
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
+    reusable = dict(reusable_observations or {})
     for seed in robustness.resolved_seeds:
         for arm in benchmark_arms:
             binding = _benchmark_param_binding(
                 settings=settings, robustness=robustness, arm=arm, seed=int(seed)
             )
+            unit_key = (arm.arm_id, int(seed))
+            reusable_item = reusable.get(unit_key)
+            if reusable_item is not None:
+                result_path = Path(binding["path"])
+                if not result_path.is_file():
+                    raise FileNotFoundError(
+                        "registered robustness result已可REUSE，但current benchmark param payload不存在: "
+                        f"{arm.arm_id}/seed={seed}: {result_path}"
+                    )
+                source_row = dict(reusable_item["row"])
+                scientific_sha = _normalized_hash_value(source_row.get("strategy_param_sha256"))
+                if not scientific_sha:
+                    raise ValueError(
+                        "registered robustness result缺少strategy param scientific identity: "
+                        f"{arm.arm_id}/seed={seed}"
+                    )
+                current_scientific_sha = compute_strategy_param_scientific_sha256(result_path)
+                if scientific_sha != _normalized_hash_value(current_scientific_sha):
+                    raise ValueError(
+                        "registered robustness result與current benchmark param scientific identity不一致: "
+                        f"{arm.arm_id}/seed={seed}"
+                    )
+                manifest_path = Path(binding["manifest_path"])
+                bindings[unit_key] = {
+                    **binding,
+                    "path": result_path,
+                    "manifest_path": manifest_path,
+                    "sha256": current_scientific_sha,
+                    "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
+                        result_path,
+                        evaluation_mode=str(binding["evaluation_mode"]),
+                        start_date=str(comparison_start),
+                        end_date=str(comparison_end),
+                    ),
+                    "file_sha256": compute_file_sha256(result_path),
+                    # Publication manifest is provenance only and may be stale/missing;
+                    # preserve the verified source observation provenance instead of
+                    # forcing a scientific replay solely to repair publication metadata.
+                    "manifest_sha256": (
+                        compute_file_sha256(manifest_path)
+                        if manifest_path.is_file()
+                        else str(source_row.get("strategy_param_manifest_sha256") or "")
+                    ),
+                }
+                continue
             unit = (
                 int(seed), str(binding["producer_variant"]), str(binding["family"]),
                 str(binding["evaluation_mode"]), str(binding["param_policy"]),
             )
             result = built_by_unit.get(unit)
             if result is None:
+                required_schedule_end = resolve_strategy_parameter_required_schedule_end_for_mode(
+                    str(binding["evaluation_mode"]),
+                    comparison_start=str(comparison_start),
+                    comparison_end=str(comparison_end),
+                )
+                if required_schedule_end in (None, ""):
+                    raise RuntimeError(
+                        "robustness benchmark param缺少可解析required schedule end: "
+                        f"{arm.arm_id}/seed={seed}"
+                    )
                 if str(binding["producer_variant"]) == "validation_budget_refit_v1":
                     result = ensure_validation_budget_robustness_strategy_parameter_artifact(
                         PROJECT_ROOT,
                         benchmark_id=str(robustness.benchmark_id),
                         seed=int(seed),
                         policy=str(binding["param_policy"]),
-                        comparison_end_date=str(comparison_end),
+                        comparison_end_date=str(required_schedule_end),
                         dataset=str(settings.dataset),
                         max_positions=int(settings.max_positions),
                         rotation=str(settings.rotation),
@@ -762,7 +837,7 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                         family=str(binding["family"]),
                         evaluation_mode=str(binding["evaluation_mode"]),
                         policy=str(binding["param_policy"]),
-                        comparison_end_date=str(comparison_end),
+                        comparison_end_date=str(required_schedule_end),
                         dataset=str(settings.dataset),
                         filter_id=str(workflow.filter_id),
                         model_architecture=str(workflow.model_architecture),
@@ -1160,9 +1235,25 @@ def _render_robustness_execution_plan(
             period_error = str(exc)
             blockers.append(str(exc))
 
+    registered_scientific_reuse: dict[tuple[str, int], dict[str, Any]] = {}
+    if (
+        start is not None
+        and end is not None
+        and cfg.benchmark_id is not None
+        and bool(cfg.reuse_completed)
+    ):
+        registered_scientific_reuse = _discover_registered_strategy_only_scientific_reuse(
+            settings=settings,
+            robustness=cfg,
+            stochastic_arms=tuple(stochastic_arms),
+            comparison_start=str(start),
+            comparison_end=str(end),
+        )
+
     benchmark_rows, benchmark_blockers, benchmark_bindings = _benchmark_parameter_plan_rows(
         settings=settings, robustness=cfg, benchmark_arms=tuple(stochastic_arms),
-        comparison_end=end,
+        comparison_start=start, comparison_end=end,
+        reusable_observations=registered_scientific_reuse,
     )
     blockers.extend(benchmark_blockers)
     pending_work = any(
@@ -1171,7 +1262,18 @@ def _render_robustness_execution_plan(
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
     rows = [*upstream_rows, *param_rows, *benchmark_rows]
-    robustness_unit_states: dict[tuple[str, int], dict[str, Any]] = {}
+    robustness_unit_states: dict[tuple[str, int], dict[str, Any]] = {
+        unit: resolve_strategy_result_state(
+            verified_evidence={
+                "arm_id": unit[0],
+                "seed": int(unit[1]),
+                "source_run_root": project_relative_display_path(
+                    Path(item["source_run_root"]), project_root=PROJECT_ROOT
+                ),
+            }
+        ).as_dict()
+        for unit, item in registered_scientific_reuse.items()
+    }
     robustness_contract: dict[str, Any] | None = None
     if (
         overall == "READY"
@@ -1184,11 +1286,21 @@ def _render_robustness_execution_plan(
             for unit, item in benchmark_bindings.items():
                 path = Path(item["path"])
                 manifest_path = Path(item["manifest_path"])
-                if not path.is_file() or not manifest_path.is_file():
+                reused = registered_scientific_reuse.get(unit)
+                if not path.is_file():
                     raise FileNotFoundError(f"benchmark parameter artifact missing: {unit}")
+                if reused is None and not manifest_path.is_file():
+                    raise FileNotFoundError(f"benchmark parameter manifest missing: {unit}")
+                scientific_sha = compute_strategy_param_scientific_sha256(path)
+                if reused is not None:
+                    source_row = dict(reused["row"])
+                    if _normalized_hash_value(source_row.get("strategy_param_sha256")) != _normalized_hash_value(scientific_sha):
+                        raise ValueError(
+                            f"registered robustness result param identity mismatch: {unit}"
+                        )
                 resolved_bindings[unit] = {
                     **item,
-                    "sha256": compute_strategy_param_scientific_sha256(path),
+                    "sha256": scientific_sha,
                     "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
                         path,
                         evaluation_mode=str(item["evaluation_mode"]),
@@ -1196,7 +1308,11 @@ def _render_robustness_execution_plan(
                         end_date=str(end),
                     ),
                     "file_sha256": compute_file_sha256(path),
-                    "manifest_sha256": compute_file_sha256(manifest_path),
+                    "manifest_sha256": (
+                        compute_file_sha256(manifest_path)
+                        if manifest_path.is_file()
+                        else str(dict(reused["row"]).get("strategy_param_manifest_sha256") or "")
+                    ),
                 }
             robustness_contract = build_multi_seed_robustness_contract(
                 robustness_id=cfg.robustness_id,
@@ -1204,7 +1320,7 @@ def _render_robustness_execution_plan(
                 artifact_identities=dict(status.get("artifact_identities") or {}),
                 benchmark_parameter_identities=_benchmark_identity_payload(resolved_bindings),
             )
-            _existing, _existing_yearly, robustness_unit_states = (
+            _existing, _existing_yearly, exact_unit_states = (
                 _resolve_existing_scientific_unit_states(
                     run_root=_run_root(robustness_contract),
                     contract=robustness_contract,
@@ -1212,6 +1328,9 @@ def _render_robustness_execution_plan(
                     reuse_completed=bool(cfg.reuse_completed),
                 )
             )
+            for unit, state in exact_unit_states.items():
+                if str(state.get("action") or "") == RESULT_ACTION_REUSE or unit not in robustness_unit_states:
+                    robustness_unit_states[unit] = state
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
             blockers.append(f"既有Robustness result state無法驗證: {type(exc).__name__}: {exc}")
             overall = "BLOCKED"
@@ -1253,11 +1372,21 @@ def _render_robustness_execution_plan(
             action = "PARAM+REPLAY"
         rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
-    optimizer_families = tuple(sorted({
-        str(settings.parameter_sources[str(arm.param_source)].canonical_family or "").strip()
-        for arm in stochastic_arms
-        if str(settings.parameter_sources[str(arm.param_source)].canonical_family or "").strip()
-    })) if cfg.benchmark_id is not None else ()
+    pending_optimizer_search_groups: set[tuple[int, str, str]] = set()
+    if cfg.benchmark_id is not None:
+        reusable_units = set(registered_scientific_reuse)
+        for seed in cfg.resolved_seeds:
+            for arm in stochastic_arms:
+                if (arm.arm_id, int(seed)) in reusable_units:
+                    continue
+                binding = benchmark_bindings.get((arm.arm_id, int(seed)))
+                if binding is None:
+                    continue
+                pending_optimizer_search_groups.add((
+                    int(seed),
+                    str(binding["producer_variant"]),
+                    str(binding["family"]),
+                ))
     pit_workload_rows: list[tuple[str, str]] = []
     pit_training_sources = tuple(
         (dl_id, arm_entries)
@@ -1319,9 +1448,12 @@ def _render_robustness_execution_plan(
         *(
             ((
                 "策略Optimizer搜尋",
-                f"{cfg.seed_count * len(optimizer_families)}（{len(optimizer_families)} families × {cfg.seed_count} seeds；Best/Agree共用search）",
+                (
+                    f"{len(pending_optimizer_search_groups)} pending search units"
+                    f"（scientific result REUSE={len(registered_scientific_reuse)}/{cfg.seed_count * len(stochastic_arms)} arm×seed）"
+                ),
             ),)
-            if optimizer_families else ()
+            if cfg.benchmark_id is not None else ()
         ),
         (
             "模型訓練單元",
@@ -1341,6 +1473,7 @@ def _render_robustness_execution_plan(
         "benchmark_param_bindings": benchmark_bindings,
         "robustness_unit_states": robustness_unit_states,
         "robustness_contract": robustness_contract,
+        "registered_scientific_reuse_units": tuple(sorted(registered_scientific_reuse)),
         "comparison_period": None if start is None else {"start": start, "end": end},
         "period_error": period_error,
         "model_upstream_prepare_required": bool(upstream_pending),
@@ -2292,7 +2425,9 @@ def _write_scientific_observation_manifest(
     This READY manifest is the commit marker for stochastic evidence within the
     exact scientific fingerprint. It intentionally excludes summary/report
     presentation so renderer refreshes or lifecycle retries do not alter evidence
-    integrity. Cross-fingerprint result migration is deliberately unsupported.
+    integrity. Cross-profile strategy-only unit reuse may consume this evidence only
+    after this exact source commit validates and the arm×seed scientific signature
+    matches the current desired unit.
     """
 
     payload = {
@@ -2395,9 +2530,10 @@ def _validate_scientific_observation_manifest(
 ) -> dict[str, Any] | None:
     """Validate exact-fingerprint scientific evidence.
 
-    No legacy backfill or cross-fingerprint migration is attempted. If the READY
-    marker is absent or incompatible, the caller must rebuild under the current
-    scientific identity.
+    This validator authenticates one source run under its exact fingerprint.
+    Cross-profile reuse, when allowed, happens only afterwards at arm×seed granularity
+    through a separate unit-identity resolver; the source evidence itself is never
+    reinterpreted without its READY exact-fingerprint commit marker.
     """
 
     evidence_path = _scientific_observation_manifest_path(run_root)
@@ -2427,6 +2563,269 @@ def _validate_scientific_observation_manifest(
         }
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
+
+
+
+def _strategy_only_unit_scientific_signature_from_contract(
+    *, contract: dict[str, Any], arm_id: str, seed: int
+) -> dict[str, Any] | None:
+    """Return the replay-scientific identity of one DL-off robustness observation.
+
+    Container identity (profile/suite/whole-run fingerprint/other arms) is excluded on
+    purpose.  A reusable unit is identified by the concrete replay inputs that can
+    affect that arm/seed observation.
+    """
+
+    arm_contract = next(
+        (
+            dict(raw or {})
+            for raw in tuple(contract.get("stochastic_arms") or ())
+            if str(dict(raw or {}).get("arm_id") or "") == str(arm_id)
+        ),
+        None,
+    )
+    if arm_contract is None or bool(arm_contract.get("model_seed_sensitive")):
+        return None
+    parameter_identity = dict(
+        dict(contract.get("benchmark_parameter_artifact_identities") or {}).get(
+            f"{arm_id}:seed={int(seed)}"
+        )
+        or {}
+    )
+    param_sha = _normalized_hash_value(parameter_identity.get("sha256"))
+    if not param_sha:
+        return None
+    return {
+        "unit_result_identity_schema": "robustness_strategy_seed_result_v1",
+        "scientific_contract_version": int(
+            contract.get("scientific_contract_version") or 0
+        ),
+        "dataset": str(contract.get("dataset") or ""),
+        "dataset_identity": dict(contract.get("dataset_identity") or {}),
+        "max_positions": int(contract.get("max_positions") or 0),
+        "rotation": str(contract.get("rotation") or ""),
+        "comparison_period": dict(contract.get("comparison_period") or {}),
+        "benchmark_id": str(contract.get("benchmark_id") or ""),
+        "seed": int(seed),
+        "strategy_trials_per_fold": contract.get("strategy_trials_per_fold"),
+        "seed_pairing": str(contract.get("seed_pairing") or ""),
+        "arm": {
+            key: arm_contract.get(key)
+            for key in (
+                "arm_id",
+                "param_source",
+                "param_policy",
+                "rule_policy",
+                "strategy_seed_sensitive",
+                "model_seed_sensitive",
+            )
+        },
+        "benchmark_parameter": {
+            key: parameter_identity.get(key)
+            for key in (
+                "identity_schema",
+                "family",
+                "evaluation_mode",
+                "param_policy",
+                "sha256",
+            )
+            if parameter_identity.get(key) not in (None, "")
+        },
+    }
+
+
+def _current_strategy_only_unit_scientific_signature(
+    *, settings, robustness, arm: StrategyComparisonArm, seed: int,
+    binding: dict[str, Any], comparison_start: str, comparison_end: str,
+) -> dict[str, Any] | None:
+    if arm.arm_id in set(robustness.model_seed_sensitive_arm_ids):
+        return None
+    path = Path(binding["path"])
+    if not path.is_file():
+        return None
+    parameter_identity = {
+        "identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
+        "family": str(binding["family"]),
+        "evaluation_mode": str(binding["evaluation_mode"]),
+        "param_policy": str(binding["param_policy"]),
+        "sha256": compute_strategy_param_scientific_sha256(path),
+    }
+    arm_contract = {
+        "arm_id": arm.arm_id,
+        "param_source": arm.param_source,
+        "param_policy": resolve_strategy_comparison_arm_param_policy(settings, arm),
+        "rule_policy": arm.rule_policy,
+        "strategy_seed_sensitive": arm.arm_id in set(robustness.benchmark_strategy_arm_ids),
+        "model_seed_sensitive": False,
+    }
+    return {
+        "unit_result_identity_schema": "robustness_strategy_seed_result_v1",
+        "scientific_contract_version": ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION,
+        "dataset": str(settings.dataset),
+        "dataset_identity": _dataset_identity_snapshot(str(settings.dataset)),
+        "max_positions": int(settings.max_positions),
+        "rotation": str(settings.rotation),
+        "comparison_period": {
+            "start": str(comparison_start), "end": str(comparison_end)
+        },
+        "benchmark_id": str(robustness.benchmark_id or ""),
+        "seed": int(seed),
+        "strategy_trials_per_fold": robustness.strategy_trials_per_fold,
+        "seed_pairing": (
+            "same_seed_strategy_optimizer_and_all_dl_sources"
+            if robustness.benchmark_id is not None else "legacy_model_seed_only"
+        ),
+        "arm": arm_contract,
+        "benchmark_parameter": parameter_identity,
+    }
+
+
+def _iter_registered_robustness_scientific_runs(robustness):
+    for raw_root in resolve_strategy_robustness_result_search_roots(robustness):
+        base = (PROJECT_ROOT / str(raw_root)).resolve()
+        if not base.is_dir():
+            continue
+        for run_root in sorted(
+            (item for item in base.iterdir() if item.is_dir()),
+            key=lambda item: item.name,
+        ):
+            validated = _validate_scientific_observation_manifest(run_root)
+            if validated is not None:
+                yield run_root, validated
+
+
+def _discover_registered_strategy_only_scientific_reuse(
+    *, settings, robustness, stochastic_arms: tuple[StrategyComparisonArm, ...],
+    comparison_start: str, comparison_end: str,
+) -> dict[tuple[str, int], dict[str, Any]]:
+    """Discover reusable DL-off arm×seed observations across registered run roots."""
+
+    if not bool(robustness.reuse_completed) or robustness.benchmark_id is None:
+        return {}
+    desired: dict[tuple[str, int], dict[str, Any]] = {}
+    for seed in robustness.resolved_seeds:
+        for arm in stochastic_arms:
+            binding = _benchmark_param_binding(
+                settings=settings, robustness=robustness, arm=arm, seed=int(seed)
+            )
+            signature = _current_strategy_only_unit_scientific_signature(
+                settings=settings,
+                robustness=robustness,
+                arm=arm,
+                seed=int(seed),
+                binding=binding,
+                comparison_start=str(comparison_start),
+                comparison_end=str(comparison_end),
+            )
+            if signature is not None:
+                desired[(arm.arm_id, int(seed))] = signature
+    if not desired:
+        return {}
+
+    found: dict[tuple[str, int], dict[str, Any]] = {}
+    for source_root, validated in _iter_registered_robustness_scientific_runs(robustness):
+        contract = dict(validated["contract"])
+        seed_frame = validated["seed_frame"]
+        yearly_frame = validated["seed_yearly_frame"]
+        for unit, expected_signature in desired.items():
+            arm_id, seed = unit
+            candidate_signature = _strategy_only_unit_scientific_signature_from_contract(
+                contract=contract, arm_id=arm_id, seed=int(seed)
+            )
+            if candidate_signature != expected_signature:
+                continue
+            rows = seed_frame[
+                (seed_frame["arm_id"].astype(str) == str(arm_id))
+                & (seed_frame["seed"].astype(int) == int(seed))
+            ]
+            if len(rows) != 1:
+                continue
+            yearly = yearly_frame[
+                (yearly_frame["arm_id"].astype(str) == str(arm_id))
+                & (yearly_frame["seed"].astype(int) == int(seed))
+            ].copy()
+            candidate = {
+                "row": dict(rows.iloc[0].to_dict()),
+                "yearly": yearly,
+                "source_run_root": source_root,
+                "signature": expected_signature,
+            }
+            previous = found.get(unit)
+            if previous is not None:
+                rebuilt = dict(candidate["row"])
+                rebuilt["yearly"] = candidate["yearly"].to_dict("records")
+                _validate_rebuilt_observation(
+                    existing_row=dict(previous["row"]),
+                    rebuilt=rebuilt,
+                    existing_yearly=previous["yearly"],
+                )
+                continue
+            found[unit] = candidate
+    return found
+
+
+def _materialize_registered_strategy_only_scientific_reuse(
+    *, run_root: Path, contract: dict[str, Any],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    reusable: dict[tuple[str, int], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Seed a new run namespace with validated observations from sibling profiles."""
+
+    if not reusable:
+        return []
+    seeds = tuple(int(value) for value in contract["resolved_seeds"])
+    arm_order = {arm.arm_id: i for i, arm in enumerate(stochastic_arms, start=1)}
+    seed_order = {int(seed): i for i, seed in enumerate(seeds, start=1)}
+    names = {arm.arm_id: arm.name for arm in stochastic_arms}
+    seed_path = Path(run_root) / SEED_RESULTS_FILENAME
+    yearly_path = Path(run_root) / SEED_YEARLY_RESULTS_FILENAME
+    current = _load_seed_results(seed_path)
+    current_yearly = _load_seed_yearly_results(yearly_path)
+    existing_units = {
+        (str(row.arm_id), int(row.seed)) for row in current.itertuples(index=False)
+    } if not current.empty else set()
+    new_rows: list[dict[str, Any]] = []
+    new_yearly_rows: list[dict[str, Any]] = []
+    provenance: list[dict[str, Any]] = []
+    for unit, item in sorted(reusable.items()):
+        if unit in existing_units:
+            continue
+        arm_id, seed = unit
+        row = dict(item["row"])
+        row.update({
+            "arm_id": arm_id,
+            "name": names[arm_id],
+            "seed": int(seed),
+            "arm_order": int(arm_order[arm_id]),
+            "seed_order": int(seed_order[int(seed)]),
+        })
+        new_rows.append(row)
+        for raw in item["yearly"].to_dict("records"):
+            yearly_row = dict(raw)
+            yearly_row.update({
+                "arm_id": arm_id,
+                "name": names[arm_id],
+                "seed": int(seed),
+                "arm_order": int(arm_order[arm_id]),
+                "seed_order": int(seed_order[int(seed)]),
+            })
+            new_yearly_rows.append(yearly_row)
+        provenance.append({
+            "arm_id": arm_id,
+            "seed": int(seed),
+            "source_run_root": project_relative_display_path(
+                Path(item["source_run_root"]), project_root=PROJECT_ROOT
+            ),
+        })
+    if new_rows:
+        merged = pd.concat([current, pd.DataFrame(new_rows)], ignore_index=True)
+        _write_seed_results(seed_path, merged)
+    if new_yearly_rows:
+        merged_yearly = pd.concat(
+            [current_yearly, pd.DataFrame(new_yearly_rows)], ignore_index=True
+        )
+        _write_seed_yearly_results(yearly_path, merged_yearly)
+    return provenance
 
 def _validate_completed_run(
     run_root: Path,
@@ -3789,9 +4188,17 @@ def run_multi_seed_robustness(
             "Multiple-seed robustness策略參數前置完成後仍缺arm binding: "
             + ", ".join(missing_params)
         )
+    registered_scientific_reuse = _discover_registered_strategy_only_scientific_reuse(
+        settings=settings,
+        robustness=cfg,
+        stochastic_arms=tuple(stochastic_arms),
+        comparison_start=str(comparison_start),
+        comparison_end=str(comparison_end),
+    )
     benchmark_bindings = _prepare_benchmark_strategy_parameter_artifacts(
         settings=settings, robustness=cfg, benchmark_arms=tuple(stochastic_arms),
         comparison_start=str(comparison_start), comparison_end=str(comparison_end),
+        reusable_observations=registered_scientific_reuse,
     )
     status = dict(status)
     status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
@@ -3841,6 +4248,12 @@ def run_multi_seed_robustness(
     manifest_path = run_root / MANIFEST_FILENAME
     seed_results_path = run_root / SEED_RESULTS_FILENAME
     seed_yearly_results_path = run_root / SEED_YEARLY_RESULTS_FILENAME
+    registered_reuse_provenance = _materialize_registered_strategy_only_scientific_reuse(
+        run_root=run_root,
+        contract=contract,
+        stochastic_arms=tuple(stochastic_arms),
+        reusable=registered_scientific_reuse,
+    )
     manifest = {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
         "status": "RUNNING",
@@ -3851,6 +4264,7 @@ def run_multi_seed_robustness(
         "seed_yearly_results_path": project_relative_display_path(
             seed_yearly_results_path, project_root=PROJECT_ROOT
         ),
+        "registered_scientific_reuse": registered_reuse_provenance,
     }
     _write_json(manifest_path, manifest)
 

@@ -12100,3 +12100,14 @@ Decision：`ENGINEERING_ONLY / REGISTRY_DERIVED_RESULT_DISCOVERY / PROFILE_NAMES
 - **Scientific impact**：無。PARAM-P5/C84、C62/C61/C58、Compare Suite membership、model workflow authorization、PIT/seed/Optimizer/Strategy semantics與artifact identity均未變；本輪只移除validator的current-suite形狀假設與dependency duplication。
 
 Decision：`VALIDATOR_CONSUMES_CANONICAL_COMPARE_DEPENDENCY_RESOLVER / STRATEGY_ONLY_SUITE_LEGAL / NO_SECOND_DEPENDENCY_MAP / NO_SCIENTIFIC_CHANGE`。
+
+## 2026-09-28 — Robustness cross-profile per-unit result reuse architecture fix
+
+- **Observed issue**：Phase-2 `[3]/[4]`雖與既有Extending robustness使用同一`end_to_end_v1`、同一8 seeds、相同C62/C61/C58 same-seed strategy contracts，計畫仍對24個既有baseline arm×seed列`REBUILD`，並把四個arms全部列`PARAM+REPLAY`。舊run其實已永久保存`scientific_observations_manifest.json`、`seed_results.csv`與`seed_yearly_returns.csv`；問題是Robustness reuse仍只認整個run fingerprint，Phase-2新增C84／新suite後whole-run fingerprint必然不同。
+- **Architecture fix**：新增Registry-derived robustness result namespace resolver；current profile只擁有write root，read-side會掃所有registered robustness output roots。每個source run仍必須先以其原scientific fingerprint通過READY scientific-observation manifest、durable SHA、完整arm/seed/year與row parameter identity驗證；之後只對strategy-only arm×seed建立container-independent unit signature，包含dataset identity、comparison period、benchmark/seed/trials、arm param/rule contract及strategy-param scientific SHA。profile/suite/其他arms/whole-run fingerprint不進unit signature。
+- **Dependency pruning**：若C62/C61/C58某seed observation已通過上述unit identity，execution plan直接標`REUSE`並剪掉該unit的benchmark-param REBUILD與strategy replay prerequisite；只有未命中的unit才進Optimizer。Phase-2正常情況若24個舊baseline observations皆相容，plan應顯示C62/C61/C58=`8/8 REUSE`、C84=`PARAM+REPLAY`，實際pending Optimizer search從原本錯誤顯示的16/全量重新計算，改為依producer-variant/family/seed的真實pending groups（典型為C84的8 units）。
+- **Execution materialization**：驗證通過的source observations會複製到新Phase-2 run的seed/yearly durable evidence，保留source-run provenance；新run再以current full contract驗證。publication manifest可作provenance而不迫使已完成scientific result重播；strategy-param scientific SHA不一致則禁止reuse。model-sensitive observations目前不跨container搬移，仍走existing fitting-identity/model artifact reuse。
+- **Forward robustness prefix**：benchmark-param dependency同時套用consumer-required schedule coverage；OOS只要求freeze起始member，Rolling才要求完整date-effective coverage，不因`[3]`預建不會被Forward replay消費的後續fold。
+
+Decision：`ROBUSTNESS_NAMESPACE_IS_WRITE_ONLY / REGISTERED_RESULT_DISCOVERY / STRATEGY_ONLY_ARM_SEED_IDENTITY_REUSE / EXACT_SOURCE_COMMIT_REQUIRED / REUSED_RESULTS_PRUNE_PARAM_DEPENDENCIES / C84_ONLY_NEW_WORK_WHEN_BASELINES_MATCH / NO_SCIENTIFIC_CONDITION_CHANGE`。
+
