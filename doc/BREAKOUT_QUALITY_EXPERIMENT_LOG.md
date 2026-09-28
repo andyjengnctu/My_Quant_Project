@@ -12091,3 +12091,12 @@ Decision：`PARAM_P5_REUSE_CONTRACT_ALIGNED_WITH_CONSUMER_READY / STALE_REBUILD_
 
 Decision：`ENGINEERING_ONLY / REGISTRY_DERIVED_RESULT_DISCOVERY / PROFILE_NAMESPACE_IS_WRITE_ONLY / IDENTITY_DECIDES_REUSE / LEGACY_REUSE_ROOTS_COMPAT_ONLY / SCIENTIFIC_IDENTITY_UNCHANGED`。
 
+
+## 2026-09-28 — Strategy-only Compare Suite authorization validator architecture fix
+
+- **Formal evidence**：使用者最新正式bundle顯示quick gate／chain checks／ml smoke皆PASS；consistency唯一FAIL=`BREAKOUT_QUALITY_REUSABLE_MODEL_COMPONENTS / current_compare_dependencies_use_shared_model_workflow_authorization`，meta quality唯一FAIL=`coverage_synthetic_suite_runs_successfully`為同一synthetic failure的連鎖。Coverage line=`65.70% >= 55%`、branch=`57.63% >= 50%`，critical targets亦無不足，故不是coverage退步。
+- **Root cause**：reusable-model validator自行以`arm.dl_id + safety_dl_id`重建Strategy Compare DL dependency集合，並額外硬編`bool(current_dependency_profiles)`，隱含假設current Compare Suite一定含DL。Phase 2 `non_dl_validation_budget_*`是合法strategy-only suite，canonical dependency graph正確解析為空DL集合，因此validator把合法狀態誤判FAIL；同時手寫掃描也漏掉其他artifact-only model dependency型態，形成第二套dependency語意。
+- **Architecture fix**：validator改為直接消費`filters.breakout_quality.strategy_compare_dl_artifacts::resolve_required_artifact_sources()`的canonical dependency resolver，不再自行辨識primary／safety source；authorization invariant改為「所有實際解析出的model dependency都必須通過shared model workflow authorization」。strategy-only suite的空集合以vacuous truth合法通過，不再要求虛構model dependency。
+- **Scientific impact**：無。PARAM-P5/C84、C62/C61/C58、Compare Suite membership、model workflow authorization、PIT/seed/Optimizer/Strategy semantics與artifact identity均未變；本輪只移除validator的current-suite形狀假設與dependency duplication。
+
+Decision：`VALIDATOR_CONSUMES_CANONICAL_COMPARE_DEPENDENCY_RESOLVER / STRATEGY_ONLY_SUITE_LEGAL / NO_SECOND_DEPENDENCY_MAP / NO_SCIENTIFIC_CHANGE`。

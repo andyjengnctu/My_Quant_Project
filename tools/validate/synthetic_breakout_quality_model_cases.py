@@ -2895,6 +2895,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         get_strategy_comparison_settings,
         get_strategy_rolling_test_modes,
     )
+    from filters.breakout_quality.strategy_compare_dl_artifacts import (
+        resolve_required_artifact_sources,
+    )
     from core.params_io import params_to_json_dict
     from core.strategy_params import V16StrategyParams
     from filters.breakout_quality.continuous_target import (
@@ -3879,33 +3882,22 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     # MR identity.  Historical per-profile flags remain frozen evidence; current model
     # workflow authorization is instead derived from the configured Training Profile /
     # Model Compare-Test List SSOT and must not require a second profile authorization list.
-    current_required_profiles = set()
-    current_strategy_scoped_profiles = set()
+    current_dependency_profiles = set()
     for mode in get_strategy_rolling_test_modes():
         mode_settings = get_strategy_comparison_settings(str(mode["profile_id"]))
-        for arm in mode_settings.enabled_arms:
-            if not bool(arm.dl_enabled) or not arm.dl_id:
-                continue
-            required_dl_ids = [str(arm.dl_id)]
-            runtime_options = dict(arm.dl_runtime_options or {})
-            safety_dl_id = str(runtime_options.get("safety_dl_id") or "").strip()
-            if safety_dl_id:
-                required_dl_ids.append(safety_dl_id)
-            for dl_id in required_dl_ids:
-                source = mode_settings.dl_sources[dl_id]
-                profile_name = str(source.experiment_profile)
-                if profile_name not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
-                    continue
-                if bool(source.single_seed_strategy_conversion_authorized):
-                    current_strategy_scoped_profiles.add(profile_name)
-                else:
-                    current_required_profiles.add(profile_name)
+        _required_params, required_dl_sources, _runtime_dl_sources = (
+            resolve_required_artifact_sources(mode_settings)
+        )
+        current_dependency_profiles.update(
+            str(mode_settings.dl_sources[dl_id].experiment_profile)
+            for dl_id in required_dl_sources
+            if str(mode_settings.dl_sources[dl_id].experiment_profile)
+            in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        )
 
-    current_dependency_profiles = current_required_profiles | current_strategy_scoped_profiles
     check_true(
         "current_compare_dependencies_use_shared_model_workflow_authorization",
-        bool(current_dependency_profiles)
-        and all(
+        all(
             breakout_quality_policy.get_breakout_quality_workflow_settings(
                 experiment_profile=profile_name
             ).rolling_authorized
