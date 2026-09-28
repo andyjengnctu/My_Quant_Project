@@ -8,6 +8,7 @@ parameter truth.  Stable menu choices express work types only.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -30,6 +31,14 @@ from core.strategy_param_policy import (
     get_strategy_param_validation_protocol,
 )
 from core.training_policy import get_robustness_benchmark_policy_snapshot
+from services.research.producer_execution import (
+    PRODUCER_ACTION_CANCEL,
+    PRODUCER_ACTION_FORCE_REBUILD,
+    PRODUCER_ACTION_NORMAL,
+    PRODUCER_ACTION_VIEW_REPORT,
+    confirm_force_rebuild,
+    prompt_producer_execution_action,
+)
 from services.optimizer.strategy_param_service import (
     ensure_robustness_benchmark_strategy_parameter_artifact,
     ensure_strategy_parameter_artifact,
@@ -119,7 +128,9 @@ def _single_state(profile: StrategyParamTrainingProfile, *, required_end: str) -
     )
 
 
-def _ensure_single(profile: StrategyParamTrainingProfile, *, required_end: str) -> dict:
+def _ensure_single(
+    profile: StrategyParamTrainingProfile, *, required_end: str, force_rebuild: bool = False
+) -> dict:
     protocol = _validation_protocol(profile)
     if protocol is not None:
         return ensure_validation_budget_strategy_parameter_artifact(
@@ -133,6 +144,8 @@ def _ensure_single(profile: StrategyParamTrainingProfile, *, required_end: str) 
             max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
             parameter_set_identity=profile.parameter_set_identity,
             validation_protocol_id=protocol.protocol_id,
+            force_rebuild=bool(force_rebuild),
+            resume_parameter_training=not bool(force_rebuild),
         )
     return ensure_strategy_parameter_artifact(
         PROJECT_ROOT,
@@ -145,6 +158,8 @@ def _ensure_single(profile: StrategyParamTrainingProfile, *, required_end: str) 
         rotation=str(DEFAULT_PORTFOLIO_ROTATION),
         fixed_risk=float(DEFAULT_FIXED_RISK),
         max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        force_rebuild=bool(force_rebuild),
+        resume_parameter_training=not bool(force_rebuild),
     )
 
 
@@ -185,7 +200,8 @@ def _benchmark_state(
 
 
 def _ensure_benchmark(
-    profile: StrategyParamTrainingProfile, *, seed: int, required_end: str
+    profile: StrategyParamTrainingProfile, *, seed: int, required_end: str,
+    force_rebuild: bool = False,
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
     protocol = _validation_protocol(profile)
@@ -205,6 +221,7 @@ def _ensure_benchmark(
             quiet=False,
             parameter_set_identity=profile.parameter_set_identity,
             validation_protocol_id=protocol.protocol_id,
+            force_rebuild=bool(force_rebuild),
         )
     return ensure_robustness_benchmark_strategy_parameter_artifact(
         PROJECT_ROOT,
@@ -220,6 +237,8 @@ def _ensure_benchmark(
         fixed_risk=float(DEFAULT_FIXED_RISK),
         max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
         quiet=False,
+        force_rebuild=bool(force_rebuild),
+        resume_parameter_training=not bool(force_rebuild),
     )
 
 
@@ -327,21 +346,102 @@ def render_strategy_param_plan(plan: dict) -> str:
     return "\n".join(lines)
 
 
-def _execute_plan(plan: dict) -> dict:
+def _load_training_evidence(path: str | Path) -> dict | None:
+    p = Path(path)
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    if not p.is_file():
+        return None
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def render_strategy_param_training_report(plan: dict) -> str:
+    """Render persisted canonical training evidence without rerunning Optimizer."""
+
+    lines = [
+        "====================================================================================================",
+        f" Strategy Parameter Training Report | {plan['work'].label}",
+        "====================================================================================================",
+    ]
+    rendered_any = False
+    for row in plan["rows"]:
+        payload = _load_training_evidence(row.get("path") or "")
+        if payload is None:
+            lines.extend(("", f"[{row['item']}] 尚無可讀 canonical parameter artifact。"))
+            continue
+        folds = list(payload.get("folds") or [])
+        adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
+        lines.extend((
+            "",
+            f"[{row['item']}]",
+            f"Parameter Set ：{adaptation.get('parameter_set') or plan['profile'].parameter_set_identity}",
+            f"Protocol      ：{adaptation.get('optimizer_search_protocol') or '-'}",
+            f"Artifact      ：{row.get('path') or '-'}",
+        ))
+        if not folds:
+            lines.append("Training protocol evidence：此工件沒有 fold-level validation evidence。")
+            continue
+        for index, fold in enumerate(folds, start=1):
+            protocol = dict((fold or {}).get("training_protocol") or {})
+            if not protocol:
+                continue
+            rendered_any = True
+            lines.extend((
+                "",
+                f"Fold {index} | OOS {fold.get('oos_start_date') or '-'} ～ {fold.get('oos_end_date') or '-'}",
+                f"Validation    ：{protocol.get('validation_start_date') or '-'} ～ {protocol.get('validation_end_date') or '-'}",
+                f"Selected N*  ：{protocol.get('selected_trials') or '-'}",
+                f"Selected Score：{('-' if protocol.get('selected_validation_score') is None else f"{float(protocol.get('selected_validation_score')):.4f}")}",
+                f"OOS feedback ：{bool(protocol.get('oos_feedback_used', False))}",
+            ))
+            checkpoints = list(protocol.get("checkpoint_results") or [])
+            if checkpoints:
+                lines.append(render_table(
+                    ("Trials", "Available", "Validation Score", "RoMD", "Return", "MDD", "Members"),
+                    [
+                        (
+                            str(item.get("trials") or "-"),
+                            "Y" if bool(item.get("available")) else "N",
+                            "-" if item.get("validation_score") is None else f"{float(item['validation_score']):.4f}",
+                            "-" if item.get("plain_romd_score") is None else f"{float(item['plain_romd_score']):.2f}",
+                            "-" if item.get("return_pct") is None else f"{float(item['return_pct']):.2f}%",
+                            "-" if item.get("mdd_pct") is None else f"{float(item['mdd_pct']):.2f}%",
+                            str(item.get("member_count") or 0),
+                        )
+                        for item in checkpoints
+                    ],
+                ))
+    if not rendered_any:
+        lines.extend(("", "目前沒有可顯示的 fold-level validation checkpoint evidence。"))
+    return "\n".join(lines)
+
+
+def _execute_plan(plan: dict, *, force_rebuild: bool = False) -> dict:
     profile: StrategyParamTrainingProfile = plan["profile"]
     work: StrategyParamWorkType = plan["work"]
     required_end = str(plan["required_end"])
     if work.robustness:
         for row in plan["rows"]:
-            if row["action"] == "REUSE":
+            if row["action"] == "REUSE" and not force_rebuild:
                 print(f"[REUSE] {row['item']}")
                 continue
-            print(f"[{row['action']}] {row['item']}")
-            _ensure_benchmark(profile, seed=int(row["seed"]), required_end=required_end)
+            action = "FORCE_REBUILD" if force_rebuild else row["action"]
+            print(f"[{action}] {row['item']}")
+            _ensure_benchmark(
+                profile, seed=int(row["seed"]), required_end=required_end,
+                force_rebuild=bool(force_rebuild),
+            )
     else:
         row = plan["rows"][0]
-        print(f"[{row['action']}] {row['item']}")
-        _ensure_single(profile, required_end=required_end)
+        action = "FORCE_REBUILD" if force_rebuild else row["action"]
+        print(f"[{action}] {row['item']}")
+        _ensure_single(
+            profile, required_end=required_end, force_rebuild=bool(force_rebuild)
+        )
     final_plan = _build_plan(profile, work)
     if final_plan["status"] != "READY":
         pending = ", ".join(
@@ -362,22 +462,28 @@ def _run_work_type(work: StrategyParamWorkType) -> int:
     profile = get_active_strategy_param_training_profile()
     plan = _build_plan(profile, work)
     print("\n" + render_strategy_param_plan(plan))
-    if plan["status"] == "READY":
-        print("\n目前所需策略參數工件已全部 READY；本次不需執行 Optimizer。")
+    can_view = any(bool(row.get("path")) and (PROJECT_ROOT / row["path"]).is_file() for row in plan["rows"])
+    choice = prompt_producer_execution_action(
+        ready=plan["status"] == "READY",
+        can_view_report=can_view,
+    )
+    if choice.action == PRODUCER_ACTION_CANCEL:
         return 0
-    try:
-        choice = input("👉 按 Enter 執行全部必要 BUILD／REBUILD／RESUME；輸入 0 返回：").strip().lower()
-    except EOFError:
-        print("\n輸入已結束，本次不執行。")
+    if choice.action == PRODUCER_ACTION_VIEW_REPORT:
+        print("\n" + render_strategy_param_training_report(plan))
         return 0
-    if choice in {"0", "q", "quit", "exit"}:
-        print("已取消本次執行。")
+    if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
+        if not confirm_force_rebuild(subject=work.label):
+            print("已取消強制重新訓練。")
+            return 0
+        _execute_plan(plan, force_rebuild=True)
+        refreshed = _build_plan(profile, work)
+        print("\n" + render_strategy_param_training_report(refreshed))
         return 0
-    if choice not in {"", "1"}:
-        print("輸入無效，本次不執行。")
+    if choice.action == PRODUCER_ACTION_NORMAL:
+        _execute_plan(plan, force_rebuild=False)
         return 0
-    _execute_plan(plan)
-    return 0
+    raise RuntimeError(f"未知 producer execution action: {choice.action}")
 
 
 def show_strategy_param_status() -> None:
@@ -427,6 +533,7 @@ def run_strategy_param_training_menu(*, advanced_handler: Callable[[], int]) -> 
 __all__ = [
     "WORK_TYPES",
     "render_strategy_param_plan",
+    "render_strategy_param_training_report",
     "run_strategy_param_training_menu",
     "show_strategy_param_status",
 ]

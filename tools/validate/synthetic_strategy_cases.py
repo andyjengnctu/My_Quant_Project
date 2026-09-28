@@ -2154,6 +2154,116 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     with patch.object(strategy_param_application, "ensure_validation_budget_strategy_parameter_artifact", side_effect=_capture_validation_producer):
         strategy_param_application._ensure_single(active_param_profile, required_end="2021-01-01")
     check("strategy_param_menu_delegates_config_identity_to_optimizer_owner", True, producer_call.get("parameter_set_identity") == active_param_profile.parameter_set_identity and producer_call.get("validation_protocol_id") == active_param_profile.validation_protocol and producer_call.get("comparison_end_date") == "2021-01-01")
+    force_call = {}
+    def _capture_force_producer(*args, **kwargs):
+        force_call.update(kwargs)
+        return {"action": "FORCE_REBUILD"}
+    with patch.object(strategy_param_application, "ensure_validation_budget_strategy_parameter_artifact", side_effect=_capture_force_producer):
+        strategy_param_application._ensure_single(
+            active_param_profile, required_end="2021-01-01", force_rebuild=True
+        )
+    check(
+        "strategy_param_force_rebuild_delegates_fresh_execution_to_optimizer_owner",
+        True,
+        force_call.get("force_rebuild") is True
+        and force_call.get("resume_parameter_training") is False
+        and force_call.get("comparison_end_date") == "2021-01-01",
+    )
+    producer_execution_source = (project_root / "services" / "research" / "producer_execution.py").read_text(encoding="utf-8")
+    model_app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
+    check(
+        "research_training_producers_share_one_execution_action_contract",
+        True,
+        "prompt_producer_execution_action" in strategy_param_app_source
+        and "prompt_producer_execution_action" in model_app_source
+        and "強制重新訓練" in producer_execution_source
+        and "查看既有訓練報表" in producer_execution_source,
+    )
+    from services.research.producer_execution import (
+        PRODUCER_ACTION_FORCE_REBUILD, PRODUCER_ACTION_VIEW_REPORT,
+        prompt_producer_execution_action,
+    )
+    with patch("builtins.input", return_value=""), redirect_stdout(io.StringIO()):
+        ready_default = prompt_producer_execution_action(ready=True, can_view_report=True)
+    with patch("builtins.input", return_value="2"), redirect_stdout(io.StringIO()):
+        ready_force = prompt_producer_execution_action(ready=True, can_view_report=True)
+    check(
+        "ready_producer_defaults_to_view_report_not_retrain",
+        PRODUCER_ACTION_VIEW_REPORT, ready_default.action,
+    )
+    check(
+        "ready_producer_force_rebuild_is_explicit_secondary_action",
+        PRODUCER_ACTION_FORCE_REBUILD, ready_force.action,
+    )
+    with TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        artifact = temp_root / "params.json"
+        artifact.write_text(json.dumps({
+            "mode": "rolling",
+            "type": "active_param_ensemble",
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [{"seed": 42, "params": {"high_len": 260}}]
+            },
+            "breakout_quality_param_adaptation": {
+                "parameter_set": active_param_profile.parameter_set_identity,
+                "optimizer_search_protocol": active_param_profile.validation_protocol,
+            },
+            "folds": [{
+                "oos_start_date": "2021-01-01",
+                "oos_end_date": "2021-12-31",
+                "training_protocol": {
+                    "protocol": "validation_budget_refit_v1",
+                    "validation_start_date": "2020-01-01",
+                    "validation_end_date": "2020-12-31",
+                    "selected_trials": 100,
+                    "selected_validation_score": 1.2345,
+                    "oos_feedback_used": False,
+                    "checkpoint_results": [{
+                        "trials": 100, "available": True,
+                        "validation_score": 1.2345, "plain_romd_score": 9.87,
+                        "return_pct": 12.3, "mdd_pct": 4.5, "member_count": 3,
+                    }],
+                },
+            }],
+        }), encoding="utf-8")
+        report_plan = {
+            "work": strategy_param_application.WORK_TYPES[0],
+            "profile": active_param_profile,
+            "rows": [{"item": "Canonical seed 42", "path": "params.json"}],
+        }
+        with patch.object(strategy_param_application, "PROJECT_ROOT", temp_root):
+            rendered_training_report = strategy_param_application.render_strategy_param_training_report(report_plan)
+    check(
+        "strategy_param_existing_training_report_reads_persisted_validation_evidence_without_retraining",
+        True,
+        "Selected N*  ：100" in rendered_training_report
+        and "1.2345" in rendered_training_report
+        and "2020-01-01" in rendered_training_report
+        and "100" in rendered_training_report,
+    )
+    from services.research import breakout_quality_application as model_application
+    with TemporaryDirectory() as temp_dir:
+        publication = Path(temp_dir) / "canonical_model"
+        publication.mkdir(parents=True, exist_ok=True)
+        sentinel = publication / "sentinel.txt"
+        sentinel.write_text("old-publication", encoding="utf-8")
+        rolled_back = False
+        try:
+            with model_application._force_rebuild_publication_guard(publication):
+                publication.mkdir(parents=True, exist_ok=True)
+                (publication / "partial.txt").write_text("new-partial", encoding="utf-8")
+                raise RuntimeError("synthetic fresh producer failure")
+        except RuntimeError:
+            rolled_back = True
+        check(
+            "force_rebuild_failure_restores_previous_canonical_publication",
+            True,
+            rolled_back
+            and sentinel.is_file()
+            and sentinel.read_text(encoding="utf-8") == "old-publication"
+            and not (publication / "partial.txt").exists()
+            and not list(publication.parent.glob("canonical_model.pre_force_rebuild_*")),
+        )
     with patch("builtins.input", side_effect=["S", "", "1"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value="1"):
         interactive_restart_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)

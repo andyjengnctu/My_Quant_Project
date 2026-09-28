@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,15 @@ from services.optimizer.strategy_param_repository import (
     refresh_strategy_parameter_benchmark_manifest,
     refresh_strategy_parameter_manifest,
 )
+
+
+def _force_rebuild_attempt_root(base: Path) -> Path:
+    """Return a fresh execution-only namespace; never part of scientific identity."""
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+    path = Path(base) / "force_rebuild_attempts" / stamp
+    path.mkdir(parents=True, exist_ok=False)
+    return path
 
 
 def _project_relative(root: Path, path: Path) -> str:
@@ -877,7 +887,8 @@ def _build_canonical_schedule(
     root: Path, *, family: str, policy: str, evaluation_mode: str, comparison_end_date: str,
     dataset: str | None = None, max_positions: int | None = None,
     rotation: str | None = None, fixed_risk: float | None = None,
-    max_position_cap_pct: float | None = None,
+    max_position_cap_pct: float | None = None, force_rebuild: bool = False,
+    resume_parameter_training: bool = True,
 ) -> dict[str, Any]:
     from services.optimizer.strategy_param_training import (
         prepare_selection_historical_full_roos_params,
@@ -899,17 +910,20 @@ def _build_canonical_schedule(
     # One optimizer-owned 2021->latest rolling schedule is the only physical truth.
     # OOS is an in-memory consumption view applied by Strategy Compare, never a
     # second 2021-only training job or frozen parameter JSON.
-    work_root = resolve_strategy_param_optimizer_work_dir(
+    canonical_work_root = resolve_strategy_param_optimizer_work_dir(
         root, scope=STRATEGY_PARAM_WORK_SCOPE_CANONICAL, family=family
     )
-    legacy_work_root = (
-        root / STRATEGY_PARAM_WORK_ROOT_RELATIVE / str(family) / "shared_policy_search"
-    )
-    work_root = _adopt_legacy_optimizer_work_root(
-        current_root=work_root,
-        legacy_root=legacy_work_root,
-        prune_stop=root / STRATEGY_PARAM_WORK_ROOT_RELATIVE,
-    )
+    if force_rebuild:
+        work_root = _force_rebuild_attempt_root(Path(canonical_work_root))
+    else:
+        legacy_work_root = (
+            root / STRATEGY_PARAM_WORK_ROOT_RELATIVE / str(family) / "shared_policy_search"
+        )
+        work_root = _adopt_legacy_optimizer_work_root(
+            current_root=canonical_work_root,
+            legacy_root=legacy_work_root,
+            prune_stop=root / STRATEGY_PARAM_WORK_ROOT_RELATIVE,
+        )
     work_identity = {
         "schema": "canonical_strategy_schedule_work_v4",
         "family": family,
@@ -935,7 +949,7 @@ def _build_canonical_schedule(
         fixed_risk=float(contract["fixed_risk"]),
         max_position_cap_pct=float(contract["max_position_cap_pct"]),
         optimizer_seed=int(contract["optimizer_seed"]),
-        resume_parameter_training=True,
+        resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
         quiet=False,
         first_oos_date=str(contract["schedule_start"]),
         last_oos_date=str(comparison_end_date),
@@ -1223,6 +1237,8 @@ def ensure_strategy_parameter_artifact(
     rotation: str | None = None,
     fixed_risk: float | None = None,
     max_position_cap_pct: float | None = None,
+    force_rebuild: bool = False,
+    resume_parameter_training: bool = True,
 ) -> dict[str, Any]:
     """Resolve/reuse/build one canonical strategy schedule.
 
@@ -1265,7 +1281,7 @@ def ensure_strategy_parameter_artifact(
         comparison_end_date in (None, "")
         or (coverage_end is not None and str(coverage_end) >= str(comparison_end_date))
     )
-    if target.is_file() and identity_ready and coverage_ready:
+    if target.is_file() and identity_ready and coverage_ready and not force_rebuild:
         return {
             "action": "REUSE", "family": family, "evaluation_mode": mode,
             "policy": policy, "path": target,
@@ -1291,6 +1307,8 @@ def ensure_strategy_parameter_artifact(
         comparison_end_date=str(comparison_end_date),
         dataset=dataset, max_positions=max_positions, rotation=rotation,
         fixed_risk=fixed_risk, max_position_cap_pct=max_position_cap_pct,
+        force_rebuild=bool(force_rebuild),
+        resume_parameter_training=bool(resume_parameter_training),
     )
     final_ready, final_status = _canonical_manifest_matches_current_schedule(
         root, family=family, policy=policy, target=target,
@@ -1305,7 +1323,7 @@ def ensure_strategy_parameter_artifact(
             f"identity={final_status}, coverage={final_coverage}, required={comparison_end_date}"
         )
     return {
-        "action": "REBUILD" if existed else "BUILD",
+        "action": "FORCE_REBUILD" if force_rebuild else ("REBUILD" if existed else "BUILD"),
         "family": family,
         "evaluation_mode": mode,
         "policy": policy,
@@ -1689,6 +1707,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
     max_position_cap_pct: float,
     resume_parameter_training: bool = True,
     quiet: bool = False,
+    force_rebuild: bool = False,
 ) -> dict[str, Any]:
     """Build/reuse one optimizer-owned full rolling schedule for a benchmark seed.
 
@@ -1722,7 +1741,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
     build_contract = dict(state["build_contract"])
     target = Path(state["target"])
     manifest_path = Path(state["manifest_path"])
-    reusable = str(state["action"]) == "REUSE"
+    reusable = str(state["action"]) == "REUSE" and not force_rebuild
     if reusable:
         initial_sha = _benchmark_effective_member_sha256(target)
         return {
@@ -1732,7 +1751,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
             "initial_2021_member_sha256": str(initial_sha),
         }
 
-    if str(state["action"]) == "REPAIR":
+    if str(state["action"]) == "REPAIR" and not force_rebuild:
         source_path = Path(state["repair_source_path"]).resolve()
         work_root = resolve_strategy_param_optimizer_work_dir(
             root, scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
@@ -1769,8 +1788,13 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
             "initial_2021_member_sha256": str(initial_member_sha),
         }
 
-    work_root = _benchmark_optimizer_work_root(
+    canonical_work_root = _benchmark_optimizer_work_root(
         root, benchmark_id=str(benchmark_id), seed=int(seed), family=family
+    )
+    work_root = (
+        _force_rebuild_attempt_root(Path(canonical_work_root))
+        if force_rebuild
+        else Path(canonical_work_root)
     )
     work_root.mkdir(parents=True, exist_ok=True)
     _write_json(work_root / "work_contract.json", dict(build_contract))
@@ -1797,7 +1821,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         fixed_risk=float(fixed_risk),
         max_position_cap_pct=float(max_position_cap_pct),
         optimizer_seed=int(seed),
-        resume_parameter_training=bool(resume_parameter_training),
+        resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
         quiet=bool(quiet),
         first_oos_date="2021-01-01",
         last_oos_date=str(comparison_end_date),
@@ -1884,7 +1908,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         )
     requested_initial_member_sha = _benchmark_effective_member_sha256(target)
     return {
-        "action": "REBUILD" if str(state["action"]) == "REBUILD" else "BUILD",
+        "action": "FORCE_REBUILD" if force_rebuild else ("REBUILD" if str(state["action"]) == "REBUILD" else "BUILD"),
         "path": target,
         "manifest_path": manifest,
         "sha256": compute_strategy_param_file_sha256(target),
@@ -2090,6 +2114,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
     fixed_risk: float, max_position_cap_pct: float, resume_parameter_training: bool = True,
     quiet: bool = False, parameter_set_identity: str = "PARAM-P5",
     validation_protocol_id: str = "validation_budget_refit_v1",
+    force_rebuild: bool = False,
 ) -> dict[str, Any]:
     from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
     from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
@@ -2118,7 +2143,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
         parameter_set_identity=parameter_set_identity,
         validation_protocol_id=validation_protocol_id,
     )
-    if str(state["action"]) == "REUSE":
+    if str(state["action"]) == "REUSE" and not force_rebuild:
         return {
             "action": "REUSE", "path": target, "manifest_path": manifest_path,
             "sha256": compute_strategy_param_file_sha256(target),
@@ -2127,9 +2152,14 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
 
     benchmark = str(contract["benchmark_id"])
     seed_value = int(contract["benchmark_seed"])
-    work_root = (
+    canonical_work_root = (
         root / _VALIDATION_BUDGET_WORK_RELATIVE / "benchmark"
         / benchmark / f"seed_{seed_value}"
+    )
+    work_root = (
+        _force_rebuild_attempt_root(canonical_work_root)
+        if force_rebuild
+        else canonical_work_root
     )
     work_root.mkdir(parents=True, exist_ok=True)
     _write_json(work_root / "work_contract.json", dict(contract))
@@ -2140,7 +2170,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
         trials_per_fold=int(contract["trials_per_fold"]),
         max_positions=int(max_positions), rotation=str(rotation),
         fixed_risk=float(fixed_risk), max_position_cap_pct=float(max_position_cap_pct),
-        optimizer_seed=seed_value, resume_parameter_training=bool(resume_parameter_training),
+        optimizer_seed=seed_value, resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
         quiet=bool(quiet), first_oos_date=str(contract["schedule_start"]),
         last_oos_date=str(comparison_end_date),
         train_window_months=int(contract["train_window_months"]),
@@ -2190,7 +2220,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
         },
     )
     return {
-        "action": "REBUILD" if str(state["action"]) == "REBUILD" else "BUILD",
+        "action": "FORCE_REBUILD" if force_rebuild else ("REBUILD" if str(state["action"]) == "REBUILD" else "BUILD"),
         "path": target, "manifest_path": manifest_path,
         "sha256": artifact_sha,
         "scientific_sha256": compute_strategy_param_scientific_sha256(target),
@@ -2287,6 +2317,8 @@ def ensure_validation_budget_strategy_parameter_artifact(
     max_position_cap_pct: float | None = None,
     parameter_set_identity: str = "PARAM-P5",
     validation_protocol_id: str = "validation_budget_refit_v1",
+    force_rebuild: bool = False,
+    resume_parameter_training: bool = True,
 ) -> dict[str, Any]:
     """Build/reuse the PARAM-P5 validation-selected-budget Full PIT schedule.
 
@@ -2332,7 +2364,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
     manifest_path = Path(state["manifest_path"])
     contract = dict(state["build_contract"])
     existed_before = str(state["action"]) == "REBUILD"
-    if bool(state["ready"]):
+    if bool(state["ready"]) and not force_rebuild:
         return {
             "action": "REUSE",
             "path": target,
@@ -2342,7 +2374,12 @@ def ensure_validation_budget_strategy_parameter_artifact(
             "build_contract": contract,
         }
 
-    work_root = root / _VALIDATION_BUDGET_WORK_RELATIVE
+    canonical_work_root = root / _VALIDATION_BUDGET_WORK_RELATIVE
+    work_root = (
+        _force_rebuild_attempt_root(canonical_work_root)
+        if force_rebuild
+        else canonical_work_root
+    )
     spec = resolve_validation_budget_spec(int(contract["trials_per_fold"]), protocol_id=validation_protocol_id)
     result = prepare_selection_historical_full_roos_params(
         project_root=root,
@@ -2360,7 +2397,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
             else max_position_cap_pct
         ),
         optimizer_seed=int(contract["optimizer_seed"]),
-        resume_parameter_training=True,
+        resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
         quiet=False,
         first_oos_date=str(contract["schedule_start"]),
         last_oos_date=end_date,
@@ -2411,7 +2448,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
         },
     )
     return {
-        "action": "REBUILD" if existed_before else "BUILD",
+        "action": "FORCE_REBUILD" if force_rebuild else ("REBUILD" if existed_before else "BUILD"),
         "path": target,
         "manifest_path": manifest_path,
         "sha256": target_sha,

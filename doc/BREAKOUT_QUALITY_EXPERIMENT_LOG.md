@@ -12122,3 +12122,12 @@ Decision：`ROBUSTNESS_NAMESPACE_IS_WRITE_ONLY / REGISTERED_RESULT_DISCOVERY / S
 
 Decision：`CONFIG_DRIVEN_STRATEGY_PARAM_TARGET / VALIDATION_GENERIC_PROFILE_OPTION / OPTIMIZER_SOLE_PRODUCER / TRADE_UI_OWNED_BY_WORKBENCH / NO_SCIENTIFIC_IDENTITY_CHANGE`。
 
+## 2026-09-28 — Research canonical producer execution-action contract
+
+- **Observed gap**：canonical producer工件一旦READY，active continuous model與strategy-parameter正式Research入口缺少一致的「只看既有訓練證據」與「真的fresh retrain/re-search」操作；PARAM-P5 READY時尤其只能REUSE返回，使用者若要檢視validation checkpoints容易被迫把「看報表」與「重訓」混為同一需求。
+- **Shared application contract**：新增`services/research/producer_execution.py`作共通execution-action SSOT。READY producer預設Enter=`查看既有訓練報表`；PREPARABLE預設Enter=`執行必要BUILD/REBUILD/RESUME`；Force Rebuild是顯式secondary action且要求輸入`REBUILD`確認。此契約套用active continuous model Forward/Rolling與其Robustness，以及strategy-parameter Forward/Rolling與其Robustness；Strategy Compare/Audit仍是consumer，不新增retrain semantics。Binary legacy model workflow維持既有domain-specific lifecycle。
+- **Force semantics**：scientific config、dataset identity、seed、window、validation protocol與parameter/model identity均不變；fresh model fitting停用既有fitted-model reuse與PIT resume checkpoint，fresh Optimizer search停用既有completed search resume並使用execution-only fresh attempt namespace。合法immutable upstream dataset/features/labels仍可REUSE，不把Force Rebuild擴張成無差別刪除所有cache。
+- **Publication safety**：model canonical publication在fresh producer成功並重新通過reuse contract前先保留；exception或non-zero return會移除partial publication並恢復舊canonical truth。Optimizer force attempt先在fresh work namespace執行，成功後才覆寫同一canonical parameter artifact。查看training report只讀persisted canonical evidence；PARAM-P5 validation checkpoint表直接讀`training_protocol/checkpoint_results`，不觸發Optimizer。
+- **Scientific impact**：無。Strategy Compare fingerprints、PARAM-P5/C84 semantics、validation checkpoints/holdout、seeds、120M/12M、report schema與canonical artifact identities均未變。
+
+Decision：`ENGINEERING_ONLY / SHARED_PRODUCER_EXECUTION_ACTION / READY_DEFAULT_REPORT / FORCE_REBUILD_FRESH_FIT_OR_SEARCH / PUBLICATION_ROLLBACK_ON_FAILURE / SCIENTIFIC_IDENTITY_UNCHANGED`。

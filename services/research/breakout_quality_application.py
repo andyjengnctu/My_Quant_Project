@@ -10,6 +10,7 @@ import importlib
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -110,6 +111,14 @@ from services.breakout_quality.fitted_model_artifacts import (
     fitted_model_settings_issues,
     pit_fold_fitting_settings_issues,
 )
+from services.research.producer_execution import (
+    PRODUCER_ACTION_CANCEL,
+    PRODUCER_ACTION_FORCE_REBUILD,
+    PRODUCER_ACTION_NORMAL,
+    PRODUCER_ACTION_VIEW_REPORT,
+    confirm_force_rebuild,
+    prompt_producer_execution_action,
+)
 from services.research.strategy_compare_training import (
     run_strategy_compare_training_unit,
     validate_strategy_compare_training_artifacts,
@@ -151,6 +160,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
     resolve_filter_output_dir,
+    resolve_filter_point_in_time_dir,
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
     SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
@@ -3658,6 +3668,16 @@ def _rolling_mode_point_in_time_dir(settings, mode) -> Path | None:
 
 
 
+def _rolling_publication_dir(settings, mode) -> Path:
+    override = _rolling_mode_point_in_time_dir(settings, mode)
+    if override is not None:
+        return Path(override).resolve()
+    return resolve_filter_point_in_time_dir(
+        PROJECT_ROOT, str(settings.filter_id), str(settings.model_architecture),
+        str(settings.experiment_profile),
+    ).resolve()
+
+
 def _interactive_continuous_rolling_test(program_name: str, settings) -> int:
     return _run_continuous_rolling_mode_direct(program_name, settings)
 
@@ -3815,17 +3835,70 @@ def _has_continuous_forward_fitted_candidate(settings) -> bool:
     )
 
 
+@contextmanager
+def _force_rebuild_publication_guard(*paths: Path):
+    """Keep current canonical publication until a fresh producer run succeeds."""
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+    backups: list[tuple[Path, Path]] = []
+    unique: list[Path] = []
+    for raw in paths:
+        path = Path(raw).resolve()
+        if path not in unique:
+            unique.append(path)
+    try:
+        for path in unique:
+            if not path.exists():
+                continue
+            backup = path.with_name(path.name + f".pre_force_rebuild_{stamp}")
+            if backup.exists():
+                raise RuntimeError(f"Force rebuild backup已存在: {backup}")
+            path.rename(backup)
+            backups.append((path, backup))
+        yield
+    except BaseException:
+        for path, backup in reversed(backups):
+            if path.exists():
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+            if backup.exists():
+                backup.rename(path)
+        raise
+    else:
+        for _path, backup in backups:
+            if backup.exists():
+                if backup.is_dir():
+                    shutil.rmtree(backup)
+                else:
+                    backup.unlink()
+
+
+def _forward_publication_paths(settings) -> tuple[Path, Path]:
+    artifact_paths = resolve_filter_artifact_paths(
+        PROJECT_ROOT, str(settings.filter_id), str(settings.model_architecture),
+        str(settings.experiment_profile),
+    )
+    research_dir = resolve_filter_model_output_dir(
+        PROJECT_ROOT, str(settings.filter_id), str(settings.model_architecture),
+        str(settings.experiment_profile),
+    )
+    return Path(artifact_paths.model_dir).resolve(), Path(research_dir).resolve()
+
+
 def _ensure_continuous_forward_model_report(
     program_name: str,
     *,
     model_id: str,
     settings,
     prompt_for_build: bool,
+    force_rebuild: bool = False,
 ):
     """REUSE a valid model/manifest/report contract or train only when it is unavailable."""
 
     contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
-    if contract is not None:
+    if contract is not None and not force_rebuild:
         return 0, contract, "REUSE"
 
     upstream_plan = _collect_continuous_research_input_plan(settings)
@@ -3840,27 +3913,39 @@ def _ensure_continuous_forward_model_report(
     code = _prepare_continuous_research_inputs(program_name, settings)
     if code != 0:
         return int(code), None, "BUILD_FAILED"
-    code = _run_command(
-        "train-continuous-ranker",
-        [
-            "--filter-id", str(settings.filter_id),
-            "--model-architecture", str(settings.model_architecture),
-            "--experiment-profile", str(settings.experiment_profile),
-            "--seed", str(int(settings.seed)),
-            "--reuse-fitted-model",
-        ],
-        program_name=program_name,
-        emit_simple_report=False,
-    )
-    if code != 0:
-        return int(code), None, "BUILD_FAILED"
-    _clear_continuous_forward_reuse_caches()
-    contract, reason = _load_reusable_continuous_forward_contract(settings)
-    if contract is None:
-        raise RuntimeError(
-            f"{model_id}訓練完成但canonical Forward-OOS contract仍不可REUSE: {reason}"
+    train_args = [
+        "--filter-id", str(settings.filter_id),
+        "--model-architecture", str(settings.model_architecture),
+        "--experiment-profile", str(settings.experiment_profile),
+        "--seed", str(int(settings.seed)),
+    ]
+    if not force_rebuild:
+        train_args.append("--reuse-fitted-model")
+
+    def _run_and_validate():
+        code = _run_command(
+            "train-continuous-ranker", train_args,
+            program_name=program_name, emit_simple_report=False,
         )
-    return 0, contract, "BUILD/REFRESH"
+        if code != 0:
+            return int(code), None, "BUILD_FAILED"
+        _clear_continuous_forward_reuse_caches()
+        built_contract, reason = _load_reusable_continuous_forward_contract(settings)
+        if built_contract is None:
+            raise RuntimeError(
+                f"{model_id}訓練完成但canonical Forward-OOS contract仍不可REUSE: {reason}"
+            )
+        return 0, built_contract, ("FORCE_REBUILD" if force_rebuild else "BUILD/REFRESH")
+
+    if force_rebuild:
+        with _force_rebuild_publication_guard(*_forward_publication_paths(settings)):
+            result = _run_and_validate()
+            if int(result[0]) != 0:
+                raise RuntimeError(
+                    f"{model_id} Force Rebuild失敗: returncode={int(result[0])}"
+                )
+            return result
+    return _run_and_validate()
 
 
 def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
@@ -3894,6 +3979,54 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
         source_payload=payload,
         source_path=Path(contract.report_path),
         action=action,
+    )
+    return 0
+
+
+def _interactive_continuous_forward_model_gate(program_name: str, settings) -> int:
+    """Apply the shared Research producer action contract to Forward model fitting."""
+
+    _print_workflow_status(settings)
+    research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    reusable_contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
+    _print_model_action_status(((
+        str(research_spec.model_research_id),
+        str(settings.experiment_profile),
+        "REUSE" if reusable_contract is not None else "BUILD/REFRESH",
+        "READY" if reusable_contract is not None else str(reuse_reason or "missing"),
+    ),))
+    choice = prompt_producer_execution_action(
+        ready=reusable_contract is not None,
+        can_view_report=reusable_contract is not None,
+    )
+    if choice.action == PRODUCER_ACTION_CANCEL:
+        return 0
+    if choice.action == PRODUCER_ACTION_VIEW_REPORT:
+        payload = dict(reusable_contract.report or {})
+        payload.setdefault("model_research_id", str(research_spec.model_research_id))
+        _emit_standard_model_sop_report(
+            settings, source_payload=payload, source_path=Path(reusable_contract.report_path), action="REUSE"
+        )
+        return 0
+    if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
+        if not confirm_force_rebuild(subject="Forward OOS 模型訓練"):
+            print("已取消強制重新訓練。")
+            return 0
+        code, contract, action = _ensure_continuous_forward_model_report(
+            program_name, model_id=str(research_spec.model_research_id), settings=settings,
+            prompt_for_build=False, force_rebuild=True,
+        )
+    else:
+        code, contract, action = _ensure_continuous_forward_model_report(
+            program_name, model_id=str(research_spec.model_research_id), settings=settings,
+            prompt_for_build=True, force_rebuild=False,
+        )
+    if code != 0 or contract is None:
+        return int(code)
+    payload = dict(contract.report or {})
+    payload.setdefault("model_research_id", str(research_spec.model_research_id))
+    _emit_standard_model_sop_report(
+        settings, source_payload=payload, source_path=Path(contract.report_path), action=action
     )
     return 0
 
@@ -4027,6 +4160,7 @@ def _run_continuous_pit_profile(
     profile_name: str,
     mode=None,
     forward_checkpoint_source: tuple[Path, Path] | None = None,
+    force_rebuild: bool = False,
 ) -> int:
     settings = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
     selected_mode = mode or get_breakout_quality_rolling_test_mode("rolling")
@@ -4050,9 +4184,12 @@ def _run_continuous_pit_profile(
         "--fold-months", str(int(selected_mode.fold_months)),
         "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
         "--seed", str(settings.seed),
-        "--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
     ]
-    _append_pit_forward_checkpoint_import_args(build_args, forward_checkpoint_source)
+    if not force_rebuild:
+        build_args.extend([
+            "--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+        ])
+        _append_pit_forward_checkpoint_import_args(build_args, forward_checkpoint_source)
     if selected_mode.fold_anchor_date is not None:
         build_args.extend(["--fold-anchor-date", str(selected_mode.fold_anchor_date)])
     if selected_mode.single_score_block:
@@ -4063,7 +4200,7 @@ def _run_continuous_pit_profile(
         build_args.extend(["--train-window-months", str(int(settings.point_in_time_train_window_months))])
     if pit_dir_override is not None:
         build_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
-    build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
+    build_args.append("--no-resume" if force_rebuild else ("--resume" if settings.point_in_time_resume else "--no-resume"))
     audit_args = [
         "--filter-id", settings.filter_id,
         "--model-architecture", settings.model_architecture,
@@ -4071,28 +4208,92 @@ def _run_continuous_pit_profile(
     ]
     if pit_dir_override is not None:
         audit_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
-    with _compact_console_scope():
-        code = _run_command(
-            "build-point-in-time-scores", build_args, program_name=program_name,
-            emit_simple_report=False,
+    def _run_build_and_audit(effective_build_args: list[str]) -> int:
+        with _compact_console_scope():
+            code = _run_command(
+                "build-point-in-time-scores", effective_build_args, program_name=program_name,
+                emit_simple_report=False,
+            )
+            if code != 0:
+                return int(code)
+            code = _run_command(
+                "audit-point-in-time-scores", audit_args, program_name=program_name,
+                emit_simple_report=False,
+            )
+            if code != 0:
+                return int(code)
+        contract, payload, reason = _load_reusable_rolling_standard_report(settings, selected_mode)
+        if contract is None or payload is None:
+            raise RuntimeError(
+                f"{model_id} Rolling OOS完成但Standard SOP仍不可REUSE: {reason}"
+            )
+        _emit_standard_model_sop_report(
+            settings, source_payload=payload, source_path=Path(contract.audit_path),
+            action=("FORCE_REBUILD" if force_rebuild else "BUILD/REFRESH"),
         )
-        if code != 0:
-            return int(code)
-        code = _run_command(
-            "audit-point-in-time-scores", audit_args, program_name=program_name,
-            emit_simple_report=False,
-        )
-        if code != 0:
-            return int(code)
-    contract, payload, reason = _load_reusable_rolling_standard_report(settings, selected_mode)
-    if contract is None or payload is None:
-        raise RuntimeError(
-            f"{model_id} Rolling OOS完成但Standard SOP仍不可REUSE: {reason}"
-        )
-    _emit_standard_model_sop_report(
-        settings, source_payload=payload, source_path=Path(contract.audit_path), action="BUILD/REFRESH"
+        return 0
+
+    if force_rebuild:
+        publication_dir = _rolling_publication_dir(settings, selected_mode)
+        with tempfile.TemporaryDirectory(prefix="bq_force_rebuild_checkpoint_") as cache_dir:
+            forced_args = list(build_args)
+            forced_args.extend(["--checkpoint-cache-root", str(Path(cache_dir).resolve())])
+            with _force_rebuild_publication_guard(publication_dir):
+                result = _run_build_and_audit(forced_args)
+                if int(result) != 0:
+                    raise RuntimeError(
+                        f"{model_id} Rolling Force Rebuild失敗: returncode={int(result)}"
+                    )
+                return int(result)
+    return _run_build_and_audit(build_args)
+
+
+def _interactive_continuous_rolling_model_gate(program_name: str, settings) -> int:
+    """Apply the shared producer action contract to canonical Rolling model fitting."""
+
+    mode = get_breakout_quality_rolling_test_mode("rolling")
+    print("\n=== Rolling OOS 模型訓練 ===")
+    if not settings.rolling_authorized:
+        print("目前Profile不在current Training／Model-Test SSOT，且沒有historical Rolling authorization；本次BLOCKED。")
+        return 0
+    _print_workflow_status(settings)
+    contract, payload, reason = _load_reusable_rolling_standard_report(settings, mode)
+    model_id = _model_display_id(settings.experiment_profile)
+    _print_model_action_status(((
+        model_id, str(settings.experiment_profile),
+        "REUSE" if contract is not None and payload is not None else "BUILD/REFRESH",
+        "READY" if contract is not None and payload is not None else str(reason or "missing"),
+    ),))
+    choice = prompt_producer_execution_action(
+        ready=contract is not None and payload is not None,
+        can_view_report=contract is not None and payload is not None,
     )
-    return 0
+    if choice.action == PRODUCER_ACTION_CANCEL:
+        return 0
+    if choice.action == PRODUCER_ACTION_VIEW_REPORT:
+        _emit_standard_model_sop_report(
+            settings, source_payload=payload, source_path=Path(contract.audit_path), action="REUSE"
+        )
+        return 0
+    if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
+        if not confirm_force_rebuild(subject="Rolling OOS 模型訓練"):
+            print("已取消強制重新訓練。")
+            return 0
+        upstream_plan = _collect_continuous_research_input_plan(settings)
+        _render_continuous_research_input_plan(settings, upstream_plan)
+        if upstream_plan.blocked:
+            print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+            return 0
+        code = _prepare_continuous_research_inputs(program_name, settings)
+        if code != 0:
+            return int(code)
+        spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+        return _run_continuous_pit_profile(
+            program_name, model_id=spec.model_research_id,
+            profile_name=settings.experiment_profile, mode=mode,
+            forward_checkpoint_source=None, force_rebuild=True,
+        )
+    return _run_continuous_rolling_mode_direct(program_name, settings, prompt_for_build=False)
 
 
 def _refresh_rolling_audit_only(program_name: str, settings, mode) -> tuple[object | None, dict | None, str | None]:
@@ -4986,24 +5187,38 @@ def _load_rolling_robustness_seed(settings, *, seed: int):
     return audit, audit_path, None
 
 
-def _build_forward_robustness_seed(program_name: str, settings, *, seed: int) -> int:
+def _build_forward_robustness_seed(
+    program_name: str, settings, *, seed: int, force_rebuild: bool = False
+) -> int:
     model_dir, research_dir = _model_robustness_dirs(settings, seed=seed, rolling=False)
     model_dir.mkdir(parents=True, exist_ok=True)
     research_dir.mkdir(parents=True, exist_ok=True)
-    return int(_run_command(
-        "train-continuous-ranker",
-        [
-            "--filter-id", str(settings.filter_id),
-            "--model-architecture", str(settings.model_architecture),
-            "--experiment-profile", str(settings.experiment_profile),
-            "--seed", str(int(seed)),
-            "--model-output-dir", str(model_dir),
-            "--research-output-dir", str(research_dir),
-            "--reuse-fitted-model",
-        ],
-        program_name=program_name,
-        emit_simple_report=False,
-    ))
+    args = [
+        "--filter-id", str(settings.filter_id),
+        "--model-architecture", str(settings.model_architecture),
+        "--experiment-profile", str(settings.experiment_profile),
+        "--seed", str(int(seed)),
+        "--model-output-dir", str(model_dir),
+        "--research-output-dir", str(research_dir),
+    ]
+    if not force_rebuild:
+        args.append("--reuse-fitted-model")
+
+    def _run():
+        return int(_run_command(
+            "train-continuous-ranker", args, program_name=program_name,
+            emit_simple_report=False,
+        ))
+
+    if force_rebuild:
+        with _force_rebuild_publication_guard(model_dir, research_dir):
+            result = _run()
+            if int(result) != 0:
+                raise RuntimeError(
+                    f"Forward robustness seed={int(seed)} Force Rebuild失敗: returncode={int(result)}"
+                )
+            return int(result)
+    return _run()
 
 
 def _rolling_robustness_score_core_ready(settings, *, seed: int) -> tuple[bool, str | None]:
@@ -5036,7 +5251,9 @@ def _rolling_robustness_score_core_ready(settings, *, seed: int) -> tuple[bool, 
     return True, None
 
 
-def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) -> int:
+def _build_rolling_robustness_seed(
+    program_name: str, settings, *, seed: int, force_rebuild: bool = False
+) -> int:
     mode = get_breakout_quality_rolling_test_mode("rolling")
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
     pit_dir.mkdir(parents=True, exist_ok=True)
@@ -5054,16 +5271,19 @@ def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) ->
         "--fold-months", str(int(mode.fold_months)),
         "--inner-validation-months", str(int(settings.point_in_time_inner_validation_months)),
         "--seed", str(int(seed)),
-        "--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
         "--point-in-time-dir-override", str(pit_dir),
-        "--resume" if settings.point_in_time_resume else "--no-resume",
+        "--no-resume" if force_rebuild else ("--resume" if settings.point_in_time_resume else "--no-resume"),
     ]
-    _append_pit_forward_checkpoint_import_args(
-        build_args,
-        None
-        if forward_payload is None
-        else (Path(forward_model_dir), Path(forward_report_path)),
-    )
+    if not force_rebuild:
+        build_args.extend([
+            "--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+        ])
+        _append_pit_forward_checkpoint_import_args(
+            build_args,
+            None
+            if forward_payload is None
+            else (Path(forward_model_dir), Path(forward_report_path)),
+        )
     if mode.fold_anchor_date is not None:
         build_args.extend(["--fold-anchor-date", str(mode.fold_anchor_date)])
     if mode.single_score_block:
@@ -5079,18 +5299,33 @@ def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) ->
         "--point-in-time-dir-override", str(pit_dir),
     ]
     core_ready, _core_reason = _rolling_robustness_score_core_ready(settings, seed=seed)
-    with _compact_console_scope():
-        if not core_ready:
-            code = _run_command(
-                "build-point-in-time-scores", build_args, program_name=program_name,
+
+    def _run(effective_args: list[str], *, force_core: bool) -> int:
+        with _compact_console_scope():
+            if force_core or not core_ready:
+                code = _run_command(
+                    "build-point-in-time-scores", effective_args, program_name=program_name,
+                    emit_simple_report=False,
+                )
+                if code != 0:
+                    return int(code)
+            return int(_run_command(
+                "audit-point-in-time-scores", audit_args, program_name=program_name,
                 emit_simple_report=False,
-            )
-            if code != 0:
-                return int(code)
-        return int(_run_command(
-            "audit-point-in-time-scores", audit_args, program_name=program_name,
-            emit_simple_report=False,
-        ))
+            ))
+
+    if force_rebuild:
+        with tempfile.TemporaryDirectory(prefix="bq_robust_force_checkpoint_") as cache_dir:
+            forced_args = list(build_args)
+            forced_args.extend(["--checkpoint-cache-root", str(Path(cache_dir).resolve())])
+            with _force_rebuild_publication_guard(pit_dir):
+                result = _run(forced_args, force_core=True)
+                if int(result) != 0:
+                    raise RuntimeError(
+                        f"Rolling robustness seed={int(seed)} Force Rebuild失敗: returncode={int(result)}"
+                    )
+                return int(result)
+    return _run(build_args, force_core=False)
 
 
 def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int:
@@ -5128,10 +5363,26 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         plans.append((str(model_id), settings, seed_states))
 
     _print_model_action_status(rows)
+    all_ready = all(
+        all(payload is not None for _seed, payload, _path, _reason in seed_states)
+        for _model_id, _settings, seed_states in plans
+    )
+    choice = prompt_producer_execution_action(
+        ready=all_ready,
+        can_view_report=all_ready,
+        normal_label="執行必要 Robustness 模型訓練／刷新",
+        report_label="查看既有 Robustness 訓練報表",
+    )
+    if choice.action == PRODUCER_ACTION_CANCEL:
+        return 0
+    force_rebuild = choice.action == PRODUCER_ACTION_FORCE_REBUILD
+    if force_rebuild and not confirm_force_rebuild(subject=f"{mode_label} Robustness 模型測試"):
+        print("已取消強制重新訓練。")
+        return 0
 
     completed = []
     for model_id, settings, seed_states in plans:
-        if any(payload is None for _seed, payload, _path, _reason in seed_states):
+        if force_rebuild or any(payload is None for _seed, payload, _path, _reason in seed_states):
             code = _prepare_continuous_research_inputs(program_name, settings)
             if code != 0:
                 return int(code)
@@ -5141,16 +5392,20 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         built = False
         for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):
             seed_text = _seed_progress_text(seed, seed_index, len(seeds))
-            if payload is None:
+            if force_rebuild or payload is None:
                 print(
-                    styled_workflow_status("[BUILD/REFRESH]")
+                    styled_workflow_status("[FORCE_REBUILD]" if force_rebuild else "[BUILD/REFRESH]")
                     + " " + _model_identity_text(model_id)
                     + " | " + seed_text
                     + f" | {reason}"
                 )
                 code = (
-                    _build_rolling_robustness_seed(program_name, settings, seed=seed)
-                    if rolling else _build_forward_robustness_seed(program_name, settings, seed=seed)
+                    _build_rolling_robustness_seed(
+                        program_name, settings, seed=seed, force_rebuild=force_rebuild
+                    )
+                    if rolling else _build_forward_robustness_seed(
+                        program_name, settings, seed=seed, force_rebuild=force_rebuild
+                    )
                 )
                 if code != 0:
                     return int(code)
@@ -5211,7 +5466,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                 "comparison_extensions": aggregated_extensions,
                 "comparison_extension_aggregation": aggregation_status,
             },
-            "artifact_action": "BUILD/REFRESH" if built else "REUSE",
+            "artifact_action": ("FORCE_REBUILD" if force_rebuild else ("BUILD/REFRESH" if built else "REUSE")),
             "benchmark_seeds": seeds,
             "source_reports": source_reports,
         })
@@ -5264,12 +5519,12 @@ def _interactive_model_research(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            return _run_continuous_forward_model_gate(program_name, settings)
+            return _interactive_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
             if not settings.rolling_authorized:
                 print("[BLOCKED] Current Model只授權Forward Model Gate；Rolling尚未授權。")
                 continue
-            _run_continuous_rolling_mode_direct(program_name, settings)
+            _interactive_continuous_rolling_model_gate(program_name, settings)
             continue
         if choice == "3":
             _run_configured_model_comparison(program_name, rolling=False)

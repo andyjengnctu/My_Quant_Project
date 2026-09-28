@@ -110,6 +110,23 @@ python apps/research.py
 
 `[5]`保留Study／Full／OOS／Rolling OOS generic研究工具；Trade正式操作由Workbench負責，不再出現在Research互動Optimizer。explicit `optimizer --model trade ...`只保留CLI/internal compatibility。
 
+`[1] 模型訓練／驗證`的active continuous model producer與`[2] 策略參數最佳化`的四個正式training work types共用同一execution action。工件READY時Enter只查看既有訓練報表；要重新fitting/search必須明確選「強制重新訓練」並輸入`REBUILD`確認：
+
+```text
+工件 READY：
+[1]  查看既有訓練報表  (Enter)
+[2]  強制重新訓練
+[0]  返回
+
+工件 PREPARABLE：
+[1]  執行必要 BUILD／REBUILD／RESUME  (Enter)
+[2]  查看既有訓練報表            # 有既有evidence時才顯示
+[3]  強制重新訓練
+[0]  返回
+```
+
+`FORCE REBUILD`會保持同一scientific config／seed／data／protocol，但不直接reuse本次核心fitting/search完成結果：模型不reuse fitted/PIT resume checkpoint；Optimizer以fresh execution namespace重新search。舊canonical publication在fresh run成功並通過contract驗證前會保留，失敗則rollback。查看既有報表不會觸發長時間訓練。Binary legacy模型研究仍維持既有domain-specific lifecycle。
+
 策略組合比較的Multiple-seed robustness由同一`config/strategy_compare.py`驅動；正式CLI可用：
 
 ```bash
