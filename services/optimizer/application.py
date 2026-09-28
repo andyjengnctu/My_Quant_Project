@@ -45,7 +45,12 @@ from core.walk_forward_policy import (
 )
 from core.active_param_ensemble import build_static_active_param_ensemble_payload, is_active_param_ensemble_payload
 from core.raw_universe_contract import RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD, resolve_raw_universe_required_min_rows
-from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, generate_random_seed_ensemble, renumber_seed_ensemble_members
+from core.seed_ensemble_policy import (
+    build_seed_ensemble_policy_snapshot,
+    generate_random_seed_ensemble,
+    renumber_seed_ensemble_members,
+    resolve_seed_ensemble_seeds,
+)
 from config.training_policy import (
     DEFAULT_OPTIMIZER_MODEL_MODE,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
@@ -2094,7 +2099,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     selected_policy_for_progress = str(run_best_selector_override or candidate_selector_override or "").strip()
     selected_policy_uses_finalist_agreement = _is_finalists_agree_policy_name(selected_policy_for_progress)
 
-    seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
+    seeds = resolve_seed_ensemble_seeds(policy)
     resolved_manifest_training_policy = (
         None if manifest_training_policy_override is None else dict(manifest_training_policy_override)
     )

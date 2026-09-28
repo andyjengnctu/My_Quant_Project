@@ -3389,7 +3389,16 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "random_seed_bundle_is_fresh_per_training_invocation", True, seed_bundle_a != seed_bundle_b)
     add_check(results, "trading_param", case_id, "random_seed_bundle_preserves_requested_count", 3, len(seed_bundle_a))
     nonrolling_source = inspect.getsource(optimizer_application._run_nonrolling_random_seed_ensemble_training)
-    add_check(results, "trading_param", case_id, "canonical_optimizer_generates_random_seed_bundle_at_run_time", True, "generate_random_seed_ensemble" in nonrolling_source)
+    seed_resolver_source = inspect.getsource(__import__("core.seed_ensemble_policy", fromlist=["resolve_seed_ensemble_seeds"]).resolve_seed_ensemble_seeds)
+    add_check(
+        results,
+        "trading_param",
+        case_id,
+        "canonical_optimizer_generates_random_seed_bundle_at_run_time",
+        True,
+        "resolve_seed_ensemble_seeds" in nonrolling_source
+        and "generate_random_seed_ensemble" in seed_resolver_source,
+    )
     add_check(results, "trading_param", case_id, "canonical_optimizer_persists_resolved_seeds_in_manifest", True, "resolved_optimizer_seeds" in nonrolling_source and "resolved_seeds" in nonrolling_source)
 
     # Exercise the public static producer without expensive optimization.  The fake

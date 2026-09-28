@@ -24,6 +24,7 @@ from services.research.strategy_compare_preparation_status import (
     resolve_required_param_policies_for_source,
 )
 from services.optimizer.strategy_param_service import (
+    ensure_fixed_multiseed_strategy_parameter_artifact,
     ensure_strategy_parameter_artifact,
     ensure_validation_budget_strategy_parameter_artifact,
 )
@@ -82,6 +83,35 @@ def _execute_preparation_action(
         for param_policy in resolve_required_param_policies_for_source(settings, source_id):
             ensure_validation_budget_strategy_parameter_artifact(
                 root,
+                policy=param_policy,
+                comparison_end_date=str(required_schedule_end),
+                dataset=settings.dataset,
+                max_positions=int(settings.max_positions),
+                rotation=str(settings.rotation),
+                fixed_risk=float(DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            )
+        return
+    if action.builder_type == "optimizer_fixed_multiseed_strategy_params":
+        _kind, source_id = action.artifact_key.split(":", 1)
+        source = settings.parameter_sources[source_id]
+        builder = source.builder
+        if builder is None:
+            raise RuntimeError(f"fixed multi-seed參數來源缺少builder: {source_id}")
+        required_schedule_end = resolve_strategy_parameter_required_schedule_end(
+            source,
+            comparison_start=comparison_start_date,
+            comparison_end=comparison_end_date,
+        )
+        if required_schedule_end in (None, ""):
+            raise RuntimeError("fixed multi-seed builder缺少可解析的required schedule end")
+        training_profile_id = str(dict(builder.options).get("training_profile_id") or "").strip()
+        if not training_profile_id:
+            raise RuntimeError("fixed multi-seed builder缺少training_profile_id")
+        for param_policy in resolve_required_param_policies_for_source(settings, source_id):
+            ensure_fixed_multiseed_strategy_parameter_artifact(
+                root,
+                training_profile_id=training_profile_id,
                 policy=param_policy,
                 comparison_end_date=str(required_schedule_end),
                 dataset=settings.dataset,

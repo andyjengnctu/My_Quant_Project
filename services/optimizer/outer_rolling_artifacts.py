@@ -141,7 +141,14 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
     params_by_oos_year = {}
     params_by_effective_date = {}
     params_ensemble_by_effective_date = {}
-    requested_seed_ensemble_policy = _build_random_seed_ensemble_policy_payload()
+    requested_seed_ensemble_policy = next(
+        (
+            dict(row.get("random_seed_ensemble") or {})
+            for row in rows
+            if dict(row.get("random_seed_ensemble") or {})
+        ),
+        _build_random_seed_ensemble_policy_payload(),
+    )
     fold_entries = []
     for row in rows:
         schedule = dict((row.get("policy_schedules") or {}).get(policy_name) or {})

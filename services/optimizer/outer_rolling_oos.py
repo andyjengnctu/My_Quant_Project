@@ -389,6 +389,7 @@ from core.seed_ensemble_policy import (
     generate_random_seed_ensemble,
     normalize_seed_ensemble_members,
     renumber_seed_ensemble_members,
+    resolve_seed_ensemble_seeds,
 )
 from core.strategy_params import build_runtime_param_raw_value
 from core.strategy_param_artifacts import normalize_strategy_param_payload_for_persistence
@@ -698,7 +699,7 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
             live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=bool(done))
     finally:
         live_board.close()
-    if _is_rolling_random_seed_ensemble_enabled():
+    if any(_task_seed_ensemble_enabled(task) for task in list(tasks or [])):
         phase_metrics = _collect_seed_progress_phase_metrics(
             progress
             for task in list(tasks or [])
@@ -917,7 +918,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         "oos_diagnostics_sec": sum(float(row.get("oos_diagnostics_sec", 0.0) or 0.0) for row in seed_rows) + ensemble_eval_sec,
         "install_shared_cache_sec": sum(float(row.get("install_shared_cache_sec", 0.0) or 0.0) for row in seed_rows),
         "study_create_sec": sum(float(row.get("study_create_sec", 0.0) or 0.0) for row in seed_rows),
-        "random_seed_ensemble": _build_rolling_seed_ensemble_policy_payload(),
+        "random_seed_ensemble": dict(_task_seed_ensemble_policy(task)),
         "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         "optimizer_seeds": [_extract_seed_from_policy_schedules(row) for row in seed_rows],
     }
@@ -968,9 +969,19 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
     }
 
 
+def _task_seed_ensemble_policy(task: dict | None) -> dict:
+    override = dict((task or {}).get("seed_ensemble_policy") or {})
+    return override if override else _effective_rolling_seed_ensemble_policy_payload()
+
+
+def _task_seed_ensemble_enabled(task: dict | None) -> bool:
+    policy = _task_seed_ensemble_policy(task)
+    return bool(policy.get("enabled", False)) and int(policy.get("seed_count", 1) or 1) > 1
+
+
 def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
-    policy = _build_rolling_seed_ensemble_policy_payload()
-    seeds = generate_random_seed_ensemble(int(policy.get("seed_count", 1) or 1))
+    policy = _task_seed_ensemble_policy(task)
+    seeds = resolve_seed_ensemble_seeds(policy)
     parallel_workers = _resolve_fold_seed_ensemble_parallel_workers(task, len(seeds))
     log_path = str(task.get("log_path") or "")
     fold_idx = int(task.get("fold_idx", 0) or 0)
@@ -1751,7 +1762,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
 
     def _execute_with_logged_exception() -> dict:
         try:
-            if not bool((task or {}).get("seed_ensemble_member")) and _is_rolling_random_seed_ensemble_enabled():
+            if not bool((task or {}).get("seed_ensemble_member")) and _task_seed_ensemble_enabled(task):
                 return _run_outer_rolling_oos_fold_ensemble_task(task)
             return _execute()
         except Exception as exc:
@@ -1800,6 +1811,7 @@ def run_outer_rolling_oos(
     canonical_strategy_param_family: str | None = None,
     latest_data_date_override: str | None = None,
     output_files_title: str = "💾 輸出檔案",
+    seed_ensemble_policy_override: dict | None = None,
 ) -> int:
     from services.optimizer.session import close_study_storage
     from services.optimizer.session_factory import build_optimizer_session_from_spec
@@ -1833,6 +1845,16 @@ def run_outer_rolling_oos(
     latest_year = None if latest_date is None else int(latest_date.year)
 
     config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, latest_date=latest_date, default_trials=default_trials, timing_mode=bool(timing_mode))
+    runtime_seed_policy = (
+        dict(seed_ensemble_policy_override)
+        if isinstance(seed_ensemble_policy_override, dict)
+        else _effective_rolling_seed_ensemble_policy_payload()
+    )
+    seed_ensemble_enabled = bool(runtime_seed_policy.get("enabled", False)) and int(
+        runtime_seed_policy.get("seed_count", 1) or 1
+    ) > 1
+    if seed_ensemble_enabled and runtime_seed_policy.get("resolved_seeds") is not None:
+        resolve_seed_ensemble_seeds(runtime_seed_policy)
     config.raw_universe_required_min_rows = int(optimizer_required_min_rows)
     folds = _build_rolling_folds(config)
     fold_count = int(len(folds))
@@ -1935,6 +1957,7 @@ def run_outer_rolling_oos(
                 "timing_mode": bool(timing_mode),
                 "fold_workers": int(fold_workers),
                 "optimizer_session_spec": dict(session_spec),
+                "seed_ensemble_policy": dict(runtime_seed_policy),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             })
             # Fold log path is kept internally for diagnostics, but not printed during normal progress.
@@ -2046,7 +2069,7 @@ def run_outer_rolling_oos(
                 )
                 _print_completed_results(rows)
             continue
-        if _is_rolling_random_seed_ensemble_enabled():
+        if seed_ensemble_enabled:
             log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
             os.makedirs(log_dir, exist_ok=True)
             config_payload = {
@@ -2084,6 +2107,7 @@ def run_outer_rolling_oos(
                 "timing_mode": bool(timing_mode),
                 "fold_workers": int(fold_workers),
                 "optimizer_session_spec": dict(session_spec),
+                "seed_ensemble_policy": dict(runtime_seed_policy),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             }
             result = _run_outer_rolling_oos_fold_task(task)
@@ -2463,7 +2487,7 @@ def run_outer_rolling_oos(
         print("\n" + final_report)
     timing_payload = dict((timing_paths or {}).get("payload") or {})
     timing_summary = dict(timing_payload.get("summary") or {})
-    seed_policy = _effective_rolling_seed_ensemble_policy_payload()
+    seed_policy = dict(runtime_seed_policy)
     seed_ensemble_enabled = bool(seed_policy.get("enabled", False))
     effective_seed_count = int(seed_policy.get("seed_count", 1) or 1)
     effective_min_agree = int(seed_policy.get("min_agree", effective_seed_count) or effective_seed_count)

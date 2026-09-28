@@ -811,6 +811,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 "selection_historical_full_roos",
                 "canonical_optimizer_strategy_params",
                 "optimizer_validation_budget_refit_strategy_params",
+                "optimizer_fixed_multiseed_strategy_params",
             },
         )
         if source.builder is not None and source.builder.enabled:

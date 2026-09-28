@@ -1896,6 +1896,11 @@ def _selection_full_roos_runtime_contract(
         "max_positions": int(args.max_positions),
         "rotation": str(args.rotation),
     }
+    seed_ensemble_policy = dict(
+        getattr(args, "seed_ensemble_policy_override", None) or {}
+    )
+    if seed_ensemble_policy:
+        payload["seed_ensemble_policy"] = seed_ensemble_policy
     payload["runtime_identity_sha256"] = _canonical_hash(payload)
     return payload
 
@@ -1978,7 +1983,7 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
     optimizer_search_protocol = str(
         getattr(args, "optimizer_search_protocol", "") or ""
     ).strip()
-    if optimizer_search_protocol:
+    if optimizer_search_protocol == "validation_budget_refit_v1":
         from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
 
         spec = resolve_validation_budget_spec(int(args.trials_per_fold))
@@ -1997,6 +2002,22 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
                 )
             if bool(protocol.get("oos_feedback_used", True)):
                 raise ValueError("validation-budget Full ROOS禁止OOS feedback進入budget selection")
+    seed_ensemble_policy = dict(
+        getattr(args, "seed_ensemble_policy_override", None) or {}
+    )
+    if seed_ensemble_policy:
+        requested = dict(meta.get("requested_random_seed_ensemble") or {})
+        for key in ("enabled", "seed_count", "min_agree", "seed_mode", "resolved_seeds"):
+            expected = seed_ensemble_policy.get(key)
+            actual = requested.get(key)
+            if key == "resolved_seeds":
+                expected = [int(value) for value in list(expected or [])]
+                actual = [int(value) for value in list(actual or [])]
+            if actual != expected:
+                raise ValueError(
+                    "Selection Full ROOS seed ensemble contract不一致: "
+                    f"field={key}, expected={expected!r}, actual={actual!r}"
+                )
     payload["breakout_quality_param_adaptation"] = {
         "mode": "selection_full_roos_training",
         "parameter_set": parameter_set_identity,
@@ -2006,6 +2027,11 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
         **(
             {"optimizer_search_protocol": optimizer_search_protocol}
             if optimizer_search_protocol
+            else {}
+        ),
+        **(
+            {"seed_ensemble_policy": dict(seed_ensemble_policy)}
+            if seed_ensemble_policy
             else {}
         ),
     }
@@ -2041,6 +2067,7 @@ def prepare_selection_historical_full_roos_params(
     environ_override=None,
     optimizer_search_protocol: str | None = None,
     parameter_set_identity: str = "P4_HISTORY",
+    seed_ensemble_policy_override: dict | None = None,
 ):
     """Build/reuse Full rolling params using the canonical full search space.
 
@@ -2071,6 +2098,11 @@ def prepare_selection_historical_full_roos_params(
         quiet=bool(quiet),
         optimizer_search_protocol=str(optimizer_search_protocol or "").strip(),
         parameter_set_identity=str(parameter_set_identity),
+        seed_ensemble_policy_override=(
+            None
+            if not isinstance(seed_ensemble_policy_override, dict)
+            else dict(seed_ensemble_policy_override)
+        ),
     )
     output_dir = (
         root / SELECTION_FULL_ROOS_RELATIVE_DIR
@@ -2183,6 +2215,11 @@ def prepare_selection_historical_full_roos_params(
             paramset_models_dir=str(active_param_dir.resolve()),
             latest_data_date_override=latest_data_date_override,
             output_files_title=str(optimizer_output_title or "💾 輸出檔案"),
+            seed_ensemble_policy_override=(
+                None
+                if not isinstance(seed_ensemble_policy_override, dict)
+                else dict(seed_ensemble_policy_override)
+            ),
         )
         if int(exit_code) != 0:
             raise RuntimeError(f"Selection Full ROOS rolling optimizer失敗: {exit_code}")

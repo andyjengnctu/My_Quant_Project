@@ -97,6 +97,7 @@ from services.optimizer.strategy_param_training import (
     MIN_ROOS_SEARCH_FIELDS,
 )
 from services.optimizer.strategy_param_service import (
+    inspect_fixed_multiseed_strategy_parameter_artifact,
     inspect_validation_budget_strategy_parameter_artifact,
     validate_strategy_parameter_artifact_identity,
 )
@@ -497,6 +498,25 @@ def _validate_param_training_identity(
                 return False, "VALIDATION_BUDGET_OUTPUT_MISSING", manifest_path
             if str(payload.get("artifact_sha256") or "") != compute_file_sha256(output_path):
                 return False, "VALIDATION_BUDGET_OUTPUT_HASH_MISMATCH", manifest_path
+            return True, "READY", manifest_path
+        if builder.builder_type == "optimizer_fixed_multiseed_strategy_params":
+            expected_profile = str(options.get("training_profile_id") or "").strip()
+            if str(payload.get("producer") or "") != "optimizer":
+                return False, "FIXED_MULTI_SEED_PRODUCER_MISMATCH", manifest_path
+            if str(payload.get("training_profile_id") or "") != expected_profile:
+                return False, "FIXED_MULTI_SEED_PROFILE_MISMATCH", manifest_path
+            build_contract = dict(payload.get("build_contract") or {})
+            if str(build_contract.get("dataset") or "") != str(settings.dataset):
+                return False, "FIXED_MULTI_SEED_DATASET_MISMATCH", manifest_path
+            if int(build_contract.get("max_positions") or 0) != int(settings.max_positions):
+                return False, "FIXED_MULTI_SEED_MAX_POSITIONS_MISMATCH", manifest_path
+            if str(build_contract.get("rotation") or "") != str(settings.rotation):
+                return False, "FIXED_MULTI_SEED_ROTATION_MISMATCH", manifest_path
+            output_path = resolve_param_source_path(root, settings, source_id)
+            if not output_path.is_file():
+                return False, "FIXED_MULTI_SEED_OUTPUT_MISSING", manifest_path
+            if str(payload.get("artifact_sha256") or "") != compute_file_sha256(output_path):
+                return False, "FIXED_MULTI_SEED_OUTPUT_HASH_MISMATCH", manifest_path
             return True, "READY", manifest_path
         if builder.builder_type == "oos_param_freeze":
             if str(payload.get("builder_type") or "") != "oos_param_freeze":
@@ -900,7 +920,10 @@ def _collect_parameter_artifact_status(
                 comparison_start=comparison_start,
                 comparison_end=comparison_end,
             )
-            if builder_type == "optimizer_validation_budget_refit_strategy_params"
+            if builder_type in {
+                "optimizer_validation_budget_refit_strategy_params",
+                "optimizer_fixed_multiseed_strategy_params",
+            }
             else comparison_end
         )
         for param_policy in policies:
@@ -936,6 +959,21 @@ def _collect_parameter_artifact_status(
                 )
                 policy_identity_ready = bool(p5_state["ready"])
                 policy_identity_status = str(p5_state["status"])
+            elif builder_type == "optimizer_fixed_multiseed_strategy_params":
+                builder_options = {} if source.builder is None else dict(source.builder.options)
+                p6_state = inspect_fixed_multiseed_strategy_parameter_artifact(
+                    root,
+                    training_profile_id=str(builder_options.get("training_profile_id") or ""),
+                    policy=param_policy,
+                    comparison_end_date=str(required_schedule_end),
+                    dataset=settings.dataset,
+                    max_positions=int(settings.max_positions),
+                    rotation=str(settings.rotation),
+                    fixed_risk=float(DEFAULT_FIXED_RISK),
+                    max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                )
+                policy_identity_ready = bool(p6_state["ready"])
+                policy_identity_status = str(p6_state["status"])
             elif source.canonical_family and source.canonical_evaluation_mode:
                 policy_identity_ready, policy_identity_status, _canonical_target = (
                     validate_strategy_parameter_artifact_identity(
@@ -1030,6 +1068,7 @@ def _collect_parameter_artifact_status(
             if builder.builder_type in {
                 "canonical_optimizer_strategy_params",
                 "optimizer_validation_budget_refit_strategy_params",
+                "optimizer_fixed_multiseed_strategy_params",
             }:
                 description = (
                     "由canonical Optimizer parameter service解析／建立／接續策略參數工件"
@@ -1100,6 +1139,7 @@ def _collect_parameter_artifact_status(
                         if builder is not None and builder.builder_type in {
                             "canonical_optimizer_strategy_params",
                             "optimizer_validation_budget_refit_strategy_params",
+                            "optimizer_fixed_multiseed_strategy_params",
                         }
                         else "strategy_parameter_optimization"
                     )

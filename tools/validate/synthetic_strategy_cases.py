@@ -2121,14 +2121,45 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     strategy_param_config_source = (project_root / "config" / "strategy_params.py").read_text(encoding="utf-8")
     strategy_param_app_source = (project_root / "services" / "research" / "strategy_param_application.py").read_text(encoding="utf-8")
     research_entry_source = (project_root / "apps" / "research.py").read_text(encoding="utf-8")
-    from core.strategy_param_policy import get_active_strategy_param_training_profile
+    from core.strategy_param_policy import (
+        get_active_strategy_param_training_profile,
+        get_strategy_param_fitting_seed_protocol,
+        get_strategy_param_training_profile,
+    )
     from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
     active_param_profile = get_active_strategy_param_training_profile()
+    validation_param_profile = get_strategy_param_training_profile("validation_budget_current")
+    production_multiseed_param_profile = get_strategy_param_training_profile(
+        "production_multiseed_current"
+    )
+    production_multiseed_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
+        production_multiseed_param_profile.fitting_seed_protocol
+    )
+    validation_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
+        validation_param_profile.fitting_seed_protocol
+    )
     validation_spec = resolve_validation_budget_spec(300)
     check("strategy_param_training_target_is_config_driven", True, "ACTIVE_STRATEGY_PARAM_PROFILE" in strategy_param_config_source and "get_active_strategy_param_training_profile" in strategy_param_app_source)
     check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
-    check("strategy_param_validation_is_profile_config_not_optimizer_menu_switch", True, active_param_profile.validation_enabled and active_param_profile.validation_protocol == "validation_budget_refit_v1" and "STRATEGY_PARAM_VALIDATION_PROTOCOLS" in strategy_param_config_source)
+    check("strategy_param_validation_is_profile_config_not_optimizer_menu_switch", True, validation_param_profile.validation_enabled and validation_param_profile.validation_protocol == "validation_budget_refit_v1" and "STRATEGY_PARAM_VALIDATION_PROTOCOLS" in strategy_param_config_source)
     check("strategy_param_validation_config_preserves_phase2_contract", True, validation_spec.as_dict() == {"protocol": "validation_budget_refit_v1", "holdout_months": 12, "checkpoints": [50, 100, 150, 200, 250, 300], "policy_name": "base_finalists_agree", "selection_metric": "canonical_optimizer_portfolio_score", "tie_break": "smaller_budget", "oos_feedback_used": False, "full_refit_required": True})
+    check(
+        "strategy_param_round2_registers_fixed_multiseed_p6_without_premature_activation",
+        True,
+        active_param_profile.parameter_set_identity == "PARAM-P5"
+        and active_param_profile.profile_id == "validation_budget_current"
+        and production_multiseed_param_profile.parameter_set_identity == "PARAM-P6"
+        and production_multiseed_param_profile.profile_id == "production_multiseed_current"
+        and not production_multiseed_param_profile.validation_enabled
+        and production_multiseed_fitting_seed_protocol.enabled
+        and production_multiseed_fitting_seed_protocol.seed_count == 8
+        and production_multiseed_fitting_seed_protocol.trials_per_seed == 300
+        and production_multiseed_fitting_seed_protocol.seed_mode == "fixed_generated_bundle"
+        and len(production_multiseed_fitting_seed_protocol.resolved_seeds) == 8
+        and len(set(production_multiseed_fitting_seed_protocol.resolved_seeds)) == 8
+        and validation_fitting_seed_protocol.seed_mode == "fixed_single_seed"
+        and validation_fitting_seed_protocol.resolved_seeds == (42,),
+    )
     from services.optimizer.outer_rolling_parallel_progress import (
         PARALLEL_FOLD_PROGRESS_PREFIX,
         _ParallelFoldProgressLogFilter,
@@ -2171,6 +2202,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "schedule_start_date": "2021-01-01",
             "coverage_end_date": "2021-12-31",
             "validation": {"enabled": False},
+            "fitting_seed_protocol": "single_seed_42",
         }
     }
     with patch.object(strategy_param_policy, "STRATEGY_PARAM_PROFILES", disabled_profiles):
@@ -2181,16 +2213,25 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     def _capture_validation_producer(*args, **kwargs):
         producer_call.update(kwargs)
         return {"action": "REUSE"}
-    with patch.object(strategy_param_application, "ensure_validation_budget_strategy_parameter_artifact", side_effect=_capture_validation_producer):
-        strategy_param_application._ensure_single(active_param_profile, required_end="2021-01-01")
-    check("strategy_param_menu_delegates_config_identity_to_optimizer_owner", True, producer_call.get("parameter_set_identity") == active_param_profile.parameter_set_identity and producer_call.get("validation_protocol_id") == active_param_profile.validation_protocol and producer_call.get("comparison_end_date") == "2021-01-01")
+    with patch.object(strategy_param_application, "ensure_fixed_multiseed_strategy_parameter_artifact", side_effect=_capture_validation_producer):
+        strategy_param_application._ensure_single(
+            production_multiseed_param_profile, required_end="2021-01-01"
+        )
+    check(
+        "strategy_param_menu_delegates_config_identity_to_optimizer_owner",
+        True,
+        producer_call.get("training_profile_id") == production_multiseed_param_profile.profile_id
+        and producer_call.get("comparison_end_date") == "2021-01-01",
+    )
     force_call = {}
     def _capture_force_producer(*args, **kwargs):
         force_call.update(kwargs)
         return {"action": "FORCE_REBUILD"}
-    with patch.object(strategy_param_application, "ensure_validation_budget_strategy_parameter_artifact", side_effect=_capture_force_producer):
+    with patch.object(strategy_param_application, "ensure_fixed_multiseed_strategy_parameter_artifact", side_effect=_capture_force_producer):
         strategy_param_application._ensure_single(
-            active_param_profile, required_end="2021-01-01", force_rebuild=True
+            production_multiseed_param_profile,
+            required_end="2021-01-01",
+            force_rebuild=True,
         )
     check(
         "strategy_param_force_rebuild_delegates_fresh_execution_to_optimizer_owner",
@@ -2243,8 +2284,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
                 "2021-01-01": [{"seed": 42, "params": {"high_len": 260}}]
             },
             "breakout_quality_param_adaptation": {
-                "parameter_set": active_param_profile.parameter_set_identity,
-                "optimizer_search_protocol": active_param_profile.validation_protocol,
+                "parameter_set": validation_param_profile.parameter_set_identity,
+                "optimizer_search_protocol": validation_param_profile.validation_protocol,
             },
             "folds": [{
                 "oos_start_date": "2021-01-01",
@@ -2266,7 +2307,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         }), encoding="utf-8")
         report_plan = {
             "work": strategy_param_application.WORK_TYPES[0],
-            "profile": active_param_profile,
+            "profile": validation_param_profile,
             "rows": [{"item": "Canonical seed 42", "path": "params.json"}],
         }
         with patch.object(strategy_param_application, "PROJECT_ROOT", temp_root):

@@ -303,7 +303,18 @@ class _ParallelFoldLiveBoard:
         # parallel fold 模式下，raw data 由各 fold worker 自行載入，
         # worker raw 時間已包含在 fold_time wall 裡；不要再以 raw/other 顯示，避免與總時間對帳時重複或缺項。
         total_folds = max((int(task.get("fold_count", 0) or 0) for task in self.tasks), default=len(self.tasks)) or len(self.tasks)
-        seed_ensemble_display = _is_rolling_random_seed_ensemble_enabled()
+        task_seed_policy = next(
+            (
+                dict(task.get("seed_ensemble_policy") or {})
+                for task in self.tasks
+                if dict(task.get("seed_ensemble_policy") or {})
+            ),
+            {},
+        )
+        seed_ensemble_display = (
+            bool(task_seed_policy.get("enabled", False))
+            and int(task_seed_policy.get("seed_count", 1) or 1) > 1
+        ) or _is_rolling_random_seed_ensemble_enabled()
         live_result_rows = _merge_live_result_rows(completed_rows_sorted, self.tasks)
         table_text = ""
         if live_result_rows:
@@ -317,7 +328,7 @@ class _ParallelFoldLiveBoard:
                 retention_table_title=retention_title,
             )
         if seed_ensemble_display:
-            seed_policy = _build_rolling_seed_ensemble_policy_payload()
+            seed_policy = task_seed_policy or _build_rolling_seed_ensemble_policy_payload()
             seed_count = int(seed_policy.get("seed_count", 1) or 1)
             seed_progress_maps = {id(task): _read_latest_parallel_fold_seed_progresses_for_task(task) for task in self.tasks}
             phase_metrics = _collect_seed_progress_phase_metrics(

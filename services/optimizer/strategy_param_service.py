@@ -1926,6 +1926,285 @@ _VALIDATION_BUDGET_WORK_RELATIVE = (
     / "param_p5_validation_budget_refit"
 )
 
+_FIXED_MULTI_SEED_PARAMSET_RELATIVE = (
+    Path("models") / "research" / "breakout_quality" / "strategy_params"
+    / "param_p6_production_multiseed"
+)
+_FIXED_MULTI_SEED_WORK_RELATIVE = (
+    Path("outputs") / "optimizer" / "strategy_param_schedule" / "experiments"
+    / "param_p6_production_multiseed"
+)
+_FIXED_MULTI_SEED_SEARCH_PROTOCOL = "fixed_multiseed_v1"
+
+
+def fixed_multiseed_strategy_param_artifact_path(
+    project_root: str | Path,
+    *,
+    policy: str = "base-finalists-agree",
+) -> Path:
+    from filters.breakout_quality.strategy_compare_sources import PARAM_POLICY_SPECS
+
+    root = Path(project_root).resolve()
+    compare_policy = str(policy).strip()
+    spec = PARAM_POLICY_SPECS.get(compare_policy)
+    if spec is None:
+        raise ValueError(f"fixed multi-seed不支援param policy: {compare_policy!r}")
+    return root / _FIXED_MULTI_SEED_PARAMSET_RELATIVE / str(spec["filename"])
+
+
+def fixed_multiseed_strategy_param_manifest_path(project_root: str | Path) -> Path:
+    return Path(project_root).resolve() / _FIXED_MULTI_SEED_PARAMSET_RELATIVE / "identity_manifest.json"
+
+
+def _fixed_multiseed_build_contract(
+    *,
+    training_profile_id: str,
+    dataset: str | None,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, Any]:
+    from core.strategy_param_policy import (
+        get_strategy_param_fitting_seed_protocol,
+        get_strategy_param_training_profile,
+    )
+
+    profile = get_strategy_param_training_profile(training_profile_id)
+    seed_protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
+    if profile.filter_profile != "full":
+        raise ValueError("fixed multi-seed目前只支援Full strategy parameter training")
+    if profile.parameter_policy != "base-finalists-agree":
+        raise ValueError("fixed multi-seed目前只支援base-finalists-agree")
+    if profile.validation_enabled:
+        raise ValueError("fixed multi-seed baseline不得同時啟用validation")
+    if not seed_protocol.enabled or seed_protocol.seed_count < 2:
+        raise ValueError("fixed multi-seed fitting seed protocol必須啟用且seed_count>=2")
+    base = _canonical_schedule_build_contract(
+        family="full",
+        dataset=(profile.dataset if dataset in (None, "") else dataset),
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    seed_policy = seed_protocol.as_seed_ensemble_policy()
+    return {
+        **base,
+        "optimizer_seed": int(seed_protocol.generator_seed),
+        "trials_per_fold": int(seed_protocol.trials_per_seed),
+        "parameter_set": str(profile.parameter_set_identity),
+        "optimizer_search_protocol": _FIXED_MULTI_SEED_SEARCH_PROTOCOL,
+        "training_profile_id": str(profile.profile_id),
+        "fitting_seed_protocol": str(seed_protocol.protocol_id),
+        "seed_ensemble_policy": seed_policy,
+    }
+
+
+def inspect_fixed_multiseed_strategy_parameter_artifact(
+    project_root: str | Path,
+    *,
+    training_profile_id: str = "production_multiseed_current",
+    policy: str = "base-finalists-agree",
+    comparison_end_date: str,
+    dataset: str | None = None,
+    max_positions: int | None = None,
+    rotation: str | None = None,
+    fixed_risk: float | None = None,
+    max_position_cap_pct: float | None = None,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    compare_policy = str(policy).strip()
+    normalized_policy = normalize_strategy_param_policy(compare_policy)
+    end_date = str(comparison_end_date or "").strip()
+    if not end_date:
+        raise ValueError("fixed multi-seed缺少comparison_end_date")
+    target = fixed_multiseed_strategy_param_artifact_path(root, policy=compare_policy)
+    manifest_path = fixed_multiseed_strategy_param_manifest_path(root)
+    contract = _fixed_multiseed_build_contract(
+        training_profile_id=training_profile_id,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    manifest = _load_json_object(manifest_path)
+    payload = _load_json_object(target)
+    coverage_end = _canonical_schedule_coverage_end(target)
+    adaptation = dict((payload or {}).get("breakout_quality_param_adaptation") or {})
+    expected_seed_policy = dict(contract["seed_ensemble_policy"])
+    actual_seed_policy = dict(adaptation.get("seed_ensemble_policy") or {})
+
+    status = "READY"
+    if payload is None:
+        status = "ARTIFACT_MISSING_OR_INVALID"
+    elif str(payload.get("selector") or "") != normalized_policy:
+        status = "POLICY_SELECTOR_MISMATCH"
+    elif str(adaptation.get("parameter_set") or "") != str(contract["parameter_set"]):
+        status = "PARAMETER_SET_MISMATCH"
+    elif bool(adaptation.get("training_dl_enabled", True)):
+        status = "TRAINING_DL_ENABLED_MISMATCH"
+    elif str(adaptation.get("optimizer_search_protocol") or "") != str(contract["optimizer_search_protocol"]):
+        status = "OPTIMIZER_SEARCH_PROTOCOL_MISMATCH"
+    elif actual_seed_policy != expected_seed_policy:
+        status = "FITTING_SEED_POLICY_MISMATCH"
+    elif coverage_end is None or str(coverage_end) < end_date:
+        status = "SCHEDULE_COVERAGE_INCOMPLETE"
+    elif manifest is None:
+        status = "MANIFEST_MISSING_OR_INVALID"
+    elif str(manifest.get("producer") or "") != "optimizer":
+        status = "PRODUCER_MISMATCH"
+    elif str(manifest.get("parameter_set") or "") != str(contract["parameter_set"]):
+        status = "MANIFEST_PARAMETER_SET_MISMATCH"
+    elif str(manifest.get("policy") or "") != compare_policy:
+        status = "MANIFEST_POLICY_MISMATCH"
+    elif str(manifest.get("optimizer_search_protocol") or "") != str(contract["optimizer_search_protocol"]):
+        status = "MANIFEST_PROTOCOL_MISMATCH"
+    elif dict(manifest.get("seed_ensemble_policy") or {}) != expected_seed_policy:
+        status = "MANIFEST_FITTING_SEED_POLICY_MISMATCH"
+    elif dict(manifest.get("build_contract") or {}) != contract:
+        status = "BUILD_CONTRACT_MISMATCH"
+    elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
+        status = "ARTIFACT_SHA_MISMATCH"
+
+    ready = status == "READY"
+    existed = bool(target.exists() or manifest_path.exists())
+    return {
+        "ready": ready,
+        "status": status,
+        "action": "REUSE" if ready else ("REBUILD" if existed else "BUILD"),
+        "path": target,
+        "manifest_path": manifest_path,
+        "coverage_end": coverage_end,
+        "build_contract": contract,
+    }
+
+
+def ensure_fixed_multiseed_strategy_parameter_artifact(
+    project_root: str | Path,
+    *,
+    training_profile_id: str = "production_multiseed_current",
+    policy: str = "base-finalists-agree",
+    comparison_end_date: str,
+    dataset: str | None = None,
+    max_positions: int | None = None,
+    rotation: str | None = None,
+    fixed_risk: float | None = None,
+    max_position_cap_pct: float | None = None,
+    force_rebuild: bool = False,
+    resume_parameter_training: bool = True,
+) -> dict[str, Any]:
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK,
+        DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS,
+        DEFAULT_PORTFOLIO_ROTATION,
+    )
+    from core.dataset_profiles import DEFAULT_DATASET_PROFILE
+    from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
+
+    root = Path(project_root).resolve()
+    compare_policy = str(policy).strip()
+    state = inspect_fixed_multiseed_strategy_parameter_artifact(
+        root,
+        training_profile_id=training_profile_id,
+        policy=compare_policy,
+        comparison_end_date=comparison_end_date,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    target = Path(state["path"])
+    manifest_path = Path(state["manifest_path"])
+    contract = dict(state["build_contract"])
+    existed_before = str(state["action"]) == "REBUILD"
+    if bool(state["ready"]) and not force_rebuild:
+        return {
+            "action": "REUSE",
+            "path": target,
+            "manifest_path": manifest_path,
+            "sha256": compute_strategy_param_file_sha256(target),
+            "coverage_end": state.get("coverage_end"),
+            "build_contract": contract,
+        }
+
+    canonical_work_root = root / _FIXED_MULTI_SEED_WORK_RELATIVE
+    work_root = _force_rebuild_attempt_root(canonical_work_root) if force_rebuild else canonical_work_root
+    end_date = str(comparison_end_date or "").strip()
+    result = prepare_selection_historical_full_roos_params(
+        project_root=root,
+        dataset=str(DEFAULT_DATASET_PROFILE if dataset in (None, "") else dataset),
+        param_policy=compare_policy,
+        trials_per_fold=int(contract["trials_per_fold"]),
+        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS if max_positions is None else max_positions),
+        rotation=str(DEFAULT_PORTFOLIO_ROTATION if rotation in (None, "") else rotation),
+        fixed_risk=float(DEFAULT_FIXED_RISK if fixed_risk is None else fixed_risk),
+        max_position_cap_pct=float(
+            DEFAULT_MAX_POSITION_CAP_PCT if max_position_cap_pct is None else max_position_cap_pct
+        ),
+        optimizer_seed=int(contract["optimizer_seed"]),
+        resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
+        quiet=False,
+        first_oos_date=str(contract["schedule_start"]),
+        last_oos_date=end_date,
+        train_window_months=int(contract["train_window_months"]),
+        oos_months=int(contract["oos_horizon_months"]),
+        output_relative_dir=work_root,
+        build_context_label="PARAM-P6 Production-Style Fixed Multi-Seed",
+        optimizer_output_title="Optimizer PARAM-P6 工作工件（非production）",
+        optimizer_search_protocol=str(contract["optimizer_search_protocol"]),
+        parameter_set_identity=str(contract["parameter_set"]),
+        seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+    )
+    source = Path(result["params_path"]).resolve()
+    _assert_optimizer_work_source(source_path=source, work_root=work_root)
+    if not source.is_file():
+        raise FileNotFoundError("PARAM-P6 Optimizer完成但找不到策略參數工件: " + _project_relative(root, source))
+    _copy_json_payload(source, target)
+    coverage_end = _canonical_schedule_coverage_end(target)
+    if coverage_end is None or str(coverage_end) < end_date:
+        raise RuntimeError(f"PARAM-P6 schedule coverage不足: required={end_date}, actual={coverage_end or '-'}")
+    payload = _load_json_object(target) or {}
+    adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
+    if str(adaptation.get("parameter_set") or "") != str(contract["parameter_set"]):
+        raise RuntimeError("PARAM-P6 artifact缺少parameter_set identity")
+    if dict(adaptation.get("seed_ensemble_policy") or {}) != dict(contract["seed_ensemble_policy"]):
+        raise RuntimeError("PARAM-P6 artifact缺少fixed fitting-seed identity")
+
+    target_sha = compute_strategy_param_file_sha256(target)
+    _write_json(
+        manifest_path,
+        {
+            "schema_type": "strategy_parameter_research_identity",
+            "schema_version": 1,
+            "producer": "optimizer",
+            "training_dl_enabled": False,
+            "parameter_set": str(contract["parameter_set"]),
+            "family": "full",
+            "policy": compare_policy,
+            "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
+            "training_profile_id": str(contract["training_profile_id"]),
+            "fitting_seed_protocol": str(contract["fitting_seed_protocol"]),
+            "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
+            "build_contract": contract,
+            "artifact_path": _project_relative(root, target),
+            "artifact_sha256": target_sha,
+            "coverage_end": coverage_end,
+            "production_promotion": False,
+        },
+    )
+    return {
+        "action": "FORCE_REBUILD" if force_rebuild else ("REBUILD" if existed_before else "BUILD"),
+        "path": target,
+        "manifest_path": manifest_path,
+        "sha256": target_sha,
+        "coverage_end": coverage_end,
+        "build_contract": contract,
+    }
+
 
 def validation_budget_strategy_param_artifact_path(
     project_root: str | Path,
@@ -2467,6 +2746,10 @@ __all__ = [
     "inspect_validation_budget_strategy_parameter_artifact",
     "ensure_validation_budget_robustness_strategy_parameter_artifact",
     "inspect_validation_budget_robustness_strategy_parameter_artifact",
+    "ensure_fixed_multiseed_strategy_parameter_artifact",
+    "inspect_fixed_multiseed_strategy_parameter_artifact",
+    "fixed_multiseed_strategy_param_artifact_path",
+    "fixed_multiseed_strategy_param_manifest_path",
     "validation_budget_strategy_param_artifact_path",
     "validation_budget_strategy_param_manifest_path",
     "validation_budget_robustness_strategy_param_artifact_path",

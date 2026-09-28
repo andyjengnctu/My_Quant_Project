@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import random
 from typing import Any
 
 SEED_ENSEMBLE_MAX_SEED_VALUE = 2_147_483_647
@@ -57,6 +58,61 @@ def generate_random_seed_ensemble(seed_count: Any) -> list[int]:
     while len(seeds) < n:
         seeds.add(1 + secrets.randbelow(SEED_ENSEMBLE_MAX_SEED_VALUE))
     return sorted(int(seed) for seed in seeds)
+
+
+def generate_deterministic_seed_ensemble(seed_count: Any, *, generator_seed: Any) -> list[int]:
+    """Return a reproducible unique seed bundle for controlled Research fitting.
+
+    Trading intentionally uses ``generate_random_seed_ensemble`` on each explicit
+    retrain.  Research controlled comparisons may instead pin a generator seed so
+    every arm/fold can replay the same stochastic realizations.
+    """
+
+    n = coerce_seed_ensemble_size(seed_count, default=1)
+    try:
+        seed0 = int(generator_seed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"seed ensemble generator_seed不合法: {generator_seed!r}") from exc
+    if seed0 < 0:
+        raise ValueError("seed ensemble generator_seed必須>=0")
+    rng = random.Random(seed0)
+    values: list[int] = []
+    seen: set[int] = set()
+    while len(values) < n:
+        value = int(rng.randrange(1, SEED_ENSEMBLE_MAX_SEED_VALUE))
+        if value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def resolve_seed_ensemble_seeds(policy: Any) -> list[int]:
+    """Resolve actual optimizer seeds from one seed-ensemble policy contract.
+
+    A policy with ``resolved_seeds`` is deterministic and must match its declared
+    ``seed_count`` exactly.  Otherwise the historical random-per-training behavior
+    is preserved.
+    """
+
+    payload = dict(policy or {})
+    count = coerce_seed_ensemble_size(payload.get("seed_count", 1), default=1)
+    raw_resolved = payload.get("resolved_seeds")
+    if raw_resolved not in (None, ""):
+        if not isinstance(raw_resolved, (list, tuple)):
+            raise ValueError("seed ensemble resolved_seeds必須是list/tuple")
+        seeds = [int(value) for value in raw_resolved]
+        if len(seeds) != count:
+            raise ValueError(
+                "seed ensemble resolved_seeds數量與seed_count不一致: "
+                f"count={count}, resolved={len(seeds)}"
+            )
+        if len(set(seeds)) != len(seeds):
+            raise ValueError("seed ensemble resolved_seeds不可重複")
+        if any(seed < 1 or seed >= SEED_ENSEMBLE_MAX_SEED_VALUE for seed in seeds):
+            raise ValueError("seed ensemble resolved_seeds超出合法範圍")
+        return seeds
+    return generate_random_seed_ensemble(count)
 
 
 def build_seed_ensemble_policy_snapshot(*, enabled: Any, seed_count: Any, min_agree: Any) -> dict:

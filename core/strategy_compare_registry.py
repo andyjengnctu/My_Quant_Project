@@ -74,6 +74,7 @@ STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE = "Full Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_BUDGET_REFIT = "Full Validation-Budget Refit"
+STRATEGY_COMPARE_DISPLAY_FULL_PRODUCTION_MULTI_SEED = "Full Production-Style Fixed Multi-Seed"
 STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE = "Min Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_K_FLEX_R0 = "Min MR-13E K-Flex R0 Exact (Compute-Blocked)"
@@ -101,6 +102,16 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13AK_NO_K_NO_R0 = "Min MR-13AK No-K No-R0"
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
+    "non_dl_production_multiseed_current": {
+        "arm_ids": ("C85", "C62", "C61", "C58"),
+        "contrast_ids": ("C85-C62", "C85-C61", "C85-C58"),
+        "display_name_bases": {
+            "C85": "Full Production-Style Fixed Multi-Seed",
+            "C62": "Full Single-Seed Base-Finalists-Agree",
+            "C61": "Full Base-Finalist-Best",
+            "C58": "Min Base-Finalist-Best",
+        },
+    },
     "non_dl_validation_budget_current": {
         "arm_ids": ("C62", "C61", "C58", "C84"),
         "contrast_ids": ("C84-C62", "C84-C61", "C84-C58"),
@@ -268,6 +279,59 @@ STRATEGY_COMPARE_PROFILES = {
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
             "C84": "full_validation_budget_rolling_experiment",
+        },
+    },
+    "non_dl_production_multiseed_oos": {
+        "label": "Non-DL Production Multi-Seed | OOS Test",
+        "description": (
+            "Round-2 controlled comparison：Full/formal/base-finalists-agree固定；C85使用"
+            "8個固定Research fitting seeds、300 trials/seed，對照C62的單一Seed42版本。"
+            "本arm重現Trading的multi-seed fitting/selection語意，但不是Trading 8 random × 1000的exact replay。"
+        ),
+        "display_alignment_group": "non_dl_production_multiseed",
+        "suite_id": "non_dl_production_multiseed_current",
+        "display_suffix": "OOS",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_production_multiseed/oos_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C85": "full_production_multiseed_oos_experiment",
+            "C62": "full_oos",
+            "C61": "full_oos",
+            "C58": "min_oos",
+        },
+    },
+    "non_dl_production_multiseed_rolling": {
+        "label": "Non-DL Production Multi-Seed | Rolling Test",
+        "description": (
+            "Round-2 primary PIT evaluation：C85逐年度以固定8-seed Research fitting bundle × 300 trials/seed"
+            "產生Full/base-finalists-agree參數；C62保持單一Seed42 × 300 control，其餘rules/execution相同。"
+        ),
+        "display_alignment_group": "non_dl_production_multiseed",
+        "suite_id": "non_dl_production_multiseed_current",
+        "display_suffix": "Rolling",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_production_multiseed/rolling_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C85": "full_production_multiseed_rolling_experiment",
+            "C62": "full_rolling",
+            "C61": "full_rolling",
+            "C58": "min_rolling",
         },
     },
     # Legacy evaluation policies retained only for historical replay / artifact interpretation.
@@ -531,6 +595,50 @@ STRATEGY_PARAM_SOURCES = {
 # not expand the production/current menu contract. The resolver merges them for
 # profiles that explicitly opt in.
 STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
+    "full_production_multiseed_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p6_production_multiseed/{param_filename}",
+        "description": (
+            "PARAM-P6 optimizer-owned production-style fixed multi-seed schedule；"
+            "OOS只freeze消費同一physical truth。"
+        ),
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p6_production_multiseed/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P6",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "production_multiseed_current"},
+        },
+    },
+    "full_production_multiseed_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p6_production_multiseed/{param_filename}",
+        "description": (
+            "PARAM-P6 optimizer-owned production-style fixed multi-seed schedule；"
+            "Rolling以date-effective語意消費同一physical truth。"
+        ),
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p6_production_multiseed/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P6",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "production_multiseed_current"},
+        },
+    },
     "full_validation_budget_oos_experiment": {
         "path_template": "models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/{param_filename}",
         "description": "PARAM-P5 optimizer-owned Full validation-budget schedule；OOS只freeze消費同一physical truth。",
@@ -664,6 +772,21 @@ STRATEGY_DL_SOURCES = {
 # Arm definition本身不保存第二份enabled/mode membership；current matrix不得在profile或robustness重複列出。
 
 STRATEGY_COMPARE_ARMS = {
+    "C85": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_PRODUCTION_MULTI_SEED,
+        "description": (
+            "PARAM-P6 Round-2 non-DL production-style treatment；Full/formal/base-finalists-agree、"
+            "120M selection + 12M annual PIT固定；使用8個固定Research fitting seeds × 300 trials/seed。"
+            "它重現Trading multi-seed fitting/selection語意，但不宣稱是8 random ×1000 production exact replay。"
+        ),
+        "param_source": "full_production_multiseed_rolling_experiment",
+        "param_policy": "base-finalists-agree",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
     "C84": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_BUDGET_REFIT,
         "description": (
@@ -678,6 +801,11 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": None,
         "robustness_role": "off",
     },
+    # Historical C62 prose/name is intentionally frozen for completed-result fingerprint
+    # compatibility.  Governance correction (2026-09-28/29): C62 is the Seed42
+    # single-seed finalists-agree controlled reference, not exact Trading production.
+    # New suites must use their own display_name_bases (see Round-2 C85 suite) rather
+    # than mutating this historical arm payload and invalidating durable result reuse.
     "C62": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE,
         "description": (
@@ -885,6 +1013,24 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C85-C62": {
+        "left": "C85",
+        "right": "C62",
+        "description": (
+            "Round-2 primary：同為Full/formal/base-finalists-agree與300 trials/seed；"
+            "比較8個固定Research fitting seeds相對單一Seed42的multi-seed fitting效果。"
+        ),
+    },
+    "C85-C61": {
+        "left": "C85",
+        "right": "C61",
+        "description": "Round-2 production-style multi-seed相對Full base-finalist-best reference",
+    },
+    "C85-C58": {
+        "left": "C85",
+        "right": "C58",
+        "description": "Round-2 production-style multi-seed相對Min base-finalist-best reference；整體策略體系比較",
+    },
     "C84-C62": {"left": "C84", "right": "C62", "description": "Phase-2 primary：validation-selected trial budget + full refit相對固定300-trial Production-PIT control；其他Full/finalists-agree條件固定"},
     "C84-C61": {"left": "C84", "right": "C61", "description": "Phase-2 treatment相對Full base-finalist-best reference"},
     "C84-C58": {"left": "C84", "right": "C58", "description": "Phase-2 treatment相對Min base-finalist-best reference；整體策略體系比較"},

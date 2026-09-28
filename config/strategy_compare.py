@@ -14,6 +14,10 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
+# Round-2 registers the production-style multi-seed producer/arms/profiles, but
+# current Strategy Compare activation remains on the Phase-2 suite until Round 3
+# adds the matching fitting-seed-bundle robustness contract. This preserves the
+# invariant that all current Compare work types bind to one executable suite.
 STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_budget_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_budget_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_validation_budget_oos"

@@ -14,6 +14,10 @@ from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 # Current Research strategy-parameter target.  Changing this value changes what
 # Research [2] trains; the interactive menu must not offer a second target selector.
+# Round 2 registers the fixed multi-seed Research producer/profile, but keeps
+# the active target on PARAM-P5 until Round 3 adds the matching seed-bundle
+# robustness contract.  This preserves the invariant that every currently
+# exposed formal Research [2] work type is executable from the active profile.
 ACTIVE_STRATEGY_PARAM_PROFILE = "validation_budget_current"
 
 
@@ -28,6 +32,31 @@ STRATEGY_PARAM_VALIDATION_PROTOCOLS: dict[str, dict] = {
         "tie_break": "smaller_budget",
         "oos_feedback_used": False,
         "full_refit_required": True,
+    },
+}
+
+
+# Strategy fitting stochasticity is a scientific dimension independent from
+# Robustness replication.  Trading may intentionally draw a fresh random bundle
+# on each production retrain; controlled Research arms pin the bundle so arm-to-
+# arm comparisons are reproducible.  The bundle itself is derived by the policy
+# resolver rather than duplicated here as literal seed values.
+STRATEGY_PARAM_FITTING_SEED_PROTOCOLS: dict[str, dict] = {
+    "single_seed_42": {
+        "enabled": False,
+        "seed_count": 1,
+        "seed_mode": "fixed_single_seed",
+        "generator_seed": 42,
+        "min_agree": 1,
+        "trials_per_seed": 300,
+    },
+    "research_fixed_multiseed_v1": {
+        "enabled": True,
+        "seed_count": 8,
+        "seed_mode": "fixed_generated_bundle",
+        "generator_seed": 42,
+        "min_agree": "auto",
+        "trials_per_seed": 300,
     },
 }
 
@@ -49,12 +78,28 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
             "enabled": True,
             "protocol": "validation_budget_refit_v1",
         },
+        "fitting_seed_protocol": "single_seed_42",
+    },
+    "production_multiseed_current": {
+        "label": "Production-Style Fixed Multi-Seed",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalists-agree",
+        "parameter_set_identity": "PARAM-P6",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {
+            "enabled": False,
+        },
+        "fitting_seed_protocol": "research_fixed_multiseed_v1",
     },
 }
 
 
 __all__ = [
     "ACTIVE_STRATEGY_PARAM_PROFILE",
+    "STRATEGY_PARAM_FITTING_SEED_PROTOCOLS",
     "STRATEGY_PARAM_PROFILES",
     "STRATEGY_PARAM_VALIDATION_PROTOCOLS",
 ]

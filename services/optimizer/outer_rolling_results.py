@@ -394,7 +394,12 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         policy_names=FINALISTS_AGREE_RESULT_POLICY_NAMES,
     )
     seed_ensemble_table = ""
-    if _is_rolling_random_seed_ensemble_enabled():
+    seed_ensemble_present = any(
+        bool(dict(row.get("random_seed_ensemble") or {}).get("enabled", False))
+        or len([seed for seed in list(row.get("optimizer_seeds") or []) if seed is not None]) > 1
+        for row in list(rows or [])
+    )
+    if seed_ensemble_present:
         seed_ensemble_table = _render_results_table(
             rows,
             color=color,

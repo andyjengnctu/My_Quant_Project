@@ -28,6 +28,7 @@ from core.console_report import render_menu_item, render_table
 from core.strategy_param_policy import (
     StrategyParamTrainingProfile,
     get_active_strategy_param_training_profile,
+    get_strategy_param_fitting_seed_protocol,
     get_strategy_param_validation_protocol,
 )
 from core.training_policy import get_robustness_benchmark_policy_snapshot
@@ -39,7 +40,9 @@ from services.research.producer_execution import (
     prompt_producer_execution_action,
 )
 from services.optimizer.strategy_param_service import (
+    ensure_fixed_multiseed_strategy_parameter_artifact,
     ensure_robustness_benchmark_strategy_parameter_artifact,
+    inspect_fixed_multiseed_strategy_parameter_artifact,
     ensure_strategy_parameter_artifact,
     ensure_validation_budget_robustness_strategy_parameter_artifact,
     ensure_validation_budget_strategy_parameter_artifact,
@@ -98,8 +101,27 @@ def _validation_protocol(profile: StrategyParamTrainingProfile):
     return protocol
 
 
+def _fitting_seed_protocol(profile: StrategyParamTrainingProfile):
+    return get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
+
+
 def _single_state(profile: StrategyParamTrainingProfile, *, required_end: str) -> dict:
     protocol = _validation_protocol(profile)
+    seed_protocol = _fitting_seed_protocol(profile)
+    if protocol is not None and seed_protocol.enabled:
+        raise ValueError("目前尚未註冊multi-seed + validation的共同producer；此能力屬後續研究輪次")
+    if seed_protocol.enabled:
+        return inspect_fixed_multiseed_strategy_parameter_artifact(
+            PROJECT_ROOT,
+            training_profile_id=profile.profile_id,
+            policy=profile.parameter_policy,
+            comparison_end_date=required_end,
+            dataset=profile.dataset,
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
     if protocol is not None:
         return inspect_validation_budget_strategy_parameter_artifact(
             PROJECT_ROOT,
@@ -131,6 +153,23 @@ def _ensure_single(
     profile: StrategyParamTrainingProfile, *, required_end: str, force_rebuild: bool = False
 ) -> dict:
     protocol = _validation_protocol(profile)
+    seed_protocol = _fitting_seed_protocol(profile)
+    if protocol is not None and seed_protocol.enabled:
+        raise ValueError("目前尚未註冊multi-seed + validation的共同producer；此能力屬後續研究輪次")
+    if seed_protocol.enabled:
+        return ensure_fixed_multiseed_strategy_parameter_artifact(
+            PROJECT_ROOT,
+            training_profile_id=profile.profile_id,
+            policy=profile.parameter_policy,
+            comparison_end_date=required_end,
+            dataset=profile.dataset,
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            force_rebuild=bool(force_rebuild),
+            resume_parameter_training=not bool(force_rebuild),
+        )
     if protocol is not None:
         return ensure_validation_budget_strategy_parameter_artifact(
             PROJECT_ROOT,
@@ -166,6 +205,8 @@ def _benchmark_state(
     profile: StrategyParamTrainingProfile, *, seed: int, required_end: str
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
+    if _fitting_seed_protocol(profile).enabled:
+        raise ValueError("multi-seed fitting robustness需要seed-bundle replication contract；將於Round 3處理")
     protocol = _validation_protocol(profile)
     if protocol is not None:
         return inspect_validation_budget_robustness_strategy_parameter_artifact(
@@ -203,6 +244,8 @@ def _ensure_benchmark(
     force_rebuild: bool = False,
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
+    if _fitting_seed_protocol(profile).enabled:
+        raise ValueError("multi-seed fitting robustness需要seed-bundle replication contract；將於Round 3處理")
     protocol = _validation_protocol(profile)
     if protocol is not None:
         return ensure_validation_budget_robustness_strategy_parameter_artifact(
@@ -243,6 +286,7 @@ def _ensure_benchmark(
 
 def _render_profile_summary(profile: StrategyParamTrainingProfile) -> str:
     protocol = _validation_protocol(profile)
+    seed_protocol = _fitting_seed_protocol(profile)
     rows = [
         ("Training Profile", profile.profile_id),
         ("Strategy", profile.strategy_id),
@@ -251,7 +295,9 @@ def _render_profile_summary(profile: StrategyParamTrainingProfile) -> str:
         ("Validation", "ON" if protocol is not None else "OFF"),
         ("Parameter Set", profile.parameter_set_identity),
         ("Dataset", profile.dataset),
-        ("Canonical Seed", str(OPTIMIZER_RANDOM_SEED_DEFAULT)),
+        ("Fitting Seeds", str(seed_protocol.seed_count)),
+        ("Seed Mode", seed_protocol.seed_mode),
+        ("Trials / Seed", str(seed_protocol.trials_per_seed)),
         ("Schedule Start", profile.schedule_start_date),
         ("Coverage End", profile.coverage_end_date),
     ]
@@ -263,13 +309,31 @@ def _render_profile_summary(profile: StrategyParamTrainingProfile) -> str:
                 ("Budget Checkpoints", " / ".join(str(v) for v in protocol.checkpoints)),
             )
         )
+    if seed_protocol.enabled:
+        rows.append(("Fixed Seed Bundle", ", ".join(str(v) for v in seed_protocol.resolved_seeds)))
     return render_table(("設定", "目前值"), rows)
 
 
 def _build_plan(profile: StrategyParamTrainingProfile, work: StrategyParamWorkType) -> dict:
     required_end = _required_schedule_end(profile, work)
     benchmark = get_robustness_benchmark_policy_snapshot()
+    seed_protocol = _fitting_seed_protocol(profile)
     rows: list[dict] = []
+    if work.robustness and seed_protocol.enabled:
+        return {
+            "work": work,
+            "profile": profile,
+            "required_end": required_end,
+            "benchmark": benchmark,
+            "rows": [{
+                "action": "BLOCKED",
+                "item": f"{seed_protocol.seed_count}-seed fitting bundle",
+                "status": "Round 3將定義fitting seed bundle與robustness replication bundle的正交contract",
+                "path": "",
+                "seed": None,
+            }],
+            "status": "BLOCKED",
+        }
     if work.robustness:
         for seed in tuple(int(v) for v in benchmark["resolved_seeds"]):
             state = _benchmark_state(profile, seed=seed, required_end=required_end)
@@ -284,10 +348,15 @@ def _build_plan(profile: StrategyParamTrainingProfile, work: StrategyParamWorkTy
             )
     else:
         state = _single_state(profile, required_end=required_end)
+        item = (
+            f"Fixed fitting seeds {seed_protocol.seed_count}"
+            if seed_protocol.enabled
+            else f"Canonical seed {OPTIMIZER_RANDOM_SEED_DEFAULT}"
+        )
         rows.append(
             {
                 "action": str(state.get("action") or "BUILD"),
-                "item": f"Canonical seed {OPTIMIZER_RANDOM_SEED_DEFAULT}",
+                "item": item,
                 "status": str(state.get("status") or ""),
                 "path": _relative(state.get("path") or ""),
                 "seed": None,
@@ -308,6 +377,7 @@ def render_strategy_param_plan(plan: dict) -> str:
     profile: StrategyParamTrainingProfile = plan["profile"]
     work: StrategyParamWorkType = plan["work"]
     protocol = _validation_protocol(profile)
+    seed_protocol = _fitting_seed_protocol(profile)
     lines = [
         "====================================================================================================",
         f" Strategy Parameter Training | {work.label}",
@@ -321,7 +391,9 @@ def render_strategy_param_plan(plan: dict) -> str:
         f"Parameter Set        ：{profile.parameter_set_identity}",
         f"Required coverage end：{plan['required_end']}",
         f"Train/OOS            ：{OUTER_ROLLING_TRAIN_WINDOW_MONTHS}m / {OUTER_ROLLING_OOS_HORIZON_MONTHS}m",
-        f"Trials/fold          ：{OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT}",
+        f"Fitting seeds        ：{seed_protocol.seed_count}",
+        f"Seed mode            ：{seed_protocol.seed_mode}",
+        f"Trials/seed          ：{seed_protocol.trials_per_seed}",
     ]
     if work.robustness:
         benchmark = dict(plan["benchmark"])
@@ -461,6 +533,9 @@ def _run_work_type(work: StrategyParamWorkType) -> int:
     profile = get_active_strategy_param_training_profile()
     plan = _build_plan(profile, work)
     print("\n" + render_strategy_param_plan(plan))
+    if plan["status"] == "BLOCKED":
+        print("\n目前此work type尚未具備合法producer contract；不執行。")
+        return 0
     can_view = any(bool(row.get("path")) and (PROJECT_ROOT / row["path"]).is_file() for row in plan["rows"])
     choice = prompt_producer_execution_action(
         ready=plan["status"] == "READY",
@@ -500,11 +575,13 @@ def run_strategy_param_training_menu(*, advanced_handler: Callable[[], int]) -> 
         print(" 策略參數最佳化")
         print("====================================================================================================")
         protocol = _validation_protocol(profile)
+        seed_protocol = _fitting_seed_protocol(profile)
         print(f"Training Profile ：{profile.profile_id}")
         print(f"Filter Profile   ：{profile.filter_profile}")
         print(f"Param Policy     ：{profile.parameter_policy}")
         print(f"Validation       ：{'ON | ' + protocol.protocol_id if protocol else 'OFF'}")
         print(f"Parameter Set    ：{profile.parameter_set_identity}")
+        print(f"Fitting Seeds    ：{seed_protocol.seed_count} | {seed_protocol.seed_mode} | {seed_protocol.trials_per_seed} trials/seed")
         print()
         for index, work in enumerate(WORK_TYPES, start=1):
             print(render_menu_item(index, work.label, default=(index == 1)))

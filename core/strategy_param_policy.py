@@ -8,8 +8,13 @@ from typing import Any, Mapping
 
 from config.strategy_params import (
     ACTIVE_STRATEGY_PARAM_PROFILE,
+    STRATEGY_PARAM_FITTING_SEED_PROTOCOLS,
     STRATEGY_PARAM_PROFILES,
     STRATEGY_PARAM_VALIDATION_PROTOCOLS,
+)
+from core.seed_ensemble_policy import (
+    generate_deterministic_seed_ensemble,
+    resolve_seed_ensemble_min_agree,
 )
 
 
@@ -50,6 +55,77 @@ class StrategyParamTrainingProfile:
     coverage_end_date: str
     validation_enabled: bool
     validation_protocol: str | None
+    fitting_seed_protocol: str
+
+
+@dataclass(frozen=True)
+class StrategyParamFittingSeedProtocol:
+    protocol_id: str
+    enabled: bool
+    seed_count: int
+    seed_mode: str
+    generator_seed: int
+    min_agree: int
+    min_agree_requested: str | int
+    trials_per_seed: int
+    resolved_seeds: tuple[int, ...]
+
+    def as_seed_ensemble_policy(self) -> dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "seed_count": int(self.seed_count),
+            "min_agree": int(self.min_agree),
+            "min_agree_requested": self.min_agree_requested,
+            "min_agree_max": int(self.seed_count),
+            "min_agree_rule": "clamp_1_to_seed_count",
+            "seed_mode": str(self.seed_mode),
+            "params_storage": "same_json",
+            "generator_seed": int(self.generator_seed),
+            "resolved_seeds": [int(value) for value in self.resolved_seeds],
+        }
+
+
+def get_strategy_param_fitting_seed_protocol(
+    protocol_id: str,
+) -> StrategyParamFittingSeedProtocol:
+    key = str(protocol_id or "").strip()
+    raw = STRATEGY_PARAM_FITTING_SEED_PROTOCOLS.get(key)
+    if not key or not isinstance(raw, Mapping):
+        raise ValueError(f"未登記strategy parameter fitting seed protocol: {key or '(blank)'}")
+    enabled = bool(raw.get("enabled", False))
+    seed_count = int(raw.get("seed_count") or 0)
+    generator_seed = int(raw.get("generator_seed") or 0)
+    trials_per_seed = int(raw.get("trials_per_seed") or 0)
+    seed_mode = str(raw.get("seed_mode") or "").strip()
+    min_agree_requested = raw.get("min_agree", "auto")
+    if seed_count < 1 or trials_per_seed < 1 or not seed_mode:
+        raise ValueError(f"fitting seed protocol contract不完整: {key}")
+    if seed_mode == "fixed_single_seed":
+        if enabled or seed_count != 1:
+            raise ValueError(f"fixed_single_seed protocol必須是disabled且seed_count=1: {key}")
+        resolved = (int(generator_seed),)
+    elif seed_mode == "fixed_generated_bundle":
+        if not enabled or seed_count < 2:
+            raise ValueError(f"fixed_generated_bundle protocol必須enabled且seed_count>=2: {key}")
+        resolved = tuple(
+            int(value)
+            for value in generate_deterministic_seed_ensemble(
+                seed_count, generator_seed=generator_seed
+            )
+        )
+    else:
+        raise ValueError(f"不支援的fitting seed_mode: {seed_mode!r} ({key})")
+    return StrategyParamFittingSeedProtocol(
+        protocol_id=key,
+        enabled=enabled,
+        seed_count=seed_count,
+        seed_mode=seed_mode,
+        generator_seed=generator_seed,
+        min_agree=resolve_seed_ensemble_min_agree(seed_count, min_agree_requested),
+        min_agree_requested=min_agree_requested,
+        trials_per_seed=trials_per_seed,
+        resolved_seeds=resolved,
+    )
 
 
 def get_strategy_param_validation_protocol(protocol_id: str) -> StrategyParamValidationProtocol:
@@ -116,6 +192,10 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         get_strategy_param_validation_protocol(protocol)
     elif protocol is not None:
         raise ValueError(f"validation關閉時不得指定protocol: {key}")
+    fitting_seed_protocol = str(raw.get("fitting_seed_protocol") or "").strip()
+    if not fitting_seed_protocol:
+        raise ValueError(f"strategy parameter profile缺少fitting_seed_protocol: {key}")
+    get_strategy_param_fitting_seed_protocol(fitting_seed_protocol)
     return StrategyParamTrainingProfile(
         profile_id=key,
         label=values["label"],
@@ -128,6 +208,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         coverage_end_date=end.isoformat(),
         validation_enabled=enabled,
         validation_protocol=protocol,
+        fitting_seed_protocol=fitting_seed_protocol,
     )
 
 
@@ -137,7 +218,9 @@ def get_active_strategy_param_training_profile() -> StrategyParamTrainingProfile
 
 __all__ = [
     "StrategyParamTrainingProfile",
+    "StrategyParamFittingSeedProtocol",
     "StrategyParamValidationProtocol",
+    "get_strategy_param_fitting_seed_protocol",
     "get_active_strategy_param_training_profile",
     "get_strategy_param_training_profile",
     "get_strategy_param_validation_protocol",
