@@ -12215,3 +12215,13 @@ Decision：`ENGINEERING_ONLY / NONINLINE_MULTI_SEED_COMPACT_HEARTBEAT / MEANINGF
 - **Scientific impact**：無。未修改P6/C85 seed bundle、trial budget、selector、PIT window、artifact identity、Robustness replication或Trading production。
 
 Decision：`ENGINEERING_ONLY / NONINLINE_REUSES_CANONICAL_SEED_RENDERER / THROTTLE_KEY_ONLY / NO_SECOND_HUMAN_FORMATTER / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+
+## 2026-09-29 — C85 live-progress stream capability / canonical polling correction
+
+- **Root cause**：single-fold C85 seed-ensemble其實已呼叫既有canonical seed renderer；真正分叉發生在fold logging與terminal refresh邊界。`_run_outer_rolling_oos_fold_task()`以`_ParallelFoldProgressLogFilter`代理`sys.stdout`時，wrapper未透傳mirror console的`isatty()`／`fileno()`，因此互動式Windows console被誤判成non-inline輸出；之後針對compact formatter／bucket的修補都只處理症狀。
+- **Architecture correction**：`_ParallelFoldProgressLogFilter`只補標準stream capability delegation；`OptimizerSeedEnsembleProgressBoard`與`_ParallelFoldLiveBoard`的terminal更新則一起收斂到專案既有`core/display_common.py::FixedProgressBlock`。seed/fold文字仍由`build_optimizer_seed_ensemble_live_lines()`等既有canonical renderer產生；不再由live board自行維護ANSI游標邏輯，也不再維護non-TTY專用heartbeat／bucket formatter。redirected output依`FixedProgressBlock`既有契約保持安靜，machine progress仍完整保存在canonical fold/seed logs。
+- **Refresh cadence**：移除single-fold seed-ensemble私有5秒render throttle；parent executor本來就以`wait(..., timeout=1.0)`輪詢，因此直接沿用這個既有poll cadence。互動式console固定區塊約每秒原地刷新，不新增歷史行。
+- **Scientific impact**：無。P6/C85仍為4 fixed fitting seeds × 300 trials/seed、`min_agree=3/4`、同一selector／PIT／artifact identity；未修改optimizer objective、trial結果、seed bundle、Robustness replication或Trading production。
+
+Decision：`ENGINEERING_ONLY / STREAM_ADAPTER_PRESERVES_TTY / FIXED_PROGRESS_BLOCK_SSOT / EXISTING_1S_PARENT_POLL / NO_SECOND_REFRESH_IMPLEMENTATION / SCIENTIFIC_IDENTITY_UNCHANGED`。

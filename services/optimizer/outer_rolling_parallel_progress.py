@@ -28,6 +28,24 @@ class _ParallelFoldProgressLogFilter:
         self.mirror_handle = mirror_handle
         self._buffer = ""
 
+    def isatty(self):
+        target = self.mirror_handle
+        if target is None:
+            return False
+        try:
+            return bool(target.isatty())
+        except (AttributeError, OSError, ValueError):
+            return False
+
+    def fileno(self):
+        target = self.mirror_handle
+        if target is None:
+            raise OSError("parallel progress log has no mirrored console")
+        fileno = getattr(target, "fileno", None)
+        if not callable(fileno):
+            raise OSError("mirrored console has no file descriptor")
+        return fileno()
+
     def _emit_line(self, line: str, *, newline: bool) -> None:
         suffix = "\n" if newline else ""
         if line.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):

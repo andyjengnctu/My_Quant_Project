@@ -6,6 +6,7 @@ import importlib
 import io
 import json
 import math
+import os
 import re
 import unicodedata
 from decimal import Decimal
@@ -1918,6 +1919,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     optimizer_main_source = (project_root / "services" / "optimizer" / "application.py").read_text(encoding="utf-8")
     optimizer_robustness_source = (project_root / "services" / "optimizer" / "robustness.py").read_text(encoding="utf-8")
     optimizer_outer_rolling_source = (project_root / "services" / "optimizer" / "outer_rolling_oos.py").read_text(encoding="utf-8")
+    optimizer_live_boards_source = (project_root / "services" / "optimizer" / "outer_rolling_live_boards.py").read_text(encoding="utf-8")
     optimizer_walk_forward_source = (project_root / "services" / "optimizer" / "walk_forward.py").read_text(encoding="utf-8")
     objective_runner_source = (project_root / "services" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
     check("optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
@@ -2309,7 +2311,15 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         _ParallelFoldProgressLogFilter,
     )
     progress_log_handle = io.StringIO()
-    progress_live_handle = io.StringIO()
+
+    class _SyntheticTTYMirror(io.StringIO):
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 123
+
+    progress_live_handle = _SyntheticTTYMirror()
     progress_filter = _ParallelFoldProgressLogFilter(
         progress_log_handle, mirror_handle=progress_live_handle
     )
@@ -2322,7 +2332,43 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         PARALLEL_FOLD_PROGRESS_PREFIX in progress_log_handle.getvalue()
         and "INNER TRAIN SEARCH" not in progress_log_handle.getvalue()
         and PARALLEL_FOLD_PROGRESS_PREFIX not in progress_live_handle.getvalue()
-        and "INNER TRAIN SEARCH" in progress_live_handle.getvalue(),
+        and "INNER TRAIN SEARCH" in progress_live_handle.getvalue()
+        and progress_filter.isatty()
+        and progress_filter.fileno() == 123,
+    )
+    from services.optimizer.outer_rolling_live_boards import OptimizerSeedEnsembleProgressBoard
+    tty_log_handle = io.StringIO()
+    tty_live_handle = _SyntheticTTYMirror()
+    tty_progress_filter = _ParallelFoldProgressLogFilter(
+        tty_log_handle, mirror_handle=tty_live_handle
+    )
+    tty_contexts = [
+        {
+            "fold_idx": 1,
+            "fold_count": 1,
+            "seed_index": seed_index,
+            "seed_count": 4,
+            "selection_start": "2011-01-01",
+            "selection_end": "2020-12-31",
+            "oos_period": "2021-01-01~2021-12-31",
+        }
+        for seed_index in range(1, 5)
+    ]
+    with patch.dict(os.environ, {"TERM": "xterm"}, clear=False), redirect_stdout(tty_progress_filter):
+        tty_board = OptimizerSeedEnsembleProgressBoard(tty_contexts, header="synthetic")
+        tty_board.render(force=True)
+        tty_board.update_many(
+            {(1, seed_index): {"stage": "START"} for seed_index in range(1, 5)},
+            force=True,
+        )
+        tty_board.close()
+    check(
+        "fold_log_wrapper_preserves_existing_seed_live_board_inline_refresh",
+        True,
+        tty_board.inline
+        and "\x1b[4A" in tty_live_handle.getvalue()
+        and "synthetic" in tty_live_handle.getvalue()
+        and tty_log_handle.getvalue() == "",
     )
     check(
         "validation_budget_sequential_fold_reuses_shared_raw_cache_and_exposes_three_live_phases",
@@ -2340,11 +2386,20 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         "seed_ensemble_process_parallel" in optimizer_outer_rolling_source
         and "progress_board = OptimizerSeedEnsembleProgressBoard" in optimizer_outer_rolling_source
         and "_read_latest_parallel_fold_seed_progresses_for_task(task)" in optimizer_outer_rolling_source
-        and "last_progress_render_at" in optimizer_outer_rolling_source
+        and "last_progress_render_at" not in optimizer_outer_rolling_source
+        and "wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)" in optimizer_outer_rolling_source
         and "略過父程序 shared raw cache" in optimizer_outer_rolling_source
         and '"mirror_console": True' in optimizer_outer_rolling_source,
     )
-    from services.optimizer.outer_rolling_live_boards import OptimizerSeedEnsembleProgressBoard
+    check(
+        "optimizer_seed_and_parallel_fold_live_boards_reuse_fixed_progress_block_ssot",
+        True,
+        "from core.display_common import FixedProgressBlock" in optimizer_live_boards_source
+        and optimizer_live_boards_source.count("FixedProgressBlock()") == 2
+        and "sys.stdout.write" not in optimizer_live_boards_source
+        and "_noninline_seed_progress_key" not in optimizer_live_boards_source
+        and "_build_noninline_render_key" not in optimizer_live_boards_source,
+    )
     compact_contexts = [
         {
             "fold_idx": 1,
@@ -2357,10 +2412,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         }
         for seed_index in range(1, 5)
     ]
-    compact_board = OptimizerSeedEnsembleProgressBoard(compact_contexts, header="synthetic")
-    compact_board.inline = False
     compact_output = io.StringIO()
     with redirect_stdout(compact_output):
+        compact_board = OptimizerSeedEnsembleProgressBoard(compact_contexts, header="synthetic")
         compact_board.render(force=True)
         compact_board.update_many({(1, seed_index): {"stage": "START"} for seed_index in range(1, 5)})
         compact_board.update_many({
@@ -2369,31 +2423,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             (1, 3): {"stage": "OPTIMIZER_SEARCH", "completed": 25, "total": 300},
             (1, 4): {"stage": "OPTIMIZER_SEARCH", "completed": 15, "total": 300},
         })
-        compact_board.update_many({
-            (1, 1): {"stage": "OPTIMIZER_SEARCH", "completed": 15, "total": 300},
-            (1, 2): {"stage": "OPTIMIZER_SEARCH", "completed": 25, "total": 300},
-            (1, 3): {"stage": "OPTIMIZER_SEARCH", "completed": 29, "total": 300},
-            (1, 4): {"stage": "OPTIMIZER_SEARCH", "completed": 20, "total": 300},
-        })
-        compact_board.update_many({
-            (1, 1): {"stage": "OPTIMIZER_SEARCH", "completed": 31, "total": 300},
-            (1, 2): {"stage": "OPTIMIZER_SEARCH", "completed": 45, "total": 300},
-            (1, 3): {"stage": "OPTIMIZER_SEARCH", "completed": 61, "total": 300},
-            (1, 4): {"stage": "OPTIMIZER_SEARCH", "completed": 35, "total": 300},
-        })
-    compact_text = compact_output.getvalue()
-    compact_lines = [line for line in compact_text.splitlines() if line.strip()]
+        compact_board.close()
     check(
-        "fixed_multiseed_noninline_live_board_reuses_canonical_seed_renderer_with_bucketed_snapshots",
+        "fixed_multiseed_redirected_progress_reuses_fixed_progress_block_quiet_contract",
         True,
-        len(compact_lines) == 17
-        and compact_text.count("synthetic") == 1
-        and "⏳ Multi-seed |" not in compact_text
-        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | QUEUED | best_base=N/A | best_local_min=N/A" in compact_text
-        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | START | best_base=N/A | best_local_min=N/A" in compact_text
-        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | trial 10/300 | best_base=N/A | best_local_min=N/A" in compact_text
-        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | trial 31/300 | best_base=N/A | best_local_min=N/A" in compact_text
-        and "seed 1/4 | trial 15/300" not in compact_text,
+        not compact_board.inline
+        and compact_output.getvalue() == "",
     )
     import core.strategy_param_policy as strategy_param_policy
     disabled_profiles = {

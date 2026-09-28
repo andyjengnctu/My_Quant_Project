@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import sys
 import time
 
 from core.display import C_CYAN, C_GRAY, C_RESET
-from core.runtime_utils import stdout_supports_inline_progress
+from core.display_common import FixedProgressBlock
 from core.training_performance import (
     resolve_optimizer_random_seed_ensemble_parallel_backend_default,
     resolve_optimizer_random_seed_ensemble_parallel_workers_default,
@@ -51,8 +50,8 @@ class OptimizerSeedEnsembleProgressBoard:
         )
         self.header = str(header or "")
         self.header_factory = header_factory
-        self.inline = stdout_supports_inline_progress()
-        self.rendered_lines = 0
+        self.progress_block = FixedProgressBlock()
+        self.inline = self.progress_block.inline
         self.progress_by_key: dict[tuple[int, int], dict] = {}
         self.completed_trials_by_key: dict[tuple[int, int], int] = {}
         self.completed_local_min_trials_by_key: dict[tuple[int, int], int] = {}
@@ -67,7 +66,6 @@ class OptimizerSeedEnsembleProgressBoard:
         self.replay_started_ts_by_fold: dict[int, float] = {}
         self.replay_last_done_ts_by_fold: dict[int, float] = {}
         self.last_lines: list[str] = []
-        self.last_noninline_key: tuple = ()
 
     def _context_key(self, context: dict) -> tuple[int, int]:
         return (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
@@ -250,131 +248,15 @@ class OptimizerSeedEnsembleProgressBoard:
             color=True,
         )
 
-    @staticmethod
-    def _noninline_seed_progress_key(progress: dict) -> tuple:
-        """Throttle non-inline snapshots without defining a second display format."""
-        data = dict(progress or {})
-        stage = str(data.get("stage") or "QUEUED").upper()
-        if stage == "OPTIMIZER_SEARCH":
-            try:
-                completed = max(0, int(data.get("completed", 0) or 0))
-            except (TypeError, ValueError):
-                completed = 0
-            try:
-                total = max(0, int(data.get("total", 0) or 0))
-            except (TypeError, ValueError):
-                total = 0
-            bucket_size = max(1, total // 10) if total > 0 else 10
-            return (stage, completed // bucket_size, total)
-        if stage == "LOCAL_MIN_REVIEW":
-            try:
-                finalist_idx = max(0, int(data.get("finalist_idx", 0) or 0))
-                finalist_total = max(0, int(data.get("finalist_total", 0) or 0))
-                neighbor_done = max(0, int(data.get("neighbor_done", 0) or 0))
-                neighbor_total = max(0, int(data.get("neighbor_total", 0) or 0))
-            except (TypeError, ValueError):
-                finalist_idx = finalist_total = neighbor_done = neighbor_total = 0
-            return (stage, finalist_idx, finalist_total, neighbor_done, neighbor_total)
-        status = str(data.get("status") or "").strip().upper()
-        return (stage, status)
-
-    def _build_noninline_render_key(self) -> tuple:
-        seed_parts: list[tuple] = []
-        for context in self.contexts:
-            key = self._context_key(context)
-            progress = dict(self.progress_by_key.get(key) or {"stage": "QUEUED", "status": "queued"})
-            seed_parts.append((key, self._noninline_seed_progress_key(progress)))
-
-        fold_parts: list[tuple] = []
-        for fold_idx, progress in sorted(self.fold_progress_by_idx.items()):
-            data = dict(progress or {})
-            stage = str(data.get("stage") or "").upper()
-            if stage not in {"ENSEMBLE_REPLAY", "FOLD_RESULT"}:
-                continue
-            if stage == "ENSEMBLE_REPLAY":
-                fold_parts.append((
-                    int(fold_idx),
-                    stage,
-                    int(data.get("replay_done", 0) or 0),
-                    int(data.get("replay_total", 0) or 0),
-                    str(data.get("policy") or data.get("status") or "").strip(),
-                ))
-            else:
-                fold_parts.append((int(fold_idx), stage, str(data.get("status") or "").strip()))
-
-        result_parts = tuple(
-            (int(fold_idx), repr(dict(row or {})))
-            for fold_idx, row in sorted(self.result_rows_by_fold.items())
-        )
-        return tuple(seed_parts), tuple(fold_parts), result_parts
-
     def render(self, *, force: bool = False) -> None:
         lines = self._build_lines()
-        if self.inline:
-            if not force and lines == self.last_lines:
-                return
-            self.last_lines = list(lines)
-            if self.rendered_lines > 0:
-                sys.stdout.write(f"\x1b[{self.rendered_lines}F")
-            for line in lines:
-                sys.stdout.write("\r" + line + "\x1b[K\n")
-            if self.rendered_lines > len(lines):
-                for _ in range(self.rendered_lines - len(lines)):
-                    sys.stdout.write("\r\x1b[K\n")
-            sys.stdout.flush()
-            self.rendered_lines = len(lines)
+        if not force and lines == self.last_lines:
             return
-
-        render_key = self._build_noninline_render_key()
-        if render_key == self.last_noninline_key:
-            return
-
-        previous_key = self.last_noninline_key
-        self.last_noninline_key = render_key
         self.last_lines = list(lines)
-        if not previous_key:
-            print("\n".join(lines), flush=True)
-            self.rendered_lines = 0
-            return
-
-        previous_seed_parts, previous_fold_parts, previous_result_parts = previous_key
-        seed_parts, fold_parts, result_parts = render_key
-        previous_seed_map = dict(previous_seed_parts)
-        previous_fold_map = {int(item[0]): tuple(item[1:]) for item in previous_fold_parts}
-
-        header_text = str(self.header_factory(self) if callable(self.header_factory) else self.header).strip()
-        offset = 1 if header_text else 0
-        seed_lines = lines[offset:offset + len(self.contexts)]
-        fold_lines = lines[offset + len(self.contexts):offset + len(self.contexts) + len(fold_parts)]
-        output_lines: list[str] = []
-
-        for index, (context_key, progress_key) in enumerate(seed_parts):
-            if previous_seed_map.get(context_key) != progress_key:
-                output_lines.append(seed_lines[index])
-
-        for index, fold_key in enumerate(fold_parts):
-            fold_idx = int(fold_key[0])
-            if previous_fold_map.get(fold_idx) != tuple(fold_key[1:]):
-                output_lines.append(fold_lines[index])
-
-        if result_parts != previous_result_parts:
-            tail_start = offset + len(self.contexts) + len(fold_parts)
-            result_lines = list(lines[tail_start:])
-            if output_lines and result_lines and not str(result_lines[0]).strip():
-                output_lines.append("")
-                result_lines = result_lines[1:]
-            output_lines.extend(result_lines)
-
-        if output_lines:
-            print("\n".join(output_lines), flush=True)
-        self.rendered_lines = 0
+        self.progress_block.update(lines)
 
     def close(self) -> None:
-        if self.inline and self.rendered_lines > 0:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-        self.rendered_lines = 0
-
+        self.progress_block.finish()
 
 
 
@@ -387,11 +269,11 @@ class _ParallelFoldLiveBoard:
 
     def __init__(self, tasks: list[dict], *, overall_start: float | None = None, raw_data_load_sec: float = 0.0):
         self.tasks = sorted(list(tasks or []), key=lambda item: int(item.get("fold_idx", 0) or 0))
-        self.inline = stdout_supports_inline_progress()
+        self.progress_block = FixedProgressBlock()
+        self.inline = self.progress_block.inline
         self.started_at = time.perf_counter()
         self.overall_start = float(overall_start) if overall_start is not None else self.started_at
         self.raw_data_load_sec = max(0.0, float(raw_data_load_sec or 0.0))
-        self.rendered_lines = 0
         self.last_lines: list[str] = []
         self.last_render_key: list[str] = []
 
@@ -543,23 +425,7 @@ class _ParallelFoldLiveBoard:
             return
         self.last_lines = list(lines)
         self.last_render_key = list(render_key)
-        if self.inline:
-            if self.rendered_lines > 0:
-                sys.stdout.write(f"\x1b[{self.rendered_lines}F")
-            for line in lines:
-                sys.stdout.write("\r" + line + "\x1b[K\n")
-            if self.rendered_lines > len(lines):
-                for _ in range(self.rendered_lines - len(lines)):
-                    sys.stdout.write("\r\x1b[K\n")
-            sys.stdout.flush()
-            self.rendered_lines = len(lines)
-        else:
-            # Non-interactive outputs cannot refresh safely; print only on meaningful changes.
-            print("\n".join(lines), flush=True)
-            self.rendered_lines = 0
+        self.progress_block.update(lines)
 
     def close(self) -> None:
-        if self.inline and self.rendered_lines > 0:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-        self.rendered_lines = 0
+        self.progress_block.finish()

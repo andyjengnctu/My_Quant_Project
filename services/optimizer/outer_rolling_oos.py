@@ -1063,13 +1063,8 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
     progress_board = OptimizerSeedEnsembleProgressBoard(
         seed_contexts, header_factory=_progress_header
     )
-    last_progress_render_at = [0.0]
 
     def _refresh_progress_board(*, force: bool = False) -> None:
-        now = time.perf_counter()
-        if not force and (now - float(last_progress_render_at[0])) < 5.0:
-            return
-        last_progress_render_at[0] = now
         latest = _read_latest_parallel_fold_seed_progresses_for_task(task)
         progress_board.update_many(
             {
