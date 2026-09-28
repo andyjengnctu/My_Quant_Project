@@ -14,11 +14,9 @@ from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 # Current Research strategy-parameter target.  Changing this value changes what
 # Research [2] trains; the interactive menu must not offer a second target selector.
-# Round 2 registers the fixed multi-seed Research producer/profile, but keeps
-# the active target on PARAM-P5 until Round 3 adds the matching seed-bundle
-# robustness contract.  This preserves the invariant that every currently
-# exposed formal Research [2] work type is executable from the active profile.
-ACTIVE_STRATEGY_PARAM_PROFILE = "validation_budget_current"
+# Round 3 activates the production-style fixed multi-seed Research producer after
+# fitting-seed bundles and robustness replication bundles were made orthogonal.
+ACTIVE_STRATEGY_PARAM_PROFILE = "production_multiseed_current"
 
 
 # Validation is a reusable Optimizer capability.  Profiles opt in/out below;
@@ -52,7 +50,7 @@ STRATEGY_PARAM_FITTING_SEED_PROTOCOLS: dict[str, dict] = {
     },
     "research_fixed_multiseed_v1": {
         "enabled": True,
-        "seed_count": 8,
+        "seed_count": 4,
         "seed_mode": "fixed_generated_bundle",
         "generator_seed": 42,
         "min_agree": "auto",

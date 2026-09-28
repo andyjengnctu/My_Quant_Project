@@ -2206,6 +2206,321 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
     }
 
 
+
+def fixed_multiseed_robustness_strategy_param_artifact_path(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    replication_seed: int,
+    policy: str = "base-finalists-agree",
+) -> Path:
+    root = Path(project_root).resolve()
+    benchmark = normalize_strategy_param_benchmark_id(str(benchmark_id))
+    seed = normalize_strategy_param_benchmark_seed(int(replication_seed))
+    filename = fixed_multiseed_strategy_param_artifact_path(root, policy=policy).name
+    return (
+        root
+        / _FIXED_MULTI_SEED_PARAMSET_RELATIVE
+        / "benchmark"
+        / benchmark
+        / f"replicate_{seed}"
+        / filename
+    )
+
+
+def fixed_multiseed_robustness_strategy_param_manifest_path(
+    project_root: str | Path, *, benchmark_id: str, replication_seed: int
+) -> Path:
+    root = Path(project_root).resolve()
+    benchmark = normalize_strategy_param_benchmark_id(str(benchmark_id))
+    seed = normalize_strategy_param_benchmark_seed(int(replication_seed))
+    return (
+        root
+        / _FIXED_MULTI_SEED_PARAMSET_RELATIVE
+        / "benchmark"
+        / benchmark
+        / f"replicate_{seed}"
+        / "identity_manifest.json"
+    )
+
+
+def _fixed_multiseed_robustness_build_contract(
+    *,
+    training_profile_id: str,
+    benchmark_id: str,
+    replication_seed: int,
+    dataset: str | None,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, Any]:
+    from core.strategy_param_policy import (
+        build_replicated_fitting_seed_ensemble_policy,
+        get_strategy_param_training_profile,
+    )
+
+    benchmark = dict(get_robustness_benchmark_policy_snapshot())
+    benchmark_name = normalize_strategy_param_benchmark_id(str(benchmark_id))
+    replicate = normalize_strategy_param_benchmark_seed(int(replication_seed))
+    if benchmark_name != str(benchmark["benchmark_id"]):
+        raise ValueError(f"benchmark_id與current SSOT不一致: {benchmark_id}")
+    if replicate not in {int(value) for value in benchmark["resolved_seeds"]}:
+        raise ValueError(f"replication seed不屬於current robustness benchmark題庫: {replicate}")
+    profile = get_strategy_param_training_profile(training_profile_id)
+    base = _fixed_multiseed_build_contract(
+        training_profile_id=training_profile_id,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    replicated_policy = build_replicated_fitting_seed_ensemble_policy(
+        profile.fitting_seed_protocol, replication_seed=replicate
+    )
+    return {
+        **base,
+        "optimizer_seed": int(replicate),
+        "seed_ensemble_policy": replicated_policy,
+        "benchmark_id": benchmark_name,
+        "robustness_replication_seed": int(replicate),
+        "robustness_seed_semantics": "replication_seed_generates_fitting_seed_bundle",
+    }
+
+
+def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+    project_root: str | Path,
+    *,
+    training_profile_id: str = "production_multiseed_current",
+    benchmark_id: str,
+    replication_seed: int,
+    policy: str = "base-finalists-agree",
+    comparison_end_date: str,
+    dataset: str | None = None,
+    max_positions: int | None = None,
+    rotation: str | None = None,
+    fixed_risk: float | None = None,
+    max_position_cap_pct: float | None = None,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    compare_policy = str(policy).strip()
+    end_date = str(comparison_end_date or "").strip()
+    if not end_date:
+        raise ValueError("fixed multi-seed robustness缺少comparison_end_date")
+    target = fixed_multiseed_robustness_strategy_param_artifact_path(
+        root,
+        benchmark_id=benchmark_id,
+        replication_seed=replication_seed,
+        policy=compare_policy,
+    )
+    manifest_path = fixed_multiseed_robustness_strategy_param_manifest_path(
+        root, benchmark_id=benchmark_id, replication_seed=replication_seed
+    )
+    contract = _fixed_multiseed_robustness_build_contract(
+        training_profile_id=training_profile_id,
+        benchmark_id=benchmark_id,
+        replication_seed=replication_seed,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    payload = _load_json_object(target)
+    manifest = _load_json_object(manifest_path)
+    coverage_end = _canonical_schedule_coverage_end(target)
+    adaptation = dict((payload or {}).get("breakout_quality_param_adaptation") or {})
+    expected_seed_policy = dict(contract["seed_ensemble_policy"])
+    actual_seed_policy = dict(adaptation.get("seed_ensemble_policy") or {})
+    status = "READY"
+    if payload is None:
+        status = "ARTIFACT_MISSING_OR_INVALID"
+    elif str(payload.get("selector") or "") != normalize_strategy_param_policy(compare_policy):
+        status = "POLICY_SELECTOR_MISMATCH"
+    elif str(adaptation.get("parameter_set") or "") != str(contract["parameter_set"]):
+        status = "PARAMETER_SET_MISMATCH"
+    elif str(adaptation.get("optimizer_search_protocol") or "") != str(contract["optimizer_search_protocol"]):
+        status = "OPTIMIZER_SEARCH_PROTOCOL_MISMATCH"
+    elif actual_seed_policy != expected_seed_policy:
+        status = "FITTING_SEED_POLICY_MISMATCH"
+    elif coverage_end is None or str(coverage_end) < end_date:
+        status = "SCHEDULE_COVERAGE_INCOMPLETE"
+    elif manifest is None:
+        status = "MANIFEST_MISSING_OR_INVALID"
+    elif str(manifest.get("producer") or "") != "optimizer":
+        status = "PRODUCER_MISMATCH"
+    elif str(manifest.get("benchmark_id") or "") != str(contract["benchmark_id"]):
+        status = "BENCHMARK_ID_MISMATCH"
+    elif int(manifest.get("robustness_replication_seed") or -1) != int(contract["robustness_replication_seed"]):
+        status = "REPLICATION_SEED_MISMATCH"
+    elif str(manifest.get("parameter_set") or "") != str(contract["parameter_set"]):
+        status = "MANIFEST_PARAMETER_SET_MISMATCH"
+    elif str(manifest.get("policy") or "") != compare_policy:
+        status = "MANIFEST_POLICY_MISMATCH"
+    elif dict(manifest.get("seed_ensemble_policy") or {}) != expected_seed_policy:
+        status = "MANIFEST_FITTING_SEED_POLICY_MISMATCH"
+    elif dict(manifest.get("build_contract") or {}) != contract:
+        status = "BUILD_CONTRACT_MISMATCH"
+    elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
+        status = "ARTIFACT_SHA_MISMATCH"
+    ready = status == "READY"
+    existed = bool(target.exists() or manifest_path.exists())
+    return {
+        "ready": ready,
+        "status": status,
+        "action": "REUSE" if ready else ("REBUILD" if existed else "BUILD"),
+        "path": target,
+        "manifest_path": manifest_path,
+        "coverage_end": coverage_end,
+        "build_contract": contract,
+    }
+
+
+def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+    project_root: str | Path,
+    *,
+    training_profile_id: str = "production_multiseed_current",
+    benchmark_id: str,
+    replication_seed: int,
+    policy: str = "base-finalists-agree",
+    comparison_end_date: str,
+    dataset: str | None = None,
+    max_positions: int | None = None,
+    rotation: str | None = None,
+    fixed_risk: float | None = None,
+    max_position_cap_pct: float | None = None,
+    force_rebuild: bool = False,
+    resume_parameter_training: bool = True,
+    quiet: bool = False,
+) -> dict[str, Any]:
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK,
+        DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS,
+        DEFAULT_PORTFOLIO_ROTATION,
+    )
+    from core.dataset_profiles import DEFAULT_DATASET_PROFILE
+    from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
+
+    root = Path(project_root).resolve()
+    compare_policy = str(policy).strip()
+    state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+        root,
+        training_profile_id=training_profile_id,
+        benchmark_id=benchmark_id,
+        replication_seed=replication_seed,
+        policy=compare_policy,
+        comparison_end_date=comparison_end_date,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    target = Path(state["path"])
+    manifest_path = Path(state["manifest_path"])
+    contract = dict(state["build_contract"])
+    if bool(state["ready"]) and not force_rebuild:
+        return {
+            "action": "REUSE",
+            "path": target,
+            "manifest_path": manifest_path,
+            "sha256": compute_strategy_param_file_sha256(target),
+            "scientific_sha256": compute_strategy_param_scientific_sha256(target),
+            "coverage_end": state.get("coverage_end"),
+            "build_contract": contract,
+        }
+    replicate = int(contract["robustness_replication_seed"])
+    benchmark = str(contract["benchmark_id"])
+    canonical_work_root = (
+        root
+        / _FIXED_MULTI_SEED_WORK_RELATIVE
+        / "benchmark"
+        / benchmark
+        / f"replicate_{replicate}"
+    )
+    work_root = _force_rebuild_attempt_root(canonical_work_root) if force_rebuild else canonical_work_root
+    result = prepare_selection_historical_full_roos_params(
+        project_root=root,
+        dataset=str(DEFAULT_DATASET_PROFILE if dataset in (None, "") else dataset),
+        param_policy=compare_policy,
+        trials_per_fold=int(contract["trials_per_fold"]),
+        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS if max_positions is None else max_positions),
+        rotation=str(DEFAULT_PORTFOLIO_ROTATION if rotation in (None, "") else rotation),
+        fixed_risk=float(DEFAULT_FIXED_RISK if fixed_risk is None else fixed_risk),
+        max_position_cap_pct=float(
+            DEFAULT_MAX_POSITION_CAP_PCT if max_position_cap_pct is None else max_position_cap_pct
+        ),
+        optimizer_seed=int(contract["optimizer_seed"]),
+        resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
+        quiet=bool(quiet),
+        first_oos_date=str(contract["schedule_start"]),
+        last_oos_date=str(comparison_end_date),
+        train_window_months=int(contract["train_window_months"]),
+        oos_months=int(contract["oos_horizon_months"]),
+        output_relative_dir=work_root,
+        build_context_label=f"PARAM-P6 Robustness {benchmark} replicate={replicate}",
+        optimizer_output_title="Optimizer PARAM-P6 robustness工作工件（非production）",
+        optimizer_search_protocol=str(contract["optimizer_search_protocol"]),
+        parameter_set_identity=str(contract["parameter_set"]),
+        seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+    )
+    source = Path(result["params_path"]).resolve()
+    _assert_optimizer_work_source(source_path=source, work_root=work_root)
+    if not source.is_file():
+        raise FileNotFoundError(
+            "PARAM-P6 robustness Optimizer完成但找不到策略參數工件: "
+            + _project_relative(root, source)
+        )
+    _copy_json_payload(source, target)
+    coverage_end = _canonical_schedule_coverage_end(target)
+    if coverage_end is None or str(coverage_end) < str(comparison_end_date):
+        raise RuntimeError(
+            "PARAM-P6 robustness schedule coverage不足: "
+            f"required={comparison_end_date}, actual={coverage_end or '-'}"
+        )
+    payload = _load_json_object(target) or {}
+    adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
+    if str(adaptation.get("parameter_set") or "") != str(contract["parameter_set"]):
+        raise RuntimeError("PARAM-P6 robustness artifact缺少parameter_set identity")
+    if dict(adaptation.get("seed_ensemble_policy") or {}) != dict(contract["seed_ensemble_policy"]):
+        raise RuntimeError("PARAM-P6 robustness artifact缺少replicated fitting-seed identity")
+    target_sha = compute_strategy_param_file_sha256(target)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        manifest_path,
+        {
+            "schema_type": "strategy_parameter_research_robustness_identity",
+            "schema_version": 1,
+            "producer": "optimizer",
+            "training_dl_enabled": False,
+            "parameter_set": str(contract["parameter_set"]),
+            "family": "full",
+            "policy": compare_policy,
+            "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
+            "training_profile_id": str(contract["training_profile_id"]),
+            "fitting_seed_protocol": str(contract["fitting_seed_protocol"]),
+            "benchmark_id": benchmark,
+            "robustness_replication_seed": replicate,
+            "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
+            "build_contract": contract,
+            "artifact_path": _project_relative(root, target),
+            "artifact_sha256": target_sha,
+            "coverage_end": coverage_end,
+            "production_promotion": False,
+        },
+    )
+    return {
+        "action": "FORCE_REBUILD" if force_rebuild else ("REBUILD" if str(state["action"]) == "REBUILD" else "BUILD"),
+        "path": target,
+        "manifest_path": manifest_path,
+        "sha256": target_sha,
+        "scientific_sha256": compute_strategy_param_scientific_sha256(target),
+        "coverage_end": coverage_end,
+        "build_contract": contract,
+    }
+
 def validation_budget_strategy_param_artifact_path(
     project_root: str | Path,
     *,
@@ -2747,6 +3062,10 @@ __all__ = [
     "ensure_validation_budget_robustness_strategy_parameter_artifact",
     "inspect_validation_budget_robustness_strategy_parameter_artifact",
     "ensure_fixed_multiseed_strategy_parameter_artifact",
+    "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
+    "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+    "fixed_multiseed_robustness_strategy_param_manifest_path",
+    "fixed_multiseed_robustness_strategy_param_artifact_path",
     "inspect_fixed_multiseed_strategy_parameter_artifact",
     "fixed_multiseed_strategy_param_artifact_path",
     "fixed_multiseed_strategy_param_manifest_path",

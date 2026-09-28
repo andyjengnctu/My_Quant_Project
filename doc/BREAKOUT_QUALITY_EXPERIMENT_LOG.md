@@ -12180,4 +12180,13 @@ Decision：`ENGINEERING_ONLY / LIVE_PROGRESS_VISIBLE / SEQUENTIAL_SHARED_RAW_CAC
 - **Scientific preservation**：C58/C61/C62/P5/C84 artifacts/results不重算；以本Round sole-source ZIP與patched tree做同一resolver／同一artifact-state base-vs-patch對照，`non_dl_validation_budget_oos`、`non_dl_validation_budget_rolling`、`extending_window_oos`、`extending_window_rolling`四個既有profile fingerprint逐一完全相同，證明Round 2沒有造成既有scientific identity drift。本Round尚無C85績效結果，不作優劣結論。
 
 Decision：`PARAM-P6 / SR-C85 / FIXED_8_FITTING_SEEDS / 300_TRIALS_PER_SEED / PRODUCTION_STYLE_NOT_EXACT_TRADING_REPLAY / STAGED_NOT_CURRENT / ROUND3_ROBUSTNESS_BUNDLE_NEXT`。
+## 2026-09-29 — Research fitting-bundle / robustness-replication split / Round 3
+
+- **Pre-result spec correction**：在`PARAM-P6 / SR-C85`尚未產生正式OOS／Rolling／Robustness evidence前，使用者明確把Research strategy fitting multi-seed由8降為4，以降低rolling／robustness實際成本。P6/C85沿用既有identity，因尚無正式result artifact；Round-2的8-seed文字規格由本條supersede，不改寫其歷史紀錄。Current fitting contract=`4 fixed seeds × 300 trials/seed`；canonical generator seed仍為`42`。Trading production完全不變，仍是每次明確重訓random 8 seeds × 1000 trials/seed。
+- **Orthogonal seed semantics**：Research fitting seeds與robustness replication seeds正式拆開。Canonical C85 OOS/Rolling使用generator seed=`42`解析固定4-seed fitting bundle。Robustness外層仍使用`end_to_end_v1` benchmark resolved seeds；對C85，每個outer replication seed只作為該replicate fitting bundle的deterministic generator，產生4個unique inner optimizer seeds，`min_agree=3/4`；outer seed本身不得作為C85單一optimizer seed。C62/C61/C58維持legacy same-seed semantics：outer benchmark seed直接作為其單一optimizer seed。
+- **Artifact isolation**：C85 canonical truth仍只有`models/research/breakout_quality/strategy_params/param_p6_production_multiseed/`。Robustness per-replicate P6 artifacts使用同PARAM-P6 scientific producer但隔離於`.../param_p6_production_multiseed/benchmark/<benchmark>/replicate_<replication_seed>/`；OOS prefix與Rolling full coverage共用同一replicate physical schedule，不建立第二份OOS/Rolling truth。Manifest同時保存`robustness_replication_seed`與完整inner `seed_ensemble_policy.resolved_seeds`。
+- **Current activation**：`ACTIVE_STRATEGY_PARAM_PROFILE`切到`production_multiseed_current`；Strategy Compare current OOS/Rolling與兩個Robustness bindings原子切到`non_dl_production_multiseed_*`，suite=`C85/C62/C61/C58`，Primary=`C85-C62`。P5/C84 fixed-checkpoint validation仍完整保留為既有single-seed controlled experiment，不刪除、不重算。
+- **Scientific scope**：本Round只完成seed-semantics與current binding；沒有C85績效結果，不做multi-seed優劣結論，也不進行Validation early-stop。
+
+Decision：`PARAM-P6 / SR-C85 / FIXED_4_FITTING_SEEDS / 300_TRIALS_PER_SEED / OUTER_ROBUSTNESS_REPLICATION_SEED_GENERATES_INNER_4_SEED_BUNDLE / CURRENT_COMPARE_AND_ROBUSTNESS_ACTIVE / RESULT_PENDING / TRADING_UNCHANGED`。
 

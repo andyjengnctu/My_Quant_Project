@@ -58,6 +58,10 @@ from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from core.training_policy import resolve_robustness_benchmark_seeds
+from core.strategy_param_policy import (
+    get_strategy_param_fitting_seed_protocol,
+    get_strategy_param_training_profile,
+)
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
@@ -151,10 +155,14 @@ from services.research.training_process import (
     terminate_registered_training_processes,
 )
 from services.optimizer.strategy_param_service import (
+    ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
     ensure_robustness_benchmark_strategy_parameter_artifact,
     ensure_validation_budget_robustness_strategy_parameter_artifact,
+    inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
     inspect_robustness_benchmark_strategy_parameter_artifact,
     inspect_validation_budget_robustness_strategy_parameter_artifact,
+    fixed_multiseed_robustness_strategy_param_artifact_path,
+    fixed_multiseed_robustness_strategy_param_manifest_path,
     validation_budget_robustness_strategy_param_artifact_path,
     validation_budget_robustness_strategy_param_manifest_path,
 )
@@ -551,6 +559,20 @@ def _robustness_arms(
     return fixed, stochastic
 
 
+def _robustness_seed_pairing_semantics(settings, robustness) -> str:
+    if robustness.benchmark_id is None:
+        return "legacy_model_seed_only"
+    for arm_id in tuple(robustness.benchmark_strategy_arm_ids):
+        arm = settings.arms[str(arm_id)]
+        source = settings.parameter_sources[str(arm.param_source)]
+        builder_type = (
+            "" if source.builder is None else str(source.builder.builder_type or "").strip()
+        )
+        if builder_type == "optimizer_fixed_multiseed_strategy_params":
+            return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
+    return "same_seed_strategy_optimizer_and_all_dl_sources"
+
+
 def _model_seed_sensitive_arms(
     settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...]
 ) -> tuple[StrategyComparisonArm, ...]:
@@ -584,6 +606,31 @@ def _benchmark_param_binding(
             PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed),
         )
         producer_variant = "validation_budget_refit_v1"
+        training_profile_id = None
+        fitting_seed_count = 1
+    elif builder_type == "optimizer_fixed_multiseed_strategy_params":
+        family = "full"
+        mode = str(source.consumption_evaluation_mode or "rolling").strip()
+        options = {} if source.builder is None else dict(source.builder.options or {})
+        training_profile_id = str(options.get("training_profile_id") or "").strip()
+        if not training_profile_id:
+            raise ValueError(
+                f"fixed multi-seed benchmark source缺少training_profile_id: {arm.arm_id}/{arm.param_source}"
+            )
+        path = fixed_multiseed_robustness_strategy_param_artifact_path(
+            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id),
+            replication_seed=int(seed), policy=policy,
+        )
+        manifest_path = fixed_multiseed_robustness_strategy_param_manifest_path(
+            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id),
+            replication_seed=int(seed),
+        )
+        producer_variant = "fixed_multiseed_v1"
+        training_profile = get_strategy_param_training_profile(training_profile_id)
+        fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
+            training_profile.fitting_seed_protocol
+        )
+        fitting_seed_count = int(fitting_seed_protocol.seed_count)
     else:
         family = str(source.canonical_family or "").strip()
         mode = str(source.canonical_evaluation_mode or "").strip()
@@ -608,6 +655,8 @@ def _benchmark_param_binding(
             evaluation_mode=mode,
         )
         producer_variant = "canonical_schedule_v1"
+        training_profile_id = None
+        fitting_seed_count = 1
     return {
         "arm_id": arm.arm_id,
         "seed": int(seed),
@@ -615,6 +664,8 @@ def _benchmark_param_binding(
         "evaluation_mode": mode,
         "param_policy": policy,
         "producer_variant": producer_variant,
+        "training_profile_id": training_profile_id,
+        "fitting_seed_count": int(fitting_seed_count),
         "path": path,
         "manifest_path": manifest_path,
     }
@@ -663,8 +714,12 @@ def _benchmark_parameter_plan_rows(
                 "" if str(binding["producer_variant"]) == "canonical_schedule_v1"
                 else f":{binding['producer_variant']}"
             )
+            seed_role = (
+                "replicate" if str(binding["producer_variant"]) == "fixed_multiseed_v1"
+                else "seed"
+            )
             label = (
-                f"param-benchmark:{robustness.benchmark_id}:seed={seed}:"
+                f"param-benchmark:{robustness.benchmark_id}:{seed_role}={seed}:"
                 f"{binding['family']}:{binding['evaluation_mode']}:{binding['param_policy']}"
                 f"{variant_suffix}"
             )
@@ -683,8 +738,15 @@ def _benchmark_parameter_plan_rows(
                 else:
                     rows.append((
                         "BUILD", label,
-                        "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
-                        "不得fallback到production Seed42策略參數",
+                        (
+                            "由canonical Optimizer以robustness replicate identity建立固定fitting-seed bundle；"
+                            "不得把outer replicate seed當成單一optimizer seed"
+                            if str(binding["producer_variant"]) == "fixed_multiseed_v1"
+                            else (
+                                "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
+                                "不得fallback到production Seed42策略參數"
+                            )
+                        ),
                     ))
                 continue
             if str(binding["producer_variant"]) == "validation_budget_refit_v1":
@@ -692,6 +754,20 @@ def _benchmark_parameter_plan_rows(
                     PROJECT_ROOT,
                     benchmark_id=str(robustness.benchmark_id),
                     seed=int(seed),
+                    policy=str(binding["param_policy"]),
+                    comparison_end_date=str(required_schedule_end),
+                    dataset=str(settings.dataset),
+                    max_positions=int(settings.max_positions),
+                    rotation=str(settings.rotation),
+                    fixed_risk=float(DEFAULT_FIXED_RISK),
+                    max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                )
+            elif str(binding["producer_variant"]) == "fixed_multiseed_v1":
+                state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    PROJECT_ROOT,
+                    training_profile_id=str(binding["training_profile_id"]),
+                    benchmark_id=str(robustness.benchmark_id),
+                    replication_seed=int(seed),
                     policy=str(binding["param_policy"]),
                     comparison_end_date=str(required_schedule_end),
                     dataset=str(settings.dataset),
@@ -729,8 +805,13 @@ def _benchmark_parameter_plan_rows(
                 )
             else:
                 detail = (
-                    "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
-                    "不得fallback到production Seed42策略參數"
+                    "由canonical Optimizer以robustness replicate identity建立固定fitting-seed bundle；"
+                    "不得把outer replicate seed當成單一optimizer seed"
+                    if str(binding["producer_variant"]) == "fixed_multiseed_v1"
+                    else (
+                        "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
+                        "不得fallback到production Seed42策略參數"
+                    )
                 )
             rows.append((action, label, detail))
     return rows, blockers, bindings
@@ -819,6 +900,22 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                         PROJECT_ROOT,
                         benchmark_id=str(robustness.benchmark_id),
                         seed=int(seed),
+                        policy=str(binding["param_policy"]),
+                        comparison_end_date=str(required_schedule_end),
+                        dataset=str(settings.dataset),
+                        max_positions=int(settings.max_positions),
+                        rotation=str(settings.rotation),
+                        fixed_risk=float(DEFAULT_FIXED_RISK),
+                        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                        resume_parameter_training=True,
+                        quiet=False,
+                    )
+                elif str(binding["producer_variant"]) == "fixed_multiseed_v1":
+                    result = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                        PROJECT_ROOT,
+                        training_profile_id=str(binding["training_profile_id"]),
+                        benchmark_id=str(robustness.benchmark_id),
+                        replication_seed=int(seed),
                         policy=str(binding["param_policy"]),
                         comparison_end_date=str(required_schedule_end),
                         dataset=str(settings.dataset),
@@ -1204,10 +1301,10 @@ def _parameter_plan_rows(
 def _render_robustness_execution_plan(
     *, cfg, settings, status: dict[str, Any], fixed_arms, stochastic_arms
 ) -> tuple[str, dict[str, Any]]:
-    # Current end-to-end benchmark repeats the complete Compare Suite per seed.
-    # Canonical production params are not a robustness prerequisite; every current
-    # arm resolves benchmark-only same-seed params, while model arms additionally
-    # retrain their DL sources with that exact seed.
+    # Current end-to-end benchmark repeats the complete Compare Suite per outer
+    # robustness replicate. Canonical production params are not a prerequisite.
+    # Single-seed arms bind the outer seed directly; fixed-multiseed arms deterministically
+    # expand that outer replicate identity into an inner fitting-seed bundle.
     if cfg.benchmark_id is not None:
         model_arms = _model_seed_sensitive_arms(settings, cfg, tuple(stochastic_arms))
         required_sources = ()
@@ -1366,9 +1463,33 @@ def _render_robustness_execution_plan(
             )
             action = "TRAIN+REPLAY"
         else:
-            description = (
-                f"{cfg.seed_count}個固定benchmark seeds；同seed strategy optimizer params + DL-off replay"
+            arm_bindings = [
+                benchmark_bindings.get((arm.arm_id, int(seed)))
+                for seed in cfg.resolved_seeds
+            ]
+            arm_bindings = [item for item in arm_bindings if isinstance(item, dict)]
+            uses_fitting_bundle = any(
+                str(item.get("producer_variant") or "") == "fixed_multiseed_v1"
+                for item in arm_bindings
             )
+            if uses_fitting_bundle:
+                fitting_counts = {
+                    int(item.get("fitting_seed_count") or 0)
+                    for item in arm_bindings
+                    if int(item.get("fitting_seed_count") or 0) > 0
+                }
+                fitting_count = next(iter(fitting_counts)) if len(fitting_counts) == 1 else 0
+                fitting_label = (
+                    f"{fitting_count}-seed fitting bundle"
+                    if fitting_count > 0 else "multi-seed fitting bundle"
+                )
+                description = (
+                    f"{cfg.seed_count}個robustness replicates；每個replicate使用{fitting_label} + DL-off replay"
+                )
+            else:
+                description = (
+                    f"{cfg.seed_count}個固定benchmark seeds；同seed strategy optimizer params + DL-off replay"
+                )
             action = "PARAM+REPLAY"
         rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
@@ -1423,6 +1544,24 @@ def _render_robustness_execution_plan(
                     f"{cfg.seed_count * sum(fold_counts)} slots（實際新訓練會扣除REUSE／rescore／跨mode checkpoint重用）",
                 ),
             ]
+    fixed_multiseed_fitting_counts = {
+        int(item.get("fitting_seed_count") or 0)
+        for item in benchmark_bindings.values()
+        if str(item.get("producer_variant") or "") == "fixed_multiseed_v1"
+        and int(item.get("fitting_seed_count") or 0) > 0
+    }
+    fitting_bundle_rows = ()
+    if fixed_multiseed_fitting_counts:
+        if len(fixed_multiseed_fitting_counts) == 1:
+            fitting_count = next(iter(fixed_multiseed_fitting_counts))
+            fitting_bundle_rows = (("Strategy fitting seeds", f"{fitting_count} / robustness replicate"),)
+        else:
+            fitting_bundle_rows = ((
+                "Strategy fitting seeds",
+                "/".join(str(value) for value in sorted(fixed_multiseed_fitting_counts))
+                + " / robustness replicate",
+            ),)
+
     metadata_rows = (
         ("整體狀態", overall),
         ("設定檔", "config/strategy_compare.py"),
@@ -1437,27 +1576,28 @@ def _render_robustness_execution_plan(
         ("CPU strategy replay", f"workers={cfg.cpu_replay_workers}"),
         ("Benchmark ID", cfg.benchmark_id or "-"),
         ("Benchmark seeds", ",".join(str(v) for v in cfg.resolved_seeds)),
+        *fitting_bundle_rows,
         (
             "Strategy trials/fold",
             cfg.strategy_trials_per_fold if cfg.strategy_trials_per_fold is not None else "-",
         ),
         (
             "策略Benchmark單元",
-            f"{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} per-seed strategy arms × {cfg.seed_count} seeds）",
+            f"{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} strategy arms × {cfg.seed_count} robustness replicates）",
         ),
         *(
             ((
                 "策略Optimizer搜尋",
                 (
                     f"{len(pending_optimizer_search_groups)} pending search units"
-                    f"（scientific result REUSE={len(registered_scientific_reuse)}/{cfg.seed_count * len(stochastic_arms)} arm×seed）"
+                    f"（scientific result REUSE={len(registered_scientific_reuse)}/{cfg.seed_count * len(stochastic_arms)} arm×replicate）"
                 ),
             ),)
             if cfg.benchmark_id is not None else ()
         ),
         (
             "模型訓練單元",
-            f"{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
+            f"{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} robustness replicates）",
         ),
         *tuple(pit_workload_rows),
     )
@@ -1707,10 +1847,7 @@ def build_multi_seed_robustness_contract(
         "seed_generator_seed": int(robustness.seed_generator_seed),
         "resolved_seeds": list(seeds),
         "strategy_trials_per_fold": robustness.strategy_trials_per_fold,
-        "seed_pairing": (
-            "same_seed_strategy_optimizer_and_all_dl_sources"
-            if robustness.benchmark_id is not None else "legacy_model_seed_only"
-        ),
+        "seed_pairing": _robustness_seed_pairing_semantics(settings, robustness),
         "benchmark_strategy_arm_ids": list(robustness.benchmark_strategy_arm_ids),
         "model_seed_sensitive_arm_ids": list(robustness.model_seed_sensitive_arm_ids),
         "consensus_reference_arm_ids": list(robustness.consensus_reference_arm_ids),
@@ -2671,10 +2808,7 @@ def _current_strategy_only_unit_scientific_signature(
         "benchmark_id": str(robustness.benchmark_id or ""),
         "seed": int(seed),
         "strategy_trials_per_fold": robustness.strategy_trials_per_fold,
-        "seed_pairing": (
-            "same_seed_strategy_optimizer_and_all_dl_sources"
-            if robustness.benchmark_id is not None else "legacy_model_seed_only"
-        ),
+        "seed_pairing": _robustness_seed_pairing_semantics(settings, robustness),
         "arm": arm_contract,
         "benchmark_parameter": parameter_identity,
     }

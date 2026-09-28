@@ -14,14 +14,13 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round-2 registers the production-style multi-seed producer/arms/profiles, but
-# current Strategy Compare activation remains on the Phase-2 suite until Round 3
-# adds the matching fitting-seed-bundle robustness contract. This preserves the
-# invariant that all current Compare work types bind to one executable suite.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_budget_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_budget_rolling"
-STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_validation_budget_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_validation_budget_rolling"
+# Round 3 activates the production-style multi-seed suite atomically for OOS,
+# Rolling, and their robustness extensions.  PARAM-P5/C84 remain registered
+# historical/controlled validation references but are no longer the current suite.
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_production_multiseed_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_production_multiseed_rolling"
+STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
 STRATEGY_COMPARE_MENU_PROFILE_IDS = (
     STRATEGY_COMPARE_CURRENT_OOS_PROFILE,

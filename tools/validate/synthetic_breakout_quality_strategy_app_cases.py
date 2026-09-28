@@ -445,27 +445,33 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         resolve_strategy_parameter_required_schedule_end,
     )
     from services.research import strategy_compare_preparation as compare_preparation
-    p5_oos_arm = oos_settings.arms.get("C84")
-    p5_rolling_arm = rolling_settings.arms.get("C84")
+    p5_oos_settings = strategy_config.get_strategy_comparison_settings(
+        "non_dl_validation_budget_oos"
+    )
+    p5_rolling_settings = strategy_config.get_strategy_comparison_settings(
+        "non_dl_validation_budget_rolling"
+    )
+    p5_oos_arm = p5_oos_settings.arms.get("C84")
+    p5_rolling_arm = p5_rolling_settings.arms.get("C84")
     if p5_oos_arm is not None and p5_rolling_arm is not None:
-        p5_oos_source = oos_settings.parameter_sources[p5_oos_arm.param_source]
-        p5_rolling_source = rolling_settings.parameter_sources[p5_rolling_arm.param_source]
+        p5_oos_source = p5_oos_settings.parameter_sources[p5_oos_arm.param_source]
+        p5_rolling_source = p5_rolling_settings.parameter_sources[p5_rolling_arm.param_source]
         check(
             "validation_budget_oos_requires_only_freeze_start_schedule_prefix",
-            str(oos_settings.start_date),
+            str(p5_oos_settings.start_date),
             resolve_strategy_parameter_required_schedule_end(
                 p5_oos_source,
-                comparison_start=oos_settings.start_date,
-                comparison_end=oos_settings.end_date,
+                comparison_start=p5_oos_settings.start_date,
+                comparison_end=p5_oos_settings.end_date,
             ),
         )
         check(
             "validation_budget_rolling_requires_full_schedule_coverage",
-            str(rolling_settings.end_date),
+            str(p5_rolling_settings.end_date),
             resolve_strategy_parameter_required_schedule_end(
                 p5_rolling_source,
-                comparison_start=rolling_settings.start_date,
-                comparison_end=rolling_settings.end_date,
+                comparison_start=p5_rolling_settings.start_date,
+                comparison_end=p5_rolling_settings.end_date,
             ),
         )
         capture = {}
@@ -489,14 +495,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ):
             compare_preparation._execute_preparation_action(
                 root=project_root,
-                settings=oos_settings,
+                settings=p5_oos_settings,
                 action=action,
-                comparison_start_date=str(oos_settings.start_date),
-                comparison_end_date=str(oos_settings.end_date),
+                comparison_start_date=str(p5_oos_settings.start_date),
+                comparison_end_date=str(p5_oos_settings.end_date),
             )
         check(
             "validation_budget_oos_builder_receives_only_required_schedule_prefix",
-            str(oos_settings.start_date),
+            str(p5_oos_settings.start_date),
             str(capture.get("comparison_end_date") or ""),
         )
 
@@ -648,7 +654,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             stale_manifest_payload["artifact_sha256"] = compute_strategy_param_file_sha256(stale_target)
             stale_manifest.write_text(json.dumps(stale_manifest_payload), encoding="utf-8")
             from services.research.strategy_compare_preparation_status import collect_preparation_status
-            initial_status = collect_preparation_status(project_root=temp_root, settings=oos_settings)
+            initial_status = collect_preparation_status(project_root=temp_root, settings=p5_oos_settings)
             orchestrator_calls = []
 
             def _fake_p5_rebuild_counted(**kwargs):
@@ -661,11 +667,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             ), redirect_stdout(io.StringIO()):
                 final_status = compare_preparation.prepare_strategy_parameter_artifacts(
                     project_root=temp_root,
-                    settings=oos_settings,
+                    settings=p5_oos_settings,
                     status=initial_status,
                     required_source_ids={p5_oos_arm.param_source},
                     status_refresher=lambda: collect_preparation_status(
-                        project_root=temp_root, settings=oos_settings
+                        project_root=temp_root, settings=p5_oos_settings
                     ),
                 )
             initial_row = initial_status["parameters"][p5_oos_arm.param_source]
@@ -860,7 +866,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 for seed in robustness.resolved_seeds
             )
             and len(pending_rows) == 8
-            and all("validation_budget_refit_v1" in str(row[1]) for row in pending_rows),
+            and all(
+                "replicate=" in str(row[1]) and "fixed_multiseed_v1" in str(row[1])
+                for row in pending_rows
+            ),
         )
 
     from services.research.strategy_multi_seed_robustness import (
@@ -903,14 +912,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
     check_true(
-        "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_c84_work",
+        "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_c85_bundle_work",
         len(rendered_robustness_payload.get("registered_scientific_reuse_units") or ()) == 24
         and "8 pending search units" in rendered_robustness_plan
-        and "scientific result REUSE=24/32 arm×seed" in rendered_robustness_plan
-        and "REUSE         Production PIT / Full Base-Finalist" in rendered_robustness_plan
+        and "scientific result REUSE=24/32 arm×replicate" in rendered_robustness_plan
+        and "REUSE         Full Single-Seed Base-Finalists-Agr" in rendered_robustness_plan
         and "REUSE         Full Base-Finalist-Best" in rendered_robustness_plan
         and "REUSE         Min Base-Finalist-Best" in rendered_robustness_plan
-        and "PARAM+REPLAY  Full Validation-Budget Refit" in rendered_robustness_plan,
+        and "PARAM+REPLAY  Full Production-Style Fixed Multi-S" in rendered_robustness_plan,
     )
 
     # The long-lived extending_current benchmark remains contract-tested even when

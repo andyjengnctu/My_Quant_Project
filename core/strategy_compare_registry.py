@@ -284,8 +284,8 @@ STRATEGY_COMPARE_PROFILES = {
     "non_dl_production_multiseed_oos": {
         "label": "Non-DL Production Multi-Seed | OOS Test",
         "description": (
-            "Round-2 controlled comparison：Full/formal/base-finalists-agree固定；C85使用"
-            "8個固定Research fitting seeds、300 trials/seed，對照C62的單一Seed42版本。"
+            "Round-3 controlled comparison：Full/formal/base-finalists-agree固定；C85使用"
+            "4個固定Research fitting seeds、300 trials/seed，對照C62的單一Seed42版本。"
             "本arm重現Trading的multi-seed fitting/selection語意，但不是Trading 8 random × 1000的exact replay。"
         ),
         "display_alignment_group": "non_dl_production_multiseed",
@@ -311,7 +311,7 @@ STRATEGY_COMPARE_PROFILES = {
     "non_dl_production_multiseed_rolling": {
         "label": "Non-DL Production Multi-Seed | Rolling Test",
         "description": (
-            "Round-2 primary PIT evaluation：C85逐年度以固定8-seed Research fitting bundle × 300 trials/seed"
+            "Round-3 primary PIT evaluation：C85逐年度以固定4-seed Research fitting bundle × 300 trials/seed"
             "產生Full/base-finalists-agree參數；C62保持單一Seed42 × 300 control，其餘rules/execution相同。"
         ),
         "display_alignment_group": "non_dl_production_multiseed",
@@ -431,6 +431,58 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         },
         "output_root": "outputs/strategy_compare/robustness/non_dl_validation_budget/rolling_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_validation_budget/rolling_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
+    "non_dl_production_multiseed_oos": {
+        "label": "Non-DL Production Multi-Seed Bundle Robustness | OOS Test",
+        "enabled": True,
+        "profile_id": "non_dl_production_multiseed_oos",
+        "suite_id": "non_dl_production_multiseed_current",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_oos", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_oos", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_production_multiseed/oos_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_production_multiseed/oos_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
+    "non_dl_production_multiseed_rolling": {
+        "label": "Non-DL Production Multi-Seed Bundle Robustness | Rolling Test",
+        "enabled": True,
+        "profile_id": "non_dl_production_multiseed_rolling",
+        "suite_id": "non_dl_production_multiseed_current",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_rolling", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_rolling", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_production_multiseed/rolling_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_production_multiseed/rolling_2021_forward",
         "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
     },
     "extending_window_oos": {
@@ -775,8 +827,8 @@ STRATEGY_COMPARE_ARMS = {
     "C85": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_PRODUCTION_MULTI_SEED,
         "description": (
-            "PARAM-P6 Round-2 non-DL production-style treatment；Full/formal/base-finalists-agree、"
-            "120M selection + 12M annual PIT固定；使用8個固定Research fitting seeds × 300 trials/seed。"
+            "PARAM-P6 Round-3 non-DL production-style treatment；Full/formal/base-finalists-agree、"
+            "120M selection + 12M annual PIT固定；使用4個固定Research fitting seeds × 300 trials/seed。"
             "它重現Trading multi-seed fitting/selection語意，但不宣稱是8 random ×1000 production exact replay。"
         ),
         "param_source": "full_production_multiseed_rolling_experiment",
@@ -1018,7 +1070,7 @@ STRATEGY_COMPARE_CONTRASTS = {
         "right": "C62",
         "description": (
             "Round-2 primary：同為Full/formal/base-finalists-agree與300 trials/seed；"
-            "比較8個固定Research fitting seeds相對單一Seed42的multi-seed fitting效果。"
+            "比較4個固定Research fitting seeds相對單一Seed42的multi-seed fitting效果。"
         ),
     },
     "C85-C61": {

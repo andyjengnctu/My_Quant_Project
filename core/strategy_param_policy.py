@@ -128,6 +128,46 @@ def get_strategy_param_fitting_seed_protocol(
     )
 
 
+
+def build_replicated_fitting_seed_ensemble_policy(
+    protocol_id: str, *, replication_seed: int
+) -> dict[str, Any]:
+    """Resolve one deterministic fitting-seed bundle for an outer robustness replicate.
+
+    ``replication_seed`` belongs to the robustness benchmark layer.  It is used only
+    as the deterministic bundle generator seed; the optimizer members inside the
+    fitting procedure remain the resolved multi-seed bundle.  This keeps fitting
+    stochasticity orthogonal to robustness replication stochasticity.
+    """
+
+    protocol = get_strategy_param_fitting_seed_protocol(protocol_id)
+    if not protocol.enabled or protocol.seed_count < 2:
+        raise ValueError(
+            "replicated fitting-seed bundle只支援enabled multi-seed protocol: "
+            f"{protocol_id}"
+        )
+    seed0 = int(replication_seed)
+    if seed0 <= 0:
+        raise ValueError("robustness replication seed必須>0")
+    resolved = tuple(
+        int(value)
+        for value in generate_deterministic_seed_ensemble(
+            protocol.seed_count, generator_seed=seed0
+        )
+    )
+    return {
+        "enabled": True,
+        "seed_count": int(protocol.seed_count),
+        "min_agree": int(protocol.min_agree),
+        "min_agree_requested": protocol.min_agree_requested,
+        "min_agree_max": int(protocol.seed_count),
+        "min_agree_rule": "clamp_1_to_seed_count",
+        "seed_mode": "fixed_generated_bundle",
+        "params_storage": "same_json",
+        "generator_seed": int(seed0),
+        "resolved_seeds": [int(value) for value in resolved],
+    }
+
 def get_strategy_param_validation_protocol(protocol_id: str) -> StrategyParamValidationProtocol:
     key = str(protocol_id or "").strip()
     raw = STRATEGY_PARAM_VALIDATION_PROTOCOLS.get(key)

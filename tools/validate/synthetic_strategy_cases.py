@@ -2144,21 +2144,165 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check("strategy_param_validation_is_profile_config_not_optimizer_menu_switch", True, validation_param_profile.validation_enabled and validation_param_profile.validation_protocol == "validation_budget_refit_v1" and "STRATEGY_PARAM_VALIDATION_PROTOCOLS" in strategy_param_config_source)
     check("strategy_param_validation_config_preserves_phase2_contract", True, validation_spec.as_dict() == {"protocol": "validation_budget_refit_v1", "holdout_months": 12, "checkpoints": [50, 100, 150, 200, 250, 300], "policy_name": "base_finalists_agree", "selection_metric": "canonical_optimizer_portfolio_score", "tie_break": "smaller_budget", "oos_feedback_used": False, "full_refit_required": True})
     check(
-        "strategy_param_round2_registers_fixed_multiseed_p6_without_premature_activation",
+        "strategy_param_round3_activates_four_seed_p6_with_single_seed_p5_preserved",
         True,
-        active_param_profile.parameter_set_identity == "PARAM-P5"
-        and active_param_profile.profile_id == "validation_budget_current"
+        active_param_profile.parameter_set_identity == "PARAM-P6"
+        and active_param_profile.profile_id == "production_multiseed_current"
         and production_multiseed_param_profile.parameter_set_identity == "PARAM-P6"
         and production_multiseed_param_profile.profile_id == "production_multiseed_current"
         and not production_multiseed_param_profile.validation_enabled
         and production_multiseed_fitting_seed_protocol.enabled
-        and production_multiseed_fitting_seed_protocol.seed_count == 8
+        and production_multiseed_fitting_seed_protocol.seed_count == 4
         and production_multiseed_fitting_seed_protocol.trials_per_seed == 300
         and production_multiseed_fitting_seed_protocol.seed_mode == "fixed_generated_bundle"
-        and len(production_multiseed_fitting_seed_protocol.resolved_seeds) == 8
-        and len(set(production_multiseed_fitting_seed_protocol.resolved_seeds)) == 8
+        and len(production_multiseed_fitting_seed_protocol.resolved_seeds) == 4
+        and len(set(production_multiseed_fitting_seed_protocol.resolved_seeds)) == 4
         and validation_fitting_seed_protocol.seed_mode == "fixed_single_seed"
         and validation_fitting_seed_protocol.resolved_seeds == (42,),
+    )
+    from core.strategy_param_policy import build_replicated_fitting_seed_ensemble_policy
+    from core.training_policy import get_robustness_benchmark_policy_snapshot
+    benchmark_snapshot = get_robustness_benchmark_policy_snapshot()
+    replication_seed = int(benchmark_snapshot["resolved_seeds"][0])
+    replicated_p6_policy = build_replicated_fitting_seed_ensemble_policy(
+        production_multiseed_param_profile.fitting_seed_protocol,
+        replication_seed=replication_seed,
+    )
+    check(
+        "strategy_param_round3_robustness_replication_seed_generates_orthogonal_four_seed_bundle",
+        True,
+        replicated_p6_policy["seed_count"] == 4
+        and replicated_p6_policy["generator_seed"] == replication_seed
+        and len(replicated_p6_policy["resolved_seeds"]) == 4
+        and len(set(replicated_p6_policy["resolved_seeds"])) == 4
+        and tuple(replicated_p6_policy["resolved_seeds"])
+            != tuple(production_multiseed_fitting_seed_protocol.resolved_seeds),
+    )
+    from config.strategy_compare import (
+        STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+        STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
+        STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS,
+        STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS,
+    )
+    check(
+        "strategy_param_round3_switches_compare_and_robustness_atomically_to_c85_suite",
+        True,
+        STRATEGY_COMPARE_CURRENT_OOS_PROFILE == "non_dl_production_multiseed_oos"
+        and STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE == "non_dl_production_multiseed_rolling"
+        and STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS == "non_dl_production_multiseed_oos"
+        and STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS == "non_dl_production_multiseed_rolling",
+    )
+    from services.optimizer.strategy_param_service import (
+        ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
+        inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
+    )
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION,
+    )
+    with TemporaryDirectory() as temp_dir:
+        p6_robustness_state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+            temp_dir,
+            training_profile_id="production_multiseed_current",
+            benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+            replication_seed=replication_seed,
+            policy="base-finalists-agree",
+            comparison_end_date="2021-01-01",
+            dataset="full",
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+    p6_robustness_contract = dict(p6_robustness_state["build_contract"])
+    p6_robustness_seed_policy = dict(p6_robustness_contract["seed_ensemble_policy"])
+    check(
+        "strategy_param_round3_p6_robustness_artifact_identity_keeps_outer_replication_and_inner_bundle_separate",
+        True,
+        p6_robustness_state["action"] == "BUILD"
+        and p6_robustness_contract["robustness_replication_seed"] == replication_seed
+        and p6_robustness_contract["robustness_seed_semantics"]
+            == "replication_seed_generates_fitting_seed_bundle"
+        and p6_robustness_seed_policy["seed_count"] == 4
+        and p6_robustness_seed_policy["generator_seed"] == replication_seed
+        and replication_seed not in set(p6_robustness_seed_policy["resolved_seeds"]),
+    )
+    with TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        captured_p6_robustness_build = {}
+
+        def _fake_p6_robustness_build(**kwargs):
+            captured_p6_robustness_build.update(kwargs)
+            work_root = Path(kwargs["output_relative_dir"])
+            source = work_root / "active_params" / "roos_base_finalists_agree.json"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            seed_policy = dict(kwargs["seed_ensemble_policy_override"])
+            members = [
+                {
+                    "seed": int(seed),
+                    "params": {"high_len": 260 + idx, "atr_len": 23},
+                }
+                for idx, seed in enumerate(seed_policy["resolved_seeds"])
+            ]
+            source.write_text(
+                json.dumps({
+                    "type": "active_param_ensemble",
+                    "mode": "rolling",
+                    "selector": "base_finalists_agree",
+                    "params_ensemble_by_effective_date": {"2021-01-01": members},
+                    "random_seed_ensemble": seed_policy,
+                    "breakout_quality_param_adaptation": {
+                        "parameter_set": kwargs["parameter_set_identity"],
+                        "optimizer_search_protocol": kwargs["optimizer_search_protocol"],
+                        "seed_ensemble_policy": seed_policy,
+                    },
+                }),
+                encoding="utf-8",
+            )
+            return {"params_path": source}
+
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+            side_effect=_fake_p6_robustness_build,
+        ):
+            built_p6_robustness = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                temp_root,
+                training_profile_id="production_multiseed_current",
+                benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+                replication_seed=replication_seed,
+                policy="base-finalists-agree",
+                comparison_end_date="2021-01-01",
+                dataset="full",
+                max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+                rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+                fixed_risk=float(DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                quiet=True,
+            )
+        rebuilt_p6_robustness_state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+            temp_root,
+            training_profile_id="production_multiseed_current",
+            benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+            replication_seed=replication_seed,
+            policy="base-finalists-agree",
+            comparison_end_date="2021-01-01",
+            dataset="full",
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+    check(
+        "strategy_param_round3_p6_robustness_builder_passes_inner_bundle_and_publishes_ready_artifact",
+        True,
+        built_p6_robustness["action"] == "BUILD"
+        and rebuilt_p6_robustness_state["ready"]
+        and int(captured_p6_robustness_build["optimizer_seed"]) == replication_seed
+        and tuple(captured_p6_robustness_build["seed_ensemble_policy_override"]["resolved_seeds"])
+            == tuple(p6_robustness_seed_policy["resolved_seeds"])
+        and len(captured_p6_robustness_build["seed_ensemble_policy_override"]["resolved_seeds"]) == 4
+        and replication_seed
+            not in set(captured_p6_robustness_build["seed_ensemble_policy_override"]["resolved_seeds"]),
     )
     from services.optimizer.outer_rolling_parallel_progress import (
         PARALLEL_FOLD_PROGRESS_PREFIX,

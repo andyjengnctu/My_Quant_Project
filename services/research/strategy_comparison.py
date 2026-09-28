@@ -386,7 +386,12 @@ def _compact_execution_plan_item(value: object) -> str:
     text = " ".join(str(value).split())
     if text.startswith("param-benchmark:"):
         parts = text.split(":")
-        seed = next((part.split("=", 1)[1] for part in parts if part.startswith("seed=")), "?")
+        seed_part = next(
+            (part for part in parts if part.startswith("seed=") or part.startswith("replicate=")),
+            "",
+        )
+        seed = seed_part.split("=", 1)[1] if "=" in seed_part else "?"
+        seed_label = f"rep={seed}" if seed_part.startswith("replicate=") else seed
         family = next((part for part in parts if part in {"full", "min"}), "params")
         policy = next(
             (part for part in parts if part in {"base-finalist-best", "base-finalists-agree"}),
@@ -396,7 +401,7 @@ def _compact_execution_plan_item(value: object) -> str:
             "base-finalist-best": "Best",
             "base-finalists-agree": "Agree",
         }.get(policy, policy)
-        text = f"Bench {family.title()} {policy_label} | {seed}".replace("  ", " ")
+        text = f"Bench {family.title()} {policy_label} | {seed_label}".replace("  ", " ")
     elif text.startswith("param:"):
         source = text.split(":", 1)[1]
         source = source.replace("_oos", "").replace("_rolling", "")

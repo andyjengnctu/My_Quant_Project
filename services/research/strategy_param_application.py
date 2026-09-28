@@ -41,8 +41,10 @@ from services.research.producer_execution import (
 )
 from services.optimizer.strategy_param_service import (
     ensure_fixed_multiseed_strategy_parameter_artifact,
+    ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
     ensure_robustness_benchmark_strategy_parameter_artifact,
     inspect_fixed_multiseed_strategy_parameter_artifact,
+    inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
     ensure_strategy_parameter_artifact,
     ensure_validation_budget_robustness_strategy_parameter_artifact,
     ensure_validation_budget_strategy_parameter_artifact,
@@ -205,8 +207,21 @@ def _benchmark_state(
     profile: StrategyParamTrainingProfile, *, seed: int, required_end: str
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
-    if _fitting_seed_protocol(profile).enabled:
-        raise ValueError("multi-seed fitting robustness需要seed-bundle replication contract；將於Round 3處理")
+    seed_protocol = _fitting_seed_protocol(profile)
+    if seed_protocol.enabled:
+        return inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+            PROJECT_ROOT,
+            training_profile_id=profile.profile_id,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            replication_seed=int(seed),
+            policy=profile.parameter_policy,
+            comparison_end_date=required_end,
+            dataset=profile.dataset,
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
     protocol = _validation_protocol(profile)
     if protocol is not None:
         return inspect_validation_budget_robustness_strategy_parameter_artifact(
@@ -244,8 +259,24 @@ def _ensure_benchmark(
     force_rebuild: bool = False,
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
-    if _fitting_seed_protocol(profile).enabled:
-        raise ValueError("multi-seed fitting robustness需要seed-bundle replication contract；將於Round 3處理")
+    seed_protocol = _fitting_seed_protocol(profile)
+    if seed_protocol.enabled:
+        return ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+            PROJECT_ROOT,
+            training_profile_id=profile.profile_id,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            replication_seed=int(seed),
+            policy=profile.parameter_policy,
+            comparison_end_date=required_end,
+            dataset=profile.dataset,
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            force_rebuild=bool(force_rebuild),
+            resume_parameter_training=not bool(force_rebuild),
+            quiet=False,
+        )
     protocol = _validation_protocol(profile)
     if protocol is not None:
         return ensure_validation_budget_robustness_strategy_parameter_artifact(
@@ -319,28 +350,16 @@ def _build_plan(profile: StrategyParamTrainingProfile, work: StrategyParamWorkTy
     benchmark = get_robustness_benchmark_policy_snapshot()
     seed_protocol = _fitting_seed_protocol(profile)
     rows: list[dict] = []
-    if work.robustness and seed_protocol.enabled:
-        return {
-            "work": work,
-            "profile": profile,
-            "required_end": required_end,
-            "benchmark": benchmark,
-            "rows": [{
-                "action": "BLOCKED",
-                "item": f"{seed_protocol.seed_count}-seed fitting bundle",
-                "status": "Round 3將定義fitting seed bundle與robustness replication bundle的正交contract",
-                "path": "",
-                "seed": None,
-            }],
-            "status": "BLOCKED",
-        }
     if work.robustness:
         for seed in tuple(int(v) for v in benchmark["resolved_seeds"]):
             state = _benchmark_state(profile, seed=seed, required_end=required_end)
             rows.append(
                 {
                     "action": str(state.get("action") or "BUILD"),
-                    "item": f"Seed {seed}",
+                    "item": (
+                        f"Replicate {seed} → {seed_protocol.seed_count}-seed fitting bundle"
+                        if seed_protocol.enabled else f"Seed {seed}"
+                    ),
                     "status": str(state.get("status") or ""),
                     "path": _relative(state.get("path") or state.get("target") or ""),
                     "seed": seed,
