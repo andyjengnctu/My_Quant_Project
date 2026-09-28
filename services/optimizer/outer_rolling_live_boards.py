@@ -67,6 +67,7 @@ class OptimizerSeedEnsembleProgressBoard:
         self.replay_started_ts_by_fold: dict[int, float] = {}
         self.replay_last_done_ts_by_fold: dict[int, float] = {}
         self.last_lines: list[str] = []
+        self.last_noninline_key: tuple = ()
 
     def _context_key(self, context: dict) -> tuple[int, int]:
         return (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
@@ -249,12 +250,65 @@ class OptimizerSeedEnsembleProgressBoard:
             color=True,
         )
 
+    @staticmethod
+    def _noninline_progress_token(*, seed_index: int, progress: dict) -> tuple[str, tuple]:
+        data = dict(progress or {})
+        stage = str(data.get("stage") or "QUEUED").upper()
+        prefix = f"S{int(seed_index)}"
+        if stage == "OPTIMIZER_SEARCH":
+            try:
+                completed = max(0, int(data.get("completed", 0) or 0))
+            except (TypeError, ValueError):
+                completed = 0
+            try:
+                total = max(0, int(data.get("total", 0) or 0))
+            except (TypeError, ValueError):
+                total = 0
+            # Non-inline consoles cannot repaint a block.  Bucket trial progress so a
+            # fast search does not append a full heartbeat every polling interval.
+            bucket_size = max(1, total // 10) if total > 0 else 10
+            bucket = completed // bucket_size
+            token = f"{prefix} {completed}/{total}" if total > 0 else f"{prefix} {completed}"
+            return token, (stage, bucket, total)
+        if stage == "LOCAL_MIN_REVIEW":
+            try:
+                finalist_idx = max(0, int(data.get("finalist_idx", 0) or 0))
+                finalist_total = max(0, int(data.get("finalist_total", 0) or 0))
+                neighbor_done = max(0, int(data.get("neighbor_done", 0) or 0))
+                neighbor_total = max(0, int(data.get("neighbor_total", 0) or 0))
+            except (TypeError, ValueError):
+                finalist_idx = finalist_total = neighbor_done = neighbor_total = 0
+            token = f"{prefix} LM {finalist_idx}/{finalist_total} {neighbor_done}/{neighbor_total}"
+            return token, (stage, finalist_idx, finalist_total, neighbor_done, neighbor_total)
+        if stage == "DONE":
+            return f"{prefix} DONE", (stage,)
+        if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
+            return f"{prefix} {stage.replace('_', ' ')}", (stage,)
+        return f"{prefix} QUEUED", ("QUEUED",)
+
+    def _build_noninline_progress_snapshot(self) -> tuple[str, tuple]:
+        tokens: list[str] = []
+        key_parts: list[tuple] = []
+        done_count = 0
+        for context in self.contexts:
+            key = self._context_key(context)
+            progress = dict(self.progress_by_key.get(key) or {"stage": "QUEUED", "status": "queued"})
+            stage = str(progress.get("stage") or "QUEUED").upper()
+            if stage == "DONE":
+                done_count += 1
+            seed_index = int(context.get("seed_index", 0) or 0)
+            token, token_key = self._noninline_progress_token(seed_index=seed_index, progress=progress)
+            tokens.append(token)
+            key_parts.append((seed_index, token_key))
+        line = f"⏳ Multi-seed | done={done_count}/{len(self.contexts)} | " + " | ".join(tokens)
+        return line, tuple(key_parts)
+
     def render(self, *, force: bool = False) -> None:
         lines = self._build_lines()
-        if not force and lines == self.last_lines:
-            return
-        self.last_lines = list(lines)
         if self.inline:
+            if not force and lines == self.last_lines:
+                return
+            self.last_lines = list(lines)
             if self.rendered_lines > 0:
                 sys.stdout.write(f"\x1b[{self.rendered_lines}F")
             for line in lines:
@@ -264,9 +318,15 @@ class OptimizerSeedEnsembleProgressBoard:
                     sys.stdout.write("\r\x1b[K\n")
             sys.stdout.flush()
             self.rendered_lines = len(lines)
-        else:
-            print("\n".join(lines), flush=True)
-            self.rendered_lines = 0
+            return
+
+        compact_line, compact_key = self._build_noninline_progress_snapshot()
+        if compact_key == self.last_noninline_key:
+            return
+        self.last_noninline_key = compact_key
+        self.last_lines = list(lines)
+        print(compact_line, flush=True)
+        self.rendered_lines = 0
 
     def close(self) -> None:
         if self.inline and self.rendered_lines > 0:

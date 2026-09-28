@@ -2344,6 +2344,54 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "略過父程序 shared raw cache" in optimizer_outer_rolling_source
         and '"mirror_console": True' in optimizer_outer_rolling_source,
     )
+    from services.optimizer.outer_rolling_live_boards import OptimizerSeedEnsembleProgressBoard
+    compact_contexts = [
+        {
+            "fold_idx": 1,
+            "fold_count": 1,
+            "seed_index": seed_index,
+            "seed_count": 4,
+            "selection_start": "2011-01-01",
+            "selection_end": "2020-12-31",
+            "oos_period": "2021-01-01~2021-12-31",
+        }
+        for seed_index in range(1, 5)
+    ]
+    compact_board = OptimizerSeedEnsembleProgressBoard(compact_contexts, header="synthetic")
+    compact_board.inline = False
+    compact_output = io.StringIO()
+    with redirect_stdout(compact_output):
+        compact_board.render(force=True)
+        compact_board.update_many({(1, seed_index): {"stage": "START"} for seed_index in range(1, 5)})
+        compact_board.update_many({
+            (1, 1): {"stage": "OPTIMIZER_SEARCH", "completed": 10, "total": 300},
+            (1, 2): {"stage": "OPTIMIZER_SEARCH", "completed": 20, "total": 300},
+            (1, 3): {"stage": "OPTIMIZER_SEARCH", "completed": 25, "total": 300},
+            (1, 4): {"stage": "OPTIMIZER_SEARCH", "completed": 15, "total": 300},
+        })
+        compact_board.update_many({
+            (1, 1): {"stage": "OPTIMIZER_SEARCH", "completed": 15, "total": 300},
+            (1, 2): {"stage": "OPTIMIZER_SEARCH", "completed": 25, "total": 300},
+            (1, 3): {"stage": "OPTIMIZER_SEARCH", "completed": 29, "total": 300},
+            (1, 4): {"stage": "OPTIMIZER_SEARCH", "completed": 20, "total": 300},
+        })
+        compact_board.update_many({
+            (1, 1): {"stage": "OPTIMIZER_SEARCH", "completed": 31, "total": 300},
+            (1, 2): {"stage": "OPTIMIZER_SEARCH", "completed": 45, "total": 300},
+            (1, 3): {"stage": "OPTIMIZER_SEARCH", "completed": 61, "total": 300},
+            (1, 4): {"stage": "OPTIMIZER_SEARCH", "completed": 35, "total": 300},
+        })
+    compact_lines = [line for line in compact_output.getvalue().splitlines() if line.strip()]
+    check(
+        "fixed_multiseed_noninline_live_board_uses_compact_bucketed_heartbeats_without_block_spam",
+        True,
+        len(compact_lines) == 4
+        and all(line.startswith("⏳ Multi-seed |") for line in compact_lines)
+        and "S1 10/300" in compact_lines[2]
+        and "S1 31/300" in compact_lines[3]
+        and "best_base" not in compact_output.getvalue()
+        and "train=" not in compact_output.getvalue(),
+    )
     import core.strategy_param_policy as strategy_param_policy
     disabled_profiles = {
         "synthetic_no_validation": {

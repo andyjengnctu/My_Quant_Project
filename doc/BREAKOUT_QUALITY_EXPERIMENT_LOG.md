@@ -12199,3 +12199,11 @@ Decision：`PARAM-P6 / SR-C85 / FIXED_4_FITTING_SEEDS / 300_TRIALS_PER_SEED / OU
 - **Scientific impact**：無。C85/P6仍是4 fixed fitting seeds × 300 trials/seed、`base-finalists-agree`；Robustness outer replication、Trading production、Strategy Compare suite/fingerprint與artifact identity均不變。
 
 Decision：`ENGINEERING_ONLY / SINGLE_FOLD_MULTI_SEED_LIVE_BOARD / NO_UNUSED_PARENT_RAW_CACHE_IN_PROCESS_MODE / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-09-29 — C85 multi-seed non-inline console anti-spam correction
+
+- **Observed issue**：Round-3 `PARAM-P6 / SR-C85` single-fold 4-seed live board在無法安全使用ANSI原地刷新（例如stdout不是TTY／由外層launcher轉送）的console中，每次poll都重新輸出aggregate header＋4條seed progress；即使trial沒有跨越實質進度，也因elapsed/header變化持續追加整個區塊，造成洗版。
+- **Console fallback fix**：`OptimizerSeedEnsembleProgressBoard`保留TTY/inline模式既有固定區塊原地刷新；non-inline fallback改為單行compact heartbeat，只顯示`done=x/4`與各seed當前stage／trial。Optimizer search以約10% trial bucket作meaningful-change key；同一bucket內的elapsed或best-score heartbeat不再追加新行，stage切換、跨bucket、seed DONE仍立即顯示。詳細best score、local-min與machine progress仍完整保留在canonical per-seed logs。
+- **Scientific impact**：無。未修改C85/P6 fitting seeds、300 trials/seed、`min_agree=3/4`、selector、PIT window、Robustness replication、Strategy Compare config或artifact identity；僅調整human progress rendering。
+
+Decision：`ENGINEERING_ONLY / NONINLINE_MULTI_SEED_COMPACT_HEARTBEAT / MEANINGFUL_PROGRESS_ONLY / INLINE_LIVE_BOARD_UNCHANGED / SCIENTIFIC_IDENTITY_UNCHANGED`。
