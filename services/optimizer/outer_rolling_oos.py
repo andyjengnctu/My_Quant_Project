@@ -1089,7 +1089,7 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
             root, ext = os.path.splitext(log_path)
             member_task["log_path"] = f"{root}_seed{int(member_index):02d}_{int(seed)}{ext or '.log'}"
         # Seed workers keep machine progress in their own logs. The parent live board
-        # renders one compact console view so process-parallel output does not interleave.
+        # renders the canonical seed-progress view so process-parallel output does not interleave.
         member_task["mirror_console"] = bool(task.get("mirror_console", False)) and int(parallel_workers) <= 1
         return member_task
 

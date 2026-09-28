@@ -2381,16 +2381,19 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             (1, 3): {"stage": "OPTIMIZER_SEARCH", "completed": 61, "total": 300},
             (1, 4): {"stage": "OPTIMIZER_SEARCH", "completed": 35, "total": 300},
         })
-    compact_lines = [line for line in compact_output.getvalue().splitlines() if line.strip()]
+    compact_text = compact_output.getvalue()
+    compact_lines = [line for line in compact_text.splitlines() if line.strip()]
     check(
-        "fixed_multiseed_noninline_live_board_uses_compact_bucketed_heartbeats_without_block_spam",
+        "fixed_multiseed_noninline_live_board_reuses_canonical_seed_renderer_with_bucketed_snapshots",
         True,
-        len(compact_lines) == 4
-        and all(line.startswith("⏳ Multi-seed |") for line in compact_lines)
-        and "S1 10/300" in compact_lines[2]
-        and "S1 31/300" in compact_lines[3]
-        and "best_base" not in compact_output.getvalue()
-        and "train=" not in compact_output.getvalue(),
+        len(compact_lines) == 17
+        and compact_text.count("synthetic") == 1
+        and "⏳ Multi-seed |" not in compact_text
+        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | QUEUED | best_base=N/A | best_local_min=N/A" in compact_text
+        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | START | best_base=N/A | best_local_min=N/A" in compact_text
+        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | trial 10/300 | best_base=N/A | best_local_min=N/A" in compact_text
+        and "train=11-01-01~20-12-31 | OOS 21-01-01~21-12-31 | seed 1/4 | trial 31/300 | best_base=N/A | best_local_min=N/A" in compact_text
+        and "seed 1/4 | trial 15/300" not in compact_text,
     )
     import core.strategy_param_policy as strategy_param_policy
     disabled_profiles = {

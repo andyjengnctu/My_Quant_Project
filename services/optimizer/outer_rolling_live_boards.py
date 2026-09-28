@@ -251,10 +251,10 @@ class OptimizerSeedEnsembleProgressBoard:
         )
 
     @staticmethod
-    def _noninline_progress_token(*, seed_index: int, progress: dict) -> tuple[str, tuple]:
+    def _noninline_seed_progress_key(progress: dict) -> tuple:
+        """Throttle non-inline snapshots without defining a second display format."""
         data = dict(progress or {})
         stage = str(data.get("stage") or "QUEUED").upper()
-        prefix = f"S{int(seed_index)}"
         if stage == "OPTIMIZER_SEARCH":
             try:
                 completed = max(0, int(data.get("completed", 0) or 0))
@@ -264,12 +264,8 @@ class OptimizerSeedEnsembleProgressBoard:
                 total = max(0, int(data.get("total", 0) or 0))
             except (TypeError, ValueError):
                 total = 0
-            # Non-inline consoles cannot repaint a block.  Bucket trial progress so a
-            # fast search does not append a full heartbeat every polling interval.
             bucket_size = max(1, total // 10) if total > 0 else 10
-            bucket = completed // bucket_size
-            token = f"{prefix} {completed}/{total}" if total > 0 else f"{prefix} {completed}"
-            return token, (stage, bucket, total)
+            return (stage, completed // bucket_size, total)
         if stage == "LOCAL_MIN_REVIEW":
             try:
                 finalist_idx = max(0, int(data.get("finalist_idx", 0) or 0))
@@ -278,30 +274,39 @@ class OptimizerSeedEnsembleProgressBoard:
                 neighbor_total = max(0, int(data.get("neighbor_total", 0) or 0))
             except (TypeError, ValueError):
                 finalist_idx = finalist_total = neighbor_done = neighbor_total = 0
-            token = f"{prefix} LM {finalist_idx}/{finalist_total} {neighbor_done}/{neighbor_total}"
-            return token, (stage, finalist_idx, finalist_total, neighbor_done, neighbor_total)
-        if stage == "DONE":
-            return f"{prefix} DONE", (stage,)
-        if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
-            return f"{prefix} {stage.replace('_', ' ')}", (stage,)
-        return f"{prefix} QUEUED", ("QUEUED",)
+            return (stage, finalist_idx, finalist_total, neighbor_done, neighbor_total)
+        status = str(data.get("status") or "").strip().upper()
+        return (stage, status)
 
-    def _build_noninline_progress_snapshot(self) -> tuple[str, tuple]:
-        tokens: list[str] = []
-        key_parts: list[tuple] = []
-        done_count = 0
+    def _build_noninline_render_key(self) -> tuple:
+        seed_parts: list[tuple] = []
         for context in self.contexts:
             key = self._context_key(context)
             progress = dict(self.progress_by_key.get(key) or {"stage": "QUEUED", "status": "queued"})
-            stage = str(progress.get("stage") or "QUEUED").upper()
-            if stage == "DONE":
-                done_count += 1
-            seed_index = int(context.get("seed_index", 0) or 0)
-            token, token_key = self._noninline_progress_token(seed_index=seed_index, progress=progress)
-            tokens.append(token)
-            key_parts.append((seed_index, token_key))
-        line = f"⏳ Multi-seed | done={done_count}/{len(self.contexts)} | " + " | ".join(tokens)
-        return line, tuple(key_parts)
+            seed_parts.append((key, self._noninline_seed_progress_key(progress)))
+
+        fold_parts: list[tuple] = []
+        for fold_idx, progress in sorted(self.fold_progress_by_idx.items()):
+            data = dict(progress or {})
+            stage = str(data.get("stage") or "").upper()
+            if stage not in {"ENSEMBLE_REPLAY", "FOLD_RESULT"}:
+                continue
+            if stage == "ENSEMBLE_REPLAY":
+                fold_parts.append((
+                    int(fold_idx),
+                    stage,
+                    int(data.get("replay_done", 0) or 0),
+                    int(data.get("replay_total", 0) or 0),
+                    str(data.get("policy") or data.get("status") or "").strip(),
+                ))
+            else:
+                fold_parts.append((int(fold_idx), stage, str(data.get("status") or "").strip()))
+
+        result_parts = tuple(
+            (int(fold_idx), repr(dict(row or {})))
+            for fold_idx, row in sorted(self.result_rows_by_fold.items())
+        )
+        return tuple(seed_parts), tuple(fold_parts), result_parts
 
     def render(self, *, force: bool = False) -> None:
         lines = self._build_lines()
@@ -320,12 +325,48 @@ class OptimizerSeedEnsembleProgressBoard:
             self.rendered_lines = len(lines)
             return
 
-        compact_line, compact_key = self._build_noninline_progress_snapshot()
-        if compact_key == self.last_noninline_key:
+        render_key = self._build_noninline_render_key()
+        if render_key == self.last_noninline_key:
             return
-        self.last_noninline_key = compact_key
+
+        previous_key = self.last_noninline_key
+        self.last_noninline_key = render_key
         self.last_lines = list(lines)
-        print(compact_line, flush=True)
+        if not previous_key:
+            print("\n".join(lines), flush=True)
+            self.rendered_lines = 0
+            return
+
+        previous_seed_parts, previous_fold_parts, previous_result_parts = previous_key
+        seed_parts, fold_parts, result_parts = render_key
+        previous_seed_map = dict(previous_seed_parts)
+        previous_fold_map = {int(item[0]): tuple(item[1:]) for item in previous_fold_parts}
+
+        header_text = str(self.header_factory(self) if callable(self.header_factory) else self.header).strip()
+        offset = 1 if header_text else 0
+        seed_lines = lines[offset:offset + len(self.contexts)]
+        fold_lines = lines[offset + len(self.contexts):offset + len(self.contexts) + len(fold_parts)]
+        output_lines: list[str] = []
+
+        for index, (context_key, progress_key) in enumerate(seed_parts):
+            if previous_seed_map.get(context_key) != progress_key:
+                output_lines.append(seed_lines[index])
+
+        for index, fold_key in enumerate(fold_parts):
+            fold_idx = int(fold_key[0])
+            if previous_fold_map.get(fold_idx) != tuple(fold_key[1:]):
+                output_lines.append(fold_lines[index])
+
+        if result_parts != previous_result_parts:
+            tail_start = offset + len(self.contexts) + len(fold_parts)
+            result_lines = list(lines[tail_start:])
+            if output_lines and result_lines and not str(result_lines[0]).strip():
+                output_lines.append("")
+                result_lines = result_lines[1:]
+            output_lines.extend(result_lines)
+
+        if output_lines:
+            print("\n".join(output_lines), flush=True)
         self.rendered_lines = 0
 
     def close(self) -> None:

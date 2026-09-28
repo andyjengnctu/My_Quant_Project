@@ -12207,3 +12207,11 @@ Decision：`ENGINEERING_ONLY / SINGLE_FOLD_MULTI_SEED_LIVE_BOARD / NO_UNUSED_PAR
 - **Scientific impact**：無。未修改C85/P6 fitting seeds、300 trials/seed、`min_agree=3/4`、selector、PIT window、Robustness replication、Strategy Compare config或artifact identity；僅調整human progress rendering。
 
 Decision：`ENGINEERING_ONLY / NONINLINE_MULTI_SEED_COMPACT_HEARTBEAT / MEANINGFUL_PROGRESS_ONLY / INLINE_LIVE_BOARD_UNCHANGED / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-09-29 — C85 multi-seed non-inline same-source renderer correction
+
+- **Observed regression**：前一輪為避免non-inline console洗版，新增`⏳ Multi-seed | done=... | S1 ...`專用human formatter；雖保留machine event SSOT，human display卻繞過既有`build_optimizer_seed_ensemble_live_lines()`／seed/fold formatter，造成Forward single-fold與Rolling既有顯示語法分叉，也讓non-inline path看不到canonical fold replay／result table。
+- **Same-source correction**：non-inline與TTY/inline現在都只使用既有canonical seed-ensemble renderer；non-inline首次輸出header＋全部seed canonical lines，後續以約10% optimizer trial bucket與stage transition判斷變更，只追加該seed／fold的canonical line，不再重印整個區塊，也不再自行產生另一種顯示文字。故輸出恢復`[fold] train | OOS | seed i/N | trial | best_base | best_local_min`等既有欄位，fold replay與result table亦回到同一renderer。
+- **Scientific impact**：無。未修改P6/C85 seed bundle、trial budget、selector、PIT window、artifact identity、Robustness replication或Trading production。
+
+Decision：`ENGINEERING_ONLY / NONINLINE_REUSES_CANONICAL_SEED_RENDERER / THROTTLE_KEY_ONLY / NO_SECOND_HUMAN_FORMATTER / SCIENTIFIC_IDENTITY_UNCHANGED`。
