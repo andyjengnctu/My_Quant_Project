@@ -2195,6 +2195,14 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         "ready_producer_force_rebuild_is_explicit_secondary_action",
         PRODUCER_ACTION_FORCE_REBUILD, ready_force.action,
     )
+    check(
+        "force_rebuild_selection_is_the_only_confirmation_step",
+        True,
+        "confirm_force_rebuild" not in producer_execution_source
+        and "輸入 REBUILD" not in producer_execution_source
+        and "confirm_force_rebuild" not in strategy_param_app_source
+        and "confirm_force_rebuild" not in model_app_source,
+    )
     with TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
         artifact = temp_root / "params.json"

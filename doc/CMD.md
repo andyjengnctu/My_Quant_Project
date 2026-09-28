@@ -110,7 +110,7 @@ python apps/research.py
 
 `[5]`保留Study／Full／OOS／Rolling OOS generic研究工具；Trade正式操作由Workbench負責，不再出現在Research互動Optimizer。explicit `optimizer --model trade ...`只保留CLI/internal compatibility。
 
-`[1] 模型訓練／驗證`的active continuous model producer與`[2] 策略參數最佳化`的四個正式training work types共用同一execution action。工件READY時Enter只查看既有訓練報表；要重新fitting/search必須明確選「強制重新訓練」並輸入`REBUILD`確認：
+`[1] 模型訓練／驗證`的active continuous model producer與`[2] 策略參數最佳化`的四個正式training work types共用同一execution action。工件READY時Enter只查看既有訓練報表；要重新fitting/search時明確選「強制重新訓練」即直接執行，不再要求第二次文字確認：
 
 ```text
 工件 READY：

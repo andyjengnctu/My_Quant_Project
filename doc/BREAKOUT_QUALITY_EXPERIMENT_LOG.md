@@ -12142,3 +12142,12 @@ Decision：`ENGINEERING_ONLY / SHARED_PRODUCER_EXECUTION_ACTION / READY_DEFAULT_
 - **Scientific impact**：無。未修改production Research/Optimizer semantics、PARAM-P5/C84、MR-13BV identity/status、dataset/PIT/seed/target/loss/model architecture或artifact scientific identity；本輪只修formal regression fixture與validator，使其消費現行canonical owners。
 
 Decision：`ENGINEERING_ONLY / SYNTHETIC_FIXTURE_CANONICALIZED / STUDY_DB_ERROR_PATH_CANONICAL_SANDBOX / FORMAL_RERUN_REQUIRED / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-09-28 — Research producer Force Rebuild secondary confirmation removed
+
+- **Observed UX issue**：Research canonical producer已在work-type execution action menu明確提供「強制重新訓練」，但選取後仍要求輸入`REBUILD`第二次確認，形成重複操作。
+- **Fix**：退役`services/research/producer_execution.py::confirm_force_rebuild()`與所有caller；模型Forward／Rolling／Robustness及strategy-parameter training／robustness在使用者選取`FORCE_REBUILD`後立即委派canonical producer。
+- **Safety invariants unchanged**：fresh fitting/search namespace、no-resume semantics、immutable upstream reuse、canonical publication backup/rollback、success-before-replace全部不變；只移除冗餘UI確認，不改scientific identity、parameter/model artifact contract或report schema。
+- **Regression**：共通execution contract驗證`FORCE_REBUILD`仍為explicit secondary menu action，且producer service與兩個producer apps均不得再引用文字型二次確認。
+
+Decision：`UI_ONLY / SINGLE_EXPLICIT_FORCE_REBUILD_ACTION / NO_SECONDARY_TEXT_CONFIRMATION / SCIENTIFIC_IDENTITY_UNCHANGED`。

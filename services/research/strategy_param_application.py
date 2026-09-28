@@ -36,7 +36,6 @@ from services.research.producer_execution import (
     PRODUCER_ACTION_FORCE_REBUILD,
     PRODUCER_ACTION_NORMAL,
     PRODUCER_ACTION_VIEW_REPORT,
-    confirm_force_rebuild,
     prompt_producer_execution_action,
 )
 from services.optimizer.strategy_param_service import (
@@ -473,9 +472,6 @@ def _run_work_type(work: StrategyParamWorkType) -> int:
         print("\n" + render_strategy_param_training_report(plan))
         return 0
     if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
-        if not confirm_force_rebuild(subject=work.label):
-            print("已取消強制重新訓練。")
-            return 0
         _execute_plan(plan, force_rebuild=True)
         refreshed = _build_plan(profile, work)
         print("\n" + render_strategy_param_training_report(refreshed))

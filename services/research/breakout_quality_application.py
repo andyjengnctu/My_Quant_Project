@@ -116,7 +116,6 @@ from services.research.producer_execution import (
     PRODUCER_ACTION_FORCE_REBUILD,
     PRODUCER_ACTION_NORMAL,
     PRODUCER_ACTION_VIEW_REPORT,
-    confirm_force_rebuild,
     prompt_producer_execution_action,
 )
 from services.research.strategy_compare_training import (
@@ -4009,9 +4008,6 @@ def _interactive_continuous_forward_model_gate(program_name: str, settings) -> i
         )
         return 0
     if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
-        if not confirm_force_rebuild(subject="Forward OOS 模型訓練"):
-            print("已取消強制重新訓練。")
-            return 0
         code, contract, action = _ensure_continuous_forward_model_report(
             program_name, model_id=str(research_spec.model_research_id), settings=settings,
             prompt_for_build=False, force_rebuild=True,
@@ -4276,9 +4272,6 @@ def _interactive_continuous_rolling_model_gate(program_name: str, settings) -> i
         )
         return 0
     if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
-        if not confirm_force_rebuild(subject="Rolling OOS 模型訓練"):
-            print("已取消強制重新訓練。")
-            return 0
         upstream_plan = _collect_continuous_research_input_plan(settings)
         _render_continuous_research_input_plan(settings, upstream_plan)
         if upstream_plan.blocked:
@@ -5376,9 +5369,6 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     if choice.action == PRODUCER_ACTION_CANCEL:
         return 0
     force_rebuild = choice.action == PRODUCER_ACTION_FORCE_REBUILD
-    if force_rebuild and not confirm_force_rebuild(subject=f"{mode_label} Robustness 模型測試"):
-        print("已取消強制重新訓練。")
-        return 0
 
     completed = []
     for model_id, settings, seed_states in plans:

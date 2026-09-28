@@ -81,20 +81,6 @@ def prompt_producer_execution_action(
     return selected
 
 
-def confirm_force_rebuild(*, subject: str) -> bool:
-    """Require an explicit destructive-intent confirmation before fresh training."""
-
-    print(
-        "\n[FORCE REBUILD] 本次會忽略目前 READY 的 fitted/search result，"
-        "但仍可重用 dataset／feature 等不影響 fitting 的合法上游工件。"
-    )
-    print("既有 canonical publication 只有在新訓練成功並通過驗證後才應被取代。")
-    try:
-        raw = input(f"👉 確認重新訓練 {subject}？輸入 REBUILD 繼續：").strip()
-    except EOFError:
-        return False
-    return raw.upper() == "REBUILD"
-
 
 __all__ = [
     "PRODUCER_ACTION_CANCEL",
@@ -102,6 +88,5 @@ __all__ = [
     "PRODUCER_ACTION_NORMAL",
     "PRODUCER_ACTION_VIEW_REPORT",
     "ProducerExecutionChoice",
-    "confirm_force_rebuild",
     "prompt_producer_execution_action",
 ]
