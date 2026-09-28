@@ -23,9 +23,20 @@ PARALLEL_FOLD_LOG_STATUS_MAX_CHARS = 140
 
 
 class _ParallelFoldProgressLogFilter:
-    def __init__(self, handle):
+    def __init__(self, handle, *, mirror_handle=None):
         self.handle = handle
+        self.mirror_handle = mirror_handle
         self._buffer = ""
+
+    def _emit_line(self, line: str, *, newline: bool) -> None:
+        suffix = "\n" if newline else ""
+        if line.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+            self.handle.write(line + suffix)
+            self.handle.flush()
+            return
+        if self.mirror_handle is not None:
+            self.mirror_handle.write(line + suffix)
+            self.mirror_handle.flush()
 
     def write(self, text):
         if not text:
@@ -34,16 +45,40 @@ class _ParallelFoldProgressLogFilter:
         self._buffer += raw
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
-            if line.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
-                self.handle.write(line + "\n")
-                self.handle.flush()
+            self._emit_line(line, newline=True)
         return len(raw)
 
     def flush(self):
-        if self._buffer.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
-            self.handle.write(self._buffer)
+        if self._buffer:
+            self._emit_line(self._buffer, newline=False)
             self._buffer = ""
         self.handle.flush()
+        if self.mirror_handle is not None:
+            self.mirror_handle.flush()
+
+
+class _MirroredLogWriter:
+    """Write stderr to the fold log and optionally mirror it to a live console."""
+
+    def __init__(self, handle, *, mirror_handle=None):
+        self.handle = handle
+        self.mirror_handle = mirror_handle
+
+    def write(self, text):
+        raw = str(text or "")
+        if not raw:
+            return 0
+        self.handle.write(raw)
+        self.handle.flush()
+        if self.mirror_handle is not None:
+            self.mirror_handle.write(raw)
+            self.mirror_handle.flush()
+        return len(raw)
+
+    def flush(self):
+        self.handle.flush()
+        if self.mirror_handle is not None:
+            self.mirror_handle.flush()
 
 
 def _parallel_fold_log_path_for_fallback(path: str) -> str:

@@ -2129,6 +2129,36 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
     check("strategy_param_validation_is_profile_config_not_optimizer_menu_switch", True, active_param_profile.validation_enabled and active_param_profile.validation_protocol == "validation_budget_refit_v1" and "STRATEGY_PARAM_VALIDATION_PROTOCOLS" in strategy_param_config_source)
     check("strategy_param_validation_config_preserves_phase2_contract", True, validation_spec.as_dict() == {"protocol": "validation_budget_refit_v1", "holdout_months": 12, "checkpoints": [50, 100, 150, 200, 250, 300], "policy_name": "base_finalists_agree", "selection_metric": "canonical_optimizer_portfolio_score", "tie_break": "smaller_budget", "oos_feedback_used": False, "full_refit_required": True})
+    from services.optimizer.outer_rolling_parallel_progress import (
+        PARALLEL_FOLD_PROGRESS_PREFIX,
+        _ParallelFoldProgressLogFilter,
+    )
+    progress_log_handle = io.StringIO()
+    progress_live_handle = io.StringIO()
+    progress_filter = _ParallelFoldProgressLogFilter(
+        progress_log_handle, mirror_handle=progress_live_handle
+    )
+    progress_filter.write(PARALLEL_FOLD_PROGRESS_PREFIX + '{"stage":"SEARCH"}\n')
+    progress_filter.write("[1/1] PHASE 1/3 | INNER TRAIN SEARCH | trials=0/300\n")
+    progress_filter.flush()
+    check(
+        "validation_budget_sequential_fold_keeps_machine_progress_in_log_and_mirrors_human_progress_to_console",
+        True,
+        PARALLEL_FOLD_PROGRESS_PREFIX in progress_log_handle.getvalue()
+        and "INNER TRAIN SEARCH" not in progress_log_handle.getvalue()
+        and PARALLEL_FOLD_PROGRESS_PREFIX not in progress_live_handle.getvalue()
+        and "INNER TRAIN SEARCH" in progress_live_handle.getvalue(),
+    )
+    check(
+        "validation_budget_sequential_fold_reuses_shared_raw_cache_and_exposes_three_live_phases",
+        True,
+        '"mirror_console": True' in optimizer_outer_rolling_source
+        and '"shared_raw_context": shared_raw_context' in optimizer_outer_rolling_source
+        and 'shared raw cache installed' in optimizer_outer_rolling_source
+        and 'PHASE 1/3 | INNER TRAIN SEARCH' in optimizer_outer_rolling_source
+        and 'PHASE 2/3 | VALIDATION BUDGET SELECTION' in optimizer_outer_rolling_source
+        and 'PHASE 3/3 | FULL REFIT' in optimizer_outer_rolling_source,
+    )
     import core.strategy_param_policy as strategy_param_policy
     disabled_profiles = {
         "synthetic_no_validation": {

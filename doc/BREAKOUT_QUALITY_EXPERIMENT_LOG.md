@@ -12151,3 +12151,12 @@ Decision：`ENGINEERING_ONLY / SYNTHETIC_FIXTURE_CANONICALIZED / STUDY_DB_ERROR_
 - **Regression**：共通execution contract驗證`FORCE_REBUILD`仍為explicit secondary menu action，且producer service與兩個producer apps均不得再引用文字型二次確認。
 
 Decision：`UI_ONLY / SINGLE_EXPLICIT_FORCE_REBUILD_ACTION / NO_SECONDARY_TEXT_CONFIRMATION / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-09-28 — Validation-budget live progress / shared raw-cache correction
+
+- **Observed issue**：config-driven PARAM-P5 Forward OOS force rebuild在console顯示`fold START`後長時間沒有任何輸出。實際工作並未停止；sequential validation-budget fold被送進共用fold-task runner時仍指定`log_path`，runner因此把human-readable stdout redirect到fold log filter，主console只能等整個fold完成後才再次看到輸出。
+- **Execution correction**：sequential validation-budget fold現在以mirror-console模式執行；machine progress events仍寫入既有fold log，human-readable optimizer/validation progress同步顯示在主console。真正parallel fold仍維持log-only，避免多worker輸出互相覆蓋。
+- **Performance correction**：sequential validation-budget fold不再於`fold START`後重載已由Rolling parent建立完成的556檔raw-data cache；outer fold session與inner-validation session都安裝同一份read-only shared raw context。這只移除重複資料載入／static cache packing，不改trial objective、search、validation、refit或PIT semantics。
+- **Phase visibility**：live console新增`PHASE 1/3 INNER TRAIN SEARCH`、`PHASE 2/3 VALIDATION BUDGET SELECTION`、`PHASE 3/3 FULL REFIT`，明確顯示目前正在inner training、validation選N*或fresh full refit。
+
+Decision：`ENGINEERING_ONLY / LIVE_PROGRESS_VISIBLE / SEQUENTIAL_SHARED_RAW_CACHE_REUSED / VALIDATION_SCIENTIFIC_CONTRACT_UNCHANGED`。

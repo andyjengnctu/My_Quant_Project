@@ -157,6 +157,7 @@ from services.optimizer.outer_rolling_runtime import (
 )
 from services.optimizer.outer_rolling_parallel_progress import (
     PARALLEL_FOLD_LOG_STATUS_MAX_CHARS,
+    _MirroredLogWriter,
     _ParallelFoldProgressLogFilter,
     _build_parallel_fold_failure_message,
     _collect_parallel_fold_replay_phase_metrics,
@@ -1130,6 +1131,9 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         optimizer_required_min_rows = int(task["optimizer_required_min_rows"])
         fold_workers = int(task.get("fold_workers", 1) or 1)
         timing_mode = bool(task.get("timing_mode", False))
+        shared_raw_context = task.get("shared_raw_context")
+        if not isinstance(shared_raw_context, dict) or not shared_raw_context.get("raw_data_cache"):
+            shared_raw_context = None
         if not str(os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "")).strip():
             os.environ["OPTIMIZER_PREP_CACHE_MAX_ITEMS"] = str(_resolve_parallel_worker_prep_cache_max_items(os.environ))
 
@@ -1143,7 +1147,12 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         oos_period_display = _display_month_period(oos_period)
         oos_start_date = str(task.get("oos_start_date") or f"{str(oos_year)[:4]}-01-01")
         oos_end_date = str(task.get("oos_end_date") or f"{str(oos_year)[:4]}-12-31")
-        print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | parallel fold START | selection={selection_period_display}", flush=True)
+        if not bool((task or {}).get("mirror_console", False)):
+            print(
+                f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | parallel fold START | "
+                f"selection={selection_period_display}",
+                flush=True,
+            )
         _write_parallel_fold_progress_event(
             stage="START",
             fold_idx=fold_idx,
@@ -1214,9 +1223,29 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         study = None
         try:
             install_started = time.perf_counter()
-            session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+            if shared_raw_context is not None:
+                session.install_raw_data_cache(
+                    selected_data_dir,
+                    shared_raw_context["raw_data_cache"],
+                    static_fast_cache=shared_raw_context.get("static_fast_cache"),
+                    master_dates=shared_raw_context.get("master_dates"),
+                    sorted_master_dates=shared_raw_context.get("sorted_master_dates"),
+                    required_min_rows=optimizer_required_min_rows,
+                )
+                raw_data_status = "shared raw cache installed"
+            else:
+                session.load_raw_data(
+                    selected_data_dir,
+                    load_all_raw_data=load_all_raw_data,
+                    required_min_rows=optimizer_required_min_rows,
+                )
+                raw_data_status = "raw data loaded"
             install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | raw data loaded | elapsed={_fmt_duration(install_shared_cache_sec)}", flush=True)
+            print(
+                f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | {raw_data_status} | "
+                f"elapsed={_fmt_duration(install_shared_cache_sec)}",
+                flush=True,
+            )
             _write_parallel_fold_progress_event(
                 stage="RAW_DATA",
                 fold_idx=fold_idx,
@@ -1225,7 +1254,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 selection_start=selection_start,
                 selection_end=selection_end,
                 **seed_context,
-                status="raw data loaded",
+                status=raw_data_status,
                 elapsed_sec=max(0.0, time.perf_counter() - fold_start),
             )
             session.profile_recorder.init_output_files()
@@ -1254,6 +1283,16 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 inner_session_spec["runtime_cache_identity"] = hashlib.sha256(
                     json.dumps(inner_identity_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
                 ).hexdigest()
+                inner_train_end_date = (
+                    pd.Timestamp(validation_start_date) - pd.Timedelta(days=1)
+                ).strftime("%Y-%m-%d")
+                print(
+                    f"[{fold_idx}/{fold_count}] PHASE 1/3 | INNER TRAIN SEARCH | "
+                    f"train={selection_start}~{inner_train_end_date} | "
+                    f"validation={validation_start_date}~{validation_end_date} | "
+                    f"trials={int(config.trials_per_fold)}",
+                    flush=True,
+                )
                 inner_session = (
                     build_optimizer_session_from_spec(
                         walk_forward_policy=inner_policy,
@@ -1270,11 +1309,21 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     inner_session.n_trials = int(config.trials_per_fold)
                     inner_session.disable_milestone_dashboard = True
                     inner_session.timing_mode = bool(timing_mode)
-                    inner_session.load_raw_data(
-                        selected_data_dir,
-                        load_all_raw_data=load_all_raw_data,
-                        required_min_rows=optimizer_required_min_rows,
-                    )
+                    if shared_raw_context is not None:
+                        inner_session.install_raw_data_cache(
+                            selected_data_dir,
+                            shared_raw_context["raw_data_cache"],
+                            static_fast_cache=shared_raw_context.get("static_fast_cache"),
+                            master_dates=shared_raw_context.get("master_dates"),
+                            sorted_master_dates=shared_raw_context.get("sorted_master_dates"),
+                            required_min_rows=optimizer_required_min_rows,
+                        )
+                    else:
+                        inner_session.load_raw_data(
+                            selected_data_dir,
+                            load_all_raw_data=load_all_raw_data,
+                            required_min_rows=optimizer_required_min_rows,
+                        )
                     inner_session.profile_recorder.init_output_files()
                     inner_session.profile_recorder.mark_run_started()
                     inner_db_name = None
@@ -1322,6 +1371,12 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                             n_trials=int(inner_remaining),
                             n_jobs=int(search_parallel_trials),
                         )
+                    print(
+                        f"[{fold_idx}/{fold_count}] PHASE 2/3 | VALIDATION BUDGET SELECTION | "
+                        f"checkpoints={','.join(str(value) for value in validation_budget_spec.checkpoints)} | "
+                        f"holdout={validation_start_date}~{validation_end_date}",
+                        flush=True,
+                    )
                     validation_budget_result = select_trial_budget_from_validation(
                         study=inner_study,
                         session=inner_session,
@@ -1363,6 +1418,12 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     )
                     db_name = f"sqlite:///{db_file}"
 
+            if validation_budget_spec is not None:
+                print(
+                    f"[{fold_idx}/{fold_count}] PHASE 3/3 | FULL REFIT | "
+                    f"selection={selection_start}~{selection_end} | trials={int(refit_trials)}",
+                    flush=True,
+                )
             study_started = time.perf_counter()
             study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
@@ -1699,9 +1760,17 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
 
     if log_path:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        mirror_console = bool((task or {}).get("mirror_console", False))
+        live_stdout = sys.stdout if mirror_console else None
+        live_stderr = sys.stderr if mirror_console else None
         with open(log_path, "w", encoding="utf-8") as log_handle:
-            progress_log = _ParallelFoldProgressLogFilter(log_handle)
-            with redirect_stdout(progress_log), redirect_stderr(log_handle):
+            progress_log = _ParallelFoldProgressLogFilter(
+                log_handle, mirror_handle=live_stdout
+            )
+            stderr_log = _MirroredLogWriter(
+                log_handle, mirror_handle=live_stderr
+            )
+            with redirect_stdout(progress_log), redirect_stderr(stderr_log):
                 return _execute_with_logged_exception()
     return _execute_with_logged_exception()
 
@@ -1951,6 +2020,8 @@ def run_outer_rolling_oos(
                 "fold_workers": int(fold_workers),
                 "optimizer_session_spec": dict(session_spec),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
+                "mirror_console": True,
+                "shared_raw_context": shared_raw_context,
             }
             result = _run_outer_rolling_oos_fold_task(task)
             chain_state = {"chain_max_positions": chain_max_positions, "chain_enable_rotation": chain_enable_rotation}
