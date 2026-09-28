@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from core.console_report import project_relative_display_path
+from core.strategy_compare_policy import resolve_strategy_comparison_result_search_roots
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
@@ -468,14 +469,19 @@ def _archived_pair_source_is_self_contained(
     )
 
 def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings) -> tuple[Path, ...]:
-    """Return current write root plus config-declared read-only legacy cache roots."""
+    """Return registry-derived completed-result cache roots.
 
-    roots: list[Path] = []
-    for raw in (settings.output_root, *settings.reuse_output_roots):
-        candidate = _resolve_relative_path(root, str(raw)) / "runs"
-        if candidate not in roots:
-            roots.append(candidate)
-    return tuple(roots)
+    A profile owns only its write namespace. Completed-result discovery is global
+    across declaratively registered Strategy Compare namespaces and is filtered by
+    the canonical result identity before reuse. Explicit ``reuse_output_roots`` are
+    retained solely for legacy namespaces that are not represented by a current
+    registered profile.
+    """
+
+    return tuple(
+        _resolve_relative_path(root, raw) / "runs"
+        for raw in resolve_strategy_comparison_result_search_roots(settings)
+    )
 
 
 def _research_dataset_generation_identity_matches_current(

@@ -252,6 +252,124 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    # Completed-result reuse must be registry-derived rather than manually wired
+    # per profile.  The current Phase-2 profiles intentionally declare no legacy
+    # reuse roots, yet they must still discover the registered Extending namespaces
+    # and let canonical result identity decide whether an arm is reusable.
+    for settings in settings_by_mode.values():
+        registered_result_roots = (
+            strategy_config.resolve_strategy_comparison_result_search_roots(settings)
+        )
+        check_true(
+            f"result_reuse_search_is_registry_derived:{settings.profile_id}",
+            settings.output_root == registered_result_roots[0]
+            and "outputs/strategy_compare/extending_window/oos_2021_forward"
+            in registered_result_roots
+            and "outputs/strategy_compare/extending_window/rolling_2021_forward"
+            in registered_result_roots
+            and len(registered_result_roots) == len(set(registered_result_roots)),
+        )
+
+    # Historical bug regression: Phase-2 declares no explicit reuse root, yet a
+    # scientifically identical C62 completed baseline in the registered Extending
+    # namespace must still be discovered. Namespace is not part of reuse legality.
+    from core.strategy_comparison import (
+        resolve_strategy_comparison_arm_param_policy,
+        resolve_strategy_parameter_consumption_mode,
+    )
+    from filters.breakout_quality.strategy_compare_sources import (
+        OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+        OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    )
+    from filters.breakout_quality.strategy_rule_policies import (
+        ALL_RULE_FILTERS_OFF_OVERRIDES,
+    )
+    from services.research.strategy_compare_reuse import _find_reusable_baseline_source
+
+    phase2_oos = settings_by_mode[
+        next(
+            str(mode["profile_id"]) for mode in modes
+            if bool(mode.get("single_score_block"))
+        )
+    ]
+    check_true(
+        "phase2_oos_has_no_manual_cross_profile_reuse_wiring",
+        tuple(phase2_oos.reuse_output_roots) == (),
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        old_run = (
+            temp_root
+            / "outputs/strategy_compare/extending_window/oos_2021_forward/runs/old_run"
+        )
+        old_run.mkdir(parents=True, exist_ok=True)
+        (old_run / "strategy_comparison.json").write_text(
+            json.dumps({"status": "COMPLETED"}), encoding="utf-8"
+        )
+        comparison_period = {"start": "2021-01-01", "end": "2026-03-02"}
+        resolved_identities = {}
+        expected_dirs = {}
+        for arm_id in ("C62", "C61", "C58"):
+            arm = phase2_oos.arms[arm_id]
+            param_sha = f"{arm_id.lower()}-param-eval-sha"
+            resolved_identities[arm_id] = {"sha256": param_sha}
+            pair_dir = old_run / "pairs" / f"{arm_id.lower()}_baseline"
+            pair_dir.mkdir(parents=True, exist_ok=True)
+            all_off = arm.rule_policy == "all_off"
+            pair_payload = {
+                "no_filter": {"total_return_pct": 1.0},
+                "metadata": {
+                    "dataset": phase2_oos.dataset,
+                    "params_file_sha256": param_sha,
+                    "requested_param_policy": resolve_strategy_comparison_arm_param_policy(
+                        phase2_oos, arm
+                    ),
+                    "param_evaluation_mode": resolve_strategy_parameter_consumption_mode(
+                        phase2_oos.parameter_sources[arm.param_source]
+                    ),
+                    "optional_entry_filter_policy": (
+                        OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+                        if all_off
+                        else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+                    ),
+                    "shared_param_overrides": (
+                        dict(ALL_RULE_FILTERS_OFF_OVERRIDES) if all_off else {}
+                    ),
+                    "max_positions": int(phase2_oos.max_positions),
+                    "enable_rotation": phase2_oos.rotation == "on",
+                    "comparison_period": comparison_period,
+                },
+            }
+            (pair_dir / "strategy_comparison.json").write_text(
+                json.dumps(pair_payload), encoding="utf-8"
+            )
+            for name in (
+                "strategy_comparison.md",
+                "yearly_returns_comparison.csv",
+                "no_filter_equity.csv",
+                "no_filter_trades.csv",
+                "no_filter_daily_capacity.csv",
+                "no_filter_orderable_candidates.csv",
+            ):
+                (pair_dir / name).write_text("fixture\n", encoding="utf-8")
+            expected_dirs[arm_id] = pair_dir
+
+        reuse_status = {
+            "comparison_period": comparison_period,
+            "resolved_arm_parameter_identities": resolved_identities,
+        }
+        for arm_id in ("C62", "C61", "C58"):
+            reusable = _find_reusable_baseline_source(
+                root=temp_root,
+                settings=phase2_oos,
+                status=reuse_status,
+                off_arm=phase2_oos.arms[arm_id],
+            )
+            check_true(
+                f"phase2_reuses_identity_compatible_{arm_id}_from_registered_sibling_profile_without_manual_root",
+                reusable == expected_dirs[arm_id],
+            )
+
     from config.compatibility import strategy_compare_history as strategy_history
 
     shared_models = get_breakout_quality_model_test_settings().model_profiles
@@ -2478,10 +2596,21 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         / "services" / "research" / "runtime_integration_gate.py"
     ).read_text(encoding="utf-8")
     check_true(
-        "runtime_integration_reuses_historical_outputs_without_mutating_runtime_default",
-        "settings.reuse_output_roots" in gate_source
+        "runtime_integration_reuses_registered_result_namespaces_without_mutating_runtime_default",
+        "resolve_strategy_comparison_result_search_roots" in gate_source
+                    and "settings.reuse_output_roots" not in gate_source
                     and "workflow.experiment_profile =" not in gate_source
                     and "run_runtime_integration_gate" in gate_source,
+    )
+
+    reuse_source = read_source_text("services/research/strategy_compare_reuse.py")
+    preparation_source = read_source_text("services/research/strategy_compare_preparation.py")
+    check_true(
+        "all_completed_strategy_result_consumers_share_registry_derived_search_roots",
+        "resolve_strategy_comparison_result_search_roots" in reuse_source
+        and "resolve_strategy_comparison_result_search_roots" in preparation_source
+        and "(settings.output_root, *settings.reuse_output_roots)" not in reuse_source
+        and "*tuple(str(value) for value in settings.reuse_output_roots)" not in preparation_source,
     )
 
     summary["candidate_profile"] = runtime["experiment_profile"]

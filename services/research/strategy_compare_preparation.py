@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping
 
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
 from core.console_report import project_relative_display_path
+from core.strategy_compare_policy import resolve_strategy_comparison_result_search_roots
 from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
@@ -166,9 +167,8 @@ def _execute_preparation_action(
             dataset=settings.dataset,
             param_policy=settings.param_policy,
             comparison_output_root=str(settings.output_root),
-            comparison_output_roots=(
-                str(settings.output_root),
-                *tuple(str(value) for value in settings.reuse_output_roots),
+            comparison_output_roots=resolve_strategy_comparison_result_search_roots(
+                settings
             ),
             trials_per_fold=int(options["trials_per_fold"]),
             first_oos_date=settings.start_date,

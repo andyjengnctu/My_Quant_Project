@@ -12081,3 +12081,13 @@ Decision：`FORWARD_OOS_BUILDS_ONLY_REQUIRED_PARAM_PREFIX / ROLLING_EXTENDS_SAME
 - **Regression evidence**：Synthetic stale publication with valid manifest/hash but missing PARAM-P5 adaptation is classified `REBUILD / PARAMETER_SET_MISMATCH`; exact Strategy Compare parameter preparation converges in one producer wave from `REBUILD` to `REUSE / READY` without a second producer invocation. Forward OOS prefix semantics remain one-fold only and scientific identities are unchanged.
 
 Decision：`PARAM_P5_REUSE_CONTRACT_ALIGNED_WITH_CONSUMER_READY / STALE_REBUILD_CONVERGES_ONE_WAVE / GENERIC_ORCHESTRATOR_GUARD_UNCHANGED / NO_SCIENTIFIC_SEMANTICS_CHANGE`。
+
+## 2026-09-28 — Strategy Compare cross-profile result reuse architecture fix
+
+- **Observed issue**：Phase-2 `non_dl_validation_budget_oos`新增獨立output namespace後，C62/C61/C58雖與既有Extending OOS replay scientific contract一致，execution plan仍顯示`RUN`；原因不是result identity不相容，而是completed-result discovery只掃`settings.output_root + settings.reuse_output_roots`，新profile若未人工列出舊root就看不到既有completed runs。
+- **Architecture fix**：completed Strategy Compare result discovery改為Registry-derived。每個profile仍只寫自己的`output_root`；read-only cache roots由`core/strategy_compare_policy.py::resolve_strategy_comparison_result_search_roots()`從全部declarative profile `output_root`自動派生，再加上真正legacy-only的`reuse_output_roots`。是否REUSE仍完全由現有dataset-generation identity、comparison period、parameter evaluation SHA、arm replay contract、runtime-consumed artifact identity與pair-cache fingerprint決定；namespace只決定搜尋位置，不再決定科學相容性。
+- **Shared consumers**：single-seed pair/baseline cache、runtime-integration evidence lookup與historical P2 completed-result recovery全部改用同一resolver；未建立第二套root mapping。未修改arms、contrasts、parameter semantics、period、seed、Optimizer、PIT legality或report contract。
+- **Regression invariant**：current Phase-2 profile即使`reuse_output_roots=()`，仍必須自動發現registered Extending OOS/Rolling namespaces；future新profile只要Registry宣告自己的`output_root`，舊scientifically-identical results就可由canonical identity resolver自動命中，無需再人工接線。
+
+Decision：`ENGINEERING_ONLY / REGISTRY_DERIVED_RESULT_DISCOVERY / PROFILE_NAMESPACE_IS_WRITE_ONLY / IDENTITY_DECIDES_REUSE / LEGACY_REUSE_ROOTS_COMPAT_ONLY / SCIENTIFIC_IDENTITY_UNCHANGED`。
+

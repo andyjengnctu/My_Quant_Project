@@ -602,6 +602,41 @@ def get_strategy_comparison_menu_profiles() -> tuple[dict[str, str], ...]:
     )
 
 
+def resolve_strategy_comparison_result_search_roots(
+    settings: StrategyComparisonSettings,
+) -> tuple[str, ...]:
+    """Return every registered Strategy Compare result namespace eligible for identity reuse.
+
+    Result reuse is scientific-identity driven, not profile-name/output-root driven.
+    Every active profile's output namespace is therefore a read-only cache candidate;
+    exact reuse is still decided later by the canonical result identity/fingerprint.
+    ``reuse_output_roots`` remains only as a compatibility hook for legacy namespaces
+    that cannot be derived from the current declarative profile registry.
+    """
+
+    roots: list[str] = []
+
+    def add(raw: object) -> None:
+        value = str(raw or "").strip()
+        if value and value not in roots:
+            roots.append(value)
+
+    # Prefer the current profile namespace when the same completed identity exists
+    # in more than one location, then scan all declaratively registered profiles.
+    add(settings.output_root)
+    for profile in STRATEGY_COMPARE_PROFILES.values():
+        add(profile.get("output_root"))
+
+    # Explicit reuse roots are legacy/migration-only compatibility namespaces.
+    for profile in STRATEGY_COMPARE_PROFILES.values():
+        for raw in tuple(profile.get("reuse_output_roots") or ()):
+            add(raw)
+    for raw in settings.reuse_output_roots:
+        add(raw)
+
+    return tuple(roots)
+
+
 def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyComparisonSettings:
     selected_profile_id = str(profile_id or STRATEGY_COMPARE_DEFAULT_PROFILE).strip()
     if selected_profile_id not in STRATEGY_COMPARE_PROFILES:
@@ -1006,6 +1041,7 @@ __all__ = [
     "get_strategy_multi_seed_robustness_settings",
     "get_strategy_runtime_integration_settings",
     "get_strategy_comparison_settings",
+    "resolve_strategy_comparison_result_search_roots",
     "get_strategy_compare_model_bindings",
     "validate_single_seed_strategy_conversion_authorization",
     "validate_single_seed_strategy_conversion_pit_scope",

@@ -23,6 +23,7 @@ from core.breakout_quality_registry import (
 )
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
+    resolve_strategy_comparison_result_search_roots,
     get_strategy_multi_seed_robustness_settings,
     get_strategy_runtime_integration_settings,
 )
@@ -307,8 +308,9 @@ def _find_strategy_result_evidence(
     candidate: StrategyComparisonArm,
     baseline: StrategyComparisonArm,
 ) -> tuple[Path, dict[str, Any]]:
-    search_roots = [root / settings.output_root]
-    search_roots.extend(root / raw for raw in settings.reuse_output_roots)
+    search_roots = [
+        root / raw for raw in resolve_strategy_comparison_result_search_roots(settings)
+    ]
     paths: list[Path] = []
     for output_root in search_roots:
         latest = output_root / "latest" / "strategy_comparison.json"
