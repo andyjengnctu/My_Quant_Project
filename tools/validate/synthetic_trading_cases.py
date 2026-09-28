@@ -44,13 +44,16 @@ def _source_references_identifier(source_text: str, identifier: str) -> bool:
 
 
 def _build_synthetic_trading_pit_param_payload(*, members, selector: str, meta=None) -> dict:
-    """Build a minimal rolling PIT artifact for Trading synthetic fixtures.
+    """Build a minimal current Trading production static Params artifact.
 
-    Most Trading lifecycle synthetics test state transitions rather than Optimizer
-    schedule construction.  Pin the single synthetic fold to the fixture's declared
-    latest-data date so those tests exercise the production rolling runtime without
-    depending on Research producer internals.
+    Trading lifecycle synthetics test state transitions rather than Optimizer
+    training.  The production Workbench artifact is static and records the
+    finalized data date in ``meta.walk_forward_policy.latest_data_date``.
+    Historical rolling-runtime behavior is covered by explicit rolling fixtures.
     """
+    from core.active_param_ensemble import build_static_active_param_ensemble_payload
+    from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
+
     meta_payload = dict(meta or {})
     walk_forward = dict(meta_payload.get("walk_forward_policy") or {})
     information_date = str(
@@ -59,23 +62,19 @@ def _build_synthetic_trading_pit_param_payload(*, members, selector: str, meta=N
         or ""
     ).strip()
     if not information_date:
-        raise ValueError("Synthetic Trading PIT Params requires meta.walk_forward_policy.latest_data_date")
-    meta_payload["oos_horizon_months"] = 12
-    return {
-        "schema_type": "optimizer_active_param_ensemble",
-        "schema_version": 1,
-        "mode": "rolling",
-        "type": "active_param_ensemble",
-        "selector": str(selector),
-        "meta": meta_payload,
-        "params_ensemble_by_effective_date": {information_date: list(members)},
-        "folds": [{
-            "selection_end_date": information_date,
-            "effective_start": information_date,
-            "effective_end": information_date,
-        }],
-        "summary": {"oos_end_date": information_date},
-    }
+        raise ValueError("Synthetic Trading Params requires meta.walk_forward_policy.latest_data_date")
+    normalized_members = list(members)
+    return build_static_active_param_ensemble_payload(
+        members=normalized_members,
+        random_seed_ensemble=build_seed_ensemble_policy_snapshot(
+            enabled=len(normalized_members) > 1,
+            seed_count=max(1, len(normalized_members)),
+            min_agree="auto",
+        ),
+        selector=str(selector),
+        meta=meta_payload,
+    )
+
 
 
 from services.trading.account_state import (
@@ -8341,11 +8340,11 @@ def validate_trading_market_data_lineage_contract_case(base_params):
             _mutate_synthetic_trading_v2_consumer_membership(root, ticker="9999")
             return {
                 "status": "READY",
-                "path": str(selected_path),
+                "selected_params_path": str(selected_path),
                 "manifest_path": str(selected_path.parent / "manifest.json"),
             }
 
-        with patch.object(param_training, "build_isolated_strategy_parameter_schedule", side_effect=_optimizer_and_mutate):
+        with patch.object(param_training, "run_static_strategy_parameter_training", side_effect=_optimizer_and_mutate):
             try:
                 param_training.run_trading_strategy_param_training(project_root=root, environ={})
             except RuntimeError as exc:

@@ -14,11 +14,12 @@ from services.trading.market_data_consumer import (
     load_trading_v2_consumer_state,
 )
 
-TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 6
+TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 7
 TRADING_STRATEGY_PARAM_BINDING_FILENAME = "trading_param_binding.json"
 TRADING_PARAM_USAGE_TRAINED_CURRENT = "trained_current"
 TRADING_PARAM_USAGE_REUSE_EXISTING = "reuse_existing"
 TRADING_PARAM_USAGE_MODES = frozenset({TRADING_PARAM_USAGE_TRAINED_CURRENT, TRADING_PARAM_USAGE_REUSE_EXISTING})
+TRADING_PARAM_SCHEDULE_MODES = frozenset({"static", "rolling"})
 
 
 def resolve_trading_strategy_param_binding_path(project_root: str | Path) -> Path:
@@ -43,8 +44,7 @@ def _validate_binding(payload: dict[str, Any]) -> None:
         "market_data_source_view_fingerprint",
         "latest_data_date",
         "param_training_data_date",
-        "param_effective_date",
-        "param_valid_through_date",
+        "param_schedule_mode",
         "usage_mode",
         "param_member_count",
         "param_min_agree",
@@ -53,20 +53,32 @@ def _validate_binding(payload: dict[str, Any]) -> None:
             raise ValueError(f"Trading param binding 缺少 {field}")
     if str(payload.get("usage_mode")) not in TRADING_PARAM_USAGE_MODES:
         raise ValueError("Trading param binding usage_mode 不合法")
+    schedule_mode = str(payload.get("param_schedule_mode") or "").strip().lower()
+    if schedule_mode not in TRADING_PARAM_SCHEDULE_MODES:
+        raise ValueError("Trading param binding param_schedule_mode 不合法")
     member_count = int(payload.get("param_member_count") or 0)
     min_agree = int(payload.get("param_min_agree") or 0)
     if member_count < 1 or min_agree < 1 or min_agree > member_count:
         raise ValueError("Trading param binding Params ensemble metadata 不合法")
-    training_date = str(payload.get("param_training_data_date"))
-    effective_date = str(payload.get("param_effective_date"))
-    valid_through_date = str(payload.get("param_valid_through_date"))
-    latest_data_date = str(payload.get("latest_data_date"))
-    if training_date > effective_date:
-        raise ValueError("Trading param binding 的 Params 訓練資料日晚於生效日")
-    if effective_date > latest_data_date:
-        raise ValueError("Trading param binding 的 Params 生效日晚於使用資料日")
-    if latest_data_date > valid_through_date:
-        raise ValueError("Trading param binding 已超過目前 Params PIT refit period")
+    training_date = str(payload.get("param_training_data_date") or "")
+    latest_data_date = str(payload.get("latest_data_date") or "")
+    if training_date > latest_data_date:
+        raise ValueError("Trading param binding 的 Params 訓練資料日晚於使用資料日")
+    if str(payload.get("usage_mode")) == TRADING_PARAM_USAGE_TRAINED_CURRENT and training_date != latest_data_date:
+        raise ValueError("trained_current Trading param binding 必須由目前 finalized data 訓練")
+    effective_date = str(payload.get("param_effective_date") or "")
+    valid_through_date = str(payload.get("param_valid_through_date") or "")
+    if schedule_mode == "rolling":
+        if not effective_date or not valid_through_date:
+            raise ValueError("Trading rolling param binding 缺少 effective/valid-through lineage")
+        if training_date > effective_date:
+            raise ValueError("Trading param binding 的 Params 訓練資料日晚於生效日")
+        if effective_date > latest_data_date:
+            raise ValueError("Trading param binding 的 Params 生效日晚於使用資料日")
+        if latest_data_date > valid_through_date:
+            raise ValueError("Trading param binding 已超過目前 Params PIT refit period")
+    elif effective_date or valid_through_date:
+        raise ValueError("Trading static param binding 不應帶 rolling effective/valid-through lineage")
     core = {key: value for key, value in payload.items() if key != "binding_fingerprint"}
     if str(payload.get("binding_fingerprint") or "") != canonical_json_sha256(core):
         raise ValueError("Trading param binding fingerprint 不一致")
@@ -86,12 +98,21 @@ def _selected_param_metadata(
     param_runtime = load_trading_strategy_param_runtime(
         selected_path, information_date=str(information_date)
     )
+    schedule_mode = str(param_runtime.get("schedule_mode") or "").strip().lower()
+    if schedule_mode not in TRADING_PARAM_SCHEDULE_MODES:
+        raise ValueError("Trading selected strategy params schedule mode 不合法")
     training_date = str(param_runtime.get("training_data_date") or "").strip()
-    effective_date = str(param_runtime.get("effective_date") or "").strip()
-    valid_through_date = str(param_runtime.get("scheduled_effective_end_date") or "").strip()
-    if not training_date or not effective_date or not valid_through_date:
-        raise ValueError("Trading rolling strategy params 缺少PIT fold lineage")
+    if not training_date:
+        raise ValueError("Trading strategy params 缺少訓練資料日 lineage")
+    effective_date = ""
+    valid_through_date = ""
+    if schedule_mode == "rolling":
+        effective_date = str(param_runtime.get("effective_date") or "").strip()
+        valid_through_date = str(param_runtime.get("scheduled_effective_end_date") or "").strip()
+        if not effective_date or not valid_through_date:
+            raise ValueError("Trading rolling strategy params 缺少 PIT fold lineage")
     return {
+        "schedule_mode": schedule_mode,
         "training_date": training_date,
         "effective_date": effective_date,
         "valid_through_date": valid_through_date,
@@ -130,6 +151,10 @@ def publish_trading_strategy_param_binding(
         raise RuntimeError(
             "Trading selected strategy params 訓練資料日晚於目前 Trading data；禁止使用未來 Params"
         )
+    if normalized_usage_mode == TRADING_PARAM_USAGE_TRAINED_CURRENT and param_training_data_date != current_data_date:
+        raise RuntimeError(
+            "Trading 本次重新訓練 Params 並非使用目前 finalized data；禁止發布 trained_current binding"
+        )
     payload: dict[str, Any] = {
         "schema_version": TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION,
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
@@ -142,8 +167,9 @@ def publish_trading_strategy_param_binding(
         "market_data_source_view_fingerprint": str(consumer_state["source_view_fingerprint"]),
         "latest_data_date": current_data_date,
         "param_training_data_date": param_training_data_date,
-        "param_effective_date": str(param_metadata["effective_date"]),
-        "param_valid_through_date": str(param_metadata["valid_through_date"]),
+        "param_schedule_mode": str(param_metadata["schedule_mode"]),
+        "param_effective_date": str(param_metadata["effective_date"]) or None,
+        "param_valid_through_date": str(param_metadata["valid_through_date"]) or None,
         "usage_mode": normalized_usage_mode,
         "param_member_count": int(param_metadata["member_count"]),
         "param_min_agree": int(param_metadata["min_agree"]),
@@ -196,10 +222,15 @@ def load_trading_strategy_param_binding(
     )
     if str(payload.get("param_training_data_date") or "") != str(param_metadata["training_date"]):
         raise RuntimeError("Trading Params artifact 訓練資料日已與 param binding 不一致")
-    if str(payload.get("param_effective_date") or "") != str(param_metadata["effective_date"]):
-        raise RuntimeError("Trading Params artifact effective date 已與 param binding 不一致")
-    if str(payload.get("param_valid_through_date") or "") != str(param_metadata["valid_through_date"]):
-        raise RuntimeError("Trading Params artifact PIT refit period 已與 param binding 不一致")
+    if str(payload.get("param_schedule_mode") or "") != str(param_metadata["schedule_mode"]):
+        raise RuntimeError("Trading Params artifact schedule mode 已與 param binding 不一致")
+    if str(param_metadata["schedule_mode"]) == "rolling":
+        if str(payload.get("param_effective_date") or "") != str(param_metadata["effective_date"]):
+            raise RuntimeError("Trading Params artifact effective date 已與 param binding 不一致")
+        if str(payload.get("param_valid_through_date") or "") != str(param_metadata["valid_through_date"]):
+            raise RuntimeError("Trading Params artifact PIT refit period 已與 param binding 不一致")
+    elif payload.get("param_effective_date") not in (None, "") or payload.get("param_valid_through_date") not in (None, ""):
+        raise RuntimeError("Trading static Params binding 不應帶 rolling effective/valid-through lineage")
     if int(payload.get("param_member_count") or 0) != int(param_metadata["member_count"]):
         raise RuntimeError("Trading Params artifact member_count 已與 param binding 不一致")
     if int(payload.get("param_min_agree") or 0) != int(param_metadata["min_agree"]):
@@ -220,6 +251,7 @@ __all__ = [
     "TRADING_PARAM_USAGE_TRAINED_CURRENT",
     "TRADING_PARAM_USAGE_REUSE_EXISTING",
     "TRADING_PARAM_USAGE_MODES",
+    "TRADING_PARAM_SCHEDULE_MODES",
     "resolve_trading_strategy_param_binding_path",
     "publish_trading_strategy_param_binding",
     "load_trading_strategy_param_binding",

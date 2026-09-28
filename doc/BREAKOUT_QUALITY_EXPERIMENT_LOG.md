@@ -12160,3 +12160,13 @@ Decision：`UI_ONLY / SINGLE_EXPLICIT_FORCE_REBUILD_ACTION / NO_SECONDARY_TEXT_C
 - **Phase visibility**：live console新增`PHASE 1/3 INNER TRAIN SEARCH`、`PHASE 2/3 VALIDATION BUDGET SELECTION`、`PHASE 3/3 FULL REFIT`，明確顯示目前正在inner training、validation選N*或fresh full refit。
 
 Decision：`ENGINEERING_ONLY / LIVE_PROGRESS_VISIBLE / SEQUENTIAL_SHARED_RAW_CACHE_REUSED / VALIDATION_SCIENTIFIC_CONTRACT_UNCHANGED`。
+
+## 2026-09-28 — Trading production seed-contract correction / Round 1
+
+- 使用者重新確認Research的角色是驗證Trading實盤production策略在歷史PIT下的效果；Research不得為了比較方便反向改寫Trading production fitting semantics。2026-09-19將Trading收斂到Seed42/300-trial rolling contract的決策保留為歷史紀錄，但其「current Production-PIT reference」解讀自本條起被更正。
+- Workbench Trading strategy-parameter production恢復一週前既有product contract：120M training window、`base-finalists-agree`、8個optimizer seeds、1000 trials/seed；每次使用者明確重新訓練都以`secrets`重新產生一組8-seed bundle（`seed_mode=random_n_each_training_run`），不是固定Seed42，也不是Research robustness seed list。
+- Workbench仍委派同一canonical Optimizer multi-seed producer與同一strategy-parameter artifact schema；沒有建立第二套search／selector演算法。Trading V2 input、Trading model/output/state roots與Research physical artifacts維持隔離。Current Workbench production改回static latest-finalized-data publication；runtime/binding保留對既有rolling Trading artifact的條件式相容，只作migration/historical compatibility。
+- 每次production retrain實際抽到的resolved seeds同時持久化於selected params artifact `meta.seeds`、manifest `training_policy.random_seed_ensemble.resolved_seeds`及top-level `resolved_optimizer_seeds`，三者必須exact一致；因此Trading保留每次重訓的隨機性，同時具備事後稽核與重現該次search realization的證據。
+- Research C58/C61/C62/PARAM-P5/C84的scientific config、artifact與既有結果本Round完全不改。C62重新分類為Full / Seed42 / 300 trials / `base-finalists-agree`的single-seed controlled reference；Phase 1 evidence凍結，8-seed robustness數值不重算。P5/C84仍是C62上的single-seed fixed-checkpoint validation-budget treatment。
+- 後續分輪且尚未分配新scientific identity：Round 2新增Research fixed/scaled multi-seed production-style arm；Round 3拆開fitting seed bundles與robustness replication bundles；Round 4新增single-seed validation early-stop；Round 5才把early-stop擴到multi-seed。
+

@@ -151,7 +151,12 @@ def load_trading_strategy_param_runtime(
             "Trading ensemble min_agree 不合法；"
             f"min_agree={min_agree}, members={len(members)}"
         )
-    training_data_date = str(fold.get("selection_end_date") or "").strip()
+    if mode == "rolling":
+        training_data_date = str(fold.get("selection_end_date") or "").strip()
+    else:
+        meta = dict(source["payload"].get("meta") or {})
+        walk_forward_policy = dict(meta.get("walk_forward_policy") or {})
+        training_data_date = str(walk_forward_policy.get("latest_data_date") or "").strip()
     return {
         "source": source,
         "source_type": source_type,

@@ -3864,8 +3864,8 @@
       "section": "B2",
       "priority": "P1",
       "category": "Runtime domain / Trading strategy params",
-      "item": "Trading canonical PIT strategy-parameter producer and artifact isolation",
-      "gap": "Trading strategy parameter training必須委派既有canonical Optimizer rolling producer，使用Trading data/output/models/strategy-params namespace，但trials／seed／train window／refit horizon必須直接沿用Research canonical rolling training contract；active selector仍由既有training-policy owner決定。Trading不得建立第二套search／seed／trial semantics，不得讀寫Research physical truth，也不得以今日資料倒灌歷史；正式artifact必須保存完整annual PIT schedule，runtime依information date解析當期legal member set並在超過refit horizon時fail-fast。Full同一次Optimizer search若同時產生base-finalist-best與base-finalists-agree，兩個policy artifact必須共同發布，不得為Production-PIT再重跑搜尋。",
+      "item": "Trading canonical multi-seed production strategy-parameter producer and artifact isolation",
+      "gap": "Trading strategy parameter training必須委派既有canonical Optimizer multi-seed producer，使用Trading data/output/models/strategy-params namespace；product-level設定由`config/trading.py`持有：目前為120M training window、8個每次明確重訓重新隨機產生的optimizer seeds、1000 trials/seed與`base-finalists-agree`。實際resolved seed bundle必須持久化到selected artifact與manifest並exact一致，使每次production retrain保有隨機性但可事後稽核。Trading不得讀寫Research physical truth，也不得由Research seed/trial budget反向改寫production；current Workbench發布static latest-finalized-data artifact，runtime/binding同時相容既有rolling historical/migration artifact且必須依schedule mode驗證lineage。Research與Trading共享canonical search/selector implementation，不得建立第二套Optimizer演算法。",
       "entry": "`core/trading_policy.py`, `core/strategy_param_artifacts.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/strategy_param_training.py`, `services/optimizer/outer_rolling_oos.py`, `services/trading/strategy_param_training.py`, `services/trading/strategy_param_runtime.py`, `services/trading/strategy_param_state.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 348
@@ -7893,7 +7893,7 @@
     {
       "id": "T480",
       "b_id": "B360",
-      "description": "`validate_trading_strategy_param_producer_contract_case` 覆蓋Trading rolling-PIT training plan、isolated strategy-param root、config-driven selector、canonical 300-trial/Seed42/120M/12M contract delegation、Trading V2 loader/data identity、同一次Full search共同發布base-finalist-best與base-finalists-agree、manifest truth、information-date runtime binding與Research physical truth隔離。",
+      "description": "`validate_trading_strategy_param_producer_contract_case` 覆蓋Trading static multi-seed production plan、isolated strategy-param root、Trading-owned config-driven selector/trials/seed-count/train-window、每次run fresh random seed bundle、resolved seeds在artifact/manifest一致持久化、Trading V2 loader/data identity、canonical Optimizer delegation、static binding roundtrip／legacy rolling runtime compatibility與Research physical truth隔離。",
       "initial_status": "NEW",
       "order": 470
     },

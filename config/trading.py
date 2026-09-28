@@ -1,13 +1,25 @@
 """Trading declarative product configuration.
 
-Trading state/artifacts are physically isolated from Research while consuming the
-same canonical Strategy Optimizer training semantics from ``config.training_policy``
-and execution/performance semantics from the canonical performance policy.
+Trading state/artifacts are physically isolated from Research.  Workbench production
+parameter training owns its product-level seed/trial contract here while reusing the
+canonical Optimizer engine/search semantics.  Research may replay or scale the same
+policy for controlled PIT experiments, but must not redefine Trading production.
 """
 
 TRADING_ACTIVE_STRATEGY_ID = "full_rule_based_no_dl"
 TRADING_DATASET_PROFILE = "full"
 TRADING_PARAM_FAMILY = "full"
+TRADING_PARAM_SELECTOR = "base_finalists_agree"
+
+# Trading production parameter training is a product-level contract, not a
+# Research comparison knob.  Each explicit retrain uses a fresh random seed
+# bundle, matching the pre-2026-09-19 Workbench production semantics.
+TRADING_OPTIMIZER_TRIALS_PER_SEED = 1000
+TRADING_OPTIMIZER_SEED_COUNT = 8
+TRADING_OPTIMIZER_SEED_MODE = "random_n_each_training_run"
+TRADING_OPTIMIZER_SEED_MIN_AGREE = "auto"
+TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS = 120
+
 TRADING_DL_FILTER_ENABLED = False
 TRADING_DL_RANKING_ENABLED = False
 
@@ -32,6 +44,12 @@ __all__ = [
     "TRADING_ACTIVE_STRATEGY_ID",
     "TRADING_DATASET_PROFILE",
     "TRADING_PARAM_FAMILY",
+    "TRADING_PARAM_SELECTOR",
+    "TRADING_OPTIMIZER_TRIALS_PER_SEED",
+    "TRADING_OPTIMIZER_SEED_COUNT",
+    "TRADING_OPTIMIZER_SEED_MODE",
+    "TRADING_OPTIMIZER_SEED_MIN_AGREE",
+    "TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS",
     "TRADING_DL_FILTER_ENABLED",
     "TRADING_DL_RANKING_ENABLED",
     "TRADING_MARKET_SESSION_CLOSE_TIME",

@@ -2095,6 +2095,19 @@ def _run_nonrolling_random_seed_ensemble_training(
     selected_policy_uses_finalist_agreement = _is_finalists_agree_policy_name(selected_policy_for_progress)
 
     seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
+    resolved_manifest_training_policy = (
+        None if manifest_training_policy_override is None else dict(manifest_training_policy_override)
+    )
+    if resolved_manifest_training_policy is not None:
+        manifest_seed_policy = dict(resolved_manifest_training_policy.get("random_seed_ensemble") or {})
+        manifest_seed_policy.update({
+            "enabled": True,
+            "seed_count": int(len(seeds)),
+            "seed_mode": str(policy.get("seed_mode") or "random_n_each_training_run"),
+            "resolved_seeds": [int(seed) for seed in seeds],
+        })
+        resolved_manifest_training_policy["random_seed_ensemble"] = manifest_seed_policy
+        resolved_manifest_training_policy["resolved_optimizer_seeds"] = [int(seed) for seed in seeds]
     compact_display = True
 
     members: list[dict] = []
@@ -2485,7 +2498,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         models_dir=runtime_models_dir,
         strategy_params_root=strategy_params_root,
         requested_seed_policy=policy,
-        manifest_training_policy=manifest_training_policy_override,
+        manifest_training_policy=resolved_manifest_training_policy,
     )
     trade_mode = normalize_optimizer_model_mode(selected_model_mode) == "trade"
     if dashboard_session is None:
@@ -2639,6 +2652,7 @@ def run_static_strategy_parameter_training(
     selected_policy: str,
     trials_per_seed: int,
     seed_count: int,
+    seed_min_agree="auto",
     trade_train_window_months: int,
     environ=None,
     raw_data_loader=None,
@@ -2714,11 +2728,10 @@ def run_static_strategy_parameter_training(
     manifest_training_policy = get_strategy_parameter_training_policy_snapshot(
         evaluation_mode="trade"
     )
-    canonical_seed_policy = dict(manifest_training_policy.get("random_seed_ensemble") or {})
     requested_seed_policy = _resolve_nonrolling_seed_ensemble_policy(
         enabled=True,
         seed_count=seeds,
-        min_agree=canonical_seed_policy.get("min_agree_requested"),
+        min_agree=seed_min_agree,
     )
     manifest_training_policy.update(
         {
@@ -2827,6 +2840,17 @@ def run_static_strategy_parameter_training(
     manifest_seed_policy = dict(manifest_training.get("random_seed_ensemble") or {})
     if int(manifest_seed_policy.get("seed_count") or 0) != seeds:
         raise RuntimeError("Trading strategy parameter manifest seed_count與目前設定不一致")
+    if str(manifest_seed_policy.get("seed_mode") or "") != str(requested_seed_policy.get("seed_mode") or ""):
+        raise RuntimeError("Trading strategy parameter manifest seed_mode與目前設定不一致")
+    resolved_seeds = [int(value) for value in list(manifest_training.get("resolved_optimizer_seeds") or [])]
+    manifest_resolved_seeds = [int(value) for value in list(manifest_seed_policy.get("resolved_seeds") or [])]
+    artifact_resolved_seeds = [int(value) for value in list(meta.get("seeds") or [])]
+    if len(resolved_seeds) != seeds or len(set(resolved_seeds)) != seeds:
+        raise RuntimeError("Trading strategy parameter manifest缺少完整且唯一的實際 optimizer seeds")
+    if resolved_seeds != manifest_resolved_seeds:
+        raise RuntimeError("Trading strategy parameter manifest seed lineage不一致")
+    if resolved_seeds != artifact_resolved_seeds:
+        raise RuntimeError("Trading strategy params artifact與manifest的實際 optimizer seeds不一致")
     return {
         "status": "READY",
         "latest_data_date": str(latest_data_date),
@@ -2836,8 +2860,10 @@ def run_static_strategy_parameter_training(
         "manifest_path": str(manifest_path),
         "trials_per_seed": trials,
         "seed_count": seeds,
+        "seed_mode": str(requested_seed_policy.get("seed_mode") or ""),
+        "resolved_optimizer_seeds": list(resolved_seeds),
         "trade_train_window_months": train_window_months,
-        "random_seed_ensemble": dict(requested_seed_policy),
+        "random_seed_ensemble": {**dict(requested_seed_policy), "resolved_seeds": list(resolved_seeds)},
     }
 
 def _extract_cli_value(argv, option_name: str):
