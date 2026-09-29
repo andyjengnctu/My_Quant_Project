@@ -284,6 +284,76 @@ def resolve_score_min_quarter_return_target(raw_value=None, floor_pct=None) -> f
         )
     return resolved
 
+def build_optimizer_scientific_score_policy_snapshot() -> dict:
+    """Return result-changing Optimizer score/order semantics only.
+
+    This intentionally excludes display scaling, Trading promotion controls and
+    execution/performance knobs.  It is a building block for the canonical
+    strategy-parameter scientific contract; legacy snapshots remain unchanged.
+    """
+
+    return {
+        "EV_CALC_METHOD": _settings.EV_CALC_METHOD,
+        "BUY_SORT_METHOD": _settings.BUY_SORT_METHOD,
+        "SCORE_CALC_METHOD": _settings.SCORE_CALC_METHOD,
+        "SCORE_NUMERATOR_METHOD": _settings.SCORE_NUMERATOR_METHOD,
+        "SCORE_MDD_POWER": resolve_score_mdd_power(),
+        "SCORE_MDD_DENOMINATOR_EPSILON": resolve_score_mdd_denominator_epsilon(),
+        "SCORE_WIN_RATE_AMP_ENABLED": is_score_win_rate_amp_enabled(),
+        "SCORE_WIN_RATE_TARGET": resolve_score_win_rate_target(),
+        "SCORE_MONTHLY_WIN_RATE_AMP_ENABLED": is_score_monthly_win_rate_amp_enabled(),
+        "SCORE_MONTHLY_WIN_RATE_TARGET": resolve_score_monthly_win_rate_target(),
+        "SCORE_MIN_MONTH_RETURN_AMP_ENABLED": is_score_min_month_return_amp_enabled(),
+        "SCORE_MIN_MONTH_RETURN_TARGET": resolve_score_min_month_return_target(),
+        "SCORE_MIN_MONTH_RETURN_FLOOR": resolve_score_min_month_return_floor(),
+        "SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED": is_score_min_full_year_return_amp_enabled(),
+        "SCORE_MIN_FULL_YEAR_RETURN_TARGET": resolve_score_min_full_year_return_target(),
+        "SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": is_score_min_quarter_return_amp_enabled(),
+        "SCORE_MIN_QUARTER_RETURN_TARGET": resolve_score_min_quarter_return_target(),
+        "SCORE_MIN_QUARTER_RETURN_FLOOR": resolve_score_min_quarter_return_floor(),
+        "SCORE_MEDIAN_R_AMP_ENABLED": is_score_median_r_amp_enabled(),
+        "SCORE_MEDIAN_R_FLOOR": resolve_score_median_r_floor(),
+        "SCORE_MEDIAN_R_TARGET": resolve_score_median_r_target(),
+    }
+
+
+def build_optimizer_scientific_selection_policy_snapshot() -> dict:
+    """Return result-changing candidate/finalist/anti-overfit semantics.
+
+    Raw defaults are preserved rather than resolving against a mutable runtime
+    model-mode singleton; the later runtime-injection round will resolve the
+    applicable branch once at the producer boundary.
+    """
+
+    return {
+        "fixed_tp_percent": _settings.OPTIMIZER_FIXED_TP_PERCENT,
+        "local_min_review": {
+            "default_enabled": bool(_settings.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED),
+            "full_mode_enabled": bool(_settings.OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED),
+            "finalist_top_k_rate": float(_settings.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE),
+            "finalist_top_k_min": int(_settings.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN),
+        },
+        "finalists_agree": {
+            "base_min_agree": _settings.OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+            "local_min_agree": _settings.OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
+            "retention_min_agree": _settings.OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
+        },
+        "inner_validation": {
+            "enabled": bool(_settings.OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED),
+            "min_score": float(_settings.OPTIMIZER_INNER_VALIDATE_MIN_SCORE),
+            "max_rank_percentile": float(_settings.OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE),
+            "holdout_years": int(_settings.OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS),
+        },
+        "dominant_year_dependency": {
+            "enabled": bool(_settings.OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED),
+            "high_positive_pnl_share": float(_settings.DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE),
+            "narrow_positive_trade_count": int(_settings.DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT),
+            "narrow_positive_symbol_count": int(_settings.DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT),
+            "top_trade_outlier_pnl_share": float(_settings.DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE),
+        },
+    }
+
+
 def build_training_threshold_snapshot():
     return {
         "MIN_FULL_YEAR_RETURN_PCT": _settings.MIN_FULL_YEAR_RETURN_PCT,

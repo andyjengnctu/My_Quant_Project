@@ -42,6 +42,29 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
 }
 
 
+# Canonical materialization values for parameters whose controlling switch is off.
+# These are part of the Optimizer parameter-generation scientific contract; keep
+# them single-source instead of hiding literals inside build_trial_params().
+BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES = {
+    "breakout_return_min": BREAKOUT_PARAM_SPECS["breakout_return_min"]["default"],
+    "breakout_ema_len": BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"],
+    "breakout_false_filter_atr_pct_min": BREAKOUT_PARAM_SPECS["breakout_false_filter_atr_pct_min"]["default"],
+    "breakout_reclaim_window_bars": BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"],
+    "breakout_reclaim_confirm_atr": BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_atr"]["default"],
+    "bb_len": BREAKOUT_PARAM_SPECS["bb_len"]["default"],
+    "bb_mult": BREAKOUT_PARAM_SPECS["bb_mult"]["default"],
+    "kc_len": BREAKOUT_PARAM_SPECS["kc_len"]["default"],
+    "kc_mult": BREAKOUT_PARAM_SPECS["kc_mult"]["default"],
+    "vol_long_len": BREAKOUT_PARAM_SPECS["vol_long_len"]["default"],
+    "vol_breakout_mult": BREAKOUT_PARAM_SPECS["vol_breakout_mult"]["default"],
+    # Disabled history threshold is intentionally neutral rather than the
+    # standalone schema default for min_history_win_rate.
+    "min_history_trades": 0,
+    "min_history_ev": -1.0,
+    "min_history_win_rate": 0.0,
+}
+
+
 def _resolve_optimizer_categorical_choices(field_name):
     choices = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]["choices"]
     if isinstance(choices, bool):
@@ -134,39 +157,39 @@ def build_trial_params(session, trial):
         vol_long_len = _resolve_optimizer_int(session, trial, "vol_long_len")
         vol_breakout_mult = _resolve_optimizer_float(session, trial, "vol_breakout_mult")
     else:
-        vol_long_len = BREAKOUT_PARAM_SPECS["vol_long_len"]["default"]
-        vol_breakout_mult = BREAKOUT_PARAM_SPECS["vol_breakout_mult"]["default"]
+        vol_long_len = BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["vol_long_len"]
+        vol_breakout_mult = BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["vol_breakout_mult"]
 
     breakout_return_min = (
         _resolve_optimizer_float(session, trial, "breakout_return_min")
         if ai_use_breakout_return_filter
-        else BREAKOUT_PARAM_SPECS["breakout_return_min"]["default"]
+        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_return_min"]
     )
 
     breakout_ema_len = (
         _resolve_optimizer_int(session, trial, "breakout_ema_len")
         if ai_use_breakout_ema_filter
-        else BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"]
+        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_ema_len"]
     )
 
     breakout_false_filter_atr_pct_min = (
         _resolve_optimizer_float(session, trial, "breakout_false_filter_atr_pct_min")
         if ai_use_breakout_false_filter
-        else BREAKOUT_PARAM_SPECS["breakout_false_filter_atr_pct_min"]["default"]
+        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_false_filter_atr_pct_min"]
     )
     breakout_reclaim_window_bars = (
         _resolve_optimizer_int(session, trial, "breakout_reclaim_window_bars")
         if ai_use_breakout_reclaim_reentry
-        else BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"]
+        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_reclaim_window_bars"]
     )
     breakout_reclaim_confirm_atr = (
         _resolve_optimizer_float(session, trial, "breakout_reclaim_confirm_atr")
         if ai_use_breakout_reclaim_reentry
-        else BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_atr"]["default"]
+        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_reclaim_confirm_atr"]
     )
-    min_history_trades = _resolve_optimizer_int(session, trial, "min_history_trades") if ai_use_history_threshold else 0
-    min_history_ev = _resolve_optimizer_float(session, trial, "min_history_ev") if ai_use_history_threshold else -1.0
-    min_history_win_rate = _resolve_optimizer_float(session, trial, "min_history_win_rate") if ai_use_history_threshold else 0.0
+    min_history_trades = _resolve_optimizer_int(session, trial, "min_history_trades") if ai_use_history_threshold else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["min_history_trades"]
+    min_history_ev = _resolve_optimizer_float(session, trial, "min_history_ev") if ai_use_history_threshold else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["min_history_ev"]
+    min_history_win_rate = _resolve_optimizer_float(session, trial, "min_history_win_rate") if ai_use_history_threshold else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["min_history_win_rate"]
 
     return build_breakout_strategy_params(
         atr_len=_resolve_optimizer_int(session, trial, "atr_len"),
@@ -195,22 +218,22 @@ def build_trial_params(session, trial):
         bb_len=(
             _resolve_optimizer_int(session, trial, "bb_len")
             if ai_use_bb
-            else BREAKOUT_PARAM_SPECS["bb_len"]["default"]
+            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["bb_len"]
         ),
         bb_mult=(
             _resolve_optimizer_float(session, trial, "bb_mult")
             if ai_use_bb
-            else BREAKOUT_PARAM_SPECS["bb_mult"]["default"]
+            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["bb_mult"]
         ),
         kc_len=(
             _resolve_optimizer_int(session, trial, "kc_len")
             if ai_use_kc
-            else BREAKOUT_PARAM_SPECS["kc_len"]["default"]
+            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["kc_len"]
         ),
         kc_mult=(
             _resolve_optimizer_float(session, trial, "kc_mult")
             if ai_use_kc
-            else BREAKOUT_PARAM_SPECS["kc_mult"]["default"]
+            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["kc_mult"]
         ),
         vol_long_len=vol_long_len,
         vol_breakout_mult=vol_breakout_mult,

@@ -2587,5 +2587,113 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         interactive_restart_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)
 
+    # Canonical Strategy Parameter scientific-contract boundary.  Round 1 is
+    # observation-only: it must detect result-changing semantics while ignoring
+    # display/performance knobs, without changing legacy runtime fingerprints.
+    import config.display_policy as display_policy_settings
+    import config.execution_policy as execution_policy_settings
+    import config.training_performance_policy as training_performance_settings
+    import config.training_policy as training_policy_settings
+    import strategies.breakout.schema as breakout_schema
+    from core.strategy_param_policy import (
+        get_active_strategy_param_training_profile,
+        get_strategy_param_fitting_seed_protocol,
+        get_strategy_param_validation_protocol,
+    )
+    from core.strategy_param_scientific_contract import build_strategy_param_scientific_contract
+    from core.training_policy import get_strategy_parameter_training_policy_snapshot
+
+    active_param_profile = get_active_strategy_param_training_profile()
+    active_fitting_protocol = get_strategy_param_fitting_seed_protocol(
+        active_param_profile.fitting_seed_protocol
+    )
+    active_training_policy = get_strategy_parameter_training_policy_snapshot(
+        evaluation_mode="rolling"
+    )
+    active_profile_id = active_param_profile.profile_id
+    if active_param_profile.validation_enabled:
+        active_validation_protocol = get_strategy_param_validation_protocol(
+            str(active_param_profile.validation_protocol)
+        )
+        expected_validation_contract = {
+            "enabled": True,
+            **{
+                key: value
+                for key, value in active_validation_protocol.as_dict().items()
+                if key != "protocol"
+            },
+        }
+    else:
+        expected_validation_contract = {"enabled": False}
+    base_scientific = build_strategy_param_scientific_contract(
+        project_root, active_profile_id
+    )
+    base_scientific_fp = base_scientific["scientific_fingerprint_sha256"]
+    check(
+        "strategy_param_scientific_contract_matches_active_profile_owners",
+        True,
+        base_scientific["references"]["profile_id"] == active_profile_id
+        and base_scientific["references"]["parameter_set_identity"]
+        == active_param_profile.parameter_set_identity
+        and base_scientific["scientific_contract"]["schedule"]["train_window_months"]
+        == int(active_training_policy["train_window_months"])
+        and base_scientific["scientific_contract"]["schedule"]["oos_horizon_months"]
+        == int(active_training_policy["oos_horizon_months"])
+        and base_scientific["scientific_contract"]["fitting"]["seed_count"]
+        == int(active_fitting_protocol.seed_count)
+        and base_scientific["scientific_contract"]["fitting"]["trials_per_seed"]
+        == int(active_fitting_protocol.trials_per_seed)
+        and base_scientific["scientific_contract"]["validation"]
+        == expected_validation_contract,
+    )
+
+    with patch.object(training_policy_settings, "MIN_ANNUAL_TRADES", float(training_policy_settings.MIN_ANNUAL_TRADES) + 1.0):
+        gate_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_tracks_hard_gate_change", True, gate_fp != base_scientific_fp)
+
+    with patch.object(training_policy_settings, "OUTER_ROLLING_TRAIN_WINDOW_MONTHS", int(training_policy_settings.OUTER_ROLLING_TRAIN_WINDOW_MONTHS) + 12):
+        schedule_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_tracks_schedule_change", True, schedule_fp != base_scientific_fp)
+
+    with patch.object(training_policy_settings, "SCORE_MDD_POWER", float(training_policy_settings.SCORE_MDD_POWER) + 0.25):
+        score_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_tracks_score_change", True, score_fp != base_scientific_fp)
+
+    with patch.object(training_policy_settings, "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE", 1):
+        selector_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_tracks_selector_change", True, selector_fp != base_scientific_fp)
+
+    with patch.object(training_policy_settings, "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED", not bool(training_policy_settings.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED)):
+        local_min_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_tracks_local_min_change", True, local_min_fp != base_scientific_fp)
+
+    min_fee_spec = execution_policy_settings.EXECUTION_POLICY_PARAM_SPECS["min_fee"]
+    with patch.dict(min_fee_spec, {"default": float(min_fee_spec["default"]) + 1.0}):
+        execution_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_tracks_execution_economics_change", True, execution_fp != base_scientific_fp)
+
+    vol_long_spec = breakout_schema.BREAKOUT_PARAM_SPECS["vol_long_len"]
+    with patch.dict(vol_long_spec, {"default": int(vol_long_spec["default"]) + 1}):
+        schema_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_tracks_parameter_schema_default_change", True, schema_fp != base_scientific_fp)
+
+    with patch.object(display_policy_settings, "SYSTEM_SCORE_DISPLAY_MULTIPLIER", float(display_policy_settings.SYSTEM_SCORE_DISPLAY_MULTIPLIER) * 2.0):
+        display_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_ignores_display_only_change", base_scientific_fp, display_fp)
+
+    from copy import deepcopy
+    import core.strategy_param_policy as strategy_param_policy_module
+    renamed_profiles = deepcopy(strategy_param_policy_module.STRATEGY_PARAM_PROFILES)
+    renamed_profiles[active_profile_id]["label"] = "Renamed Display Label"
+    renamed_profiles[active_profile_id]["parameter_set_identity"] = "PARAM-RENAMED-ONLY"
+    with patch.object(strategy_param_policy_module, "STRATEGY_PARAM_PROFILES", renamed_profiles):
+        renamed_contract = build_strategy_param_scientific_contract(project_root, active_profile_id)
+    check("strategy_param_scientific_fingerprint_excludes_human_and_artifact_aliases", base_scientific_fp, renamed_contract["scientific_fingerprint_sha256"])
+    check("strategy_param_scientific_contract_keeps_aliases_as_references", "PARAM-RENAMED-ONLY", renamed_contract["references"]["parameter_set_identity"])
+
+    with patch.object(training_performance_settings, "OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC", float(training_performance_settings.OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC) + 1.0):
+        performance_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
+    check("strategy_param_scientific_fingerprint_ignores_performance_only_change", base_scientific_fp, performance_fp)
+
     summary["checks"] = len(results)
     return results, summary
