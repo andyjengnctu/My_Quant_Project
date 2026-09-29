@@ -6605,6 +6605,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         build_trading_v2_ohlcv_frames,
         load_trading_v2_consumer_state,
         publish_trading_v2_consumer_state,
+        resolve_trading_v2_current_execution_pool,
     )
     from services.trading.market_data_consumer_promotion import (
         reconcile_trading_v2_consumer_state_from_local_evidence,
@@ -6719,6 +6720,98 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     check("bulk_v2_ohlcv_preparation_preserves_requested_membership", ["2317", "2330"], sorted(bulk_frames))
     check("bulk_v2_ohlcv_preparation_matches_single_ticker_semantics", frame.to_dict(orient="records"), bulk_frames["2330"].to_dict(orient="records"))
 
+    class _SparseLatestSyncedMarketValueView:
+        def __init__(self):
+            self.archive = SimpleNamespace(
+                snapshot_fingerprint="provider-snapshot-fp",
+                as_of_date="2026-03-02",
+            )
+            self.backfill_requests = []
+
+        def daily_pit_market_members(self, market_date):
+            assert market_date == "2026-09-09"
+            return ("2330", "6550")
+
+        def read_dataset_frame_many_data_ids(self, dataset, *, data_ids, columns=None, start_date=None, end_date=None):
+            self.backfill_requests.append(tuple(sorted(str(item) for item in data_ids)))
+            frame = pd.DataFrame({
+                "date": ["2026-09-08"],
+                "stock_id": ["6550"],
+                "market_value": [30_000_000_000],
+            })
+            if columns:
+                frame = frame.loc[:, list(columns)]
+            return frame.reset_index(drop=True)
+
+        def read_dataset_frame(self, dataset, *, columns=None, data_id=None, start_date=None, end_date=None):
+            if dataset == "TaiwanStockInfo":
+                frame = pd.DataFrame({
+                    "date": ["2026-09-09", "2026-09-09"],
+                    "stock_id": ["2330", "6550"],
+                    "type": ["twse", "twse"],
+                    "industry_category": ["半導體業", "生技醫療業"],
+                })
+            elif dataset == "TaiwanStockDelisting":
+                frame = pd.DataFrame(columns=["date", "stock_id"])
+            elif dataset == "TaiwanStockPriceAdj":
+                frame = pd.DataFrame({
+                    "date": ["2026-09-09", "2026-09-09"],
+                    "stock_id": ["2330", "6550"],
+                    "Trading_Volume": [2_000_000, 2_000_000],
+                })
+            elif dataset == "TaiwanStockMarketValue":
+                # Provider's 09-09 MarketValue snapshot is sparse: 6550 is
+                # absent that day but has a previously synchronized valid row.
+                frame = pd.DataFrame({
+                    "date": ["2026-09-09"],
+                    "stock_id": ["2330"],
+                    "market_value": [1_000_000_000_000],
+                })
+            else:
+                frame = pd.DataFrame(columns=list(columns or ()))
+            if columns:
+                missing = [column for column in columns if column not in frame.columns]
+                if missing:
+                    raise ValueError(f"synthetic sparse V2 view missing columns: {missing}")
+                frame = frame.loc[:, list(columns)]
+            return frame.reset_index(drop=True)
+
+    from unittest.mock import patch
+    with TemporaryDirectory(prefix="market_value_latest_synced_sparse_") as sparse_temp_dir:
+        sparse_root = Path(sparse_temp_dir)
+        sparse_view = _SparseLatestSyncedMarketValueView()
+        with patch(
+            "services.trading.market_data_consumer.load_market_data_dataset_state",
+            return_value={
+                "datasets": {
+                    "TaiwanStockMarketValue": {
+                        "latest_data_date": "2026-09-09",
+                        "scan_freshness_mode": "latest_synced",
+                    }
+                }
+            },
+        ):
+            sparse_pool, sparse_stats = resolve_trading_v2_current_execution_pool(
+                sparse_view,
+                market_date="2026-09-09",
+                project_root=sparse_root,
+            )
+        check(
+            "latest_synced_market_value_carries_prior_row_per_required_stock",
+            ["2330", "6550"],
+            sparse_pool,
+        )
+        check(
+            "latest_synced_market_value_backfills_only_missing_high_volume_stock",
+            [("6550",)],
+            sparse_view.backfill_requests,
+        )
+        check(
+            "latest_synced_market_value_sparse_snapshot_remains_complete_for_execution_pool",
+            2,
+            sparse_stats["market_value_usable_count"],
+        )
+
     with TemporaryDirectory(prefix="round8_v2_consumer_") as temp_dir:
         root = Path(temp_dir)
         first = publish_trading_v2_consumer_state(
@@ -6748,7 +6841,6 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
             view=fake,
         )
         loaded = load_trading_v2_consumer_state(root, required=True, verify_current_view=False)
-        from unittest.mock import patch
         with patch(
             "services.trading.market_data_consumer.TradingMarketDataV2View.open_pinned",
             return_value=fake,

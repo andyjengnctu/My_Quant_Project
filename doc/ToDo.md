@@ -1,9 +1,15 @@
 
 - restreucture
     - 刪除不再需要的相容層的code，精簡程式也避免之後誤接
+    - 重新編號目前的research arm編號系統
 
 - non-DL 
     - 加入validate period early stop，驗證最適回數，再用此回數retrain traning+valid完整資料，最後再用research的即有的選單來測試效果
+    - 目前DL是用SR來編號，策略是否也要有自已的編號
+    
+    - 將要要改的寫進一個臨時doc，改完後刪掉，避免跨對話移忘
+
+
 
 - imrove DL learnability
     - 0050 only DL

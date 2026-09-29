@@ -86,6 +86,7 @@ def _execution_market_value_rows(
     *,
     project_root: Path,
     market_date: str,
+    required_stock_ids: Iterable[str] = (),
 ) -> pd.DataFrame:
     """Resolve MarketValue rows under its canonical Scan freshness policy."""
 
@@ -108,6 +109,10 @@ def _execution_market_value_rows(
         # was knowable for this Scan target.  When the current dataset state has
         # already advanced beyond a finalized older Scanner target, the target's
         # own daily snapshot is the newest admissible one in the target-as-of view.
+        # MarketValue is sparse for some otherwise actionable symbols on a given
+        # provider date, so latest-synced semantics are resolved per stock_id:
+        # keep the admissible-date rows for the broad snapshot, then carry the
+        # latest earlier row only for required symbols that are absent that day.
         usable_date = min(latest_data_date, str(market_date))
         frame = view.read_dataset_frame(
             dataset,
@@ -115,8 +120,50 @@ def _execution_market_value_rows(
             start_date=usable_date,
             end_date=usable_date,
         )
-        if not frame.empty:
+        required = tuple(
+            dict.fromkeys(
+                str(stock_id).strip()
+                for stock_id in required_stock_ids
+                if str(stock_id).strip()
+            )
+        )
+        present = (
+            set(frame["stock_id"].astype("string").str.strip().dropna().astype(str).tolist())
+            if not frame.empty and "stock_id" in frame.columns
+            else set()
+        )
+        missing_required = tuple(stock_id for stock_id in required if stock_id not in present)
+        if not missing_required:
             return frame.reset_index(drop=True)
+
+        prior = view.read_dataset_frame_many_data_ids(
+            dataset,
+            data_ids=missing_required,
+            columns=("date", "stock_id", "market_value"),
+            end_date=usable_date,
+        )
+        if prior.empty:
+            return frame.reset_index(drop=True)
+        work = prior.copy()
+        work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        work["stock_id"] = work["stock_id"].astype("string").str.strip()
+        work = work.loc[
+            work["date"].notna()
+            & (work["date"] <= usable_date)
+            & work["stock_id"].notna()
+            & (work["stock_id"] != "")
+            & work["stock_id"].isin(missing_required)
+        ]
+        if work.empty:
+            return frame.reset_index(drop=True)
+        carry_forward = (
+            work.sort_values(["stock_id", "date"], kind="stable")
+            .drop_duplicates("stock_id", keep="last")
+            .reset_index(drop=True)
+        )
+        if frame.empty:
+            return carry_forward
+        return pd.concat((frame, carry_forward), ignore_index=True)
 
     # Compatibility fallback for an old state that predates latest_data_date.
     # The target-as-of view still prevents future batches from entering the scan.
@@ -160,6 +207,11 @@ def resolve_trading_v2_current_execution_pool(
         start_date=market_date,
         end_date=market_date,
     ).rename(columns={"Trading_Volume": "trading_volume"})
+    required_market_value_ids = tuple(sorted({
+        str(item.get("stock_id") or "").strip()
+        for item in members
+        if not bool(item.get("is_etf")) and str(item.get("stock_id") or "").strip()
+    }))
     root_value = project_root if project_root is not None else getattr(view, "project_root", None)
     if root_value is None:
         raise ValueError("Trading execution pool 缺 project_root，無法解析 MarketValue Scan freshness policy")
@@ -167,6 +219,7 @@ def resolve_trading_v2_current_execution_pool(
         view,
         project_root=Path(root_value).resolve(),
         market_date=market_date,
+        required_stock_ids=required_market_value_ids,
     )
     tickers, stats = screen_daily_trading_execution_pool(
         members,
