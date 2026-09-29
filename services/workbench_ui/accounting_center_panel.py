@@ -25,7 +25,11 @@ from services.trading.order_form_constraints import build_trading_actual_fill_fo
 from services.trading.scanner_state import load_trading_scanner_runtime
 from services.workbench_ui.date_picker import DatePickerField
 from services.workbench_ui.paged_table import PagedTable, TableColumn
-from services.workbench_ui.stock_names import enrich_workbench_stock_rows, workbench_stock_name
+from services.workbench_ui.stock_names import (
+    enrich_workbench_stock_rows,
+    load_workbench_stock_name_map,
+    workbench_stock_name,
+)
 from services.workbench_ui.state_sync import ACCOUNT_MUTATION_DOMAINS
 from services.workbench_ui.trading_source_labels import trading_source_display_label
 from services.workbench_ui.workbench import (
@@ -39,10 +43,12 @@ from services.workbench_ui.workbench import (
     WORKBENCH_LABEL_STYLE,
     WORKBENCH_LABELLF_STYLE,
     WORKBENCH_MUTED,
+    WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
     WORKBENCH_SUCCESS,
     WORKBENCH_TEXT,
     WORKBENCH_VSCROLL_STYLE,
     _warn_gui_fallback,
+    run_workbench_startup_io_serialized,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -114,6 +120,10 @@ class AccountingCenterPanel(ttk.Frame):
         self._refresh_results: queue.Queue = queue.Queue()
         self._refresh_thread = None
         self._refresh_pending = False
+        self._startup_refresh_started = False
+        self._startup_refresh_after_id = None
+        self._deferred_refresh_result = None
+        self._workbench_active = False
         self._all_buy_rows: list[dict] = []
         self._all_sell_rows: list[dict] = []
         self._footer_hint_var = tk.StringVar(value="")
@@ -128,7 +138,38 @@ class AccountingCenterPanel(ttk.Frame):
         self._sell_constraint_results: queue.Queue = queue.Queue()
         self._sell_constraint_poll_after_id = None
         self._build_ui()
-        self.after(80, self.refresh)
+        self.bind("<Map>", lambda _event: self.on_workbench_visibility_changed(True), add="+")
+        self.bind("<Unmap>", lambda _event: self.on_workbench_visibility_changed(False), add="+")
+
+    def on_workbench_visibility_changed(self, active: bool) -> None:
+        self._workbench_active = bool(active)
+        if not self._workbench_active:
+            if self._startup_refresh_after_id is not None:
+                try:
+                    self.after_cancel(self._startup_refresh_after_id)
+                except tk.TclError as exc:
+                    _warn_gui_fallback("Accounting startup refresh after_cancel", exc)
+                self._startup_refresh_after_id = None
+            return
+        if self._deferred_refresh_result is not None:
+            account, dashboard, error = self._deferred_refresh_result
+            self._deferred_refresh_result = None
+            self.after_idle(lambda: self._apply_refresh_result(account, dashboard, error))
+            return
+        if self._startup_refresh_started:
+            return
+        if self._startup_refresh_after_id is None:
+            self._startup_refresh_after_id = self.after(
+                WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
+                self._start_startup_refresh,
+            )
+
+    def _start_startup_refresh(self) -> None:
+        self._startup_refresh_after_id = None
+        if not self._workbench_active or self._startup_refresh_started:
+            return
+        self._startup_refresh_started = True
+        self.refresh()
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
@@ -486,21 +527,45 @@ class AccountingCenterPanel(ttk.Frame):
                 continue
 
     def refresh(self):
+        if (
+            not bool(getattr(self, "_workbench_active", True))
+            and getattr(self, "_deferred_refresh_result", None) is not None
+        ):
+            self._refresh_pending = True
+            return
         if self._refresh_thread is not None and self._refresh_thread.is_alive():
             self._refresh_pending = True
             self._refresh_status_var.set("刷新排程中…")
             return
         self._refresh_pending = False
         self._refresh_status_var.set("刷新中…")
-        self._refresh_thread = threading.Thread(target=self._load_worker, daemon=True, name="workbench-accounting-center-refresh")
+        serialize_startup = not bool(
+            getattr(self, "_snapshot", {}) or getattr(self, "_dashboard", {})
+        )
+        self._refresh_thread = threading.Thread(
+            target=self._load_worker,
+            args=(serialize_startup,),
+            daemon=True,
+            name="workbench-accounting-center-refresh",
+        )
         self._refresh_thread.start()
         self.after(30, self._poll_refresh)
 
-    def _load_worker(self):
-        try:
+    def _load_worker(self, serialize_startup: bool = False):
+        def _load():
+            # Warm names before returning the read models so render never opens the
+            # Market Data V2 security master on the Tk thread.
+            load_workbench_stock_name_map(WORKBENCH_PROJECT_ROOT)
             account = get_trading_account_read_model(WORKBENCH_PROJECT_ROOT)
             dashboard = build_trading_account_dashboard_read_model(WORKBENCH_PROJECT_ROOT)
             publish_trading_account_dashboard_snapshot(WORKBENCH_PROJECT_ROOT, dashboard)
+            return account, dashboard
+
+        try:
+            if serialize_startup:
+                account, dashboard = run_workbench_startup_io_serialized(_load)
+            else:
+                account, dashboard = _load()
             self._refresh_results.put((account, dashboard, None))
         except Exception as exc:
             self._refresh_results.put((None, None, exc))
@@ -513,6 +578,18 @@ class AccountingCenterPanel(ttk.Frame):
                 self.after(30, self._poll_refresh)
             return
         self._refresh_thread = None
+        if not self._workbench_active:
+            self._deferred_refresh_result = (account, dashboard, error)
+            return
+        self._apply_refresh_result(account, dashboard, error)
+
+    def _apply_refresh_result(self, account, dashboard, error):
+        # The tab may have been hidden after an activation scheduled this idle
+        # callback.  Re-defer instead of spending a long Tk turn rendering a
+        # page the user is no longer looking at.
+        if not bool(getattr(self, "_workbench_active", True)):
+            self._deferred_refresh_result = (account, dashboard, error)
+            return
         if error is not None:
             self._snapshot = {}
             self._dashboard = {}
@@ -1139,6 +1216,15 @@ class AccountingCenterPanel(ttk.Frame):
         callback = getattr(self.winfo_toplevel(), "_open_single_stock_inspector", None)
         if callable(callback):
             callback(str(ticker), runtime_domain="trading", auto_run=True)
+
+    def destroy(self):
+        if self._startup_refresh_after_id is not None:
+            try:
+                self.after_cancel(self._startup_refresh_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Accounting startup refresh destroy after_cancel", exc)
+            self._startup_refresh_after_id = None
+        super().destroy()
 
 
 __all__ = ["AccountingCenterPanel"]

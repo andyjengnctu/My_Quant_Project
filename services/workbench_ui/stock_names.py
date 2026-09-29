@@ -54,12 +54,19 @@ def invalidate_workbench_stock_name_cache(project_root=None) -> None:
         _STOCK_NAME_CACHE.pop(str(Path(project_root).resolve()), None)
 
 
-def load_workbench_stock_name_map(project_root, *, force: bool = False) -> dict[str, str]:
+def _get_workbench_stock_name_map_ref(project_root, *, force: bool = False) -> dict[str, str]:
+    """Return the published cache object for read-only internal use.
+
+    Published maps are never mutated in place: refresh/invalidation replaces the cache
+    entry.  UI lookup helpers can therefore read this reference safely without copying
+    the full security master for every ticker lookup.
+    """
+
     root = Path(project_root).resolve()
     cache_key = str(root)
     with _STOCK_NAME_CACHE_LOCK:
         if not force and cache_key in _STOCK_NAME_CACHE:
-            return dict(_STOCK_NAME_CACHE[cache_key])
+            return _STOCK_NAME_CACHE[cache_key]
     try:
         view = TradingMarketDataV2View.open(root)
         frame = view.read_dataset_frame(
@@ -73,14 +80,20 @@ def load_workbench_stock_name_map(project_root, *, force: bool = False) -> dict[
         name_map = {}
     with _STOCK_NAME_CACHE_LOCK:
         _STOCK_NAME_CACHE[cache_key] = dict(name_map)
-    return dict(name_map)
+        return _STOCK_NAME_CACHE[cache_key]
+
+
+def load_workbench_stock_name_map(project_root, *, force: bool = False) -> dict[str, str]:
+    """Return a caller-owned copy of the cached security-name map."""
+
+    return dict(_get_workbench_stock_name_map_ref(project_root, force=force))
 
 
 def workbench_stock_name(project_root, ticker, *, default: str = "-") -> str:
     ticker_key = normalize_workbench_ticker(ticker)
     if not ticker_key:
         return default
-    return load_workbench_stock_name_map(project_root).get(ticker_key) or default
+    return _get_workbench_stock_name_map_ref(project_root).get(ticker_key) or default
 
 
 def format_workbench_stock_label(project_root, ticker, *, source_label: str | None = None) -> str:
@@ -96,7 +109,7 @@ def format_workbench_stock_label(project_root, ticker, *, source_label: str | No
 
 
 def enrich_workbench_stock_rows(project_root, rows, *, ticker_key: str = "ticker") -> list[dict]:
-    name_map = load_workbench_stock_name_map(project_root)
+    name_map = _get_workbench_stock_name_map_ref(project_root)
     output = []
     for raw in list(rows or []):
         row = dict(raw or {})

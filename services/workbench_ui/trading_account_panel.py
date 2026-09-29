@@ -133,7 +133,7 @@ from services.workbench_ui.state_sync import (
     normalize_state_domains,
 )
 from services.workbench_ui.paged_table import PagedTable, TableColumn
-from services.workbench_ui.stock_names import workbench_stock_name
+from services.workbench_ui.stock_names import load_workbench_stock_name_map, workbench_stock_name
 from services.workbench_ui.trading_source_labels import (
     TRADING_SOURCE_CUSTOM_LABEL,
     TRADING_SOURCE_STRATEGY_LABEL,
@@ -162,6 +162,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_LABEL_STYLE,
     WORKBENCH_LABELLF_STYLE,
     WORKBENCH_MUTED,
+    WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
     WORKBENCH_SUCCESS,
     WORKBENCH_TEXT,
     WORKBENCH_TREE_STYLE,
@@ -170,6 +171,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_WARNING,
     _warn_gui_fallback,
     run_workbench_local_reconcile_serialized,
+    run_workbench_startup_io_serialized,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -497,6 +499,11 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
         return snapshot
 
     loaders = {
+        # Warm the canonical security-name cache off the Tk thread.  Candidate and
+        # position rendering may resolve hundreds of names on first open; letting
+        # the first UI lookup open TaiwanStockInfo caused an intermittent mainloop
+        # stall when users switched centers during startup.
+        "stock_names": lambda: load_workbench_stock_name_map(root),
         "dashboard": _load_dashboard,
         "candidate_read": lambda: get_trading_candidate_snapshot_read_model(root),
         "protection": lambda: get_trading_protection_plan_read_model(root, recover_pending_fill=False),
@@ -668,15 +675,59 @@ class TradingAccountPanel(ttk.Frame):
         self._initial_state_token = 0
         self._initial_state_results: queue.Queue = queue.Queue()
         self._initial_state_poll_after_id = None
+        self._initial_state_start_after_id = None
+        self._initial_state_started = False
+        self._initial_state_applied = False
+        self._deferred_initial_bundle: dict[str, object] | None = None
+        self._initial_apply_steps: list[object] = []
+        self._initial_apply_after_id = None
+        self._initial_apply_bundle_active = False
+        self._workbench_active = False
         self._initial_preloaded: dict[str, object] = {}
         self._suspend_operations_refresh = False
         self._external_state_refresh_pending_domains: set[str] = set()
         self._build_ui()
         self._set_initial_loading_state()
-        # AI: Paint the complete Trading page first.  Canonical state reads may validate
-        # persisted lineage and touch multiple files, so do them off the Tk thread and
-        # apply the already-read snapshots once they are ready.
-        self.after(80, self._start_initial_state_load)
+        # AI: The Workbench shell notifies visibility after construction.  Keep a
+        # Map/Unmap fallback for standalone panel use and defer the heavyweight
+        # first read until this page remains visible for a short dwell interval.
+        self.bind("<Map>", lambda _event: self.on_workbench_visibility_changed(True), add="+")
+        self.bind("<Unmap>", lambda _event: self.on_workbench_visibility_changed(False), add="+")
+
+    def on_workbench_visibility_changed(self, active: bool) -> None:
+        """Start/apply Trading startup work only while this notebook page is visible."""
+
+        self._workbench_active = bool(active)
+        if not self._workbench_active:
+            if self._initial_state_start_after_id is not None:
+                try:
+                    self.after_cancel(self._initial_state_start_after_id)
+                except tk.TclError as exc:
+                    _warn_gui_fallback("Trading initial load after_cancel", exc)
+                self._initial_state_start_after_id = None
+            if self._initial_apply_after_id is not None:
+                try:
+                    self.after_cancel(self._initial_apply_after_id)
+                except tk.TclError as exc:
+                    _warn_gui_fallback("Trading initial render after_cancel", exc)
+                self._initial_apply_after_id = None
+            return
+
+        if self._deferred_initial_bundle is not None and not self._initial_apply_bundle_active:
+            bundle = self._deferred_initial_bundle
+            self._deferred_initial_bundle = None
+            self._begin_initial_state_bundle_apply(bundle)
+            return
+        if self._initial_apply_bundle_active:
+            self._schedule_initial_apply_step()
+            return
+        if self._initial_state_started or self._initial_state_applied:
+            return
+        if self._initial_state_start_after_id is None:
+            self._initial_state_start_after_id = self.after(
+                WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
+                self._start_initial_state_load,
+            )
 
     def _set_initial_loading_state(self):
         self._operations_next_var.set("LOADING | Trading 狀態載入中… | 下一步：等待載入完成")
@@ -687,8 +738,14 @@ class TradingAccountPanel(ttk.Frame):
                 button.configure(state="disabled")
 
     def _start_initial_state_load(self):
+        self._initial_state_start_after_id = None
+        if not self._workbench_active:
+            return
         if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
             return
+        if self._initial_state_started or self._initial_state_applied:
+            return
+        self._initial_state_started = True
         self._initial_state_token += 1
         token = int(self._initial_state_token)
         thread = threading.Thread(
@@ -702,8 +759,15 @@ class TradingAccountPanel(ttk.Frame):
         self._schedule_initial_state_poll()
 
     def _initial_state_load_worker(self, token: int):
-        bundle = build_trading_account_panel_initial_bundle(WORKBENCH_PROJECT_ROOT)
-        self._initial_state_results.put((int(token), bundle))
+        bundle = None
+        error = None
+        try:
+            bundle = run_workbench_startup_io_serialized(
+                lambda: build_trading_account_panel_initial_bundle(WORKBENCH_PROJECT_ROOT)
+            )
+        except Exception as exc:
+            error = exc
+        self._initial_state_results.put((int(token), bundle, error))
 
     def _schedule_initial_state_poll(self):
         if self._initial_state_poll_after_id is None:
@@ -713,15 +777,14 @@ class TradingAccountPanel(ttk.Frame):
         self._initial_state_poll_after_id = None
         while True:
             try:
-                token, bundle = self._initial_state_results.get_nowait()
+                token, bundle, error = self._initial_state_results.get_nowait()
             except queue.Empty:
                 break
-            self._finish_initial_state_load(token, bundle)
+            self._finish_initial_state_load(token, bundle, error)
         if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
             self._schedule_initial_state_poll()
 
-    def _apply_state_bundle(self, bundle: dict[str, object]) -> None:
-        """Apply an already-read canonical Trading state bundle on the Tk thread only."""
+    def _prepare_state_bundle_for_render(self, bundle: dict[str, object]) -> None:
         lifecycle_ok, lifecycle_value = dict(bundle or {}).get("lifecycle_sync", (True, {}))
         if lifecycle_ok:
             self._lifecycle_sync_snapshot = dict(lifecycle_value or {})
@@ -734,6 +797,10 @@ class TradingAccountPanel(ttk.Frame):
                 "position_status_by_ticker": {},
             }
         self._initial_preloaded = dict(bundle or {})
+
+    def _apply_state_bundle(self, bundle: dict[str, object]) -> None:
+        """Apply an already-read canonical Trading state bundle on the Tk thread only."""
+        self._prepare_state_bundle_for_render(bundle)
         self._suspend_operations_refresh = True
         try:
             self.refresh_account()
@@ -748,12 +815,86 @@ class TradingAccountPanel(ttk.Frame):
         self.refresh_operations_status()
         self._initial_preloaded.clear()
 
-    def _finish_initial_state_load(self, token: int, bundle: dict[str, object]):
+    def _begin_initial_state_bundle_apply(self, bundle: dict[str, object]) -> None:
+        """Render first-open Trading state in short Tk turns and pause while hidden."""
+
+        if self._initial_apply_bundle_active:
+            self._deferred_initial_bundle = dict(bundle or {})
+            return
+        self._prepare_state_bundle_for_render(bundle)
+        self._suspend_operations_refresh = True
+        self._initial_apply_steps = [
+            self.refresh_account,
+            self.refresh_account_dashboard,
+            self.refresh_candidate_snapshot_rows,
+            self.refresh_pending_entries,
+            self.refresh_protection_plan,
+            self.refresh_indicator_exit_plan,
+            self.refresh_daily_workflow,
+        ]
+        self._initial_apply_bundle_active = True
+        self._schedule_initial_apply_step()
+
+    def _schedule_initial_apply_step(self) -> None:
+        if not self._workbench_active or not self._initial_apply_bundle_active:
+            return
+        if self._initial_apply_after_id is None:
+            self._initial_apply_after_id = self.after(1, self._run_initial_apply_step)
+
+    def _run_initial_apply_step(self) -> None:
+        self._initial_apply_after_id = None
+        if not self._workbench_active or not self._initial_apply_bundle_active:
+            return
+        if self._initial_apply_steps:
+            step = self._initial_apply_steps.pop(0)
+            try:
+                step()
+            except Exception as exc:
+                self._suspend_operations_refresh = False
+                self._initial_apply_steps.clear()
+                self._initial_preloaded.clear()
+                self._initial_apply_bundle_active = False
+                self._initial_state_started = False
+                self._operations_next_var.set(
+                    f"FAIL | Trading 初始畫面建立失敗：{type(exc).__name__}: {exc}"
+                )
+                return
+            self._schedule_initial_apply_step()
+            return
+
+        self._suspend_operations_refresh = False
+        try:
+            self.refresh_operations_status()
+        except Exception as exc:
+            self._initial_state_started = False
+            self._operations_next_var.set(
+                f"FAIL | Trading 初始畫面建立失敗：{type(exc).__name__}: {exc}"
+            )
+            return
+        finally:
+            self._initial_preloaded.clear()
+            self._initial_apply_bundle_active = False
+        self._initial_state_applied = True
+        self._schedule_pending_external_account_refresh()
+
+    def _finish_initial_state_load(self, token: int, bundle, error=None):
         if int(token) != int(self._initial_state_token):
             return
         self._initial_state_thread = None
-        self._apply_state_bundle(bundle)
-        self._schedule_pending_external_account_refresh()
+        if error is not None:
+            self._initial_state_started = False
+            self._operations_next_var.set(
+                f"FAIL | Trading 初始狀態載入失敗：{type(error).__name__}: {error}"
+            )
+            return
+        if not isinstance(bundle, dict):
+            self._initial_state_started = False
+            self._operations_next_var.set("FAIL | Trading 初始狀態載入失敗：bundle 格式不合法")
+            return
+        if not self._workbench_active:
+            self._deferred_initial_bundle = dict(bundle)
+            return
+        self._begin_initial_state_bundle_apply(bundle)
 
     def _iter_action_buttons(self):
         stack = [self]
@@ -796,7 +937,10 @@ class TradingAccountPanel(ttk.Frame):
         refresh_state: bool = True,
         state_domains=None,
     ) -> bool:
-        if self._initial_state_thread is not None and self._initial_state_thread.is_alive():
+        if (
+            (self._initial_state_thread is not None and self._initial_state_thread.is_alive())
+            or bool(getattr(self, "_initial_apply_bundle_active", False))
+        ):
             self._operations_next_var.set("WAIT | Trading 初始狀態仍在載入中…")
             return False
         if self._command_thread is not None and self._command_thread.is_alive():
@@ -896,7 +1040,15 @@ class TradingAccountPanel(ttk.Frame):
         normalized = normalize_state_domains(domains)
         if not normalized:
             return False
-        initial_busy = self._initial_state_thread is not None and self._initial_state_thread.is_alive()
+        initial_busy = bool(
+            (self._initial_state_thread is not None and self._initial_state_thread.is_alive())
+            or bool(getattr(self, "_initial_apply_bundle_active", False))
+            or getattr(self, "_deferred_initial_bundle", None) is not None
+            or (
+                bool(getattr(self, "_initial_state_started", False))
+                and not bool(getattr(self, "_initial_state_applied", False))
+            )
+        )
         command_busy = self._command_thread is not None and self._command_thread.is_alive()
         if initial_busy or command_busy:
             self._external_state_refresh_pending_domains.update(normalized)
@@ -932,7 +1084,9 @@ class TradingAccountPanel(ttk.Frame):
                 _warn_gui_fallback("Trading direct-fill constraint after_cancel", exc)
             self._trade_constraint_after_id = None
         for attr_name, label in (
+            ("_initial_state_start_after_id", "initial-state-start"),
             ("_initial_state_poll_after_id", "initial-state"),
+            ("_initial_apply_after_id", "initial-render"),
             ("_command_poll_after_id", "command"),
             ("_pending_preview_poll_after_id", "pending-preview"),
             ("_trade_constraint_poll_after_id", "direct-fill-constraint"),

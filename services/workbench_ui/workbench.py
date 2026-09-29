@@ -75,15 +75,31 @@ WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES = 4
 WORKBENCH_COMBOBOX_POPUP_FIT_RETRY_MS = 8
 WORKBENCH_DEFAULT_PANEL_ID = "trading_account"
 WORKBENCH_TAB_LOAD_DEBOUNCE_MS = 120
+WORKBENCH_PANEL_ACTIVATION_DELAY_MS = 180
 
 # AI: Workbench can expose the same zero-quota consumer reconcile from more than
 # one center.  Serialize that mutation inside this GUI process so rapid tab
 # switching cannot rebuild/publish the same consumer generation concurrently.
 _WORKBENCH_LOCAL_RECONCILE_LOCK = threading.Lock()
+_WORKBENCH_STARTUP_IO_LOCK = threading.Lock()
 
 
 def run_workbench_local_reconcile_serialized(callback):
     with _WORKBENCH_LOCAL_RECONCILE_LOCK:
+        return callback()
+
+
+def run_workbench_startup_io_serialized(callback):
+    """Serialize heavyweight first-open reads across Workbench centers.
+
+    Rapid tab switching used to launch Trading, Accounting and Market Data first-open
+    workers at the same time.  Those workers are provider-free, but they still perform
+    substantial local filesystem/pandas work and can starve Tk long enough for Windows
+    to present the shell as unresponsive.  Startup serialization changes execution
+    strategy only; each center still consumes the same canonical producers.
+    """
+
+    with _WORKBENCH_STARTUP_IO_LOCK:
         return callback()
 
 
@@ -950,6 +966,7 @@ class StockToolsWorkbench:
         return None
 
     def _on_notebook_tab_changed(self, _event=None):
+        self._notify_panel_visibility_state()
         # AI: A user can click through several tabs while the first page is still
         # importing.  Debounce those transient selections so each click does not
         # immediately launch another expensive import.
@@ -959,6 +976,19 @@ class StockToolsWorkbench:
             WORKBENCH_TAB_LOAD_DEBOUNCE_MS,
             self._load_stable_selected_panel,
         )
+
+    def _notify_panel_visibility_state(self):
+        """Tell mounted panels whether they are the currently visible notebook page."""
+
+        selected = self._selected_panel_id()
+        for panel_id, panel in list(self._panel_instances.items()):
+            callback = getattr(panel, "on_workbench_visibility_changed", None)
+            if not callable(callback):
+                continue
+            try:
+                callback(str(panel_id) == str(selected))
+            except tk.TclError as exc:
+                _warn_gui_fallback("Workbench panel visibility notification", exc)
 
     def _load_stable_selected_panel(self):
         self._panel_selection_after_id = None
@@ -1107,6 +1137,12 @@ class StockToolsWorkbench:
             status.destroy()
             self._panel_status_labels.pop(panel_id, None)
         self._panel_instances[panel_id] = panel
+        visibility_callback = getattr(panel, "on_workbench_visibility_changed", None)
+        if callable(visibility_callback):
+            try:
+                visibility_callback(self._selected_panel_id() == panel_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Workbench initial panel visibility notification", exc)
         if panel_id == "single_stock_backtest_inspector":
             self._consume_pending_single_stock_request()
 
