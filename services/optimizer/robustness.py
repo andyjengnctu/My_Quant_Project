@@ -17,16 +17,6 @@ from core.training_performance import (
     resolve_optimizer_single_fold_local_min_parallel_workers_default,
     resolve_optimizer_single_fold_local_min_parallel_workers,
 )
-from config.training_policy import (
-    OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
-    OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
-    OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
-    OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
-)
-from core.training_policy import (
-    is_optimizer_local_min_review_enabled,
-    resolve_optimizer_local_min_score_finalist_top_k,
-)
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.runtime_utils import choose_inline_progress_message, stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import build_runtime_param_raw_value
@@ -46,6 +36,12 @@ from services.optimizer.param_cache import build_full_evaluation_cache_key, buil
 from services.optimizer.prep import prepare_trial_inputs
 from services.optimizer.walk_forward import evaluate_walk_forward
 from services.optimizer.score_display import format_optimizer_score_for_display
+from services.optimizer.scientific_runtime import (
+    resolve_session_dominant_year_policy,
+    resolve_session_inner_validation_policy,
+    resolve_session_local_min_finalist_top_k,
+    resolve_session_local_min_review_enabled,
+)
 from services.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
@@ -189,14 +185,14 @@ def _resolve_report_periods(session, *, objective_mode: str) -> dict:
     }
 
 
-def _build_gate_status_rows(finalists: list[dict], *, objective_mode: str) -> list[dict]:
+def _build_gate_status_rows(finalists: list[dict], *, objective_mode: str, session=None) -> list[dict]:
     gate_rows: list[dict] = []
     gate_rows.append({
         'name': 'LOCAL_MIN_SCORE',
-        'enabled': bool(is_optimizer_local_min_review_enabled()),
+        'enabled': bool(resolve_session_local_min_review_enabled(session)),
         'ratio_text': '-',
     })
-    inner_enabled = is_inner_validate_anti_overfit_enabled(objective_mode)
+    inner_enabled = is_inner_validate_anti_overfit_enabled(objective_mode, session=session)
     ratio_text = '-'
     if inner_enabled:
         pass_items = [
@@ -209,7 +205,7 @@ def _build_gate_status_rows(finalists: list[dict], *, objective_mode: str) -> li
         if pass_items:
             diagnostics = pass_items[0].get('inner_validate_diagnostics') or {}
             allowed_count = int(diagnostics.get('inner_validate_rank_cutoff', 0) or 0)
-        ratio_pct = float(OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE) * 100.0
+        ratio_pct = float(resolve_session_inner_validation_policy(session).get('max_rank_percentile', 0.5)) * 100.0
         ratio_text = f"{ratio_pct:.0f}%"
         if total_count > 0:
             ratio_text += f" ({allowed_count}/{total_count})"
@@ -220,7 +216,7 @@ def _build_gate_status_rows(finalists: list[dict], *, objective_mode: str) -> li
     })
     gate_rows.append({
         'name': 'DOMINANT_YEAR_DEPENDENCY',
-        'enabled': bool(is_dominant_year_dependency_anti_overfit_enabled()),
+        'enabled': bool(is_dominant_year_dependency_anti_overfit_enabled(session=session)),
         'ratio_text': '-',
     })
     return gate_rows
@@ -1076,19 +1072,19 @@ def _compute_local_retention(base_score: float, local_min_score: float) -> float
     return float(local_min_score) / base
 
 
-def is_dominant_year_dependency_anti_overfit_enabled() -> bool:
-    return bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED)
+def is_dominant_year_dependency_anti_overfit_enabled(*, session=None) -> bool:
+    return bool(resolve_session_dominant_year_policy(session).get('enabled', False))
 
 
-def is_inner_validate_anti_overfit_enabled(objective_mode: str | None = None) -> bool:
-    if not bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
+def is_inner_validate_anti_overfit_enabled(objective_mode: str | None = None, *, session=None) -> bool:
+    if not bool(resolve_session_inner_validation_policy(session).get('enabled', False)):
         return False
     if objective_mode is None:
         return True
     return normalize_objective_mode(objective_mode) == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
 
 
-def _inner_validate_score_is_positive(item: dict) -> bool:
+def _inner_validate_score_is_positive(item: dict, *, session=None) -> bool:
     diagnostics = item.get("inner_validate_diagnostics")
     if not isinstance(diagnostics, dict):
         return False
@@ -1096,11 +1092,11 @@ def _inner_validate_score_is_positive(item: dict) -> bool:
         score = float(diagnostics.get("inner_validate_score", float("-inf")))
     except (TypeError, ValueError):
         return False
-    return score > float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE)
+    return score > float(resolve_session_inner_validation_policy(session).get('min_score', 0.0))
 
 
-def _has_inner_validate_pass(item: dict) -> bool:
-    if not _inner_validate_score_is_positive(item):
+def _has_inner_validate_pass(item: dict, *, session=None) -> bool:
+    if not _inner_validate_score_is_positive(item, session=session):
         return False
     diagnostics = item.get("inner_validate_diagnostics")
     if not isinstance(diagnostics, dict):
@@ -1108,7 +1104,7 @@ def _has_inner_validate_pass(item: dict) -> bool:
     return bool(diagnostics.get("inner_validate_rank_gate", True))
 
 
-def _annotate_inner_validate_ranks(finalists: list[dict]) -> list[dict]:
+def _annotate_inner_validate_ranks(finalists: list[dict], *, session=None) -> list[dict]:
     score_items = [
         item for item in finalists
         if bool(item.get("gate_pass", False))
@@ -1126,12 +1122,12 @@ def _annotate_inner_validate_ranks(finalists: list[dict]) -> list[dict]:
         reverse=True,
     )
     cutoff = max(1, int(
-        (Decimal(len(score_items)) * Decimal(str(OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE)))
+        (Decimal(len(score_items)) * Decimal(str(resolve_session_inner_validation_policy(session).get('max_rank_percentile', 0.5))))
         .to_integral_value(rounding="ROUND_CEILING")
     ))
     for rank, item in enumerate(score_items, start=1):
         diagnostics = item["inner_validate_diagnostics"]
-        score_gate = _inner_validate_score_is_positive(item)
+        score_gate = _inner_validate_score_is_positive(item, session=session)
         diagnostics["inner_validate_rank"] = int(rank)
         diagnostics["inner_validate_rank_cutoff"] = int(cutoff)
         diagnostics["inner_validate_rank_total"] = int(len(score_items))
@@ -1174,7 +1170,7 @@ def _sort_finalists_by_local_min(finalists: list[dict]) -> list[dict]:
     )
 
 
-def _select_best_finalist_by_local_min_score(finalists: list[dict], *, use_inner_validate: bool | None = None):
+def _select_best_finalist_by_local_min_score(finalists: list[dict], *, use_inner_validate: bool | None = None, session=None):
     eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
     if not eligible:
         return None
@@ -1185,10 +1181,10 @@ def _select_best_finalist_by_local_min_score(finalists: list[dict], *, use_inner
             for item in finalists
         )
     if bool(use_inner_validate):
-        eligible = [item for item in eligible if _has_inner_validate_pass(item)]
+        eligible = [item for item in eligible if _has_inner_validate_pass(item, session=session)]
         if not eligible:
             return None
-    if is_dominant_year_dependency_anti_overfit_enabled():
+    if is_dominant_year_dependency_anti_overfit_enabled(session=session):
         safe_eligible = [item for item in eligible if not _has_dependency_warning(item)]
         if safe_eligible:
             return _sort_finalists_by_local_min(safe_eligible)[0]
@@ -1252,7 +1248,7 @@ def _resolve_neighbor_step(session, field_name: str, *, center_payload=None):
         spec = OPTIMIZER_TP_PERCENT_SEARCH_SPEC
         return float(spec["step"]), "float", float(spec["low"]), float(spec["high"])
 
-    return resolve_breakout_neighbor_spec(field_name, center_payload=center_payload)
+    return resolve_breakout_neighbor_spec(field_name, center_payload=center_payload, session=session)
 
 
 def _apply_step(field_name: str, current_value, step_value, direction: int, kind: str):
@@ -1302,7 +1298,7 @@ def compute_local_min_score(
     on_finish=None,
     stop_below_local_min_score: float | None = None,
 ):
-    if not bool(is_optimizer_local_min_review_enabled()):
+    if not bool(resolve_session_local_min_review_enabled(session)):
         score = float(getattr(trial, "user_attrs", {}).get("base_score", getattr(trial, "value", INVALID_TRIAL_VALUE)))
         if on_finish is not None:
             on_finish(0, 0, float(score), False)
@@ -1687,13 +1683,13 @@ def _build_local_min_disabled_finalists(
     for item in finalists:
         enriched_item = _build_local_min_disabled_finalist_item(item)
         trial = enriched_item["trial"]
-        if is_inner_validate_anti_overfit_enabled(objective_mode):
+        if is_inner_validate_anti_overfit_enabled(objective_mode, session=session):
             enriched_item["inner_validate_diagnostics"] = _resolve_trial_inner_validate_diagnostics(
                 session,
                 trial,
                 objective_mode,
             )
-        if is_dominant_year_dependency_anti_overfit_enabled():
+        if is_dominant_year_dependency_anti_overfit_enabled(session=session):
             enriched_item["dominant_year_dependency_diagnostics"] = _resolve_trial_dependency_diagnostics(
                 session,
                 trial,
@@ -1702,8 +1698,8 @@ def _build_local_min_disabled_finalists(
         if bool(include_oos_diagnostics):
             enriched_item["oos_diagnostics"] = _resolve_trial_oos_diagnostics(session, trial)
         enriched_finalists.append(enriched_item)
-    if is_inner_validate_anti_overfit_enabled(objective_mode):
-        _annotate_inner_validate_ranks(enriched_finalists)
+    if is_inner_validate_anti_overfit_enabled(objective_mode, session=session):
+        _annotate_inner_validate_ranks(enriched_finalists, session=session)
     enriched_finalists.sort(
         key=lambda item: (
             float(item["local_min_score"]),
@@ -1719,7 +1715,7 @@ def _build_local_min_disabled_finalists(
 def _resolve_local_min_score_finalist_top_k(session, top_k=None):
     if top_k is not None:
         return max(1, int(top_k))
-    return resolve_optimizer_local_min_score_finalist_top_k(getattr(session, "n_trials", 0))
+    return resolve_session_local_min_finalist_top_k(session, getattr(session, "n_trials", 0))
 
 
 def list_local_min_score_finalists(
@@ -1741,14 +1737,17 @@ def list_local_min_score_finalists(
 
     _seed_payload_score_cache_from_study(session, study, objective_mode)
     finalists = _build_display_finalists(sorted_trials, top_k=resolved_top_k, include_trial=include_trial)
-    if not bool(is_optimizer_local_min_review_enabled()):
+    if not bool(resolve_session_local_min_review_enabled(session)):
         return _build_local_min_disabled_finalists(
             finalists,
             session=session,
             objective_mode=objective_mode,
             include_oos_diagnostics=include_oos_diagnostics,
         )
-    gates_require_exact_review = bool(is_inner_validate_anti_overfit_enabled(objective_mode) or is_dominant_year_dependency_anti_overfit_enabled())
+    gates_require_exact_review = bool(
+        is_inner_validate_anti_overfit_enabled(objective_mode, session=session)
+        or is_dominant_year_dependency_anti_overfit_enabled(session=session)
+    )
     if (
         bool(single_finalist_fast_path)
         and include_trial is None
@@ -1823,13 +1822,13 @@ def list_local_min_score_finalists(
             "local_min_review_mode": "exact",
             "local_min_exact": True,
         }
-        if is_inner_validate_anti_overfit_enabled(objective_mode):
+        if is_inner_validate_anti_overfit_enabled(objective_mode, session=session):
             enriched_item["inner_validate_diagnostics"] = _resolve_trial_inner_validate_diagnostics(
                 session,
                 trial,
                 objective_mode,
             )
-        if is_dominant_year_dependency_anti_overfit_enabled():
+        if is_dominant_year_dependency_anti_overfit_enabled(session=session):
             enriched_item["dominant_year_dependency_diagnostics"] = _resolve_trial_dependency_diagnostics(
                 session,
                 trial,
@@ -1841,8 +1840,8 @@ def list_local_min_score_finalists(
         if bool(enriched_item.get("gate_pass", False)):
             best_selection_local_min = max(best_selection_local_min, float(enriched_item["local_min_score"]))
             best_selection_retention = max(best_selection_retention, float(enriched_item["local_retention"]))
-    if is_inner_validate_anti_overfit_enabled(objective_mode):
-        _annotate_inner_validate_ranks(enriched_finalists)
+    if is_inner_validate_anti_overfit_enabled(objective_mode, session=session):
+        _annotate_inner_validate_ranks(enriched_finalists, session=session)
     enriched_finalists.sort(
         key=lambda item: (
             float(item["local_min_score"]),
@@ -1871,12 +1870,13 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     if winner_trial is None:
         best_finalist = _select_best_finalist_by_local_min_score(
             finalists,
-            use_inner_validate=is_inner_validate_anti_overfit_enabled(objective_mode),
+            use_inner_validate=is_inner_validate_anti_overfit_enabled(objective_mode, session=session),
+            session=session,
         )
         winner_trial = None if best_finalist is None else best_finalist["trial"]
     if not bool(emit_table):
         return finalists, winner_trial
-    if not bool(is_optimizer_local_min_review_enabled()):
+    if not bool(resolve_session_local_min_review_enabled(session)):
         _print_progress_line(session, "ℹ️ local_min review disabled：local_min_score 使用 base_score 等價值，retention=1.0")
 
     gray = colors.get("gray", "")
@@ -1885,10 +1885,10 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     yellow = colors.get("yellow", "")
     reset = colors.get("reset", "")
 
-    inner_validate_enabled = is_inner_validate_anti_overfit_enabled(objective_mode)
-    dependency_enabled = is_dominant_year_dependency_anti_overfit_enabled()
+    inner_validate_enabled = is_inner_validate_anti_overfit_enabled(objective_mode, session=session)
+    dependency_enabled = is_dominant_year_dependency_anti_overfit_enabled(session=session)
     periods = _resolve_report_periods(session, objective_mode=objective_mode)
-    gate_rows = _build_gate_status_rows(finalists, objective_mode=objective_mode)
+    gate_rows = _build_gate_status_rows(finalists, objective_mode=objective_mode, session=session)
 
     print(f"{gray}{'-' * 108}{reset}")
     period_gate_pairs = [
@@ -1924,7 +1924,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         trial = item['trial']
         gate_pass = bool(item.get('gate_pass'))
         is_winner = winner_trial is not None and int(winner_trial.number) == int(trial.number)
-        has_inner_validate_fail = inner_validate_enabled and not _has_inner_validate_pass(item)
+        has_inner_validate_fail = inner_validate_enabled and not _has_inner_validate_pass(item, session=session)
         has_dependency_warning = dependency_enabled and _has_dependency_warning(item)
         if is_winner:
             result_text = 'winner'
@@ -1964,7 +1964,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
                 validate_rank_text = 'N/A'
             else:
                 validate_rank_text = f"#{int(rank_value)}/{int(rank_cutoff)}"
-            validate_gate = _has_inner_validate_pass(item)
+            validate_gate = _has_inner_validate_pass(item, session=session)
             validate_text = 'PASS' if validate_gate else 'FAIL'
             validate_color = green if validate_gate else red
             line += (
@@ -1996,7 +1996,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         if winner_trial is not None and int(item_trial.number) == int(winner_trial.number):
             continue
         gate_pass = bool(item.get('gate_pass'))
-        has_inner_validate_fail = inner_validate_enabled and not _has_inner_validate_pass(item)
+        has_inner_validate_fail = inner_validate_enabled and not _has_inner_validate_pass(item, session=session)
         has_dependency_warning = dependency_enabled and _has_dependency_warning(item)
         if gate_pass and not has_inner_validate_fail and not has_dependency_warning:
             keep_count += 1
@@ -2060,7 +2060,8 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
     )
     best_finalist = _select_best_finalist_by_local_min_score(
         finalists,
-        use_inner_validate=is_inner_validate_anti_overfit_enabled(objective_mode),
+        use_inner_validate=is_inner_validate_anti_overfit_enabled(objective_mode, session=session),
+        session=session,
     )
     if best_finalist is None:
         if show_progress:
@@ -2071,7 +2072,7 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
     if show_progress:
         _print_progress_line(
             session,
-            f"🏁 winner({'local_min' if is_optimizer_local_min_review_enabled() else 'base_equivalent'}{' + inner_val_rank' if is_inner_validate_anti_overfit_enabled(objective_mode) else ''}{' + dependency_safe' if is_dominant_year_dependency_anti_overfit_enabled() else ''}): trial #{int(trial.number) + 1} | base_score={format_optimizer_score_for_display(best_finalist['base_score'], decimals=3)} | local_min_score={format_optimizer_score_for_display(best_finalist['local_min_score'], decimals=3)} | retention={float(best_finalist['local_retention']):.3f}"
+            f"🏁 winner({'local_min' if resolve_session_local_min_review_enabled(session) else 'base_equivalent'}{' + inner_val_rank' if is_inner_validate_anti_overfit_enabled(objective_mode, session=session) else ''}{' + dependency_safe' if is_dominant_year_dependency_anti_overfit_enabled(session=session) else ''}): trial #{int(trial.number) + 1} | base_score={format_optimizer_score_for_display(best_finalist['base_score'], decimals=3)} | local_min_score={format_optimizer_score_for_display(best_finalist['local_min_score'], decimals=3)} | retention={float(best_finalist['local_retention']):.3f}"
         )
     resolver_cache[cache_key] = trial
     return trial

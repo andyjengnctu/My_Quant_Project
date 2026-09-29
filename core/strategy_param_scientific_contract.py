@@ -1,9 +1,15 @@
 """Canonical scientific contract for Strategy Parameter fitting.
 
-Round 1 introduces this resolver as an observation-only boundary.  Existing
-Optimizer runtime, artifacts and legacy fingerprints do not consume it yet.
-Later migration rounds will inject the resolved payload once at the producer
-boundary and bind named parameter artifacts/experiments to its fingerprint.
+The contract has two layers:
+
+* :func:`build_strategy_param_runtime_scientific_contract` resolves the actual
+  semantics of one Optimizer fitting invocation from explicit producer inputs.
+* :func:`build_strategy_param_scientific_contract` resolves a registered
+  Strategy Parameter profile into the same runtime contract and adds stable
+  human/artifact references.
+
+Artifact identity migration is intentionally separate.  Runtime consumers may
+use the resolved scientific payload without changing legacy artifact keys.
 """
 
 from __future__ import annotations
@@ -101,6 +107,81 @@ def _build_validation_contract(profile) -> tuple[dict[str, Any], dict[str, Any]]
     return _jsonable(scientific), {"validation_protocol": str(protocol.protocol_id)}
 
 
+def _wrap_scientific_contract(
+    scientific: Mapping[str, Any],
+    *,
+    references: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized = _jsonable(dict(scientific))
+    return {
+        "references": _jsonable(dict(references or {})),
+        "scientific_contract": normalized,
+        "scientific_fingerprint_sha256": canonical_json_sha256(normalized),
+    }
+
+
+def build_strategy_param_runtime_scientific_contract(
+    project_root: str | Path,
+    *,
+    strategy_id: str,
+    filter_profile: str,
+    parameter_policy: str,
+    dataset_profile: str,
+    schedule_start_date: str,
+    coverage_end_date: str,
+    train_window_months: int,
+    oos_horizon_months: int,
+    fitting: Mapping[str, Any],
+    validation: Mapping[str, Any],
+    execution_overrides: Mapping[str, Any] | None = None,
+    dataset_generation_identity_override: Mapping[str, Any] | None = None,
+    references: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve one immutable runtime scientific payload from producer inputs.
+
+    This builder is deliberately profile-agnostic.  It is the single boundary
+    used by both registered Research profiles and legacy/canonical producer
+    calls, preventing inner Optimizer code from re-reading mutable scientific
+    globals after a fitting invocation has started.
+    """
+
+    root = Path(project_root).resolve()
+    dataset_identity = (
+        dict(dataset_generation_identity_override)
+        if isinstance(dataset_generation_identity_override, Mapping)
+        else build_dataset_generation_identity(root, str(dataset_profile))
+    )
+    scientific = {
+        "schema_version": STRATEGY_PARAM_SCIENTIFIC_CONTRACT_SCHEMA_VERSION,
+        "strategy": {
+            "strategy_id": str(strategy_id),
+            "filter_profile": str(filter_profile),
+            "parameter_policy": str(parameter_policy),
+        },
+        "dataset": {
+            "profile": str(dataset_profile),
+            "generation_identity": dataset_identity,
+        },
+        "schedule": {
+            "schedule_start_date": str(schedule_start_date),
+            "coverage_end_date": str(coverage_end_date),
+            "train_window_months": int(train_window_months),
+            "oos_horizon_months": int(oos_horizon_months),
+        },
+        "parameter_generation": _build_parameter_generation_contract(strategy_id),
+        "score": build_optimizer_scientific_score_policy_snapshot(),
+        "hard_gates": build_training_threshold_snapshot(),
+        "selection_and_anti_overfit": {
+            "parameter_policy": str(parameter_policy),
+            **build_optimizer_scientific_selection_policy_snapshot(),
+        },
+        "execution": _build_execution_scientific_contract(execution_overrides),
+        "fitting": _jsonable(dict(fitting)),
+        "validation": _jsonable(dict(validation)),
+    }
+    return _wrap_scientific_contract(scientific, references=references)
+
+
 def build_strategy_param_scientific_contract(
     project_root: str | Path,
     profile_id: str,
@@ -125,46 +206,27 @@ def build_strategy_param_scientific_contract(
     fitting, fitting_refs = _build_fitting_contract(profile)
     validation, validation_refs = _build_validation_contract(profile)
 
-    scientific = {
-        "schema_version": STRATEGY_PARAM_SCIENTIFIC_CONTRACT_SCHEMA_VERSION,
-        "strategy": {
-            "strategy_id": str(profile.strategy_id),
-            "filter_profile": str(profile.filter_profile),
-            "parameter_policy": str(profile.parameter_policy),
-        },
-        "dataset": {
-            "profile": str(profile.dataset),
-            "generation_identity": build_dataset_generation_identity(root, profile.dataset),
-        },
-        "schedule": {
-            "schedule_start_date": str(profile.schedule_start_date),
-            "coverage_end_date": str(profile.coverage_end_date),
-            "train_window_months": int(training["train_window_months"]),
-            "oos_horizon_months": int(training["oos_horizon_months"]),
-        },
-        "parameter_generation": _build_parameter_generation_contract(profile.strategy_id),
-        "score": build_optimizer_scientific_score_policy_snapshot(),
-        "hard_gates": build_training_threshold_snapshot(),
-        "selection_and_anti_overfit": {
-            "parameter_policy": str(profile.parameter_policy),
-            **build_optimizer_scientific_selection_policy_snapshot(),
-        },
-        "execution": _build_execution_scientific_contract(execution_overrides),
-        "fitting": fitting,
-        "validation": validation,
-    }
-    scientific = _jsonable(scientific)
     references = {
         "profile_id": str(profile.profile_id),
         "parameter_set_identity": str(profile.parameter_set_identity),
         **fitting_refs,
         **validation_refs,
     }
-    return {
-        "references": references,
-        "scientific_contract": scientific,
-        "scientific_fingerprint_sha256": canonical_json_sha256(scientific),
-    }
+    return build_strategy_param_runtime_scientific_contract(
+        root,
+        strategy_id=str(profile.strategy_id),
+        filter_profile=str(profile.filter_profile),
+        parameter_policy=str(profile.parameter_policy),
+        dataset_profile=str(profile.dataset),
+        schedule_start_date=str(profile.schedule_start_date),
+        coverage_end_date=str(profile.coverage_end_date),
+        train_window_months=int(training["train_window_months"]),
+        oos_horizon_months=int(training["oos_horizon_months"]),
+        fitting=fitting,
+        validation=validation,
+        execution_overrides=execution_overrides,
+        references=references,
+    )
 
 
 def build_strategy_param_scientific_fingerprint(
@@ -184,6 +246,7 @@ def build_strategy_param_scientific_fingerprint(
 
 __all__ = [
     "STRATEGY_PARAM_SCIENTIFIC_CONTRACT_SCHEMA_VERSION",
+    "build_strategy_param_runtime_scientific_contract",
     "build_strategy_param_scientific_contract",
     "build_strategy_param_scientific_fingerprint",
 ]

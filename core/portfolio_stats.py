@@ -153,7 +153,22 @@ def summarize_closed_trade_entry_type_counts(closed_trades_stats):
     return {key: int(value) for key, value in counts.items()}
 
 
-def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None, min_full_year_return_pct=None, min_month_return_pct=None, min_quarter_return_pct=None, total_r=None, median_r=None):
+def calc_portfolio_score(
+    sys_ret,
+    sys_mdd,
+    m_win_rate,
+    r_sq,
+    annual_return_pct=None,
+    trade_win_rate_pct=None,
+    min_full_year_return_pct=None,
+    min_month_return_pct=None,
+    min_quarter_return_pct=None,
+    total_r=None,
+    median_r=None,
+    *,
+    score_policy=None,
+    threshold_policy=None,
+):
     from core.config import (
         get_score_calc_method,
         get_score_mdd_denominator_epsilon,
@@ -177,10 +192,21 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
         is_score_win_rate_amp_enabled,
     )
 
-    score_calc_method = get_score_calc_method()
-    score_numerator_method = get_score_numerator_method()
-    score_mdd_power = get_score_mdd_power()
-    score_mdd_denominator_epsilon = get_score_mdd_denominator_epsilon()
+    score_policy = dict(score_policy or {})
+    threshold_policy = dict(threshold_policy or {})
+
+    def _score_value(key, fallback):
+        return score_policy[key] if key in score_policy else fallback()
+
+    def _threshold_value(key, fallback):
+        return threshold_policy[key] if key in threshold_policy else fallback()
+
+    score_calc_method = _score_value("SCORE_CALC_METHOD", get_score_calc_method)
+    score_numerator_method = _score_value("SCORE_NUMERATOR_METHOD", get_score_numerator_method)
+    score_mdd_power = float(_score_value("SCORE_MDD_POWER", get_score_mdd_power))
+    score_mdd_denominator_epsilon = float(
+        _score_value("SCORE_MDD_DENOMINATOR_EPSILON", get_score_mdd_denominator_epsilon)
+    )
 
     annual_return = sys_ret if annual_return_pct is None else annual_return_pct
     if score_numerator_method == 'ANNUAL_RETURN':
@@ -210,39 +236,71 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
     else:
         raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
 
-    if is_score_win_rate_amp_enabled() and trade_win_rate_pct is not None:
+    win_rate_amp_enabled = bool(
+        _score_value("SCORE_WIN_RATE_AMP_ENABLED", is_score_win_rate_amp_enabled)
+    )
+    if win_rate_amp_enabled and trade_win_rate_pct is not None:
         score *= calc_score_win_rate_multiplier(
             trade_win_rate_pct,
-            get_score_win_rate_target(),
+            float(_score_value("SCORE_WIN_RATE_TARGET", get_score_win_rate_target)),
         )
-    if is_score_monthly_win_rate_amp_enabled() and m_win_rate is not None:
+    monthly_win_rate_amp_enabled = bool(
+        _score_value("SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", is_score_monthly_win_rate_amp_enabled)
+    )
+    if monthly_win_rate_amp_enabled and m_win_rate is not None:
         score *= calc_score_win_rate_multiplier(
             m_win_rate,
-            get_score_monthly_win_rate_target(),
+            float(
+                _score_value("SCORE_MONTHLY_WIN_RATE_TARGET", get_score_monthly_win_rate_target)
+            ),
         )
-    if is_score_min_full_year_return_amp_enabled() and min_full_year_return_pct is not None:
+    min_full_year_amp_enabled = bool(
+        _score_value("SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", is_score_min_full_year_return_amp_enabled)
+    )
+    if min_full_year_amp_enabled and min_full_year_return_pct is not None:
         score *= calc_score_min_full_year_return_multiplier(
             min_full_year_return_pct,
-            get_min_full_year_return_pct(),
-            get_score_min_full_year_return_target(),
+            float(
+                _threshold_value("MIN_FULL_YEAR_RETURN_PCT", get_min_full_year_return_pct)
+            ),
+            float(
+                _score_value("SCORE_MIN_FULL_YEAR_RETURN_TARGET", get_score_min_full_year_return_target)
+            ),
         )
-    if is_score_min_month_return_amp_enabled() and min_month_return_pct is not None:
+    min_month_amp_enabled = bool(
+        _score_value("SCORE_MIN_MONTH_RETURN_AMP_ENABLED", is_score_min_month_return_amp_enabled)
+    )
+    if min_month_amp_enabled and min_month_return_pct is not None:
         score *= calc_score_min_month_return_multiplier(
             min_month_return_pct,
-            get_score_min_month_return_floor(),
-            get_score_min_month_return_target(),
+            float(
+                _score_value("SCORE_MIN_MONTH_RETURN_FLOOR", get_score_min_month_return_floor)
+            ),
+            float(
+                _score_value("SCORE_MIN_MONTH_RETURN_TARGET", get_score_min_month_return_target)
+            ),
         )
-    if is_score_min_quarter_return_amp_enabled() and min_quarter_return_pct is not None:
+    min_quarter_amp_enabled = bool(
+        _score_value("SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", is_score_min_quarter_return_amp_enabled)
+    )
+    if min_quarter_amp_enabled and min_quarter_return_pct is not None:
         score *= calc_score_min_quarter_return_multiplier(
             min_quarter_return_pct,
-            get_score_min_quarter_return_floor(),
-            get_score_min_quarter_return_target(),
+            float(
+                _score_value("SCORE_MIN_QUARTER_RETURN_FLOOR", get_score_min_quarter_return_floor)
+            ),
+            float(
+                _score_value("SCORE_MIN_QUARTER_RETURN_TARGET", get_score_min_quarter_return_target)
+            ),
         )
-    if is_score_median_r_amp_enabled() and median_r is not None:
+    median_r_amp_enabled = bool(
+        _score_value("SCORE_MEDIAN_R_AMP_ENABLED", is_score_median_r_amp_enabled)
+    )
+    if median_r_amp_enabled and median_r is not None:
         score *= calc_score_median_r_multiplier(
             median_r,
-            get_score_median_r_floor(),
-            get_score_median_r_target(),
+            float(_score_value("SCORE_MEDIAN_R_FLOOR", get_score_median_r_floor)),
+            float(_score_value("SCORE_MEDIAN_R_TARGET", get_score_median_r_target)),
         )
     return score
 

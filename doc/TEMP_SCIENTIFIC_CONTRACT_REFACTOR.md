@@ -73,15 +73,17 @@ Exit: one canonical resolved contract exists and current scientific behavior/out
 
 Round-1 evidence: the existing P6 build contract and legacy Optimizer effective-policy fingerprint remain byte-equivalent to the input ZIP; disabled-switch `build_trial_params()` materialization is also byte-equivalent.  The new scientific fingerprint is observation-only and is **not yet** an artifact reuse key.
 
-### Round 2 — Runtime injection / eliminate scientific global re-reads **[PENDING]**
+### Round 2 — Runtime injection / eliminate scientific global re-reads **[DONE]**
 
-- [ ] Resolve scientific contract once at Strategy Parameter producer boundary.
-- [ ] Inject relevant resolved sections into Optimizer session/runtime.
-- [ ] Remove direct mutable-scientific-config reads from inner Optimizer consumers in controlled slices.
-- [ ] Preserve exact current results/seed/trial/order/fingerprints during the behavior-preserving migration.
-- [ ] Keep performance/display config dynamic.
+- [x] Resolve scientific contract once at Strategy Parameter producer boundary.
+- [x] Inject relevant resolved sections into Optimizer session/runtime.
+- [x] Remove direct mutable-scientific-config reads from result-changing inner Optimizer paths: parameter generation/inactive defaults, execution economics, buy-sort/EV, score, hard gates, local-min neighborhood/review, inner validation, dominant-year thresholds and finalist-agree.
+- [x] Preserve exact current results/seed/trial/order/fingerprints during the behavior-preserving migration.
+- [x] Keep performance/display config dynamic.
 
-Exit: runtime scientific semantics come from the resolved contract, not scattered current globals.
+Exit: runtime scientific semantics come from the resolved contract. Generic/non-Strategy-Parameter Optimizer sessions retain the legacy config-backed fallback; artifact identity binding is intentionally deferred to Round 3.
+
+Round-2 evidence: latest-baseline vs refactored legacy fixed-multiseed build-contract hash and Optimizer effective-policy fingerprint are identical; generic no-contract score/selector/search and trial-param materialization are also byte/value-equivalent. Capability tests (95/95) additionally mutate mutable training config *after* contract resolution and verify the injected session/context continues to use the frozen trial generation, score, buy-sort/EV, local-min, fixed-TP, finalist-agree and dominant-year semantics.
 
 ### Round 3 — C85 / PARAM-P6 first full identity consumer **[PENDING]**
 
@@ -130,8 +132,8 @@ Exit: component identity, scientific contracts, runtime and historical experimen
 | Round | Status | Scientific behavior intentionally changed? |
 | --- | --- | --- |
 | 1 | DONE | No |
-| 2 | NEXT | No |
-| 3 | PENDING | No; identity binding/migration only |
+| 2 | DONE | No |
+| 3 | NEXT | No; identity binding/migration only |
 | 4 | PENDING | No; historical migration only |
 | 5 | PENDING | **Yes — explicit validation research change** |
 | 6 | PENDING | No for identity refactor; new compositions later require explicit research identity |

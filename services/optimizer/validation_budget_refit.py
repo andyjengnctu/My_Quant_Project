@@ -167,7 +167,7 @@ def select_trial_budget_from_validation(
                 single_finalist_fast_path=True,
                 selection_pruning=True,
             )
-            policy_items = _build_policy_items(finalists, objective_mode=str(objective_mode))
+            policy_items = _build_policy_items(finalists, objective_mode=str(objective_mode), session=session)
             item = policy_items.get(spec.policy_name)
             if item is None:
                 record = {

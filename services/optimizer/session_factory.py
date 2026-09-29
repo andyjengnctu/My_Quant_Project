@@ -109,9 +109,10 @@ def build_optimizer_session(
     fixed_strategy_param_overrides=None,
     runtime_context_factory=None,
     runtime_cache_identity=None,
-    optimizer_fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-    train_max_positions=TRAIN_MAX_POSITIONS,
-    train_enable_rotation=TRAIN_ENABLE_ROTATION,
+    optimizer_fixed_tp_percent=None,
+    train_max_positions=None,
+    train_enable_rotation=None,
+    strategy_param_scientific_contract=None,
 ):
     from services.optimizer.profile import OptimizerProfileRecorder
     from services.optimizer.session import OptimizerSession
@@ -122,6 +123,43 @@ def build_optimizer_session(
     )
 
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
+    scientific_payload = (
+        dict(strategy_param_scientific_contract)
+        if isinstance(strategy_param_scientific_contract, dict)
+        else None
+    )
+    scientific_inner = None
+    if isinstance(scientific_payload, dict):
+        raw_inner = scientific_payload.get("scientific_contract")
+        scientific_inner = dict(raw_inner) if isinstance(raw_inner, dict) else None
+    selection_contract = dict((scientific_inner or {}).get("selection_and_anti_overfit") or {})
+    execution_contract = dict((scientific_inner or {}).get("execution") or {})
+
+    resolved_fixed_tp = (
+        float(selection_contract["fixed_tp_percent"])
+        if selection_contract.get("fixed_tp_percent") is not None
+        else float(OPTIMIZER_FIXED_TP_PERCENT if optimizer_fixed_tp_percent is None else optimizer_fixed_tp_percent)
+    )
+    resolved_max_positions = (
+        int(execution_contract["max_positions"])
+        if execution_contract.get("max_positions") is not None
+        else int(TRAIN_MAX_POSITIONS if train_max_positions is None else train_max_positions)
+    )
+    resolved_rotation = (
+        str(execution_contract["rotation"]).strip().lower() == "on"
+        if execution_contract.get("rotation") is not None
+        else bool(TRAIN_ENABLE_ROTATION if train_enable_rotation is None else train_enable_rotation)
+    )
+
+    if optimizer_fixed_tp_percent is not None and selection_contract.get("fixed_tp_percent") is not None:
+        if float(optimizer_fixed_tp_percent) != float(resolved_fixed_tp):
+            raise ValueError("Optimizer session fixed TP 與 injected scientific contract 不一致")
+    if train_max_positions is not None and execution_contract.get("max_positions") is not None:
+        if int(train_max_positions) != int(resolved_max_positions):
+            raise ValueError("Optimizer session max_positions 與 injected scientific contract 不一致")
+    if train_enable_rotation is not None and execution_contract.get("rotation") is not None:
+        if bool(train_enable_rotation) != bool(resolved_rotation):
+            raise ValueError("Optimizer session rotation 與 injected scientific contract 不一致")
     objective_mode = str(walk_forward_policy.get("objective_mode", "split_train_romd"))
     return OptimizerSession(
         output_dir=OUTPUT_DIR if output_dir is None else output_dir,
@@ -135,14 +173,15 @@ def build_optimizer_session(
         resolve_optimizer_tp_percent=resolve_optimizer_tp_percent,
         print_strategy_dashboard=print_strategy_dashboard,
         colors=COLORS,
-        optimizer_fixed_tp_percent=optimizer_fixed_tp_percent,
-        train_max_positions=int(train_max_positions),
+        optimizer_fixed_tp_percent=resolved_fixed_tp,
+        train_max_positions=int(resolved_max_positions),
         train_start_year=int(walk_forward_policy["train_start_year"]),
-        train_enable_rotation=bool(train_enable_rotation),
+        train_enable_rotation=bool(resolved_rotation),
         default_max_workers=DEFAULT_OPTIMIZER_MAX_WORKERS,
         enable_optimizer_profiling=ENABLE_OPTIMIZER_PROFILING,
         enable_profile_console_print=ENABLE_OPTIMIZER_PROFILE_CONSOLE_PRINT,
         profile_print_every_n_trials=OPTIMIZER_PROFILE_PRINT_EVERY_N_TRIALS,
+        strategy_param_scientific_contract=scientific_payload,
         fixed_strategy_param_overrides=fixed_strategy_param_overrides,
         runtime_context_factory=runtime_context_factory,
         runtime_cache_identity=runtime_cache_identity,

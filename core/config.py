@@ -2,14 +2,22 @@
 
 import config.training_policy as _training_policy_settings
 import core.training_policy as _training_policy
+from core.scientific_runtime_context import get_active_scientific_section
+
+
+def _active_score_policy():
+    payload = get_active_scientific_section("score")
+    return payload if isinstance(payload, dict) else {}
 
 
 def get_buy_sort_method():
-    return _training_policy_settings.BUY_SORT_METHOD
+    policy = _active_score_policy()
+    return policy.get("BUY_SORT_METHOD", _training_policy_settings.BUY_SORT_METHOD)
 
 
 def get_ev_calc_method():
-    return _training_policy_settings.EV_CALC_METHOD
+    policy = _active_score_policy()
+    return policy.get("EV_CALC_METHOD", _training_policy_settings.EV_CALC_METHOD)
 
 
 def get_score_calc_method():

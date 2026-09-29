@@ -29,6 +29,7 @@ from config.training_policy import (
 from core.training_policy import (
     is_optimizer_local_min_review_enabled,
 )
+from services.optimizer.scientific_runtime import resolve_session_local_min_review_enabled
 from core.training_performance import (
     is_optimizer_active_replay_include_pit_stats_index_enabled,
     is_optimizer_active_replay_include_trade_logs_enabled,
@@ -1608,7 +1609,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             local_elapsed = time.perf_counter() - local_started
             best_local_min_score = max((float(item.get("local_min_score", INVALID_TRIAL_VALUE)) for item in list(finalists or [])), default=None)
             best_local_min_text = format_optimizer_score_for_display(best_local_min_score, decimals=3)
-            local_stage_label = "local-min review DONE" if is_optimizer_local_min_review_enabled() else "local-min disabled (base equivalent)"
+            local_stage_label = "local-min review DONE" if resolve_session_local_min_review_enabled(session) else "local-min disabled (base equivalent)"
             print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | {local_stage_label} | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="LOCAL_MIN_REVIEW",
@@ -1640,7 +1641,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 local_min_last_done_ts=time.time(),
                 local_min_last_neighbor_done_ts=time.time(),
             )
-            policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
+            policy_items = _build_policy_items(finalists, objective_mode=objective_mode, session=session)
             if not any(item is not None for item in policy_items.values()):
                 fold_elapsed = time.perf_counter() - fold_start
                 timing_row = _build_outer_timing_row(
@@ -1730,6 +1731,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                         "optimizer_fixed_tp_percent",
                         OPTIMIZER_FIXED_TP_PERCENT,
                     ),
+                    session=session,
                 )
                 for name, item in policy_items.items()
                 if item is not None
@@ -2353,13 +2355,13 @@ def run_outer_rolling_oos(
             prep_cache_stats = session.get_prep_cache_stats() if hasattr(session, "get_prep_cache_stats") else {}
             print(
                 f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | "
-                f"{'LOCAL_MIN_REVIEW DONE' if is_optimizer_local_min_review_enabled() else 'LOCAL_MIN_DISABLED'} | "
+                f"{'LOCAL_MIN_REVIEW DONE' if resolve_session_local_min_review_enabled(session) else 'LOCAL_MIN_DISABLED'} | "
                 f"finalists={len(finalists)} | best_local={format_optimizer_score_for_display(float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0, decimals=3)} "
                 f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
                 f"prep_cache_hit/miss/evict={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))}/{int(prep_cache_stats.get('evictions', 0))} | "
                 f"elapsed={_fmt_duration(local_elapsed)}"
             )
-            policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
+            policy_items = _build_policy_items(finalists, objective_mode=objective_mode, session=session)
             if not any(item is not None for item in policy_items.values()):
                 fold_elapsed = time.perf_counter() - fold_start
                 fold_timing_rows.append(_build_outer_timing_row(
@@ -2416,6 +2418,7 @@ def run_outer_rolling_oos(
                         "optimizer_fixed_tp_percent",
                         OPTIMIZER_FIXED_TP_PERCENT,
                     ),
+                    session=session,
                 )
                 for name, item in policy_items.items()
                 if item is not None

@@ -9,6 +9,7 @@ from config.training_policy import (
     DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT,
     DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE,
 )
+from core.scientific_runtime_context import get_active_scientific_section
 
 
 
@@ -68,6 +69,16 @@ def _empty_diagnostics(*, status: str, positive_total_pnl: float = 0.0) -> dict:
 
 
 def _threshold_snapshot() -> dict:
+    selection = get_active_scientific_section("selection_and_anti_overfit")
+    if isinstance(selection, dict):
+        dependency = selection.get("dominant_year_dependency")
+        if isinstance(dependency, dict):
+            return {
+                "high_positive_pnl_share": float(dependency.get("high_positive_pnl_share", DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE)),
+                "narrow_positive_trade_count": int(dependency.get("narrow_positive_trade_count", DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT)),
+                "narrow_positive_symbol_count": int(dependency.get("narrow_positive_symbol_count", DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT)),
+                "top_trade_outlier_pnl_share": float(dependency.get("top_trade_outlier_pnl_share", DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE)),
+            }
     return {
         "high_positive_pnl_share": float(DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE),
         "narrow_positive_trade_count": int(DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT),
@@ -131,10 +142,11 @@ def build_dominant_year_dependency_diagnostics(closed_trades_stats) -> dict:
         dominant_year_positive_pnl,
     )
 
-    temporal_concentration = dominant_share >= float(DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE)
-    narrow_trade_source = positive_trade_count <= int(DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT)
-    narrow_symbol_source = positive_symbol_count <= int(DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT)
-    top_trade_outlier = top_trade_pnl_share >= float(DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE)
+    thresholds = _threshold_snapshot()
+    temporal_concentration = dominant_share >= float(thresholds["high_positive_pnl_share"])
+    narrow_trade_source = positive_trade_count <= int(thresholds["narrow_positive_trade_count"])
+    narrow_symbol_source = positive_symbol_count <= int(thresholds["narrow_positive_symbol_count"])
+    top_trade_outlier = top_trade_pnl_share >= float(thresholds["top_trade_outlier_pnl_share"])
     dependency_warning = bool(
         temporal_concentration and (narrow_trade_source or narrow_symbol_source or top_trade_outlier)
     )

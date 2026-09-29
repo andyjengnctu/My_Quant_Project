@@ -2695,5 +2695,162 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         performance_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
     check("strategy_param_scientific_fingerprint_ignores_performance_only_change", base_scientific_fp, performance_fp)
 
+    # Round 2 runtime injection: once a producer starts a fitting invocation,
+    # inner consumers must keep using that resolved contract even if mutable
+    # common config is changed afterwards.  Generic sessions without a contract
+    # retain the legacy config-backed fallback.
+    from core.scientific_runtime_context import scientific_runtime_context
+    import core.config as core_config_module
+    import core.portfolio_attribution as portfolio_attribution_module
+    import strategies.breakout.search_space as breakout_search_module
+    from services.optimizer.outer_rolling_policy import (
+        BASE_FINALISTS_AGREE_POLICY_NAME,
+        _finalists_agree_policy_config,
+    )
+    from services.optimizer.scientific_runtime import (
+        get_session_scientific_section,
+        resolve_session_fixed_tp_percent,
+        resolve_session_local_min_review_enabled,
+    )
+
+    injected_session = SimpleNamespace(strategy_param_scientific_contract=deepcopy(base_scientific))
+    injected_score = get_session_scientific_section(injected_session, "score") or {}
+    injected_selection = get_session_scientific_section(injected_session, "selection_and_anti_overfit") or {}
+    injected_parameter_generation = get_session_scientific_section(injected_session, "parameter_generation") or {}
+
+    frozen_buy_sort = injected_score.get("BUY_SORT_METHOD")
+    frozen_ev_method = injected_score.get("EV_CALC_METHOD")
+    with patch.object(training_policy_settings, "BUY_SORT_METHOD", "__MUTATED_BUY_SORT__"), patch.object(
+        training_policy_settings, "EV_CALC_METHOD", "__MUTATED_EV__"
+    ):
+        with scientific_runtime_context(base_scientific):
+            runtime_buy_sort = core_config_module.get_buy_sort_method()
+            runtime_ev_method = core_config_module.get_ev_calc_method()
+    check("strategy_param_runtime_context_freezes_buy_sort_method", frozen_buy_sort, runtime_buy_sort)
+    check("strategy_param_runtime_context_freezes_ev_calc_method", frozen_ev_method, runtime_ev_method)
+
+    frozen_score_value = calc_portfolio_score(
+        35.0,
+        -12.0,
+        70.0,
+        0.8,
+        annual_return_pct=18.0,
+        trade_win_rate_pct=55.0,
+        min_full_year_return_pct=5.0,
+        min_month_return_pct=-2.0,
+        min_quarter_return_pct=-3.0,
+        total_r=12.0,
+        median_r=0.6,
+        score_policy=injected_score,
+        threshold_policy=get_session_scientific_section(injected_session, "hard_gates"),
+    )
+    with patch.object(training_policy_settings, "SCORE_MDD_POWER", float(training_policy_settings.SCORE_MDD_POWER) + 0.75), patch.object(
+        training_policy_settings, "SCORE_WIN_RATE_TARGET", float(training_policy_settings.SCORE_WIN_RATE_TARGET) + 11.0
+    ):
+        runtime_score_value = calc_portfolio_score(
+            35.0,
+            -12.0,
+            70.0,
+            0.8,
+            annual_return_pct=18.0,
+            trade_win_rate_pct=55.0,
+            min_full_year_return_pct=5.0,
+            min_month_return_pct=-2.0,
+            min_quarter_return_pct=-3.0,
+            total_r=12.0,
+            median_r=0.6,
+            score_policy=injected_score,
+            threshold_policy=get_session_scientific_section(injected_session, "hard_gates"),
+        )
+    check("strategy_param_session_freezes_score_policy", frozen_score_value, runtime_score_value)
+
+    frozen_local_enabled = bool(
+        (injected_selection.get("local_min_review") or {}).get("default_enabled", False)
+    )
+    with patch.object(
+        training_policy_settings,
+        "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED",
+        not bool(training_policy_settings.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED),
+    ):
+        runtime_local_enabled = resolve_session_local_min_review_enabled(injected_session)
+    check("strategy_param_session_freezes_local_min_enablement", frozen_local_enabled, runtime_local_enabled)
+
+    frozen_fixed_tp = float(injected_selection.get("fixed_tp_percent", 0.0) or 0.0)
+    with patch.object(
+        training_policy_settings,
+        "OPTIMIZER_FIXED_TP_PERCENT",
+        frozen_fixed_tp + 0.123,
+    ):
+        runtime_fixed_tp = resolve_session_fixed_tp_percent(
+            injected_session, training_policy_settings.OPTIMIZER_FIXED_TP_PERCENT
+        )
+    check("strategy_param_session_freezes_fixed_tp_percent", frozen_fixed_tp, runtime_fixed_tp)
+
+    frozen_base_agree = (injected_selection.get("finalists_agree") or {}).get("base_min_agree")
+    with patch.object(training_policy_settings, "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE", 1):
+        runtime_base_agree = _finalists_agree_policy_config(
+            BASE_FINALISTS_AGREE_POLICY_NAME, session=injected_session
+        ).get("min_agree_requested")
+    check("strategy_param_session_freezes_finalists_agree_request", frozen_base_agree, runtime_base_agree)
+
+    frozen_search_space = dict(injected_parameter_generation.get("search_space") or {})
+    original_atr_low = float(frozen_search_space["atr_len"]["low"])
+    with patch.dict(breakout_search_module.BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"], {"low": original_atr_low + 7}):
+        _step, _kind, runtime_atr_low, _high = breakout_search_module.resolve_breakout_neighbor_spec(
+            "atr_len", session=injected_session
+        )
+    check("strategy_param_session_freezes_local_min_neighbor_search_space", original_atr_low, float(runtime_atr_low))
+
+    class _ContractTrial:
+        def suggest_categorical(self, _name, choices):
+            return list(choices)[0]
+        def suggest_int(self, _name, low, _high, step=1):
+            return int(low)
+        def suggest_float(self, _name, low, _high, step=None):
+            return float(low)
+        def set_user_attr(self, *_args, **_kwargs):
+            return None
+
+    class _ContractSession(SimpleNamespace):
+        optimizer_fixed_tp_percent = frozen_fixed_tp
+        def has_fixed_strategy_param(self, _field_name):
+            return False
+        def get_fixed_strategy_param(self, _field_name, default=None):
+            return default
+        def resolve_optimizer_tp_percent(self, _trial, fixed_tp_percent):
+            return float(fixed_tp_percent)
+
+    from core.strategy_params import strategy_params_to_dict
+    contract_session = _ContractSession(strategy_param_scientific_contract=deepcopy(base_scientific))
+    with patch.dict(
+        breakout_search_module.BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"],
+        {"low": int(original_atr_low) + 9},
+    ):
+        contract_trial_params = strategy_params_to_dict(
+            breakout_search_module.build_trial_params(contract_session, _ContractTrial())
+        )
+    check(
+        "strategy_param_session_freezes_trial_parameter_generation",
+        int(original_atr_low),
+        int(contract_trial_params["atr_len"]),
+    )
+
+    frozen_dependency = dict(injected_selection.get("dominant_year_dependency") or {})
+    with scientific_runtime_context(base_scientific):
+        runtime_dependency_thresholds = portfolio_attribution_module._threshold_snapshot()
+    check(
+        "strategy_param_runtime_context_freezes_dominant_year_thresholds",
+        {
+            key: frozen_dependency[key]
+            for key in (
+                "high_positive_pnl_share",
+                "narrow_positive_trade_count",
+                "narrow_positive_symbol_count",
+                "top_trade_outlier_pnl_share",
+            )
+        },
+        runtime_dependency_thresholds,
+    )
+
     summary["checks"] = len(results)
     return results, summary

@@ -2,7 +2,7 @@ import copy
 import os
 import threading
 from collections import OrderedDict
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from services.optimizer.callbacks import run_optimizer_monitoring_callback
 from services.optimizer.dependency_stats import empty_local_min_dependency_stats as _empty_local_min_dependency_stats
 from services.optimizer.objective import run_optimizer_objective
@@ -88,6 +88,7 @@ class OptimizerSession:
         enable_optimizer_profiling,
         enable_profile_console_print,
         profile_print_every_n_trials,
+        strategy_param_scientific_contract=None,
         fixed_strategy_param_overrides=None,
         runtime_context_factory=None,
         runtime_cache_identity=None,
@@ -120,6 +121,9 @@ class OptimizerSession:
         self.train_start_year = train_start_year
         self.train_enable_rotation = train_enable_rotation
         self.default_max_workers = default_max_workers
+        self.strategy_param_scientific_contract = copy.deepcopy(
+            strategy_param_scientific_contract
+        ) if isinstance(strategy_param_scientific_contract, dict) else None
         self.fixed_strategy_param_overrides = dict(fixed_strategy_param_overrides or {})
         self.runtime_context_factory = runtime_context_factory
         self.runtime_cache_identity = runtime_cache_identity
@@ -194,8 +198,18 @@ class OptimizerSession:
         return V16StrategyParams(**payload)
 
     def optimizer_runtime_context(self):
+        from core.scientific_runtime_context import scientific_runtime_context
+
         factory = self.runtime_context_factory
-        return nullcontext() if not callable(factory) else factory()
+
+        @contextmanager
+        def _combined_context():
+            runtime_context = nullcontext() if not callable(factory) else factory()
+            with scientific_runtime_context(self.strategy_param_scientific_contract):
+                with runtime_context:
+                    yield
+
+        return _combined_context()
 
     def _resolve_prepared_trial_input_cache_max_items(self):
         policy_default = resolve_optimizer_rolling_parallel_prep_cache_max_items_default()

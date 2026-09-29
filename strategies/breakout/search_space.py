@@ -4,6 +4,7 @@ from config.breakout_policy import (
     BREAKOUT_HIGH_LEN_SEARCH_STEP,
 )
 from core.data_utils import get_required_min_rows_from_lookbacks
+from core.scientific_runtime_context import get_scientific_section
 from strategies.breakout.adapter import build_breakout_strategy_params
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
@@ -65,8 +66,39 @@ BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES = {
 }
 
 
-def _resolve_optimizer_categorical_choices(field_name):
-    choices = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]["choices"]
+def _runtime_parameter_generation(session):
+    payload = get_scientific_section(
+        getattr(session, "strategy_param_scientific_contract", None),
+        "parameter_generation",
+    )
+    return payload if isinstance(payload, dict) else {}
+
+
+def _runtime_search_space(session):
+    payload = _runtime_parameter_generation(session).get("search_space")
+    return payload if isinstance(payload, dict) else BREAKOUT_OPTIMIZER_SEARCH_SPACE
+
+
+def _runtime_inactive_values(session):
+    payload = _runtime_parameter_generation(session).get("inactive_param_values")
+    return payload if isinstance(payload, dict) else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES
+
+
+def _runtime_breakout_schema(session):
+    payload = _runtime_parameter_generation(session).get("breakout_param_schema")
+    return payload if isinstance(payload, dict) else BREAKOUT_PARAM_SPECS
+
+
+def _runtime_execution_contract(session):
+    payload = get_scientific_section(
+        getattr(session, "strategy_param_scientific_contract", None),
+        "execution",
+    )
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_optimizer_categorical_choices(session, field_name):
+    choices = _runtime_search_space(session)[field_name]["choices"]
     if isinstance(choices, bool):
         return [choices]
     normalized = list(choices)
@@ -75,8 +107,8 @@ def _resolve_optimizer_categorical_choices(field_name):
     return normalized
 
 
-def _suggest_optimizer_switch(trial, field_name):
-    return bool(trial.suggest_categorical(field_name, _resolve_optimizer_categorical_choices(field_name)))
+def _suggest_optimizer_switch(session, trial, field_name):
+    return bool(trial.suggest_categorical(field_name, _resolve_optimizer_categorical_choices(session, field_name)))
 
 
 def _resolve_optimizer_switch(session, trial, field_name):
@@ -86,7 +118,7 @@ def _resolve_optimizer_switch(session, trial, field_name):
         if not isinstance(value, bool):
             raise ValueError(f"固定 optimizer 開關 {field_name} 必須是 bool，收到 {value!r}")
         return value
-    return _suggest_optimizer_switch(trial, field_name)
+    return _suggest_optimizer_switch(session, trial, field_name)
 
 
 def _resolve_optimizer_int(session, trial, field_name):
@@ -98,7 +130,7 @@ def _resolve_optimizer_int(session, trial, field_name):
                 f"固定 optimizer 整數參數 {field_name} 必須是 int，收到 {value!r}"
             )
         return int(value)
-    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
+    spec = _runtime_search_space(session)[field_name]
     return trial.suggest_int(
         field_name,
         int(spec["low"]),
@@ -116,7 +148,7 @@ def _resolve_optimizer_float(session, trial, field_name):
                 f"固定 optimizer 浮點參數 {field_name} 必須是數值，收到 {value!r}"
             )
         return float(value)
-    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
+    spec = _runtime_search_space(session)[field_name]
     return trial.suggest_float(
         field_name,
         float(spec["low"]),
@@ -141,6 +173,28 @@ def _resolve_optimizer_tp_percent(session, trial):
 
 
 def build_trial_params(session, trial):
+    inactive_values = _runtime_inactive_values(session)
+    breakout_schema = _runtime_breakout_schema(session)
+    execution = _runtime_execution_contract(session)
+    # Preserve the legacy generic Optimizer default (always compounding) when
+    # no Strategy Parameter scientific contract is injected.  An injected
+    # execution contract is authoritative for all result-changing economics.
+    execution_kwargs = {"use_compounding": True}
+    execution_kwargs.update({
+        key: execution[key]
+        for key in (
+            "initial_capital",
+            "fixed_risk",
+            "max_position_cap_pct",
+            "buy_fee",
+            "sell_fee",
+            "tax_rate",
+            "min_fee",
+            "min_entry_notional",
+            "use_compounding",
+        )
+        if key in execution
+    })
     ai_use_breakout_buy = _resolve_optimizer_switch(session, trial, "use_breakout_buy")
     ai_use_bb = _resolve_optimizer_switch(session, trial, "use_bb")
     ai_use_kc = _resolve_optimizer_switch(session, trial, "use_kc")
@@ -157,39 +211,39 @@ def build_trial_params(session, trial):
         vol_long_len = _resolve_optimizer_int(session, trial, "vol_long_len")
         vol_breakout_mult = _resolve_optimizer_float(session, trial, "vol_breakout_mult")
     else:
-        vol_long_len = BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["vol_long_len"]
-        vol_breakout_mult = BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["vol_breakout_mult"]
+        vol_long_len = inactive_values["vol_long_len"]
+        vol_breakout_mult = inactive_values["vol_breakout_mult"]
 
     breakout_return_min = (
         _resolve_optimizer_float(session, trial, "breakout_return_min")
         if ai_use_breakout_return_filter
-        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_return_min"]
+        else inactive_values["breakout_return_min"]
     )
 
     breakout_ema_len = (
         _resolve_optimizer_int(session, trial, "breakout_ema_len")
         if ai_use_breakout_ema_filter
-        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_ema_len"]
+        else inactive_values["breakout_ema_len"]
     )
 
     breakout_false_filter_atr_pct_min = (
         _resolve_optimizer_float(session, trial, "breakout_false_filter_atr_pct_min")
         if ai_use_breakout_false_filter
-        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_false_filter_atr_pct_min"]
+        else inactive_values["breakout_false_filter_atr_pct_min"]
     )
     breakout_reclaim_window_bars = (
         _resolve_optimizer_int(session, trial, "breakout_reclaim_window_bars")
         if ai_use_breakout_reclaim_reentry
-        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_reclaim_window_bars"]
+        else inactive_values["breakout_reclaim_window_bars"]
     )
     breakout_reclaim_confirm_atr = (
         _resolve_optimizer_float(session, trial, "breakout_reclaim_confirm_atr")
         if ai_use_breakout_reclaim_reentry
-        else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["breakout_reclaim_confirm_atr"]
+        else inactive_values["breakout_reclaim_confirm_atr"]
     )
-    min_history_trades = _resolve_optimizer_int(session, trial, "min_history_trades") if ai_use_history_threshold else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["min_history_trades"]
-    min_history_ev = _resolve_optimizer_float(session, trial, "min_history_ev") if ai_use_history_threshold else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["min_history_ev"]
-    min_history_win_rate = _resolve_optimizer_float(session, trial, "min_history_win_rate") if ai_use_history_threshold else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["min_history_win_rate"]
+    min_history_trades = _resolve_optimizer_int(session, trial, "min_history_trades") if ai_use_history_threshold else inactive_values["min_history_trades"]
+    min_history_ev = _resolve_optimizer_float(session, trial, "min_history_ev") if ai_use_history_threshold else inactive_values["min_history_ev"]
+    min_history_win_rate = _resolve_optimizer_float(session, trial, "min_history_win_rate") if ai_use_history_threshold else inactive_values["min_history_win_rate"]
 
     return build_breakout_strategy_params(
         atr_len=_resolve_optimizer_int(session, trial, "atr_len"),
@@ -209,8 +263,8 @@ def build_trial_params(session, trial):
         breakout_false_filter_atr_pct_min=breakout_false_filter_atr_pct_min,
         use_breakout_quality_filter=ai_use_breakout_quality_filter,
         use_breakout_quality_ranking=ai_use_breakout_quality_ranking,
-        breakout_quality_filter_id=BREAKOUT_PARAM_SPECS["breakout_quality_filter_id"]["default"],
-        breakout_quality_score_threshold=BREAKOUT_PARAM_SPECS["breakout_quality_score_threshold"]["default"],
+        breakout_quality_filter_id=breakout_schema["breakout_quality_filter_id"]["default"],
+        breakout_quality_score_threshold=breakout_schema["breakout_quality_score_threshold"]["default"],
         use_breakout_reclaim_reentry=ai_use_breakout_reclaim_reentry,
         breakout_reclaim_window_bars=breakout_reclaim_window_bars,
         breakout_reclaim_confirm_atr=breakout_reclaim_confirm_atr,
@@ -218,22 +272,22 @@ def build_trial_params(session, trial):
         bb_len=(
             _resolve_optimizer_int(session, trial, "bb_len")
             if ai_use_bb
-            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["bb_len"]
+            else inactive_values["bb_len"]
         ),
         bb_mult=(
             _resolve_optimizer_float(session, trial, "bb_mult")
             if ai_use_bb
-            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["bb_mult"]
+            else inactive_values["bb_mult"]
         ),
         kc_len=(
             _resolve_optimizer_int(session, trial, "kc_len")
             if ai_use_kc
-            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["kc_len"]
+            else inactive_values["kc_len"]
         ),
         kc_mult=(
             _resolve_optimizer_float(session, trial, "kc_mult")
             if ai_use_kc
-            else BREAKOUT_OPTIMIZER_INACTIVE_PARAM_VALUES["kc_mult"]
+            else inactive_values["kc_mult"]
         ),
         vol_long_len=vol_long_len,
         vol_breakout_mult=vol_breakout_mult,
@@ -241,7 +295,7 @@ def build_trial_params(session, trial):
         min_history_trades=min_history_trades,
         min_history_ev=min_history_ev,
         min_history_win_rate=min_history_win_rate,
-        use_compounding=True,
+        **execution_kwargs,
     )
 
 
@@ -311,8 +365,8 @@ def get_breakout_local_min_candidate_fields(trial, *, center_payload):
     return tuple(candidate_fields)
 
 
-def resolve_breakout_neighbor_spec(field_name, *, center_payload=None):
-    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
+def resolve_breakout_neighbor_spec(field_name, *, center_payload=None, session=None):
+    spec = _runtime_search_space(session)[field_name]
     kind = str(spec["kind"])
     step = spec.get("step", 1)
     low_value = spec["low"]

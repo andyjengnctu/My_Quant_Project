@@ -27,6 +27,14 @@ from services.optimizer.robustness import (
     is_dominant_year_dependency_anti_overfit_enabled,
     is_inner_validate_anti_overfit_enabled,
 )
+from services.optimizer.scientific_runtime import (
+    resolve_finalists_agree_min_agree,
+    resolve_session_dominant_year_policy,
+    resolve_session_finalists_agree_requested,
+    resolve_session_fixed_tp_percent,
+    resolve_session_inner_validation_policy,
+    resolve_session_local_min_review_enabled,
+)
 from services.optimizer.study_utils import INVALID_TRIAL_VALUE, build_best_params_payload_from_trial
 
 
@@ -220,11 +228,11 @@ def _active_optimizer_table_titles() -> tuple[str, str]:
         return optimizer_seed_ensemble_table_titles()
     return SEED_ENSEMBLE_RESULTS_TABLE_TITLE, ""
 
-def _select_winner(finalists: list[dict], *, objective_mode: str):
+def _select_winner(finalists: list[dict], *, objective_mode: str, session=None):
     eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
-    if is_inner_validate_anti_overfit_enabled(objective_mode):
+    if is_inner_validate_anti_overfit_enabled(objective_mode, session=session):
         eligible = [item for item in eligible if _has_inner_validate_pass(item)]
-    if is_dominant_year_dependency_anti_overfit_enabled():
+    if is_dominant_year_dependency_anti_overfit_enabled(session=session):
         safe = [item for item in eligible if not _has_dependency_warning(item)]
         if safe:
             eligible = safe
@@ -377,7 +385,7 @@ def _is_policy_ensemble_item(item: dict | None) -> bool:
     return isinstance(item, dict) and bool(normalize_seed_ensemble_members(item.get("params_ensemble")))
 
 
-def _finalists_agree_policy_config(policy_name: str) -> dict:
+def _finalists_agree_policy_config(policy_name: str, *, session=None) -> dict:
     name = str(policy_name)
     if _is_local_finalists_agree_policy(name):
         return {
@@ -388,7 +396,9 @@ def _finalists_agree_policy_config(policy_name: str) -> dict:
             "seed_finalist_count_key": "local_agree_seed_finalist_count",
             "seed_selected_trials_key": "local_agree_seed_selected_trials",
             "min_agree_requested_key": "local_agree_min_agree_requested",
-            "min_agree_requested": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
+            "min_agree_requested": resolve_session_finalists_agree_requested(
+                session, LOCAL_FINALISTS_AGREE_POLICY_NAME, OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE
+            ),
             "selection_rule": "all_finalists_local_min_sum_best_seed_finalist_agree",
             "member_selection": "seed_with_max_all_finalists_local_min_sum",
             "ranker": _rank_local_finalist_items,
@@ -403,7 +413,9 @@ def _finalists_agree_policy_config(policy_name: str) -> dict:
             "seed_finalist_count_key": "retention_agree_seed_finalist_count",
             "seed_selected_trials_key": "retention_agree_seed_selected_trials",
             "min_agree_requested_key": "retention_agree_min_agree_requested",
-            "min_agree_requested": OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
+            "min_agree_requested": resolve_session_finalists_agree_requested(
+                session, RETENTION_FINALISTS_AGREE_POLICY_NAME, OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE
+            ),
             "selection_rule": "all_finalists_retention_sum_best_seed_finalist_agree",
             "member_selection": "seed_with_max_all_finalists_retention_sum",
             "ranker": _rank_retention_finalist_items,
@@ -417,7 +429,9 @@ def _finalists_agree_policy_config(policy_name: str) -> dict:
         "seed_finalist_count_key": "base_agree_seed_finalist_count",
         "seed_selected_trials_key": "base_agree_seed_selected_trials",
         "min_agree_requested_key": "base_agree_min_agree_requested",
-        "min_agree_requested": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+        "min_agree_requested": resolve_session_finalists_agree_requested(
+            session, BASE_FINALISTS_AGREE_POLICY_NAME, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
+        ),
         "selection_rule": "all_finalists_base_score_sum_best_seed_finalist_agree",
         "member_selection": "seed_with_max_all_finalists_base_score_sum",
         "ranker": _rank_base_finalist_items,
@@ -425,13 +439,13 @@ def _finalists_agree_policy_config(policy_name: str) -> dict:
     }
 
 
-def _resolve_finalists_agree_min_agree(policy_name: str, member_count: int) -> int:
-    config = _finalists_agree_policy_config(policy_name)
-    return int(config["resolver"](member_count, config["min_agree_requested"]))
+def _resolve_finalists_agree_min_agree(policy_name: str, member_count: int, *, session=None) -> int:
+    config = _finalists_agree_policy_config(policy_name, session=session)
+    return int(resolve_finalists_agree_min_agree(policy_name, member_count, config["min_agree_requested"]))
 
 
-def _finalists_agree_metadata(finalists: list[dict], *, policy_name: str) -> dict:
-    config = _finalists_agree_policy_config(policy_name)
+def _finalists_agree_metadata(finalists: list[dict], *, policy_name: str, session=None) -> dict:
+    config = _finalists_agree_policy_config(policy_name, session=session)
     ranked = config["ranker"](finalists)
     member_count = int(len(ranked))
     score_sum = float(sum(float(item.get(config["score_field"], INVALID_TRIAL_VALUE)) for item in ranked)) if ranked else 0.0
@@ -446,7 +460,7 @@ def _finalists_agree_metadata(finalists: list[dict], *, policy_name: str) -> dic
         "member_selection": str(config["member_selection"]),
         "intra_seed_agree": "selected_seed_finalists",
         "member_count": int(member_count),
-        "min_agree": _resolve_finalists_agree_min_agree(policy_name, member_count) if member_count > 0 else 0,
+        "min_agree": _resolve_finalists_agree_min_agree(policy_name, member_count, session=session) if member_count > 0 else 0,
     }
     return metadata
 
@@ -465,12 +479,13 @@ def _build_finalists_agree_member_payloads(
     seed: int | None = None,
     local_rank_map: dict[int, int] | None = None,
     retention_rank_map: dict[int, int] | None = None,
+    session=None,
 ) -> list[dict]:
-    config = _finalists_agree_policy_config(policy_name)
+    config = _finalists_agree_policy_config(policy_name, session=session)
     ranked = config["ranker"](finalists)
     if not ranked:
         return []
-    metadata = _finalists_agree_metadata(ranked, policy_name=policy_name)
+    metadata = _finalists_agree_metadata(ranked, policy_name=policy_name, session=session)
     local_ranks = dict(local_rank_map or _build_local_rank_map(ranked))
     retention_ranks = dict(retention_rank_map or _build_retention_rank_map(ranked))
     members: list[dict] = []
@@ -490,14 +505,14 @@ def _build_finalists_agree_member_payloads(
             "base_rank": int(item.get("base_rank", 0) or 0),
             "local_min_score": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
             "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+            "local_min_review_enabled": bool(item.get("local_min_review_enabled", resolve_session_local_min_review_enabled(session))),
+            "local_min_exact": bool(item.get("local_min_exact", bool(resolve_session_local_min_review_enabled(session)))),
             "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
             "local_rank": int(local_ranks.get(trial_number, 0)),
             "retention": float(item.get("local_retention", 0.0)),
             "retention_rank": int(retention_ranks.get(trial_number, 0)),
             "local_gate": bool(item.get("gate_pass", False)),
-            "params": build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT),
+            "params": build_best_params_payload_from_trial(trial, fixed_tp_percent=resolve_session_fixed_tp_percent(session, OPTIMIZER_FIXED_TP_PERCENT)),
         }
         member_payload.update(metadata)
         members.append(member_payload)
@@ -624,15 +639,15 @@ def select_retention_finalists_agree_members(members: list[dict]) -> list[dict]:
     return select_finalists_agree_members(members, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
 
 
-def _select_finalists_agree_item(finalists: list[dict], *, policy_name: str) -> dict | None:
-    config = _finalists_agree_policy_config(policy_name)
+def _select_finalists_agree_item(finalists: list[dict], *, policy_name: str, session=None) -> dict | None:
+    config = _finalists_agree_policy_config(policy_name, session=session)
     ranked = config["ranker"](finalists)
     if not ranked:
         return None
-    members = _build_finalists_agree_member_payloads(ranked, policy_name=policy_name)
+    members = _build_finalists_agree_member_payloads(ranked, policy_name=policy_name, session=session)
     if not members:
         return None
-    metadata = _finalists_agree_metadata(ranked, policy_name=policy_name)
+    metadata = _finalists_agree_metadata(ranked, policy_name=policy_name, session=session)
     first_member = dict(members[0])
     item = {
         "params_ensemble": members,
@@ -647,20 +662,20 @@ def _select_finalists_agree_item(finalists: list[dict], *, policy_name: str) -> 
     return item
 
 
-def _select_base_finalists_agree_item(finalists: list[dict]) -> dict | None:
-    return _select_finalists_agree_item(finalists, policy_name=BASE_FINALISTS_AGREE_POLICY_NAME)
+def _select_base_finalists_agree_item(finalists: list[dict], *, session=None) -> dict | None:
+    return _select_finalists_agree_item(finalists, policy_name=BASE_FINALISTS_AGREE_POLICY_NAME, session=session)
 
 
-def _select_local_finalists_agree_item(finalists: list[dict]) -> dict | None:
-    return _select_finalists_agree_item(finalists, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME)
+def _select_local_finalists_agree_item(finalists: list[dict], *, session=None) -> dict | None:
+    return _select_finalists_agree_item(finalists, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME, session=session)
 
 
-def _select_retention_finalists_agree_item(finalists: list[dict]) -> dict | None:
-    return _select_finalists_agree_item(finalists, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
+def _select_retention_finalists_agree_item(finalists: list[dict], *, session=None) -> dict | None:
+    return _select_finalists_agree_item(finalists, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME, session=session)
 
 
-def _select_local_rank1_item(finalists: list[dict], *, objective_mode: str):
-    winner = _select_winner(finalists, objective_mode=objective_mode)
+def _select_local_rank1_item(finalists: list[dict], *, objective_mode: str, session=None):
+    winner = _select_winner(finalists, objective_mode=objective_mode, session=session)
     if winner is not None:
         return winner
     items = [item for item in list(finalists or []) if item.get("trial") is not None]
@@ -682,17 +697,17 @@ def _select_retention_rank1_item(finalists: list[dict]):
     )
 
 
-def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[str, dict | None]:
+def _build_policy_items(finalists: list[dict], *, objective_mode: str, session=None) -> dict[str, dict | None]:
     base_rank1 = _select_base_rank1_item(finalists)
-    local_rank1 = _select_local_rank1_item(finalists, objective_mode=objective_mode)
+    local_rank1 = _select_local_rank1_item(finalists, objective_mode=objective_mode, session=session)
     retention_rank1 = _select_retention_rank1_item(finalists)
     items = {
         BASE_FINALIST_BEST_POLICY_NAME: base_rank1,
         LOCAL_FINALIST_BEST_POLICY_NAME: local_rank1,
         RETENTION_FINALIST_BEST_POLICY_NAME: retention_rank1,
-        BASE_FINALISTS_AGREE_POLICY_NAME: _select_base_finalists_agree_item(finalists),
-        LOCAL_FINALISTS_AGREE_POLICY_NAME: _select_local_finalists_agree_item(finalists),
-        RETENTION_FINALISTS_AGREE_POLICY_NAME: _select_retention_finalists_agree_item(finalists),
+        BASE_FINALISTS_AGREE_POLICY_NAME: _select_base_finalists_agree_item(finalists, session=session),
+        LOCAL_FINALISTS_AGREE_POLICY_NAME: _select_local_finalists_agree_item(finalists, session=session),
+        RETENTION_FINALISTS_AGREE_POLICY_NAME: _select_retention_finalists_agree_item(finalists, session=session),
         "base": base_rank1,
         "local": local_rank1,
         "retention": retention_rank1,
@@ -743,13 +758,14 @@ def build_optimizer_policy_members_from_finalists(
     objective_mode: str,
     member_index: int,
     seed: int | None = None,
+    session=None,
 ) -> dict[str, dict | list[dict]]:
     """Build static active-param ensemble members with the same policy selectors as rolling OOS.
 
     Non-rolling training is a single-fold case, so it must reuse rolling's policy
     selection rules instead of re-implementing base/local/retention choices.
     """
-    policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
+    policy_items = _build_policy_items(finalists, objective_mode=objective_mode, session=session)
     local_rank_map = _build_local_rank_map(finalists)
     retention_rank_map = _build_retention_rank_map(finalists)
     members: dict[str, dict | list[dict]] = {}
@@ -767,6 +783,7 @@ def build_optimizer_policy_members_from_finalists(
                     seed=seed,
                     local_rank_map=local_rank_map,
                     retention_rank_map=retention_rank_map,
+                    session=session,
                 )
             for offset, raw_member in enumerate(finalists_agree_members):
                 member_payload = dict(raw_member)
@@ -782,7 +799,7 @@ def build_optimizer_policy_members_from_finalists(
             continue
         trial = item["trial"]
         trial_number = int(trial.number)
-        params_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+        params_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=resolve_session_fixed_tp_percent(session, OPTIMIZER_FIXED_TP_PERCENT))
         member_payload = {
             "member_index": int(member_index),
             "seed": None if seed is None else int(seed),
@@ -794,8 +811,8 @@ def build_optimizer_policy_members_from_finalists(
             "base_rank": int(item.get("base_rank", 0) or 0),
             "local_min_score": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
             "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+            "local_min_review_enabled": bool(item.get("local_min_review_enabled", resolve_session_local_min_review_enabled(session))),
+            "local_min_exact": bool(item.get("local_min_exact", bool(resolve_session_local_min_review_enabled(session)))),
             "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
             "local_rank": int(local_rank_map.get(trial_number, 0)),
             "retention": float(item.get("local_retention", 0.0)),
@@ -847,7 +864,9 @@ def _build_policy_schedule_entry(
     optimizer_seed: int | None = None,
     fixed_strategy_param_overrides: dict | None = None,
     fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+    session=None,
 ) -> dict:
+    fixed_tp_percent = resolve_session_fixed_tp_percent(session, fixed_tp_percent)
     effective_start = str(oos_start_date or f"{str(oos_year)[:4]}-01-01")
     effective_end = str(oos_end_date or f"{str(oos_year)[:4]}-12-31")
     ensemble_members = _materialize_fixed_strategy_param_overrides_in_members(
@@ -876,7 +895,7 @@ def _build_policy_schedule_entry(
             "optimizer_seed": None if optimizer_seed is None else int(optimizer_seed),
             "optimizer_seeds": optimizer_seed_values,
             "member_count": int(len(ensemble_members)),
-            "min_agree": int(item.get("min_agree") or (_resolve_finalists_agree_min_agree(policy_name, len(ensemble_members)) if _is_finalists_agree_policy(policy_name) else 1)),
+            "min_agree": int(item.get("min_agree") or (_resolve_finalists_agree_min_agree(policy_name, len(ensemble_members), session=session) if _is_finalists_agree_policy(policy_name) else 1)),
             "min_agree_requested": item.get("min_agree_requested", item.get("base_agree_min_agree_requested", item.get("local_agree_min_agree_requested", item.get("retention_agree_min_agree_requested")))),
             "base_agree_min_agree_requested": item.get("base_agree_min_agree_requested"),
             "local_agree_min_agree_requested": item.get("local_agree_min_agree_requested"),
@@ -884,8 +903,8 @@ def _build_policy_schedule_entry(
             "base_score": float(item.get("base_score", first_member.get("base_score", INVALID_TRIAL_VALUE))),
             "base_rank": int(item.get("base_rank", first_member.get("base_rank", 0)) or 0),
             "local_min": float(item.get("local_min_score", first_member.get("local_min_score", INVALID_TRIAL_VALUE))),
-            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+            "local_min_review_enabled": bool(item.get("local_min_review_enabled", resolve_session_local_min_review_enabled(session))),
+            "local_min_exact": bool(item.get("local_min_exact", bool(resolve_session_local_min_review_enabled(session)))),
             "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
             "retention": float(item.get("local_retention", first_member.get("retention", 0.0))),
             "params": dict(first_member.get("params") or {}),
@@ -916,8 +935,8 @@ def _build_policy_schedule_entry(
         "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
         "base_rank": int(item.get("base_rank", 0) or 0),
         "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-        "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-        "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+        "local_min_review_enabled": bool(item.get("local_min_review_enabled", resolve_session_local_min_review_enabled(session))),
+        "local_min_exact": bool(item.get("local_min_exact", bool(resolve_session_local_min_review_enabled(session)))),
         "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
         "local_rank": int(local_rank_map.get(trial_number, 0)),
         "retention": float(item.get("local_retention", 0.0)),

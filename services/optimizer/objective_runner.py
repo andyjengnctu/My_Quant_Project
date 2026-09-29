@@ -2,11 +2,6 @@ import time
 from typing import Any
 
 import pandas as pd
-
-from config.training_policy import (
-    OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
-    OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS,
-)
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_portfolio_score
 from core.strategy_params import build_runtime_param_raw_value
@@ -21,6 +16,10 @@ from services.optimizer.study_utils import (
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
     normalize_objective_mode,
 )
+from services.optimizer.scientific_runtime import (
+    get_session_scientific_section,
+    resolve_session_inner_validation_policy,
+)
 
 
 def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str, objective_start: float):
@@ -33,9 +32,14 @@ def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str
     return INVALID_TRIAL_VALUE
 
 
-def is_inner_validate_anti_overfit_enabled_for_mode(objective_mode: str | None) -> bool:
+def is_inner_validate_anti_overfit_enabled_for_mode(
+    objective_mode: str | None,
+    *,
+    session=None,
+) -> bool:
     mode = normalize_objective_mode(objective_mode or "")
-    return bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED) and mode == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
+    policy = resolve_session_inner_validation_policy(session)
+    return bool(policy.get("enabled", False)) and mode == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
 
 
 def _policy_date(policy: dict, key: str) -> str:
@@ -47,11 +51,12 @@ def _policy_date(policy: dict, key: str) -> str:
 
 def resolve_inner_validate_policy(session, *, objective_mode: str | None = None) -> dict[str, Any]:
     mode = normalize_objective_mode(session.objective_mode if objective_mode is None else objective_mode)
-    if not is_inner_validate_anti_overfit_enabled_for_mode(mode):
+    inner_policy = resolve_session_inner_validation_policy(session)
+    if not is_inner_validate_anti_overfit_enabled_for_mode(mode, session=session):
         return {"enabled": False, "mode": str(mode)}
 
     runtime_policy = dict(getattr(session, "walk_forward_policy", {}) or {})
-    holdout_years = max(1, int(OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS))
+    holdout_years = max(1, int(inner_policy.get("holdout_years", 1) or 1))
     train_start_date = _policy_date(runtime_policy, "train_start_date")
     full_selection_end_date = _policy_date(runtime_policy, "search_train_end_date")
     if full_selection_end_date:
@@ -337,7 +342,9 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "m_win_rate": m_win_rate,
         "r_sq": r_sq,
     }
-    objective_fail_reason = apply_filter_rules(metrics)
+    score_policy = get_session_scientific_section(session, "score")
+    hard_gates = get_session_scientific_section(session, "hard_gates")
+    objective_fail_reason = apply_filter_rules(metrics, thresholds=hard_gates)
     if objective_fail_reason is not None:
         return {
             "ok": False,
@@ -403,6 +410,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         min_quarter_return_pct=min_quarter_return_pct,
         total_r=score_total_r,
         median_r=score_median_r,
+        score_policy=score_policy,
+        threshold_policy=hard_gates,
     )
     return {
         "ok": True,
@@ -542,6 +551,8 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         min_quarter_return_pct=min_quarter_return_pct,
         total_r=score_total_r,
         median_r=score_median_r,
+        score_policy=get_session_scientific_section(session, "score"),
+        threshold_policy=get_session_scientific_section(session, "hard_gates"),
     )
     return {
         "enabled": True,

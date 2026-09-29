@@ -52,6 +52,9 @@ from core.active_param_ensemble import (
 from core.dataset_profiles import get_dataset_dir
 from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
+from core.strategy_param_scientific_contract import (
+    build_strategy_param_runtime_scientific_contract,
+)
 from filters.breakout_quality.artifacts import compute_file_sha256, load_model_artifact_contract
 from filters.breakout_quality.binary_pit_score_store import (
     BINARY_PIT_IN_COVERAGE_MISSING_POLICY,
@@ -887,10 +890,42 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     if not reusable:
         base_policy = build_rolling_base_policy(root=root, baseline_contract=baseline_contract)
         base_policy.update({"adaptation_scope": f"binary_dl_filter_min_roos_{arm_id.lower()}", "evaluation_scope": "rolling_selection_diagnostic"})
+        runtime_scientific_contract = build_strategy_param_runtime_scientific_contract(
+            root,
+            strategy_id="breakout",
+            filter_profile=(canonical_family or "min"),
+            parameter_policy=str(args.param_policy),
+            dataset_profile=str(args.dataset),
+            schedule_start_date=str(baseline_contract["meta"]["first_oos_date"]),
+            coverage_end_date=str(baseline_contract["meta"]["last_oos_date"]),
+            train_window_months=int(baseline_contract["meta"]["train_window_months"]),
+            oos_horizon_months=int(baseline_contract["meta"]["oos_horizon_months"]),
+            fitting={
+                "enabled": False,
+                "seed_count": 1,
+                "seeds": [int(settings.seed)],
+                "generator_seed": int(settings.seed),
+                "min_agree": 1,
+                "trials_per_seed": int(args.trials_per_fold),
+            },
+            validation={"enabled": False},
+            execution_overrides={
+                "max_positions": int(args.max_positions),
+                "rotation": str(args.rotation),
+                "fixed_risk": float(args.fixed_risk),
+                "max_position_cap_pct": float(args.max_position_cap_pct),
+            },
+            references={
+                "parameter_set_identity": str(getattr(args, "parameter_set_identity", arm_id) or arm_id),
+                "optimizer_search_protocol": str(getattr(args, "optimizer_search_protocol", "") or ""),
+                "legacy_arm_id": str(arm_id),
+            },
+        )
         session_spec = {
             "output_dir": str((optimizer_output_dir / "sessions").resolve()),
             FOLD_FIXED_STRATEGY_OVERRIDES_KEY: fold_overrides,
             "runtime_cache_identity": contract["runtime_identity_sha256"],
+            "strategy_param_scientific_contract": runtime_scientific_contract,
             "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
             "train_max_positions": int(args.max_positions),
             "train_enable_rotation": str(args.rotation) == "on",
@@ -2120,6 +2155,50 @@ def prepare_selection_historical_full_roos_params(
         schedule_contract=schedule_contract,
         dataset_identity_override=dataset_identity_override,
     )
+    runtime_seed_policy = (
+        dict(seed_ensemble_policy_override)
+        if isinstance(seed_ensemble_policy_override, dict)
+        else {
+            "enabled": False,
+            "seed_count": 1,
+            "min_agree": 1,
+            "min_agree_requested": 1,
+            "min_agree_max": 1,
+            "min_agree_rule": "clamp_1_to_seed_count",
+            "seed_mode": "fixed_single_seed",
+            "params_storage": "same_json",
+            "generator_seed": int(optimizer_seed),
+            "resolved_seeds": [int(optimizer_seed)],
+        }
+    )
+    runtime_fitting_contract = {
+        **runtime_seed_policy,
+        "trials_per_seed": int(trials_per_fold),
+    }
+    runtime_scientific_contract = build_strategy_param_runtime_scientific_contract(
+        root,
+        strategy_id="breakout",
+        filter_profile="full",
+        parameter_policy=str(param_policy),
+        dataset_profile=str(dataset),
+        schedule_start_date=str(resolved_first_oos_date),
+        coverage_end_date=str(resolved_last_oos_date),
+        train_window_months=int(train_window_months),
+        oos_horizon_months=int(oos_months),
+        fitting=runtime_fitting_contract,
+        validation={"enabled": False},
+        execution_overrides={
+            "max_positions": int(max_positions),
+            "rotation": str(rotation),
+            "fixed_risk": float(fixed_risk),
+            "max_position_cap_pct": float(max_position_cap_pct),
+        },
+        dataset_generation_identity_override=dataset_identity_override,
+        references={
+            "parameter_set_identity": str(parameter_set_identity),
+            "optimizer_search_protocol": str(optimizer_search_protocol or "").strip() or None,
+        },
+    )
     prior = _load_json(preflight_path)
     reusable = bool(
         isinstance(prior, dict)
@@ -2175,6 +2254,7 @@ def prepare_selection_historical_full_roos_params(
             "runtime_cache_identity": _selection_full_roos_optimizer_runtime_cache_identity(
                 contract, optimizer_search_protocol=optimizer_search_protocol
             ),
+            "strategy_param_scientific_contract": runtime_scientific_contract,
             "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
             "train_max_positions": int(max_positions),
             "train_enable_rotation": str(rotation) == "on",
