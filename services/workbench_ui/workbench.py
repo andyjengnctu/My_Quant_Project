@@ -76,6 +76,8 @@ WORKBENCH_COMBOBOX_POPUP_FIT_RETRY_MS = 8
 WORKBENCH_DEFAULT_PANEL_ID = "trading_account"
 WORKBENCH_TAB_LOAD_DEBOUNCE_MS = 120
 WORKBENCH_PANEL_ACTIVATION_DELAY_MS = 180
+WORKBENCH_STARTUP_MAXIMIZE_SETTLE_MS = 90
+WORKBENCH_STARTUP_PANEL_DELAY_MS = 60
 
 # AI: Workbench can expose the same zero-quota consumer reconcile from more than
 # one center.  Serialize that mutation inside this GUI process so rapid tab
@@ -902,6 +904,10 @@ class StockToolsWorkbench:
         self._panel_selection_after_id = None
         self._panel_construct_scheduled: set[str] = set()
         self._pending_single_stock_request: dict[str, object] | None = None
+        self._startup_map_binding_id = None
+        self._startup_maximize_scheduled = False
+        self._startup_settle_after_id = None
+        self._maximize_mode = None
         # Cross-panel navigation seam used by Trading tables without importing the
         # inspector implementation into the Trading panel.
         self.root._open_single_stock_inspector = self.open_single_stock_inspector
@@ -911,14 +917,44 @@ class StockToolsWorkbench:
         self.root._notify_trading_account_changed = self.notify_trading_account_changed
         self._build_ui()
         self.root.update_idletasks()
+        # AI: On Windows, applying ``zoomed`` in the same synchronous turn as
+        # ``deiconify`` can race the first native Map/non-client-area calculation.
+        # The symptom is an intermittently clipped maximized top edge.  Wait until
+        # the root has actually mapped, maximize on the next idle turn, then let
+        # the maximized geometry settle before any first-open panel I/O starts.
+        self._startup_map_binding_id = self.root.bind(
+            "<Map>", self._on_startup_root_mapped, add="+"
+        )
         self.root.deiconify()
-        self._maximize_mode = _maximize_root_window(self.root)
+
+    def _on_startup_root_mapped(self, event=None):
+        if event is not None and getattr(event, "widget", None) is not self.root:
+            return
+        if self._startup_maximize_scheduled:
+            return
+        self._startup_maximize_scheduled = True
+        if self._startup_map_binding_id is not None:
+            try:
+                self.root.unbind("<Map>", self._startup_map_binding_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback('root.unbind("<Map>")', exc)
+            self._startup_map_binding_id = None
+        self.root.after_idle(self._maximize_after_startup_map)
+
+    def _maximize_after_startup_map(self):
         self.root.update_idletasks()
-        # AI: Load only the selected tab after the shell has had a chance to paint.
-        # Other tabs remain true first-use lazy.  In particular, do not pre-import
-        # the single-stock inspector during startup: its factory is requested on
-        # demand by cross-panel navigation and otherwise only adds import contention.
-        self.root.after(60, self._prime_initial_panel_factory)
+        self._maximize_mode = _maximize_root_window(self.root)
+        self._startup_settle_after_id = self.root.after(
+            WORKBENCH_STARTUP_MAXIMIZE_SETTLE_MS,
+            self._finish_startup_window_settle,
+        )
+
+    def _finish_startup_window_settle(self):
+        self._startup_settle_after_id = None
+        self.root.update_idletasks()
+        # AI: Keep panel loading strictly after native maximize/layout settlement so
+        # first-open imports and Tk construction cannot perturb startup geometry.
+        self.root.after(WORKBENCH_STARTUP_PANEL_DELAY_MS, self._prime_initial_panel_factory)
 
     def _prime_initial_panel_factory(self):
         """Load only the currently visible panel off the Tk thread."""
