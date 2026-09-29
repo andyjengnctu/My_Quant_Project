@@ -48,6 +48,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_WARNING_LABEL_STYLE,
     WORKBENCH_TEXT,
     _warn_gui_fallback,
+    run_workbench_local_reconcile_serialized,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -208,6 +209,8 @@ class MarketDataOpsPanel(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=6, style=WORKBENCH_FRAME_STYLE)
         self._action_thread: threading.Thread | None = None
+        self._action_results: queue.Queue = queue.Queue()
+        self._action_poll_after_id: str | None = None
         self._status_refresh_token = 0
         self._status_refresh_threads: dict[int, threading.Thread] = {}
         self._status_refresh_results: queue.Queue = queue.Queue()
@@ -1127,13 +1130,16 @@ class MarketDataOpsPanel(ttk.Frame):
         self._status_label.configure(style=WORKBENCH_WARNING_LABEL_STYLE)
         self._action_thread = threading.Thread(target=self._run_action, args=(action,), name=f"workbench-data-ops-{action}", daemon=True)
         self._action_thread.start()
+        self._schedule_action_result_poll()
 
     def _run_action(self, action: str):
         console_progress = MarketDataDailyConsoleProgress() if action in {"due", "full"} else None
         try:
             if action == "reconcile":
-                result = reconcile_trading_v2_consumer_state_from_local_evidence(
-                    WORKBENCH_PROJECT_ROOT
+                result = run_workbench_local_reconcile_serialized(
+                    lambda: reconcile_trading_v2_consumer_state_from_local_evidence(
+                        WORKBENCH_PROJECT_ROOT
+                    )
                 )
             elif action == "due":
                 result = run_trading_market_data_auto_update(
@@ -1158,18 +1164,41 @@ class MarketDataOpsPanel(ttk.Frame):
                 result = remove_market_data_scheduler(WORKBENCH_PROJECT_ROOT)
             else:
                 raise ValueError(f"未知 Market Data Ops action: {action}")
+            if console_progress is not None:
+                canonical_result = result.get("market_data_v2_archive") if action == "full" and isinstance(result, dict) else result
+                if isinstance(canonical_result, dict):
+                    console_progress.result(canonical_result, label="Workbench Full Update" if action == "full" else "Workbench Due Check")
+                else:
+                    console_progress.close()
         except Exception as exc:
             if console_progress is not None:
                 console_progress.close()
-            self.after(0, self._finish_action_error, exc)
+            self._action_results.put((None, exc))
             return
-        if console_progress is not None:
-            canonical_result = result.get("market_data_v2_archive") if action == "full" and isinstance(result, dict) else result
-            if isinstance(canonical_result, dict):
-                console_progress.result(canonical_result, label="Workbench Full Update" if action == "full" else "Workbench Due Check")
+        # AI: Worker threads must never call Tk methods directly.  Queue the
+        # result and let the Tk-thread poller update widgets/messageboxes.
+        self._action_results.put((result, None))
+
+    def _schedule_action_result_poll(self) -> None:
+        if self._action_poll_after_id is not None:
+            return
+        self._action_poll_after_id = self.after(25, self._drain_action_results)
+
+    def _drain_action_results(self) -> None:
+        self._action_poll_after_id = None
+        handled = False
+        while True:
+            try:
+                result, error = self._action_results.get_nowait()
+            except queue.Empty:
+                break
+            handled = True
+            if error is not None:
+                self._finish_action_error(error)
             else:
-                console_progress.close()
-        self.after(0, self._finish_action_success, result)
+                self._finish_action_success(result)
+        if not handled and self._action_thread is not None and self._action_thread.is_alive():
+            self._schedule_action_result_poll()
 
     def _finish_action_success(self, result):
         self._action_thread = None

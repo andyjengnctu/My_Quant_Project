@@ -5532,7 +5532,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_combobox_popdown_repositions_above_when_bottom_space_is_insufficient", True, bottom_edge_geometry["y"] < 980 and bottom_edge_geometry["y"] >= 18)
     check("workbench_cross_panel_navigation_preserves_candidate_row_to_inspector", True, all(token in workbench_source for token in ('"candidate_row": dict(candidate_row or {})', 'candidate_row=dict(request.get("candidate_row") or {})')) and "on_open_stock=self._open_candidate_ticker_in_inspector" in panel_source and "candidate_row=dict(candidate_row or {})" in panel_source)
     check("workbench_cross_panel_navigation_shares_entire_trading_candidate_pool", True, all(token in workbench_source for token in ('"candidate_rows": [dict(row) for row in list(candidate_rows or [])]', 'candidate_rows=[dict(row) for row in list(request.get("candidate_rows") or [])]')) and "candidate_rows=[dict(row) for row in list(self._candidate_rows or [])]" in panel_source and 'candidate_latest_data_date=self._candidate_payload.get("latest_data_date")' in panel_source)
-    check("workbench_primes_single_stock_factory_before_first_cross_panel_navigation", True, "def _prime_initial_panel_factories" in workbench_source and 'self._request_panel_load("single_stock_backtest_inspector")' in workbench_source)
+    check("workbench_single_stock_factory_stays_first_use_lazy", True, "def _prime_initial_panel_factory" in workbench_source and 'self._request_panel_load("single_stock_backtest_inspector")' not in workbench_source.split("def _prime_initial_panel_factory", 1)[1].split("def _build_ui", 1)[0] and 'self._request_panel_load(panel_id)' in workbench_source.split("def open_single_stock_inspector", 1)[1].split("def _consume_pending_single_stock_request", 1)[0])
     check("workbench_pending_single_stock_navigation_wins_lazy_import_selection_race", True, 'panel_id == "single_stock_backtest_inspector" and self._pending_single_stock_request' in workbench_source and 'self._notebook.select(host)' in workbench_source)
     check("workbench_single_stock_defaults_to_trading_mode", True, 'self._runtime_domain_var = tk.StringVar(value="Trading")' in inspector_source)
     check("workbench_single_stock_trading_hides_research_only_param_and_risk_controls", True, '("runtime", "identity", "candidate", "pending", "holdings", "volume")' in inspector_source and '"params"' not in inspector_source.split('if trading\n                else', 1)[0].split('visible_keys =', 1)[1])
@@ -7135,7 +7135,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _pending_single_stock_request={"ticker": "2455"},
         _notebook=_FakeNotebook(),
         _selected_panel_id=lambda: selected["panel_id"],
-        _construct_ready_panel_if_selected=lambda panel_id: constructed.append(panel_id),
+        _schedule_ready_panel_construction=lambda panel_id: constructed.append(panel_id),
     )
     StockToolsWorkbench._finish_panel_load(
         lazy_nav, "single_stock_backtest_inspector", object(), None

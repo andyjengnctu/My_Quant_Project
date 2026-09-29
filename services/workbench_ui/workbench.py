@@ -74,6 +74,17 @@ WORKBENCH_COMBOBOX_POPUP_ROW_PADDING = 8
 WORKBENCH_COMBOBOX_POPUP_FIT_RETRIES = 4
 WORKBENCH_COMBOBOX_POPUP_FIT_RETRY_MS = 8
 WORKBENCH_DEFAULT_PANEL_ID = "trading_account"
+WORKBENCH_TAB_LOAD_DEBOUNCE_MS = 120
+
+# AI: Workbench can expose the same zero-quota consumer reconcile from more than
+# one center.  Serialize that mutation inside this GUI process so rapid tab
+# switching cannot rebuild/publish the same consumer generation concurrently.
+_WORKBENCH_LOCAL_RECONCILE_LOCK = threading.Lock()
+
+
+def run_workbench_local_reconcile_serialized(callback):
+    with _WORKBENCH_LOCAL_RECONCILE_LOCK:
+        return callback()
 
 
 def _scale_right_sidebar_font_size(base_size):
@@ -869,6 +880,11 @@ class StockToolsWorkbench:
         self._panel_loading: set[str] = set()
         self._panel_load_results: queue.Queue = queue.Queue()
         self._panel_poll_after_id = None
+        self._panel_import_thread = None
+        self._panel_import_active_id: str | None = None
+        self._panel_import_queue: list[str] = []
+        self._panel_selection_after_id = None
+        self._panel_construct_scheduled: set[str] = set()
         self._pending_single_stock_request: dict[str, object] | None = None
         # Cross-panel navigation seam used by Trading tables without importing the
         # inspector implementation into the Trading panel.
@@ -883,21 +899,15 @@ class StockToolsWorkbench:
         self._maximize_mode = _maximize_root_window(self.root)
         self.root.update_idletasks()
         # AI: Load only the selected tab after the shell has had a chance to paint.
-        # Other tabs are first-use lazy, so opening Workbench does not import every
-        # charting / portfolio / Trading module up front.
-        self.root.after(60, self._prime_initial_panel_factories)
+        # Other tabs remain true first-use lazy.  In particular, do not pre-import
+        # the single-stock inspector during startup: its factory is requested on
+        # demand by cross-panel navigation and otherwise only adds import contention.
+        self.root.after(60, self._prime_initial_panel_factory)
 
-    def _prime_initial_panel_factories(self):
-        """Load the visible panel plus the single-stock factory off the Tk thread.
-
-        Cross-panel Trading navigation is allowed before the inspector was ever
-        opened manually.  Priming only imports its factory; it does not construct
-        hidden Tk widgets.
-        """
+    def _prime_initial_panel_factory(self):
+        """Load only the currently visible panel off the Tk thread."""
 
         self._ensure_selected_panel_loaded()
-        if self._selected_panel_id() != "single_stock_backtest_inspector":
-            self._request_panel_load("single_stock_backtest_inspector")
 
     def _build_ui(self):
         container = ttk.Frame(self.root, padding=4, style=WORKBENCH_FRAME_STYLE)
@@ -940,6 +950,18 @@ class StockToolsWorkbench:
         return None
 
     def _on_notebook_tab_changed(self, _event=None):
+        # AI: A user can click through several tabs while the first page is still
+        # importing.  Debounce those transient selections so each click does not
+        # immediately launch another expensive import.
+        if self._panel_selection_after_id is not None:
+            self.root.after_cancel(self._panel_selection_after_id)
+        self._panel_selection_after_id = self.root.after(
+            WORKBENCH_TAB_LOAD_DEBOUNCE_MS,
+            self._load_stable_selected_panel,
+        )
+
+    def _load_stable_selected_panel(self):
+        self._panel_selection_after_id = None
         self._ensure_selected_panel_loaded()
 
     def _ensure_selected_panel_loaded(self):
@@ -949,26 +971,60 @@ class StockToolsWorkbench:
 
     def _request_panel_load(self, panel_id):
         panel_id = str(panel_id)
-        if panel_id in self._panel_instances or panel_id in self._panel_loading:
+        if panel_id in self._panel_instances:
             return
         if panel_id in self._panel_factories:
-            self._construct_ready_panel_if_selected(panel_id)
+            self._schedule_ready_panel_construction(panel_id)
+            return
+        if panel_id in self._panel_loading:
+            # If this panel is queued behind another import, promote the newly
+            # selected request instead of adding a duplicate worker.
+            if panel_id in self._panel_import_queue:
+                self._panel_import_queue.remove(panel_id)
+                self._panel_import_queue.insert(0, panel_id)
             return
         panel_spec = next((row for row in PANEL_SPECS if str(row["panel_id"]) == panel_id), None)
         if panel_spec is None:
             return
         self._panel_loading.add(panel_id)
+        self._panel_import_queue.append(panel_id)
         status = self._panel_status_labels.get(panel_id)
         if status is not None:
-            status.configure(text=f"{panel_spec['tab_label']}｜載入中…")
-        thread = threading.Thread(
-            target=self._load_panel_factory_worker,
-            args=(panel_id, str(panel_spec["panel_factory_path"])),
-            name=f"workbench-panel-import-{panel_id}",
-            daemon=True,
-        )
-        thread.start()
+            status.configure(text=f"{panel_spec['tab_label']}｜載入排程中…")
+        self._start_next_panel_import()
         self._schedule_panel_result_poll()
+
+    def _start_next_panel_import(self):
+        if self._panel_import_thread is not None and self._panel_import_thread.is_alive():
+            return
+        while self._panel_import_queue:
+            selected = self._selected_panel_id()
+            if selected in self._panel_import_queue:
+                self._panel_import_queue.remove(selected)
+                panel_id = selected
+            else:
+                panel_id = self._panel_import_queue.pop(0)
+            if panel_id not in self._panel_loading:
+                continue
+            panel_spec = next((row for row in PANEL_SPECS if str(row["panel_id"]) == panel_id), None)
+            if panel_spec is None:
+                self._panel_loading.discard(panel_id)
+                continue
+            status = self._panel_status_labels.get(panel_id)
+            if status is not None:
+                status.configure(text=f"{panel_spec['tab_label']}｜載入中…")
+            thread = threading.Thread(
+                target=self._load_panel_factory_worker,
+                args=(panel_id, str(panel_spec["panel_factory_path"])),
+                name=f"workbench-panel-import-{panel_id}",
+                daemon=True,
+            )
+            self._panel_import_active_id = panel_id
+            self._panel_import_thread = thread
+            thread.start()
+            return
+        self._panel_import_active_id = None
+        self._panel_import_thread = None
 
     def _load_panel_factory_worker(self, panel_id, factory_path):
         try:
@@ -989,7 +1045,11 @@ class StockToolsWorkbench:
                 panel_id, factory, error = self._panel_load_results.get_nowait()
             except queue.Empty:
                 break
+            if self._panel_import_active_id == str(panel_id):
+                self._panel_import_active_id = None
+                self._panel_import_thread = None
             self._finish_panel_load(panel_id, factory, error)
+            self._start_next_panel_import()
         if self._panel_loading:
             self._schedule_panel_result_poll()
 
@@ -1013,10 +1073,18 @@ class StockToolsWorkbench:
             if status is not None:
                 status.configure(text="頁面已準備｜切換到此頁時顯示")
             return
-        self._construct_ready_panel_if_selected(panel_id)
+        self._schedule_ready_panel_construction(panel_id)
+
+    def _schedule_ready_panel_construction(self, panel_id):
+        panel_id = str(panel_id)
+        if panel_id in self._panel_instances or panel_id in self._panel_construct_scheduled:
+            return
+        self._panel_construct_scheduled.add(panel_id)
+        self.root.after_idle(self._construct_ready_panel_if_selected, panel_id)
 
     def _construct_ready_panel_if_selected(self, panel_id):
         panel_id = str(panel_id)
+        self._panel_construct_scheduled.discard(panel_id)
         if panel_id in self._panel_instances or self._selected_panel_id() != panel_id:
             return
         factory = self._panel_factories.get(panel_id)

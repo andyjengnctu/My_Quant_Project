@@ -169,6 +169,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_VSCROLL_STYLE,
     WORKBENCH_WARNING,
     _warn_gui_fallback,
+    run_workbench_local_reconcile_serialized,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -472,7 +473,9 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
     # remains the only sequential prerequisite. Everything after this point is
     # read-only against the same finalized generation.
     def _reconcile_initial_state():
-        market_data = reconcile_trading_v2_consumer_state_from_local_evidence(root)
+        market_data = run_workbench_local_reconcile_serialized(
+            lambda: reconcile_trading_v2_consumer_state_from_local_evidence(root)
+        )
         manual_management = reconcile_trading_manual_position_management(root)
         return {"market_data": market_data, "manual_management": manual_management}
 
