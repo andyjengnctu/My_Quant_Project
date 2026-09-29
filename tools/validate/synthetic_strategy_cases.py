@@ -2600,7 +2600,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         get_strategy_param_fitting_seed_protocol,
         get_strategy_param_validation_protocol,
     )
-    from core.strategy_param_scientific_contract import build_strategy_param_scientific_contract
+    from core.strategy_param_scientific_contract import (
+        build_registered_strategy_param_scientific_identity,
+        build_strategy_param_scientific_contract,
+    )
     from core.training_policy import get_strategy_parameter_training_policy_snapshot
 
     active_param_profile = get_active_strategy_param_training_profile()
@@ -2695,6 +2698,37 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         performance_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
     check("strategy_param_scientific_fingerprint_ignores_performance_only_change", base_scientific_fp, performance_fp)
 
+    registered_profile_ids = tuple(
+        profile_id
+        for profile_id, raw_profile in strategy_param_policy_module.STRATEGY_PARAM_PROFILES.items()
+        if str(dict(raw_profile).get("registered_scientific_fingerprint_sha256") or "").strip()
+    )
+    registered_identity_rows = [
+        build_registered_strategy_param_scientific_identity(project_root, profile_id)
+        for profile_id in registered_profile_ids
+    ]
+    check(
+        "registered_strategy_param_profiles_match_resolved_scientific_contracts",
+        True,
+        bool(registered_identity_rows)
+        and all(bool(row.get("registration_matches", False)) for row in registered_identity_rows),
+    )
+    with patch.object(
+        training_policy_settings,
+        "MIN_ANNUAL_TRADES",
+        float(training_policy_settings.MIN_ANNUAL_TRADES) + 1.0,
+    ):
+        registered_drift_rows = [
+            build_registered_strategy_param_scientific_identity(project_root, profile_id)
+            for profile_id in registered_profile_ids
+        ]
+    check(
+        "registered_strategy_param_identity_detects_common_scientific_drift",
+        True,
+        bool(registered_drift_rows)
+        and all(not bool(row.get("registration_matches", True)) for row in registered_drift_rows),
+    )
+
     # Round 2 runtime injection: once a producer starts a fitting invocation,
     # inner consumers must keep using that resolved contract even if mutable
     # common config is changed afterwards.  Generic sessions without a contract
@@ -2708,9 +2742,85 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         _finalists_agree_policy_config,
     )
     from services.optimizer.scientific_runtime import (
+        build_optimizer_progress_display_contract,
         get_session_scientific_section,
         resolve_session_fixed_tp_percent,
         resolve_session_local_min_review_enabled,
+    )
+
+    from services.optimizer.outer_rolling_progress import (
+        format_optimizer_seed_ensemble_progress_header,
+        render_optimizer_seed_progress_line,
+    )
+
+    progress_display_contract = build_optimizer_progress_display_contract(base_scientific)
+    expected_selector = str(
+        base_scientific["scientific_contract"]["strategy"].get("parameter_policy") or ""
+    )
+    expected_show_seed_min_agree = not expected_selector.replace("_", "-").lower().endswith(
+        "-finalists-agree"
+    )
+    local_min_contract = dict(
+        base_scientific["scientific_contract"]["selection_and_anti_overfit"].get(
+            "local_min_review"
+        )
+        or {}
+    )
+    filter_profile = str(
+        base_scientific["scientific_contract"]["strategy"].get("filter_profile") or ""
+    ).lower()
+    expected_show_local_min = bool(
+        local_min_contract.get(
+            "full_mode_enabled" if filter_profile == "full" else "default_enabled",
+            local_min_contract.get("default_enabled", False),
+        )
+    )
+    check(
+        "optimizer_progress_display_contract_is_derived_from_scientific_contract",
+        True,
+        progress_display_contract.get("selector") == expected_selector
+        and bool(progress_display_contract.get("show_seed_min_agree"))
+        == expected_show_seed_min_agree
+        and bool(progress_display_contract.get("show_local_min")) == expected_show_local_min,
+    )
+    progress_header = format_optimizer_seed_ensemble_progress_header(
+        folds=1,
+        seeds=max(1, int(active_fitting_protocol.seed_count)),
+        min_agree=(
+            int(active_fitting_protocol.min_agree)
+            if progress_display_contract.get("show_seed_min_agree")
+            else None
+        ),
+        parallel_workers=1,
+        selector=progress_display_contract.get("selector"),
+        backend="synthetic",
+    )
+    check(
+        "optimizer_progress_header_hides_inapplicable_seed_agreement",
+        expected_show_seed_min_agree,
+        "seed_min_agree=" in progress_header,
+    )
+    progress_line = render_optimizer_seed_progress_line(
+        context={
+            "fold_idx": 1,
+            "fold_count": 1,
+            "seed_index": 1,
+            "seed_count": max(1, int(active_fitting_protocol.seed_count)),
+            "selection_start": "2020-01-01",
+            "selection_end": "2020-12-31",
+            "oos_period": "2021-01-01~2021-12-31",
+            "progress_display_contract": progress_display_contract,
+        },
+        progress={
+            "stage": "DONE",
+            "best_base_score": 1.0,
+            "best_local_min_score": 2.0,
+        },
+    )
+    check(
+        "optimizer_progress_line_hides_inactive_local_min_metric",
+        expected_show_local_min,
+        "best_local_min=" in progress_line,
     )
 
     injected_session = SimpleNamespace(strategy_param_scientific_contract=deepcopy(base_scientific))

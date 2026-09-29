@@ -37,6 +37,7 @@ from core.training_policy import (
 )
 
 STRATEGY_PARAM_SCIENTIFIC_CONTRACT_SCHEMA_VERSION = 1
+STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA_VERSION = 1
 
 
 def _jsonable(value: Any) -> Any:
@@ -244,8 +245,46 @@ def build_strategy_param_scientific_fingerprint(
     )
 
 
+def build_registered_strategy_param_scientific_identity(
+    project_root: str | Path,
+    profile_id: str,
+    *,
+    execution_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve and validate one profile's immutable scientific identity.
+
+    Profiles may remain unregistered while they are still mutable research
+    configuration.  Once ``registered_scientific_fingerprint_sha256`` is
+    present, the resolved semantics must match it exactly.  This is the source
+    registration gate; artifact manifests separately bind the same full
+    contract/fingerprint to concrete PARAM outputs.
+    """
+
+    profile = get_strategy_param_training_profile(profile_id)
+    resolved = build_strategy_param_scientific_contract(
+        project_root,
+        profile_id,
+        execution_overrides=execution_overrides,
+    )
+    actual = str(resolved["scientific_fingerprint_sha256"])
+    registered = profile.registered_scientific_fingerprint_sha256
+    return {
+        "schema_version": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA_VERSION,
+        "profile_id": str(profile.profile_id),
+        "parameter_set_identity": str(profile.parameter_set_identity),
+        "registered": registered is not None,
+        "registered_scientific_fingerprint_sha256": registered,
+        "scientific_fingerprint_sha256": actual,
+        "registration_matches": bool(registered is not None and registered == actual),
+        "scientific_contract": dict(resolved["scientific_contract"]),
+        "references": dict(resolved.get("references") or {}),
+    }
+
+
 __all__ = [
     "STRATEGY_PARAM_SCIENTIFIC_CONTRACT_SCHEMA_VERSION",
+    "STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA_VERSION",
+    "build_registered_strategy_param_scientific_identity",
     "build_strategy_param_runtime_scientific_contract",
     "build_strategy_param_scientific_contract",
     "build_strategy_param_scientific_fingerprint",

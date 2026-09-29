@@ -12225,3 +12225,13 @@ Decision：`ENGINEERING_ONLY / NONINLINE_REUSES_CANONICAL_SEED_RENDERER / THROTT
 - **Scientific impact**：無。P6/C85仍為4 fixed fitting seeds × 300 trials/seed、`min_agree=3/4`、同一selector／PIT／artifact identity；未修改optimizer objective、trial結果、seed bundle、Robustness replication或Trading production。
 
 Decision：`ENGINEERING_ONLY / STREAM_ADAPTER_PRESERVES_TTY / FIXED_PROGRESS_BLOCK_SSOT / EXISTING_1S_PARENT_POLL / NO_SECOND_REFRESH_IMPLEMENTATION / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-09-30 — PARAM-P6 / SR-C85 scientific identity binding refactor Round 3
+
+- **Immutable registration**：`production_multiseed_current / PARAM-P6 / SR-C85`成為第一個綁定canonical Strategy Parameter scientific contract的current identity。`config/strategy_params.py`只保存resolved semantic fingerprint=`b6162e8debd663a54fc3a56d2f738e7a217e11128a1fa2148dac01006bae976b`；120M/12M、固定4-seed fitting bundle、300 trials/seed、`base-finalists-agree`、Research data generation lineage、search/schema/defaults、score、hard gates、execution economics、local-min／anti-overfit、validation-disabled等仍由各自既有owner解析，不複製第二套參數表。
+- **Artifact binding / drift gate**：新建P6 `identity_manifest.json`保存完整resolved scientific contract與fingerprint。Source registration與current resolved contract不符、或已綁定manifest與current contract不符時一律`BLOCKED`，不得以相同P6/C85 identity自動REBUILD。既有manifest若沒有scientific identity欄位，標記`LEGACY_SCIENTIFIC_IDENTITY_UNBOUND`；系統不自動宣稱舊artifact具備無法證明的hard-gate/score等歷史語意，只有explicit force rebuild可在未漂移的registered contract下重新產生並綁定。
+- **Single-resolve execution**：P6 ensure在identity inspection後直接使用已解析legacy build contract中的dataset／position／risk值啟動canonical producer，不在inspect與實際training之間再次讀取mutable execution defaults；Round 2 session-level frozen scientific contract仍是inner Optimizer唯一scientific runtime source。
+- **Contract-driven progress visibility**：Rolling與single-fold multi-seed共用canonical progress renderer。顯示欄位由resolved scientific contract衍生：`base-finalists-agree`不再顯示不適用的outer `seed_min_agree`；local-min disabled時不再顯示`best_local_min`／local-min throughput。Seed log reader同時保留先前search event的best-base值，避免最新event缺欄時DONE列退化成`best_base=N/A`。此修改只影響human display，不改optimizer event、selector或score。
+- **Scientific impact**：無新的研究treatment。P6/C85既有4 fixed fitting seeds × 300 trials/seed、120M/12M、selector、PIT、Trading隔離與RESULT_PENDING狀態不變；本Round只把其既有語意永久註冊並建立fail-fast reuse boundary。
+
+Decision：`PARAM-P6_C85_SCIENTIFIC_CONTRACT_BOUND / REGISTERED_FINGERPRINT_IMMUTABLE / LEGACY_UNBOUND_NOT_AUTO_ADOPTED / SCIENTIFIC_DRIFT_BLOCKED / CONTRACT_DRIVEN_PROGRESS_FIELDS / NO_RESULT_CHANGE`。

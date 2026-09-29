@@ -313,6 +313,13 @@ class _ParallelFoldLiveBoard:
         if seed_ensemble_display:
             seed_policy = task_seed_policy or _build_rolling_seed_ensemble_policy_payload()
             seed_count = int(seed_policy.get("seed_count", 1) or 1)
+            progress_display_contract = dict(
+                (self.tasks[0].get("progress_display_contract") if self.tasks else {}) or {}
+            )
+            show_seed_min_agree = bool(
+                progress_display_contract.get("show_seed_min_agree", True)
+            )
+            show_local_min = bool(progress_display_contract.get("show_local_min", True))
             seed_progress_maps = {id(task): _read_latest_parallel_fold_seed_progresses_for_task(task) for task in self.tasks}
             phase_metrics = _collect_seed_progress_phase_metrics(
                 progress
@@ -324,8 +331,13 @@ class _ParallelFoldLiveBoard:
             header = format_optimizer_seed_ensemble_progress_header(
                 folds=total_folds,
                 seeds=seed_count,
-                min_agree=int(seed_policy.get("min_agree", seed_count) or seed_count),
+                min_agree=(
+                    int(seed_policy.get("min_agree", seed_count) or seed_count)
+                    if show_seed_min_agree
+                    else None
+                ),
                 parallel_workers=resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count),
+                selector=str(progress_display_contract.get("selector") or "").strip() or None,
                 backend=resolve_optimizer_random_seed_ensemble_parallel_backend_default(),
                 completed_folds=len(completed_rows_sorted),
                 pending_folds=len(pending),
@@ -334,8 +346,14 @@ class _ParallelFoldLiveBoard:
                 setup_elapsed_sec=setup_elapsed,
                 completed_trials=completed_trials,
                 search_wall_elapsed_sec=phase_metrics.get("search_wall_elapsed_sec"),
-                completed_local_min_trials=int(phase_metrics.get("completed_local_min_trials", 0) or 0),
-                local_min_wall_elapsed_sec=phase_metrics.get("local_min_wall_elapsed_sec"),
+                completed_local_min_trials=(
+                    int(phase_metrics.get("completed_local_min_trials", 0) or 0)
+                    if show_local_min
+                    else 0
+                ),
+                local_min_wall_elapsed_sec=(
+                    phase_metrics.get("local_min_wall_elapsed_sec") if show_local_min else None
+                ),
                 completed_replays=int(replay_metrics.get("completed_replays", 0) or 0),
                 replay_wall_elapsed_sec=replay_metrics.get("replay_wall_elapsed_sec"),
             )
@@ -360,6 +378,7 @@ class _ParallelFoldLiveBoard:
                         "selection_start": str(task.get("selection_start_date") or task.get("selection_period") or ""),
                         "selection_end": str(task.get("selection_end_date") or ""),
                         "selection_period": str(task.get("selection_period") or ""),
+                        "progress_display_contract": progress_display_contract,
                     }
                     seed_contexts.append(context)
                     seed_progress_by_key[_seed_progress_context_key(context)] = progress

@@ -911,6 +911,7 @@ def _collect_parameter_artifact_status(
         policy_rows: dict[str, Any] = {}
         all_artifacts_ready = True
         any_target_exists = False
+        scientific_identity_blocked = False
         builder_type = (
             "" if source.builder is None else str(source.builder.builder_type or "").strip()
         )
@@ -974,6 +975,10 @@ def _collect_parameter_artifact_status(
                 )
                 policy_identity_ready = bool(p6_state["ready"])
                 policy_identity_status = str(p6_state["status"])
+                scientific_identity_blocked = bool(
+                    scientific_identity_blocked
+                    or str(p6_state.get("action") or "") == "BLOCKED"
+                )
             elif source.canonical_family and source.canonical_evaluation_mode:
                 policy_identity_ready, policy_identity_status, _canonical_target = (
                     validate_strategy_parameter_artifact_identity(
@@ -1049,15 +1054,19 @@ def _collect_parameter_artifact_status(
         artifact_exists = bool(
             any_target_exists or (identity_path is not None and identity_path.exists())
         )
-        action = resolve_research_artifact_action(
-            ready=bool(all_artifacts_ready),
-            artifact_exists=artifact_exists,
-            has_builder=has_builder,
-            auto_prepare=bool(settings.preparation.auto_prepare),
-            reuse_ready_artifacts=bool(settings.preparation.reuse_ready_artifacts),
-            rebuild_stale_artifacts=bool(settings.preparation.rebuild_stale_artifacts),
-            resume_partial_artifacts=bool(settings.preparation.resume_parameter_training),
-            resumable=False,
+        action = (
+            "BLOCKED"
+            if scientific_identity_blocked
+            else resolve_research_artifact_action(
+                ready=bool(all_artifacts_ready),
+                artifact_exists=artifact_exists,
+                has_builder=has_builder,
+                auto_prepare=bool(settings.preparation.auto_prepare),
+                reuse_ready_artifacts=bool(settings.preparation.reuse_ready_artifacts),
+                rebuild_stale_artifacts=bool(settings.preparation.rebuild_stale_artifacts),
+                resume_partial_artifacts=bool(settings.preparation.resume_parameter_training),
+                resumable=False,
+            )
         )
         if action == "REUSE":
             description = "重用既有策略參數工件"
@@ -1077,6 +1086,9 @@ def _collect_parameter_artifact_status(
             else:
                 description = "執行或接續config指定的策略參數訓練"
             builder_type = builder.builder_type
+        elif action == "BLOCKED":
+            builder_type = None
+            description = "scientific identity drift／legacy unbound；禁止以相同PARAM identity自動重建"
         else:
             builder_type = None
             description = (

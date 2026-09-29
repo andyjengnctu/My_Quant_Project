@@ -85,16 +85,18 @@ Exit: runtime scientific semantics come from the resolved contract. Generic/non-
 
 Round-2 evidence: latest-baseline vs refactored legacy fixed-multiseed build-contract hash and Optimizer effective-policy fingerprint are identical; generic no-contract score/selector/search and trial-param materialization are also byte/value-equivalent. Capability tests (95/95) additionally mutate mutable training config *after* contract resolution and verify the injected session/context continues to use the frozen trial generation, score, buy-sort/EV, local-min, fixed-TP, finalist-agree and dominant-year semantics.
 
-### Round 3 — C85 / PARAM-P6 first full identity consumer **[PENDING]**
+### Round 3 — C85 / PARAM-P6 first full identity consumer **[DONE]**
 
-- [ ] Freeze/register current P6/C85 scientific fingerprint without silently changing historical semantics.
-- [ ] Bind 120M/12M, 4 fixed fitting seeds, 300 trials/seed, `base-finalists-agree`, data lineage, score/gates/search/economics/anti-overfit/validation-disabled semantics.
-- [ ] Fail fast on scientific contract drift instead of rebuilding a different meaning under the same P6/C85 identity.
-- [ ] Make progress/report fields contract-driven; remove inapplicable `best_local_min` / `seed_min_agree` leakage from this selector path through the canonical renderer owner.
+- [x] Freeze/register current P6/C85 scientific fingerprint without silently changing historical semantics.
+- [x] Bind 120M/12M, 4 fixed fitting seeds, 300 trials/seed, `base-finalists-agree`, data lineage, score/gates/search/economics/anti-overfit/validation-disabled semantics.
+- [x] Fail fast on scientific contract drift instead of rebuilding a different meaning under the same P6/C85 identity.
+- [x] Make progress/report fields contract-driven; remove inapplicable `best_local_min` / `seed_min_agree` leakage from this selector path through the canonical renderer owner.
 
 Exit: C85/P6 has one reproducible scientific meaning.
 
-### Round 4 — Migrate existing strategy-param / Strategy Compare identities **[PENDING]**
+Round-3 evidence: `production_multiseed_current` is source-registered against the canonical resolved scientific fingerprint; P6 inspect returns `BLOCKED` on common scientific drift, existing manifests without scientific identity are `LEGACY_SCIENTIFIC_IDENTITY_UNBOUND`, and bound manifests must carry the exact resolved contract/fingerprint. Progress visibility is derived from the same contract so finalist-agree/local-min-disabled runs no longer leak `seed_min_agree` / `best_local_min`; no optimizer result semantics changed. Permanent formal ownership is registered as B422/T560 in `doc/TEST_SUITE_CHECKLIST.md`; B253 now explicitly distinguishes ordinary artifact/workspace staleness from scientific-identity drift.
+
+### Round 4 — Migrate existing strategy-param / Strategy Compare identities **[NEXT]**
 
 - [ ] Migrate C58/C61/C62/C84/C85 and relevant `PARAM-P*` lineage to the same contract system.
 - [ ] Keep completed historical evidence immutable.
@@ -133,8 +135,8 @@ Exit: component identity, scientific contracts, runtime and historical experimen
 | --- | --- | --- |
 | 1 | DONE | No |
 | 2 | DONE | No |
-| 3 | NEXT | No; identity binding/migration only |
-| 4 | PENDING | No; historical migration only |
+| 3 | DONE | No; identity binding/migration only |
+| 4 | NEXT | No; historical migration only |
 | 5 | PENDING | **Yes — explicit validation research change** |
 | 6 | PENDING | No for identity refactor; new compositions later require explicit research identity |
 

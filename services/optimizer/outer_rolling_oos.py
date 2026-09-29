@@ -29,7 +29,10 @@ from config.training_policy import (
 from core.training_policy import (
     is_optimizer_local_min_review_enabled,
 )
-from services.optimizer.scientific_runtime import resolve_session_local_min_review_enabled
+from services.optimizer.scientific_runtime import (
+    build_optimizer_progress_display_contract,
+    resolve_session_local_min_review_enabled,
+)
 from core.training_performance import (
     is_optimizer_active_replay_include_pit_stats_index_enabled,
     is_optimizer_active_replay_include_trade_logs_enabled,
@@ -991,6 +994,15 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
     oos_year = int(task.get("oos_year", 0) or 0)
     selection_start = str(task.get("selection_start_date") or "")
     selection_end = str(task.get("selection_end_date") or "")
+    progress_display_contract = dict(task.get("progress_display_contract") or {})
+    show_seed_min_agree = bool(progress_display_contract.get("show_seed_min_agree", True))
+    show_local_min = bool(progress_display_contract.get("show_local_min", True))
+    selector_for_display = str(
+        progress_display_contract.get("selector")
+        or policy.get("selector")
+        or policy.get("policy")
+        or ""
+    ).strip() or None
     _write_parallel_fold_progress_event(
         stage="START",
         fold_idx=fold_idx,
@@ -1038,6 +1050,7 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
             "selection_end": str(selection_end),
             "selection_period": str(task.get("selection_period") or ""),
             "show_oos": True,
+            "progress_display_contract": progress_display_contract,
         }
         for member_index, seed in enumerate(seeds, start=1)
     ]
@@ -1046,17 +1059,25 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
         return format_optimizer_seed_ensemble_progress_header(
             folds=1,
             seeds=len(seeds),
-            min_agree=int(policy.get("min_agree", len(seeds)) or len(seeds)),
+            min_agree=(
+                int(policy.get("min_agree", len(seeds)) or len(seeds))
+                if show_seed_min_agree
+                else None
+            ),
             parallel_workers=int(parallel_workers),
-            selector=str(policy.get("selector") or policy.get("policy") or "base-finalists-agree"),
+            selector=selector_for_display,
             backend=str(parallel_backend),
             completed_folds=board.get_completed_fold_count(),
             pending_folds=max(0, 1 - board.get_completed_fold_count()),
             total_elapsed_sec=max(0.0, time.perf_counter() - started),
             completed_trials=board.get_completed_trial_count(),
             search_wall_elapsed_sec=board.get_search_wall_elapsed_sec(),
-            completed_local_min_trials=board.get_completed_local_min_trial_count(),
-            local_min_wall_elapsed_sec=board.get_local_min_wall_elapsed_sec(),
+            completed_local_min_trials=(
+                board.get_completed_local_min_trial_count() if show_local_min else 0
+            ),
+            local_min_wall_elapsed_sec=(
+                board.get_local_min_wall_elapsed_sec() if show_local_min else None
+            ),
             completed_replays=board.get_completed_replay_count(),
             replay_wall_elapsed_sec=board.get_replay_wall_elapsed_sec(),
         )
@@ -1881,6 +1902,9 @@ def run_outer_rolling_oos(
     from services.optimizer.session_factory import build_optimizer_session_from_spec
 
     session_spec = dict(optimizer_session_spec or {})
+    progress_display_contract = build_optimizer_progress_display_contract(
+        session_spec.get("strategy_param_scientific_contract")
+    )
 
     def _build_session(walk_forward_policy, *, oos_start_date=None):
         resolved_session_spec = resolve_optimizer_session_spec_for_fold(
@@ -2037,6 +2061,7 @@ def run_outer_rolling_oos(
                 "timing_mode": bool(timing_mode),
                 "fold_workers": int(fold_workers),
                 "optimizer_session_spec": dict(session_spec),
+                "progress_display_contract": dict(progress_display_contract),
                 "seed_ensemble_policy": dict(runtime_seed_policy),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             })
@@ -2122,6 +2147,7 @@ def run_outer_rolling_oos(
                 "timing_mode": bool(timing_mode),
                 "fold_workers": int(fold_workers),
                 "optimizer_session_spec": dict(session_spec),
+                "progress_display_contract": dict(progress_display_contract),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
                 "mirror_console": True,
                 "shared_raw_context": shared_raw_context,
@@ -2187,6 +2213,7 @@ def run_outer_rolling_oos(
                 "timing_mode": bool(timing_mode),
                 "fold_workers": int(fold_workers),
                 "optimizer_session_spec": dict(session_spec),
+                "progress_display_contract": dict(progress_display_contract),
                 "seed_ensemble_policy": dict(runtime_seed_policy),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
                 "mirror_console": True,
@@ -2573,6 +2600,9 @@ def run_outer_rolling_oos(
     seed_ensemble_enabled = bool(seed_policy.get("enabled", False))
     effective_seed_count = int(seed_policy.get("seed_count", 1) or 1)
     effective_min_agree = int(seed_policy.get("min_agree", effective_seed_count) or effective_seed_count)
+    show_seed_min_agree = bool(progress_display_contract.get("show_seed_min_agree", True))
+    show_local_min = bool(progress_display_contract.get("show_local_min", True))
+    selector_for_display = str(progress_display_contract.get("selector") or "").strip() or None
     if not seed_ensemble_performance_metrics:
         seed_ensemble_performance_metrics = {
             "completed_trials": int(timing_summary.get("completed_trials", 0) or 0),
@@ -2585,13 +2615,22 @@ def run_outer_rolling_oos(
     print(format_optimizer_final_performance_summary(
         folds=int(fold_count),
         seeds=int(effective_seed_count),
-        min_agree=int(effective_min_agree),
+        min_agree=int(effective_min_agree) if show_seed_min_agree else None,
         completed_folds=int(len(rows)),
+        selector=selector_for_display,
         total_elapsed_sec=float(timing_summary.get("overall_sec", max(0.0, time.perf_counter() - overall_start)) or 0.0),
         completed_trials=int(seed_ensemble_performance_metrics.get("completed_trials", 0) or 0),
         search_wall_elapsed_sec=seed_ensemble_performance_metrics.get("search_wall_elapsed_sec"),
-        completed_local_min_trials=int(seed_ensemble_performance_metrics.get("completed_local_min_trials", 0) or 0),
-        local_min_wall_elapsed_sec=seed_ensemble_performance_metrics.get("local_min_wall_elapsed_sec"),
+        completed_local_min_trials=(
+            int(seed_ensemble_performance_metrics.get("completed_local_min_trials", 0) or 0)
+            if show_local_min
+            else 0
+        ),
+        local_min_wall_elapsed_sec=(
+            seed_ensemble_performance_metrics.get("local_min_wall_elapsed_sec")
+            if show_local_min
+            else None
+        ),
         completed_replays=int(seed_ensemble_performance_metrics.get("completed_replays", 0) or 0),
         replay_wall_elapsed_sec=seed_ensemble_performance_metrics.get("replay_wall_elapsed_sec"),
         resource_summary=timing_summary,

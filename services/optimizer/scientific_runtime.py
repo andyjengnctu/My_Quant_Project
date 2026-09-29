@@ -33,6 +33,40 @@ def get_session_scientific_section(session, section_name: str) -> dict[str, Any]
     )
 
 
+def build_optimizer_progress_display_contract(
+    scientific_contract: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Derive progress-field visibility from resolved scientific semantics.
+
+    This is presentation metadata only.  It does not choose a policy or alter
+    any optimization result; it prevents inactive scientific capabilities from
+    leaking misleading fields into the canonical progress renderer.
+    """
+
+    normalized = normalize_scientific_contract(scientific_contract)
+    if normalized is None:
+        return {
+            "selector": None,
+            "show_seed_min_agree": True,
+            "show_local_min": True,
+        }
+    strategy = dict(normalized.get("strategy") or {})
+    selection = dict(normalized.get("selection_and_anti_overfit") or {})
+    selector = str(strategy.get("parameter_policy") or selection.get("parameter_policy") or "").strip()
+    selector_key = selector.replace("_", "-").lower()
+    local = dict(selection.get("local_min_review") or {})
+    filter_profile = str(strategy.get("filter_profile") or "").strip().lower()
+    if filter_profile == "full":
+        local_enabled = bool(local.get("full_mode_enabled", local.get("default_enabled", False)))
+    else:
+        local_enabled = bool(local.get("default_enabled", False))
+    return {
+        "selector": selector or None,
+        "show_seed_min_agree": not selector_key.endswith("-finalists-agree"),
+        "show_local_min": bool(local_enabled),
+    }
+
+
 def resolve_session_local_min_review_enabled(session, *, model_mode=None) -> bool:
     selection = get_session_scientific_section(session, "selection_and_anti_overfit")
     if isinstance(selection, dict):
@@ -118,6 +152,7 @@ def resolve_finalists_agree_min_agree(policy_name: str, member_count: int, reque
 
 
 __all__ = [
+    "build_optimizer_progress_display_contract",
     "get_session_scientific_contract",
     "get_session_scientific_section",
     "resolve_finalists_agree_min_agree",

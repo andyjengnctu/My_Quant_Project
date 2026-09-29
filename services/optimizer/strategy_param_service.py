@@ -28,6 +28,9 @@ from core.active_param_ensemble import (
 )
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from core.strategy_param_scientific_contract import (
+    build_registered_strategy_param_scientific_identity,
+)
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY,
@@ -1937,6 +1940,67 @@ _FIXED_MULTI_SEED_WORK_RELATIVE = (
 _FIXED_MULTI_SEED_SEARCH_PROTOCOL = "fixed_multiseed_v1"
 
 
+def _fixed_multiseed_execution_overrides(
+    *,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, Any]:
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK,
+        DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS,
+        DEFAULT_PORTFOLIO_ROTATION,
+    )
+
+    return {
+        "max_positions": int(
+            DEFAULT_PORTFOLIO_MAX_POSITIONS if max_positions is None else max_positions
+        ),
+        "rotation": str(
+            DEFAULT_PORTFOLIO_ROTATION if rotation in (None, "") else rotation
+        ),
+        "fixed_risk": float(DEFAULT_FIXED_RISK if fixed_risk is None else fixed_risk),
+        "max_position_cap_pct": float(
+            DEFAULT_MAX_POSITION_CAP_PCT
+            if max_position_cap_pct is None
+            else max_position_cap_pct
+        ),
+    }
+
+
+def _fixed_multiseed_scientific_identity(
+    project_root: str | Path,
+    *,
+    training_profile_id: str,
+    dataset: str | None,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, Any]:
+    from core.strategy_param_policy import get_strategy_param_training_profile
+
+    profile = get_strategy_param_training_profile(training_profile_id)
+    requested_dataset = str(profile.dataset if dataset in (None, "") else dataset)
+    if requested_dataset != str(profile.dataset):
+        raise ValueError(
+            "registered fixed multi-seed identity不得覆寫dataset: "
+            f"profile={profile.dataset!r}, requested={requested_dataset!r}"
+        )
+    return build_registered_strategy_param_scientific_identity(
+        project_root,
+        training_profile_id,
+        execution_overrides=_fixed_multiseed_execution_overrides(
+            max_positions=max_positions,
+            rotation=rotation,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
+        ),
+    )
+
+
 def fixed_multiseed_strategy_param_artifact_path(
     project_root: str | Path,
     *,
@@ -2029,15 +2093,29 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
         fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
     )
+    scientific_identity = _fixed_multiseed_scientific_identity(
+        root,
+        training_profile_id=training_profile_id,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
     manifest = _load_json_object(manifest_path)
     payload = _load_json_object(target)
     coverage_end = _canonical_schedule_coverage_end(target)
     adaptation = dict((payload or {}).get("breakout_quality_param_adaptation") or {})
     expected_seed_policy = dict(contract["seed_ensemble_policy"])
     actual_seed_policy = dict(adaptation.get("seed_ensemble_policy") or {})
+    manifest_scientific_identity = dict((manifest or {}).get("scientific_identity") or {})
 
     status = "READY"
-    if payload is None:
+    if not bool(scientific_identity.get("registered", False)):
+        status = "SCIENTIFIC_IDENTITY_UNREGISTERED"
+    elif not bool(scientific_identity.get("registration_matches", False)):
+        status = "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT"
+    elif payload is None:
         status = "ARTIFACT_MISSING_OR_INVALID"
     elif str(payload.get("selector") or "") != normalized_policy:
         status = "POLICY_SELECTOR_MISMATCH"
@@ -2052,7 +2130,9 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
     elif coverage_end is None or str(coverage_end) < end_date:
         status = "SCHEDULE_COVERAGE_INCOMPLETE"
     elif manifest is None:
-        status = "MANIFEST_MISSING_OR_INVALID"
+        status = "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"
+    elif not manifest_scientific_identity:
+        status = "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"
     elif str(manifest.get("producer") or "") != "optimizer":
         status = "PRODUCER_MISMATCH"
     elif str(manifest.get("parameter_set") or "") != str(contract["parameter_set"]):
@@ -2065,19 +2145,52 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
         status = "MANIFEST_FITTING_SEED_POLICY_MISMATCH"
     elif dict(manifest.get("build_contract") or {}) != contract:
         status = "BUILD_CONTRACT_MISMATCH"
+    elif int(manifest_scientific_identity.get("schema_version", 0) or 0) != int(
+        scientific_identity["schema_version"]
+    ):
+        status = "SCIENTIFIC_IDENTITY_SCHEMA_MISMATCH"
+    elif str(
+        manifest_scientific_identity.get("registered_scientific_fingerprint_sha256") or ""
+    ) != str(scientific_identity.get("registered_scientific_fingerprint_sha256") or ""):
+        status = "SCIENTIFIC_REGISTRATION_MISMATCH"
+    elif str(manifest_scientific_identity.get("scientific_fingerprint_sha256") or "") != str(
+        scientific_identity.get("scientific_fingerprint_sha256") or ""
+    ):
+        status = "SCIENTIFIC_CONTRACT_DRIFT"
+    elif dict(manifest_scientific_identity.get("scientific_contract") or {}) != dict(
+        scientific_identity.get("scientific_contract") or {}
+    ):
+        status = "SCIENTIFIC_CONTRACT_DRIFT"
     elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
         status = "ARTIFACT_SHA_MISMATCH"
 
     ready = status == "READY"
     existed = bool(target.exists() or manifest_path.exists())
+    blocked_statuses = {
+        "SCIENTIFIC_IDENTITY_UNREGISTERED",
+        "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT",
+        "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND",
+        "SCIENTIFIC_IDENTITY_SCHEMA_MISMATCH",
+        "SCIENTIFIC_REGISTRATION_MISMATCH",
+        "SCIENTIFIC_CONTRACT_DRIFT",
+    }
     return {
         "ready": ready,
         "status": status,
-        "action": "REUSE" if ready else ("REBUILD" if existed else "BUILD"),
+        "action": (
+            "REUSE"
+            if ready
+            else (
+                "BLOCKED"
+                if status in blocked_statuses
+                else ("REBUILD" if existed else "BUILD")
+            )
+        ),
         "path": target,
         "manifest_path": manifest_path,
         "coverage_end": coverage_end,
         "build_contract": contract,
+        "scientific_identity": scientific_identity,
     }
 
 
@@ -2095,13 +2208,6 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
     force_rebuild: bool = False,
     resume_parameter_training: bool = True,
 ) -> dict[str, Any]:
-    from config.execution_policy import (
-        DEFAULT_FIXED_RISK,
-        DEFAULT_MAX_POSITION_CAP_PCT,
-        DEFAULT_PORTFOLIO_MAX_POSITIONS,
-        DEFAULT_PORTFOLIO_ROTATION,
-    )
-    from core.dataset_profiles import DEFAULT_DATASET_PROFILE
     from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
 
     root = Path(project_root).resolve()
@@ -2120,6 +2226,15 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
     target = Path(state["path"])
     manifest_path = Path(state["manifest_path"])
     contract = dict(state["build_contract"])
+    scientific_identity = dict(state["scientific_identity"])
+    if str(state.get("action") or "") == "BLOCKED":
+        status = str(state.get("status") or "")
+        if not (bool(force_rebuild) and status == "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"):
+            raise RuntimeError(
+                "PARAM-P6 scientific identity blocked: "
+                f"status={status}. Existing registered identity must not be rebuilt "
+                "under changed scientific semantics."
+            )
     existed_before = str(state["action"]) == "REBUILD"
     if bool(state["ready"]) and not force_rebuild:
         return {
@@ -2129,6 +2244,7 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
             "sha256": compute_strategy_param_file_sha256(target),
             "coverage_end": state.get("coverage_end"),
             "build_contract": contract,
+            "scientific_identity": scientific_identity,
         }
 
     canonical_work_root = root / _FIXED_MULTI_SEED_WORK_RELATIVE
@@ -2136,15 +2252,13 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
     end_date = str(comparison_end_date or "").strip()
     result = prepare_selection_historical_full_roos_params(
         project_root=root,
-        dataset=str(DEFAULT_DATASET_PROFILE if dataset in (None, "") else dataset),
+        dataset=str(contract["dataset"]),
         param_policy=compare_policy,
         trials_per_fold=int(contract["trials_per_fold"]),
-        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS if max_positions is None else max_positions),
-        rotation=str(DEFAULT_PORTFOLIO_ROTATION if rotation in (None, "") else rotation),
-        fixed_risk=float(DEFAULT_FIXED_RISK if fixed_risk is None else fixed_risk),
-        max_position_cap_pct=float(
-            DEFAULT_MAX_POSITION_CAP_PCT if max_position_cap_pct is None else max_position_cap_pct
-        ),
+        max_positions=int(contract["max_positions"]),
+        rotation=str(contract["rotation"]),
+        fixed_risk=float(contract["fixed_risk"]),
+        max_position_cap_pct=float(contract["max_position_cap_pct"]),
         optimizer_seed=int(contract["optimizer_seed"]),
         resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
         quiet=False,
@@ -2190,6 +2304,16 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
             "fitting_seed_protocol": str(contract["fitting_seed_protocol"]),
             "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
             "build_contract": contract,
+            "scientific_identity": {
+                "schema_version": int(scientific_identity["schema_version"]),
+                "registered_scientific_fingerprint_sha256": str(
+                    scientific_identity["registered_scientific_fingerprint_sha256"]
+                ),
+                "scientific_fingerprint_sha256": str(
+                    scientific_identity["scientific_fingerprint_sha256"]
+                ),
+                "scientific_contract": dict(scientific_identity["scientific_contract"]),
+            },
             "artifact_path": _project_relative(root, target),
             "artifact_sha256": target_sha,
             "coverage_end": coverage_end,
@@ -2203,6 +2327,7 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
         "sha256": target_sha,
         "coverage_end": coverage_end,
         "build_contract": contract,
+        "scientific_identity": scientific_identity,
     }
 
 

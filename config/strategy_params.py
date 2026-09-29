@@ -91,6 +91,15 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
             "enabled": False,
         },
         "fitting_seed_protocol": "research_fixed_multiseed_v1",
+        # PARAM-P6 / SR-C85 is the first Strategy Parameter profile whose
+        # scientific semantics are permanently registered.  This digest is
+        # the canonical resolved scientific contract (including Research data
+        # generation identity), not a display/runtime fingerprint.  Any future
+        # result-affecting change must allocate a new scientific identity
+        # rather than mutate PARAM-P6/SR-C85 in place.
+        "registered_scientific_fingerprint_sha256": (
+            "b6162e8debd663a54fc3a56d2f738e7a217e11128a1fa2148dac01006bae976b"
+        ),
     },
 }
 

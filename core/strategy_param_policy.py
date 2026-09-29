@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import re
 from typing import Any, Mapping
 
 from config.strategy_params import (
@@ -56,6 +57,7 @@ class StrategyParamTrainingProfile:
     validation_enabled: bool
     validation_protocol: str | None
     fitting_seed_protocol: str
+    registered_scientific_fingerprint_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -236,6 +238,17 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
     if not fitting_seed_protocol:
         raise ValueError(f"strategy parameter profile缺少fitting_seed_protocol: {key}")
     get_strategy_param_fitting_seed_protocol(fitting_seed_protocol)
+    registered_scientific_fingerprint_sha256 = str(
+        raw.get("registered_scientific_fingerprint_sha256") or ""
+    ).strip().lower() or None
+    if (
+        registered_scientific_fingerprint_sha256 is not None
+        and re.fullmatch(r"[0-9a-f]{64}", registered_scientific_fingerprint_sha256) is None
+    ):
+        raise ValueError(
+            "registered_scientific_fingerprint_sha256必須是64字元小寫SHA256: "
+            f"{key}"
+        )
     return StrategyParamTrainingProfile(
         profile_id=key,
         label=values["label"],
@@ -249,6 +262,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         validation_enabled=enabled,
         validation_protocol=protocol,
         fitting_seed_protocol=fitting_seed_protocol,
+        registered_scientific_fingerprint_sha256=registered_scientific_fingerprint_sha256,
     )
 
 

@@ -2650,7 +2650,7 @@
       "initial_status": "NEW",
       "order": 238,
       "category": "Strategy Parameter Artifact SSOT / Optimizer sole-producer contract",
-      "item": "Current正常策略參數的physical truth扁平集中`models/strategy_params/canonical/`，family與policy用檔名區隔；同一策略JSON保存完整跨年effective-date schedule，OOS與Rolling不得形成第二份physical truth。OOS只在consumer讀取時freeze起始日合法member，Rolling按effective date讀同一schedule。Benchmark隔離於`models/strategy_params/benchmark/<benchmark_id>/`，每個獨立seed以檔名區隔並同樣保存完整跨年schedule。`models/strategy_params/**`只放正式truth、manifest與named runtime state；Optimizer resume／fold DB／preflight／active_params等工作狀態統一放`outputs/optimizer/strategy_param_schedule/`，canonical與benchmark都必須經共用workspace resolver，current producer若回傳workspace外source path即fail-fast；舊benchmark `_optimizer_work`只允許一次性搬到outputs後RESUME。Optimizer是唯一current producer；Research/Strategy Compare只resolve、validate、delegate、REUSE。同一canonical search產生的`base-finalist-best`與`base-finalists-agree`必須一次發布並最後刷新manifest，第二policy直接REUSE，不得再進同一builder；正式JSON採atomic replace，manifest最後atomic replace作publication commit marker；workspace與正式strategy-param持久化都必須是strict JSON，內部排序／gate的`NaN`／`±inf`診斷sentinel在artifact boundary轉JSON `null`，runtime `params`若non-finite則fail-fast；pre-fix workspace若只有診斷sentinel必須可一次性修復後直接RESUME／publish，不得重跑已完成Optimizer search。Canonical REUSE必須驗optimizer seed、trials、training/build contract、search space、dataset/execution contract、coverage與runtime-scientific payload SHA（raw file SHA僅作integrity/provenance），`created_at`／diagnostic metadata刷新不得造成STALE，缺少或STALE時由Optimizer自動BUILD／REBUILD／RESUME。Legacy nested/root路徑只允許明確一次性migration／historical compatibility；current ensure/runtime不得fallback或implicit migration。舊OOS frozen params若與canonical initial member不同，cleanup前必須先byte-preserve到historical-only archive並驗source/archive SHA，不能硬併或遺失。`run_best_params.json`與candidate named artifacts集中`canonical/`，不再建立匿名`active.json`第二份truth。",
+      "item": "Current正常策略參數的physical truth扁平集中`models/strategy_params/canonical/`，family與policy用檔名區隔；同一策略JSON保存完整跨年effective-date schedule，OOS與Rolling不得形成第二份physical truth。OOS只在consumer讀取時freeze起始日合法member，Rolling按effective date讀同一schedule。Benchmark隔離於`models/strategy_params/benchmark/<benchmark_id>/`，每個獨立seed以檔名區隔並同樣保存完整跨年schedule。`models/strategy_params/**`只放正式truth、manifest與named runtime state；Optimizer resume／fold DB／preflight／active_params等工作狀態統一放`outputs/optimizer/strategy_param_schedule/`，canonical與benchmark都必須經共用workspace resolver，current producer若回傳workspace外source path即fail-fast；舊benchmark `_optimizer_work`只允許一次性搬到outputs後RESUME。Optimizer是唯一current producer；Research/Strategy Compare只resolve、validate、delegate、REUSE。同一canonical search產生的`base-finalist-best`與`base-finalists-agree`必須一次發布並最後刷新manifest，第二policy直接REUSE，不得再進同一builder；正式JSON採atomic replace，manifest最後atomic replace作publication commit marker；workspace與正式strategy-param持久化都必須是strict JSON，內部排序／gate的`NaN`／`±inf`診斷sentinel在artifact boundary轉JSON `null`，runtime `params`若non-finite則fail-fast；pre-fix workspace若只有診斷sentinel必須可一次性修復後直接RESUME／publish，不得重跑已完成Optimizer search。Canonical REUSE必須驗optimizer seed、trials、training/build contract、search space、dataset/execution contract、coverage與runtime-scientific payload SHA（raw file SHA僅作integrity/provenance），`created_at`／diagnostic metadata刷新不得造成STALE；一般build/workspace artifact缺少或非scientific STALE時由Optimizer自動BUILD／REBUILD／RESUME，但已註冊Strategy Parameter scientific identity的source/manifest binding、legacy-unbound與scientific drift另由B422治理，禁止把scientific drift降級成同一PARAM identity的自動REBUILD。Legacy nested/root路徑只允許明確一次性migration／historical compatibility；current ensure/runtime不得fallback或implicit migration。舊OOS frozen params若與canonical initial member不同，cleanup前必須先byte-preserve到historical-only archive並驗source/archive SHA，不能硬併或遺失。`run_best_params.json`與candidate named artifacts集中`canonical/`，不再建立匿名`active.json`第二份truth。",
       "gap": "config-driven Strategy Compare synthetic驗證OOS/Rolling同family解析同一physical JSON、canonical shared search第一policy BUILD後第二policy直接REUSE、benchmark同seed共用一份JSON、canonical／benchmark optimizer workspace只落`outputs/optimizer/strategy_param_schedule/`且`models/strategy_params/**`不再產生current `_optimizer_work`、Optimizer sole producer、current ensure不讀legacy root、stale identity可導向自動builder、explicit migration + divergent legacy OOS historical archive + READY-gated cleanup，以及default runtime named run-best與benchmark discovery isolation；canonical resolver/service與Optimizer writer直接import smoke另作交付前檢查；並刻意以舊workspace `-Infinity`診斷sentinel驗證publication可原地修復成strict JSON `null`且不重跑search，同時non-finite runtime params必須fail-fast。",
       "entry": "`core/file_integrity.py`, `core/strategy_param_artifacts.py`, `core/active_param_ensemble.py`, `core/portfolio_param_runtime.py`, `core/params_io.py`, `core/model_paths.py`, `services/optimizer/strategy_param_repository.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/strategy_param_training.py`, `services/optimizer/outer_rolling_oos.py`, `filters/breakout_quality/strategy_compare_sources.py`, `apps/research.py`, `config/training_policy.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`"
     },
@@ -4540,6 +4540,17 @@
       "entry": "`core/position_management.py`, `core/position_replay.py`, `core/trading_lifecycle_plans.py`, `core/trading_position_projection.py`, `services/trading/lifecycle_context.py`, `services/trading/signal_lineage.py`, `tools/validate/synthetic_lifecycle_ssot_cases.py`",
       "initial_status": "NEW",
       "order": 409
+    },
+    {
+      "id": "B422",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Strategy Parameter scientific identity / immutable contract binding",
+      "item": "已命名Strategy Parameter identity不得在common scientific config變更後靜默漂移。Profile可登記canonical resolved scientific fingerprint；已綁定artifact manifest必須保存相同schema、registered fingerprint、actual fingerprint與完整resolved scientific contract。PARAM-P6/C85為第一個bound identity：source registration與目前resolved contract不一致、bound manifest contract/fingerprint漂移一律`BLOCKED`，不得在同一PARAM identity下自動REBUILD；既有artifact缺少scientific identity視為legacy-unbound且不得自動認領，僅可在registered contract仍一致時以明確force rebuild完成一次性綁定。Progress/report欄位可依resolved contract決定可見性，但presentation contract不得進scientific fingerprint；`base-finalists-agree`且local-min disabled時不得顯示不適用的`seed_min_agree`或`best_local_min`。",
+      "gap": "`validate_optimizer_walk_forward_policy_contract_case`以config/registry-driven方式驗registered profile fingerprint等價、hard-gate mutation造成registration drift、legacy-unbound與bound-manifest語意，並驗progress display contract只依active scientific policy顯示適用欄位；不得硬編PARAM-P6、4 seeds、300 trials、120M/12M為唯一合法current值。",
+      "entry": "`config/strategy_params.py`, `core/strategy_param_policy.py`, `core/strategy_param_scientific_contract.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/scientific_runtime.py`, `services/optimizer/outer_rolling_progress.py`, `services/optimizer/outer_rolling_oos.py`, `services/optimizer/outer_rolling_live_boards.py`, `services/research/strategy_compare_preparation_status.py`, `tools/validate/synthetic_strategy_cases.py`",
+      "initial_status": "NEW",
+      "order": 410
     }
   ],
   "tests": [
@@ -8449,6 +8460,13 @@
       "description": "validate_trading_direct_fill_source_contract_case - Direct fills resolve Scanner source independently of selection; frozen lineage, quantity discretion, stale guards and execution reason remain distinct.",
       "initial_status": "NEW",
       "order": 549
+    },
+    {
+      "id": "T560",
+      "b_id": "B422",
+      "description": "`validate_optimizer_walk_forward_policy_contract_case` Strategy Parameter scientific identity extension：驗registered profile與resolved canonical fingerprint一致、scientific config mutation觸發drift、legacy-unbound不得自動認領、bound manifest需exact contract/fingerprint，並以resolved display contract驗`seed_min_agree`／`best_local_min`只在適用policy出現。",
+      "initial_status": "NEW",
+      "order": 550
     }
   ],
   "transitions": [
@@ -26979,6 +26997,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "Independent snapshot/account/UI simulations; no formal-suite status implied."
+    },
+    {
+      "date": "2026-09-30",
+      "id": "B422",
+      "description": "Register immutable Strategy Parameter scientific identity binding, legacy-unbound handling, drift fail-fast and contract-driven progress-field visibility.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "PARAM-P6/C85 is the first bound identity; scientific semantics are unchanged."
+    },
+    {
+      "date": "2026-09-30",
+      "id": "T560",
+      "description": "Register config-driven scientific-identity drift and display-visibility regression under the existing optimizer walk-forward policy synthetic.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_optimizer_walk_forward_policy_contract_case`"
     }
   ]
 }

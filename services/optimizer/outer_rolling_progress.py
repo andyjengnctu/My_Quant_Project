@@ -407,6 +407,8 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     else:
         selection_text = "train=?"
     stage = str(progress.get("stage") or "QUEUED").upper()
+    display_contract = dict(task.get("progress_display_contract") or {})
+    show_local_min = bool(display_contract.get("show_local_min", True))
 
     def _progress_prefix() -> str:
         parts = [f"[{fold_idx}/{fold_count}] {selection_text}"]
@@ -424,12 +426,13 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         best_text = format_optimizer_score_for_display(best, decimals=3)
         status = str(progress.get("status") or "").strip()
         status_text = f"{status} | " if status else ""
-        local_best = progress.get("best_local_min_score")
-        local_best_text = format_optimizer_score_for_display(local_best, decimals=3)
-        return (
-            f"{_progress_prefix()} | "
-            f"{status_text}trial {completed}/{total} | best_base={best_text} | best_local_min={local_best_text}{elapsed_text}"
-        )
+        parts = [f"{_progress_prefix()} | {status_text}trial {completed}/{total} | best_base={best_text}"]
+        if show_local_min:
+            local_best = progress.get("best_local_min_score")
+            parts.append(
+                f"best_local_min={format_optimizer_score_for_display(local_best, decimals=3)}"
+            )
+        return " | ".join(parts) + elapsed_text
     if stage == "LOCAL_MIN_REVIEW":
         finalist_idx = int(progress.get("finalist_idx", 0) or 0)
         finalist_total = int(progress.get("finalist_total", 0) or 0)
@@ -444,6 +447,11 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         local_min_elapsed_text = ""
         if progress.get("elapsed_sec") is not None:
             local_min_elapsed_text = f" | elapsed={_fmt_duration_compact(progress.get('elapsed_sec'))}"
+        if not show_local_min:
+            return (
+                f"{_progress_prefix()} | finalist {finalist_idx}/{finalist_total} | "
+                f"best_base : {base_best_text}{local_min_elapsed_text}"
+            )
         return (
             f"{_progress_prefix()} | "
             f"finalist {finalist_idx}/{finalist_total} | local {neighbor_done}/{neighbor_total} | "
@@ -452,10 +460,14 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     if stage == "OOS_DIAGNOSTICS":
         status = str(progress.get("status") or "RUN")
         base_best = progress.get("best_base_score")
-        local_best = progress.get("best_local_min_score")
         base_best_text = format_optimizer_score_for_display(base_best, decimals=3)
-        local_best_text = format_optimizer_score_for_display(local_best, decimals=3)
-        return f"{_progress_prefix()} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
+        parts = [f"{_progress_prefix()} | diagnostics {status} | best_base={base_best_text}"]
+        if show_local_min:
+            local_best = progress.get("best_local_min_score")
+            parts.append(
+                f"best_local_min={format_optimizer_score_for_display(local_best, decimals=3)}"
+            )
+        return " | ".join(parts) + elapsed_text
     if stage == "ENSEMBLE_REPLAY":
         replay_done = int(progress.get("replay_done", 0) or 0)
         replay_total = int(progress.get("replay_total", 0) or 0)
@@ -469,10 +481,14 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         status = _strip_redundant_seed_status(str(progress.get("status") or ""))
         done_label = "DONE" if not status or status.lower() == "done" else f"DONE {status}"
         base_best = progress.get("best_base_score")
-        local_best = progress.get("best_local_min_score")
         base_best_text = format_optimizer_score_for_display(base_best, decimals=3)
-        local_best_text = format_optimizer_score_for_display(local_best, decimals=3)
-        return f"{_progress_prefix()} | {done_label} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
+        parts = [f"{_progress_prefix()} | {done_label} | best_base={base_best_text}"]
+        if show_local_min:
+            local_best = progress.get("best_local_min_score")
+            parts.append(
+                f"best_local_min={format_optimizer_score_for_display(local_best, decimals=3)}"
+            )
+        return " | ".join(parts) + elapsed_text
     if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
         status = str(progress.get("status") or stage).replace("_", " ")
         return f"{_progress_prefix()} | {status}{elapsed_text}"
@@ -515,7 +531,14 @@ def _format_best_local_min_value(value) -> str:
     return format_optimizer_score_for_display(value, decimals=3)
 
 
-def _seed_progress_label_for_stage(*, stage: str, progress: dict, seed_text: str, log_status: str = "") -> str:
+def _seed_progress_label_for_stage(
+    *,
+    stage: str,
+    progress: dict,
+    seed_text: str,
+    log_status: str = "",
+    show_local_min: bool = True,
+) -> str:
     stage_text = str(stage or "QUEUED").upper()
     status = _strip_redundant_member_status(str(progress.get("status") or log_status or ""), member_text=seed_text)
     status_upper = status.strip().upper()
@@ -534,6 +557,8 @@ def _seed_progress_label_for_stage(*, stage: str, progress: dict, seed_text: str
     if stage_text == "LOCAL_MIN_REVIEW":
         finalist_idx = _seed_progress_int(progress.get("finalist_idx", 0), 0)
         finalist_total = _seed_progress_int(progress.get("finalist_total", 0), 0)
+        if not bool(show_local_min):
+            return f"finalist {finalist_idx}/{finalist_total}"
         neighbor_done = _seed_progress_int(progress.get("neighbor_done", 0), 0)
         neighbor_total = _seed_progress_int(progress.get("neighbor_total", 0), 0)
         return f"finalist {finalist_idx}/{finalist_total} | local {neighbor_done}/{neighbor_total}"
@@ -562,6 +587,8 @@ def _normalize_seed_progress_display_record(context: dict, progress: dict, *, lo
         selection_text = "train=?"
     seed_text = f"seed {seed_index}/{seed_count}" if seed_index and seed_count else "seed ?/?"
     stage = str(progress.get("stage") or "QUEUED").upper()
+    display_contract = dict(context.get("progress_display_contract") or {})
+    show_local_min = bool(display_contract.get("show_local_min", True))
     elapsed_sec = progress.get("elapsed_sec")
     base_best = progress.get("best_base_score")
     if base_best is None:
@@ -577,9 +604,16 @@ def _normalize_seed_progress_display_record(context: dict, progress: dict, *, lo
         "oos_label": oos_label,
         "seed_text": seed_text,
         "stage": stage,
-        "status_label": _seed_progress_label_for_stage(stage=stage, progress=progress, seed_text=seed_text, log_status=log_status),
+        "status_label": _seed_progress_label_for_stage(
+            stage=stage,
+            progress=progress,
+            seed_text=seed_text,
+            log_status=log_status,
+            show_local_min=show_local_min,
+        ),
         "best_base": base_best,
         "best_local_min": local_best,
+        "show_local_min": show_local_min,
         "elapsed_sec": elapsed_sec,
         "current": progress.get("current"),
     }
@@ -597,14 +631,16 @@ def _render_seed_progress_display_record(record: dict) -> str:
     prefix_parts.append(str(record.get('seed_text') or 'seed ?/?'))
     parts = [" | ".join(prefix_parts), status_label]
     if stage == "LOCAL_MIN_REVIEW":
-        current = record.get("current")
-        current_text = format_optimizer_score_for_display(current, decimals=3)
-        parts.append(f"current : {current_text}")
         parts.append(f"best_base : {_fmt_score_trunc_2(record.get('best_base'))}")
-        parts.append(f"best_lm : {_fmt_score_trunc_2(record.get('best_local_min'))}")
+        if bool(record.get("show_local_min", True)):
+            current = record.get("current")
+            current_text = format_optimizer_score_for_display(current, decimals=3)
+            parts.insert(-1, f"current : {current_text}")
+            parts.append(f"best_lm : {_fmt_score_trunc_2(record.get('best_local_min'))}")
     else:
         parts.append(f"best_base={_format_best_base_value(record.get('best_base'))}")
-        parts.append(f"best_local_min={_format_best_local_min_value(record.get('best_local_min'))}")
+        if bool(record.get("show_local_min", True)):
+            parts.append(f"best_local_min={_format_best_local_min_value(record.get('best_local_min'))}")
     if record.get("elapsed_sec") is not None:
         parts.append(f"elapsed={_fmt_duration_compact(record.get('elapsed_sec'))}")
     return " | ".join(parts)
@@ -709,6 +745,22 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
         if local_neighbor_completed > int(payload.get("local_min_neighbor_completed", 0) or 0):
             payload["local_min_neighbor_completed"] = int(local_neighbor_completed)
         events = events_by_member.get(member_index, [])
+        if payload.get("best_base_score") is None:
+            for event in events:
+                candidate = event.get("best_base_score")
+                if candidate is None:
+                    candidate = event.get("best_score")
+                if candidate is not None:
+                    payload["best_base_score"] = candidate
+                    break
+        if payload.get("best_local_min_score") is None:
+            for event in events:
+                candidate = event.get("best_local_min_score")
+                if candidate is None and str(event.get("stage") or "").upper() == "LOCAL_MIN_REVIEW":
+                    candidate = event.get("best")
+                if candidate is not None:
+                    payload["best_local_min_score"] = candidate
+                    break
         search_starts = []
         search_dones = []
         local_starts = []
