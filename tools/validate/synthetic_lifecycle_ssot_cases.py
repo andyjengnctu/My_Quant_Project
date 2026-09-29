@@ -810,7 +810,9 @@ def validate_trading_signal_origin_persistence_case(base_params):
     from core.file_integrity import load_json_strict
     p = _params(base_params)
     candidate = _candidate(p)
-    frames = {"2330": _frame()}
+    # Production V2 Scanner prepared_frames are raw six-column frames with a
+    # RangeIndex plus Date column, not already-indexed sanitized frames.
+    frames = {"2330": _frame().reset_index(names="Date")}
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         first = freeze_trading_candidate_lineages(root, candidate_rows=[candidate], prepared_frames=frames,
@@ -822,12 +824,14 @@ def validate_trading_signal_origin_persistence_case(base_params):
         frozen_result["kind"] = "extended"
         seen = []
         def producer(frame, ticker, params):
-            seen.append((params.atr_times_init, str(frame.index.max().date())))
+            observed_dates = pd.to_datetime(frame["Date"] if "Date" in frame.columns else frame.index)
+            seen.append((params.atr_times_init, observed_dates.max().strftime("%Y-%m-%d")))
             return deepcopy(frozen_result)
         with patch("services.trading.signal_lineage.process_raw_stock_frame_actionable_detail", side_effect=producer):
             current = freeze_trading_candidate_lineages(root, candidate_rows=[later], prepared_frames=frames,
                 information_date="2026-09-17", strategy_id="fixture", source_binding="params-v2")
-        check("continuing_signal_calls_producer_with_original_params_and_cutoff", [(2., "2026-09-17")], seen)
+        check("continuing_signal_calls_producer_with_original_params_and_cutoff", [(2., "2026-09-17")], list(seen))
+        check("continuing_signal_accepts_raw_scanner_range_index_frame", True, isinstance(frames["2330"].index, pd.RangeIndex))
         check("later_scan_cannot_replace_first_signal_identity", original, current[0]["signal_lineage"])
         check("continuing_candidate_is_recomputed_not_relabelled", "extended", current[0]["kind"])
         with patch("services.trading.signal_lineage.process_raw_stock_frame_actionable_detail", return_value=None):

@@ -11,6 +11,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
+import pandas as pd
+
 from core.breakout_reentry import BREAKOUT_REENTRY_SOURCE
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.params_io import build_params_from_mapping
@@ -82,6 +84,34 @@ def _validate_registry(state):
             raise ValueError("Trading frozen signal Params differ from original identity")
 
 
+def _prepared_frame_through_information_date(frame, *, ticker: str, information_date: str):
+    """PIT-cut either canonical raw Scanner frames or already-indexed frames.
+
+    V2 Scanner ``prepared_frames`` are raw six-column frames with a RangeIndex
+    and a Date/Time column.  Older synthetic/direct callers may provide an
+    already-sanitized DatetimeIndex frame.  Date ownership remains with the
+    canonical Scanner sanitizer; this helper only enforces the information-date
+    boundary before the frozen-Params producer is called.
+    """
+
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError(f"{ticker} prepared Scanner frame 必須是 pandas.DataFrame")
+    cutoff = pd.Timestamp(str(information_date)).normalize()
+    date_col = "Time" if "Time" in frame.columns else ("Date" if "Date" in frame.columns else None)
+    if date_col is not None:
+        # Cast through string first so YYYYMMDD integer representations are not
+        # interpreted by pandas as nanoseconds from epoch.  Unparseable rows are
+        # kept for the canonical Scanner sanitizer to reject consistently.
+        dates = pd.to_datetime(frame[date_col].astype("string"), errors="coerce").dt.normalize()
+        return frame.loc[dates.isna() | (dates <= cutoff)].copy()
+    if isinstance(frame.index, pd.DatetimeIndex):
+        return frame.loc[frame.index.normalize() <= cutoff].copy()
+    raise RuntimeError(
+        f"{ticker} prepared Scanner frame 缺 Date/Time 欄位且 index 非 DatetimeIndex；"
+        "無法安全套用 information-date PIT cutoff"
+    )
+
+
 @serialized_trading_state_mutation
 def freeze_trading_candidate_lineages(
     project_root, *, candidate_rows, prepared_frames, information_date,
@@ -117,8 +147,9 @@ def freeze_trading_candidate_lineages(
         if proposed is not None and proposed.get("params_signature") == member["params_signature"]:
             refreshed = deepcopy(proposed)
         else:
-            frame = prepared_frames[ticker]
-            frame = frame.loc[frame.index <= information_date]
+            frame = _prepared_frame_through_information_date(
+                prepared_frames[ticker], ticker=ticker, information_date=information_date
+            )
             raw = process_raw_stock_frame_actionable_detail(frame, ticker, params)
             if raw is None or raw.get("kind") not in {"buy", "extended", "extended_tbd"}:
                 # AI: Absence/eligibility is not evidence of strategy termination.
